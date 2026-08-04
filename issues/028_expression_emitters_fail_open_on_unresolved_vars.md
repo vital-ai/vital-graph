@@ -449,7 +449,7 @@ added to the allowlist is a claim that deserves scrutiny.
 
 ## Related
 
-- `issues/023_values_clause_ignored_in_sparql_update.md` — NOT FIXED (its
+- `issues/023_values_clause_ignored_in_sparql_update.md` — FIXED (its
   translation defect is fixed; its coverage gap is not). Two connections:
   it adopted fail-closed for syntax elements and the same reasoning was never
   carried over to the expression layer; and its open DAWG-wiring item is a

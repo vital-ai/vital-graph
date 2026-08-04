@@ -1,5 +1,9 @@
 # 019 — Concurrent term-insert race poisons pooled connections → reads flake under load
 
+*Related: `issues/003_concurrent_insert_term_race.md` is the same race seen from
+the write path — it points here for the full chain, so this is the fuller
+writeup of a defect filed twice.*
+
 ## Status: ✅ FIXED
 
 ## Summary

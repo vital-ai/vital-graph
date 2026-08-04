@@ -412,6 +412,9 @@ the genuinely-out-of-scope entries. That is the step that closes 028.
   C read as A; the fix reconstructs metadata that should have been carried.
 - `issues/027_exists_loses_correlation_for_filter_only_outer_vars.md` — FIXED.
   Case E read as A.
-- `issues/028_expression_emitters_fail_open_on_unresolved_vars.md` — NOT FIXED,
-  and **blocked on this issue**: it needs `UNRESOLVED` separable from
-  `UNBOUND`, which is exactly what `NullKind` provides. See step 10.
+- `issues/028_expression_emitters_fail_open_on_unresolved_vars.md` — FIXED
+  2026-08-04, and **not** blocked on this issue after all. The step 1 audit
+  found `NullKind.UNRESOLVED` cannot exist — an unresolved reference has no
+  `ColumnInfo` to stamp, and that absence *is* the property. 028 was closed
+  instead by threading scope through emission, which is a different mechanism
+  entirely. This line previously asserted the dependency; it was wrong.

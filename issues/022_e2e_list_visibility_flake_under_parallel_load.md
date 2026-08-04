@@ -283,23 +283,123 @@ page twice. They now wait for the first row to change, the same rule
   deciding whether the seeded-space fixture should assert its own preconditions
   rather than trusting the stack's state.
 
-## Still open
+## Second pass — the five "still open" items
 
-Not yet investigated — each appeared once, in a spec this pass never examined,
-and none has been shown to be a stale read:
+All five were investigated. Four had identifiable causes; a fifth did not
+reproduce. Two more were found in the process. The recurring theme is
+**cleanup helpers that silently do nothing** and **assertions that pass
+without the write happening**.
 
-1. `entity-registry-lookups.spec.ts:118` — strict-mode violation:
-   `getByText('E2E Lookup Source Sel')` resolves to 2 elements. Ambiguous
-   locator, likely deterministic given the right state.
-2. `graph-visualization-crud.spec.ts:60` — database search does not find
-   'Alice Anderson'.
-3. `graph-visualization-crud.spec.ts:177` — 'Session 2' tab not visible
-   (seen once, in an earlier run).
-4. `data-import-export-crud.spec.ts:90` — import job never reaches
-   `completed`; first seen immediately after a stack rebuild, so possibly a
-   cold-start timeout.
-5. `search-execution.spec.ts:58` — FTS search returns no results for a known
-   entity (seen once).
+### Fixed
+
+1. **`entity-registry-lookups.spec.ts:118`** — not a flake at all; by this
+   point it failed 3/3. `cleanup()` passed `limit: 50`, but the endpoint's
+   parameter is `page_size` (default 20, max 100), so `limit` was ignored.
+   Delete is a SOFT delete: the row survives with `status: 'deleted'` and keeps
+   matching the search. Once 20 tombstones accumulated ahead of the live row
+   (measured: 30 rows per fixture name, the first 20 all deleted), cleanup's
+   window held only tombstones, deleted nothing, and each run added another
+   LIVE duplicate — so `getByText(SOURCE_NAME)` eventually matched two rows and
+   failed strict mode. Cleanup now pages through all results and skips
+   already-deleted rows. 3/3 green, and it self-heals the accumulated
+   duplicates.
+2. **`search-execution.spec.ts:58`** — the test switched to FTS mode and
+   searched without waiting for the index list, so the search ran with an empty
+   index name. The generated SPARQL interpolates that into the table name,
+   producing `e2e_test_space_fts_` — the server log shows
+   `relation "e2e_test_space_fts_" does not exist`. Fixed on both sides:
+   `SemanticSearch.tsx` now refuses an index-backed search with no index (and
+   disables Search while indexes load) instead of issuing a query that cannot
+   work, and the test waits for `#indexName` to be populated.
+3. **`graph-visualization-crud.spec.ts:60`** — `waitForTimeout(500)` after
+   changing the space. The select reflects the ACTIVE SESSION's space, updated
+   asynchronously, so under load the search ran against the previous space.
+   All four fixed sleeps in that spec replaced with
+   `expect(spaceSelect).toHaveValue(SPACE_ID)`.
+4. **`graph-visualization-crud.spec.ts:177`** — `handleNewSession` returns
+   early when no space is known, so clicking "New session" before the default
+   session exists is a SILENT no-op and "Session 2" never appears. The two
+   sibling tests already guarded against this; this one did not. The button is
+   now `disabled={!spaceId}` (so the click waits rather than vanishing) and the
+   test waits for Session 1 first.
+5. **`data-import-export-crud.spec.ts:90`** — did not reproduce in repeated
+   runs, in isolation or under full load. Consistent with the original guess of
+   a cold-start timeout right after a stack rebuild. Left as-is; it now
+   captures a trace if it recurs.
+
+### Found while verifying
+
+6. **`spaces-crud.spec.ts:38`** — `cleanupCrudSpace()` called
+   `DELETE /api/spaces/{id}`, which is not a route: it returned **405** every
+   time, so cleanup never ran. When a prior run left `e2e_crud_space` behind,
+   the create test failed with
+   `500 {"detail": "Error adding space: 400: Failed to add space with tables"}`.
+   Now uses `DELETE /api/spaces?space_id=…` (the form `space-fixtures.ts`
+   already used) and throws on 405 rather than silently skipping.
+7. **`triples-crud.spec.ts:43`** — another vacuous assertion, same class as
+   cause 3 above. In one full run the server log contains **no insert request
+   for that space at all**, yet "add a triple via the UI" passed and the next
+   test then found an empty list. The test now waits for the insert POST and
+   asserts its `success`.
+
+### Convention notes (not fixed)
+
+- `POST /api/spaces` returns **500** when the space already exists, and
+  `DELETE /api/spaces` returns **404** for a missing space. Both are domain
+  outcomes and, per the project's convention, belong in a 200 body. Tracked
+  separately in `issues/034_spaces_endpoint_raises_for_domain_outcomes.md`,
+  which also documents why the intended 400 surfaces as a 500.
+
+### Third pass — `Indexes.tsx` had the same stale-overwrite bug
+
+On the first clean-stack full run, `indexes-mappings.spec.ts:34` failed: the
+seeded vector index was missing from the list. The trace shows the same
+overlapping-request defect as section B, in a page that had not been patched:
+
+| started | duration | request |
+|---|---|---|
+| 41.364 | 62 ms | `vector-indexes?space_id=e2e_test_space` (the selected space) |
+| 41.356 | 80 ms | `vector-indexes?space_id=apitest_8360d4c5` (the default) |
+
+The selected space's response completed at 41.426; the previous space's at
+41.436 — 10 ms later — and overwrote it. The table then showed the wrong
+space's indexes with no trigger for another fetch. Same `fetchSeq` guard
+applied to `Indexes.tsx`.
+
+Note the default space was `apitest_8360d4c5`, a leftover from the API test
+suite; it sorts first and so becomes the initial selection, which is what made
+the race reachable here.
+
+**This class is not fully swept.** The guard is now on `KGFrames`,
+`KGRelations`, `KGEntities` and `Indexes` — the four with direct trace
+evidence. Other list pages fetch on control change without sequencing and are
+candidates if a similar failure appears: `GraphObjects`, `Triples`, `KGTypes`,
+`KGDocuments`, `Graphs`, `Files`, `FtsIndexes`, `VectorIndexes`,
+`FuzzyMappings`, `SearchMappings`, `IndexMappings`, `GeoShapes`,
+`EntityRegistry`, `AgentRegistry`. The real remedy is a shared
+fetch-sequencing hook rather than repeating the guard per page.
+
+### Result
+
+Three consecutive full runs on an idle stack after the `Indexes.tsx` fix:
+**273/273, 273/273** (the run before the fix was 272/273, failing only
+`indexes-mappings.spec.ts:34`).
+
+### Environment warning
+
+A `pytest tests/api` run against the same stack (`localhost:8002`) was found
+running concurrently with some of these suite runs, started outside this work.
+It writes into shared spaces including `sp_kg_types` and pushed the app
+container to 98% CPU. **Full-suite results are not trustworthy while it runs** —
+one run taken during that window showed mass failures (234 passed, 14 not run)
+in basic page-load specs. Check for it (`ps aux | grep pytest`, or
+`docker logs --since 60s vitalgraph-test-app | grep -c apitest_`) before
+reading anything into a red run. The three green runs above were taken after it
+finished, on an idle stack.
+
+It also leaves `apitest_*` spaces behind, and those sort ahead of `e2e_*`
+alphabetically — which is how they became the default selection that exposed
+the `Indexes.tsx` race above.
 
 ## Note on shared fixtures
 

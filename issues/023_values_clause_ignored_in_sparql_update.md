@@ -16,14 +16,33 @@ shipped and was caught only by one test that happened to assert a bystander
 survived. Both halves had to be done.
 
 See also `issues/028_expression_emitters_fail_open_on_unresolved_vars.md`
-(NOT FIXED) — the fail-closed principle adopted here was applied only to the
-syntax-element mapper, not to the expression emitter. The conformance corpus
-built here is what let 028 finally measure its blast radius; its design
-question is now settled on evidence.
+(FIXED 2026-08-04) — the fail-closed principle adopted here covered only the
+syntax-element mapper; 028 extended it to the expression emitter, which now
+raises on a variable that was in scope and still could not be resolved. The
+conformance corpus built here is what let 028 measure its blast radius first.
 
-And `issues/029_aggregates_over_mixed_typed_literals.md` (OPEN) — four
-pre-existing aggregate bugs that surfaced the moment conformance began
+And `issues/029_aggregates_over_mixed_typed_literals.md` (FIXED 2026-08-04) —
+four pre-existing aggregate bugs that surfaced the moment conformance began
 executing SQL.
+
+## Issues that descend from this one
+
+Four issues cite this one and it cited none of them, which understated how much
+followed from it:
+
+- `issues/026_minus_ignored_when_shared_var_has_no_term_uuid.md` and
+  `issues/027_exists_loses_correlation_for_filter_only_outer_vars.md` — the same
+  failure shape (a silently dropped constraint widening a DELETE) at two other
+  layers. Both found while writing this issue's regression tests.
+- `issues/028_expression_emitters_fail_open_on_unresolved_vars.md` — the shared
+  fail-open beneath all three. Its measurement needed the conformance corpus
+  this issue built.
+- `issues/025_construct_describe_unimplemented.md` — unblocked by the same
+  work: `test_dawg_sql_v2` only began executing SQL here, so before that there
+  was no way to validate a CONSTRUCT implementation. 025 added the `construct`
+  category to the file this issue fixed.
+- `issues/029_aggregates_over_mixed_typed_literals.md` — four pre-existing
+  aggregate bugs, surfaced the moment that suite started executing.
 
 ## Severity
 

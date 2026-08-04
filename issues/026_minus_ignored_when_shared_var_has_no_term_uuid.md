@@ -181,6 +181,29 @@ a URI-only fix would have missed.
 - A translation-level assertion on the emitted SQL: the MINUS correlation must
   not reduce to a constant-NULL comparison.
 
+## Superseded in part by issue 030 (2026-08-04)
+
+Read this before changing `emit_minus` — the fix described above was revised,
+and the root cause was reframed.
+
+**The fix.** `term_identity_expr` is no longer applied unconditionally.
+`emit_minus` now asks `ColumnInfo.has_term_identity()` and uses the stored
+`__uuid` when there is one, deriving only when there is not. Same results, less
+SQL on the common path.
+
+**The root cause.** This issue reads as "a missing field". It was not.
+`ColumnInfo.from_triple` already recorded exactly this — `emit_join` and
+`emit_group` consulted it and were correct; `emit_minus` went straight to the
+raw `__uuid` column. So the defect was **a consumer ignoring metadata that
+already existed**, which is a different lesson than the one this issue draws.
+
+**It cannot recur silently.** `tests/unit/sparql_sql/test_null_provenance_lint.py`
+fails any emitter that tests a `__uuid` column for NULL to infer boundness —
+the exact line that caused this bug. Verified by reintroducing it.
+
+See `issues/030_sql_null_overloaded_across_distinct_meanings.md`, which found
+this was one of six distinct conditions all encoded as SQL `NULL`.
+
 ## Related
 
 `issues/027_exists_loses_correlation_for_filter_only_outer_vars.md` — split out

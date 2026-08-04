@@ -268,7 +268,7 @@ pattern, and why it should not be changed blind.
 
 ## Related
 
-- `issues/028_expression_emitters_fail_open_on_unresolved_vars.md` — NOT FIXED.
+- `issues/028_expression_emitters_fail_open_on_unresolved_vars.md` — FIXED 2026-08-04.
   The shared root pattern behind this issue, 023 and 026.
 - `issues/023_values_clause_ignored_in_sparql_update.md` — fixed. Same failure
   *shape* (a dropped constraint widening a DELETE), different mechanism
@@ -276,7 +276,7 @@ pattern, and why it should not be changed blind.
   test `test_not_exists_constrained_delete` uses the plain
   `FILTER NOT EXISTS { ?s <protected> true }` form, which is in the "correct"
   column above — so it passes and does not cover this defect.
-- `issues/026_minus_ignored_when_shared_var_has_no_term_uuid.md` — open. Also a
+- `issues/026_minus_ignored_when_shared_var_has_no_term_uuid.md` — FIXED. Also a
   silently-ignored constraint, and also rooted in how a variable's identity is
   compared across a subquery boundary (`__uuid` columns there, scope
   registration here). Worth fixing with an eye on both.
