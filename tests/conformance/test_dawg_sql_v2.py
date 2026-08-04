@@ -55,6 +55,11 @@ P0_CATEGORIES = [
     "negation",
     "exists",
     "grouping",
+    # VALUES. Added for issue 023 — the 11 tests here are the only DAWG
+    # coverage of VALUES, and until `test_sql_v2` began actually executing
+    # (same issue) they ran against pyoxigraph only, so VALUES had never been
+    # exercised against the SQL backend by any test.
+    "bindings",
 ]
 
 
@@ -99,6 +104,32 @@ XFAIL_TESTS_V2 = {
         "pyoxigraph GRAPH + MINUS interaction",
 }
 
+# Real gaps in the SQL pipeline, surfaced when `test_sql_v2` was changed on
+# 2026-08-04 to actually execute (it previously ran only the pyoxigraph
+# baseline). Kept visible rather than excluded from collection: removing an
+# entry must make its test pass.
+#
+# All four are aggregates over mixed-typed literals, tracked in
+# issues/029_aggregates_over_mixed_typed_literals.md. In each case pyoxigraph
+# agrees with the manifest's .srx and the SQL pipeline does not, so these are
+# our defects, not oracle disagreements.
+XFAIL_SQL_V2_EXEC = {
+    ("aggregates", "Error in AVG"):
+        "AVG over a non-numeric term crashes the query — Postgres raises "
+        "'invalid input syntax for type numeric: \"b2\"' instead of the "
+        "aggregate yielding an error value (issue 029)",
+    ("aggregates", "MAX"):
+        "MAX over mixed-typed literals returns the wrong extremum — SPARQL "
+        "orders across types, the SQL path compares within the numeric lane "
+        "only, so 3E+4 is not selected (issue 029)",
+    ("aggregates", "MAX with GROUP BY"):
+        "MAX over mixed-typed literals per group returns the wrong extremum "
+        "(issue 029)",
+    ("aggregates", "MIN with GROUP BY"):
+        "MIN over mixed-typed literals per group returns the wrong extremum "
+        "(issue 029)",
+}
+
 
 # ---------------------------------------------------------------------------
 # Test collection
@@ -137,6 +168,10 @@ def event_loop():
     loop.close()
 
 
+# The DB connection and event loop are session-scoped and shared with the
+# update suite — see tests/conformance/conftest.py for why they must be.
+
+
 @pytest.mark.dawg
 class TestDAWGSqlV2:
     """DAWG conformance tests run through the v2 SPARQL→SQL pipeline.
@@ -149,8 +184,14 @@ class TestDAWGSqlV2:
         _SQL_V2_TESTS,
         ids=[t[0] for t in _SQL_V2_TESTS],
     )
-    def test_sql_v2(self, name: str, tc: DawgTestCase):
-        """Run a DAWG test through sql_v2 and compare to pyoxigraph."""
+    def test_oracle_baseline(self, name: str, tc: DawgTestCase):
+        """pyoxigraph vs. the manifest's expected results.
+
+        This validates the corpus and the comparator, NOT this project's code.
+        Kept as a baseline so a failure in `test_sql_v2` below can be attributed
+        — if both fail, suspect the fixture; if only `test_sql_v2` fails, the
+        SQL pipeline is wrong.
+        """
         key = (tc.category, tc.name)
         if key in XFAIL_TESTS_V2:
             pytest.xfail(XFAIL_TESTS_V2[key])
@@ -160,9 +201,6 @@ class TestDAWGSqlV2:
         if tc.result_file is None or not tc.result_file.exists():
             pytest.skip("Result file missing")
 
-        # For now, just verify pyoxigraph baseline passes
-        # Full sql_v2 execution requires the async pipeline setup
-        # which is handled by the run_single_test_sql_v2 in the runner
         expected = parse_result_file(tc.result_file)
         if expected is None:
             pytest.skip(f"Cannot parse result file: {tc.result_file.suffix}")
@@ -183,4 +221,42 @@ class TestDAWGSqlV2:
             pytest.fail(
                 f"Result mismatch: {comparison.message} "
                 f"(expected {comparison.expected_count} rows, got {comparison.actual_count})"
+            )
+
+    @pytest.mark.parametrize(
+        "name,tc",
+        _SQL_V2_TESTS,
+        ids=[t[0] for t in _SQL_V2_TESTS],
+    )
+    def test_sql_v2(self, name: str, tc: DawgTestCase, dawg_conn, dawg_loop):
+        """Run the query through the **real** SPARQL→SQL pipeline.
+
+        Until 2026-08-04 this module ran only the pyoxigraph baseline above —
+        despite its name, its docstring, its `sql_v2` marker and its
+        PostgreSQL+sidecar gate, it never touched the SQL backend. The comment
+        said "full sql_v2 execution ... is handled by run_single_test_sql_v2 in
+        the runner", and that runner was never invoked from pytest. So the
+        query side had no SQL conformance coverage either, the same gap issue
+        023 identified on the update side.
+        """
+        key = (tc.category, tc.name)
+        if key in XFAIL_SQL_V2_EXEC:
+            pytest.xfail(XFAIL_SQL_V2_EXEC[key])
+        if key in XFAIL_TESTS_V2:
+            pytest.xfail(XFAIL_TESTS_V2[key])
+
+        from vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_test_runner import (
+            run_single_test_sql_v2,
+        )
+
+        result = dawg_loop.run_until_complete(
+            run_single_test_sql_v2(tc, dawg_conn)
+        )
+        if result.status == "SKIP":
+            pytest.skip(result.error_message or "runner skipped")
+        if result.status != "PASS":
+            pytest.fail(
+                f"{result.status}: {result.error_message}\n"
+                f"  category={tc.category} test={tc.name}\n"
+                f"  query={tc.query_file}"
             )
