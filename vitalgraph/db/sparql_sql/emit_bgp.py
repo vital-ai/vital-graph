@@ -194,7 +194,13 @@ def emit_bgp(plan: PlanV2, ctx: EmitContext) -> str:
         has_term = slot.term_ref_id is not None and any(
             t.ref_id == slot.term_ref_id for t in plan.tables
         )
-        ctx.types.register(ColumnInfo.simple_output(var, sn, from_triple=has_term))
+        # Whether the term JOIN was actually emitted above. The variable is
+        # bound and its __uuid is real either way; only the text column
+        # differs. Recorded so consumers need not consult ctx (issue 030).
+        ctx.types.register(ColumnInfo.simple_output(
+            var, sn, from_triple=has_term,
+            text_materialized=(text_needed is None or var in text_needed),
+        ))
 
     # Trace: SPARQL→SQL name allocation
     ctx.log("bgp", f"name map: {sql_names}")

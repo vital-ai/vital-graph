@@ -129,11 +129,24 @@ class ColumnInfo:
     # (__type, __uuid, __lang, __datatype, __num, __bool, __dt).
     # True for BGP, EXTEND, passthrough; False for regular aggregates.
     _sql_has_companions: bool = True
+    # Whether the text column actually holds this variable's lexical value.
+    #
+    # False when the term-table JOIN was deferred by the text_needed_vars
+    # optimisation: the variable IS bound and its __uuid is real, but the text
+    # column is NULL. That is a different condition from "unbound", and
+    # conflating the two is issue 030 — it is why emit_distinct reaches for
+    # null_companions() (which means *unbound*) for these variables and then
+    # patches the __uuid entry back.
+    #
+    # Ambient in ctx.text_needed_vars; carried here so consumers can ask the
+    # question of the variable rather than of the context.
+    text_materialized: bool = True
 
     @staticmethod
     def simple_output(sparql_name: str, sql_name: str,
                       from_triple: bool = False,
-                      typed_lane: Optional[str] = None) -> 'ColumnInfo':
+                      typed_lane: Optional[str] = None,
+                      text_materialized: bool = True) -> 'ColumnInfo':
         """Create a ColumnInfo with standard output column names.
 
         All companion columns derive from the opaque *sql_name*
@@ -151,7 +164,21 @@ class ColumnInfo:
             num_col=f"{sql_name}__num",
             from_triple=from_triple,
             typed_lane=typed_lane,
+            text_materialized=text_materialized,
         )
+
+    def has_term_identity(self) -> bool:
+        """Whether this variable can be compared by term UUID.
+
+        True only when the value came from a triple pattern, so its ``__uuid``
+        is a real term-table reference. Values synthesized by BIND, VALUES or
+        an aggregate carry a literal ``NULL::uuid`` there — reading that NULL
+        as "unbound" is what made MINUS a silent no-op (issue 026).
+
+        Ask this rather than testing a ``__uuid`` column for NULL: the column
+        cannot distinguish "no term identity" from "unbound".
+        """
+        return bool(self.from_triple and self.uuid_col)
 
     def has_companions(self) -> bool:
         """Whether this var has companion columns available."""

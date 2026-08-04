@@ -140,7 +140,9 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
         sn = child_info.sql_name if child_info else v
         lane = child_info.typed_lane if child_info else None
         ft = child_info.from_triple if child_info else False
-        ctx.types.register(ColumnInfo.simple_output(v, sn, typed_lane=lane, from_triple=ft))
+        tm = child_info.text_materialized if child_info else True
+        ctx.types.register(ColumnInfo.simple_output(
+            v, sn, typed_lane=lane, from_triple=ft, text_materialized=tm))
 
     ctx.log("join", f"output map: {{{', '.join(f'?{v}→{ctx.types.get(v).sql_name}' for v in sorted(all_vars))}}}")
     ctx.log_scope("join", defined=left_vars | right_vars,

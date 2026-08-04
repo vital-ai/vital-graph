@@ -356,22 +356,29 @@ change. Recorded here so it is not mistaken for a regression if it recurs.
 
 ### What would close this issue
 
-**Blocked on `issues/030_sql_null_overloaded_across_distinct_meanings.md`.**
+**Correction (2026-08-04): this is _not_ unblocked by issue 030**, contrary to
+an earlier note here. 030's step 1 audit found that its proposed
+`NullKind.UNRESOLVED` cannot exist: an unresolved reference is characterised by
+the *absence* of a `ColumnInfo`, so there is nothing to stamp a kind on. That
+absence is the defining property, and this issue's context-marking is already
+the right representation of it.
 
-This issue is one instance of a larger defect: SQL `NULL` carries at least six
-distinct meanings in the generator, and every consumer re-infers which one it
-is. The specific discrimination this issue is stuck on — "legitimately unbound"
-vs "the translator could not resolve it" — is exactly `NullKind.UNBOUND` vs
-`NullKind.UNRESOLVED` in 030's vocabulary. Once producers stamp the kind, the
-question is answerable by lookup instead of by scope analysis.
+So the blocker is unchanged and unshared: separating "legitimately unbound"
+from "the translator should have resolved this" needs **scope information
+threaded through emission** — the ability to ask "was this variable in scope
+here?" at the point the reference is emitted. None of the cheap discriminators
+work:
 
-Concretely, 030 step 10 is what closes this: with `null_kind` populated, strict
-mode may become safe to enable in production for the `UNRESOLVED` case only,
-and the allowlist should shrink to the genuinely-out-of-scope entries.
+- *bound anywhere in the query* — misclassifies `bind10`, where `?z` is bound
+  by a BIND and is still legitimately out of scope inside the group.
+- *under a negation* — misclassifies everything; a legitimately-unbound
+  variable inside `NOT EXISTS`/`MINUS` correctly widens the result, verified
+  against the running backend.
 
-The marking layer added here is the right seam and survives — `ctx.unresolved_vars`
-becomes a query over `null_kind == UNRESOLVED` rather than a parallel list
-(030 step 8).
+The marking layer added here is the right seam for that work: the decision
+already happens in `_check_unresolved_vars`, after emission, with the whole
+query in view. Scope analysis plugs in there without the emitters changing
+again.
 
 The ratchet buys time; it does not remove the need. Until then, every entry
 added to the allowlist is a claim that deserves scrutiny.

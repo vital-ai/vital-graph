@@ -117,7 +117,137 @@ correct consumer is to know all four workarounds already exist.
 
 ---
 
+## Step 1 findings (2026-08-04) — the `NullKind` enum below is the wrong shape
+
+Step 1 said to audit what the four consumers actually branch on before writing
+code, and not to guess. Doing that overturned the design. Recording it here;
+the original proposal is left below for context, but **do not implement the
+seven-value enum**.
+
+### What is already represented
+
+**C (synthesized / no term identity) → `ColumnInfo.from_triple`. Already
+exists, and is already correct.**
+
+I initially misread `emit_bgp.py:194` —
+
+```python
+has_term = slot.term_ref_id is not None and any(
+    t.ref_id == slot.term_ref_id for t in plan.tables)
+```
+
+— as "the term table was joined", which would have meant `from_triple` was
+conflating C with D. It is not: `term_ref_id` is assigned at *collect* time
+(`collect.py:139,287,351`) and reflects plan structure, not whether the JOIN
+was emitted. `from_triple` genuinely means "this value came from a triple and
+has a term-table identity" — exactly C.
+
+Verified end-to-end: for a query where a shared join variable's term join *is*
+deferred (`text_needed_vars = {age, name}`, `?s` excluded), the emitted join
+still correlates on `j0.v0__uuid = j1.v2__uuid`, and OPTIONAL/VALUES/plain
+joins over that variable all return correct results. `emit_join` is right.
+
+**So issue 026 was not a missing field — it was a consumer ignoring a field
+that existed.** `emit_join` and `emit_group` both consult `from_triple`;
+`emit_minus` went straight to the raw `__uuid` column. Had it asked
+`from_triple`, it would have known VALUES/BIND variables have no term identity.
+
+**B (lane not applicable) → `ColumnInfo.typed_lane`, plus a runtime CASE.**
+For BGP variables `typed_lane` is deliberately `None` because the actual type
+is row-dependent — `__num` is a `CASE ... END` evaluated per row. B is
+therefore not a static per-variable property at all and cannot live in a
+per-variable enum. It is already modelled as well as it can be.
+
+**E (unresolved) is characterised by *absence* from the registry.** There is no
+`ColumnInfo` to put an enum value on — that is the defining property. Issue
+028's context marking is the right representation and should stay.
+
+**A (unbound) and F (type error) are genuine runtime NULLs.** SQL NULL
+propagation is the correct semantics. Leave them alone.
+
+### The one real gap
+
+**D (bound, text not materialized) is ambient, not per-column.** It lives in
+`ctx.text_needed_vars` and nothing on `ColumnInfo` expresses it. That is why
+`emit_distinct.py:171-177` reaches for `TypeRegistry.null_companions()` — the
+primitive that *means* A — for variables that are actually D, and then
+string-patches the `__uuid` column back. There is no D primitive to reach for.
+
+### Revised conclusion
+
+Six kinds collapse to **one addition and one correction**:
+
+| Kind | Action |
+|---|---|
+| A, F | none — genuine runtime NULLs |
+| B | none — already `typed_lane`; inherently runtime for BGP vars |
+| C | none to the model; make `emit_minus` **use** `from_triple` |
+| D | **add** a per-variable "is the text materialized" property |
+| E | none — issue 028's context marking is correct |
+
+This is far smaller and safer than the enum, and it removes the two workarounds
+that actually exist. The taxonomy in this issue remains valuable as
+documentation of what NULL means where; it just should not become a field.
+
 ## Implementation steps
+
+*(Revised per the step 1 findings above. The original phasing is preserved —
+enrichment first, then consumers, then enforcement — but steps 2–4 are now much
+narrower.)*
+
+### Phase 1 — represent what is missing (behaviour-preserving)
+
+**Step 2r. Add `text_materialized` to `ColumnInfo`**, defaulting to `True`, and
+set it from `ctx.text_needed_vars` where variables are registered
+(`emit_bgp`, and the passthrough registrations in `emit_join` / `emit_distinct`
+/ `emit_group`). Nothing reads it yet; the suite must be green with byte-
+identical generated SQL.
+
+**Step 3r. Add `ColumnInfo.has_term_identity()`** — an accessor expressing what
+`from_triple` means for the question consumers actually ask ("can I compare
+this by term UUID?"), so the next consumer does not have to know that
+`from_triple` is the right field. Still nothing reads it.
+
+**Step 4r. Assert the vocabulary.** Unit tests that `text_materialized` is
+`False` exactly when the term join is deferred, and that `has_term_identity()`
+is `False` for VALUES/BIND/aggregate outputs and `True` for BGP variables.
+
+### Phase 2 — migrate the consumers
+
+**Step 5r. `emit_minus`** — replace the unconditional `term_identity_expr`
+COALESCE with an explicit `has_term_identity()` check, deriving only when
+needed. Issue 026's integration tests are the net.
+
+**Step 6r. `emit_distinct`** — request the correct companions for
+`text_materialized=False` variables instead of asking for `null_companions()`
+and repairing the `__uuid` entry afterwards.
+
+**Step 7r. `emit_join`** — turn the `emit_join.py:96-98` comment into a
+`text_materialized` check, so the reason the `__uuid` column is chosen for the
+NULL test is expressed rather than explained.
+
+**Step 8r. `emit_group`** — fold `_is_null_placeholder` into whichever
+representation survives, so there is one mechanism rather than an undeclared
+attribute read via `getattr`.
+
+### Phase 3 — enforcement
+
+**Step 9r.** A lint/assertion test that a consumer cannot infer term identity
+by testing a `__uuid` column for NULL directly — the mistake that caused 026.
+
+**Step 10r.** Revisit issue 028. Unchanged in intent, but note that `NullKind.
+UNRESOLVED` will not exist; 028's discrimination still needs scope analysis and
+is **not** unblocked by this issue. See the correction in 028.
+
+---
+
+## Original proposal (superseded by the step 1 findings above)
+
+Retained because the taxonomy is still the clearest statement of what NULL
+means where, and because the reasoning about *why* the distinction belongs in
+`ColumnInfo` rather than in the SQL value still holds.
+
+### Superseded implementation steps
 
 Sequenced so that every step is independently verifiable and no step both adds
 a mechanism and changes behaviour. Steps 1–4 are the enrichment phase and are

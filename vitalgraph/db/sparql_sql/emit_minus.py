@@ -46,7 +46,14 @@ def emit_minus(plan: PlanV2, ctx: EmitContext) -> str:
         sn = child_info.sql_name if child_info else v
         select_cols.extend(TypeRegistry.passthrough_columns(sn, l_alias))
         lane = child_info.typed_lane if child_info else None
-        ctx.types.register(ColumnInfo.simple_output(v, sn, typed_lane=lane))
+        tm = child_info.text_materialized if child_info else True
+        # NOTE: from_triple is deliberately NOT propagated here, matching the
+        # pre-existing behaviour. It probably should be — emit_join reads it,
+        # so a MINUS output feeding a JOIN currently loses the knowledge that
+        # its variables have term identity. That is a behaviour change, so it
+        # belongs in step 5r of issue 030, not in this additive step.
+        ctx.types.register(ColumnInfo.simple_output(
+            v, sn, typed_lane=lane, text_materialized=tm))
 
     if not shared:
         return f"SELECT {', '.join(select_cols)}\nFROM ({left_sql}) AS {l_alias}"

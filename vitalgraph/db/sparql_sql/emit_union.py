@@ -79,7 +79,12 @@ def emit_union(plan: PlanV2, ctx: EmitContext) -> str:
         l_lane = l_info.typed_lane if l_info else None
         r_lane = r_info.typed_lane if r_info else None
         lane = l_lane if l_lane and l_lane == r_lane else None
-        ctx.types.register(ColumnInfo.simple_output(v, out_names[v], typed_lane=lane))
+        # Conservative: a branch missing the variable pads with NULL, so the
+        # text column only carries a value when every contributing branch
+        # materialised it.
+        tm = all(i.text_materialized for i in (l_info, r_info) if i)
+        ctx.types.register(ColumnInfo.simple_output(
+            v, out_names[v], typed_lane=lane, text_materialized=tm))
 
     sql = (
         f"SELECT {', '.join(outer_cols)}\n"
