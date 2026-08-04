@@ -26,6 +26,19 @@ from ..jena_sparql.jena_types import (
 
 logger = logging.getLogger(__name__)
 
+
+class UnboundDeleteTemplateVar(ValueError):
+    """Deprecated — retained only so existing imports keep resolving.
+
+    No longer raised.  An unbound DELETE-template variable now emits a no-op,
+    per SPARQL 1.1 §3.1.3: the template instantiation yields no triple.  That
+    keeps issue 023's safety property (an unbound position must never become a
+    wildcard) without rejecting a spec-legal update — rejecting failed four
+    W3C conformance tests, including "Simple DELETE 7", whose whole purpose is
+    to check this case.
+    """
+
+
 # Deterministic UUID namespace — must match sparql_sql_space_impl._VITALGRAPH_NS
 _VITALGRAPH_NS = _uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
 
@@ -755,12 +768,37 @@ def _delete_from_bindings(dq: QuadPattern, space_id: str,
         """Check if a variable is bound by the WHERE clause."""
         return _sparql_to_sql_col(name, var_map) is not None
 
+    # SPARQL 1.1 §3.1.3: a template quad containing a variable the WHERE clause
+    # does not bind produces NO triple — the instantiation is simply skipped.
+    # It is neither an error nor a wildcard.
+    #
+    # Getting this wrong is how issue 023 caused a whole-graph delete: omitting
+    # the condition for an unbound variable left that position unconstrained.
+    # Emitting a no-op keeps the safety property (a delete can never widen)
+    # while matching the spec, which the W3C update suite checks directly —
+    # dawg_tests/.../delete/delete-07.ru, "Simple DELETE 7", whose stated
+    # purpose is "to test that unbound variables in the DELETE clause do not
+    # act as wildcards".
+    unbound = [
+        (position, node.name)
+        for position, node in (
+            ("subject", dq.subject), ("predicate", dq.predicate),
+            ("object", dq.object), ("graph", dq.graph),
+        )
+        if isinstance(node, VarNode) and not _var_is_bound(node.name)
+    ]
+    if unbound:
+        logger.debug(
+            "DELETE template quad skipped: %s not bound by the WHERE clause "
+            "(SPARQL 1.1 §3.1.3 — unbound template variables yield no triple)",
+            ", ".join(f"?{n} ({p})" for p, n in unbound),
+        )
+        return "SELECT 1"
+
     # Subject
     if isinstance(dq.subject, VarNode):
-        if _var_is_bound(dq.subject.name):
-            conditions.append(f"q.subject_uuid = {_binding_uuid_col(dq.subject.name, var_map, term_table, dt_table)}")
-            needs_bindings = True
-        # else: unbound variable → omit condition (wildcard match)
+        conditions.append(f"q.subject_uuid = {_binding_uuid_col(dq.subject.name, var_map, term_table, dt_table)}")
+        needs_bindings = True
     else:
         conditions.append(
             f"q.subject_uuid = {_term_uuid_subquery(term_table, _node_text(dq.subject), _node_type(dq.subject))}"
@@ -768,10 +806,8 @@ def _delete_from_bindings(dq: QuadPattern, space_id: str,
 
     # Predicate
     if isinstance(dq.predicate, VarNode):
-        if _var_is_bound(dq.predicate.name):
-            conditions.append(f"q.predicate_uuid = {_binding_uuid_col(dq.predicate.name, var_map, term_table, dt_table)}")
-            needs_bindings = True
-        # else: unbound variable → omit condition (wildcard match)
+        conditions.append(f"q.predicate_uuid = {_binding_uuid_col(dq.predicate.name, var_map, term_table, dt_table)}")
+        needs_bindings = True
     else:
         conditions.append(
             f"q.predicate_uuid = {_term_uuid_subquery(term_table, _node_text(dq.predicate), _node_type(dq.predicate))}"
@@ -779,10 +815,8 @@ def _delete_from_bindings(dq: QuadPattern, space_id: str,
 
     # Object
     if isinstance(dq.object, VarNode):
-        if _var_is_bound(dq.object.name):
-            conditions.append(f"q.object_uuid = {_binding_uuid_col(dq.object.name, var_map, term_table, dt_table)}")
-            needs_bindings = True
-        # else: unbound variable → omit condition (wildcard match)
+        conditions.append(f"q.object_uuid = {_binding_uuid_col(dq.object.name, var_map, term_table, dt_table)}")
+        needs_bindings = True
     else:
         o_dt_id = None
         o_dt_uri = _node_datatype_uri(dq.object)
@@ -795,10 +829,8 @@ def _delete_from_bindings(dq: QuadPattern, space_id: str,
 
     # Graph
     if dq.graph and isinstance(dq.graph, VarNode):
-        if _var_is_bound(dq.graph.name):
-            conditions.append(f"q.context_uuid = {_binding_uuid_col(dq.graph.name, var_map, term_table, dt_table)}")
-            needs_bindings = True
-        # else: unbound graph variable → omit condition
+        conditions.append(f"q.context_uuid = {_binding_uuid_col(dq.graph.name, var_map, term_table, dt_table)}")
+        needs_bindings = True
     elif dq.graph:
         conditions.append(
             f"q.context_uuid = {_term_uuid_subquery(term_table, _node_text(dq.graph), 'U')}"

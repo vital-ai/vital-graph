@@ -36,6 +36,15 @@ from .jena_types import (
 logger = logging.getLogger(__name__)
 
 
+class UnsupportedSparqlElement(ValueError):
+    """A SPARQL syntax Element has no translation to algebra.
+
+    Raised instead of degrading to an empty pattern.  See issue 023: an
+    untranslatable construct in an update's WHERE must reject the update, never
+    execute a broadened one.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -784,15 +793,32 @@ def _extract_delete_where_quads(u: Dict[str, Any]) -> List[QuadPattern]:
     return []
 
 
+def _element_sub(elem: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the nested element of a wrapper element ("sub" or "element")."""
+    return elem.get("sub") or elem.get("element") or {}
+
+
 def map_element_to_op(elem: Dict[str, Any]) -> Op:
     """Convert a Jena syntax Element to an algebra Op.
 
     The WHERE pattern in UpdateModify uses Element types (syntax level)
     rather than compiled algebra Op types. This converts common elements.
+
+    Raises:
+        UnsupportedSparqlElement: for any element type without a handler.
+            This MUST NOT fall back to an empty BGP — an empty BGP is the
+            join identity, so a dropped constraint silently *widens* the
+            pattern.  In an update that turns ``DELETE ... WHERE { VALUES ?s
+            {...} ?s ?p ?o }`` into an unconstrained whole-graph delete
+            (issue 023).  Rejecting the update is recoverable; deleting the
+            graph is not.
     """
     etype = elem.get("type", "")
 
-    if etype == "ElementPathBlock":
+    # ElementPathBlock and ElementTriplesBlock share the same serialized
+    # shape ({"triples": [{s,p,o}, ...]}) — Jena emits whichever the parser
+    # produced.  Both are plain BGPs.
+    if etype in ("ElementPathBlock", "ElementTriplesBlock"):
         triples = []
         for t in elem.get("triples", []):
             triples.append(TriplePattern(
@@ -806,10 +832,39 @@ def map_element_to_op(elem: Dict[str, Any]) -> Op:
         elements = elem.get("elements", [])
         if not elements:
             return OpBGP(triples=[])
-        ops = [map_element_to_op(e) for e in elements]
-        result = ops[0]
-        for op in ops[1:]:
-            if isinstance(op, OpFilter):
+        # OPTIONAL / MINUS / EXISTS / NOT EXISTS carry only their right-hand
+        # side; they wrap the accumulated result rather than joining with it,
+        # so they are dispatched on the raw element type before mapping.
+        result: Optional[Op] = None
+        for e in elements:
+            e_type = e.get("type", "") if isinstance(e, dict) else ""
+            if e_type == "ElementOptional":
+                result = OpLeftJoin(
+                    left=result if result is not None else OpBGP(triples=[]),
+                    right=map_element_to_op(_element_sub(e)),
+                    exprs=[],
+                )
+                continue
+            if e_type == "ElementMinus":
+                result = OpMinus(
+                    left=result if result is not None else OpBGP(triples=[]),
+                    right=map_element_to_op(_element_sub(e)),
+                )
+                continue
+            if e_type in ("ElementNotExists", "ElementExists"):
+                from .jena_types import ExprExists
+                result = OpFilter(
+                    exprs=[ExprExists(
+                        graph_pattern=map_element_to_op(_element_sub(e)),
+                        negated=(e_type == "ElementNotExists"),
+                    )],
+                    sub_op=result if result is not None else OpBGP(triples=[]),
+                )
+                continue
+            op = map_element_to_op(e)
+            if result is None:
+                result = op
+            elif isinstance(op, OpFilter):
                 # Wrap the accumulated result with the filter
                 result = OpFilter(exprs=op.exprs, sub_op=result)
             elif isinstance(op, OpExtend) and isinstance(op.sub_op, OpBGP) and not op.sub_op.triples:
@@ -817,7 +872,41 @@ def map_element_to_op(elem: Dict[str, Any]) -> Op:
                 result = OpExtend(var=op.var, expr=op.expr, sub_op=result)
             else:
                 result = OpJoin(left=result, right=op)
-        return result
+        return result if result is not None else OpBGP(triples=[])
+
+    # VALUES inline data.  The sidecar serializes Jena's ElementData under the
+    # name "ElementValues" (ElementSerializer.java), with rows as *positional*
+    # lists aligned to `vars` — unlike the algebra path's OpTable, whose rows
+    # are dicts keyed by var name.  Zip them here; do not reuse _map_table.
+    if etype in ("ElementValues", "ElementData"):
+        vars_ = list(elem.get("vars", []))
+        rows = []
+        for row in elem.get("rows", []):
+            mapped_row: Dict[str, Any] = {}
+            for var_name, node_data in zip(vars_, row):
+                # None → UNDEF
+                mapped_row[var_name] = (
+                    map_node(node_data) if node_data is not None else None
+                )
+            rows.append(mapped_row)
+        return OpTable(vars=vars_, rows=rows)
+
+    # A bare MINUS / EXISTS / NOT EXISTS outside a group: minus against the
+    # empty pattern.  Normally these arrive inside an ElementGroup and are
+    # handled above.
+    if etype == "ElementMinus":
+        return OpMinus(left=OpBGP(triples=[]),
+                       right=map_element_to_op(_element_sub(elem)))
+
+    if etype in ("ElementNotExists", "ElementExists"):
+        from .jena_types import ExprExists
+        return OpFilter(
+            exprs=[ExprExists(
+                graph_pattern=map_element_to_op(_element_sub(elem)),
+                negated=(etype == "ElementNotExists"),
+            )],
+            sub_op=OpBGP(triples=[]),
+        )
 
     if etype == "ElementFilter":
         expr_data = elem.get("expr")
@@ -836,8 +925,12 @@ def map_element_to_op(elem: Dict[str, Any]) -> Op:
             )
         return OpBGP(triples=[])
 
+    # Bare OPTIONAL outside a group.  Inside a group it wraps the accumulated
+    # result instead (see ElementGroup above).
+    # NOTE: the serializer emits the nested element under "sub"; reading only
+    # "element" here silently dropped every OPTIONAL in an update WHERE.
     if etype == "ElementOptional":
-        inner = elem.get("element")
+        inner = _element_sub(elem)
         if inner:
             return OpLeftJoin(
                 left=OpBGP(triples=[]),
@@ -959,5 +1052,12 @@ def map_element_to_op(elem: Dict[str, Any]) -> Op:
 
         return result_op
 
-    logger.warning("Unknown element type: %s — returning empty BGP", etype)
-    return OpBGP(triples=[])
+    # Fail CLOSED.  Returning an empty BGP here would be the join identity,
+    # silently widening the caller's pattern — in an update that means a
+    # whole-graph DELETE reported as success (issue 023).  Anything without a
+    # handler above must reject the statement instead.
+    raise UnsupportedSparqlElement(
+        f"Unsupported SPARQL element type {etype!r} in an update WHERE clause. "
+        f"Refusing to translate: dropping it would silently widen the pattern "
+        f"and could delete more than intended."
+    )
