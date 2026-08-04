@@ -46,14 +46,14 @@ class TestClassification:
         ctx = _ctx()
         with ctx.expression_scope({"other"}):
             _var_to_sql(ExprVar(var="missing"), ctx)
-        assert ctx.unresolved_vars == [("missing", 0, False)]
+        assert ctx.unresolved_vars == [("missing", 0, False, "unresolvable")]
 
     def test_in_scope_is_recorded_as_a_gap(self):
         """In scope and unresolvable — the translator should have wired it."""
         ctx = _ctx()
         with ctx.expression_scope({"missing"}):
             _var_to_sql(ExprVar(var="missing"), ctx)
-        assert ctx.unresolved_vars == [("missing", 0, True)]
+        assert ctx.unresolved_vars == [("missing", 0, True, "unresolvable")]
 
     def test_undeclared_scope_is_treated_as_out_of_scope(self):
         """An emitter that has not declared a scope must not manufacture false
@@ -61,7 +61,7 @@ class TestClassification:
         ctx = _ctx()
         assert ctx.expr_scope is None
         _var_to_sql(ExprVar(var="missing"), ctx)
-        assert ctx.unresolved_vars == [("missing", 0, False)]
+        assert ctx.unresolved_vars == [("missing", 0, False, "unresolvable")]
 
     def test_emitted_sql_is_unchanged_either_way(self):
         """Classification decides whether to raise, not what to emit."""
@@ -117,7 +117,7 @@ class TestScopeIsPositional:
         ctx.correlated_scope = frozenset({"outer"})
         with ctx.expression_scope({"inner_only"}):
             _var_to_sql(ExprVar(var="outer"), ctx)
-        assert ctx.unresolved_vars == [("outer", 0, True)]
+        assert ctx.unresolved_vars == [("outer", 0, True, "unresolvable")]
 
 
 class TestExistsContextSharesTheRecord:
@@ -154,16 +154,17 @@ class TestPolicy:
 
     def test_gap_raises(self):
         with pytest.raises(UnresolvedVariableError, match=r"\?missing"):
-            _check_unresolved_vars([("missing", 0, True)])
+            _check_unresolved_vars([("missing", 0, True, "unresolvable")])
 
     def test_out_of_scope_never_raises(self):
         """Raising here would reject conformant queries — COALESCE, BIND of an
         unbound expression, and cross-scope references all rely on NULL."""
-        _check_unresolved_vars([("missing", 0, False)])
+        _check_unresolved_vars([("missing", 0, False, "unresolvable")])
 
     def test_mixed_raises_only_for_the_gap(self):
         with pytest.raises(UnresolvedVariableError) as exc:
-            _check_unresolved_vars([("fine", 0, False), ("broken", 1, True)])
+            _check_unresolved_vars([("fine", 0, False, "unresolvable"),
+                                    ("broken", 1, True, "unresolvable")])
         assert "?broken" in str(exc.value)
         assert "?fine" not in str(exc.value)
 
@@ -174,7 +175,7 @@ class TestPolicy:
         """The reader must not be tempted to 'fix' this by relaxing a check —
         in scope and unresolvable is always a wiring bug."""
         with pytest.raises(UnresolvedVariableError) as exc:
-            _check_unresolved_vars([("x", 0, True)])
+            _check_unresolved_vars([("x", 0, True, "unresolvable")])
         msg = str(exc.value)
         assert "translation gap" in msg
         assert "in scope" in msg
@@ -187,3 +188,56 @@ class TestPolicy:
         assert "_STRICT_UNRESOLVED_VARS" not in inspect.getsource(generator), (
             "the opt-in toggle should be gone; gaps raise unconditionally"
         )
+
+
+class TestTextNotMaterialised:
+    """The other way a variable loses its value — issue 027's *second* half.
+
+    Here the variable resolves: it has a ColumnInfo and a column reference.
+    Only its text column is NULL at runtime, because the term JOIN was deferred
+    on the belief that nothing referenced it. Scope analysis cannot see this —
+    nothing is unresolved — so it needs its own check, keyed on the invariant
+    `compute_text_needed_vars` states: a variable may only be deferred if it is
+    "NOT referenced by any expression".
+    """
+
+    def _ctx_with(self, materialized):
+        ctx = _ctx(all_vars=("s",))
+        ctx.types.register(
+            ColumnInfo.simple_output("s", "v0", from_triple=True,
+                                     text_materialized=materialized))
+        return ctx
+
+    def test_deferred_text_is_recorded_as_a_gap(self):
+        ctx = self._ctx_with(False)
+        assert _var_to_sql(ExprVar(var="s"), ctx) == "v0"
+        assert ctx.unresolved_vars == [("s", 0, True, "text-not-materialised")]
+
+    def test_materialised_text_is_not_recorded(self):
+        ctx = self._ctx_with(True)
+        assert _var_to_sql(ExprVar(var="s"), ctx) == "v0"
+        assert ctx.unresolved_vars == []
+
+    def test_it_does_not_depend_on_declared_scope(self):
+        """Unlike the unresolvable case, this is a broken invariant regardless
+        of where the expression sits — an expression referencing the variable
+        is itself the proof the deferral was wrong."""
+        ctx = self._ctx_with(False)
+        with ctx.expression_scope(set()):
+            _var_to_sql(ExprVar(var="s"), ctx)
+        assert ctx.unresolved_vars[0][2] is True
+
+    def test_still_returns_the_column(self):
+        """Marking must not change what is emitted."""
+        ctx = self._ctx_with(False)
+        assert _var_to_sql(ExprVar(var="s"), ctx) == "v0"
+
+    def test_message_names_the_actual_cause(self):
+        """'unresolvable' would be wrong here and would send the reader to the
+        wrong fix — the variable resolved fine."""
+        with pytest.raises(UnresolvedVariableError) as exc:
+            _check_unresolved_vars([("s", 0, True, "text-not-materialised")])
+        msg = str(exc.value)
+        assert "text-not-materialised" in msg
+        assert "DID resolve" in msg
+        assert "reference collector" in msg

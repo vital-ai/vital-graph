@@ -57,18 +57,20 @@ EXISTS body were written to a context nobody read — the same shape of mistake
 as the original defect. The earlier unit test used `ctx.child()` and therefore
 missed it; there is now a test on the actual construction path.
 
-## Not covered
+## Also covered, via a second mechanism (2026-08-04)
 
-`vars_in_expr` failing to recurse into `ExprExists` — 027's *second* half — is
-a different failure mode and is **not** caught by this. There the variable
-resolves fine; its text column is simply NULL because the term JOIN was
-skipped. Reverting that half still returns wrong results silently. Detecting it
-would need value-level provenance, not scope — the direction `issues/030`
-started with `ColumnInfo.text_materialized`.
+This section previously said 027's second half was **not** caught. It is now.
 
-This is also recorded in `issues/027` itself, since that is where the
-unguarded code lives and where someone is likely to be reading before changing
-it.
+Scope cannot see it — the variable resolves, and only its text column is NULL
+because the term JOIN was deferred. The check keys on a different invariant:
+`compute_text_needed_vars` defers a variable only when it is "NOT referenced by
+any expression", so an expression reaching one with
+`ColumnInfo.text_materialized=False` proves the reference collector missed it.
+
+Both causes flow through the same record and raise the same error, which names
+which one occurred (`unresolvable` vs `text-not-materialised`) and, for the
+latter, says explicitly that the variable *did* resolve — otherwise the message
+sends the reader to the wrong fix.
 
 ## Severity
 

@@ -377,7 +377,7 @@ def _check_unresolved_vars(unresolved) -> None:
     """
     if not unresolved:
         return
-    gaps = [(v, d) for v, d, in_scope in unresolved if in_scope]
+    gaps = [(v, d, reason) for v, d, in_scope, reason in unresolved if in_scope]
     if not gaps:
         return
     # Raised in production, not only under test. A variable that was in scope
@@ -387,13 +387,24 @@ def _check_unresolved_vars(unresolved) -> None:
     # merely logged. Measured against the DAWG corpus: zero occurrences, so no
     # conformant query is affected.
     from .emit_expressions import UnresolvedVariableError
-    detail = ", ".join(f"?{v} (depth {d})" for v, d in gaps)
+    detail = ", ".join(f"?{v} ({reason}, depth {d})" for v, d, reason in gaps)
+    causes = {reason for _, _, reason in gaps}
+    hint = ""
+    if "text-not-materialised" in causes:
+        hint = (
+            " A 'text-not-materialised' variable DID resolve — its term JOIN "
+            "was deferred because compute_text_needed_vars believed nothing "
+            "referenced it, so its text column is NULL at runtime. Teach the "
+            "reference collector about this reference (issue 027's second "
+            "half)."
+        )
     raise UnresolvedVariableError(
-        f"Variable(s) in scope but unresolvable: {detail}. Each compiled to "
-        f"NULL, which silently weakens the enclosing constraint (issues 023, "
-        f"027). Being in scope means the translator should have resolved it, "
-        f"so this is a translation gap — fix the wiring. A variable that is "
-        f"legitimately out of scope does not reach here."
+        f"Variable(s) lost their value while in scope: {detail}. Each compiles "
+        f"to NULL, silently weakening the enclosing constraint (issues 023, "
+        f"027). Being in scope means the translator should have carried the "
+        f"value, so this is a translation gap — fix the wiring, do not relax "
+        f"the check. A variable legitimately out of scope does not reach "
+        f"here.{hint}"
     )
 
 

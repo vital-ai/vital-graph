@@ -155,6 +155,20 @@ def _var_to_sql(expr: ExprVar, ctx: EmitContext) -> Optional[str]:
     """
     info = ctx.types.get(expr.var)
     if info and info.text_col:
+        # The variable resolves — but if its term JOIN was deferred, the text
+        # column is NULL at runtime and any comparison using it silently
+        # returns nothing. compute_text_needed_vars only defers a variable that
+        # is "NOT referenced by any expression", so an expression reaching one
+        # here means the reference collector missed this reference.
+        #
+        # That is issue 027's *second* half, which scope analysis cannot see:
+        # nothing is unresolved, so 028's check never fires. Recorded through
+        # the same channel because the consequence is identical — a constraint
+        # that silently stops constraining.
+        if info.text_materialized is False:
+            ctx.add_unresolved_var(expr.var, in_scope=True,
+                                   reason="text-not-materialised")
+            ctx.log("expr", f"?{expr.var} referenced but text not materialised")
         return info.text_col
     # Rule 1: NULL = unbound (§10.5). Variable not in registry.
     if ctx.query_all_vars and expr.var in ctx.query_all_vars:

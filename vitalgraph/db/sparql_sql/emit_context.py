@@ -258,7 +258,7 @@ class EmitContext:
         # condition inspectable after generation instead of leaving no trace —
         # mirroring ColumnInfo.is_unbound, which likewise marks a
         # deliberate NULL rather than emitting a bare one. See issue 028.
-        self._unresolved_vars: List[Tuple[str, int, bool]] = []
+        self._unresolved_vars: List[Tuple[str, int, bool, str]] = []
         # Variables in scope for the expressions currently being emitted, or
         # None when no handler has declared a scope. Set via expression_scope();
         # read by emit_expressions._var_to_sql to tell a translation gap from a
@@ -389,7 +389,8 @@ class EmitContext:
         """
         self._fuzzy_requests.append(request)
 
-    def add_unresolved_var(self, var: str, in_scope: bool = False) -> None:
+    def add_unresolved_var(self, var: str, in_scope: bool = False,
+                           reason: str = "unresolvable") -> None:
         """Record a variable an expression referenced but could not resolve.
 
         The emitted SQL is still ``NULL`` — this does not change behaviour, it
@@ -401,11 +402,11 @@ class EmitContext:
         translator should have resolved it and failing to is a bug. False means
         it is legitimately unbound and NULL is the specified result.
         """
-        self._unresolved_vars.append((var, self._depth, in_scope))
+        self._unresolved_vars.append((var, self._depth, in_scope, reason))
 
     @property
-    def unresolved_vars(self) -> List[Tuple[str, int, bool]]:
-        """(variable, depth, in_scope) for every reference that compiled to NULL."""
+    def unresolved_vars(self) -> List[Tuple[str, int, bool, str]]:
+        """(variable, depth, in_scope, reason) for each reference that lost its value."""
         return self._unresolved_vars
 
     @contextmanager
