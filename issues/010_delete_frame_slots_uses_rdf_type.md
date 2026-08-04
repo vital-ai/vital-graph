@@ -1,6 +1,6 @@
 # DELETE /kgframes/kgslots: validation uses rdf:type instead of vital-core:vitaltype
 
-**Status: RESOLVED**
+## Status: FIXED
 
 ## Summary
 

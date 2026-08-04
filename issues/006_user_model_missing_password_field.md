@@ -64,7 +64,7 @@ resp = await vg_client.users.add_user(user)
 # → VitalGraphClientError: Request failed (400): Password is required
 ```
 
-## Status
+## Status: FIXED
 
 **Resolved.** `UserCreate` model added to `users_model.py`. Server endpoint
 and client updated to use it.

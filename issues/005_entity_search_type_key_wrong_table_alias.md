@@ -1,5 +1,7 @@
 # Entity search type_key filter: wrong SQL table alias
 
+## Status: FIXED — verified 2026-08-04: `et.type_key` at entity_registry_search.py:74,167
+
 ## Summary
 
 The `search_topic`, `search_hybrid`, and `search_topic_near` methods in

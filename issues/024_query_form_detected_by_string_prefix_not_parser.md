@@ -96,7 +96,7 @@ The module is the remote, client-backed implementation of the VitalSigns
 against a local graph service or a remote VitalGraph server interchangeably. It
 is stranded because that interface is synchronous while its backend is not, so
 the preferred fix is upstream in `vital-vitalsigns-python`: convert the
-interface to `async`, after which almost nothing here needs to change. See 027
+interface to `async`, after which almost nothing here needs to change. See 032
 for the full plan and the sequencing caveat.
 
 ## Scope note

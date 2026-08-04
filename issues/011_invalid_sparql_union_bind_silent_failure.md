@@ -1,5 +1,7 @@
 # SQL generator: BIND in UNION branches produces empty bindings
 
+## Status: NOT A BUG — behaviour is correct per SPARQL 1.1 §18.5; a diagnostic warning was added instead
+
 ## Summary
 
 A SPARQL query using `{ BIND(?x AS ?y) } UNION { BIND(?z AS ?y) }`
@@ -60,6 +62,28 @@ references a variable from a sibling pattern. Per SPARQL 1.1 semantics,
 each UNION branch is evaluated independently — move the source pattern
 into the UNION branch or use a different query structure.
 ```
+
+### Update 2026-08-04 — the warning was rewritten and is now backed by a check
+
+That wording was this issue's, and it turned out to be too narrow. The same
+`_var_to_sql` path is reached by at least two other causes, and the
+UNION-specific advice was actively misleading for them — a filter-only
+reference inside `EXISTS`, and a variable the reference-collector never marked
+text-needed. Both were real defects
+(`issues/027_exists_loses_correlation_for_filter_only_outer_vars.md`), and both
+produced whole-graph deletes when they occurred in an update's WHERE.
+
+The message now leads with the *consequence* (the variable compiles to NULL, so
+the enclosing constraint is silently weakened), lists the known causes without
+asserting one, and tells the reader not to trust the results. See
+`issues/028_expression_emitters_fail_open_on_unresolved_vars.md`.
+
+The condition is also no longer diagnostics-only: it is recorded on the emit
+context (`ctx.add_unresolved_var`), annotated in the generated SQL as
+`NULL /* vg:unresolved-var ?x */`, and **raises** under the test suite's strict
+mode, with the legitimate cases allowlisted by name. The verdict below is
+unchanged — this query shape is still correct-per-spec, not a bug — but a *new*
+instance of the same NULL is now caught rather than merely logged.
 
 ## Reproduction
 

@@ -76,6 +76,6 @@ return SegmentDocumentResponse(
 - `tests/api/test_kgdocuments_api.py::TestSegmentationConfigCrud` (5 tests)
 - `tests/api/test_kgdocuments_api.py::TestSegmentationTriggerAndStatus` (3 tests)
 
-## Status
+## Status: FIXED
 
 **Fixed** — connections properly released; endpoint returns promptly when queue unavailable.

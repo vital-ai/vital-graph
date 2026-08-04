@@ -1,6 +1,6 @@
 # 012 — `filter_spaces_by_name` only matches `space_name`, not `space_id`
 
-**Status**: Fixed  
+## Status: FIXED  
 **Severity**: Medium  
 **Component**: `vitalgraph/api/vitalgraph_api.py` — `filter_spaces_by_name` and `list_spaces`
 

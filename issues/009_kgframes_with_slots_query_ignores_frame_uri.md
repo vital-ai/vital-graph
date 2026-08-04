@@ -1,6 +1,6 @@
 # GET /kgframes/kgslots ignores frame_uri and never returns slots
 
-**Status: RESOLVED**
+## Status: FIXED
 
 ## Summary
 

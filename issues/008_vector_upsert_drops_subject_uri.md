@@ -1,5 +1,7 @@
 # Issue 008: Vector upsert drops subject_uri on retrieval
 
+## Status: FIXED — verified 2026-08-04: term INSERT at vector_indexes_endpoint.py:423,428
+
 ## Summary
 
 When vectors are inserted via `POST /api/vector-indexes/vectors` (the direct

@@ -1,5 +1,7 @@
 # Users endpoint: update_user parameter mismatch + missing filter route
 
+## Status: FIXED — all three bugs marked Resolved inline; `name_filter` route verified at users_endpoint.py:43
+
 ## Bug 1: update_user passes raw dict to DB method
 
 ### Summary

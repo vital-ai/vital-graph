@@ -1,6 +1,29 @@
 # E2E: intermittent "X appears in the list" failures under full parallel load
 
-## Status: OPEN
+## Status: PARTIALLY RESOLVED — root causes identified, four fixed, two open
+
+**Resolution (2026-08-04).** With traces finally being captured (see below),
+the "read-after-write visibility" framing turned out to be wrong. Neither cache
+invalidation nor request sequencing was involved in any failure examined. Three
+distinct causes were found and fixed, plus one unrelated product bug:
+
+| # | Cause | Evidence | Fix |
+|---|---|---|---|
+| 1 | **Traces were never captured locally** — `trace: 'on-first-retry'` with `retries: 0` | config read | `trace: 'retain-on-failure'` (`playwright.config.ts`) |
+| 2 | **Shared list + paging, not a stale read** — the seeded space/graph is shared with the frame sorting specs (~30 fixture frames); with a 25-row page the created frame is simply not on page 1 | trace: list `total_count: 51` without the frame, `search` for the same frame `total_count: 1` — **the server had it all along** | search-scoped lookup in `kgframes-crud.spec.ts`, `search-ui.spec.ts` |
+| 3 | **A vacuous assertion hid a lost write** — `expect(page).toHaveURL(/\/kg-types/)` is satisfied by the create page's own URL (`/kg-types/new?mode=create`), so the create test passed with no POST ever issued; the failure surfaced one test later as an empty list | trace: list returned `total_count: 0`; server logs show no `POST /api/graphs/kgtypes` in the run window | anchored URL + `waitForResponse` on the create POST in `kgtypes-crud.spec.ts` |
+| 4 | **`networkidle` waits** in `indexes-crud.spec.ts` (six of them) | Playwright guidance; run-A failure sat directly after one | `selectSpaceAndSettle()` waits on the three actual list responses |
+| — | **Product bug, unrelated to load:** agent edit form seeded `agent_type` from `agent_type_label` but submits it as `agent_type_key` | trace: `PUT /api/agents/agent` → 200 `{"success": false, "message": "Unknown agent type: E2E Bot"}` | `AgentRegistryDetail.tsx` now seeds from the key, and `handleSave` inspects the `success` envelope instead of treating HTTP 200 as success |
+
+Section B — the request-sequencing bug — was then **confirmed with trace
+evidence and fixed**; see "Section B confirmed" below. Full-suite results
+progressed 7 failed → 4 → 1 → **273/273 green**, with a later run showing 2
+failures in two previously-unexamined specs (listed under "Still open").
+
+**What this rules out.** No evidence was found for cause 1 (entity/count cache
+`NOTIFY` timing) or cause 2 (fast-path/`rdf_stats` lag) in any failure examined.
+The "created object does not appear" symptom was, in every traced case, either
+paging over a shared list or a write that never happened.
 
 ## Summary
 
@@ -212,3 +235,78 @@ timeout within a single test (cause 6), or replacing `networkidle` with a real
 assertion (cause 5), removes test-side noise rather than hiding a product bug.
 The line is whether the change makes the test wait for *the thing it is
 asserting* or merely wait *longer in general*.
+
+## Section B confirmed — and fixed
+
+The overlapping-request bug hypothesised in section B was reproduced with a
+trace, from `kgframes-sorting.spec.ts:193`. Request timeline (same page, ms
+resolution):
+
+| started | duration | page_size | search | sort_by |
+|---|---|---|---|---|
+| 47.786 | 45 ms | 100 | yes | — |
+| 47.794 | 34 ms | 100 | yes | `hasFrameSequence` |
+
+The **sorted** response completed at 47.828; the older **unsorted** one at
+47.831 — 3 ms later — and overwrote it. The table then showed unsorted rows
+with no trigger for another fetch, so the test waited the full 20 s for a row
+order that could never arrive. This is a user-visible bug, not a test artifact:
+type a search and immediately pick a sort and you can be left looking at the
+unsorted list.
+
+Fixed with a fetch sequence number in `KGFrames.tsx`, `KGRelations.tsx` and
+`KGEntities.tsx`: each fetch takes a ticket, and a response whose ticket is no
+longer current is discarded instead of being written to state (`loading` is
+likewise only cleared by the newest fetch).
+
+Two test-side paging loops had the matching defect and were fixed with them:
+`kgframes-sorting.spec.ts:223` and `kgrelations-sorting.spec.ts:306` clicked
+"next" and then waited on ROW COUNT, which is identical on every full page — so
+the assertion passed instantly against the stale page and collected the same
+page twice. They now wait for the first row to change, the same rule
+`entity-graph-paging` already documented.
+
+## Resolved since
+
+- **`entity-graph-paging.spec.ts:238`** — not a product bug. The loop paging to
+  the last frame page used `waitForLoadState('networkidle')`, which returned
+  before React re-rendered; the card selector then took `.last()` of the STALE
+  page. Traced: the app requested slots for `…:f005` (last card of page 1)
+  instead of `…:f000` (the only frame with 40 slots), so the slot pager never
+  appeared. Also, every card renders `frame-slot-count` (it shows "0 slots"),
+  so filtering on it narrowed nothing. Now waits for the rendered page to
+  change and addresses frame 0 by `data-frame-uri`. 3/3 consecutive passes.
+- **`entity-lifecycle.spec.ts:23` / `kg-objects.spec.ts:17`** (`toHaveCount(3)`
+  got 4) — stale data, not a bug: `urn:e2e:probe:e1` ("Probe", created
+  2026-08-04T03:15) was residue in the seeded space and nothing in this repo
+  creates it. Deleted; the space is back to its 3 seeded entities. Still worth
+  deciding whether the seeded-space fixture should assert its own preconditions
+  rather than trusting the stack's state.
+
+## Still open
+
+Not yet investigated — each appeared once, in a spec this pass never examined,
+and none has been shown to be a stale read:
+
+1. `entity-registry-lookups.spec.ts:118` — strict-mode violation:
+   `getByText('E2E Lookup Source Sel')` resolves to 2 elements. Ambiguous
+   locator, likely deterministic given the right state.
+2. `graph-visualization-crud.spec.ts:60` — database search does not find
+   'Alice Anderson'.
+3. `graph-visualization-crud.spec.ts:177` — 'Session 2' tab not visible
+   (seen once, in an earlier run).
+4. `data-import-export-crud.spec.ts:90` — import job never reaches
+   `completed`; first seen immediately after a stack rebuild, so possibly a
+   cold-start timeout.
+5. `search-execution.spec.ts:58` — FTS search returns no results for a known
+   entity (seen once).
+
+## Note on shared fixtures
+
+Two of the three fixed causes trace back to the same structural choice: specs
+share `e2e_test_space` / `urn:e2e:graph:main` and assert against page 1 of a
+list other specs are concurrently filling. Search-scoping the lookups fixes the
+symptom. The structural fix — per-spec spaces, as `indexes-crud` already does —
+would remove the class. `tests/api` also writes into the shared `sp_kg_types`
+space, so a concurrent pytest run against the same stack can perturb the e2e
+suite.

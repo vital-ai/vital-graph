@@ -1,5 +1,7 @@
 # 017 — Client & Frontend Should Use Streaming File Endpoints Only
 
+## Status: FIXED — the doc's own "Required Changes" are all checked off
+
 ## Summary
 
 The TypeScript client SDK (`FilesEndpoint.ts`) and the frontend (`FileUpload.tsx`) currently use the **non-streaming** file endpoints (`/api/files/upload`, `/api/files/download`), which buffer the entire file into memory on both upload and download. The backend already provides true stream-pump endpoints (`/api/files/stream/upload`, `/api/files/stream/download`) but they are unused.

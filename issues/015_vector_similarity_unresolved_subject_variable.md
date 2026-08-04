@@ -241,7 +241,7 @@ Pattern 3 (structural awareness of emit ordering). It requires:
 - `vitalgraph/db/sparql_sql/emit_context.py` — `TypeRegistry` (where variables are registered)
 - `vitalgraph/db/sparql_sql/sql_type_generation.py` — `register_from_triple` (how BGPs populate registry)
 
-## Status
+## Status: FIXED
 
 **FIXED** — Pattern 4 implemented 2026-07-03. All 420 API tests + 363
 conformance tests pass.
