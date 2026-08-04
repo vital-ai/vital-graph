@@ -21,7 +21,17 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+_PROJECT_ROOT = os.path.join(os.path.dirname(__file__), '..', '..')
+sys.path.insert(0, _PROJECT_ROOT)
+
+# Load .env like the other test scripts do.  Without this the OpenAI test
+# skipped even on machines where the key is configured — it only ever read the
+# exported shell environment.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(_PROJECT_ROOT, '.env'))
+except ImportError:
+    pass
 
 
 async def test_vitalsigns_provider():
@@ -37,11 +47,10 @@ async def test_vitalsigns_provider():
     init_time = time.time() - t0
     print(f"  Initialized in {init_time:.2f}s")
     print(f"  Model: {provider.model_name}")
-    print(f"  Device: {provider._device}")
     print(f"  Dimensions: {provider.dimensions}")
 
     assert provider.dimensions == 384, f"Expected 384 dims, got {provider.dimensions}"
-    assert provider.provider_name == "vitalsigns"
+    assert provider.provider_name == "vitalsigns_onnx"
 
     # Single text
     t0 = time.time()
@@ -85,6 +94,107 @@ async def test_vitalsigns_provider():
     assert len(vec_empty) == 384
 
     print("\n  ✅ VitalSignsProvider: ALL TESTS PASSED")
+    return True
+
+
+async def test_paraphrase_multilingual_provider():
+    """Test ParaphraseMultilingualMiniLMProvider — dims, Weaviate parity, multilinguality."""
+    print("\n" + "=" * 60)
+    print("TEST: ParaphraseMultilingualMiniLMProvider")
+    print("=" * 60)
+
+    import numpy as np
+
+    from vitalgraph.vectorization.paraphrase_multilingual_minilm_provider import (
+        DEFAULT_MODEL, ParaphraseMultilingualMiniLMProvider,
+    )
+
+    t0 = time.time()
+    provider = ParaphraseMultilingualMiniLMProvider.from_config({"device": "cpu"})
+    print(f"  Initialized in {time.time() - t0:.2f}s")
+    print(f"  Model: {provider.model_name}")
+    print(f"  Dimensions: {provider.dimensions}")
+
+    assert provider.dimensions == 384, f"Expected 384 dims, got {provider.dimensions}"
+    assert provider.provider_name == "paraphrase_multilingual_minilm_l12_v2"
+    assert provider.model_name == DEFAULT_MODEL
+
+    # Single text
+    t0 = time.time()
+    text = "Acme Corporation renewable energy solutions"
+    vec = await provider.vectorize_text(text)
+    print(f"\n  Single text vectorization: {(time.time() - t0) * 1000:.1f}ms")
+    assert len(vec) == 384, f"Expected 384 dims, got {len(vec)}"
+    assert all(isinstance(v, float) for v in vec)
+    assert any(abs(v) > 1e-9 for v in vec), "Got an all-zero embedding"
+
+    # Batch — must preserve positional order
+    texts = [
+        "Acme Corporation",
+        "Widget Factory Inc",
+        "Global Renewable Energy Partners",
+        "Smith & Associates Law Firm",
+        "Pacific Northwest Coffee Roasters",
+    ]
+    t0 = time.time()
+    vecs = await provider.vectorize_texts(texts)
+    print(f"  Batch ({len(texts)} texts): {(time.time() - t0) * 1000:.1f}ms")
+    assert len(vecs) == len(texts)
+    assert all(len(v) == 384 for v in vecs)
+    for i, t in enumerate(texts):
+        single = await provider.vectorize_text(t)
+        assert np.allclose(vecs[i], single, atol=1e-5), (
+            f"Batch position {i} does not match its single-text embedding — "
+            f"batch ordering is broken"
+        )
+    print("  Batch order matches single-text embeddings ✓")
+
+    # Weaviate parity: the provider must not perturb WeaviateLocalVectorizer
+    from vitalgraph.entity_registry.entity_vectorizer import WeaviateLocalVectorizer
+    ref = WeaviateLocalVectorizer(device="cpu").vectorize_text(text)
+    a = np.array(vec)
+    cos = float(a @ ref / (np.linalg.norm(a) * np.linalg.norm(ref)))
+    print(f"  Cosine vs WeaviateLocalVectorizer: {cos:.8f}")
+    assert cos > 0.9999, f"Provider diverges from WeaviateLocalVectorizer (cos={cos})"
+
+    # Multilinguality — the property that distinguishes this model from
+    # vitalsigns_onnx (paraphrase-MiniLM-L3-v2, English wordpiece vocab).
+    #
+    # Use NON-LATIN scripts deliberately.  A Spanish/French pair does NOT
+    # discriminate: shared tokens ("chef", "pasta", "italiano") carry the
+    # English-only model to ~0.87 as well.  Under ja/ru it collapses to ~0.0-0.09
+    # and the translation is not even closer than an unrelated sentence, while
+    # this model holds ~0.85+.
+    def _cos(x, y):
+        return float(x @ y / (np.linalg.norm(x) * np.linalg.norm(y)))
+
+    en_text = "Italian chef specializing in pasta and traditional Tuscan cuisine"
+    unrelated_text = "quantum physics researcher studying subatomic particles"
+    translations = {
+        "ja": "イタリア料理のシェフで、麺類と伝統的な地方料理を専門としています",
+        "ru": "итальянский повар, специализирующийся на лапше и традиционной кухне",
+    }
+
+    en = np.array(await provider.vectorize_text(en_text))
+    unrelated = np.array(await provider.vectorize_text(unrelated_text))
+
+    for lang, text in translations.items():
+        tr = np.array(await provider.vectorize_text(text))
+        cos_translation = _cos(tr, en)
+        cos_unrelated = _cos(tr, unrelated)
+        print(f"  Cosine ({lang} ↔ EN translation): {cos_translation:.4f}  "
+              f"({lang} ↔ unrelated: {cos_unrelated:.4f})")
+        assert cos_translation > cos_unrelated, (
+            f"{lang} translation is not closer than an unrelated sentence — "
+            f"this does not look like a multilingual model"
+        )
+        # English-only models score ~0.0-0.09 here; this model scores ~0.85+.
+        assert cos_translation > 0.5, (
+            f"{lang} translation similarity {cos_translation:.4f} is far below "
+            f"the ~0.85 expected of paraphrase-multilingual-MiniLM-L12-v2"
+        )
+
+    print("\n  ✅ ParaphraseMultilingualMiniLMProvider: ALL TESTS PASSED")
     return True
 
 
@@ -159,12 +269,12 @@ async def test_registry():
 
     # Check built-in providers are registered
     print(f"  Registered providers: {list(PROVIDER_REGISTRY.keys())}")
-    assert "vitalsigns" in PROVIDER_REGISTRY
+    assert "vitalsigns_onnx" in PROVIDER_REGISTRY
     assert "openai" in PROVIDER_REGISTRY
 
     # Test factory with VitalSigns (always available)
     provider = get_provider("vitalsigns", {"device": "cpu"}, cache_key="test_vs")
-    assert provider.provider_name == "vitalsigns"
+    assert provider.provider_name == "vitalsigns_onnx"
     assert provider.dimensions == 384
     print(f"  Created vitalsigns provider: dims={provider.dimensions}")
 
@@ -208,12 +318,14 @@ async def test_registry():
 async def main():
     parser = argparse.ArgumentParser(description="Test vectorization providers")
     parser.add_argument("--vitalsigns", action="store_true", help="Test VitalSigns provider")
+    parser.add_argument("--paraphrase", action="store_true",
+                        help="Test paraphrase-multilingual-MiniLM-L12-v2 provider")
     parser.add_argument("--openai", action="store_true", help="Test OpenAI provider")
     parser.add_argument("--registry", action="store_true", help="Test registry")
     parser.add_argument("--all", action="store_true", help="Test all")
     args = parser.parse_args()
 
-    if not any([args.vitalsigns, args.openai, args.registry, args.all]):
+    if not any([args.vitalsigns, args.paraphrase, args.openai, args.registry, args.all]):
         args.all = True
 
     results = []
@@ -223,6 +335,9 @@ async def main():
 
     if args.vitalsigns or args.all:
         results.append(("VitalSigns", await test_vitalsigns_provider()))
+
+    if args.paraphrase or args.all:
+        results.append(("ParaphraseMultilingual", await test_paraphrase_multilingual_provider()))
 
     if args.openai or args.all:
         results.append(("OpenAI", await test_openai_provider()))

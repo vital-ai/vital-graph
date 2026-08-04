@@ -9,8 +9,11 @@ file that can be loaded directly into a space's KG types graph.
 
 Object types generated:
   - KGFrameType   (~1,221)  — one per FrameNet frame
-  - KGSlotType    (~1,285)  — fuzzylicated frame elements
-  - Edge_hasSubKGFrameType (~781)  — frame inheritance hierarchy
+  - KGSlotType    (~1,285)  — deduplicated frame elements
+  - Edge_hasSubKGFrameType  (~781)  — frame inheritance hierarchy
+  - Edge_hasKGSlotType      (~10k)  — frame → slot type membership
+  - Edge_hasPartOfKGFrameType (~131) — subframe / part-of edges
+  - Edge_hasSameAsKGType     (~127) — perspective-on / same-as edges
 
 FrameNet defines frame semantics at the type level — frame definitions,
 typed slots (frame elements), and inheritance relationships.  This maps
@@ -50,6 +53,9 @@ from vital_ai_vitalsigns.block.vital_block_writer import VitalBlockWriter
 from ai_haley_kg_domain.model.KGFrameType import KGFrameType
 from ai_haley_kg_domain.model.KGSlotType import KGSlotType
 from ai_haley_kg_domain.model.Edge_hasSubKGFrameType import Edge_hasSubKGFrameType
+from ai_haley_kg_domain.model.Edge_hasKGSlotType import Edge_hasKGSlotType
+from ai_haley_kg_domain.model.Edge_hasPartOfKGFrameType import Edge_hasPartOfKGFrameType
+from ai_haley_kg_domain.model.Edge_hasSameAsKGType import Edge_hasSameAsKGType
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +172,33 @@ def make_hierarchy_edge(parent_name: str, child_name: str) -> Edge_hasSubKGFrame
     return edge
 
 
+def make_slot_type_edge(frame_name: str, fe_name: str) -> Edge_hasKGSlotType:
+    """Create an Edge_hasKGSlotType linking a frame to one of its slot types."""
+    edge = Edge_hasKGSlotType()
+    edge.URI = _edge_uri()
+    edge.edgeSource = _type_uri("frame-type", frame_name)
+    edge.edgeDestination = _type_uri("slot-type", fe_name)
+    return edge
+
+
+def make_part_of_edge(parent_name: str, child_name: str) -> Edge_hasPartOfKGFrameType:
+    """Create an Edge_hasPartOfKGFrameType for subframe relations."""
+    edge = Edge_hasPartOfKGFrameType()
+    edge.URI = _edge_uri()
+    edge.edgeSource = _type_uri("frame-type", parent_name)
+    edge.edgeDestination = _type_uri("frame-type", child_name)
+    return edge
+
+
+def make_same_as_edge(frame_a: str, frame_b: str) -> Edge_hasSameAsKGType:
+    """Create an Edge_hasSameAsKGType for perspective-on relations."""
+    edge = Edge_hasSameAsKGType()
+    edge.URI = _edge_uri()
+    edge.edgeSource = _type_uri("frame-type", frame_a)
+    edge.edgeDestination = _type_uri("frame-type", frame_b)
+    return edge
+
+
 # ---------------------------------------------------------------------------
 # Full generation
 # ---------------------------------------------------------------------------
@@ -188,6 +221,9 @@ def generate_kgtypes(fn, limit: Optional[int] = None):
         "frame_types": 0,
         "slot_types": 0,
         "hierarchy_edges": 0,
+        "slot_type_edges": 0,
+        "part_of_edges": 0,
+        "same_as_edges": 0,
     }
 
     for frame in frames:
@@ -206,14 +242,38 @@ def generate_kgtypes(fn, limit: Optional[int] = None):
                 seen_slot_types.add(fe.name)
                 stats["slot_types"] += 1
 
-        # Frame hierarchy edges (Inheritance only)
+        # Edge_hasKGSlotType: frame → slot type membership
+        for fe in frame.FE.values():
+            objects.append(make_slot_type_edge(frame.name, fe.name))
+            stats["slot_type_edges"] += 1
+
+        # Frame relation edges
         for relation in frame.frameRelations:
-            if (relation.type.name == "Inheritance"
+            rel_name = relation.type.name
+
+            # Inheritance → Edge_hasSubKGFrameType
+            if (rel_name == "Inheritance"
                     and relation.superFrame.name == frame.name):
                 objects.append(make_hierarchy_edge(
                     relation.superFrame.name, relation.subFrame.name,
                 ))
                 stats["hierarchy_edges"] += 1
+
+            # Subframe → Edge_hasPartOfKGFrameType
+            elif (rel_name == "Subframe"
+                    and relation.superFrame.name == frame.name):
+                objects.append(make_part_of_edge(
+                    relation.superFrame.name, relation.subFrame.name,
+                ))
+                stats["part_of_edges"] += 1
+
+            # Perspective_on → Edge_hasSameAsKGType
+            elif (rel_name == "Perspective_on"
+                    and relation.superFrame.name == frame.name):
+                objects.append(make_same_as_edge(
+                    relation.superFrame.name, relation.subFrame.name,
+                ))
+                stats["same_as_edges"] += 1
 
     stats["total_objects"] = len(objects)
     return objects, stats
@@ -276,10 +336,23 @@ def preview_frame(fn, frame_name: str):
         print(f"\n  KGSlotType: {st.URI}")
         print(f"    name = {st.name}")
 
+    for fe in frame.FE.values():
+        edge = make_slot_type_edge(frame.name, fe.name)
+        print(f"\n  Edge_hasKGSlotType: {edge.URI}")
+        print(f"    {edge.edgeSource} -> {edge.edgeDestination}")
+
     for rel in frame.frameRelations:
         if rel.type.name == "Inheritance" and rel.superFrame.name == frame.name:
             edge = make_hierarchy_edge(rel.superFrame.name, rel.subFrame.name)
             print(f"\n  Edge_hasSubKGFrameType: {edge.URI}")
+            print(f"    {edge.edgeSource} -> {edge.edgeDestination}")
+        elif rel.type.name == "Subframe" and rel.superFrame.name == frame.name:
+            edge = make_part_of_edge(rel.superFrame.name, rel.subFrame.name)
+            print(f"\n  Edge_hasPartOfKGFrameType: {edge.URI}")
+            print(f"    {edge.edgeSource} -> {edge.edgeDestination}")
+        elif rel.type.name == "Perspective_on" and rel.superFrame.name == frame.name:
+            edge = make_same_as_edge(rel.superFrame.name, rel.subFrame.name)
+            print(f"\n  Edge_hasSameAsKGType: {edge.URI}")
             print(f"    {edge.edgeSource} -> {edge.edgeDestination}")
 
 
@@ -321,6 +394,9 @@ def main():
     print(f"  Frame types:           {stats['frame_types']}")
     print(f"  Slot types:            {stats['slot_types']}")
     print(f"  Hierarchy edges:       {stats['hierarchy_edges']}")
+    print(f"  Slot type edges:       {stats['slot_type_edges']}")
+    print(f"  Part-of edges:         {stats['part_of_edges']}")
+    print(f"  Same-as edges:         {stats['same_as_edges']}")
     print(f"  {'─' * 30}")
     print(f"  Total objects:         {stats['total_objects']}")
 

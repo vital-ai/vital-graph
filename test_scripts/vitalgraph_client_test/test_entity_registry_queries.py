@@ -280,7 +280,7 @@ class QueryTestRunner:
     async def test_aliases_list(self):
         logger.info("\n--- List Aliases ---")
         try:
-            aliases = await self.reg.list_aliases(ALPHA_OMEGA)
+            aliases = (await self.reg.list_aliases(ALPHA_OMEGA)).aliases
             alias_names = [a.alias_name for a in aliases]
             self._report("Alpha Omega has aliases", len(aliases) >= 1,
                          f"count={len(aliases)}")
@@ -288,7 +288,7 @@ class QueryTestRunner:
                          'Topnotch Design Center' in alias_names,
                          f"aliases={alias_names}")
 
-            aliases2 = await self.reg.list_aliases(TB_ENTERPISES)
+            aliases2 = (await self.reg.list_aliases(TB_ENTERPISES)).aliases
             alias_names2 = [a.alias_name for a in aliases2]
             self._report("Tb Enterpises has alias 'Smoking Monkey Pizza'",
                          'Smoking Monkey Pizza' in alias_names2,
@@ -303,14 +303,14 @@ class QueryTestRunner:
     async def test_categories(self):
         logger.info("\n--- List Entity Categories ---")
         try:
-            cats = await self.reg.list_entity_categories(ACES_DENTAL)
+            cats = (await self.reg.list_entity_categories(ACES_DENTAL)).entity_categories
             cat_keys = [c.category_key for c in cats]
             self._report("Aces Dental has categories", len(cats) >= 2,
                          f"keys={cat_keys}")
             self._report("Has 'customer' category", 'customer' in cat_keys)
             self._report("Has 'llc' category", 'llc' in cat_keys)
 
-            cats2 = await self.reg.list_entity_categories(HOBBS_KOLO)
+            cats2 = (await self.reg.list_entity_categories(HOBBS_KOLO)).entity_categories
             cat_keys2 = [c.category_key for c in cats2]
             self._report("Hobbs Kolo has 's_corporation' category",
                          's_corporation' in cat_keys2,
@@ -337,7 +337,7 @@ class QueryTestRunner:
     async def test_relationships(self):
         logger.info("\n--- Relationships ---")
         try:
-            rels = await self.reg.list_relationships(UPRISING_AGENCY)
+            rels = (await self.reg.list_relationships(UPRISING_AGENCY)).relationships
             self._report("Uprising Agency has relationships", len(rels) >= 4,
                          f"count={len(rels)}")
             if rels:
@@ -345,7 +345,7 @@ class QueryTestRunner:
                 self._report("Has 'owner_of' relationship", 'owner_of' in type_keys,
                              f"types={type_keys}")
 
-            rels2 = await self.reg.list_relationships(QUICK_CAKES)
+            rels2 = (await self.reg.list_relationships(QUICK_CAKES)).relationships
             self._report("Quick Cakes has relationships", len(rels2) >= 2,
                          f"count={len(rels2)}")
         except Exception as ex:
@@ -810,7 +810,7 @@ class QueryTestRunner:
                 LocationCreateRequest, LocationUpdateRequest)
 
             # List existing locations
-            locs = await self.reg.list_locations(ACES_DENTAL)
+            locs = (await self.reg.list_locations(ACES_DENTAL)).locations
             original_count = len(locs)
             self._report("List locations", original_count >= 1,
                          f"count={original_count}")
@@ -848,7 +848,7 @@ class QueryTestRunner:
 
             # Remove it
             await self.reg.remove_location(new_loc.location_id)
-            locs_after = await self.reg.list_locations(ACES_DENTAL)
+            locs_after = (await self.reg.list_locations(ACES_DENTAL)).locations
             self._report("Remove restores count",
                          len(locs_after) == original_count,
                          f"before={original_count} after={len(locs_after)}")

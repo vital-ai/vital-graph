@@ -123,7 +123,7 @@ class EntityRegistryTestRunner:
     async def test_list_entity_types(self):
         logger.info("\n--- Test: List Entity Types ---")
         try:
-            types = await self.client.entity_registry.list_entity_types()
+            types = (await self.client.entity_registry.list_entity_types()).entity_types
             self._report("List entity types", len(types) >= 4,
                          f"Got {len(types)} types")
             type_keys = [t.type_key for t in types]
@@ -265,7 +265,7 @@ class EntityRegistryTestRunner:
         logger.info("\n--- Test: Identifiers ---")
         acme_id = self.ids['acme_corp']
         try:
-            idents = await self.client.entity_registry.list_identifiers(acme_id)
+            idents = (await self.client.entity_registry.list_identifiers(acme_id)).identifiers
             self._report("List identifiers", len(idents) == 2, f"count={len(idents)}")
 
             # Add and then remove (leaves state clean)
@@ -287,7 +287,7 @@ class EntityRegistryTestRunner:
             result = await self.client.entity_registry.remove_identifier(new_ident.identifier_id)
             self._report("Remove identifier", result.get('success') is True)
 
-            idents_after = await self.client.entity_registry.list_identifiers(acme_id)
+            idents_after = (await self.client.entity_registry.list_identifiers(acme_id)).identifiers
             self._report("Identifier retracted", len(idents_after) == 2)
         except Exception as e:
             self._report("Identifiers", False, str(e))
@@ -301,7 +301,7 @@ class EntityRegistryTestRunner:
         logger.info("\n--- Test: Aliases ---")
         acme_id = self.ids['acme_corp']
         try:
-            aliases = await self.client.entity_registry.list_aliases(acme_id)
+            aliases = (await self.client.entity_registry.list_aliases(acme_id)).aliases
             self._report("List aliases", len(aliases) == 2, f"count={len(aliases)}")
 
             req = AliasCreateRequest(
@@ -314,7 +314,7 @@ class EntityRegistryTestRunner:
             result = await self.client.entity_registry.remove_alias(new_alias.alias_id)
             self._report("Remove alias", result.get('success') is True)
 
-            aliases_after = await self.client.entity_registry.list_aliases(acme_id)
+            aliases_after = (await self.client.entity_registry.list_aliases(acme_id)).aliases
             self._report("Alias retracted", len(aliases_after) == 2)
         except Exception as e:
             self._report("Aliases", False, str(e))
@@ -328,7 +328,7 @@ class EntityRegistryTestRunner:
         logger.info("\n--- Test: Categories ---")
         acme_id = self.ids['acme_corp']
         try:
-            categories = await self.client.entity_registry.list_categories()
+            categories = (await self.client.entity_registry.list_categories()).categories
             self._report("List categories", len(categories) >= 7,
                          f"count={len(categories)}")
 
@@ -344,7 +344,7 @@ class EntityRegistryTestRunner:
             mapping2 = (await self.client.entity_registry.add_entity_category(acme_id, req2)).entity_category
             self._report("Add second category", mapping2 is not None and mapping2.category_key == 'partner')
 
-            entity_cats = await self.client.entity_registry.list_entity_categories(acme_id)
+            entity_cats = (await self.client.entity_registry.list_entity_categories(acme_id)).entity_categories
             entity_cat_keys = [c.category_key for c in entity_cats]
             self._report("List entity categories", len(entity_cats) == 2,
                          f"keys={entity_cat_keys}")
@@ -357,7 +357,7 @@ class EntityRegistryTestRunner:
             result = await self.client.entity_registry.remove_entity_category(acme_id, 'partner')
             self._report("Remove entity category", result.get('success') is True)
 
-            entity_cats_after = await self.client.entity_registry.list_entity_categories(acme_id)
+            entity_cats_after = (await self.client.entity_registry.list_entity_categories(acme_id)).entity_categories
             remaining_keys = [c.category_key for c in entity_cats_after]
             self._report("Category removed", 'partner' not in remaining_keys and 'customer' in remaining_keys,
                          f"remaining={remaining_keys}")
@@ -388,7 +388,7 @@ class EntityRegistryTestRunner:
             mapping = (await self.client.entity_registry.create_same_as(req)).same_as
             self._report("Create same-as", mapping is not None and mapping.source_entity_id == source_id)
 
-            mappings = await self.client.entity_registry.get_same_as(source_id)
+            mappings = (await self.client.entity_registry.get_same_as(source_id)).same_as
             self._report("Get same-as mappings", len(mappings) >= 1)
 
             resolved = (await self.client.entity_registry.resolve_entity(source_id)).entity
@@ -877,12 +877,12 @@ class EntityRegistryTestRunner:
 
         try:
             # List locations for Acme Corp (should have 2 from load_test_data)
-            locs = await reg.list_locations(acme_id)
+            locs = (await reg.list_locations(acme_id)).locations
             self._report("List Acme locations", len(locs) >= 2,
                          f"count={len(locs)}")
 
             # List locations for GeoTest (should have 3)
-            geo_locs = await reg.list_locations(geo_id)
+            geo_locs = (await reg.list_locations(geo_id)).locations
             self._report("List GeoTest locations", len(geo_locs) >= 3,
                          f"count={len(geo_locs)}")
 
@@ -920,7 +920,7 @@ class EntityRegistryTestRunner:
             test_location_id = new_loc.location_id
 
             # Verify it appears in the list
-            locs2 = await reg.list_locations(acme_id)
+            locs2 = (await reg.list_locations(acme_id)).locations
             self._report("New location in list", len(locs2) == len(locs) + 1,
                          f"before={len(locs)} after={len(locs2)}")
 
@@ -938,7 +938,7 @@ class EntityRegistryTestRunner:
 
             # Remove the test location
             await reg.remove_location(test_location_id)
-            locs3 = await reg.list_locations(acme_id)
+            locs3 = (await reg.list_locations(acme_id)).locations
             self._report("Remove location restores count",
                          len(locs3) == len(locs),
                          f"count={len(locs3)}")

@@ -21,7 +21,7 @@ keywords = ["knowledge-graph", "rdf", "sparql", "database", "semantic-web"]
 
 # Core dependencies - minimal set for basic functionality
 dependencies = [
-    "vital-ai-vitalsigns>=0.1.53",
+    "vital-ai-vitalsigns>=0.1.55",
     "vital-ai-haley-kg>=0.1.24",
     "python-dotenv",
     "rdflib>=7.0.0",
@@ -36,7 +36,7 @@ dependencies = [
 [project.optional-dependencies]
 # Slow-building deps (native compilation / large downloads) — cached separately in Docker
 heavy = [
-    "vital-ai-vitalsigns>=0.1.53",
+    "vital-ai-vitalsigns>=0.1.55",
     "vital-ai-haley-kg>=0.1.24",
     "torch>=2.0.0",
     "transformers>=4.30.0",
