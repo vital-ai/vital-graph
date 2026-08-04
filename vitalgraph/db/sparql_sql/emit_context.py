@@ -250,6 +250,14 @@ class EmitContext:
         # FuzzyRequests: vg:fuzzyMatch calls that need MinHash LSH + RapidFuzz
         # resolution before SQL execution.
         self._fuzzy_requests: List['FuzzyRequest'] = []
+        # Variables an expression referenced but could not resolve. Each
+        # compiled to NULL, which is correct for a legitimately unbound
+        # variable and a silently-widened constraint if the translator should
+        # have resolved it (issues 023, 027). Recording them makes the
+        # condition inspectable after generation instead of leaving no trace —
+        # mirroring _is_null_placeholder in emit_group, which marks a
+        # deliberate NULL rather than emitting a bare one. See issue 028.
+        self._unresolved_vars: List[Tuple[str, int]] = []
         # vg: optimizer hints — temporarily set by emit_extend when emitting
         # a BIND with vg_top_k or vg_threshold hints from vg_optimize pass.
         self.vg_hints: Dict[str, Any] = {}
@@ -369,6 +377,20 @@ class EmitContext:
         """
         self._fuzzy_requests.append(request)
 
+    def add_unresolved_var(self, var: str) -> None:
+        """Record a variable an expression referenced but could not resolve.
+
+        The emitted SQL is still ``NULL`` — this does not change behaviour, it
+        makes the condition detectable. ``unresolved_vars`` is read after
+        generation (see generator.generate_sql).
+        """
+        self._unresolved_vars.append((var, self._depth))
+
+    @property
+    def unresolved_vars(self) -> List[Tuple[str, int]]:
+        """(variable, depth) for every reference that compiled to NULL."""
+        return self._unresolved_vars
+
     def add_deferred_uuid(self, var: str, placeholder: str) -> None:
         """Record a deferred UUID column placeholder for later resolution.
 
@@ -417,6 +439,9 @@ class EmitContext:
         ctx._fuzzy_requests = self._fuzzy_requests
         # Share deferred UUIDs list across parent/child contexts
         ctx._deferred_uuids = self._deferred_uuids
+        # Share unresolved-variable records so nested contexts (EXISTS bodies,
+        # UNION branches) surface to the same post-generation check
+        ctx._unresolved_vars = self._unresolved_vars
         # Share multi-vector config and index metadata
         ctx.multi_vector_config = self.multi_vector_config
         ctx.vector_index_meta = self.vector_index_meta

@@ -364,6 +364,68 @@ async def materialize_constants(
                  len(aliases.constants) - len(missing_pairs), len(missing_pairs))
 
 
+# ---------------------------------------------------------------------------
+# Unresolved-variable policy (issue 028)
+# ---------------------------------------------------------------------------
+
+# OFF in production, ON under pytest (enabled by tests/conftest.py).
+_STRICT_UNRESOLVED_VARS = False
+
+
+def set_strict_unresolved_vars(enabled: bool) -> bool:
+    """Toggle raising when a query contains an unresolvable variable.
+
+    Returns the previous value.
+
+    Why this is a test-time ratchet and not production behaviour:
+
+    A variable that cannot be resolved during emission is one of two things,
+    and nothing in the pipeline can yet tell them apart —
+
+    1. **Legitimately unbound.** Bound nowhere, or bound only in a scope SPARQL
+       evaluates independently. ``NULL`` is the *specified* result:
+       ``FILTER(?unbound = ?o)`` errors and excludes the row, ``COALESCE``
+       depends on it, ``BIND(?nova AS ?z)`` leaves ``?z`` unbound. Every
+       occurrence in the DAWG corpus is this case — raising unconditionally
+       would break four passing W3C conformance tests.
+    2. **A translation gap** — it should have resolved and the translator
+       failed to wire it. Issues 023 and 027 were both this, and both silently
+       widened a DELETE.
+
+    Separating them needs real scope analysis threaded through emission. In
+    particular the cheap discriminators do *not* work: "is it bound anywhere in
+    the query" misclassifies ``bind10`` (``?z`` is bound by a BIND and is still
+    legitimately out of scope), and "is it under a negation" misclassifies
+    everything (a legitimately-unbound variable inside ``NOT EXISTS``/``MINUS``
+    correctly widens the result, verified against the running backend).
+
+    So production stays permissive and the suite runs strict, with the known
+    legitimate occurrences allowlisted by name — meaning a *new* instance of
+    case 2 cannot be introduced silently.
+    """
+    global _STRICT_UNRESOLVED_VARS
+    previous = _STRICT_UNRESOLVED_VARS
+    _STRICT_UNRESOLVED_VARS = enabled
+    return previous
+
+
+def _check_unresolved_vars(unresolved) -> None:
+    """Raise if strict mode is on and any variable failed to resolve."""
+    if not unresolved or not _STRICT_UNRESOLVED_VARS:
+        return
+    from .emit_expressions import UnresolvedVariableError
+    detail = ", ".join(f"?{v} (depth {d})" for v, d in unresolved)
+    raise UnresolvedVariableError(
+        f"Unresolvable variable(s) in this query: {detail}. Each compiled to "
+        f"NULL. That is correct if the variable is genuinely unbound, and a "
+        f"silently-widened constraint if the translator should have resolved "
+        f"it (issues 023, 027). Strict mode is on, so this is surfaced rather "
+        f"than swallowed. If the variable really is unbound here, allowlist "
+        f"this test in tests/conftest.py (_STRICT_UNRESOLVED_ALLOWLIST) with a "
+        f"reason; otherwise it is a translation gap — fix the wiring."
+    )
+
+
 async def generate_sql(
     compile_result: CompileResult,
     space_id: str,
@@ -540,10 +602,23 @@ async def generate_sql(
         ctx.vector_index_meta = vector_index_meta
         ctx.fts_index_meta = fts_index_meta
         ctx.search_mapping_meta = search_mapping_meta
-        # Compute all variables in the plan for out-of-scope diagnostics
-        from .var_scope import compute_scope
-        ctx.query_all_vars = frozenset(compute_scope(plan).all_visible)
+        # Every variable NAMED anywhere in the plan, for the unresolved-variable
+        # diagnostic. Not compute_scope().all_visible — that is only what is
+        # visible at the root, so it excluded the variables most likely to fail
+        # to resolve (a FILTER-only reference inside EXISTS, a sibling-scope
+        # binding), leaving the diagnostic silent exactly when it was needed.
+        # See issues 027 / 028.
+        from .var_scope import all_named_vars
+        ctx.query_all_vars = frozenset(all_named_vars(plan))
         sql_str = emit(plan, ctx)
+
+        # Issue 028: any variable an expression could not resolve compiled to
+        # NULL. Harmless when the variable is legitimately unbound, and a
+        # silently-widened constraint when the translator should have resolved
+        # it. The emitter marks; the decision is made here, where the whole
+        # query has been seen.
+        if ctx.unresolved_vars:
+            _check_unresolved_vars(ctx.unresolved_vars)
 
         # Stage 4: Substitute constants
         sql_str = substitute_constants(sql_str, aliases)
