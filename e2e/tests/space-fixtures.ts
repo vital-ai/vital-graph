@@ -39,7 +39,8 @@ async function authContext() {
   throw lastErr;
 }
 
-/** Drop a space if it exists (idempotent — 404s are fine). */
+/** Drop a space if it exists (idempotent — a missing space is HTTP 200
+ *  with status "not_found" since issues/034, and was 404 before). */
 export async function dropSpace(spaceId: string): Promise<void> {
   const { ctx, headers } = await authContext();
   await ctx.delete('/api/spaces', { headers, params: { space_id: spaceId } });

@@ -8,6 +8,9 @@ from vitalgraph.auth.audit import emit_audit_event
 logger = logging.getLogger(__name__)
 
 
+from vitalgraph.space.space_manager import SpaceAlreadyExistsError
+
+
 class VitalGraphAPI:
     def __init__(self, auth_handler, db_impl=None, space_manager=None, signal_manager=None):
         self.auth = auth_handler
@@ -256,6 +259,17 @@ class VitalGraphAPI:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=str(e)
             )
+        except SpaceAlreadyExistsError:
+            # Domain outcome — the endpoint turns this into HTTP 200 with
+            # status=ALREADY_EXISTS. Must precede the handlers below, both of
+            # which would rewrite it as a fault (issue 034).
+            raise
+        except HTTPException:
+            # Without this, the deliberate 400 raised above is caught by the
+            # bare handler and re-reported as 500 "Error adding space: 400:
+            # ...", making the status code untrustworthy. delete_space has
+            # always had this clause; add_space did not.
+            raise
         except Exception as e:
             logger.error(f"Add exception: {str(e)}")
             raise HTTPException(

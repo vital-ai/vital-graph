@@ -22,9 +22,22 @@ async function cleanupCrudSpace() {
     form: { username: ADMIN_USER, password: ADMIN_PASS },
   });
   const { access_token } = await loginResp.json();
-  await ctx.delete(`/api/spaces/${CRUD_SPACE_ID}`, {
+  // `/api/spaces?space_id=…`, NOT `/api/spaces/{id}` — the path form is not a
+  // route and returned 405, so this cleanup silently did nothing. When a prior
+  // run left the space behind, the create test then failed with
+  // "Failed to add space with tables" because the space already existed.
+  // See issues/022. (space-fixtures.ts already used the correct form.)
+  const resp = await ctx.delete('/api/spaces', {
     headers: { Authorization: `Bearer ${access_token}` },
+    params: { space_id: CRUD_SPACE_ID },
   });
+  // A missing space now comes back as HTTP 200 with status "not_found"
+  // (issues/034) — previously 404. Either is the normal "nothing to clean"
+  // outcome and neither is an error here. 405 means the route form is wrong
+  // again — fail loudly rather than silently skipping cleanup.
+  if (resp.status() === 405) {
+    throw new Error(`space cleanup route rejected the request: 405 ${resp.url()}`);
+  }
   await ctx.dispose();
 }
 

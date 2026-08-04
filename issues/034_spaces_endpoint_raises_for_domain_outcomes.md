@@ -1,6 +1,51 @@
 # Spaces Endpoint Raises HTTP Errors for Domain Outcomes
 
-## Status: OPEN
+## Status: FIXED (2026-08-04)
+
+All three fix-sketch items done. Measured against the rebuilt test stack:
+
+| call | situation | before | now |
+|---|---|---|---|
+| `POST /api/spaces` | space exists | 500 `{"detail": "Error adding space: 400: …"}` | **200** `{"status": "already_exists", "success": false}` |
+| `DELETE /api/spaces` | space missing | 404 `{"detail": "Space not found or deletion failed"}` | **200** `{"status": "not_found", "success": false}` |
+| `POST /api/spaces` | new space | 200 created | **200** created *(unchanged)* |
+| `DELETE /api/spaces` | space exists | 200 deleted | **200** deleted *(unchanged)* |
+
+### What changed
+
+1. **`create_space_with_tables` now distinguishes the case** (fix item 3). Its
+   two already-exists branches raise `SpaceAlreadyExistsError` instead of
+   returning the same `False` used for genuine failures, so the endpoint no
+   longer has to infer intent from a boolean. Existing callers are unaffected —
+   all of them create fresh spaces.
+2. **`vitalgraph_api.add_space` stops swallowing its own status codes** (fix
+   item 1). Added `except SpaceAlreadyExistsError: raise` and
+   `except HTTPException: raise` ahead of the bare handler, mirroring
+   `delete_space`. This was a bug on its own terms: the deliberate 400 was
+   caught by its own error handler and re-reported as a 500 with the reason
+   buried in a string.
+3. **The endpoint returns both outcomes at HTTP 200** (fix item 2), using the
+   `ALREADY_EXISTS` and `NOT_FOUND` members that already existed and are
+   documented as "success=False, still HTTP 200". No model changes were needed.
+   A delete failure that is *not* 404 still raises.
+
+### Callers
+
+- **Python client** — verified through `vg_client.spaces`: `is_success` is
+  `True/False` correctly for all four cases. It does not surface the `status`
+  enum, which is a pre-existing client gap and not a regression.
+- **`e2e/tests/spaces-crud.spec.ts`** — tolerated 404 and only failed loudly on
+  405, so a 200 passes through unchanged. Comment updated; it described a
+  status code that no longer occurs.
+- **`e2e/tests/space-fixtures.ts`** — `dropSpace` ignores the result. Docstring
+  updated for the same reason.
+
+### Verification
+
+`tests/api/test_spaces.py::TestSpaceDomainOutcomes` — four tests covering both
+new outcomes plus their neighbours (a real delete still succeeds; create is
+repeatable after delete, so the already-exists path leaves nothing broken).
+2216 local tests and 511 `tests/api` pass against a rebuilt stack.
 
 ## Problem
 

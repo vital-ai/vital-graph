@@ -62,7 +62,24 @@ class SpacesEndpoint:
     
     async def add_space(self, space: Space, current_user: Dict):
         """Create a new space."""
-        created_space = await self.api.add_space(space.dict(), current_user)
+        from vitalgraph.space.space_manager import SpaceAlreadyExistsError
+        try:
+            created_space = await self.api.add_space(space.dict(), current_user)
+        except SpaceAlreadyExistsError as e:
+            # Domain outcome (HTTP 200), matching get_space and the
+            # protected-space branch of delete_space. Previously surfaced as a
+            # 500 with the reason buried in a detail string, so callers could
+            # not tell "already exists" from a server fault without
+            # string-matching, and 5xx-retrying clients retried forever
+            # (issue 034).
+            self.logger.info(f"Space already exists: {space.space}")
+            return SpaceCreateResponse(
+                status=OperationStatus.ALREADY_EXISTS,
+                message=str(e),
+                created_count=0,
+                created_uris=[],
+                space=None,
+            )
         # The API returns the space dict with 'space' field, not 'id'
         space_id = created_space.get('space', space.space)
         
@@ -255,7 +272,22 @@ class SpacesEndpoint:
                 deleted_count=0,
                 deleted_uris=[],
             )
-        result = await self.api.delete_space(space_id, current_user)
+        try:
+            result = await self.api.delete_space(space_id, current_user)
+        except HTTPException as e:
+            # A missing space is a domain outcome, not a fault — the branch
+            # directly above already returns HTTP 200 for the protected-space
+            # case. Anything other than 404 is a real failure and still raises
+            # (issue 034).
+            if e.status_code != 404:
+                raise
+            self.logger.info(f"Space not found for delete: {space_id}")
+            return SpaceDeleteResponse(
+                status=OperationStatus.NOT_FOUND,
+                message=f"Space '{space_id}' not found",
+                deleted_count=0,
+                deleted_uris=[],
+            )
         return SpaceDeleteResponse(
             status=OperationStatus.DELETED,
             message="Space deleted successfully",

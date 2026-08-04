@@ -5,6 +5,16 @@ import asyncio
 from .space_impl import SpaceImpl
 
 
+class SpaceAlreadyExistsError(Exception):
+    """Creation was refused because the space is already there.
+
+    A domain outcome, not a fault. ``create_space_with_tables`` previously
+    returned ``False`` for this and for genuine failures alike, so callers had
+    to infer the difference from a boolean and reported it as a server error
+    (issue 034).
+    """
+
+
 @dataclass
 class SpaceRecord:
     """
@@ -203,14 +213,16 @@ class SpaceManager:
             
         # Check if space already exists in the manager
         if space_id in self._spaces:
-            self.logger.error(f"Cannot create space '{space_id}': Space already exists in manager")
-            return False
+            self.logger.info(f"Cannot create space '{space_id}': already exists in manager")
+            raise SpaceAlreadyExistsError(
+                f"Space '{space_id}' already exists")
             
         # Check if space already exists in backend
         space_exists = await self.space_backend.space_exists(space_id)
         if space_exists:
-            self.logger.error(f"Cannot create space '{space_id}': Space already exists in backend")
-            return False
+            self.logger.info(f"Cannot create space '{space_id}': already exists in backend")
+            raise SpaceAlreadyExistsError(
+                f"Space '{space_id}' already exists")
             
         try:
             # Create space using generic backend interface

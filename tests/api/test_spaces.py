@@ -181,3 +181,73 @@ class TestSpaceFilter:
         resp = await vg_client.spaces.filter_spaces(name_filter="xyzzy_no_match_99")
         assert resp.is_success
         assert resp.count == 0
+
+
+class TestSpaceDomainOutcomes:
+    """Ordinary domain outcomes arrive as HTTP 200 with a status in the body.
+
+    Creating a space that exists, and deleting one that does not, are not
+    server faults. They used to be signalled with HTTP 500 and 404
+    respectively (issue 034), which meant callers could not tell "already
+    exists" from a genuine failure without string-matching a `detail` field,
+    and clients that retry on 5xx retried a request that could never succeed.
+    """
+
+    async def _drop(self, vg_client, space_id):
+        try:
+            await vg_client.spaces.delete_space(space_id=space_id)
+        except Exception:
+            pass
+
+    async def test_create_existing_space_is_a_domain_outcome(self, vg_client):
+        from vitalgraph.model.spaces_model import Space
+
+        space_id = f"{TEST_SPACE_PREFIX}dup_{uuid.uuid4().hex[:8]}"
+        await self._drop(vg_client, space_id)
+        space = Space(space=space_id, space_name="dup", space_description="d")
+        try:
+            first = await vg_client.spaces.add_space(space)
+            assert first.is_success, "precondition: first create should succeed"
+
+            # The second create must come back as a normal response, not raise
+            # and not report a server fault.
+            second = await vg_client.spaces.add_space(space)
+            assert second.is_success is False
+        finally:
+            await self._drop(vg_client, space_id)
+
+    async def test_delete_missing_space_is_a_domain_outcome(self, vg_client):
+        space_id = f"{TEST_SPACE_PREFIX}gone_{uuid.uuid4().hex[:8]}"
+        await self._drop(vg_client, space_id)
+
+        result = await vg_client.spaces.delete_space(space_id=space_id)
+        assert result.is_success is False
+
+    async def test_delete_existing_space_still_succeeds(self, vg_client):
+        """Guard the neighbour — the not-found branch must not swallow the
+        real one."""
+        from vitalgraph.model.spaces_model import Space
+
+        space_id = f"{TEST_SPACE_PREFIX}del_{uuid.uuid4().hex[:8]}"
+        await self._drop(vg_client, space_id)
+        created = await vg_client.spaces.add_space(
+            Space(space=space_id, space_name="del", space_description="d"))
+        assert created.is_success
+
+        result = await vg_client.spaces.delete_space(space_id=space_id)
+        assert result.is_success is True
+
+    async def test_create_is_repeatable_after_delete(self, vg_client):
+        """The already-exists path must not leave the space unusable."""
+        from vitalgraph.model.spaces_model import Space
+
+        space_id = f"{TEST_SPACE_PREFIX}cyc_{uuid.uuid4().hex[:8]}"
+        await self._drop(vg_client, space_id)
+        space = Space(space=space_id, space_name="cyc", space_description="d")
+        try:
+            assert (await vg_client.spaces.add_space(space)).is_success
+            assert (await vg_client.spaces.add_space(space)).is_success is False
+            assert (await vg_client.spaces.delete_space(space_id=space_id)).is_success
+            assert (await vg_client.spaces.add_space(space)).is_success
+        finally:
+            await self._drop(vg_client, space_id)
