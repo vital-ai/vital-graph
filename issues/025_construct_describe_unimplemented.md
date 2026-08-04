@@ -1,6 +1,67 @@
 # CONSTRUCT and DESCRIBE are unimplemented — they silently execute as SELECT and return bindings
 
-## Status: OPEN
+## Status: FIXED (2026-08-04)
+
+Both stages done. Stage 1 (fail closed) landed with issue 024; stage 2
+implements the forms and lifts the restriction.
+
+### Implementation
+
+`vitalgraph/db/sparql_sql/construct.py` — template instantiation per §16.2,
+kept free of database access so the rules are testable directly:
+
+- each solution fills the template once;
+- a triple with an unbound position is **skipped, and the rest of that
+  solution's triples are kept**. This issue said "skip rows leaving any
+  template position unbound", which is wrong — §16.2 skips the *triple*, and
+  skipping the row would drop valid output;
+- template blank nodes are freshly allocated per solution;
+- illegal triples (literal subject, non-IRI predicate) are skipped;
+- the result is deduplicated — CONSTRUCT returns a graph, not a bag.
+
+`_describe_triples` in the space impl resolves targets, then fetches their
+triples in one VALUES-constrained SELECT.
+
+**DESCRIBE strategy (§16.4 leaves this implementation-defined):** every triple
+in the space with the target as its *subject* — a forward concise bounded
+description, without recursive blank-node expansion. Chosen because it is
+predictable and bounded; symmetric or recursive CBD can return unboundedly more
+of the graph for a well-connected node. Stated here because the issue required
+the choice to be documented.
+
+Both forms return triples under the `triples` key and an empty `bindings`, and
+`SPARQLQueryResponse.triples` was retyped from `List[Dict[str, str]]` to
+`List[Dict[str, Any]]` — terms are nested SPARQL JSON objects, not strings, and
+the old annotation would have rejected them.
+
+The endpoint still refuses to present bindings as triples: if the backend
+returns no `triples` key it errors rather than falling back.
+
+### Conformance gated the harness, not the code — now fixed
+
+Adding `construct` to `P0_CATEGORIES` initially proved nothing.
+`dawg_sql_v2_executor` carried its **own** CONSTRUCT instantiation, so the DAWG
+tests validated a copy living in the test harness while
+`vitalgraph/db/sparql_sql/construct.py` went untested — the same facade issue
+023 found on the query side.
+
+The harness now delegates to the production instantiator and its copy is
+deleted. Verified by breaking production dedup and confirming the DAWG tests
+fail; with the copy in place they passed regardless.
+
+### Verification
+
+- 23 unit tests on the §16.2 rules — several are invisible end-to-end (a shared
+  blank node across solutions, a skipped partial triple) because the output
+  still looks plausible.
+- 12 integration tests against the backend, using templates that are **not**
+  echoes of the WHERE variables, which is what kept the defect hidden.
+- 8 DAWG `construct` conformance tests, now genuinely gating production code.
+- `tests/api` 507 passed against a rebuilt stack.
+
+The 024 tests that asserted these forms were rejected are flipped to shape
+assertions, as this issue anticipated. Both prologue variants remain
+parametrised so the dispatch stays keyed on the parsed form.
 
 ## Severity
 

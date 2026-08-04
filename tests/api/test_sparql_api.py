@@ -451,15 +451,20 @@ class TestQueryFormDispatch:
 
     @pytest.mark.parametrize("form", ["CONSTRUCT", "DESCRIBE"])
     @pytest.mark.parametrize("prologue", ["", "PREFIX ex: <http://example.org/>\n"])
-    async def test_construct_describe_rejected(
+    async def test_construct_describe_return_triples(
         self, vg_client, test_space, seeded, form, prologue
     ):
-        """CONSTRUCT/DESCRIBE are unimplemented (issues/025) and must error.
+        """CONSTRUCT/DESCRIBE return RDF triples (issues/025).
 
-        They must NOT return WHERE-pattern bindings in the ``triples`` field —
-        that would assert those rows are RDF triples, which they are not.
-        Flip these to shape assertions when the generator materialises
-        construct_template / describe_nodes.
+        These were error-assertions until the forms were implemented: the
+        backend used to return WHERE-pattern bindings, and putting those in
+        ``triples`` would have claimed they were RDF triples. Now the template
+        is instantiated and the describe targets resolved, so the field carries
+        what it says.
+
+        Both prologue variants are parametrised because the form is dispatched
+        on the parsed ``query_type``, not on a string prefix (issues/024) — a
+        PREFIX line must not change the routing.
         """
         subj, _ = seeded
         if form == "CONSTRUCT":
@@ -471,10 +476,25 @@ class TestQueryFormDispatch:
             query = f'{prologue}DESCRIBE <{subj}>'
 
         r = await self._ask(vg_client, test_space, query)
-        assert r.error is not None, f"{form} should be rejected, got: {r}"
-        assert form.lower() in r.error.lower()
-        assert r.triples is None
-        assert r.results is None
+        assert r.error is None, f"{form} failed: {r.error}"
+        assert r.triples is not None, f"{form} returned no triples field"
+        assert r.results is None, "triples must not also arrive as bindings"
+        assert r.boolean is None
+
+        assert r.triples, f"{form} returned an empty graph for seeded data"
+        for t in r.triples:
+            assert set(t) == {"subject", "predicate", "object"}
+            # nested SPARQL JSON terms, not flat strings
+            assert t["subject"]["type"] in ("uri", "bnode")
+            assert t["predicate"]["type"] == "uri"
+
+        if form == "CONSTRUCT":
+            # the template's predicate, not the WHERE pattern's — the
+            # distinction the old bindings-shaped response could not express
+            assert {t["predicate"]["value"] for t in r.triples} == {
+                "http://example.org/n"}
+        else:
+            assert all(t["subject"]["value"] == subj for t in r.triples)
 
 
 class TestGuardQueryShapes:

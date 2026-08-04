@@ -60,6 +60,9 @@ P0_CATEGORIES = [
     # (same issue) they ran against pyoxigraph only, so VALUES had never been
     # exercised against the SQL backend by any test.
     "bindings",
+    # CONSTRUCT. Added for issue 025, which implemented the form — before that
+    # these would have "passed" by comparing WHERE-pattern bindings.
+    "construct",
 ]
 
 

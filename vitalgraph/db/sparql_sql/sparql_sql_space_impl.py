@@ -1463,11 +1463,77 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 result['boolean'] = bool(result_rows[0]['_ask_result']) if result_rows else False
                 result['results'] = {'bindings': []}
 
+            # CONSTRUCT returns a graph, not the WHERE-pattern bindings. The
+            # template was parsed all along and then dropped one layer short of
+            # use (issue 025); instantiate it here, where the solutions are.
+            elif cr.meta.query_type == 'CONSTRUCT':
+                from .construct import instantiate_construct
+                result['triples'] = instantiate_construct(
+                    cr.meta.construct_template, bindings)
+                result['results'] = {'bindings': []}
+
+            # DESCRIBE resolves its targets from constants and from variables
+            # the WHERE clause bound, then returns each target's triples.
+            elif cr.meta.query_type == 'DESCRIBE':
+                from .construct import describe_targets
+                targets = describe_targets(cr.meta.describe_nodes, bindings)
+                result['triples'] = await self._describe_triples(space_id, targets)
+                result['results'] = {'bindings': []}
+
             return result
 
         except Exception as e:
             logger.error("execute_sparql_query(%s) failed: %s", space_id, e)
             return {'results': {'bindings': []}, 'success': False, 'error': str(e)}
+
+    async def _describe_triples(self, space_id: str,
+                                targets: List[str]) -> List[Dict[str, Any]]:
+        """Triples describing each target URI.
+
+        **Description strategy (SPARQL leaves this implementation-defined,
+        §16.4):** every triple in the space with the target as its *subject* —
+        a forward concise bounded description, without recursive blank-node
+        expansion. Chosen because it is predictable and bounded; a symmetric
+        or recursive CBD can return unboundedly more of the graph for a
+        well-connected node.
+
+        Runs as one VALUES-constrained SELECT rather than a query per target.
+        """
+        if not targets:
+            return []
+
+        # These URIs come from the query and from term rows, so they are not
+        # arbitrary user text — but an IRI cannot contain these characters, so
+        # anything carrying one is malformed and is dropped rather than
+        # interpolated (mirrors segment_deletion._is_safe_uri).
+        illegal = set('<>"{}|^`\\ \t\n\r')
+        safe = [u for u in targets if u and not (illegal & set(u))]
+        if len(safe) != len(targets):
+            logger.warning(
+                "DESCRIBE: dropped %d target(s) that cannot be safely "
+                "interpolated into a query", len(targets) - len(safe))
+        if not safe:
+            return []
+
+        values = " ".join(f"<{u}>" for u in safe)
+        sparql = (
+            f"SELECT ?s ?p ?o WHERE {{ GRAPH ?g {{ "
+            f"VALUES ?s {{ {values} }} ?s ?p ?o . }} }}"
+        )
+        sub = await self.execute_sparql_query(space_id, sparql)
+        triples: List[Dict[str, Any]] = []
+        seen = set()
+        for b in sub.get('results', {}).get('bindings', []):
+            s, p, o = b.get('s'), b.get('p'), b.get('o')
+            if not (s and p and o):
+                continue
+            key = (s.get('value'), p.get('value'), o.get('value'),
+                   o.get('type'), o.get('xml:lang'), o.get('datatype'))
+            if key in seen:
+                continue
+            seen.add(key)
+            triples.append({'subject': s, 'predicate': p, 'object': o})
+        return triples
 
     @staticmethod
     def _rows_to_sparql_bindings(

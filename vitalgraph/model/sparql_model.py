@@ -116,9 +116,15 @@ class SPARQLQueryResponse(BaseModel):
         None,
         description="Boolean result for ASK queries"
     )
-    triples: Optional[List[Dict[str, str]]] = Field(
+    triples: Optional[List[Dict[str, Any]]] = Field(
         None,
-        description="RDF triples for CONSTRUCT/DESCRIBE queries"
+        description=(
+            "RDF triples for CONSTRUCT/DESCRIBE queries. Each entry is "
+            "{'subject': term, 'predicate': term, 'object': term}, where a "
+            "term is a SPARQL JSON node — {'type': 'uri'|'literal'|'bnode', "
+            "'value': str, and for literals optionally 'xml:lang'/'datatype'}. "
+            "Values are nested objects, not strings."
+        )
     )
     query_time: Optional[float] = Field(
         None,

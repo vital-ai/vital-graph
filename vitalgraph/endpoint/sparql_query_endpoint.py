@@ -152,13 +152,22 @@ class SPARQLQueryEndpoint:
                 )
 
             elif query_type in ('CONSTRUCT', 'DESCRIBE'):
-                # Not implemented in the SQL generator: construct_template and
-                # describe_nodes are parsed and then ignored, so the rows here
-                # are WHERE-pattern bindings, not triples. Returning them in the
-                # 'triples' field would assert something untrue. See issues/025.
-                self.logger.warning(f"Unsupported SPARQL query form: {query_type}")
+                # The backend instantiates the template / resolves the describe
+                # targets and returns real triples (issues/025). These used to
+                # be rejected precisely because the rows were WHERE-pattern
+                # bindings; only forward them once they are actually triples.
+                triples = result_dict.get('triples')
+                if triples is None:
+                    self.logger.error(
+                        "%s returned no 'triples' key — backend did not build "
+                        "them; refusing to present bindings as triples",
+                        query_type)
+                    return SPARQLQueryResponse(
+                        error=f"{query_type} queries are not supported by this backend",
+                        query_time=query_time
+                    )
                 return SPARQLQueryResponse(
-                    error=f"{query_type} queries are not supported by this backend",
+                    triples=triples,
                     query_time=query_time
                 )
 

@@ -458,63 +458,40 @@ async def _execute_construct(
                 )
         solution_rows.append(bindings)
 
-    # Apply template to each solution row → produce triples
-    # Blank nodes in the template get fresh labels per solution row
-    triples: List[Dict[str, SparqlBinding]] = []
-    seen = set()
-    for row_idx, bindings in enumerate(solution_rows):
-        for tp in template:
-            triple = _instantiate_template_triple(tp, bindings, row_idx)
-            if triple is None:
-                continue
-            # Deduplicate
-            key = tuple(sorted(
-                (k, v.type, v.value, v.datatype or "", v.lang or "")
-                for k, v in triple.items()
-            ))
-            if key not in seen:
-                seen.add(key)
-                triples.append(triple)
+    # Apply the template via the PRODUCTION instantiator, so these conformance
+    # tests gate shipping code rather than a parallel copy living in the test
+    # harness. This module used to instantiate templates itself, which meant
+    # the DAWG construct tests validated the harness and left
+    # vitalgraph.db.sparql_sql.construct entirely untested (issue 025).
+    from vitalgraph.db.sparql_sql.construct import instantiate_construct
+
+    def _to_json_term(b):
+        term = {"type": b.type, "value": b.value}
+        if b.lang:
+            term["xml:lang"] = b.lang
+        elif b.datatype:
+            term["datatype"] = b.datatype
+        return term
+
+    def _from_json_term(t):
+        return SparqlBinding(
+            type=t.get("type", "literal"),
+            value=t.get("value", ""),
+            datatype=t.get("datatype"),
+            lang=t.get("xml:lang"),
+        )
+
+    json_solutions = [
+        {name: _to_json_term(b) for name, b in bindings.items()}
+        for bindings in solution_rows
+    ]
+    triples = [
+        {role: _from_json_term(term) for role, term in triple.items()}
+        for triple in instantiate_construct(template, json_solutions)
+    ]
 
     return SparqlResults(
         variables=["subject", "predicate", "object"],
         rows=triples,
         is_graph=True,
     )
-
-
-def _instantiate_template_triple(tp, bindings, row_idx=0):
-    """Instantiate a template triple from a solution row.
-
-    Returns a dict with 'subject', 'predicate', 'object' SparqlBindings,
-    or None if any variable is unbound.
-    Blank nodes get fresh labels per row_idx to avoid cross-row collisions.
-    """
-    from vitalgraph.db.jena_sparql.jena_types import VarNode, URINode, LiteralNode, BNodeNode
-
-    result = {}
-    for role, node in [("subject", tp.subject),
-                       ("predicate", tp.predicate),
-                       ("object", tp.object)]:
-        if isinstance(node, VarNode):
-            b = bindings.get(node.name)
-            if b is None:
-                return None  # unbound → skip triple
-            result[role] = b
-        elif isinstance(node, URINode):
-            result[role] = SparqlBinding(type="uri", value=node.value)
-        elif isinstance(node, LiteralNode):
-            dt = node.datatype if node.datatype else None
-            if dt == XSD_STRING:
-                dt = None
-            result[role] = SparqlBinding(
-                type="literal", value=node.value,
-                lang=node.lang, datatype=dt,
-            )
-        elif isinstance(node, BNodeNode):
-            # Fresh bnode label per solution row
-            result[role] = SparqlBinding(
-                type="bnode", value=f"{node.label}_r{row_idx}")
-        else:
-            return None
-    return result
