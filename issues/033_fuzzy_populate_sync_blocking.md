@@ -1,4 +1,7 @@
-# Issue 004: Fuzzy Populate Was Synchronous / Blocking
+# Fuzzy Populate Was Synchronous / Blocking
+
+*(renumbered from 004 on 2026-08-04 — the number collided with
+`004_delete_kgentity_combined_property_coercion.md`)*
 
 ## Problem
 

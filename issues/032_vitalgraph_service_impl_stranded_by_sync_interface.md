@@ -2,6 +2,9 @@
 
 ## Status: OPEN
 
+*(renumbered from 027 on 2026-08-04 — the number collided with
+`027_exists_loses_correlation_for_filter_only_outer_vars.md`)*
+
 ## Severity
 
 **A whole integration surface is non-functional.** `VitalGraphServiceImpl` is
@@ -74,8 +77,9 @@ Converting `VitalGraphService`'s 31 abstract methods to `async def` means
 the mismatch.
 
 Source repo: `/Users/hadfield/Local/vital-git/vital-vitalsigns-python`
-(version `0.1.55`; this repo pins `vital-ai-vitalsigns>=0.1.53` in
-`pyproject.toml:24,39`).
+(version `0.1.55`). This repo now pins `vital-ai-vitalsigns>=0.1.55` in
+`pyproject.toml:24,39`, raised from `>=0.1.53` so the floor matches the source
+tree the interface change will be made in.
 
 Work required upstream:
 

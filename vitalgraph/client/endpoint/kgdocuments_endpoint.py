@@ -381,7 +381,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
             # body, so the server's status decides whether anything was
             # deleted. Reporting deleted=True unconditionally made a rejected
             # delete (e.g. managed segment protection) look like a success and
-            # overwrote the server's explanation. See issues/026.
+            # overwrote the server's explanation. See issues/031.
             status = response_data.get('status')
             deleted = status in _SUCCESS_STATUS_VALUES if status is not None else True
 

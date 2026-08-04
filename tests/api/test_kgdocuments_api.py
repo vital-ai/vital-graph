@@ -528,7 +528,7 @@ class TestManagedSegmentDeleteProtection:
         )
         # A domain outcome: the explanation rides in `message`, not
         # `error_message`, and must be the server's, not a client-side canned
-        # string. See issues/026.
+        # string. See issues/031.
         assert "managed segment" in (del_resp.message or "").lower()
         assert del_resp.deleted is False
         assert del_resp.deleted_count == 0

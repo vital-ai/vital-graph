@@ -2,6 +2,9 @@
 
 ## Status: FIXED (2026-08-04)
 
+*(renumbered from 026 on 2026-08-04 — the number collided with
+`026_minus_ignored_when_shared_var_has_no_term_uuid.md`)*
+
 ## Severity
 
 **A protection guard that works server-side is invisible to every client.**

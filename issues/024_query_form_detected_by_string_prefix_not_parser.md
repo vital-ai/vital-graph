@@ -52,7 +52,7 @@ Also done in a follow-up pass:
     `Edge_hasKGFrame` created; nonexistent parent → no edge).
 
   **Writing the endpoint-level tests immediately found a real defect**, filed
-  as `issues/026_client_delete_response_reports_rejected_delete_as_success.md`:
+  as `issues/031_client_delete_response_reports_rejected_delete_as_success.md`:
   the server correctly refused to delete a managed segment, and the client
   reported `is_success=True` with a fabricated `"Deleted KGDocument: …"`
   message. Fixed there. The shape-level tests would never have caught it —
@@ -90,7 +90,7 @@ exercised again. Passing a raw query string where a `SPARQLQueryRequest` is
 expected is an *older* mismatch still — that signature already took a request
 object before the async conversion — which reinforces the same conclusion.
 
-**Tracked as `issues/027_vitalgraph_service_impl_stranded_by_sync_interface.md`.**
+**Tracked as `issues/032_vitalgraph_service_impl_stranded_by_sync_interface.md`.**
 The module is the remote, client-backed implementation of the VitalSigns
 `VitalGraphService` interface — the abstraction meant to let callers work
 against a local graph service or a remote VitalGraph server interchangeably. It
