@@ -255,7 +255,7 @@ class EmitContext:
         # variable and a silently-widened constraint if the translator should
         # have resolved it (issues 023, 027). Recording them makes the
         # condition inspectable after generation instead of leaving no trace —
-        # mirroring _is_null_placeholder in emit_group, which marks a
+        # mirroring ColumnInfo.is_unbound, which likewise marks a
         # deliberate NULL rather than emitting a bare one. See issue 028.
         self._unresolved_vars: List[Tuple[str, int]] = []
         # vg: optimizer hints — temporarily set by emit_extend when emitting

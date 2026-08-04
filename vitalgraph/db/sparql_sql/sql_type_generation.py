@@ -141,6 +141,15 @@ class ColumnInfo:
     # Ambient in ctx.text_needed_vars; carried here so consumers can ask the
     # question of the variable rather than of the context.
     text_materialized: bool = True
+    # Whether this entry stands for a variable that is out of scope here, and
+    # so is unbound (SPARQL 10.5) rather than merely unresolved or deferred.
+    # Every companion is NULL, including __uuid.
+    #
+    # Distinct from text_materialized=False, which means bound-but-no-text.
+    # Was an undeclared attribute set via `info._is_null_placeholder = True`
+    # and read back with getattr(); declared here so there is one vocabulary
+    # (issue 030).
+    is_unbound: bool = False
 
     @staticmethod
     def simple_output(sparql_name: str, sql_name: str,

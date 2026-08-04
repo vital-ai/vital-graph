@@ -102,8 +102,8 @@ def _emit_group_impl(plan: PlanV2, ctx: EmitContext) -> str:
                 # Still add to gb_cols so GROUP BY collapses rows properly.
                 from .sql_type_generation import ColumnInfo
                 sn = ctx.types.allocate(var)
-                info = ColumnInfo(sparql_name=var, sql_name=sn, text_col=sn)
-                info._is_null_placeholder = True
+                info = ColumnInfo(sparql_name=var, sql_name=sn, text_col=sn,
+                                  is_unbound=True)
                 ctx.types.register(info)
                 gb_cols.append("CAST(NULL AS text)")
                 gb_select.extend(TypeRegistry.null_companions(sn))
@@ -278,7 +278,7 @@ def _qualify_agg_inner(inner_expr, agg_expr: ExprAggregator,
         return None
 
     # Rule 1: NULL = unbound (§10.5). Variables not in BGP are NULL.
-    if getattr(info, '_is_null_placeholder', False):
+    if info.is_unbound:
         return "NULL"
 
     agg_name = (agg_expr.name or "").upper()

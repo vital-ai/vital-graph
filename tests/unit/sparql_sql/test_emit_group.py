@@ -365,13 +365,17 @@ class TestEmitGroup:
         result = _qualify_agg_inner(inner, agg, "g0", ctx)
         assert result is None
 
-    def test_qualify_agg_inner_null_placeholder(self):
-        """Null-placeholder variable returns 'NULL'."""
+    def test_qualify_agg_inner_unbound_variable(self):
+        """An out-of-scope (unbound) variable returns 'NULL'.
+
+        Was a dynamic `_is_null_placeholder` attribute; now the declared
+        ColumnInfo.is_unbound field (issue 030).
+        """
         from vitalgraph.db.sparql_sql.emit_group import _qualify_agg_inner
         ctx = _make_ctx({})
         sn = ctx.types.allocate("ghost")
-        info = ColumnInfo(sparql_name="ghost", sql_name=sn, text_col=sn)
-        info._is_null_placeholder = True  # type: ignore[attr-defined]  # dynamic attr
+        info = ColumnInfo(sparql_name="ghost", sql_name=sn, text_col=sn,
+                          is_unbound=True)
         ctx.types.register(info)
         inner = _var("ghost")
         agg = ExprAggregator(name="SUM", expr=inner, distinct=False)

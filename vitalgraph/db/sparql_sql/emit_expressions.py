@@ -150,7 +150,7 @@ def _var_to_sql(expr: ExprVar, ctx: EmitContext) -> Optional[str]:
     translation gap, and the two are indistinguishable *here* — so this does
     not decide. It marks. ``generator.generate_sql`` inspects
     ``ctx.unresolved_vars`` after emission and decides there. This mirrors
-    ``_is_null_placeholder`` in ``emit_group``, which likewise marks a
+    ``ColumnInfo.is_unbound``, which likewise marks a
     deliberate NULL instead of emitting a bare one. See issue 028.
     """
     info = ctx.types.get(expr.var)
