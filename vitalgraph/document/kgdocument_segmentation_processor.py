@@ -17,6 +17,7 @@ from typing import Callable, List, Optional, Tuple, Union
 
 from vitalgraph.document.document_segmenter import DocumentSegmenter, SegmentResult
 from vitalgraph.document.segment_config import MarkdownSegmentConfig, PlainSplitConfig
+from vitalgraph.document.segment_deletion import mint_uri
 
 logger = logging.getLogger(__name__)
 
@@ -173,10 +174,15 @@ class KGDocumentSegmentationProcessor:
         method_uri = config.segment_method_uri
         now = datetime.now(timezone.utc).isoformat()
 
-        # Determine parent copy URI (deterministic)
-        # Use method short name in URI for multi-method coexistence
+        # Mint the parent copy URI. The descriptive prefix is for readability
+        # when debugging only — it carries no semantics and nothing parses it.
+        # Uniqueness comes from the random tail: without it, two methods whose
+        # local names collide (urn:segmethod:markdown_split vs
+        # urn:other:markdown_split) would mint the same URI and overwrite each
+        # other. Method-scoped deletes match hasKGDocumentSegmentMethodURI, not
+        # this text.
         method_suffix = method_uri.split(":")[-1] if ":" in method_uri else "segmented"
-        parent_uri = f"{original_uri}_parent_{method_suffix}"
+        parent_uri = mint_uri(f"{original_uri}_parent_{method_suffix}")
 
         # Build parent copy properties
         parent_summary = build_parent_copy_summary(original_properties)
@@ -222,9 +228,11 @@ class KGDocumentSegmentationProcessor:
             }
             segment_properties_list.append(seg_props)
 
-        # Build edge: original → parent copy
+        # Build edge: original → parent copy.
+        # Derived from parent_uri, which already carries the random tail, so
+        # this inherits uniqueness without needing its own.
         edge_orig_to_parent = {
-            "URI": f"{original_uri}_edge_to_{method_suffix}_parent",
+            "URI": f"{parent_uri}_edge_from_original",
             "edgeSource": original_uri,
             "edgeDestination": parent_uri,
             "kGGraphURI": kg_graph_uri,

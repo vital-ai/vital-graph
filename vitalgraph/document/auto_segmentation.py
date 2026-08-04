@@ -18,6 +18,7 @@ from vitalgraph.document.kgdocument_segmentation_processor import (
     extract_content,
 )
 from vitalgraph.document.segment_config import MarkdownSegmentConfig, PlainSplitConfig
+from vitalgraph.document.segment_deletion import delete_segmentation
 from vitalgraph.document.segmentation_config_manager import (
     SegmentationConfigDTO,
     SegmentationConfigManager,
@@ -181,32 +182,15 @@ class AutoSegmentationHook:
             )
 
     async def _delete_existing(self, graph_id: str, original_uri: str, method_uri: str):
-        """Delete existing parent copy + segments for a method."""
-        method_suffix = method_uri.split(":")[-1] if ":" in method_uri else "segmented"
-        parent_uri = f"{original_uri}_parent_{method_suffix}"
+        """Delete existing parent copy + segments for a method.
 
+        Scoped to this method, so re-running one segmentation method leaves
+        other methods' output intact.
+        """
         try:
-            # Delete subjects starting with parent URI
-            sparql = f"""
-                DELETE WHERE {{
-                    GRAPH <{graph_id}> {{
-                        ?s ?p ?o .
-                        FILTER(STRSTARTS(STR(?s), "{parent_uri}"))
-                    }}
-                }}
-            """
-            await self._backend.execute_sparql_update(self._space_id, sparql)
-
-            # Delete edge from original to parent
-            edge_uri = f"{original_uri}_edge_to_{method_suffix}_parent"
-            sparql_edge = f"""
-                DELETE WHERE {{
-                    GRAPH <{graph_id}> {{
-                        <{edge_uri}> ?p ?o .
-                    }}
-                }}
-            """
-            await self._backend.execute_sparql_update(self._space_id, sparql_edge)
+            await delete_segmentation(
+                self._backend, self._space_id, graph_id, original_uri, method_uri
+            )
         except Exception as e:
             logger.warning(f"Error deleting existing segmentation: {e}")
 

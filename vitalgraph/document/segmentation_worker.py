@@ -20,6 +20,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from vitalgraph.document.segment_deletion import delete_segmentation
 from vitalgraph.document.segmentation_job_manager import (
     SegmentationJobDTO,
     SegmentationJobManager,
@@ -547,65 +548,13 @@ class SegmentationWorker:
     ) -> None:
         """Delete existing segmentation by traversing edges from the original document.
 
-        Finds parent copies and segments by following Edge_hasKGDocumentSegment
-        relationships, then deletes all discovered URIs (edges, parent, segments).
-        Never assumes URI structure — uses graph traversal only.
+        Scoped to this method, so re-running one segmentation method leaves
+        other methods' output intact.
         """
         try:
-            # Step 1: Find edges FROM the original document to parent copies
-            # Filter by method_uri to only delete segmentation for this method
-            sparql_edges_from_original = f"""
-                SELECT ?edge ?parent WHERE {{
-                    GRAPH <{graph_id}> {{
-                        ?edge <http://vital.ai/ontology/vital-core#hasEdgeSource> <{original_uri}> .
-                        ?edge <http://vital.ai/ontology/vital-core#hasEdgeDestination> ?parent .
-                        ?parent <http://vital.ai/ontology/haley-ai-kg#hasKGDocumentSegmentMethodURI> "{method_uri}" .
-                    }}
-                }}
-            """
-            result = await backend_impl.execute_sparql_query(space_id, sparql_edges_from_original)
-            bindings = result.get('results', {}).get('bindings', [])
-            if not bindings:
-                return  # No existing segmentation to delete
-
-            uris_to_delete = []
-            parent_uris = []
-
-            for row in bindings:
-                edge_uri = row.get("edge", {}).get("value", "")
-                parent_uri = row.get("parent", {}).get("value", "")
-                if edge_uri:
-                    uris_to_delete.append(edge_uri)
-                if parent_uri:
-                    uris_to_delete.append(parent_uri)
-                    parent_uris.append(parent_uri)
-
-            # Step 2: For each parent, find edges to segments and the segments themselves
-            for parent_uri in parent_uris:
-                sparql_segments = f"""
-                    SELECT ?edge ?seg WHERE {{
-                        GRAPH <{graph_id}> {{
-                            ?edge <http://vital.ai/ontology/vital-core#hasEdgeSource> <{parent_uri}> .
-                            ?edge <http://vital.ai/ontology/vital-core#hasEdgeDestination> ?seg .
-                        }}
-                    }}
-                """
-                seg_result = await backend_impl.execute_sparql_query(space_id, sparql_segments)
-                seg_bindings = seg_result.get('results', {}).get('bindings', [])
-                for row in seg_bindings:
-                    edge_uri = row.get("edge", {}).get("value", "")
-                    seg_uri = row.get("seg", {}).get("value", "")
-                    if edge_uri:
-                        uris_to_delete.append(edge_uri)
-                    if seg_uri:
-                        uris_to_delete.append(seg_uri)
-
-            if uris_to_delete:
-                await backend_impl.db_ops.remove_quads_by_subject_uris(
-                    space_id, uris_to_delete, graph_id=graph_id
-                )
-                logger.info("Deleted %d objects for existing segmentation of %s",
-                            len(uris_to_delete), original_uri)
+            await delete_segmentation(
+                backend_impl, space_id, graph_id, original_uri, method_uri
+            )
         except Exception as e:
             logger.warning(f"Error deleting existing segmentation: {e}")
 
