@@ -170,14 +170,10 @@ def emit_bgp(plan: PlanV2, ctx: EmitContext) -> str:
                 ))
                 continue
 
-        # No term table needed — just pass through UUID, null everything else
-        outer_cols.extend(TypeRegistry.null_companions(sn))
-        # Override the uuid column with the actual passthrough
-        # null_companions uses typed nulls (NULL::uuid), so match that format
-        for i, c in enumerate(outer_cols):
-            if c.endswith(f" AS {sn}__uuid"):
-                outer_cols[i] = f"{sub_alias}.{sn}__uuid AS {sn}__uuid"
-                break
+        # Term JOIN deferred: the variable is bound and its __uuid is real,
+        # only the text-derived companions are absent. Not null_companions(),
+        # which means *unbound* and would NULL the UUID too (issue 030).
+        outer_cols.extend(TypeRegistry.deferred_text_companions(sn, sub_alias))
 
     if not outer_cols:
         outer_cols = ["1 AS _dummy"]

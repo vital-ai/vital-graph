@@ -29,12 +29,45 @@ conformance), 507 `tests/api` against a rebuilt stack. Steps 2r–4r were checke
 byte-for-byte on generated SQL. The lint was verified to fail when the exact
 issue-026 expression is reintroduced, rather than assumed to work.
 
-**Not done, deliberately:** kinds A (unbound) and F (type error) remain plain
-SQL NULL, which is correct — those genuinely are runtime NULLs and SQL's
-propagation semantics are what SPARQL requires. Kind B stays `typed_lane`, and
-for BGP variables it is row-dependent so it could not be a static field. Kind E
-stays with issue 028's context marking, because an unresolved reference has no
-`ColumnInfo` to carry a field.
+### What each kind ended up as
+
+An earlier version of this section claimed "only one of the six kinds needed a
+new representation" and that kind A "stays plain SQL NULL". Both were wrong —
+**two** fields were added, and A is one of them. Corrected:
+
+| Kind | Outcome |
+|---|---|
+| **A** unbound | `ColumnInfo.is_unbound` — a **declared field**, migrated from the undeclared `_is_null_placeholder`. The SQL value is still NULL; what changed is that the intent is now recorded. |
+| **B** lane N/A | No change. Already `typed_lane`, and for BGP variables it is row-dependent (`__num` is a per-row `CASE`), so it could not be a static field. |
+| **C** synthesized | No new field — `from_triple` already carried it correctly. Added `has_term_identity()` as the accessor consumers should ask, and made `emit_minus` use it. |
+| **D** text deferred | `ColumnInfo.text_materialized` + `TypeRegistry.deferred_text_companions()`. The only kind that genuinely had no representation. |
+| **E** unresolved | No change. An unresolved reference has no `ColumnInfo` to carry a field — that absence *is* the property — so issue 028's context marking stays. True by the current call graph rather than by construction: the dead `register_from_subquery(has_text=False)` builds a `ColumnInfo` with `text_col=None`, which would be recorded as E; it has no callers. |
+| **F** type error | No change. Genuinely a runtime NULL (`CASE WHEN COUNT(*) != COUNT(x) THEN NULL`), correctly. |
+
+So: one kind needed a new representation (D), one had its ad-hoc
+representation formalised (A), one needed only to be *used* (C), and three
+needed nothing.
+
+### Which producers mark kind A — and which correctly do not
+
+`is_unbound` is only meaningful where a producer registers a `ColumnInfo` for a
+variable that is genuinely unbound. Auditing all six `null_companions()` call
+sites:
+
+| Site | Marks `is_unbound`? | Why |
+|---|---|---|
+| `emit_group` | ✓ | out-of-scope variable in GROUP BY |
+| `emit_project` | ✓ | out-of-scope variable — was missing, now fixed |
+| `emit_table` (VALUES UNDEF) | ✗ correctly | pads individual *rows*; the variable is bound in other rows |
+| `emit_union` (branch padding) | ✗ correctly | pads a *branch*; the variable is bound in the other branch |
+| `emit_bgp` (no term JOIN) | ✗ correctly | not kind A at all — this is D, and it now uses `deferred_text_companions` |
+
+`emit_bgp` was a third instance of the `null_companions()`-then-patch-the-UUID
+workaround, alongside `emit_distinct`. Both are gone.
+
+Pinned by `TestUnboundIsMarkedWhereItApplies`, which asserts both directions —
+that the two real producers mark, and that the row/branch-padding ones do not.
+Marking those would be worse than leaving them unmarked.
 
 ## Severity
 

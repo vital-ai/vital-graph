@@ -38,7 +38,7 @@ def emit_project(plan: PlanV2, ctx: EmitContext) -> str:
             from .sql_type_generation import ColumnInfo
             sn = ctx.types.allocate(var)
             ctx.types.register(ColumnInfo(sparql_name=var, sql_name=sn,
-                                          text_col=sn))
+                                          text_col=sn, is_unbound=True))
             proj_cols.extend(TypeRegistry.null_companions(sn))
         name_map[var] = sn
 

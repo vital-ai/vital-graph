@@ -156,6 +156,52 @@ class TestDeferredTextCompanions:
         assert "NULL::uuid AS v0__uuid" in TypeRegistry.null_companions("v0")
 
 
+class TestUnboundIsMarkedWhereItApplies:
+    """`is_unbound` must be set by every producer that registers a ColumnInfo
+    for a variable that is genuinely unbound — otherwise a consumer trusting
+    the field gets wrong answers and the vocabulary is only half real.
+
+    Not every `null_companions()` call site qualifies, and the distinction is
+    easy to get wrong:
+
+    - `emit_project` registers a ColumnInfo for an out-of-scope variable —
+      genuinely unbound, must be marked.
+    - `emit_table` (VALUES UNDEF) and `emit_union` (branch padding) emit NULL
+      *rows* for a variable that is bound elsewhere in the same result. The
+      variable-level ColumnInfo must NOT be marked; those NULLs are runtime,
+      per-row, and correctly invisible to the vocabulary.
+    - `emit_bgp`'s deferred-text path is not unbound at all — it is
+      text_materialized=False, which is why it uses deferred_text_companions.
+    """
+
+    def test_project_marks_out_of_scope_variable(self):
+        import inspect
+        from vitalgraph.db.sparql_sql import emit_project
+        src = inspect.getsource(emit_project)
+        assert "is_unbound=True" in src, (
+            "emit_project registers a ColumnInfo for an out-of-scope variable "
+            "and must mark it unbound"
+        )
+
+    def test_table_and_union_do_not_mark_the_variable(self):
+        """Padding a row is not the same as the variable being unbound."""
+        import inspect
+        from vitalgraph.db.sparql_sql import emit_table, emit_union
+        for mod in (emit_table, emit_union):
+            assert "is_unbound=True" not in inspect.getsource(mod), (
+                f"{mod.__name__} pads individual rows/branches; the variable "
+                f"is bound elsewhere, so marking it unbound would be wrong"
+            )
+
+    def test_bgp_uses_the_deferred_primitive_not_the_unbound_one(self):
+        """emit_bgp's no-term-JOIN path is kind D, not kind A."""
+        import inspect
+        from vitalgraph.db.sparql_sql import emit_bgp
+        src = inspect.getsource(emit_bgp)
+        assert "deferred_text_companions" in src
+        assert "is_unbound=True" not in src
+
+
 class TestValuesProducesNoTermIdentity:
     """emit_table (VALUES) is the producer that caused issue 026."""
 
