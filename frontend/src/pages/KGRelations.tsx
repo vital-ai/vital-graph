@@ -8,7 +8,12 @@ import {
 import { type SpaceInfo } from '../types/api';
 import { type GraphInfo } from '../types/graphs';
 import { HiTrash, HiArrowRight, HiEye } from 'react-icons/hi2';
-import { HiSearch, HiLink } from 'react-icons/hi';
+import { HiSearch, HiLink, HiSortAscending, HiSortDescending } from 'react-icons/hi';
+import {
+  NAME_PROPERTY,
+  LIST_INDEX_PROPERTY,
+  RELATION_TYPE_PROPERTY,
+} from '../lib/sortProperties';
 import {
   parseEntitiesFromQuads,
   shortenUri,
@@ -26,6 +31,7 @@ interface KGRelation {
   name: string;
   source_uri: string;
   destination_uri: string;
+  list_index: string;
   properties_count: number;
 }
 
@@ -50,6 +56,8 @@ const KGRelations: React.FC = () => {
   const [destFilter, setDestFilter] = useState('');
   const [deletingRelation, setDeletingRelation] = useState<KGRelation | null>(null);
   const [entityNames, setEntityNames] = useState<Map<string, string>>(new Map());
+  const [sortBy, setSortBy] = useState<string>('');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
   const hasSelection = !!(selectedSpace && selectedGraph);
 
@@ -93,6 +101,8 @@ const KGRelations: React.FC = () => {
         offset: (currentPage - 1) * itemsPerPage,
         entity_source_uri: sourceFilter || undefined,
         entity_destination_uri: destFilter || undefined,
+        sort_by: sortBy || undefined,
+        sort_order: sortBy ? sortOrder : undefined,
       });
       const quads: Quad[] = data.results || [];
       const grouped = parseEntitiesFromQuads(quads);
@@ -102,6 +112,7 @@ const KGRelations: React.FC = () => {
         name: e.name,
         source_uri: getFirstValue(e.properties, HAS_EDGE_SOURCE),
         destination_uri: getFirstValue(e.properties, HAS_EDGE_DESTINATION),
+        list_index: getFirstValue(e.properties, LIST_INDEX_PROPERTY),
         properties_count: e.properties_count,
       }));
 
@@ -113,7 +124,7 @@ const KGRelations: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage, sourceFilter, destFilter]);
+  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage, sourceFilter, destFilter, sortBy, sortOrder]);
 
   useEffect(() => { fetchRelations(); }, [fetchRelations]);
 
@@ -165,6 +176,23 @@ const KGRelations: React.FC = () => {
       setError('Failed to delete relation.');
       setDeletingRelation(null);
     }
+  };
+
+  const toggleSort = (field: string) => {
+    if (sortBy === field) {
+      setSortOrder(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortBy(field);
+      setSortOrder('asc');
+    }
+    setCurrentPage(1);
+  };
+
+  const SortIcon: React.FC<{ field: string }> = ({ field }) => {
+    if (sortBy !== field) return <HiSortAscending className="w-3.5 h-3.5 text-gray-300" />;
+    return sortOrder === 'asc'
+      ? <HiSortAscending className="w-3.5 h-3.5 text-blue-500" />
+      : <HiSortDescending className="w-3.5 h-3.5 text-blue-500" />;
   };
 
   const totalPages = Math.max(1, Math.ceil(totalCount / itemsPerPage));
@@ -228,6 +256,7 @@ const KGRelations: React.FC = () => {
         <div className="flex flex-col sm:flex-row gap-3">
           <div className="flex-1">
             <TextInput
+              data-testid="relations-source-filter"
               icon={HiSearch}
               placeholder="Filter by source entity URI..."
               value={sourceFilter}
@@ -243,7 +272,9 @@ const KGRelations: React.FC = () => {
             />
           </div>
           <div className="w-32 flex-shrink-0">
-            <Select value={itemsPerPage} onChange={(e) => { setItemsPerPage(parseInt(e.target.value)); setCurrentPage(1); }}>
+            <Select
+              data-testid="relations-page-size"
+              value={itemsPerPage} onChange={(e) => { setItemsPerPage(parseInt(e.target.value)); setCurrentPage(1); }}>
               <option value={10}>10 / page</option>
               <option value={25}>25 / page</option>
               <option value={50}>50 / page</option>
@@ -290,9 +321,35 @@ const KGRelations: React.FC = () => {
           <table className="w-full text-sm text-left">
             <thead className="text-xs text-gray-500 dark:text-gray-400 uppercase bg-gray-50 dark:bg-gray-800">
               <tr>
-                <th className="px-4 py-3">Relation</th>
+                <th className="px-4 py-3">
+                  <button
+                    onClick={() => toggleSort(NAME_PROPERTY)}
+                    data-testid="relations-sort-name"
+                    className="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-200"
+                  >
+                    Relation <SortIcon field={NAME_PROPERTY} />
+                  </button>
+                </th>
                 <th className="px-4 py-3">Source → Destination</th>
-                <th className="px-4 py-3">Type</th>
+                <th className="px-4 py-3">
+                  <button
+                    onClick={() => toggleSort(RELATION_TYPE_PROPERTY)}
+                    data-testid="relations-sort-type"
+                    className="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-200"
+                  >
+                    Type <SortIcon field={RELATION_TYPE_PROPERTY} />
+                  </button>
+                </th>
+                <th className="px-4 py-3 w-24">
+                  <button
+                    onClick={() => toggleSort(LIST_INDEX_PROPERTY)}
+                    data-testid="relations-sort-index"
+                    title="Order by hasListIndex. Relations without an index sort last."
+                    className="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-200"
+                  >
+                    Index <SortIcon field={LIST_INDEX_PROPERTY} />
+                  </button>
+                </th>
                 <th className="px-4 py-3 w-20"></th>
               </tr>
             </thead>
@@ -320,6 +377,13 @@ const KGRelations: React.FC = () => {
                   </td>
                   <td className="px-4 py-3">
                     <Badge color="purple" size="sm">{shortenUri(rel.rdf_type)}</Badge>
+                  </td>
+                  <td className="px-4 py-3" data-testid="relation-index">
+                    {rel.list_index !== '' && rel.list_index != null ? (
+                      <span className="text-gray-700 dark:text-gray-300">{rel.list_index}</span>
+                    ) : (
+                      <span className="text-gray-300 dark:text-gray-600" title="No hasListIndex — sorts last">—</span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1">

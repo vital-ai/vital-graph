@@ -169,8 +169,59 @@ export class ApiService {
     return vgClient.kgentities.get(spaceId, graphId, entityUri) as any;
   }
 
+  /**
+   * The entity's ENTIRE subgraph (all frames, all slots, all edges) in one
+   * response. Fine for modest graphs; for entities with many frames or many
+   * slots per frame use getEntityFrames + getEntityFrameSlots instead, which
+   * page and sort server-side.
+   */
   async getEntityGraph(spaceId: string, graphId: string, entityUri: string): Promise<QuadResponse> {
     return vgClient.kgentities.get(spaceId, graphId, entityUri, true) as any;
+  }
+
+  /**
+   * Frames of an entity, paged and sorted server-side.
+   * Pass FRAME_SEQUENCE_PROPERTY as sort_by to order by hasFrameSequence.
+   */
+  async getEntityFrames(spaceId: string, graphId: string, entityUri: string, options: {
+    page_size?: number; offset?: number; search?: string;
+    parent_frame_uri?: string;
+    sort_by?: string; sort_order?: 'asc' | 'desc';
+    /**
+     * Request a slot_counts map for the returned page, so the caller can tell
+     * which frames need slot pagination without fetching their slots.
+     * A frame with zero slots reports 0 — read a missing key as 0.
+     */
+    include_slot_counts?: boolean;
+  } = {}): Promise<QuadResponse> {
+    return vgClient.kgentities.getFrames(spaceId, graphId, entityUri, {
+      pageSize: options.page_size ?? 10,
+      offset: options.offset ?? 0,
+      search: options.search,
+      parentFrameUri: options.parent_frame_uri,
+      sortBy: options.sort_by,
+      sortOrder: options.sort_order,
+      includeSlotCounts: options.include_slot_counts,
+    }) as any;
+  }
+
+  /**
+   * Slots of ONE frame, paged and sorted server-side.
+   * Pass SLOT_SEQUENCE_PROPERTY as sort_by to order by hasSlotSequence.
+   */
+  async getEntityFrameSlots(spaceId: string, graphId: string, frameUri: string, options: {
+    entity_uri?: string; kg_slot_type?: string;
+    page_size?: number; offset?: number;
+    sort_by?: string; sort_order?: 'asc' | 'desc';
+  } = {}): Promise<QuadResponse> {
+    return vgClient.kgframes.getEntityFrameSlots(spaceId, graphId, frameUri, {
+      entityUri: options.entity_uri,
+      kgSlotType: options.kg_slot_type,
+      pageSize: options.page_size ?? 10,
+      offset: options.offset ?? 0,
+      sortBy: options.sort_by,
+      sortOrder: options.sort_order,
+    }) as any;
   }
 
   async deleteEntity(spaceId: string, graphId: string, entityUri: string): Promise<any> {
@@ -213,14 +264,24 @@ export class ApiService {
   async getRelations(spaceId: string, graphId: string, options: {
     page_size?: number; offset?: number;
     entity_source_uri?: string; entity_destination_uri?: string;
-    relation_type_uri?: string; direction?: string;
+    relation_type_uri?: string; direction?: 'all' | 'incoming' | 'outgoing';
+    sort_by?: string; sort_order?: 'asc' | 'desc';
   } = {}): Promise<QuadResponse> {
+    // relation_type_uri, direction and sort_by/sort_order were accepted by this
+    // options type (or supported by the client) but never forwarded, so they
+    // silently did nothing.
     return vgClient.kgrelations.list(
       spaceId, graphId,
       options.page_size ?? 10, options.offset ?? 0,
       undefined,
       options.entity_source_uri,
       options.entity_destination_uri,
+      {
+        relationTypeUri: options.relation_type_uri,
+        direction: options.direction,
+        sortBy: options.sort_by,
+        sortOrder: options.sort_order,
+      },
     ) as any;
   }
 

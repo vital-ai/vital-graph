@@ -15,11 +15,18 @@ import {
   type Quad,
 } from '../utils/QuadUtils';
 import ConfirmDialog from '../components/ConfirmDialog';
+import {
+  NAME_PROPERTY,
+  CREATED_PROPERTY,
+  MODIFIED_PROPERTY,
+  FRAME_SEQUENCE_PROPERTY,
+} from '../lib/sortProperties';
 
 const FRAME_SORT_OPTIONS: { label: string; value: string }[] = [
-  { label: 'Name', value: 'http://vital.ai/ontology/vital-core#hasName' },
-  { label: 'Created', value: 'http://vital.ai/ontology/vital-aimp#hasObjectCreationTime' },
-  { label: 'Modified', value: 'http://vital.ai/ontology/vital#hasObjectModificationDateTime' },
+  { label: 'Name', value: NAME_PROPERTY },
+  { label: 'Sequence', value: FRAME_SEQUENCE_PROPERTY },
+  { label: 'Created', value: CREATED_PROPERTY },
+  { label: 'Modified', value: MODIFIED_PROPERTY },
 ];
 
 const FORM_TYPE_OPTIONS: { label: string; value: string }[] = [
@@ -249,17 +256,17 @@ const KGFrames: React.FC = () => {
       {hasSelection && (
         <div className="flex flex-col sm:flex-row gap-3">
           <div className="flex-1">
-            <TextInput icon={HiSearch} placeholder="Search frames..." value={searchTerm}
+            <TextInput data-testid="frames-search" icon={HiSearch} placeholder="Search frames..." value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)} />
           </div>
           <div className="w-36 flex-shrink-0">
-            <Select value={sortBy} disabled={!sortEnabled} title={sortEnabled ? undefined : 'Search or filter to enable sorting'} onChange={(e) => { setSortBy(e.target.value); setCurrentPage(1); }}>
+            <Select data-testid="frames-sort-select" value={sortBy} disabled={!sortEnabled} title={sortEnabled ? undefined : 'Search or filter to enable sorting'} onChange={(e) => { setSortBy(e.target.value); setCurrentPage(1); }}>
               <option value="">{sortEnabled ? 'Sort by...' : 'Sort (search first)'}</option>
               {FRAME_SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </Select>
           </div>
           <div className="w-32 flex-shrink-0">
-            <Select value={itemsPerPage} onChange={(e) => { setItemsPerPage(parseInt(e.target.value)); setCurrentPage(1); }}>
+            <Select data-testid="frames-page-size" value={itemsPerPage} onChange={(e) => { setItemsPerPage(parseInt(e.target.value)); setCurrentPage(1); }}>
               <option value={10}>10 / page</option>
               <option value={25}>25 / page</option>
               <option value={50}>50 / page</option>
@@ -316,8 +323,8 @@ const KGFrames: React.FC = () => {
                 <tr>
                   <th className="px-4 py-3">
                     {sortEnabled ? (
-                      <button onClick={() => toggleSort('http://vital.ai/ontology/vital-core#hasName')} className="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-200">
-                        Frame <SortIcon field="http://vital.ai/ontology/vital-core#hasName" />
+                      <button data-testid="frames-sort-name" onClick={() => toggleSort(NAME_PROPERTY)} className="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-200">
+                        Frame <SortIcon field={NAME_PROPERTY} />
                       </button>
                     ) : (
                       <span title="Search or filter to enable sorting">Frame</span>

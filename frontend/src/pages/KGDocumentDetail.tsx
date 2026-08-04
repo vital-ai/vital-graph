@@ -47,10 +47,12 @@ function propValue(obj: BaseRDFObject | null, predicate: string): string {
   return prop?.object ?? '';
 }
 
+// Exact URI equality, matching isSegment/isParent below. A substring test would
+// mis-badge any type URI merely containing the token (urn:segtype:not_a_text_chunk).
 function segmentTypeBadge(segType: string) {
-  if (segType.includes('segmentation_parent')) return <Badge color="purple" size="xs">Parent Copy</Badge>;
-  if (segType.includes('markdown_section'))    return <Badge color="indigo" size="xs">Markdown Section</Badge>;
-  if (segType.includes('text_chunk'))          return <Badge color="cyan" size="xs">Text Chunk</Badge>;
+  if (segType === 'urn:segtype:segmentation_parent') return <Badge color="purple" size="xs">Parent Copy</Badge>;
+  if (segType === 'urn:segtype:markdown_section')    return <Badge color="indigo" size="xs">Markdown Section</Badge>;
+  if (segType === 'urn:segtype:text_chunk')          return <Badge color="cyan" size="xs">Text Chunk</Badge>;
   return <Badge color="gray" size="xs">{segType.split(':').pop()}</Badge>;
 }
 
