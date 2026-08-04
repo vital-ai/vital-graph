@@ -1,6 +1,60 @@
 # VitalGraphServiceImpl is stranded: it implements a sync VitalSigns interface over an async client
 
-## Status: OPEN
+## Status: DEFERRED — not scheduled (2026-08-04)
+
+Not being worked. The scoping step this issue named as its prerequisite has now
+been done, and the answer is why: converting the interface is a **breaking
+change across 8 repositories**, for a capability nothing currently uses.
+
+Nothing under `vitalgraph/` imports `VitalGraphServiceImpl`, so there is no
+live cost to leaving it — only the missing capability. Revisit if and when a
+remote `VitalGraphService` is actually wanted; the measurements below are the
+input to that decision and should be re-checked rather than trusted, since the
+workspace will have moved on.
+
+### Scoping (measured 2026-08-04)
+
+**Upstream — `vital-vitalsigns-python` (present locally, v0.1.55):**
+
+| | Count |
+|---|---|
+| Methods on the `VitalGraphService` ABC | 34 |
+| Implementors | **2**, not 3 — `VirtuosoGraphService`, `MemoryGraphService` |
+| `graph_service.*` call sites, library (`vital_ai_vitalsigns/`) | 24 |
+| … `vital_ai_vitalservice_cmd/` | 6 |
+| … `test_scripts/` | 64 |
+| … `tests/` | 1 |
+
+*Correction to the table earlier in this issue:* it lists three sync-native
+implementors. There are two. `VirtuosoService` is actually
+`VirtuosoGraphService`, and `RDFLibSparqlImpl` is not a separate implementor —
+`MemoryGraphService` inherits it as a mixin
+(`class MemoryGraphService(VitalGraphService, RDFlibSparqlImpl)`).
+
+**Downstream — other repos in the workspace referencing
+`graph_service` / `VitalGraphService`:**
+
+| Repo | Files |
+|---|---|
+| `kgraph-nexus` | 33 |
+| `kgraphservice` | 18 |
+| `vitalservice-virtuoso` | 13 |
+| `vital-ontology` | 10 |
+| `vital-graph` (this repo) | 5 |
+| `vitalservice-fuseki` | 3 |
+| `vital-agent-resource-rest` | 1 |
+| `vitalservice-weaviate` | 1 |
+
+~84 files across 8 repos, plus ~30 library call sites upstream. These are grep
+counts and will include imports and comments, so treat them as an upper bound
+on files and a lower bound on effort.
+
+**What this settles.** The "sequencing caveat" below asked for exactly this
+count before starting, on the grounds that landing step 1 could strand a
+different caller the same way this one was stranded. At 8 repos that risk is
+real, so the async conversion is not a change to start opportunistically. If
+the integration is wanted, it needs planning across those repos; if it is not,
+"delete it" remains the cheapest honest outcome.
 
 *(renumbered from 027 on 2026-08-04 — the number collided with
 `027_exists_loses_correlation_for_filter_only_outer_vars.md`)*

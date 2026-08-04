@@ -3,6 +3,18 @@
 *(renumbered from 004 on 2026-08-04 — the number collided with
 `004_delete_kgentity_combined_property_coercion.md`)*
 
+## Status: FIXED
+
+Verified in code 2026-08-04: `fuzzy_mappings_endpoint.py:232` spawns
+`_run_populate` via `asyncio.ensure_future` and returns immediately, matching
+the FTS pattern described below.
+
+One item from "Related" is **not** done and is a genuine gap: there is still no
+`status` field on the fuzzy mapping row, so a client polling `stats` cannot
+distinguish *not started* from *in progress* from *complete* — it can only
+watch `entity_count` climb. That is the same limitation noted for the
+segmentation worker in `issues/018` §7.
+
 ## Problem
 
 The `POST /api/fuzzy-mappings/populate` endpoint was executing the full
