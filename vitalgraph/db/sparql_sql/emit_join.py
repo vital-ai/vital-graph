@@ -12,6 +12,24 @@ from .var_scope import compute_scope
 logger = logging.getLogger(__name__)
 
 
+def _boundness_col(alias: str, sql_name: str, info) -> str:
+    """Column whose NULL-ness actually means "this variable is unbound".
+
+    Not simply the text column: when the term JOIN is deferred the text is
+    NULL for a variable that is bound, so testing it reports unbound and
+    SPARQL's "unbound is compatible with anything" rule then admits rows it
+    should not (issue 030).
+
+    A variable with a term identity is tested on ``__uuid``. One without —
+    a VALUES/BIND/aggregate value — is tested on its text, which is always
+    materialised for exactly the reason it has no term identity: the value was
+    synthesized rather than read from a term row, so there is nothing to defer.
+    """
+    if info is not None and info.has_term_identity():
+        return f"{alias}.{sql_name}__uuid"
+    return f"{alias}.{sql_name}"
+
+
 def emit_join(plan: PlanV2, ctx: EmitContext) -> str:
     """Emit SQL for an inner JOIN."""
     return _emit_join_impl(plan, ctx, is_left=False)
@@ -69,8 +87,8 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
             right_info = right_ctx.types.get(v)
             l_sn = left_info.sql_name if left_info else v
             r_sn = right_info.sql_name if right_info else v
-            left_has_uuid = left_info and left_info.uuid_col and left_info.from_triple
-            right_has_uuid = right_info and right_info.uuid_col and right_info.from_triple
+            left_has_uuid = bool(left_info and left_info.has_term_identity())
+            right_has_uuid = bool(right_info and right_info.has_term_identity())
             if left_has_uuid and right_has_uuid:
                 cond = f"{l_alias}.{l_sn}__uuid = {r_alias}.{r_sn}__uuid"
             elif (left_info and right_info
@@ -93,12 +111,16 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
             # SPARQL compatible-mapping semantics: unbound (NULL) is
             # compatible with any value.  Apply to VALUES joins AND LEFT
             # JOINs so that sequential OPTIONALs sharing a variable work.
-            # Use __uuid for the IS NULL check — the base (text) column may
-            # be NULL when text_needed_vars skips term JOINs, even though
-            # the variable IS bound.
+            #
+            # The NULL test must use a column that actually signals boundness.
+            # The text column does not when the term JOIN was deferred — it is
+            # NULL for a variable that IS bound (issue 030 kind D). So prefer
+            # __uuid where there is a term identity, and fall back to text
+            # only for synthesized values, whose text is always materialised
+            # precisely because there is no term row to defer.
             if right_is_table or left_is_table or is_left:
-                l_null_col = f"{l_alias}.{l_sn}__uuid" if left_has_uuid else f"{l_alias}.{l_sn}"
-                r_null_col = f"{r_alias}.{r_sn}__uuid" if right_has_uuid else f"{r_alias}.{r_sn}"
+                l_null_col = _boundness_col(l_alias, l_sn, left_info)
+                r_null_col = _boundness_col(r_alias, r_sn, right_info)
                 cond = f"({l_null_col} IS NULL OR {r_null_col} IS NULL OR {cond})"
             on_parts.append(cond)
         on_clause = " AND ".join(on_parts)
