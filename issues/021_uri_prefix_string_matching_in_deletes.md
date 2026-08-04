@@ -18,6 +18,21 @@ its `DELETE WHERE` through `execute_sparql_query`; it now calls
 `delete_segmentation`, which uses `execute_sparql_update`. So the cascade does
 run — the question the issue asked to confirm either way.
 
+### Site 4 is on a backend nothing currently uses
+
+Worth stating so it is not read as equal in weight to sites 1–3, which were
+live data-loss paths on the active backend.
+
+`sparql_sql` is the only backend in use — it is what `BACKEND_TYPE` selects
+everywhere, and it took 41 commits in the 60 days to 2026-08-04 against 2 for
+`vitalgraph/db/fuseki/` (one of which is this fix). Nothing outside
+`deploy/fuseki_deploy_test/` configures Fuseki, and the backend had no test
+coverage at all before this issue.
+
+So site 4 was a *latent* bug in a dormant backend, not a live one. The fix is
+cheap and correct and stays, but if this issue is used to prioritise similar
+work, weight by which backend the site is on first.
+
 ### Site 4 detail
 
 A space owns `http://vital.ai/graph/{space_id}` plus `/`-suffixed subgraphs, so
@@ -26,12 +41,11 @@ the prefix arm had to stay; what was missing was the boundary. Anchoring on
 `foo` matching space `foobar` — which mattered because one of the two callers
 feeds the result straight into a graph delete.
 
-The fuseki backend is selectable (`backend_config.py:66`) but is not the
-default and has no test stack, so this is **verified by construction, not by
-execution**: `tests/unit/test_space_graph_filter.py` asserts the emitted filter
-and guards against the unanchored form returning. Confirmed the guard fails
-when the anchor is removed. Runtime behaviour against a live Fuseki is
-untested — flagged rather than glossed.
+Verified by construction rather than execution — there is no Fuseki in the test
+stack. `tests/unit/test_space_graph_filter.py` asserts the emitted filter and
+guards against the unanchored form returning; the guard was confirmed to fail
+when the anchor is removed. Given the backend is dormant (above), that is the
+proportionate level of assurance, not a gap to chase.
 
 ### Regression test
 
