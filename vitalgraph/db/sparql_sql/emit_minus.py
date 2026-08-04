@@ -11,6 +11,22 @@ from .var_scope import compute_scope
 logger = logging.getLogger(__name__)
 
 
+def _identity_expr(alias: str, sql_name: str, info, space_id: str) -> str:
+    """Term identity for a shared MINUS variable.
+
+    Uses the stored ``__uuid`` when the variable has a term identity, and
+    derives one from the text/type/lang/datatype companions otherwise. Both
+    forms are comparable — ``vitalgraph_term_uuid`` mirrors the Python
+    ``_generate_term_uuid`` exactly — so a synthesized value on one side
+    matches the same term read from the term table on the other.
+    """
+    from .sql_type_generation import term_identity_expr
+
+    if info is not None and info.has_term_identity():
+        return f"{alias}.{sql_name}__uuid"
+    return term_identity_expr(alias, sql_name, space_id)
+
+
 def emit_minus(plan: PlanV2, ctx: EmitContext) -> str:
     """Emit SQL for MINUS (set difference).
 
@@ -47,13 +63,14 @@ def emit_minus(plan: PlanV2, ctx: EmitContext) -> str:
         select_cols.extend(TypeRegistry.passthrough_columns(sn, l_alias))
         lane = child_info.typed_lane if child_info else None
         tm = child_info.text_materialized if child_info else True
-        # NOTE: from_triple is deliberately NOT propagated here, matching the
-        # pre-existing behaviour. It probably should be — emit_join reads it,
-        # so a MINUS output feeding a JOIN currently loses the knowledge that
-        # its variables have term identity. That is a behaviour change, so it
-        # belongs in step 5r of issue 030, not in this additive step.
+        # MINUS passes the left side through unchanged, so its variables keep
+        # whatever term identity they had. Not propagating this made a MINUS
+        # output feeding a JOIN look synthesized, so emit_join fell back to
+        # comparing text columns — which are NULL when the term JOIN was
+        # deferred.
+        ft = child_info.from_triple if child_info else False
         ctx.types.register(ColumnInfo.simple_output(
-            v, sn, typed_lane=lane, text_materialized=tm))
+            v, sn, typed_lane=lane, from_triple=ft, text_materialized=tm))
 
     if not shared:
         return f"SELECT {', '.join(select_cols)}\nFROM ({left_sql}) AS {l_alias}"
@@ -70,12 +87,17 @@ def emit_minus(plan: PlanV2, ctx: EmitContext) -> str:
         r_info = right_ctx.types.get(v)
         l_sn = l_info.sql_name if l_info else v
         r_sn = r_info.sql_name if r_info else v
-        # Not the raw __uuid column: a shared variable bound by BIND or VALUES
-        # has a literal NULL there, which would read as "unbound" and make the
-        # domain-intersection test below unsatisfiable — silently turning the
-        # whole MINUS into a no-op (issue 026).
-        l_uuid = term_identity_expr(l_alias, l_sn, ctx.space_id)
-        r_uuid = term_identity_expr(r_alias, r_sn, ctx.space_id)
+        # Ask whether the variable has a term identity rather than testing its
+        # __uuid column for NULL. A value from VALUES/BIND carries a literal
+        # NULL::uuid, so reading that column directly says "unbound" for a
+        # bound value — which made the domain-intersection test below
+        # unsatisfiable and turned the whole MINUS into a no-op (issue 026).
+        #
+        # A derived identity and a term-table UUID are interchangeable by
+        # construction: vitalgraph_term_uuid mirrors _generate_term_uuid, so
+        # the two sides compare correctly even when only one is derived.
+        l_uuid = _identity_expr(l_alias, l_sn, l_info, ctx.space_id)
+        r_uuid = _identity_expr(r_alias, r_sn, r_info, ctx.space_id)
         # Rule 2: 3-part compatibility for joins (§10.5).
         # Compatible: if either side is NULL (unbound), it's fine; otherwise must match.
         compat_parts.append(
