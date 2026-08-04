@@ -63,7 +63,12 @@ missed it; there is now a test on the actual construction path.
 a different failure mode and is **not** caught by this. There the variable
 resolves fine; its text column is simply NULL because the term JOIN was
 skipped. Reverting that half still returns wrong results silently. Detecting it
-would need value-level provenance, not scope.
+would need value-level provenance, not scope — the direction `issues/030`
+started with `ColumnInfo.text_materialized`.
+
+This is also recorded in `issues/027` itself, since that is where the
+unguarded code lives and where someone is likely to be reading before changing
+it.
 
 ## Severity
 

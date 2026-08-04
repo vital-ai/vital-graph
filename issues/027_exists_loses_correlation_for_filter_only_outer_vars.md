@@ -190,6 +190,31 @@ Diagnosing this needed the actual rows, not just the SQL: the emitted
 correlation clause read `WHERE (v1 = ex_v1)` — which *looks* correct — and only
 dumping the outer result showed `v1` was NULL for every row.
 
+### The two halves have very different safety nets (2026-08-04)
+
+Worth knowing before touching either, because the asymmetry is invisible from
+the code.
+
+**Half 1 is guarded.** `issues/028` closed the fail-open it belonged to:
+emission now carries scope, and a variable that is *in scope* yet unresolvable
+raises in production. Reverting the `_exists_to_sql` change produces
+`Variable(s) in scope but unresolvable: ?s` at generation time. Verified.
+
+**Half 2 is not guarded, and cannot be by that mechanism.** When `vars_in_expr`
+misses a variable, the variable still *resolves* — it has a `ColumnInfo` and a
+column reference. Only its text column is NULL at runtime, because the
+term-table JOIN was optimised away. Nothing is unresolved, so scope analysis
+has nothing to see. Reverting this half was confirmed to return **wrong results
+with no error**.
+
+So the only thing standing between a regression here and silently wrong
+answers is `test_exists_var_refs.py` plus the literal-valued cases in
+`test_minus_and_exists_correlation.py`. Do not delete or weaken those on the
+assumption that 028's check covers this — it does not. Catching it generically
+would need value-level provenance (knowing a NULL text column means "deferred"
+rather than "unbound"), which is the direction `issues/030` started with
+`ColumnInfo.text_materialized`.
+
 ## Verification
 
 - `tests/integration/test_minus_and_exists_correlation.py` — 22 tests covering
