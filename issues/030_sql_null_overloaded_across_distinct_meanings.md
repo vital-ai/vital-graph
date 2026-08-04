@@ -1,6 +1,40 @@
 # SQL `NULL` is overloaded across six distinct meanings, and every consumer re-guesses which one it is
 
-## Status: OPEN
+## Status: FIXED (2026-08-04) — vocabulary in place, workarounds removed, lint added
+
+All ten steps done. The taxonomy below still stands as documentation of what
+NULL means where; what changed is that the two knowable-at-emit-time
+distinctions now live on `ColumnInfo` instead of being re-inferred by each
+consumer, and the habit that caused issue 026 is now caught by a lint.
+
+**What shipped**
+
+| Step | Change |
+|---|---|
+| 1 | Audit — overturned the proposed seven-value enum; see "Step 1 findings" |
+| 2r–4r | `ColumnInfo.text_materialized`, `has_term_identity()`, populated in `emit_bgp` and propagated through join/minus/union; byte-identical SQL across all 34 plan-tree fixtures |
+| 5r | `emit_minus` asks for identity instead of deriving unconditionally; also propagates `from_triple` through the passthrough |
+| 6r | `TypeRegistry.deferred_text_companions` — `emit_distinct` no longer asks for "unbound" companions and patches the UUID back |
+| 7r | `emit_join._boundness_col` — the explanatory comment became a check |
+| 8r | `ColumnInfo.is_unbound` replaces the undeclared `_is_null_placeholder` |
+| 9r | Source lint: no emitter may test a `__uuid` column for NULL |
+| 10r | Issue 028 corrected — it is *not* unblocked by this work |
+
+**Both workarounds are gone.** `emit_distinct`'s string-patch and
+`emit_join`'s comment-as-documentation were the two live instances; each is now
+an explicit call against the vocabulary.
+
+**Verification.** 2098 local tests (unit + integration + fixtures +
+conformance), 507 `tests/api` against a rebuilt stack. Steps 2r–4r were checked
+byte-for-byte on generated SQL. The lint was verified to fail when the exact
+issue-026 expression is reintroduced, rather than assumed to work.
+
+**Not done, deliberately:** kinds A (unbound) and F (type error) remain plain
+SQL NULL, which is correct — those genuinely are runtime NULLs and SQL's
+propagation semantics are what SPARQL requires. Kind B stays `typed_lane`, and
+for BGP variables it is row-dependent so it could not be a static field. Kind E
+stays with issue 028's context marking, because an unresolved reference has no
+`ColumnInfo` to carry a field.
 
 ## Severity
 
