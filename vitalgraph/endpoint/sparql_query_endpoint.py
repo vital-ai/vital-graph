@@ -126,38 +126,50 @@ class SPARQLQueryEndpoint:
             bindings = result_dict.get('results', {}).get('bindings', [])
             self.logger.info(f" ENDPOINT: Extracted {len(bindings)} bindings")
             
-            # Determine query type and format response
-            query_upper = query.strip().upper()
-            
-            if query_upper.startswith('ASK'):
-                # ASK query - return boolean result
-                boolean_result = len(bindings) > 0
+            # Dispatch on the parser-derived query form, never on the raw text.
+            # A SPARQL query does not start with its form keyword - BASE, PREFIX
+            # and comments all precede it - so string matching misclassifies any
+            # query carrying a prologue. See issues/024.
+            query_type = result_dict.get('query_type')
+
+            if query_type == 'ASK':
+                # The backend derives the boolean; do not recompute it here.
                 return SPARQLQueryResponse(
-                    boolean=boolean_result,
+                    boolean=result_dict.get('boolean', False),
                     query_time=query_time
                 )
-            
-            elif query_upper.startswith('CONSTRUCT') or query_upper.startswith('DESCRIBE'):
-                # CONSTRUCT/DESCRIBE query - return RDF triples
-                return SPARQLQueryResponse(
-                    triples=bindings,
-                    query_time=query_time
-                )
-            
-            else:
-                # SELECT query - return variable bindings
+
+            elif query_type == 'SELECT':
                 # Extract variables from results
                 variables = []
                 if bindings:
                     variables = list(bindings[0].keys())
-                
-                response = SPARQLQueryResponse(
+
+                return SPARQLQueryResponse(
                     head={"vars": variables},
                     results={"bindings": bindings},
                     query_time=query_time
                 )
-                
-                return response
+
+            elif query_type in ('CONSTRUCT', 'DESCRIBE'):
+                # Not implemented in the SQL generator: construct_template and
+                # describe_nodes are parsed and then ignored, so the rows here
+                # are WHERE-pattern bindings, not triples. Returning them in the
+                # 'triples' field would assert something untrue. See issues/025.
+                self.logger.warning(f"Unsupported SPARQL query form: {query_type}")
+                return SPARQLQueryResponse(
+                    error=f"{query_type} queries are not supported by this backend",
+                    query_time=query_time
+                )
+
+            else:
+                # Fail closed rather than assuming SELECT, so an unrecognised or
+                # future form cannot silently take the wrong response shape.
+                self.logger.error(f"Unrecognised SPARQL query form: {query_type!r}")
+                return SPARQLQueryResponse(
+                    error=f"Unrecognised SPARQL query form: {query_type!r}",
+                    query_time=query_time
+                )
         
         except HTTPException:
             raise

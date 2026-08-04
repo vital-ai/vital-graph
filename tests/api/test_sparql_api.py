@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+import pytest_asyncio
 
 pytestmark = [
     pytest.mark.api,
@@ -341,3 +342,210 @@ class TestSparqlFormBased:
         bindings = qr.results.get("bindings", []) if qr.results else []
         assert len(bindings) == 1
         assert bindings[0]["o"]["value"] == f"new_{tag}"
+
+
+# ---------------------------------------------------------------------------
+# Query form dispatch (issues/024, issues/025)
+# ---------------------------------------------------------------------------
+
+class TestQueryFormDispatch:
+    """The query form must come from the parser, not a string prefix.
+
+    A SPARQL query does not begin with its form keyword — the grammar is
+    ``Prologue ( Select | Construct | Describe | Ask )`` — so any query with a
+    PREFIX/BASE prologue or a leading comment used to be misrouted to SELECT.
+    """
+
+    @pytest_asyncio.fixture(loop_scope="session")
+    async def seeded(self, vg_client, test_space):
+        """Insert one known triple and return its subject URI and tag."""
+        from vitalgraph.model.sparql_model import SPARQLInsertRequest
+
+        tag = uuid.uuid4().hex[:8]
+        subj = f"http://example.org/asktest/{tag}"
+        ins = SPARQLInsertRequest(
+            update=f'INSERT DATA {{ <{subj}> <http://example.org/name> "ask_{tag}" . }}'
+        )
+        result = await vg_client.sparql.execute_sparql_insert(test_space, ins)
+        assert result.success, f"Seed insert failed: {result.error}"
+        return subj, tag
+
+    async def _ask(self, vg_client, test_space, query):
+        from vitalgraph.model.sparql_model import SPARQLQueryRequest
+
+        return await vg_client.sparql.execute_sparql_query(
+            test_space, SPARQLQueryRequest(query=query)
+        )
+
+    async def test_ask_bare_true(self, vg_client, test_space, seeded):
+        """Bare ASK that matches — the one form that always worked."""
+        subj, _ = seeded
+        r = await self._ask(
+            vg_client, test_space,
+            f'ASK {{ <{subj}> <http://example.org/name> ?o }}',
+        )
+        assert r.boolean is True
+
+    async def test_ask_bare_false(self, vg_client, test_space, seeded):
+        """Bare ASK that does not match must be False, not None."""
+        subj, _ = seeded
+        r = await self._ask(
+            vg_client, test_space,
+            f'ASK {{ <{subj}> <http://example.org/name> "definitely_not_here" }}',
+        )
+        assert r.boolean is False
+
+    async def test_ask_with_prefix_prologue_true(self, vg_client, test_space, seeded):
+        """PREFIX prologue must not misroute the ASK to SELECT."""
+        subj, tag = seeded
+        r = await self._ask(
+            vg_client, test_space,
+            f'PREFIX ex: <http://example.org/>\n'
+            f'ASK {{ <{subj}> ex:name ?o }}',
+        )
+        assert r.boolean is True
+        assert r.results is None, "ASK must not return SELECT-shaped bindings"
+
+    async def test_ask_with_prefix_prologue_false(self, vg_client, test_space, seeded):
+        """A prologued ASK matching nothing must be False, never None."""
+        subj, _ = seeded
+        r = await self._ask(
+            vg_client, test_space,
+            f'PREFIX ex: <http://example.org/>\n'
+            f'ASK {{ <{subj}> ex:name "definitely_not_here" }}',
+        )
+        assert r.boolean is False
+
+    async def test_ask_with_leading_comment(self, vg_client, test_space, seeded):
+        """A comment before the form keyword must not misroute the query."""
+        subj, _ = seeded
+        r = await self._ask(
+            vg_client, test_space,
+            f'# leading comment\n'
+            f'ASK {{ <{subj}> <http://example.org/name> ?o }}',
+        )
+        assert r.boolean is True
+
+    async def test_ask_with_base_prologue(self, vg_client, test_space, seeded):
+        """A BASE declaration before the form keyword must not misroute it."""
+        subj, _ = seeded
+        r = await self._ask(
+            vg_client, test_space,
+            f'BASE <http://example.org/>\n'
+            f'ASK {{ <{subj}> <http://example.org/name> ?o }}',
+        )
+        assert r.boolean is True
+
+    async def test_select_with_prefix_prologue(self, vg_client, test_space, seeded):
+        """SELECT still routes correctly with a prologue."""
+        subj, tag = seeded
+        r = await self._ask(
+            vg_client, test_space,
+            f'PREFIX ex: <http://example.org/>\n'
+            f'SELECT ?o WHERE {{ <{subj}> ex:name ?o }}',
+        )
+        bindings = r.results.get("bindings", []) if r.results else []
+        assert len(bindings) == 1
+        assert bindings[0]["o"]["value"] == f"ask_{tag}"
+        assert r.boolean is None, "SELECT must not carry a boolean"
+
+    @pytest.mark.parametrize("form", ["CONSTRUCT", "DESCRIBE"])
+    @pytest.mark.parametrize("prologue", ["", "PREFIX ex: <http://example.org/>\n"])
+    async def test_construct_describe_rejected(
+        self, vg_client, test_space, seeded, form, prologue
+    ):
+        """CONSTRUCT/DESCRIBE are unimplemented (issues/025) and must error.
+
+        They must NOT return WHERE-pattern bindings in the ``triples`` field —
+        that would assert those rows are RDF triples, which they are not.
+        Flip these to shape assertions when the generator materialises
+        construct_template / describe_nodes.
+        """
+        subj, _ = seeded
+        if form == "CONSTRUCT":
+            query = (
+                f'{prologue}CONSTRUCT {{ <{subj}> <http://example.org/n> ?o }} '
+                f'WHERE {{ <{subj}> <http://example.org/name> ?o }}'
+            )
+        else:
+            query = f'{prologue}DESCRIBE <{subj}>'
+
+        r = await self._ask(vg_client, test_space, query)
+        assert r.error is not None, f"{form} should be rejected, got: {r}"
+        assert form.lower() in r.error.lower()
+        assert r.triples is None
+        assert r.results is None
+
+
+class TestGuardQueryShapes:
+    """Lock the ASK shapes the endpoint guards depend on (issues/024).
+
+    ``kgdocuments_endpoint._check_delete_protection`` and
+    ``kgframes_endpoint._validate_parent_object`` were hand-rolled as
+    ``SELECT … LIMIT 1`` while the adapter returned no boolean. They now use
+    ASK. Neither guard had test coverage, so these assert the query shapes
+    directly — a silent regression here means a protection check that stops
+    protecting.
+    """
+
+    _PRED = "http://vital.ai/ontology/haley-ai-kg#hasKGDocumentSegmentTypeURI"
+    _MANAGED = [
+        "urn:segtype:markdown_section",
+        "urn:segtype:paragraph",
+        "urn:segtype:segmentation_parent",
+        "urn:segtype:text_chunk",
+    ]
+
+    async def _q(self, vg_client, space, query):
+        from vitalgraph.model.sparql_model import SPARQLQueryRequest
+
+        return await vg_client.sparql.execute_sparql_query(
+            space, SPARQLQueryRequest(query=query)
+        )
+
+    async def test_delete_protection_ask_with_values(self, vg_client, test_space):
+        """ASK + VALUES must distinguish managed segments from user documents."""
+        from vitalgraph.model.sparql_model import SPARQLInsertRequest
+
+        g = f"http://example.org/g/{uuid.uuid4().hex[:8]}"
+        managed = f"urn:doc:managed_{uuid.uuid4().hex[:8]}"
+        plain = f"urn:doc:plain_{uuid.uuid4().hex[:8]}"
+
+        await vg_client.sparql.execute_sparql_insert(test_space, SPARQLInsertRequest(
+            update=f'INSERT DATA {{ GRAPH <{g}> {{ '
+                   f'<{managed}> <{self._PRED}> <urn:segtype:text_chunk> . '
+                   f'<{plain}> <{self._PRED}> <urn:segtype:user_defined> . }} }}'))
+
+        values = " ".join(f"<{t}>" for t in sorted(self._MANAGED))
+        tmpl = ('ASK {{ GRAPH <%s> {{ VALUES ?managed {{ %s }} '
+                '<{uri}> <%s> ?managed . }} }}' % (g, values, self._PRED))
+
+        r = await self._q(vg_client, test_space, tmpl.format(uri=managed))
+        assert r.boolean is True, f"managed segment not detected: {r}"
+
+        r = await self._q(vg_client, test_space, tmpl.format(uri=plain))
+        assert r.boolean is False, f"user document wrongly protected: {r}"
+
+        r = await self._q(vg_client, test_space, tmpl.format(uri="urn:doc:nonexistent"))
+        assert r.boolean is False
+
+    async def test_parent_object_type_ask(self, vg_client, test_space):
+        """ASK on rdf:type must not conflate KGEntity with KGFrame."""
+        from vitalgraph.model.sparql_model import SPARQLInsertRequest
+
+        haley = "http://vital.ai/ontology/haley-ai-kg#"
+        g = f"http://example.org/g/{uuid.uuid4().hex[:8]}"
+        ent = f"urn:e:{uuid.uuid4().hex[:8]}"
+
+        await vg_client.sparql.execute_sparql_insert(test_space, SPARQLInsertRequest(
+            update=f'INSERT DATA {{ GRAPH <{g}> {{ <{ent}> a <{haley}KGEntity> . }} }}'))
+
+        r = await self._q(
+            vg_client, test_space,
+            f'ASK {{ GRAPH <{g}> {{ <{ent}> a <{haley}KGEntity> . }} }}')
+        assert r.boolean is True
+
+        r = await self._q(
+            vg_client, test_space,
+            f'ASK {{ GRAPH <{g}> {{ <{ent}> a <{haley}KGFrame> . }} }}')
+        assert r.boolean is False, "entity wrongly identified as frame"

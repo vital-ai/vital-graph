@@ -1408,6 +1408,14 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 if 'ORDER BY' in query.upper() and 'MIN' in query.upper():
                     logger.info("DEBUG multi-value sort SQL:\n%s", sql)
 
+                # ASK only needs to know whether any row matches. The generator
+                # does not specialise on query_type, so without this the query
+                # materialises every matching row to answer a yes/no question.
+                # SPARQL forbids solution modifiers on ASK, so there is no
+                # LIMIT/OFFSET/ORDER BY in the inner SQL to disturb.
+                if cr.meta.query_type == 'ASK':
+                    sql = f"SELECT EXISTS (SELECT 1 FROM ({sql}) _ask_sub) AS _ask_result"
+
                 rows = await conn.fetch(sql)
                 t_exec = _time.monotonic()
                 result_rows = [dict(r) for r in rows]
@@ -1441,11 +1449,21 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             )
             logger.debug("Generated SQL [%s]:\n%s", space_id, sql)
 
-            return {
+            result = {
                 'results': {'bindings': bindings},
                 'success': True,
                 'sql': sql,
+                'query_type': cr.meta.query_type,
             }
+
+            # ASK answers from the EXISTS wrapper above, not from the bindings
+            # (which carry no meaningful variables once wrapped). Callers read
+            # result['boolean'].
+            if cr.meta.query_type == 'ASK':
+                result['boolean'] = bool(result_rows[0]['_ask_result']) if result_rows else False
+                result['results'] = {'bindings': []}
+
+            return result
 
         except Exception as e:
             logger.error("execute_sparql_query(%s) failed: %s", space_id, e)
