@@ -66,7 +66,7 @@ def emit_project(plan: PlanV2, ctx: EmitContext) -> str:
                 sn = info.sql_name if info else key
                 col = f"{p_alias}.{sn}"
             else:
-                col = expr_to_sql(key, ctx)
+                col = _scoped_expr(key, plan, ctx)
                 if not col:
                     continue
             suffix = " DESC" if direction == "DESC" else ""
@@ -75,3 +75,18 @@ def emit_project(plan: PlanV2, ctx: EmitContext) -> str:
             base += f"\nORDER BY {', '.join(ob_parts)}"
 
     return base
+
+
+def _scoped_expr(expr, plan, ctx):
+    """Emit an expression with the child pattern's variables declared in scope.
+
+    These expressions apply to whatever the child binds, so that is the scope
+    an unresolvable reference should be judged against (issue 028).
+    """
+    from .emit_expressions import expr_to_sql
+    from .var_scope import compute_scope
+
+    child = plan.child if getattr(plan, "child", None) is not None else None
+    in_scope = compute_scope(child).all_visible if child is not None else None
+    with ctx.expression_scope(in_scope):
+        return expr_to_sql(expr, ctx)

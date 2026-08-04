@@ -158,7 +158,19 @@ def _var_to_sql(expr: ExprVar, ctx: EmitContext) -> Optional[str]:
         return info.text_col
     # Rule 1: NULL = unbound (§10.5). Variable not in registry.
     if ctx.query_all_vars and expr.var in ctx.query_all_vars:
-        ctx.add_unresolved_var(expr.var)
+        # Was this variable in scope here per SPARQL's rules? If it was, the
+        # translator should have resolved it and failing to is a bug; if it
+        # was not, NULL is the specified result. This is the discrimination
+        # issue 028 was blocked on, and it is only answerable positionally —
+        # ctx.expr_scope is declared by whichever handler is emitting.
+        #
+        # expr_scope is None when no handler declared one; treat that as "not
+        # in scope" so an undeclared site cannot manufacture false positives.
+        in_scope = bool(
+            (ctx.expr_scope and expr.var in ctx.expr_scope)
+            or expr.var in ctx.correlated_scope
+        )
+        ctx.add_unresolved_var(expr.var, in_scope=in_scope)
         # Also record it in the processing trace, where every other emitter
         # logs its decisions — a trace dump then shows *where* in the plan this
         # happened, which the flat context list cannot convey.
@@ -1026,6 +1038,12 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext) -> Optional[str]:
     # the subquery still produces the _var_to_sql diagnostic instead of a
     # silent NULL.
     inner_ctx.query_all_vars = ctx.query_all_vars
+    # Share the unresolved-variable record with the parent. This context is
+    # built directly rather than via ctx.child(), so it does not inherit the
+    # list — without this, a translation gap inside an EXISTS body is recorded
+    # onto a context nobody reads, which is exactly how issue 027 stayed
+    # invisible.
+    inner_ctx._unresolved_vars = ctx._unresolved_vars
 
     outer_vars = set(ctx.types.all_vars())
     inner_scope = compute_scope(inner_plan)
@@ -1050,7 +1068,10 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext) -> Optional[str]:
         if o_info and o_info.sql_name:
             inner_ctx.types.register(o_info)
 
-    # Emit the inner graph pattern
+    # §8.1.1: the pattern is evaluated with the outer solution
+    # substituted, so outer variables are in scope throughout it — even
+    # inside a nested FILTER that declares its own pattern's scope.
+    inner_ctx.correlated_scope = frozenset(outer_vars)
     inner_sql = emit(inner_plan, inner_ctx)
 
     # Substitute inner constants with direct term table lookups

@@ -1,24 +1,69 @@
 # Expression emitters fail *open*: an unresolved variable becomes `NULL` and silently drops the constraint
 
-## Status: MITIGATED (2026-08-04), not fixed — production behaviour unchanged
+## Status: FIXED (2026-08-04)
 
-This is the shared root pattern behind issues 023, 026 and 027. Each of those
-fixed one instance; none changed the underlying behaviour.
+The discrimination this issue was blocked on is implemented: emission now
+carries **scope**, so an unresolvable variable can be told apart from a
+legitimately unbound one, and only the former raises.
 
-What changed on 2026-08-04:
+- **In scope but unresolvable** → the translator should have resolved it.
+  There is no data for which NULL is right, so this **raises in production**,
+  not merely under test. The fail-open that produced two whole-graph deletes
+  (issues 023, 027) is closed.
+- **Out of scope** → NULL is the SPARQL-specified result. Unchanged, and it
+  must stay that way: `COALESCE`, `BIND` of an unbound expression, and
+  cross-scope references all depend on it.
 
-- **A ratchet is in place.** The test suite now *raises* on an unresolvable
-  variable, with the handful of legitimate corpus occurrences allowlisted by
-  name and reason. A new translation gap can no longer be introduced silently
-  — it fails the suite. See "The fix as applied".
-- **Production still returns `NULL`**, deliberately. The measurement below
-  showed that every known occurrence is a *legitimately* unbound variable for
-  which `NULL` is the SPARQL-specified result, so failing closed in production
-  would break correct queries.
+The test-time ratchet, its toggle and its allowlist are **deleted** — all
+subsumed. Gaps raise by definition; out-of-scope NULLs are correct and never
+raise. The four previously-allowlisted DAWG cases now classify as out of scope
+on their own, with the allowlist empty.
 
-It stays open because the underlying ambiguity is unresolved: the emitter still
-cannot distinguish "legitimately unbound" from "the translator failed to
-resolve this". The ratchet stops the bleeding without curing it.
+## How scope is carried
+
+Two channels, because one is not enough:
+
+- `EmitContext.expr_scope` — the variables the *current* pattern binds,
+  declared by each handler that emits expressions (`emit_filter`,
+  `emit_order`, `emit_project`, and the group/extend paths). SPARQL scoping is
+  positional (§18.2.1), so this cannot be computed once per query.
+- `EmitContext.correlated_scope` — variables correlated in from an enclosing
+  solution. §8.1.1 evaluates EXISTS with the outer solution substituted, so
+  outer variables **are** in scope inside the pattern; but a nested FILTER
+  replaces `expr_scope` with its own pattern's scope, which would hide them.
+  Kept ambient and unioned in.
+
+Undeclared scope is treated as *out* of scope, so a handler that has not
+declared one cannot manufacture false positives.
+
+## Verified against the real defect
+
+Reverting issue 027's fix — the one that binds filter-only outer variables into
+the EXISTS context — now produces:
+
+```
+Variable(s) in scope but unresolvable: ?s (depth 0). Each compiled to NULL,
+which silently weakens the enclosing constraint (issues 023, 027)...
+```
+
+Before this work the same revert returned three rows and no error.
+
+### A bug found in this issue's own earlier work
+
+The first attempt did not raise, and instrumenting it showed why:
+`_exists_to_sql` builds its context directly rather than via `ctx.child()`, so
+it never inherited the shared `_unresolved_vars` list. Marks recorded inside an
+EXISTS body were written to a context nobody read — the same shape of mistake
+as the original defect. The earlier unit test used `ctx.child()` and therefore
+missed it; there is now a test on the actual construction path.
+
+## Not covered
+
+`vars_in_expr` failing to recurse into `ExprExists` — 027's *second* half — is
+a different failure mode and is **not** caught by this. There the variable
+resolves fine; its text column is simply NULL because the term JOIN was
+skipped. Reverting that half still returns wrong results silently. Detecting it
+would need value-level provenance, not scope.
 
 ## Severity
 
@@ -140,7 +185,9 @@ changing behaviour, instrument first: make the condition always detectable
 conformance corpus, and count real hits. If the count is zero, failing closed
 is nearly free. If it is not, each hit needs classifying before anything raises.
 
-## Measurement — DONE (2026-08-04). The blast radius is known now.
+## Measurement (superseded — kept for the reasoning)
+
+*The conclusions below were drawn before scope was threaded through emission. They correctly ruled out the cheap discriminators; the "option 2 / updates-only" recommendation is superseded by the scope-based fix above.*
 
 Steps 1–3 of the sequencing plan below have been carried out. Results:
 
@@ -237,7 +284,9 @@ Recommended order:
 Steps 1–3 are all safe and independently valuable. Only step 4 can break a
 working query, and by then it is an informed change rather than a blind one.
 
-## The fix as applied (step 4)
+## The interim ratchet (superseded — removed from the code)
+
+*Describes the test-time toggle and allowlist, both deleted once scope made the real discrimination possible.*
 
 ### What the evidence ruled out
 

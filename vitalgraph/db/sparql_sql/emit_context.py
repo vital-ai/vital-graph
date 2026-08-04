@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 
@@ -257,7 +258,18 @@ class EmitContext:
         # condition inspectable after generation instead of leaving no trace —
         # mirroring ColumnInfo.is_unbound, which likewise marks a
         # deliberate NULL rather than emitting a bare one. See issue 028.
-        self._unresolved_vars: List[Tuple[str, int]] = []
+        self._unresolved_vars: List[Tuple[str, int, bool]] = []
+        # Variables in scope for the expressions currently being emitted, or
+        # None when no handler has declared a scope. Set via expression_scope();
+        # read by emit_expressions._var_to_sql to tell a translation gap from a
+        # legitimately unbound variable (issue 028).
+        self.expr_scope: Optional[frozenset] = None
+        # Variables correlated in from an enclosing solution. SPARQL §8.1.1
+        # evaluates EXISTS with the current solution substituted, so the outer
+        # variables ARE in scope inside the pattern — but each nested handler
+        # replaces expr_scope with its own pattern's scope, which would hide
+        # them. Kept as a separate ambient set that _var_to_sql unions in.
+        self.correlated_scope: frozenset = frozenset()
         # vg: optimizer hints — temporarily set by emit_extend when emitting
         # a BIND with vg_top_k or vg_threshold hints from vg_optimize pass.
         self.vg_hints: Dict[str, Any] = {}
@@ -377,19 +389,44 @@ class EmitContext:
         """
         self._fuzzy_requests.append(request)
 
-    def add_unresolved_var(self, var: str) -> None:
+    def add_unresolved_var(self, var: str, in_scope: bool = False) -> None:
         """Record a variable an expression referenced but could not resolve.
 
         The emitted SQL is still ``NULL`` — this does not change behaviour, it
         makes the condition detectable. ``unresolved_vars`` is read after
         generation (see generator.generate_sql).
+
+        *in_scope* is the discrimination issue 028 was blocked on. True means
+        the variable **was** in scope at this point per SPARQL's rules, so the
+        translator should have resolved it and failing to is a bug. False means
+        it is legitimately unbound and NULL is the specified result.
         """
-        self._unresolved_vars.append((var, self._depth))
+        self._unresolved_vars.append((var, self._depth, in_scope))
 
     @property
-    def unresolved_vars(self) -> List[Tuple[str, int]]:
-        """(variable, depth) for every reference that compiled to NULL."""
+    def unresolved_vars(self) -> List[Tuple[str, int, bool]]:
+        """(variable, depth, in_scope) for every reference that compiled to NULL."""
         return self._unresolved_vars
+
+    @contextmanager
+    def expression_scope(self, in_scope_vars):
+        """Declare which variables are in scope for the expressions emitted here.
+
+        SPARQL scoping is positional — a variable bound by a BIND in an
+        enclosing group is *not* in scope inside a nested group evaluated
+        independently (§18.2.1) — so this cannot be derived once per query. Each
+        handler that emits expressions declares the scope of the pattern those
+        expressions apply to.
+
+        Restores the previous value on exit, so nested emission (an EXISTS body
+        inside a FILTER) does not leak its scope back to the enclosing one.
+        """
+        previous = self.expr_scope
+        self.expr_scope = frozenset(in_scope_vars) if in_scope_vars is not None else None
+        try:
+            yield
+        finally:
+            self.expr_scope = previous
 
     def add_deferred_uuid(self, var: str, placeholder: str) -> None:
         """Record a deferred UUID column placeholder for later resolution.
@@ -442,6 +479,8 @@ class EmitContext:
         # Share unresolved-variable records so nested contexts (EXISTS bodies,
         # UNION branches) surface to the same post-generation check
         ctx._unresolved_vars = self._unresolved_vars
+        ctx.expr_scope = self.expr_scope
+        ctx.correlated_scope = self.correlated_scope
         # Share multi-vector config and index metadata
         ctx.multi_vector_config = self.multi_vector_config
         ctx.vector_index_meta = self.vector_index_meta

@@ -368,61 +368,32 @@ async def materialize_constants(
 # Unresolved-variable policy (issue 028)
 # ---------------------------------------------------------------------------
 
-# OFF in production, ON under pytest (enabled by tests/conftest.py).
-_STRICT_UNRESOLVED_VARS = False
-
-
-def set_strict_unresolved_vars(enabled: bool) -> bool:
-    """Toggle raising when a query contains an unresolvable variable.
-
-    Returns the previous value.
-
-    Why this is a test-time ratchet and not production behaviour:
-
-    A variable that cannot be resolved during emission is one of two things,
-    and nothing in the pipeline can yet tell them apart —
-
-    1. **Legitimately unbound.** Bound nowhere, or bound only in a scope SPARQL
-       evaluates independently. ``NULL`` is the *specified* result:
-       ``FILTER(?unbound = ?o)`` errors and excludes the row, ``COALESCE``
-       depends on it, ``BIND(?nova AS ?z)`` leaves ``?z`` unbound. Every
-       occurrence in the DAWG corpus is this case — raising unconditionally
-       would break four passing W3C conformance tests.
-    2. **A translation gap** — it should have resolved and the translator
-       failed to wire it. Issues 023 and 027 were both this, and both silently
-       widened a DELETE.
-
-    Separating them needs real scope analysis threaded through emission. In
-    particular the cheap discriminators do *not* work: "is it bound anywhere in
-    the query" misclassifies ``bind10`` (``?z`` is bound by a BIND and is still
-    legitimately out of scope), and "is it under a negation" misclassifies
-    everything (a legitimately-unbound variable inside ``NOT EXISTS``/``MINUS``
-    correctly widens the result, verified against the running backend).
-
-    So production stays permissive and the suite runs strict, with the known
-    legitimate occurrences allowlisted by name — meaning a *new* instance of
-    case 2 cannot be introduced silently.
-    """
-    global _STRICT_UNRESOLVED_VARS
-    previous = _STRICT_UNRESOLVED_VARS
-    _STRICT_UNRESOLVED_VARS = enabled
-    return previous
-
-
 def _check_unresolved_vars(unresolved) -> None:
-    """Raise if strict mode is on and any variable failed to resolve."""
-    if not unresolved or not _STRICT_UNRESOLVED_VARS:
+    """Raise on a variable that was in scope and still failed to resolve.
+
+    Only the in-scope ones are errors. A variable that was legitimately out of
+    scope compiles to NULL because that is what SPARQL specifies, and raising
+    on it would reject conformant queries — see set_strict_unresolved_vars.
+    """
+    if not unresolved:
         return
+    gaps = [(v, d) for v, d, in_scope in unresolved if in_scope]
+    if not gaps:
+        return
+    # Raised in production, not only under test. A variable that was in scope
+    # and still could not be resolved is always a translator bug — there is no
+    # data for which NULL is the right answer — so the fail-open that produced
+    # two whole-graph deletes (issues 023, 027) is closed here rather than
+    # merely logged. Measured against the DAWG corpus: zero occurrences, so no
+    # conformant query is affected.
     from .emit_expressions import UnresolvedVariableError
-    detail = ", ".join(f"?{v} (depth {d})" for v, d in unresolved)
+    detail = ", ".join(f"?{v} (depth {d})" for v, d in gaps)
     raise UnresolvedVariableError(
-        f"Unresolvable variable(s) in this query: {detail}. Each compiled to "
-        f"NULL. That is correct if the variable is genuinely unbound, and a "
-        f"silently-widened constraint if the translator should have resolved "
-        f"it (issues 023, 027). Strict mode is on, so this is surfaced rather "
-        f"than swallowed. If the variable really is unbound here, allowlist "
-        f"this test in tests/conftest.py (_STRICT_UNRESOLVED_ALLOWLIST) with a "
-        f"reason; otherwise it is a translation gap — fix the wiring."
+        f"Variable(s) in scope but unresolvable: {detail}. Each compiled to "
+        f"NULL, which silently weakens the enclosing constraint (issues 023, "
+        f"027). Being in scope means the translator should have resolved it, "
+        f"so this is a translation gap — fix the wiring. A variable that is "
+        f"legitimately out of scope does not reach here."
     )
 
 

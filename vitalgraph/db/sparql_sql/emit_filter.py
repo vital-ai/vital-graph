@@ -31,10 +31,15 @@ def emit_filter(plan: PlanV2, ctx: EmitContext) -> str:
 
     f_alias = ctx.aliases.next("f")
     where_parts = []
-    for expr in plan.filter_exprs:
-        sql_expr = expr_to_sql(expr, ctx)
-        if sql_expr:
-            where_parts.append(sql_expr)
+    # A FILTER's expressions see exactly the variables its child pattern binds
+    # (SPARQL §18.2.1). Declaring that lets an unresolvable reference be told
+    # apart from a legitimately unbound one — see issue 028.
+    from .var_scope import compute_scope
+    with ctx.expression_scope(compute_scope(plan.child).all_visible):
+        for expr in plan.filter_exprs:
+            sql_expr = expr_to_sql(expr, ctx)
+            if sql_expr:
+                where_parts.append(sql_expr)
 
     if not where_parts:
         return child_sql
