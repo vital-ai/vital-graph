@@ -1,6 +1,44 @@
 # URI-prefix string matching drives destructive deletes (and space graph lookup)
 
-## Status: OPEN
+## Status: FIXED (2026-08-04)
+
+All four sites now identify objects by relationship or by an anchored URI
+match. Audited site-by-site rather than assumed — sites 1–3 were fixed earlier
+by the `segment_deletion` work; site 4 was still live.
+
+| Site | Was | Now |
+|---|---|---|
+| 1 `auto_segmentation._delete_existing` | `STRSTARTS` on `{original}_parent_{method}` | `delete_segmentation(...)` — traverses `Edge_hasKGDocumentSegment`, scoped by method |
+| 2 `kgdocuments_endpoint:666` | duplicate of site 1 | same helper; the duplication is gone |
+| 3 `_cascade_delete_segments` | `STRSTARTS` on `_parent_` \|\| `_edge_to_` | same helper, `method_uri=None` |
+| 4 `fuseki_space_impl:429,932` | `STRSTARTS(STR(?g), "…/{space_id}")` | `space_graph_filter()` — exact match on the base graph **or** base + `/` |
+
+**The "additional bug" is also resolved.** `_cascade_delete_segments` issued
+its `DELETE WHERE` through `execute_sparql_query`; it now calls
+`delete_segmentation`, which uses `execute_sparql_update`. So the cascade does
+run — the question the issue asked to confirm either way.
+
+### Site 4 detail
+
+A space owns `http://vital.ai/graph/{space_id}` plus `/`-suffixed subgraphs, so
+the prefix arm had to stay; what was missing was the boundary. Anchoring on
+"equals the base, or starts with base + `/`" keeps subgraphs and stops space
+`foo` matching space `foobar` — which mattered because one of the two callers
+feeds the result straight into a graph delete.
+
+The fuseki backend is selectable (`backend_config.py:66`) but is not the
+default and has no test stack, so this is **verified by construction, not by
+execution**: `tests/unit/test_space_graph_filter.py` asserts the emitted filter
+and guards against the unanchored form returning. Confirmed the guard fails
+when the anchor is removed. Runtime behaviour against a live Fuseki is
+untested — flagged rather than glossed.
+
+### Regression test
+
+The collateral-deletion case the issue asked for exists and passes:
+`tests/api/test_kgdocuments_api.py::TestSegmentDeleteScoping` creates a decoy
+whose URI extends the target's prefix, deletes the target, and asserts the
+decoy survives. It is what caught the whole-graph delete in issue 023.
 
 ## Summary
 

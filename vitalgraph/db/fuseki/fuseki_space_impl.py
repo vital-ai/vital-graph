@@ -37,6 +37,22 @@ from ..backend_config import BackendConfig
 from ...utils.resource_manager import track_session
 
 
+def space_graph_filter(space_id: str, var: str = "?g") -> str:
+    """SPARQL FILTER matching exactly the graphs belonging to *space_id*.
+
+    A space owns ``http://vital.ai/graph/{space_id}`` plus ``/``-suffixed
+    subgraphs (``/entities``, ``/connections``, …). Matching that base as a
+    bare ``STRSTARTS`` prefix has no boundary, so space ``foo`` also matches
+    every graph of space ``foobar`` — and one of the callers uses the result
+    to *delete* those graphs (issue 021, site 4).
+
+    Anchoring on either an exact match or the base plus ``/`` restores the
+    boundary while still covering subgraphs.
+    """
+    base = f"http://vital.ai/graph/{space_id}"
+    return f'FILTER({var} = <{base}> || STRSTARTS(STR({var}), "{base}/"))'
+
+
 class FusekiSpaceImpl(SpaceBackendInterface):
     """
     Fuseki implementation of SpaceBackendInterface using HTTP API.
@@ -420,13 +436,15 @@ class FusekiSpaceImpl(SpaceBackendInterface):
             session = await self._get_session()
             
             # Delete ALL graphs for this space (including subgraphs like /entities, /connections)
-            space_graph_pattern = f"http://vital.ai/graph/{space_id}"
+            # Anchored so space "foo" cannot match space "foobar"'s graphs —
+            # these are about to be DELETED (issue 021, site 4).
+            graph_filter = space_graph_filter(space_id)
             
             # First, find all graphs that belong to this space
             find_graphs_query = f"""
             SELECT DISTINCT ?g WHERE {{
                 GRAPH ?g {{ ?s ?p ?o }}
-                FILTER(STRSTARTS(STR(?g), "{space_graph_pattern}"))
+                {graph_filter}
             }}
             """
             
@@ -924,12 +942,12 @@ class FusekiSpaceImpl(SpaceBackendInterface):
                 """
             else:
                 # Count all quads in ALL graphs related to this space (including subgraphs)
-                space_graph_pattern = f"http://vital.ai/graph/{space_id}"
+                graph_filter = space_graph_filter(space_id)
                 query = f"""
                 SELECT (COUNT(*) AS ?count) WHERE {{
                     GRAPH ?g {{
                         ?s ?p ?o .
-                        FILTER(STRSTARTS(STR(?g), "{space_graph_pattern}"))
+                        {graph_filter}
                     }}
                 }}
                 """
