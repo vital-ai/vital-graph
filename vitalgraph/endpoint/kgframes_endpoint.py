@@ -31,8 +31,9 @@ from ..model.kgframes_model import (
     SlotUpdateResponse,
     SlotDeleteResponse,
     FrameQueryRequest,
-    FrameQueryResponse
+    FrameQueryResponse,
 )
+from ..kg_impl.kg_sparql_utils import KGSparqlUtils
 
 # VitalSigns imports for proper graph object handling
 from ai_haley_kg_domain.model.KGFrame import KGFrame
@@ -349,6 +350,7 @@ class KGFramesEndpoint:
                     ?frame haley:hasKGGraphURI <{entity_uri}> .
                 }}
             }}
+            ORDER BY ?frame
             LIMIT {page_size}
             OFFSET {offset}
             """
@@ -729,8 +731,8 @@ class KGFramesEndpoint:
             space_id: str = Query(..., description="Space ID"),
             graph_id: str = Query(..., description="Graph ID"),
             frame_uri: Optional[str] = Query(None, description="Frame URI to get slots for"),
-            page_size: int = Query(10, description="Number of items per page"),
-            offset: int = Query(0, description="Offset for pagination"),
+            page_size: int = Query(10, ge=1, le=1000, description="Number of items per page"),
+            offset: int = Query(0, ge=0, description="Offset for pagination"),
             entity_uri: Optional[str] = Query(None, description="Optional entity URI for filtering"),
             parent_uri: Optional[str] = Query(None, description="Optional parent URI for filtering"),
             search: Optional[str] = Query(None, description="Optional search term"),
@@ -739,10 +741,54 @@ class KGFramesEndpoint:
         ):
             """
             Get frames with their associated slots using pagination.
+
+            NOTE: no sort_by here yet. This query returns a flat DISTINCT list
+            of subjects UNIONing frames and their slots, so a single ORDER BY
+            cannot express "frames by sequence, slots by sequence" — and the
+            page boundary can already split a frame from its slots. Sorting
+            arrives with the nested slot_pagination restructure (step 3 of
+            planning/planning_sequence/frame_slot_sequence_sort_paging_plan.md).
+            Ordering IS stable here (step 1 added ORDER BY ?subject).
             """
             require_space_read(current_user, space_id)
             return await self._get_kgframes_with_slots(space_id, graph_id, frame_uri, page_size, offset, entity_uri, parent_uri, search, kGSlotType, current_user)
         
+        # Registered on the KGFrames router but served under /kgentities/... so
+        # it mirrors GET /kgentities/kgframes: page frames of an entity, then
+        # page the slots of one of those frames. Both routers mount under
+        # /api/graphs, so the path is independent of the file; the slot query
+        # builder and converters all live here.
+        @self.router.get("/kgentities/kgframes/kgslots", response_model=QuadResponse, tags=["KG Frame Slots"])
+        async def get_entity_frame_slots(
+            space_id: str = Query(..., description="Space ID"),
+            graph_id: str = Query(..., description="Graph ID"),
+            frame_uri: str = Query(..., description="Frame URI to get slots for"),
+            entity_uri: Optional[str] = Query(None, description="Owning entity URI (scoping/consistency with /kgentities/kgframes)"),
+            page_size: int = Query(10, ge=1, le=1000, description="Number of slots per page"),
+            offset: int = Query(0, ge=0, description="Offset for pagination"),
+            kGSlotType: Optional[str] = Query(None, description="Filter by slot type"),
+            sort_by: Optional[str] = Query(None, description="Property URI to sort slots by (e.g. haley-ai-kg:hasSlotSequence). Must be an allowed sortable property."),
+            sort_order: str = Query("asc", description="Sort order: 'asc' or 'desc'"),
+            current_user: Dict = Depends(self.auth_dependency)
+        ):
+            """
+            Slots of a single frame, sorted and paged.
+
+            Sorting by hasSlotSequence orders slots numerically, with
+            unsequenced slots last in both directions.
+            """
+            require_space_read(current_user, space_id)
+            from ..model.kgframes_model import _SLOT_SORT_PROPERTIES, validate_sort_params
+            err = validate_sort_params(sort_by, sort_order, _SLOT_SORT_PROPERTIES)
+            if err:
+                return QuadResponse(
+                    status=OperationStatus.INVALID_REQUEST, message=err,
+                    results=[], total_count=0, page_size=page_size, offset=offset,
+                )
+            return await self._list_frame_slots_paged(
+                space_id, graph_id, frame_uri, page_size, offset,
+                kGSlotType=kGSlotType, sort_by=sort_by, sort_order=sort_order)
+
         @self.router.post("/kgframes/kgslots", response_model=None, tags=["KG Frame Slots"])
         async def create_or_update_frame_slots(
             space_id: str = Query(..., description="Space ID"),
@@ -781,7 +827,7 @@ class KGFramesEndpoint:
             return await self._delete_frame_slots(space_id, graph_id, frame_uri, slot_uri_list, current_user)
     
     # Implementation methods following MockKGFramesEndpoint patterns with VitalSigns integration
-    
+
     async def _list_frames(self, space_id: str, graph_id: str, page_size: int, offset: int,
                            search: Optional[str], current_user: Dict,
                            sort_by: Optional[str] = None, sort_order: str = "asc",
@@ -975,6 +1021,19 @@ class KGFramesEndpoint:
 
         Returns DISTINCT ?subject where ?subject is either a frame or a slot
         reachable from it via Edge_hasKGSlot.
+
+        ORDER BY ?subject is required, not cosmetic: without it the LIMIT/OFFSET
+        below page over an unordered result set, so successive pages can repeat
+        or skip subjects.
+
+        ``search`` narrows by the FRAME (name / description / URI) in both UNION
+        branches, so a match returns that frame together with its slots. It was
+        previously accepted and threaded all the way here but never used, so the
+        parameter silently did nothing.
+
+        Note: the count companion counts matching *frames*, while this returns
+        frames AND slots as subjects — a pre-existing mismatch in what
+        ``total_count`` means for this endpoint, not introduced here.
         """
         if hasattr(backend, '_get_space_graph_uri'):
             full_graph_uri = backend._get_space_graph_uri(space_id, graph_id)
@@ -989,6 +1048,25 @@ class KGFramesEndpoint:
         if kGSlotType:
             slot_type_filter = f"?subject <{self.haley_prefix}hasKGSlotType> <{kGSlotType}> ."
 
+        def _search_clause(frame_var: str) -> str:
+            """Frame text search, bound to whichever variable holds the frame."""
+            if not search:
+                return ""
+            # Escape so a quote in the term cannot terminate the SPARQL literal.
+            term = search.replace("\\", "\\\\").replace('"', '\\"')
+            v = frame_var.lstrip("?")
+            return f"""
+                    OPTIONAL {{ ?{v} <{self.vital_prefix}hasName> ?_name_{v} }}
+                    OPTIONAL {{ ?{v} <{self.haley_prefix}hasKGraphDescription> ?_desc_{v} }}
+                    FILTER(
+                        CONTAINS(LCASE(STR(?_name_{v})), LCASE("{term}")) ||
+                        CONTAINS(LCASE(STR(?_desc_{v})), LCASE("{term}")) ||
+                        CONTAINS(LCASE(STR(?{v})), LCASE("{term}"))
+                    )"""
+
+        frame_search = _search_clause("?subject")   # branch 1: subject IS the frame
+        slot_search = _search_clause("?frame")      # branch 2: frame is separate
+
         return f"""
         PREFIX haley: <{self.haley_prefix}>
         PREFIX vital: <{self.vital_prefix}>
@@ -1002,6 +1080,7 @@ class KGFramesEndpoint:
                     ?slot_edge vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .
                     ?slot_edge vital-core:hasEdgeSource ?subject .
                     ?slot_edge vital-core:hasEdgeDestination ?slot .
+                    {frame_search}
                 }}
             }} UNION {{
                 GRAPH <{full_graph_uri}> {{
@@ -1011,9 +1090,11 @@ class KGFramesEndpoint:
                     ?slot_edge vital-core:hasEdgeSource ?frame .
                     ?slot_edge vital-core:hasEdgeDestination ?subject .
                     {slot_type_filter}
+                    {slot_search}
                 }}
             }}
         }}
+        ORDER BY ?subject
         LIMIT {page_size}
         OFFSET {offset}
         """
@@ -1380,7 +1461,7 @@ class KGFramesEndpoint:
             
             sparql_query = self._build_get_frame_slots_query(graph_id, frame_uri, kGSlotType)
             results = await backend.execute_sparql_query(space_id, sparql_query)
-            slots = await self._sparql_results_to_slots(backend, graph_id, results)
+            slots = await self._sparql_results_to_slots(backend, graph_id, results, space_id)
             
             return slots or []
             
@@ -1733,26 +1814,27 @@ class KGFramesEndpoint:
             modified_after=modified_after, modified_before=modified_before,
         )
 
-        # Build sort clause
-        direction = "DESC" if sort_order == "desc" else "ASC"
-        sort_optional = ""
-        if sort_by:
-            sort_optional = f"OPTIONAL {{ ?frame <{sort_by}> ?sort_val . }}"
-            order_clause = f"ORDER BY {direction}(?sort_val) ?frame"
-        else:
-            order_clause = "ORDER BY ?frame"
+        # Build sort clause.  Sequence properties get the numeric /
+        # unsequenced-last construct; everything else sorts lexically.
+        # The DISTINCT lives in an inner subquery: an ORDER BY alongside a
+        # DISTINCT is silently dropped by the backend.
+        sort_optional, sort_projection, order_clause = KGSparqlUtils.build_sort_clauses(
+            "?frame", sort_by, sort_order,
+        )
 
         return f"""
         PREFIX haley: <{self.haley_prefix}>
         PREFIX vital: <{self.vital_prefix}>
         PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-        
-        SELECT DISTINCT ?frame WHERE {{
-            GRAPH <{full_graph_uri}> {{
-                ?frame a haley:KGFrame .
-                {filters}
-                {sort_optional}
-            }}
+
+        SELECT ?frame WHERE {{
+            {{ SELECT DISTINCT ?frame {sort_projection} WHERE {{
+                GRAPH <{full_graph_uri}> {{
+                    ?frame a haley:KGFrame .
+                    {filters}
+                    {sort_optional}
+                }}
+            }} }}
         }}
         {order_clause}
         LIMIT {page_size}
@@ -1796,24 +1878,25 @@ class KGFramesEndpoint:
         }}
         """
     
-    def _build_list_slots_query(self, backend, space_id: str, graph_id: str, frame_uri: Optional[str], page_size: int, offset: int) -> str:
+    def _build_list_slots_query(self, backend, space_id: str, graph_id: str, frame_uri: Optional[str], page_size: int, offset: int,
+                                sort_by: Optional[str] = None, sort_order: str = "asc") -> str:
         """Build SPARQL query for listing slot subjects by finding objects with hasFrameGraphURI property."""
         # Get the proper space-specific graph URI
         if hasattr(backend, '_get_space_graph_uri'):
             full_graph_uri = backend._get_space_graph_uri(space_id, graph_id)
         else:
             full_graph_uri = graph_id
-            
+
         frame_filter = ""
         if frame_uri:
             frame_filter = f"""
             ?slot haley:hasFrameGraphURI <{frame_uri}> .
             """
-        
+
         return f"""
         PREFIX haley: <{self.haley_prefix}>
         PREFIX vital: <{self.vital_prefix}>
-        
+
         SELECT DISTINCT ?slot WHERE {{{{
             GRAPH <{full_graph_uri}> {{{{
                 # Find objects that have hasFrameGraphURI property (these are slot objects)
@@ -1837,7 +1920,7 @@ class KGFramesEndpoint:
         LIMIT {page_size}
         OFFSET {offset}
         """
-    
+
     def _build_count_slots_query(self, backend, space_id: str, graph_id: str, frame_uri: Optional[str]) -> str:
         """Build SPARQL count query for slots by finding objects with hasFrameGraphURI property."""
         # Get the proper space-specific graph URI
@@ -1911,6 +1994,25 @@ class KGFramesEndpoint:
             }}
             """
     
+    @staticmethod
+    def _reorder_to_match(objects: List[Any], ordered_uris: List[str]) -> List[Any]:
+        """Return ``objects`` in the order given by ``ordered_uris``.
+
+        The paging/sorting query decides the order, but objects are rebuilt
+        from a second triple fetch that groups by its own order. Without this,
+        ORDER BY is honored when selecting WHICH subjects appear on a page but
+        lost for the order they appear IN — so sorting looks broken end to end
+        even though the SPARQL is correct.
+
+        Objects whose URI is not in the list (shouldn't happen) are appended in
+        their existing order rather than dropped.
+
+        Thin delegate to KGSparqlUtils.reorder_to_match, which is the shared
+        implementation now that frames, entity-frames, slots and relations all
+        need it.
+        """
+        return KGSparqlUtils.reorder_to_match(objects, ordered_uris)
+
     async def _sparql_results_to_frames(self, backend, graph_id: str, sparql_result: Dict[str, Any], space_id: str) -> List[KGFrame]:
         """Convert SPARQL results to VitalSigns frame objects using proper triple conversion."""
         try:
@@ -1952,7 +2054,14 @@ class KGFramesEndpoint:
             # Convert triples directly to VitalSigns objects
             frames = await self._convert_triples_to_vitalsigns_frames(triples)
             self.logger.debug(f"🔄 Converted to {len(frames) if frames else 0} VitalSigns frames")
-            
+
+            # Restore the order the paging query established.  Rebuilding objects
+            # from triples groups them by whatever order the triple fetch
+            # returned, which silently discards the ORDER BY — so a sorted page
+            # would come back in arbitrary order even though the right subjects
+            # were selected.
+            frames = self._reorder_to_match(frames, subject_uris)
+
             return frames
             
         except Exception as e:
@@ -2582,47 +2691,31 @@ class KGFramesEndpoint:
     # Removed duplicate _get_all_triples_for_subjects method - using the implementation above
     # Removed duplicate _convert_triples_to_vitalsigns_frames method - using the implementation above
 
-    @staticmethod
-    def _result_has_rows(result) -> bool:
-        """Check if a SPARQL SELECT result contains any rows."""
-        if isinstance(result, dict):
-            bindings = result.get("bindings") or result.get("results", {}).get("bindings")
-            return bool(bindings and len(bindings) > 0)
-        elif isinstance(result, list):
-            return len(result) > 0
-        return False
-
     async def _validate_parent_object(self, backend, space_id: str, graph_id: str, parent_uri: str) -> Dict[str, Any]:
-        """Validate that parent object exists and determine its type.
-        
-        Uses SELECT queries (not ASK) because the SQL backend compiles ASK
-        to SELECT and does not return a 'boolean' key.
-        """
+        """Validate that parent object exists and determine its type."""
         try:
             # Check if parent is a KGEntity
             entity_query = f"""
-            SELECT ?s WHERE {{
+            ASK {{
                 GRAPH <{graph_id}> {{
                     <{parent_uri}> a <{self.haley_prefix}KGEntity> .
-                    BIND(<{parent_uri}> as ?s)
                 }}
-            }} LIMIT 1
+            }}
             """
             entity_result = await backend.execute_sparql_query(space_id, entity_query)
-            if self._result_has_rows(entity_result):
+            if entity_result.get("boolean", False):
                 return {"valid": True, "type": "entity", "uri": parent_uri}
-            
+
             # Check if parent is a KGFrame
             frame_query = f"""
-            SELECT ?s WHERE {{
+            ASK {{
                 GRAPH <{graph_id}> {{
                     <{parent_uri}> a <{self.haley_prefix}KGFrame> .
-                    BIND(<{parent_uri}> as ?s)
                 }}
-            }} LIMIT 1
+            }}
             """
             frame_result = await backend.execute_sparql_query(space_id, frame_query)
-            if self._result_has_rows(frame_result):
+            if frame_result.get("boolean", False):
                 return {"valid": True, "type": "frame", "uri": parent_uri}
             
             return {"valid": False, "error": f"Parent object {parent_uri} not found or invalid type"}
@@ -2689,39 +2782,157 @@ class KGFramesEndpoint:
 
     # Helper methods for frame-slot operations
     
-    def _build_get_frame_slots_query(self, graph_id: str, frame_uri: str, kGSlotType: Optional[str] = None) -> str:
-        """Build SPARQL query to get slots connected to a frame via Edge_hasKGSlot."""
+    def _build_get_frame_slots_query(self, graph_id: str, frame_uri: str, kGSlotType: Optional[str] = None,
+                                     sort_by: Optional[str] = None, sort_order: str = "asc",
+                                     page_size: Optional[int] = None, offset: int = 0) -> str:
+        """Build SPARQL query to get slots connected to a frame via Edge_hasKGSlot.
+
+        page_size is optional: when None the full slot set is returned, which is
+        the historical behavior.  Callers paging a frame with many slots should
+        pass one.
+
+        No type pattern on ?slot: Edge_hasKGSlot's destination IS a slot by
+        construction, and _sparql_results_to_slots filters isinstance(KGSlot)
+        anyway. The previous
+            ?slot a ?slotType .
+            FILTER(STRSTARTS(STR(?slotType), "...KG") && STRENDS(..., "Slot"))
+        cost ~10s to return 25 slots from a 5k-slot frame (step 5 baselines):
+        it joined every slot to its type and ran string functions over the
+        result. Enumerating the concrete slot classes instead would work but
+        drifts — there are 31 KG*Slot classes in the schema and the list in
+        _build_list_slots_query names only 5, already missing KGCurrencySlot,
+        KGJSONSlot, KGChoiceSlot and KGMultiChoiceSlot which occur in real data.
+        """
         slot_type_filter = ""
         if kGSlotType:
             slot_type_filter = f"?slot <{self.haley_prefix}kGSlotType> \"{kGSlotType}\" ."
-        
+
+        sort_optional, sort_projection, order_clause = KGSparqlUtils.build_sort_clauses(
+            "?slot", sort_by, sort_order,
+        )
+
+        pagination = ""
+        if page_size is not None:
+            pagination = f"\n        LIMIT {page_size}\n        OFFSET {offset}"
+
         return f"""
         PREFIX haley: <{self.haley_prefix}>
         PREFIX vital: <{self.vital_prefix}>
-        
-        SELECT DISTINCT ?slot WHERE {{
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+        SELECT ?slot WHERE {{
+            {{ SELECT DISTINCT ?slot {sort_projection} WHERE {{
             GRAPH <{graph_id}> {{
                 ?edge a haley:Edge_hasKGSlot ;
                       vital:hasEdgeSource <{frame_uri}> ;
                       vital:hasEdgeDestination ?slot .
-                ?slot a ?slotType .
-                FILTER(STRSTARTS(STR(?slotType), "{self.haley_prefix}KG") && STRENDS(STR(?slotType), "Slot"))
+                {slot_type_filter}
+                {sort_optional}
+            }}
+            }} }}
+        }}
+        {order_clause}{pagination}
+        """
+    
+    def _build_count_frame_slots_query(self, graph_id: str, frame_uri: str,
+                                       kGSlotType: Optional[str] = None) -> str:
+        """Count companion for _build_get_frame_slots_query.
+
+        Same filters, no ordering or paging — needed so a paged slot response
+        can report a real total_count.
+        """
+        slot_type_filter = ""
+        if kGSlotType:
+            slot_type_filter = f"?slot <{self.haley_prefix}kGSlotType> \"{kGSlotType}\" ."
+
+        return f"""
+        PREFIX haley: <{self.haley_prefix}>
+        PREFIX vital: <{self.vital_prefix}>
+
+        SELECT (COUNT(DISTINCT ?slot) AS ?count) WHERE {{
+            GRAPH <{graph_id}> {{
+                ?edge a haley:Edge_hasKGSlot ;
+                      vital:hasEdgeSource <{frame_uri}> ;
+                      vital:hasEdgeDestination ?slot .
                 {slot_type_filter}
             }}
         }}
-        ORDER BY ?slot
         """
-    
-    async def _sparql_results_to_slots(self, backend, graph_id: str, sparql_result: Dict[str, Any]) -> List[KGSlot]:
+
+    async def _list_frame_slots_paged(self, space_id: str, graph_id: str, frame_uri: str,
+                                      page_size: int, offset: int,
+                                      kGSlotType: Optional[str] = None,
+                                      sort_by: Optional[str] = None,
+                                      sort_order: str = "asc") -> QuadResponse:
+        """Slots of ONE frame, sorted and paged.
+
+        The second half of the two-endpoint model: frames of an entity are
+        paged by /kgentities/kgframes, then each frame's slots are paged here.
+        Keeping them separate avoids needing a per-frame window inside a single
+        query, which SPARQL cannot express (a sub-SELECT LIMIT is global).
+        """
+        try:
+            space_record = await self.space_manager.get_space_or_load(space_id)
+            if not space_record:
+                return QuadResponse(status=OperationStatus.NOT_FOUND, results=[],
+                                    total_count=0, page_size=page_size, offset=offset)
+
+            space_impl = space_record.space_impl
+            backend = space_impl.get_db_space_impl()
+            if not backend:
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
+            full_graph_uri = graph_id
+            if hasattr(backend, '_get_space_graph_uri'):
+                full_graph_uri = backend._get_space_graph_uri(space_id, graph_id)
+
+            query = self._build_get_frame_slots_query(
+                full_graph_uri, frame_uri, kGSlotType,
+                sort_by=sort_by, sort_order=sort_order,
+                page_size=page_size, offset=offset)
+            results = await backend.execute_sparql_query(space_id, query)
+            slots = await self._sparql_results_to_slots(backend, full_graph_uri, results, space_id)
+
+            count_results = await backend.execute_sparql_query(
+                space_id, self._build_count_frame_slots_query(
+                    full_graph_uri, frame_uri, kGSlotType))
+            total_count = self._extract_count_from_results(count_results)
+
+            quads = await asyncio.to_thread(
+                graphobjects_to_quad_list, slots or [], graph_id)
+            return QuadResponse(
+                status=OperationStatus.FOUND if slots else OperationStatus.EMPTY,
+                results=quads, total_count=total_count,
+                page_size=page_size, offset=offset)
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            self.logger.error(f"Error listing frame slots: {e}", exc_info=True)
+            return QuadResponse(status=OperationStatus.ERROR, message=str(e),
+                                results=[], total_count=0,
+                                page_size=page_size, offset=offset)
+
+    async def _sparql_results_to_slots(self, backend, graph_id: str, sparql_result: Dict[str, Any],
+                                       space_id: Optional[str] = None) -> List[KGSlot]:
         """Convert SPARQL results to VitalSigns slot objects using proper triple conversion."""
         try:
             slots = []
-            if not sparql_result or not sparql_result.get("bindings"):
+            if not sparql_result:
                 return slots
-            
+
+            # Handle both direct bindings and results.bindings structure.
+            # This previously only read the top-level "bindings" key, so with a
+            # backend that returns {"results": {"bindings": [...]}} it silently
+            # returned zero slots.
+            bindings = (sparql_result.get("bindings")
+                        or sparql_result.get("results", {}).get("bindings"))
+            if not bindings:
+                return slots
+
             # Extract slot URIs from initial query results
             slot_uris = []
-            for binding in sparql_result["bindings"]:
+            for binding in bindings:
                 slot_uri = binding.get("slot", {}).get("value")
                 if slot_uri:
                     slot_uris.append(slot_uri)
@@ -2730,7 +2941,7 @@ class KGFramesEndpoint:
                 return slots
             
             # Get all triples for these slot subjects
-            triples = await self._get_all_triples_for_subjects(backend, graph_id, slot_uris)
+            triples = await self._get_all_triples_for_subjects(backend, graph_id, slot_uris, space_id)
             
             # Convert triples directly to VitalSigns objects
             all_objects = await self._convert_triples_to_vitalsigns_objects(triples)
@@ -2739,8 +2950,11 @@ class KGFramesEndpoint:
             for obj in all_objects:
                 if isinstance(obj, KGSlot):
                     slots.append(obj)
-            
-            return slots
+
+            # Restore the order the paging/sorting query established — the
+            # triple re-fetch above groups by its own order, which would
+            # silently discard ORDER BY. See §9c of the sequence plan.
+            return self._reorder_to_match(slots, slot_uris)
             
         except Exception as e:
             self.logger.error(f"Error converting SPARQL results to slots: {e}")
@@ -2812,14 +3026,20 @@ class KGFramesEndpoint:
         return enhanced_objects
     
     async def _slot_exists_in_backend(self, backend, space_id: str, graph_id: str, slot_uri: str) -> bool:
-        """Check if slot exists in backend."""
+        """Check whether the given slot URI exists in the graph.
+
+        Plain subject-existence check — no type constraint. Slots are always
+        reached through Edge_hasKGSlot, which already establishes that a
+        subject is a slot, so re-deriving the type here adds nothing. It used
+        to match vitaltype against
+        ``STRSTARTS(...,"…KG") && STRENDS(...,"Slot")``, which is the same
+        string-scan pattern removed from the slot and frame queries in step 7.
+        """
         try:
             query = f"""
-            PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
             SELECT ?s WHERE {{
                 GRAPH <{graph_id}> {{
-                    <{slot_uri}> vital-core:vitaltype ?type .
-                    FILTER(STRSTARTS(STR(?type), "{self.haley_prefix}KG") && STRENDS(STR(?type), "Slot"))
+                    <{slot_uri}> ?p ?o .
                     BIND(<{slot_uri}> as ?s)
                 }}
             }}
@@ -3040,8 +3260,12 @@ class KGFramesEndpoint:
     def _build_frame_query_sparql(self, graph_id: str, query_request: FrameQueryRequest) -> str:
         """Build SPARQL query based on frame query criteria."""
         # Start with basic frame selection
-        where_clauses = [f"?frame a ?frameType ."]
-        where_clauses.append(f"FILTER(STRSTARTS(STR(?frameType), \"{self.haley_prefix}KG\") && STRENDS(STR(?frameType), \"Frame\"))")
+        # KGFrame is the only concrete frame class (every other *Frame in the
+        # schema is an Edge_*), so matching it directly is exactly equivalent to
+        # the old `?frame a ?frameType` + STRSTARTS/STRENDS pair — without
+        # joining every frame to its type and running string functions on the
+        # result. Same fix as _build_get_frame_slots_query; see step 7.
+        where_clauses = [f"?frame a <{self.haley_prefix}KGFrame> ."]
         
         # Add name filter if specified (using criteria.search_string)
         if query_request.criteria.search_string:

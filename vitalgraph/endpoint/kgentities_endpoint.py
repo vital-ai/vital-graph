@@ -336,6 +336,9 @@ class KGEntitiesEndpoint:
             page_size: int = Query(10, ge=1, le=1000, description="Number of frames per page"),
             offset: int = Query(0, ge=0, description="Offset for pagination"),
             search: Optional[str] = Query(None, description="Search text to find in frame properties"),
+            sort_by: Optional[str] = Query(None, description="Property URI to sort frames by (e.g. haley-ai-kg:hasFrameSequence). Must be an allowed sortable property."),
+            sort_order: str = Query("asc", description="Sort order: 'asc' or 'desc'"),
+            include_slot_counts: bool = Query(False, description="Include a slot_counts map (frame URI -> slot count) for the returned page. Lets a client decide whether a frame needs slot pagination without fetching its slots."),
             current_user: Dict = Depends(self.auth_dependency)
         ):
             """
@@ -352,12 +355,29 @@ class KGEntitiesEndpoint:
                 page_size: Number of frames per page
                 offset: Offset for pagination
                 search: Optional search term
-                
+                sort_by: Optional property URI to order frames by. Sequence
+                    properties order numerically with unsequenced frames last;
+                    omitted means the previous default (URI order).
+                sort_order: 'asc' or 'desc'
+
             Returns:
                 Dictionary with entity frames data or N quad-format documents if frame_uris provided
             """
             require_space_read(current_user, space_id)
-            return await self._get_kgentity_frames(space_id, graph_id, entity_uri, frame_uris, page_size, offset, search, current_user, parent_frame_uri)
+            from ..model.kgframes_model import (
+                _FRAME_SORT_PROPERTIES, validate_sort_params)
+            err = validate_sort_params(sort_by, sort_order, _FRAME_SORT_PROPERTIES)
+            if err:
+                return QuadResponse(
+                    status=OperationStatus.INVALID_REQUEST, message=err,
+                    results=[], total_count=0, page_size=page_size, offset=offset,
+                )
+            return await self._get_kgentity_frames(
+                space_id, graph_id, entity_uri, frame_uris, page_size, offset,
+                search, current_user, parent_frame_uri,
+                sort_by=sort_by, sort_order=sort_order,
+                include_slot_counts=include_slot_counts,
+            )
         
         @self.router.post("/kgentities/kgframes", response_model=None, tags=["KG Entities"])
         async def create_or_update_entity_frames(
@@ -1334,7 +1354,9 @@ class KGEntitiesEndpoint:
             self.logger.error(f"Error deleting KG entities: {e}")
             raise HTTPException(status_code=500, detail=f"Error deleting KG entities: {str(e)}")
 
-    async def _get_kgentity_frames(self, space_id: str, graph_id: str, entity_uri: Optional[str], frame_uris: Optional[List[str]], page_size: int, offset: int, search: Optional[str], current_user: Dict, parent_frame_uri: Optional[str] = None):
+    async def _get_kgentity_frames(self, space_id: str, graph_id: str, entity_uri: Optional[str], frame_uris: Optional[List[str]], page_size: int, offset: int, search: Optional[str], current_user: Dict, parent_frame_uri: Optional[str] = None,
+                                   sort_by: Optional[str] = None, sort_order: str = "asc",
+                                   include_slot_counts: bool = False):
         """Get frames associated with KGEntities using SPARQL query processor."""
         try:
             self.logger.debug(f"Getting KGEntity frames in space {space_id}, graph {graph_id}, entity_uri {entity_uri}, frame_uris {frame_uris}, parent_frame_uri {parent_frame_uri}")
@@ -1364,7 +1386,9 @@ class KGEntitiesEndpoint:
             frame_results = await sparql_processor.get_entity_frames(
                 space_id=space_id, graph_id=graph_id, entity_uri=entity_uri,
                 page_size=page_size, offset=offset, search=search,
-                parent_frame_uri=parent_frame_uri
+                parent_frame_uri=parent_frame_uri,
+                sort_by=sort_by, sort_order=sort_order,
+                include_slot_counts=include_slot_counts
             )
             
             self.logger.info(f"📋 GET_FRAMES found {len(frame_results['frame_uris'])} frames for entity {entity_uri}")
@@ -1376,6 +1400,12 @@ class KGEntitiesEndpoint:
             if frame_results['frame_uris']:
                 triples = await self._get_all_triples_for_subjects(backend, space_id, graph_id, frame_results['frame_uris'])
                 frames = await self._convert_triples_to_vitalsigns_frames(triples)
+                # Rebuilding objects from a second triple fetch groups them in
+                # that fetch's order, discarding the ORDER BY. Restore the order
+                # the paging query established, or sort_by has no visible effect.
+                from .kgframes_endpoint import KGFramesEndpoint
+                frames = KGFramesEndpoint._reorder_to_match(
+                    frames, frame_results['frame_uris'])
                 self.logger.debug(f"Converted to {len(frames)} VitalSigns frame objects")
             
             quads = await asyncio.to_thread(graphobjects_to_quad_list, frames, graph_id)
@@ -1384,6 +1414,7 @@ class KGEntitiesEndpoint:
                 total_count=frame_results['total_count'],
                 page_size=page_size,
                 offset=offset,
+                slot_counts=frame_results.get('slot_counts'),
             )
 
         except HTTPException:

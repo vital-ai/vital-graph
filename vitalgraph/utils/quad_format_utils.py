@@ -326,7 +326,7 @@ _URI_PROP = "http://vital.ai/ontology/vital-core#URIProp"
 _XSD = "http://www.w3.org/2001/XMLSchema#"
 
 
-def _parse_nquads_object(term_str: str) -> Any:
+def parse_nquads_object(term_str: str) -> Any:
     """Parse an N-Quads object term into a native Python value.
 
     Returns:
@@ -392,7 +392,7 @@ def _convert_typed_literal(value_str: str, datatype: str):
     return value_str
 
 
-def _parse_nquads_uri(term_str: str) -> str:
+def parse_nquads_uri(term_str: str) -> str:
     """Extract URI from an N-Quads angle-bracket term."""
     term_str = term_str.strip()
     if term_str.startswith('<') and term_str.endswith('>'):
@@ -408,9 +408,9 @@ def _quad_list_to_graphobjects_fast(quads: List[Quad]) -> List[GraphObject]:
     subjects: dict = defaultdict(lambda: {'type_uri': None, 'properties': {}})
 
     for quad in quads:
-        s_uri = _parse_nquads_uri(quad.s)
-        p_uri = _parse_nquads_uri(quad.p)
-        o_val = _parse_nquads_object(quad.o)
+        s_uri = parse_nquads_uri(quad.s)
+        p_uri = parse_nquads_uri(quad.p)
+        o_val = parse_nquads_object(quad.o)
 
         if p_uri == _RDF_TYPE or p_uri == _VITALTYPE:
             # Type URI — extract the URI value

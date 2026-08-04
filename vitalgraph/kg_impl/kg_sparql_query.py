@@ -690,9 +690,62 @@ class KGSparqlQueryProcessor:
             self.logger.error(f"Error getting triples for subjects: {e}")
             raise
     
-    async def get_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, 
+    async def _count_slots_for_frames(self, space_id: str, graph_id: str,
+                                      frame_uris: List[str]) -> Dict[str, int]:
+        """Slot count per frame, for a whole page of frames in ONE query.
+
+        Lets a client decide whether a frame needs slot pagination before
+        fetching its slots. Grouped COUNT over the page's frame URIs rather
+        than one count query per frame.
+
+        A frame with zero slots produces no group and is therefore ABSENT from
+        the result — callers must read a missing key as 0. Every frame on the
+        page is seeded to 0 here so the returned map is total over the page.
+        """
+        if not frame_uris:
+            return {}
+
+        values = " ".join(f"<{u}>" for u in frame_uris)
+        query = f"""
+        {self.utils.build_prefixes()}
+
+        SELECT ?frame (COUNT(DISTINCT ?slot) AS ?slot_count) WHERE {{
+            {self.utils.build_graph_clause(graph_id)} {{
+                VALUES ?frame {{ {values} }}
+                ?edge a haley:Edge_hasKGSlot ;
+                      vital:hasEdgeSource ?frame ;
+                      vital:hasEdgeDestination ?slot .
+            }}
+        }}
+        GROUP BY ?frame
+        """
+        counts: Dict[str, int] = {u: 0 for u in frame_uris}
+        try:
+            results = await self.backend.execute_sparql_query(space_id, query)
+            bindings = []
+            if isinstance(results, dict):
+                bindings = (results.get("bindings")
+                            or results.get("results", {}).get("bindings") or [])
+            for row in bindings:
+                uri = (row.get("frame") or {}).get("value")
+                raw = (row.get("slot_count") or {}).get("value")
+                if uri is None:
+                    continue
+                try:
+                    counts[uri] = int(raw)
+                except (TypeError, ValueError):
+                    counts[uri] = 0
+        except Exception as e:
+            self.logger.error(f"Error counting slots for frames: {e}")
+            return {}
+        return counts
+
+    async def get_entity_frames(self, space_id: str, graph_id: str, entity_uri: str,
                                page_size: int = 100, offset: int = 0, search: Optional[str] = None,
-                               parent_frame_uri: Optional[str] = None) -> Dict[str, Any]:
+                               parent_frame_uri: Optional[str] = None,
+                               sort_by: Optional[str] = None,
+                               sort_order: str = "asc",
+                               include_slot_counts: bool = False) -> Dict[str, Any]:
         """
         Get frames associated with an entity using SPARQL queries with pagination and search.
         
@@ -743,18 +796,28 @@ class KGSparqlQueryProcessor:
                           vital:hasEdgeDestination ?frame .
                 """
             
-            # Query to get frame URIs
+            # Sequence properties get the numeric / unsequenced-last construct;
+            # everything else sorts lexically. Falls back to ORDER BY ?frame.
+            sort_optional, sort_projection, order_clause = self.utils.build_sort_clauses(
+                "?frame", sort_by, sort_order,
+            )
+
+            # Query to get frame URIs.  DISTINCT lives in an inner subquery:
+            # an ORDER BY alongside a DISTINCT is silently dropped.
             frames_query = f"""
             {self.utils.build_prefixes()}
-            
-            SELECT DISTINCT ?frame WHERE {{
-                {self.utils.build_graph_clause(graph_id)} {{
-                    {parent_filter}
-                    ?frame a haley:KGFrame .
-                    {search_filter}
-                }}
+
+            SELECT ?frame WHERE {{
+                {{ SELECT DISTINCT ?frame {sort_projection} WHERE {{
+                    {self.utils.build_graph_clause(graph_id)} {{
+                        {parent_filter}
+                        ?frame a haley:KGFrame .
+                        {search_filter}
+                        {sort_optional}
+                    }}
+                }} }}
             }}
-            ORDER BY ?frame
+            {order_clause}
             {pagination}
             """
             
@@ -779,9 +842,15 @@ class KGSparqlQueryProcessor:
             count_results = await self.backend.execute_sparql_query(space_id, count_query)
             total_count = self.utils.extract_count_from_results(count_results)
             
+            slot_counts = None
+            if include_slot_counts and frame_uris:
+                slot_counts = await self._count_slots_for_frames(
+                    space_id, graph_id, frame_uris)
+
             return {
                 'frame_uris': frame_uris,
-                'total_count': total_count
+                'total_count': total_count,
+                'slot_counts': slot_counts,
             }
             
         except Exception as e:

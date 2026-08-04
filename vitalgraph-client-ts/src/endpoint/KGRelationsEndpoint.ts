@@ -3,6 +3,13 @@ import { validateRequired } from '../utils/params.js';
 import type { PaginatedGraphObjectResponse, DeleteResponse, VitalGraphResponse } from '../response/types.js';
 
 export class KGRelationsEndpoint extends BaseEndpoint {
+  /**
+   * List KG relations, optionally filtered and sorted.
+   *
+   * `sortBy` takes a property URI — use vital-core#hasListIndex to order
+   * relations by their list index. Relations without one sort last, in both
+   * directions.
+   */
   async list(
     spaceId: string,
     graphId: string,
@@ -11,12 +18,22 @@ export class KGRelationsEndpoint extends BaseEndpoint {
     search?: string,
     entitySourceUri?: string,
     entityDestinationUri?: string,
+    options?: {
+      relationTypeUri?: string;
+      direction?: 'all' | 'incoming' | 'outgoing';
+      sortBy?: string;
+      sortOrder?: 'asc' | 'desc';
+    },
   ): Promise<PaginatedGraphObjectResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId });
     return this.request('GET', '/api/graphs/kgrelations', {
       params: {
         space_id: spaceId, graph_id: graphId, page_size: pageSize, offset,
         search, entity_source_uri: entitySourceUri, entity_destination_uri: entityDestinationUri,
+        relation_type_uri: options?.relationTypeUri,
+        direction: options?.direction,
+        sort_by: options?.sortBy,
+        sort_order: options?.sortOrder,
       },
     });
   }

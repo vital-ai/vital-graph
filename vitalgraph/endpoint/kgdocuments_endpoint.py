@@ -34,9 +34,15 @@ from ..model.kgdocuments_model import (
     SegmentationStatusSummaryResponse,
     SegmentationWorkerStatus,
 )
+from vitalgraph.document.segment_deletion import delete_segmentation
 from vitalgraph.model.quad_model import Quad, QuadRequest, QuadResponse, QuadResultsResponse
 from vitalgraph.model.result_status import OperationStatus
-from vitalgraph.utils.quad_format_utils import graphobjects_to_quad_list, quad_list_to_graphobjects
+from vitalgraph.utils.quad_format_utils import (
+    graphobjects_to_quad_list,
+    parse_nquads_object,
+    parse_nquads_uri,
+    quad_list_to_graphobjects,
+)
 from ..kg_impl.kgdocuments_read_impl import KGDocumentsReadProcessor
 from ..kg_impl.kg_backend_utils import create_backend_adapter
 from ..auth.role_dependencies import require_space_read, require_space_write
@@ -651,39 +657,19 @@ class KGDocumentsEndpoint:
         self, backend_impl, space_id: str, graph_id: str,
         original_uri: str, method_uri: str
     ) -> None:
-        """Delete existing parent copy + segments for this method."""
-        # Find existing parent copy for this method
-        method_suffix = method_uri.split(":")[-1] if ":" in method_uri else "segmented"
-        parent_uri = f"{original_uri}_parent_{method_suffix}"
+        """Delete existing parent copy + segments for this method.
 
+        Scoped to this method, so re-running one segmentation method leaves
+        other methods' output intact.
+        """
         try:
-            # Delete all subjects that start with the parent URI prefix
-            # (parent + segments + edges)
-            sparql_delete = f"""
-                PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
-                
-                DELETE WHERE {{
-                    GRAPH <{graph_id}> {{
-                        ?s ?p ?o .
-                        FILTER(STRSTARTS(STR(?s), "{parent_uri}"))
-                    }}
-                }}
-            """
-            await backend_impl.execute_sparql_update(space_id, sparql_delete)
-
-            # Also delete the edge from original to parent
-            edge_uri = f"{original_uri}_edge_to_{method_suffix}_parent"
-            sparql_delete_edge = f"""
-                DELETE WHERE {{
-                    GRAPH <{graph_id}> {{
-                        <{edge_uri}> ?p ?o .
-                    }}
-                }}
-            """
-            await backend_impl.execute_sparql_update(space_id, sparql_delete_edge)
-
-            logger.debug(f"Deleted existing segmentation for {original_uri} method={method_uri}")
-
+            deleted = await delete_segmentation(
+                backend_impl, space_id, graph_id, original_uri, method_uri
+            )
+            logger.debug(
+                f"Deleted {deleted} existing segmentation object(s) for "
+                f"{original_uri} method={method_uri}"
+            )
         except Exception as e:
             logger.warning(f"Error deleting existing segmentation: {e}")
 
@@ -1251,9 +1237,13 @@ class KGDocumentsEndpoint:
         Returns an error message (domain validation failure) or None if OK.
         """
         for q in quads:
-            # Check if any quad sets a managed segment type
-            pred = q.p.strip("<>") if q.p.startswith("<") else q.p
-            obj_val = q.o.strip('"').split('"')[0] if q.o.startswith('"') else q.o.strip("<>")
+            # Check if any quad sets a managed segment type. Quad fields carry
+            # N-Quads term encoding, so use the real parsers — an escaped quote,
+            # a datatype suffix or a language tag all defeat a naive split.
+            pred = parse_nquads_uri(q.p)
+            obj_val = parse_nquads_object(q.o)
+            if isinstance(obj_val, dict):  # language-tagged literal
+                obj_val = obj_val.get("value")
             if pred == self._HAS_SEGMENT_TYPE_PRED and obj_val in self._MANAGED_SEGMENT_TYPES:
                 return (
                     "Cannot directly create/modify segmentation-managed documents. "
@@ -1266,10 +1256,30 @@ class KGDocumentsEndpoint:
     ) -> Optional[str]:
         """Check if a URI is a managed segment (reject direct deletion).
 
+        Asks the graph what the object *is* — a document is protected because it
+        carries a managed hasKGDocumentSegmentTypeURI, not because of how it is
+        named. A user document called 'urn:doc:report_seg_2024' is deletable.
+
         Returns an error message (domain validation failure) or None if OK.
         """
-        # Fast-path: URI pattern check
-        if "_parent_" in uri or "_seg_" in uri:
+        values = " ".join(f"<{t}>" for t in sorted(self._MANAGED_SEGMENT_TYPES))
+        sparql = f"""
+            ASK {{
+                GRAPH <{graph_id}> {{
+                    VALUES ?managed {{ {values} }}
+                    <{uri}> <{self._HAS_SEGMENT_TYPE_PRED}> ?managed .
+                }}
+            }}
+        """
+        try:
+            result = await backend_adapter.execute_sparql_query(space_id, sparql)
+        except Exception as e:
+            # Fail open: a protection lookup failure must not block an ordinary
+            # delete. The cascade is relationship-scoped either way.
+            self.logger.warning(f"Segment protection check failed for {uri}: {e}")
+            return None
+
+        if result.get("boolean", False):
             return (
                 f"Cannot directly delete managed segment '{uri}'. "
                 "Delete the original document to cascade."
@@ -1279,22 +1289,18 @@ class KGDocumentsEndpoint:
     async def _cascade_delete_segments(
         self, backend_adapter, space_id: str, graph_id: str, original_uri: str
     ) -> None:
-        """Delete all parent copies, segments, and edges for an original document."""
+        """Delete all parent copies, segments, and edges for an original document.
+
+        Unscoped by method — the original is going away, so every method's
+        output goes with it.
+        """
         try:
-            # Delete all subjects that start with the original URI + suffix patterns
-            sparql_delete = f"""
-                DELETE WHERE {{
-                    GRAPH <{graph_id}> {{
-                        ?s ?p ?o .
-                        FILTER(
-                            STRSTARTS(STR(?s), "{original_uri}_parent_") ||
-                            STRSTARTS(STR(?s), "{original_uri}_edge_to_")
-                        )
-                    }}
-                }}
-            """
-            await backend_adapter.execute_sparql_query(space_id, sparql_delete)
-            self.logger.debug(f"Cascade deleted segments for {original_uri}")
+            deleted = await delete_segmentation(
+                backend_adapter, space_id, graph_id, original_uri, method_uri=None
+            )
+            self.logger.debug(
+                f"Cascade deleted {deleted} segmentation object(s) for {original_uri}"
+            )
         except Exception as e:
             self.logger.warning(f"Error cascade-deleting segments for {original_uri}: {e}")
 

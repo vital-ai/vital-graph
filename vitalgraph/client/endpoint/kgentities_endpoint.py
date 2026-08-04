@@ -881,7 +881,10 @@ class KGEntitiesEndpoint(BaseEndpoint):
         parent_frame_uri: Optional[str] = None,
         page_size: int = 10,
         offset: int = 0,
-        search: Optional[str] = None
+        search: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
+        include_slot_counts: bool = False
     ):
         """
         Get frames associated with a KGEntity.
@@ -895,7 +898,16 @@ class KGEntitiesEndpoint(BaseEndpoint):
             page_size: Number of items per page
             offset: Offset for pagination
             search: Optional search term
-            
+            sort_by: Optional property URI to order frames by, e.g.
+                haley-ai-kg#hasFrameSequence. Must be an allowed sortable
+                property or the server returns INVALID_REQUEST.
+            sort_order: 'asc' or 'desc'
+            include_slot_counts: ask the server for a slot_counts map
+                (frame URI -> slot count) covering the returned page, so a
+                caller can tell which frames need slot pagination without
+                fetching their slots. Frames with zero slots are omitted —
+                a missing key means 0.
+
         Returns:
             FrameResponse if frame_uris is None (list of frames)
             FrameGraphResponse if frame_uris contains one URI (single frame graph)
@@ -917,7 +929,10 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 parent_frame_uri=parent_frame_uri,
                 page_size=page_size,
                 offset=offset,
-                search=search
+                search=search,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                include_slot_counts=include_slot_counts
             )
             
             response = await self._make_request('GET', url, params=params)
@@ -1013,6 +1028,9 @@ class KGEntitiesEndpoint(BaseEndpoint):
                     message=f"Retrieved {len(objects)} frames",
                     space_id=space_id,
                     graph_id=graph_id,
+                    # Present only when include_slot_counts was requested; the
+                    # server omits the key otherwise.
+                    slot_counts=response_data.get('slot_counts'),
                     metadata={'object_types': count_object_types(objects)}
                 )
                 

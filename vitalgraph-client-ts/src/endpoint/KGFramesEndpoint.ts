@@ -83,14 +83,64 @@ export class KGFramesEndpoint extends BaseEndpoint {
     });
   }
 
+  /**
+   * Frames and their slots, mixed together in one flat paged list.
+   *
+   * Prefer {@link getEntityFrameSlots} when you want the slots of a single
+   * frame: this endpoint returns frames AND slots in the same result set and
+   * a page boundary can split a frame from its slots. It also has no sort.
+   */
   async getSlots(
     spaceId: string,
     graphId: string,
     frameUri: string,
+    options?: { pageSize?: number; offset?: number },
   ): Promise<PaginatedGraphObjectResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId, frame_uri: frameUri });
     return this.request('GET', '/api/graphs/kgframes/kgslots', {
-      params: { space_id: spaceId, graph_id: graphId, frame_uri: frameUri },
+      params: {
+        space_id: spaceId,
+        graph_id: graphId,
+        frame_uri: frameUri,
+        page_size: options?.pageSize,
+        offset: options?.offset,
+      },
+    });
+  }
+
+  /**
+   * Slots of ONE frame, sorted and paged.
+   *
+   * The counterpart to KGEntitiesEndpoint.getFrames: page an entity's frames,
+   * then page each frame's slots here. Use hasSlotSequence as `sortBy` to get
+   * sequence order; slots without a sequence sort last in both directions.
+   */
+  async getEntityFrameSlots(
+    spaceId: string,
+    graphId: string,
+    frameUri: string,
+    options?: {
+      entityUri?: string;
+      kgSlotType?: string;
+      sortBy?: string;
+      sortOrder?: 'asc' | 'desc';
+      pageSize?: number;
+      offset?: number;
+    },
+  ): Promise<PaginatedGraphObjectResponse> {
+    validateRequired({ space_id: spaceId, graph_id: graphId, frame_uri: frameUri });
+    return this.request('GET', '/api/graphs/kgentities/kgframes/kgslots', {
+      params: {
+        space_id: spaceId,
+        graph_id: graphId,
+        frame_uri: frameUri,
+        entity_uri: options?.entityUri,
+        kGSlotType: options?.kgSlotType,
+        sort_by: options?.sortBy,
+        sort_order: options?.sortOrder,
+        page_size: options?.pageSize,
+        offset: options?.offset,
+      },
     });
   }
 

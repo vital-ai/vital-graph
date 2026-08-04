@@ -669,7 +669,7 @@ class KGHierarchicalFrameValidator:
                 """
                 
                 # Execute ownership validation
-                result = await self.backend.execute_sparql_query(ownership_query)
+                result = await self.backend.execute_sparql_query(space_id, ownership_query)
                 
                 # Parse ASK query result
                 if hasattr(result, 'boolean'):
@@ -735,7 +735,7 @@ class KGHierarchicalFrameValidator:
                     }}
                     """
                     
-                    connection_result = await self.backend.execute_sparql_query(connection_query)
+                    connection_result = await self.backend.execute_sparql_query(space_id, connection_query)
                     connection_exists = False
                     
                     if hasattr(connection_result, 'boolean'):

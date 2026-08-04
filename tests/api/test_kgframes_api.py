@@ -287,10 +287,156 @@ class TestFramesWithSlots:
         all_uris = [str(obj.URI) for obj in (lr.objects or [])]
         assert str(frame.URI) in all_uris
 
+    async def test_paging_partitions_frames_with_slots(
+        self, vg_client, test_space, test_graph
+    ):
+        """Paging over frames+slots must return each subject exactly once.
+
+        Regression test for unstable paging: this endpoint applied
+        LIMIT/OFFSET with no ORDER BY, so successive pages could repeat or
+        skip subjects.  Small page_size maximizes the number of page
+        boundaries and therefore the chance of catching it.
+
+        See planning/planning_sequence/frame_slot_sequence_sort_paging_plan.md
+        """
+        # A handful of frames, each with a slot, so paging crosses the
+        # frame/slot UNION boundary repeatedly.
+        for i in range(4):
+            f = _make_frame(f"Partition Test {i}")
+            s = _make_slot(f"PartSlot{i}", f"v{i}")
+            e = _make_slot_edge(str(f.URI), str(s.URI))
+            await vg_client.kgframes.create_kgframes(
+                space_id=test_space, graph_id=test_graph, objects=[f],
+            )
+            await vg_client.kgframes.create_frame_slots(
+                space_id=test_space, graph_id=test_graph,
+                frame_uri=str(f.URI), objects=[s, e],
+            )
+
+        unpaged = await vg_client.kgframes.get_kgframes_with_slots(
+            space_id=test_space, graph_id=test_graph, page_size=1000,
+        )
+        assert unpaged.is_success
+        expected = {str(o.URI) for o in (unpaged.objects or [])}
+        assert len(expected) >= 8, "fixture did not produce enough subjects"
+
+        page_size = 3
+        seen: List[str] = []
+        for offset in range(0, len(expected) + page_size, page_size):
+            page = await vg_client.kgframes.get_kgframes_with_slots(
+                space_id=test_space, graph_id=test_graph,
+                page_size=page_size, offset=offset,
+            )
+            assert page.is_success
+            seen.extend(str(o.URI) for o in (page.objects or []))
+
+        # No subject may appear on two pages...
+        assert len(seen) == len(set(seen)), (
+            f"paging returned duplicate subjects: "
+            f"{sorted(u for u in set(seen) if seen.count(u) > 1)}"
+        )
+        # ...and none may be skipped.
+        assert set(seen) == expected, (
+            f"paging lost subjects: {sorted(expected - set(seen))}"
+        )
+
+
 
 # ---------------------------------------------------------------------------
 # Frame query (POST /kgframes/query)
 # ---------------------------------------------------------------------------
+
+class TestFrameSorting:
+    """GET /kgframes sort_by — ordering must survive to the response.
+
+    Fixtures decorrelate name order, sequence order and URI order from each
+    other. If any two agreed, an ignored ORDER BY would look correct.
+    """
+
+    NAME_PROP = "http://vital.ai/ontology/vital-core#hasName"
+    SEQ_PROP = "http://vital.ai/ontology/haley-ai-kg#hasFrameSequence"
+
+    async def _seed(self, vg_client, test_space, test_graph):
+        ns = f"{NS}sort_{_uid()}/"
+        # URI order f01..f05; names reverse-alphabetical; sequence reversed too
+        names = ["Zeta", "Yankee", "Xray", "Bravo", "Alpha"]
+        objs = []
+        for i, n in enumerate(names, 1):
+            f = KGFrame()
+            f.URI = f"{ns}f{i:02d}"
+            f.name = n
+            f.frameSequence = 6 - i
+            objs.append(f)
+        cr = await vg_client.kgframes.create_kgframes(
+            space_id=test_space, graph_id=test_graph, objects=objs)
+        assert cr.is_success, cr.error_message
+        return ns
+
+    async def _list(self, vg_client, test_space, test_graph, ns, **kw):
+        lr = await vg_client.kgframes.list_kgframes(
+            space_id=test_space, graph_id=test_graph, page_size=1000, **kw)
+        assert lr.is_success
+        return [str(o.URI).rsplit("/", 1)[-1]
+                for o in (lr.objects or []) if str(o.URI).startswith(ns)]
+
+    async def test_sort_by_name_ascending(self, vg_client, test_space, test_graph):
+        """Alpha..Zeta — the exact reverse of URI order."""
+        ns = await self._seed(vg_client, test_space, test_graph)
+        got = await self._list(vg_client, test_space, test_graph, ns,
+                               sort_by=self.NAME_PROP, sort_order="asc")
+        assert got == ["f05", "f04", "f03", "f02", "f01"], got
+
+    async def test_sort_by_name_descending(self, vg_client, test_space, test_graph):
+        ns = await self._seed(vg_client, test_space, test_graph)
+        got = await self._list(vg_client, test_space, test_graph, ns,
+                               sort_by=self.NAME_PROP, sort_order="desc")
+        assert got == ["f01", "f02", "f03", "f04", "f05"], got
+
+    async def test_sort_by_sequence_ascending(self, vg_client, test_space, test_graph):
+        """hasFrameSequence 1..5, which is the reverse of URI order."""
+        ns = await self._seed(vg_client, test_space, test_graph)
+        got = await self._list(vg_client, test_space, test_graph, ns,
+                               sort_by=self.SEQ_PROP, sort_order="asc")
+        assert got == ["f05", "f04", "f03", "f02", "f01"], got
+
+    async def test_sort_by_sequence_descending(self, vg_client, test_space, test_graph):
+        ns = await self._seed(vg_client, test_space, test_graph)
+        got = await self._list(vg_client, test_space, test_graph, ns,
+                               sort_by=self.SEQ_PROP, sort_order="desc")
+        assert got == ["f01", "f02", "f03", "f04", "f05"], got
+
+    async def test_sorted_paging_preserves_order(
+        self, vg_client, test_space, test_graph
+    ):
+        """Concatenated pages equal the unpaged sorted order, each URI once.
+
+        Pages the WHOLE space, not just this test's namespace: the space is
+        module-scoped and other tests add frames, so a page boundary rarely
+        lines up with the namespace. Filtering after paging is what makes the
+        comparison meaningful.
+        """
+        ns = await self._seed(vg_client, test_space, test_graph)
+        expected = await self._list(vg_client, test_space, test_graph, ns,
+                                    sort_by=self.SEQ_PROP, sort_order="asc")
+        assert len(expected) == 5, expected
+
+        first = await vg_client.kgframes.list_kgframes(
+            space_id=test_space, graph_id=test_graph, page_size=1,
+            sort_by=self.SEQ_PROP, sort_order="asc")
+        total = first.total_count
+
+        page_size = 2
+        seen = []
+        for offset in range(0, total + page_size, page_size):
+            lr = await vg_client.kgframes.list_kgframes(
+                space_id=test_space, graph_id=test_graph, page_size=page_size,
+                offset=offset, sort_by=self.SEQ_PROP, sort_order="asc")
+            assert lr.is_success
+            seen.extend(str(o.URI).rsplit("/", 1)[-1]
+                        for o in (lr.objects or []) if str(o.URI).startswith(ns))
+
+        assert seen == expected, f"paged {seen} != unpaged {expected}"
+
 
 class TestFrameQuery:
     """POST /kgframes/query — criteria-based frame search."""
@@ -388,4 +534,173 @@ class TestFrameGraph:
         # Should succeed but with no frame_graph data
         assert resp.frame_graph is None or (
             hasattr(resp.frame_graph, 'objects') and len(resp.frame_graph.objects or []) == 0
+        )
+
+
+class TestFramesWithSlotsFilters:
+    """GET /kgframes/kgslots — search and slot-type filters.
+
+    Both were previously accepted and silently ignored: `search` reached the
+    query builder but was never used, and the Python client sent `slot_type`
+    while the route declares `kGSlotType`.
+    """
+
+    async def _seed(self, vg_client, test_space, test_graph):
+        ns = f"{NS}filt_{_uid()}/"
+        objs = []
+        for label in ("Findable", "Otherwise"):
+            f = KGFrame()
+            f.URI = f"{ns}{label.lower()}_frame"
+            f.name = f"{label} Frame"
+            s = KGTextSlot()
+            s.URI = f"{ns}{label.lower()}_slot"
+            s.name = f"{label} Slot"
+            s.textSlotValue = "v"
+            e = _make_slot_edge(str(f.URI), str(s.URI))
+            await vg_client.kgframes.create_kgframes(
+                space_id=test_space, graph_id=test_graph, objects=[f])
+            await vg_client.kgframes.create_frame_slots(
+                space_id=test_space, graph_id=test_graph,
+                frame_uri=str(f.URI), objects=[s, e])
+            objs.append(str(f.URI))
+        return ns
+
+    async def test_search_narrows_to_matching_frames_and_their_slots(
+        self, vg_client, test_space, test_graph
+    ):
+        """A search term returns the matching frame AND its slots, nothing else."""
+        ns = await self._seed(vg_client, test_space, test_graph)
+
+        lr = await vg_client.kgframes.get_kgframes_with_slots(
+            space_id=test_space, graph_id=test_graph,
+            page_size=1000, search="Findable")
+        assert lr.is_success, lr.error_message
+
+        mine = [str(o.URI) for o in (lr.objects or []) if str(o.URI).startswith(ns)]
+        assert f"{ns}findable_frame" in mine, mine
+        assert f"{ns}findable_slot" in mine, mine
+        # the non-matching frame and its slot must be excluded
+        assert f"{ns}otherwise_frame" not in mine, mine
+        assert f"{ns}otherwise_slot" not in mine, mine
+
+    async def test_search_is_ignored_when_absent(
+        self, vg_client, test_space, test_graph
+    ):
+        """Without a search term both frames come back — guards over-filtering."""
+        ns = await self._seed(vg_client, test_space, test_graph)
+
+        lr = await vg_client.kgframes.get_kgframes_with_slots(
+            space_id=test_space, graph_id=test_graph, page_size=1000)
+        assert lr.is_success
+        mine = [str(o.URI) for o in (lr.objects or []) if str(o.URI).startswith(ns)]
+        assert f"{ns}findable_frame" in mine
+        assert f"{ns}otherwise_frame" in mine
+
+    async def test_search_term_with_a_quote_does_not_break_the_query(
+        self, vg_client, test_space, test_graph
+    ):
+        """A double quote must be escaped, not terminate the SPARQL literal."""
+        await self._seed(vg_client, test_space, test_graph)
+        lr = await vg_client.kgframes.get_kgframes_with_slots(
+            space_id=test_space, graph_id=test_graph,
+            page_size=10, search='no"such"frame')
+        assert lr.is_success, lr.error_message
+
+    async def test_slot_type_filter_reaches_the_server(
+        self, vg_client, test_space, test_graph
+    ):
+        """Regression: the client sent slot_type, the route reads kGSlotType.
+
+        With a slot type that matches nothing, a working filter returns no
+        slots. Before the fix the param was dropped and everything came back.
+        """
+        ns = await self._seed(vg_client, test_space, test_graph)
+
+        lr = await vg_client.kgframes.get_frame_slots(
+            space_id=test_space, graph_id=test_graph,
+            frame_uri=f"{ns}findable_frame",
+            slot_type="http://example.org/no-such-slot-type",
+            page_size=1000)
+        assert lr.is_success, lr.error_message
+        slot_uris = [str(o.URI) for o in (lr.objects or [])
+                     if str(o.URI).startswith(ns) and "_slot" in str(o.URI)]
+        assert slot_uris == [], slot_uris
+
+
+# ---------------------------------------------------------------------------
+# Parent object validation (issues/024)
+# ---------------------------------------------------------------------------
+
+class TestParentObjectValidation:
+    """_validate_parent_object must identify the parent's type via ASK.
+
+    The observable effect is which parent edge gets created:
+    KGEntity parent → Edge_hasEntityKGFrame, KGFrame parent → Edge_hasKGFrame,
+    and an unknown parent → no edge at all. A regression that makes the ASK
+    return a falsy boolean silently drops the parent edge, and no other test
+    covers this.
+    """
+
+    _HALEY = "http://vital.ai/ontology/haley-ai-kg#"
+
+    async def _edges_from(self, vg_client, test_space, test_graph, parent_uri):
+        """Return the set of edge types whose source is parent_uri."""
+        from vitalgraph.model.sparql_model import SPARQLQueryRequest
+
+        q = (
+            f'SELECT ?type WHERE {{ GRAPH <{test_graph}> {{ '
+            f'?e <http://vital.ai/ontology/vital-core#hasEdgeSource> <{parent_uri}> . '
+            f'?e a ?type . }} }}'
+        )
+        r = await vg_client.sparql.execute_sparql_query(
+            test_space, SPARQLQueryRequest(query=q)
+        )
+        bindings = r.results.get("bindings", []) if r.results else []
+        return {b["type"]["value"] for b in bindings}
+
+    async def test_frame_parent_creates_frame_edge(
+        self, vg_client, test_space, test_graph
+    ):
+        """A KGFrame parent must be identified as a frame and get Edge_hasKGFrame."""
+        parent = _make_frame("Parent Frame")
+        await vg_client.kgframes.create_kgframes(
+            space_id=test_space, graph_id=test_graph, objects=[parent],
+        )
+
+        child = _make_frame("Child Frame")
+        cr = await vg_client.kgframes.create_kgframes(
+            space_id=test_space, graph_id=test_graph, objects=[child],
+            parent_uri=str(parent.URI),
+        )
+        assert cr.is_success, f"create failed: {cr.error_message}"
+
+        edge_types = await self._edges_from(
+            vg_client, test_space, test_graph, str(parent.URI)
+        )
+        assert f"{self._HALEY}Edge_hasKGFrame" in edge_types, (
+            f"parent edge missing or wrong type: {edge_types}"
+        )
+
+    async def test_unknown_parent_creates_no_edge(
+        self, vg_client, test_space, test_graph
+    ):
+        """A parent URI that exists in no graph must yield no parent edge.
+
+        The frame itself is still created — _handle_parent_relationships logs
+        and returns the objects unchanged rather than failing the request.
+        """
+        bogus = f"{NS}nonexistent_{_uid()}"
+
+        child = _make_frame("Orphan Child")
+        cr = await vg_client.kgframes.create_kgframes(
+            space_id=test_space, graph_id=test_graph, objects=[child],
+            parent_uri=bogus,
+        )
+        assert cr.is_success, f"create failed: {cr.error_message}"
+
+        edge_types = await self._edges_from(
+            vg_client, test_space, test_graph, bogus
+        )
+        assert edge_types == set(), (
+            f"edge created for a nonexistent parent: {edge_types}"
         )

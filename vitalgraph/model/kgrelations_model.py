@@ -11,6 +11,25 @@ from .quad_model import QuadResponse, QuadResultsResponse
 from .api_model import BaseCreateResponse, BaseUpdateResponse, BaseDeleteResponse, BasePaginatedResponse
 
 
+# ---------------------------------------------------------------------------
+# Relation sort registry
+# ---------------------------------------------------------------------------
+
+# KG relations have no dedicated sequence property. hasListIndex is inherited
+# from VITAL_Edge (scalar integer, so single-valued) and is the ordering key
+# for entity-to-entity relations. It was previously unused for this purpose
+# anywhere in the codebase, so this establishes the convention.
+_RELATION_LIST_INDEX_PROPERTY = "http://vital.ai/ontology/vital-core#hasListIndex"
+
+# Allowed property URIs for relation sort. Deliberately small: these are the
+# properties an Edge_hasKGRelation reliably carries.
+_RELATION_SORT_PROPERTIES = {
+    _RELATION_LIST_INDEX_PROPERTY,
+    "http://vital.ai/ontology/vital-core#hasName",
+    "http://vital.ai/ontology/haley-ai-kg#hasKGRelationType",
+}
+
+
 class RelationsResponse(QuadResponse):
     """Response model for relations listing (paginated quad results)."""
     pass

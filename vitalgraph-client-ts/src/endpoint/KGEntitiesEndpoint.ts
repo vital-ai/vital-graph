@@ -171,14 +171,46 @@ export class KGEntitiesEndpoint extends BaseEndpoint {
     });
   }
 
+  /**
+   * Frames for an entity, optionally sorted and paged.
+   *
+   * `sortBy` takes a property URI — use hasFrameSequence to order frames by
+   * their declared sequence. Frames without one sort last, in both directions.
+   */
   async getFrames(
     spaceId: string,
     graphId: string,
     entityUri: string,
+    options?: {
+      pageSize?: number;
+      offset?: number;
+      search?: string;
+      parentFrameUri?: string;
+      sortBy?: string;
+      sortOrder?: 'asc' | 'desc';
+      /**
+       * Ask for a `slot_counts` map (frame URI → slot count) covering the
+       * returned page, so the caller can tell which frames need slot
+       * pagination without fetching their slots. Frames with zero slots are
+       * omitted from the map — read a missing key as 0, not as unknown.
+       */
+      includeSlotCounts?: boolean;
+    },
   ): Promise<PaginatedGraphObjectResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId, entity_uri: entityUri });
     return this.request('GET', '/api/graphs/kgentities/kgframes', {
-      params: { space_id: spaceId, graph_id: graphId, entity_uri: entityUri },
+      params: {
+        space_id: spaceId,
+        graph_id: graphId,
+        entity_uri: entityUri,
+        page_size: options?.pageSize,
+        offset: options?.offset,
+        search: options?.search,
+        parent_frame_uri: options?.parentFrameUri,
+        sort_by: options?.sortBy,
+        sort_order: options?.sortOrder,
+        include_slot_counts: options?.includeSlotCounts,
+      },
     });
   }
 

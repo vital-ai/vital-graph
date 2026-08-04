@@ -911,7 +911,10 @@ class KGFramesEndpoint(BaseEndpoint):
         try:
             url = f"{self._get_server_url()}/api/graphs/kgframes/kgslots"
             params = build_query_params(
-                space_id=space_id, graph_id=graph_id, frame_uri=frame_uri, slot_type=slot_type,
+                space_id=space_id, graph_id=graph_id, frame_uri=frame_uri,
+                # The route declares this as kGSlotType; sending slot_type meant
+                # the filter was silently ignored by the server.
+                kGSlotType=slot_type,
                 parent_uri=parent_uri, search=search,
                 page_size=page_size, offset=offset
             )
@@ -937,8 +940,77 @@ class KGFramesEndpoint(BaseEndpoint):
                 PaginatedGraphObjectResponse, error_code=1, error_message=str(e), status_code=500
             )
     
+    async def get_entity_frame_slots(self, space_id: str, graph_id: str, frame_uri: str,
+                                     entity_uri: Optional[str] = None,
+                                     kg_slot_type: Optional[str] = None,
+                                     sort_by: Optional[str] = None,
+                                     sort_order: str = "asc",
+                                     page_size: int = 10,
+                                     offset: int = 0) -> PaginatedGraphObjectResponse:
+        """
+        Get the slots of ONE frame, sorted and paged.
+
+        The counterpart to get_kgentity_frames: page an entity's frames, then
+        page each frame's slots here. Unlike get_frame_slots (which returns
+        frames and slots mixed together from /kgframes/kgslots), this returns
+        slots only and supports ordering.
+
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            frame_uri: Frame whose slots to return (required)
+            entity_uri: Owning entity URI, for scoping consistency
+            kg_slot_type: Optional slot type URI filter
+            sort_by: Property URI to order by, e.g.
+                http://vital.ai/ontology/haley-ai-kg#hasSlotSequence.
+                Unsequenced slots sort last in both directions.
+            sort_order: 'asc' or 'desc'
+            page_size: Number of slots per page
+            offset: Offset for pagination
+
+        Returns:
+            PaginatedGraphObjectResponse containing KGSlot GraphObjects
+
+        Raises:
+            VitalGraphClientError: If request fails
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, graph_id=graph_id, frame_uri=frame_uri)
+
+        try:
+            url = f"{self._get_server_url()}/api/graphs/kgentities/kgframes/kgslots"
+            params = build_query_params(
+                space_id=space_id, graph_id=graph_id, frame_uri=frame_uri,
+                entity_uri=entity_uri, kGSlotType=kg_slot_type,
+                sort_by=sort_by, sort_order=sort_order,
+                page_size=page_size, offset=offset,
+            )
+
+            response = await self._make_request('GET', url, params=params)
+            response_data = response.json()
+            objects = deserialize_response_to_graphobjects(
+                response_data, ClientWireFormat.JSON_QUADS, self.vs)
+            pagination = extract_pagination_from_json_quads(response_data)
+
+            return build_success_response(
+                PaginatedGraphObjectResponse, objects=objects,
+                status_code=response.status_code,
+                status=response_data.get('status'),
+                message=f"Retrieved {len(objects)} slots",
+                space_id=space_id, graph_id=graph_id, **pagination,
+                metadata={'object_types': count_object_types(objects)}
+            )
+        except VitalGraphClientError:
+            raise
+        except Exception as e:
+            logger.error(f"Error getting entity frame slots: {e}")
+            return build_error_response(
+                PaginatedGraphObjectResponse, error_code=1, error_message=str(e),
+                status_code=500
+            )
+
     # Frame-to-Frame Sub-Endpoint Operations
-    
+
     async def create_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, objects: List[GraphObject]) -> CreateEntityResponse:
         """
         Create child frames for a parent frame.

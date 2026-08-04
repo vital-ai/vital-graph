@@ -684,41 +684,18 @@ class GraphObjectRetriever:
         
         return await asyncio.to_thread(_bindings_to_objects, results)
 
-    async def list_objects(
-        self,
-        space_id: str,
-        graph_id: str,
-        type_uris: List[str],
-        property_filters: Optional[Dict[str, str]] = None,
-        include_materialized_edges: bool = False,
-        page_size: int = 100,
-        offset: int = 0,
-        search: Optional[str] = None,
-        include_count: bool = False
-    ) -> Tuple[List[tuple], int]:
+    def _build_subject_filters(self, type_uris: List[str],
+                               property_filters: Optional[Dict[str, str]] = None,
+                               search: Optional[str] = None) -> str:
+        """Build the WHERE body that selects candidate ?s subjects.
+
+        Extracted so list_objects and list_object_uris_sorted apply identical
+        type/property/search filtering — a divergence here would make a sorted
+        page disagree with its own count.
         """
-        List objects by type with optional property filters, pagination, and search.
-        
-        Args:
-            space_id: Space identifier
-            graph_id: Graph identifier (full URI)
-            type_uris: List of type URIs to filter by (UNION)
-            property_filters: Optional dict of property URI -> value URI pairs for additional filtering
-            include_materialized_edges: If False (default), exclude vg-direct:* predicates
-            page_size: Number of objects per page
-            offset: Number of objects to skip
-            search: Optional search text to filter by hasName or URI
-            include_count: If False (default), skip count query for performance; if True, return actual count
-            
-        Returns:
-            Tuple of (list of RDFLib triples, total count or -1 if include_count=False)
-        """
-        filter_clause = "" if include_materialized_edges else MaterializedPredicateConstants.get_filter_clause()
-        
         # Build type filter using UNION (using rdf:type)
         type_filters = " UNION ".join([f"{{ ?s a <{type_uri}> . }}" for type_uri in type_uris])
-        
-        # Build property filters
+
         property_filter_clauses = []
         if property_filters:
             for prop_uri, value_uri in property_filters.items():
@@ -761,6 +738,119 @@ class GraphObjectRetriever:
             {type_filters}
             {all_filters}
         """
+        return subquery_filter
+
+    async def list_object_uris_sorted(
+        self,
+        space_id: str,
+        graph_id: str,
+        type_uris: List[str],
+        sort_by: str,
+        sort_order: str = "asc",
+        property_filters: Optional[Dict[str, str]] = None,
+        page_size: int = 100,
+        offset: int = 0,
+        search: Optional[str] = None,
+    ) -> Tuple[List[str], int]:
+        """Return one page of subject URIs ordered by ``sort_by``, plus the total.
+
+        Separate from list_objects on purpose: list_objects is shared by several
+        endpoints, its outer query re-sorts by ?s, and it has a fast path that
+        pages by subject_uuid. Both would discard a requested ordering. Callers
+        pair this with get_objects_by_uris and then reorder the resulting
+        objects (see KGSparqlUtils.reorder_to_match).
+
+        Sequence-style properties get the numeric / unsequenced-last construct;
+        see KGSparqlUtils.build_sort_clauses.
+        """
+        from .kg_sparql_utils import KGSparqlUtils
+
+        subquery_filter = self._build_subject_filters(type_uris, property_filters, search)
+        sort_patterns, sort_projection, order_clause = KGSparqlUtils.build_sort_clauses(
+            "?s", sort_by, sort_order)
+
+        # DISTINCT lives in the inner subselect with the sort keys projected;
+        # the ORDER BY sits outside it. An ORDER BY alongside a DISTINCT is
+        # dropped or errors depending on LIMIT.
+        query = f"""
+            PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
+            PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
+            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+            SELECT ?s WHERE {{
+                {{ SELECT DISTINCT ?s {sort_projection} WHERE {{
+                    GRAPH <{graph_id}> {{
+                        {subquery_filter}
+                        {sort_patterns}
+                    }}
+                }} }}
+            }}
+            {order_clause}
+            LIMIT {page_size}
+            OFFSET {offset}
+        """
+        results = await self.backend.execute_sparql_query(space_id, query)
+        if isinstance(results, dict):
+            results = results.get('results', {}).get('bindings', [])
+        uris = []
+        for row in results or []:
+            uri = (row.get('s') or {}).get('value')
+            if uri:
+                uris.append(uri)
+
+        count_query = f"""
+            PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
+            PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
+
+            SELECT (COUNT(DISTINCT ?s) AS ?count) WHERE {{
+                GRAPH <{graph_id}> {{
+                    {subquery_filter}
+                }}
+            }}
+        """
+        count_results = await self.backend.execute_sparql_query(space_id, count_query)
+        if isinstance(count_results, dict):
+            count_results = count_results.get('results', {}).get('bindings', [])
+        total_count = 0
+        if count_results:
+            try:
+                total_count = int((count_results[0].get('count') or {}).get('value', 0))
+            except (ValueError, TypeError, AttributeError, IndexError):
+                total_count = 0
+
+        return uris, total_count
+
+    async def list_objects(
+        self,
+        space_id: str,
+        graph_id: str,
+        type_uris: List[str],
+        property_filters: Optional[Dict[str, str]] = None,
+        include_materialized_edges: bool = False,
+        page_size: int = 100,
+        offset: int = 0,
+        search: Optional[str] = None,
+        include_count: bool = False
+    ) -> Tuple[List[tuple], int]:
+        """
+        List objects by type with optional property filters, pagination, and search.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier (full URI)
+            type_uris: List of type URIs to filter by (UNION)
+            property_filters: Optional dict of property URI -> value URI pairs for additional filtering
+            include_materialized_edges: If False (default), exclude vg-direct:* predicates
+            page_size: Number of objects per page
+            offset: Number of objects to skip
+            search: Optional search text to filter by hasName or URI
+            include_count: If False (default), skip count query for performance; if True, return actual count
+            
+        Returns:
+            Tuple of (list of RDFLib triples, total count or -1 if include_count=False)
+        """
+        filter_clause = "" if include_materialized_edges else MaterializedPredicateConstants.get_filter_clause()
+        subquery_filter = self._build_subject_filters(type_uris, property_filters, search)
         
         # --- Fast default path: page by subject_uuid instead of ORDER BY ?s ---
         # Engages only for the plain type-only listing (no property/search

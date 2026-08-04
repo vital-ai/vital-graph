@@ -26,8 +26,43 @@ _FILTERABLE_FRAME_PROPERTIES = {
     "http://vital.ai/ontology/vital-aimp#hasObjectStatusType":            "uri",
 }
 
-# Allowed property URIs for frame sort (derived from registry)
-_FRAME_SORT_PROPERTIES = set(_FILTERABLE_FRAME_PROPERTIES.keys())
+# Sequence properties are sortable but NOT filterable: they are integers, and
+# _FRAME_OPERATORS_BY_DATATYPE has no integer operator set.  Keeping them out of
+# the filterable registry avoids implying a filtering capability that does not
+# exist.
+_FRAME_SEQUENCE_PROPERTY = "http://vital.ai/ontology/haley-ai-kg#hasFrameSequence"
+_SLOT_SEQUENCE_PROPERTY = "http://vital.ai/ontology/haley-ai-kg#hasSlotSequence"
+
+# Allowed property URIs for frame sort (registry + sequence)
+_FRAME_SORT_PROPERTIES = set(_FILTERABLE_FRAME_PROPERTIES.keys()) | {
+    _FRAME_SEQUENCE_PROPERTY,
+}
+
+# Allowed property URIs for slot sort.  Slots have no filterable registry of
+# their own, so this is declared directly.
+_SLOT_SORT_PROPERTIES = {
+    _SLOT_SEQUENCE_PROPERTY,
+    "http://vital.ai/ontology/vital-core#hasName",
+    "http://vital.ai/ontology/haley-ai-kg#hasKGSlotType",
+    "http://vital.ai/ontology/vital#hasObjectModificationDateTime",
+}
+
+
+def validate_sort_params(sort_by: Optional[str], sort_order: str,
+                         allowed: set, label: str = "sort_by") -> Optional[str]:
+    """Return an error message if the sort params are invalid, else None.
+
+    Callers turn this into an INVALID_REQUEST body with HTTP 200 — validation
+    failures are domain outcomes in this codebase, not transport errors.
+    """
+    if sort_by and sort_by not in allowed:
+        return (f"{label} '{sort_by}' is not a sortable property. "
+                f"Allowed: {', '.join(sorted(allowed))}")
+    if str(sort_order).lower() not in ("asc", "desc"):
+        order_label = "slot_sort_order" if label.startswith("slot") else "sort_order"
+        return f"{order_label} must be 'asc' or 'desc'"
+    return None
+
 
 # Valid operators per datatype (shared with entities)
 _FRAME_OPERATORS_BY_DATATYPE = {

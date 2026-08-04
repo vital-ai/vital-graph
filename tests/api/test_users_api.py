@@ -217,7 +217,12 @@ class TestPasswordChange:
             os.environ["VITALGRAPH_CLIENT_ENVIRONMENT"] = "test"
             os.environ["TEST_CLIENT_AUTH_USERNAME"] = uc.username
             os.environ["TEST_CLIENT_AUTH_PASSWORD"] = uc.password
-            os.environ["TEST_CLIENT_SERVER_URL"] = "http://localhost:8001"
+            # Must follow the suite's server, not a hardcoded one: the user was
+            # just created on SERVER_URL, so logging in anywhere else 401s.
+            # Hardcoding :8001 made this fail whenever the suite ran against
+            # the vg-test stack on :8002.
+            from .conftest import SERVER_URL
+            os.environ["TEST_CLIENT_SERVER_URL"] = SERVER_URL
 
             user_config = VitalGraphClientConfig()
             user_client = VitalGraphClient(config=user_config)

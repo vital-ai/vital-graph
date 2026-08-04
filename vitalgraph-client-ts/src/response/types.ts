@@ -96,6 +96,15 @@ export interface PaginatedGraphObjectResponse extends GraphObjectResponse {
   has_more: boolean;
   entity_type_uri?: string;
   search?: string;
+  /**
+   * Frame URI → slot count, present only when requested via
+   * `includeSlotCounts` on KGEntitiesEndpoint.getFrames.
+   *
+   * A frame with zero slots is OMITTED — read a missing key as 0, not as
+   * unknown. Lets a caller decide whether a frame needs slot pagination
+   * without fetching its slots.
+   */
+  slot_counts?: Record<string, number>;
 }
 
 // ============================================================================

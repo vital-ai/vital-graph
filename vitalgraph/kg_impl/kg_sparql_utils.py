@@ -14,6 +14,17 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 
+# Concrete KG entity classes. A UNION over these is preferable to matching the
+# type's text: prune_union removes branches for classes absent from the space,
+# so unused subtypes cost nothing in the emitted SQL.
+KG_ENTITY_CLASS_URIS = (
+    "http://vital.ai/ontology/haley-ai-kg#KGEntity",
+    "http://vital.ai/ontology/haley-ai-kg#KGNewsEntity",
+    "http://vital.ai/ontology/haley-ai-kg#KGProductEntity",
+    "http://vital.ai/ontology/haley-ai-kg#KGWebEntity",
+)
+
+
 class KGSparqlUtils:
     """Utility class for common SPARQL operations and result processing."""
     
@@ -133,7 +144,111 @@ class KGSparqlUtils:
             str: SPARQL pagination clause
         """
         return f"LIMIT {page_size} OFFSET {offset}"
-    
+
+    # Sequence properties are integers and need the numeric ordering construct
+    # below; every other sortable property uses a plain lexical sort.
+    SEQUENCE_PROPERTIES = frozenset({
+        "http://vital.ai/ontology/haley-ai-kg#hasFrameSequence",
+        "http://vital.ai/ontology/haley-ai-kg#hasSlotSequence",
+        # KG relations have no dedicated sequence property; hasListIndex is
+        # inherited from VITAL_Edge and is the ordering key for them. Integer
+        # and sparsely populated, so it is exactly the sequence case.
+        "http://vital.ai/ontology/vital-core#hasListIndex",
+    })
+
+    @staticmethod
+    def reorder_to_match(objects: list, ordered_uris: list) -> list:
+        """Return ``objects`` in the order given by ``ordered_uris``.
+
+        Paging/sorting queries decide the order, but objects are typically
+        rebuilt from a second triple fetch that groups by its own order.
+        Without this, ORDER BY governs WHICH objects appear on a page but not
+        the order they appear IN — so sorting looks broken end to end while
+        every builder-level test passes.
+
+        Objects whose URI is absent from the list are appended, not dropped.
+        """
+        if not objects or not ordered_uris:
+            return objects
+        rank = {uri: i for i, uri in enumerate(ordered_uris)}
+        tail = len(rank)
+        return sorted(objects,
+                      key=lambda o: rank.get(str(getattr(o, "URI", "")), tail))
+
+    @staticmethod
+    def build_sort_clauses(anchor_var: str, sort_by: Optional[str],
+                           sort_order: str = "asc",
+                           var_prefix: str = "sort") -> tuple:
+        """Build the WHERE patterns, projection and ORDER BY for a sorted page.
+
+        Returns ``(patterns, projection, order_clause)``.
+
+        The caller MUST emit the subquery shape below — an ORDER BY that sits
+        in the same SELECT as a DISTINCT is silently DROPPED by the backend,
+        which then returns subject/URI order while looking like it sorted:
+
+            SELECT ?anchor WHERE {
+                { SELECT DISTINCT ?anchor <projection> WHERE {
+                      GRAPH <...> {
+                          ... <patterns> ...
+                      }
+                } }
+            }
+            <order_clause>
+            LIMIT n OFFSET m
+
+        ``patterns`` must go INSIDE the GRAPH block (they match against the
+        anchor's graph); ``projection`` must be added to the inner DISTINCT
+        SELECT so the sort keys survive to the outer ORDER BY.
+
+        Ordering contract (see
+        planning/planning_sequence/frame_slot_sequence_sort_paging_plan.md):
+
+          - subjects WITH the sort property sort by it;
+          - subjects WITHOUT it sort last — in BOTH directions;
+          - the anchor variable tiebreaks, giving a total order so that
+            offset paging is stable.
+
+        For sequence properties the value is an xsd:integer, and two extra
+        keys are needed because of how the backend compiles ORDER BY:
+
+          - ``xsd:integer(...)`` via BIND puts the sort key in the numeric
+            lane.  A bare ``ORDER BY ?seq`` resolves to the lexical column and
+            orders 1,10,11,12,2,... instead of 1..12.
+          - ``IF(BOUND(?v), 0, 1)`` as the LEADING key keeps unsequenced
+            subjects last in both directions.  PostgreSQL defaults to NULLS
+            LAST on ASC but NULLS FIRST on DESC, and SPARQL has no NULLS LAST
+            syntax to override it.  BOUND() (not a truthiness test) is
+            required because sequence 0 is a legitimate value, commonly used
+            for singletons.
+
+        Callers must declare the xsd prefix when sorting on a sequence
+        property.
+        """
+        anchor = anchor_var.lstrip("?")
+        if not sort_by:
+            return "", "", f"ORDER BY ?{anchor}"
+
+        direction = "DESC" if str(sort_order).lower() == "desc" else "ASC"
+        val_var = f"{var_prefix}_val"
+
+        if sort_by in KGSparqlUtils.SEQUENCE_PROPERTIES:
+            missing_var = f"{var_prefix}_missing"
+            num_var = f"{var_prefix}_num"
+            patterns = (
+                f"OPTIONAL {{ ?{anchor} <{sort_by}> ?{val_var} . }}\n"
+                f"                BIND(IF(BOUND(?{val_var}), 0, 1) AS ?{missing_var})\n"
+                f"                BIND(xsd:integer(?{val_var}) AS ?{num_var})"
+            )
+            order_term = (f"?{num_var}" if direction == "ASC"
+                          else f"DESC(?{num_var})")
+            return (patterns, f"?{missing_var} ?{num_var}",
+                    f"ORDER BY ?{missing_var} {order_term} ?{anchor}")
+
+        patterns = f"OPTIONAL {{ ?{anchor} <{sort_by}> ?{val_var} . }}"
+        order_term = f"?{val_var}" if direction == "ASC" else f"DESC(?{val_var})"
+        return patterns, f"?{val_var}", f"ORDER BY {order_term} ?{anchor}"
+
     @staticmethod
     def build_graph_clause(graph_id: str) -> str:
         """
@@ -199,6 +314,7 @@ class KGSparqlUtils:
         PREFIX vital: <http://vital.ai/ontology/vital-core#>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
         """
     
     @staticmethod
@@ -653,10 +769,14 @@ class KGSparqlQueryBuilder:
         if entity_type_uri:
             entity_filter = f"?entity a {self.utils.build_uri_reference(entity_type_uri)} ."
         else:
-            entity_filter = """
-            ?entity a ?entityType .
-            FILTER(STRSTARTS(STR(?entityType), "http://vital.ai/ontology/haley-ai-kg#KG") && STRENDS(STR(?entityType), "Entity"))
-            """
+            # UNION over the concrete KG entity classes rather than
+            # `?entity a ?entityType` + STRSTARTS/STRENDS. The string form
+            # joined every entity to its type and then filtered on the type's
+            # text; this matches the classes directly, and prune_union drops
+            # the branches whose class does not exist in the space before SQL
+            # emission — this is the exact case its docstring cites.
+            entity_filter = " UNION ".join(
+                f"{{ ?entity a <{uri}> . }}" for uri in KG_ENTITY_CLASS_URIS)
         
         # Build search filter
         search_filter = ""

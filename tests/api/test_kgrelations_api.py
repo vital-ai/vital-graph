@@ -141,3 +141,98 @@ class TestKGRelationsCrud:
         # Should return empty or failure
         if get_resp.is_success:
             assert len(get_resp.objects) == 0
+
+
+class TestRelationSorting:
+    """GET /kgrelations sort_by — ordering by hasListIndex (step 6).
+
+    KG relations have no dedicated sequence property; hasListIndex is inherited
+    from VITAL_Edge and is the ordering key. List index is deliberately the
+    REVERSE of relation URI order so an ignored ORDER BY, a lexical sort, or an
+    order lost while rebuilding objects from triples all show up.
+    """
+
+    LIST_INDEX = "http://vital.ai/ontology/vital-core#hasListIndex"
+    N = 12  # spans the 1..12 lexical trap: "10" < "9" as text
+
+    async def _seed(self, vg_client, test_space, test_graph):
+        ns = f"{NS}sort_{uuid.uuid4().hex[:8]}/"
+        src = _make_entity("Rel Sort Source")
+        dst = _make_entity("Rel Sort Dest")
+        objs = [src, dst]
+        for i in range(1, self.N + 1):
+            r = Edge_hasKGRelation()
+            r.URI = f"{ns}r{i:02d}"
+            r.edgeSource = str(src.URI)
+            r.edgeDestination = str(dst.URI)
+            r.listIndex = self.N + 1 - i          # r01→12 … r12→1
+            objs.append(r)
+        cr = await vg_client.kgentities.create_kgentities(
+            space_id=test_space, graph_id=test_graph, objects=objs)
+        assert cr.is_success, cr.error_message
+        return ns
+
+    async def _list(self, vg_client, test_space, test_graph, ns, **kw):
+        r = await vg_client.kgrelations.list_relations(
+            space_id=test_space, graph_id=test_graph, page_size=1000, **kw)
+        assert r.is_success, r.error_message
+        return [str(o.URI).rsplit("/", 1)[-1]
+                for o in (r.objects or []) if str(o.URI).startswith(ns)]
+
+    async def test_sort_by_list_index_ascending(self, vg_client, test_space, test_graph):
+        """List index 1..12 — the exact reverse of URI order, and numeric."""
+        ns = await self._seed(vg_client, test_space, test_graph)
+        got = await self._list(vg_client, test_space, test_graph, ns,
+                               sort_by=self.LIST_INDEX, sort_order="asc")
+        assert got == [f"r{i:02d}" for i in range(self.N, 0, -1)], got
+
+    async def test_sort_by_list_index_descending(self, vg_client, test_space, test_graph):
+        ns = await self._seed(vg_client, test_space, test_graph)
+        got = await self._list(vg_client, test_space, test_graph, ns,
+                               sort_by=self.LIST_INDEX, sort_order="desc")
+        assert got == [f"r{i:02d}" for i in range(1, self.N + 1)], got
+
+    async def test_sorted_paging_partitions_relations(
+        self, vg_client, test_space, test_graph
+    ):
+        """Concatenated pages equal the unpaged order, each relation once."""
+        ns = await self._seed(vg_client, test_space, test_graph)
+        expected = await self._list(vg_client, test_space, test_graph, ns,
+                                    sort_by=self.LIST_INDEX, sort_order="asc")
+        assert len(expected) == self.N
+
+        first = await vg_client.kgrelations.list_relations(
+            space_id=test_space, graph_id=test_graph, page_size=1,
+            sort_by=self.LIST_INDEX, sort_order="asc")
+        total = first.total_count
+
+        page_size = 5
+        seen = []
+        for offset in range(0, total + page_size, page_size):
+            r = await vg_client.kgrelations.list_relations(
+                space_id=test_space, graph_id=test_graph,
+                page_size=page_size, offset=offset,
+                sort_by=self.LIST_INDEX, sort_order="asc")
+            assert r.is_success
+            seen.extend(str(o.URI).rsplit("/", 1)[-1]
+                        for o in (r.objects or []) if str(o.URI).startswith(ns))
+
+        assert seen == expected, f"paged {seen} != unpaged {expected}"
+        assert len(set(seen)) == self.N
+
+    async def test_unsorted_listing_still_works(self, vg_client, test_space, test_graph):
+        """Omitting sort_by must leave the existing (fast) path untouched."""
+        ns = await self._seed(vg_client, test_space, test_graph)
+        got = await self._list(vg_client, test_space, test_graph, ns)
+        assert len(got) == self.N, got
+
+    async def test_invalid_sort_by_is_a_domain_outcome(
+        self, vg_client, test_space, test_graph
+    ):
+        """Unknown sort property → INVALID_REQUEST body, still HTTP 200."""
+        await self._seed(vg_client, test_space, test_graph)
+        r = await vg_client.kgrelations.list_relations(
+            space_id=test_space, graph_id=test_graph,
+            sort_by="http://example.org/not-sortable")
+        assert r.status_code == 200, r.status_code
+        assert r.status == "invalid_request", r.status

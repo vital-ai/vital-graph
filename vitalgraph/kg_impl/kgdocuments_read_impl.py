@@ -155,8 +155,10 @@ class KGDocumentsReadProcessor:
         """
         List all segments for a given parent/original document URI.
 
-        Finds segments by URI prefix pattern ({parent_uri}_seg_*) and
-        returns them ordered by segment index.
+        Finds segments by traversing Edge_hasKGDocumentSegment — never by URI
+        shape — and returns them ordered by segment index. Accepts either the
+        original document URI (two hops: original → parent copy → segments) or
+        a parent copy URI (one hop).
 
         Args:
             backend: Backend adapter instance

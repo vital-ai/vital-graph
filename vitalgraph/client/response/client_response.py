@@ -179,8 +179,16 @@ class FrameGraphResponse(VitalGraphResponse):
 
 
 class FrameResponse(GraphObjectResponse):
-    """Response for single frame operations (without graph)."""
-    pass
+    """Response for frame list/single operations (without graph)."""
+
+    slot_counts: Optional[Dict[str, int]] = Field(
+        default=None,
+        description=(
+            "Frame URI -> slot count for the returned page. Present only when "
+            "requested via include_slot_counts. A frame with zero slots is "
+            "reported as 0, not omitted."
+        ),
+    )
 
 
 class MultiEntityGraphResponse(VitalGraphResponse):
@@ -749,10 +757,18 @@ class KGDocumentDeleteResponse(VitalGraphResponse):
     deleted: bool = Field(False, description="Whether documents were deleted")
     deleted_count: int = Field(0, description="Number of documents deleted")
     deleted_uris: List[str] = Field(default_factory=list, description="URIs of deleted documents")
-    
+
     @property
     def is_success(self) -> bool:
-        """Check if operation was successful."""
+        """Check if operation was successful.
+
+        Defers to the base implementation when the server supplied a domain
+        `status`, so an HTTP 200 carrying status=invalid_request (e.g. managed
+        segment delete protection) is not reported as a success. Only falls
+        back to the `deleted` flag when no status is present.
+        """
+        if self.status is not None:
+            return super().is_success
         return self.deleted and not self.error_code
 
 

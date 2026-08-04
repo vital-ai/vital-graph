@@ -1473,6 +1473,26 @@ class VitalGraphClient(VitalGraphClientInterface):
             FramesResponse containing KGFrames with slots data and pagination info
         """
         return await self.kgframes.get_kgframes_with_slots(space_id, graph_id, page_size, offset, search)
+
+    async def get_entity_frame_slots(self, space_id: str, graph_id: str, frame_uri: str,
+                                     entity_uri: Optional[str] = None,
+                                     kg_slot_type: Optional[str] = None,
+                                     sort_by: Optional[str] = None,
+                                     sort_order: str = "asc",
+                                     page_size: int = 10,
+                                     offset: int = 0) -> PaginatedGraphObjectResponse:
+        """
+        Get the slots of one frame, sorted and paged.
+
+        Counterpart to get_kgentity_frames — page an entity's frames, then page
+        each frame's slots. sort_by takes a property URI such as
+        haley-ai-kg#hasSlotSequence; unsequenced slots sort last either way.
+        """
+        return await self.kgframes.get_entity_frame_slots(
+            space_id=space_id, graph_id=graph_id, frame_uri=frame_uri,
+            entity_uri=entity_uri, kg_slot_type=kg_slot_type,
+            sort_by=sort_by, sort_order=sort_order,
+            page_size=page_size, offset=offset)
     
     async def create_kgframes_with_slots(self, space_id: str, graph_id: str, objects: List) -> CreateEntityResponse:
         """
@@ -1604,11 +1624,13 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgentities.delete_kgentities_batch(space_id, graph_id, uri_list)
     
-    async def get_kgentity_frames(self, space_id: str, graph_id: str, entity_uri: Optional[str] = None, 
-                           page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> Dict[str, Any]:
+    async def get_kgentity_frames(self, space_id: str, graph_id: str, entity_uri: Optional[str] = None,
+                           page_size: int = 10, offset: int = 0, search: Optional[str] = None,
+                           sort_by: Optional[str] = None, sort_order: str = "asc",
+                           include_slot_counts: bool = False) -> Dict[str, Any]:
         """
         Get frames associated with KGEntities.
-        
+
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
@@ -1616,11 +1638,21 @@ class VitalGraphClient(VitalGraphClientInterface):
             page_size: Number of items per page
             offset: Offset for pagination
             search: Optional search term
-            
+            sort_by: Optional property URI to order frames by, e.g.
+                haley-ai-kg#hasFrameSequence
+            sort_order: 'asc' or 'desc'
+
         Returns:
             Dictionary containing entity frames data and pagination info
         """
-        return await self.kgentities.get_kgentity_frames(space_id, graph_id, entity_uri, page_size, offset, search)
+        # Keyword args are required here: the endpoint signature has
+        # frame_uris/parent_frame_uri between entity_uri and page_size, so a
+        # positional call silently passed page_size as frame_uris.
+        return await self.kgentities.get_kgentity_frames(
+            space_id=space_id, graph_id=graph_id, entity_uri=entity_uri,
+            page_size=page_size, offset=offset, search=search,
+            sort_by=sort_by, sort_order=sort_order,
+            include_slot_counts=include_slot_counts)
     
     # Object CRUD Methods - Delegated to ObjectsEndpoint
     

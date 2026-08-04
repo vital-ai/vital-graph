@@ -10,7 +10,7 @@ Term encoding follows standard N-Quads rules:
   - Blank nodes:           _:b1
 """
 
-from typing import List, Optional
+from typing import List, Optional, Dict
 from pydantic import BaseModel, Field
 
 from .result_status import ResultStatus, OperationStatus
@@ -47,3 +47,14 @@ class QuadResponse(QuadResultsResponse):
     """JSON Quads response envelope — paginated list results."""
     page_size: int = Field(description="Number of results per page")
     offset: int = Field(description="Offset into the result set")
+    slot_counts: Optional[Dict[str, int]] = Field(
+        None,
+        description=(
+            "Frame URI → number of slots, present only when the caller asks "
+            "for it (include_slot_counts=true on GET /kgentities/kgframes). "
+            "Lets a client decide whether a frame needs slot pagination "
+            "WITHOUT fetching its slots. A frame with zero slots is omitted "
+            "from the map — treat a missing key as 0, not as unknown. Kept out "
+            "of the quad stream because the count is derived, not a triple."
+        ),
+    )

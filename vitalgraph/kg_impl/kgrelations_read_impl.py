@@ -36,7 +36,9 @@ class KGRelationsReadProcessor:
                            relation_type_uri: Optional[str] = None,
                            direction: str = "outgoing",
                            page_size: int = 100,
-                           offset: int = 0) -> Tuple[List[Tuple], int]:
+                           offset: int = 0,
+                           sort_by: Optional[str] = None,
+                           sort_order: str = "asc") -> Tuple[List[Tuple], int, List[str]]:
         """
         List KG Relations with filtering and pagination.
         
@@ -50,8 +52,15 @@ class KGRelationsReadProcessor:
             page_size: Number of relations per page
             offset: Number of relations to skip
             
+            sort_by: Optional property URI to order by, e.g.
+                vital-core#hasListIndex. Relations without the property sort
+                last, in both directions.
+            sort_order: 'asc' or 'desc'
+
         Returns:
-            Tuple[List[Tuple], int]: (List of RDFLib triples, total count)
+            Tuple of (RDFLib triples, total count, ordered relation URIs).
+            The URI list is empty when no sort was requested; callers use it to
+            restore ordering after rebuilding objects from triples.
         """
         try:
             self.logger.info(f"Listing KG Relations (page_size: {page_size}, offset: {offset})")
@@ -76,6 +85,32 @@ class KGRelationsReadProcessor:
             if direction != "outgoing":
                 self.logger.warning(f"Direction filter '{direction}' not yet supported in centralized retriever, using 'outgoing'")
             
+            if sort_by:
+                # Sorted path: page ordered subject URIs first, then fetch their
+                # triples. list_objects cannot be used here — its outer query
+                # re-sorts by ?s and its fast path pages by subject_uuid, either
+                # of which discards the requested order.
+                ordered_uris, total_count = await self.retriever.list_object_uris_sorted(
+                    space_id, graph_id, type_uris,
+                    sort_by=sort_by, sort_order=sort_order,
+                    property_filters=property_filters if property_filters else None,
+                    page_size=page_size, offset=offset,
+                )
+                triples = []
+                if ordered_uris:
+                    # get_objects_by_uris returns Dict[subject_uri, triples],
+                    # not a flat list. Flatten in page order so the triples
+                    # themselves already follow the requested ordering.
+                    grouped = await self.retriever.get_objects_by_uris(
+                        space_id, graph_id, ordered_uris,
+                        include_materialized_edges=False,
+                    )
+                    for uri in ordered_uris:
+                        triples.extend(grouped.get(uri, []))
+                self.logger.info(
+                    f"✅ Listed {len(ordered_uris)} sorted relations (total: {total_count})")
+                return triples, total_count, ordered_uris
+
             # Use centralized retriever (filters OUT materialized edges by default)
             triples, total_count = await self.retriever.list_objects(
                 space_id, graph_id, type_uris,
@@ -87,7 +122,7 @@ class KGRelationsReadProcessor:
             )
             
             self.logger.info(f"✅ Listed {len(triples)} relation RDFLib triples (total: {total_count})")
-            return triples, total_count
+            return triples, total_count, []
             
         except Exception as e:
             self.logger.error(f"❌ Failed to list KG Relations: {e}")

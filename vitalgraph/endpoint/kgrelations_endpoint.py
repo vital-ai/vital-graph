@@ -76,6 +76,8 @@ class KGRelationsEndpoint:
             direction: str = Query("all", description="Direction filter: all, incoming, outgoing"),
             page_size: int = Query(10, ge=1, le=1000, description="Number of relations per page"),
             offset: int = Query(0, ge=0, description="Offset for pagination"),
+            sort_by: Optional[str] = Query(None, description="Property URI to sort relations by (e.g. vital-core:hasListIndex). Must be an allowed sortable property."),
+            sort_order: str = Query("asc", description="Sort order: 'asc' or 'desc'"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """
@@ -94,18 +96,30 @@ class KGRelationsEndpoint:
                 direction: Direction filter (all, incoming, outgoing)
                 page_size: Number of relations per page
                 offset: Offset for pagination
-                
+                sort_by: Optional property URI to order by. hasListIndex orders
+                    relations numerically with unindexed relations last.
+                sort_order: 'asc' or 'desc'
+
             Returns:
                 RelationResponse (if relation_uri provided) or RelationsResponse (for list)
             """
             require_space_read(current_user, space_id)
             if relation_uri:
                 return await self._get_relation(space_id, graph_id, relation_uri, current_user)
-            else:
-                return await self._list_relations(
-                    space_id, graph_id, entity_source_uri, entity_destination_uri,
-                    relation_type_uri, direction, page_size, offset, current_user
+
+            from ..model.kgrelations_model import _RELATION_SORT_PROPERTIES
+            from ..model.kgframes_model import validate_sort_params
+            err = validate_sort_params(sort_by, sort_order, _RELATION_SORT_PROPERTIES)
+            if err:
+                return QuadResponse(
+                    status=OperationStatus.INVALID_REQUEST, message=err,
+                    results=[], total_count=0, page_size=page_size, offset=offset,
                 )
+            return await self._list_relations(
+                space_id, graph_id, entity_source_uri, entity_destination_uri,
+                relation_type_uri, direction, page_size, offset, current_user,
+                sort_by=sort_by, sort_order=sort_order
+            )
         
         @self.router.post("/kgrelations", response_model=None, tags=["KG Relations"])
         async def create_or_update_relations(
@@ -172,7 +186,8 @@ class KGRelationsEndpoint:
     
     async def _list_relations(self, space_id: str, graph_id: str, entity_source_uri: Optional[str],
                             entity_destination_uri: Optional[str], relation_type_uri: Optional[str],
-                            direction: str, page_size: int, offset: int, current_user: Dict) -> QuadResponse:
+                            direction: str, page_size: int, offset: int, current_user: Dict,
+                            sort_by: Optional[str] = None, sort_order: str = "asc") -> QuadResponse:
         """List KG Relations with filtering and pagination."""
         try:
             self.logger.info(f"Listing KG Relations in space {space_id}, graph {graph_id}")
@@ -189,15 +204,21 @@ class KGRelationsEndpoint:
             backend = create_backend_adapter(backend_impl)
             read_processor = KGRelationsReadProcessor(backend)
             
-            triples, total_count = await read_processor.list_relations(
+            triples, total_count, ordered_uris = await read_processor.list_relations(
                 space_id, graph_id, entity_source_uri, entity_destination_uri,
-                relation_type_uri, direction, page_size, offset
+                relation_type_uri, direction, page_size, offset,
+                sort_by=sort_by, sort_order=sort_order
             )
             
             if triples:
                 from vital_ai_vitalsigns.vitalsigns import VitalSigns
                 vs = VitalSigns()
                 graph_objects = await asyncio.to_thread(vs.from_triples_list, triples)
+                # from_triples_list groups by its own order, discarding the page
+                # ordering. Restore it or sort_by has no visible effect.
+                if ordered_uris:
+                    from ..kg_impl.kg_sparql_utils import KGSparqlUtils
+                    graph_objects = KGSparqlUtils.reorder_to_match(graph_objects, ordered_uris)
             else:
                 graph_objects = []
             
@@ -397,13 +418,19 @@ class KGRelationsEndpoint:
             # Execute query via backend interface
             results = await backend.execute_sparql_query(space_id, sparql_query)
             
-            # Extract relation URIs from results
+            # Extract relation URIs from results. The query now de-duplicates
+            # with DISTINCT *before* the LIMIT; the check below is a harmless
+            # backstop and no longer shrinks the page.
+            # Handles both binding shapes — the backend returns results.bindings.
             relation_uris = []
-            if results and results.get("bindings"):
-                for binding in results["bindings"]:
-                    relation_uri = binding.get("relation", {}).get("value", "")
-                    if relation_uri and relation_uri not in relation_uris:
-                        relation_uris.append(relation_uri)
+            bindings = []
+            if results:
+                bindings = (results.get("bindings")
+                            or results.get("results", {}).get("bindings") or [])
+            for binding in bindings:
+                relation_uri = binding.get("relation", {}).get("value", "")
+                if relation_uri and relation_uri not in relation_uris:
+                    relation_uris.append(relation_uri)
             
             # For now, use the actual count as total_count
             total_count = len(relation_uris)
@@ -501,19 +528,35 @@ class KGRelationsEndpoint:
         """
     
     def _build_query_relations_sparql(self, graph_id: str, criteria, page_size: int, offset: int) -> str:
-        """Build SPARQL query from relation query criteria."""
-        # TODO: Implement based on criteria parameters
+        """Build SPARQL query from relation query criteria.
+
+        DISTINCT + ORDER BY are both required, and both were missing:
+        - without DISTINCT a relation matching several times was returned more
+          than once, and the caller de-duplicated AFTER the LIMIT, so a page of
+          N could yield fewer than N rows for no visible reason;
+        - without ORDER BY the LIMIT/OFFSET paged an unordered set, so pages
+          could repeat or skip relations.
+
+        The DISTINCT sits in an inner subselect with the ORDER BY outside it —
+        an ORDER BY alongside a DISTINCT is dropped or errors depending on LIMIT.
+
+        TODO: criteria (source/destination/type/direction/search) are still not
+        applied here; this returns all relations in the graph.
+        """
         return f"""
         PREFIX haley: <{self.haley_prefix}>
         PREFIX vital: <{self.vital_prefix}>
-        
+
         SELECT ?relation WHERE {{
-            GRAPH <{graph_id}> {{
-                ?relation a haley:Edge_hasKGRelation ;
-                         vital:hasEdgeSource ?source ;
-                         vital:hasEdgeDestination ?destination .
-            }}
+            {{ SELECT DISTINCT ?relation WHERE {{
+                GRAPH <{graph_id}> {{
+                    ?relation a haley:Edge_hasKGRelation ;
+                             vital:hasEdgeSource ?source ;
+                             vital:hasEdgeDestination ?destination .
+                }}
+            }} }}
         }}
+        ORDER BY ?relation
         LIMIT {page_size}
         OFFSET {offset}
         """

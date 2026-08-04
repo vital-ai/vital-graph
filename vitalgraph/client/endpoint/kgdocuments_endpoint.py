@@ -29,6 +29,7 @@ from ..response.client_response import (
     SegmentationConfigClientResponse,
     SegmentationConfigListClientResponse,
     SegmentationConfigDeleteClientResponse,
+    _SUCCESS_STATUS_VALUES,
 )
 from ..response.response_builder import build_success_response, build_error_response
 
@@ -376,14 +377,22 @@ class KGDocumentsEndpoint(BaseEndpoint):
             response = await self._make_authenticated_request('DELETE', url, params=params)
             response_data = response.json()
 
+            # Domain outcomes arrive as HTTP 200 with the real result in the
+            # body, so the server's status decides whether anything was
+            # deleted. Reporting deleted=True unconditionally made a rejected
+            # delete (e.g. managed segment protection) look like a success and
+            # overwrote the server's explanation. See issues/026.
+            status = response_data.get('status')
+            deleted = status in _SUCCESS_STATUS_VALUES if status is not None else True
+
             return build_success_response(
                 KGDocumentDeleteResponse,
                 status_code=200,
-                status=response_data.get('status'),
-                message=f"Deleted KGDocument: {uri}",
-                deleted=True,
-                deleted_count=response_data.get('total_count', 1),
-                deleted_uris=[uri],
+                status=status,
+                message=response_data.get('message') or f"Deleted KGDocument: {uri}",
+                deleted=deleted,
+                deleted_count=response_data.get('total_count', 1 if deleted else 0),
+                deleted_uris=[uri] if deleted else [],
             )
 
         except VitalGraphClientError as e:

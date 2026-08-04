@@ -322,6 +322,16 @@ class VitalGraphClientInterface(ABC):
         pass
 
     @abstractmethod
+    async def get_entity_frame_slots(self, space_id: str, graph_id: str, frame_uri: str,
+                                     entity_uri: Optional[str] = None,
+                                     kg_slot_type: Optional[str] = None,
+                                     sort_by: Optional[str] = None,
+                                     sort_order: str = "asc",
+                                     page_size: int = 10, offset: int = 0):
+        """Get the slots of one frame, sorted and paged."""
+        pass
+
+    @abstractmethod
     async def create_kgframes_with_slots(self, space_id: str, graph_id: str, objects: List[GraphObject]):
         """Create KGFrames with their associated slots from GraphObjects."""
         pass
@@ -372,8 +382,15 @@ class VitalGraphClientInterface(ABC):
     @abstractmethod
     async def get_kgentity_frames(self, space_id: str, graph_id: str,
                                   entity_uri: Optional[str] = None, page_size: int = 10,
-                                  offset: int = 0, search: Optional[str] = None) -> Dict[str, Any]:
-        """Get frames associated with KGEntities."""
+                                  offset: int = 0, search: Optional[str] = None,
+                                  sort_by: Optional[str] = None,
+                                  sort_order: str = "asc",
+                                  include_slot_counts: bool = False) -> Dict[str, Any]:
+        """Get frames associated with KGEntities, optionally sorted.
+
+        sort_by takes a property URI (e.g. haley-ai-kg#hasFrameSequence);
+        sort_order is 'asc' or 'desc'.
+        """
         pass
 
     # Health / Diagnostics

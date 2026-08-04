@@ -88,7 +88,9 @@ class KGRelationsEndpoint(BaseEndpoint):
         relation_type_uri: Optional[str] = None,
         direction: str = "all",
         page_size: int = 10, 
-        offset: int = 0
+        offset: int = 0,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc"
     ) -> PaginatedGraphObjectResponse:
         """
         List KGRelations with pagination and enhanced filtering.
@@ -102,6 +104,10 @@ class KGRelationsEndpoint(BaseEndpoint):
             direction: Direction filter: "all", "incoming", "outgoing"
             page_size: Number of items per page
             offset: Offset for pagination
+            sort_by: Optional property URI to order by, e.g.
+                http://vital.ai/ontology/vital-core#hasListIndex. Relations
+                without the property sort last, in both directions.
+            sort_order: 'asc' or 'desc'
             
         Returns:
             PaginatedGraphObjectResponse with Edge_hasKGRelation objects
@@ -122,7 +128,9 @@ class KGRelationsEndpoint(BaseEndpoint):
                 relation_type_uri=relation_type_uri,
                 direction=direction,
                 page_size=page_size,
-                offset=offset
+                offset=offset,
+                sort_by=sort_by,
+                sort_order=sort_order
             )
             
             logger.debug(f"DEBUG list_relations params: {params}")

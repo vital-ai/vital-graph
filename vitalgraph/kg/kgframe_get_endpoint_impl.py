@@ -269,26 +269,12 @@ def get_single_frame_impl(endpoint_instance, space, graph_id: str, frame_uri: st
         endpoint_instance.logger.info(f"DEBUG _get_single_frame: Query returned {len(results.get('bindings', []))} results")
         
         if not results.get("bindings"):
-            # Frame not found - let's check if it exists with different URI format
-            if graph_id:
-                alt_query = f"""
-                SELECT ?subject ?predicate ?object WHERE {{
-                    GRAPH <{graph_id}> {{
-                        ?subject ?predicate ?object .
-                        FILTER(CONTAINS(STR(?subject), "KGFrame"))
-                    }}
-                }}
-                """
-            else:
-                alt_query = f"""
-                SELECT ?subject ?predicate ?object WHERE {{
-                    ?subject ?predicate ?object .
-                    FILTER(CONTAINS(STR(?subject), "KGFrame"))
-                }}
-                """
-            alt_results = endpoint_instance._execute_sparql_query(space, alt_query)
-            endpoint_instance.logger.info(f"DEBUG _get_single_frame: Alternative search found {len(alt_results.get('bindings', []))} frame-related triples")
-            
+            # Previously ran a diagnostic "alternative search" here that scanned
+            # every triple in the graph with FILTER(CONTAINS(STR(?subject),
+            # "KGFrame")) — matching a type by substring on the subject URI —
+            # logged the count, then returned [] regardless. Removed: it did no
+            # work the caller could use and was the last string-based type match
+            # in the codebase.
             return []
         
         # Reconstruct frame properties
