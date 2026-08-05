@@ -1,6 +1,53 @@
 # Test-Stack Data Accumulates Across Rebuilds; Registry Tombstones Unbounded
 
-## Status: OPEN
+## Status: FIXED (2026-08-05)
+
+All five items done. Items 1–3 were already in place; 4 and 5 completed here.
+
+### 4. Tombstone purge — low-level SQL, deliberately no REST path
+
+`EntityRegistryImpl.purge_deleted_entities(primary_name=None)` hard-deletes
+soft-deleted rows and returns the count. **Not exposed over HTTP**: destroying
+audit rows is a maintenance action, not something a caller should be able to
+trigger through the API.
+
+Two schema details it has to respect, both checked against the live database
+rather than assumed:
+
+- Most dependents are `ON DELETE CASCADE` (`entity_identifier`, `entity_alias`,
+  `entity_category_map`, `entity_location`, `entity_relationship`), but
+  **`entity_same_as` is `NO ACTION`** and blocks the delete, so its rows go
+  first — in both directions, since an entity can be either side.
+- `entity_change_log` is `ON DELETE SET NULL`, so the audit trail survives the
+  row. Left that way on purpose.
+
+### 5. `status=''` no longer means "include the graveyard"
+
+`search_entities` treated a falsy status as *no filter at all*, so an explicit
+empty status returned tombstones. It now applies `status != 'deleted'`.
+Tombstones remain reachable by asking for them by name (`status=deleted`) —
+otherwise nothing could audit or purge them.
+
+Measured against the live stack, which had 28 tombstones to 1 live row:
+
+| query | before | after |
+|---|---|---|
+| `status=''` | 29 (incl. 28 tombstones) | **1** |
+| `status=deleted` | 28 | 28 *(unchanged — still reachable)* |
+| `status=active` | 1 | 1 |
+
+This makes the e2e registry cleanup simpler rather than harder: it paged
+through tombstones looking for live rows precisely because they came back.
+
+### Verification
+
+`tests/integration/test_registry_tombstone_purge.py` — 7 tests. The purge ones
+check that a live entity sharing the name survives, that the row is *really*
+gone (asserted via `status=deleted`, which would still find it if it had merely
+been filtered out), that it is idempotent, and that it is a no-op with nothing
+to purge. The filter ones check all three status readings.
+
+2260 local tests and 511 `tests/api` pass against a rebuilt stack.
 
 ## Summary
 

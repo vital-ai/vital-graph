@@ -602,6 +602,58 @@ class EntityRegistryImpl(
     # ------------------------------------------------------------------
 
     @with_db_retry()
+    async def purge_deleted_entities(
+        self, primary_name: Optional[str] = None,
+    ) -> int:
+        """Permanently remove soft-deleted entities. Returns the row count.
+
+        Deliberately **not** exposed through the REST API — destroying audit
+        rows is a maintenance action, not something a caller should be able to
+        trigger over HTTP. Intended for test-stack hygiene and admin use.
+
+        ``delete_entity`` is a soft delete, so tombstones accumulate for the
+        life of the database — one per delete, forever, with no way to clear
+        them (issues/035 measured 426 against 2 live rows). Most dependent
+        tables are ``ON DELETE CASCADE``, but ``entity_same_as`` is
+        ``NO ACTION`` and will block the delete, so its rows go first.
+
+        ``entity_change_log`` is ``ON DELETE SET NULL`` and is left in place —
+        the audit trail outliving the row is the intended behaviour.
+
+        Args:
+            primary_name: purge only tombstones with this exact name; ``None``
+                purges every tombstone.
+        """
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                if primary_name is None:
+                    target = "SELECT entity_id FROM entity WHERE status = $1"
+                    args = [DELETED]
+                else:
+                    target = ("SELECT entity_id FROM entity "
+                              "WHERE status = $1 AND primary_name = $2")
+                    args = [DELETED, primary_name]
+
+                # entity_same_as does not cascade — clear both directions
+                # first or the delete below fails on the FK.
+                await conn.execute(
+                    f"DELETE FROM entity_same_as WHERE source_entity_id IN ({target}) "
+                    f"OR target_entity_id IN ({target})", *args)
+
+                result = await conn.execute(
+                    f"DELETE FROM entity WHERE entity_id IN ({target})", *args)
+
+        # asyncpg returns e.g. "DELETE 28"
+        try:
+            count = int(str(result).split()[-1])
+        except (ValueError, IndexError):
+            count = 0
+        logger.info(
+            "Purged %d soft-deleted entit%s%s", count,
+            "y" if count == 1 else "ies",
+            f" named {primary_name!r}" if primary_name else "")
+        return count
+
     async def search_entities(
         self,
         query: Optional[str] = None,
@@ -632,6 +684,16 @@ class EntityRegistryImpl(
             param_idx += 1
             conditions.append(f"e.status = ${param_idx}")
             params.append(status)
+        else:
+            # An explicit empty status means "no particular status", not
+            # "include the graveyard". Soft-deleted rows are excluded unless
+            # asked for by name (status='{DELETED}').
+            #
+            # The old reading — falsy status, no filter at all — is what made
+            # the e2e registry cleanup subtly wrong: it paged through
+            # tombstones looking for live rows, and once 20 tombstones preceded
+            # the live one, cleanup silently did nothing (issues/022, 035).
+            conditions.append(f"e.status != '{DELETED}'")
 
         if type_key:
             param_idx += 1

@@ -46,15 +46,18 @@ async function apiContext(): Promise<{ ctx: APIRequestContext; headers: Record<s
  *
  *  - The endpoint's page parameter is `page_size` (default 20, max 100), NOT
  *    `limit`. Passing `limit: 50` was ignored, so only 20 rows were ever seen.
- *  - Delete is a SOFT delete: the row stays and keeps matching the search with
- *    `status: 'deleted'`. Tombstones accumulate one per run, and once 20 of
- *    them precede the live row, the live row falls outside the first page —
- *    cleanup deletes nothing, and the next run's beforeAll adds a SECOND live
- *    entity with the same name. `getByText(SOURCE_NAME)` then hits two rows and
- *    fails strict mode. That is why this failure looked intermittent and then
- *    became permanent. See issues/022.
+ *  - Delete is a SOFT delete: the row stays with `status: 'deleted'`.
+ *    Tombstones used to keep matching this search, and once 20 of them
+ *    preceded the live row, the live row fell outside the first page — cleanup
+ *    deleted nothing, and the next run's beforeAll added a SECOND live entity
+ *    with the same name. `getByText(SOURCE_NAME)` then hit two rows and failed
+ *    strict mode. That is why the failure looked intermittent and then became
+ *    permanent. See issues/022.
  *
- * So: page through every result and skip rows that are already deleted.
+ *    `status: ''` now means "any status except deleted" rather than "literally
+ *    everything" (issues/035), so tombstones no longer come back here and the
+ *    skip below is belt-and-braces rather than load-bearing. Paging is kept:
+ *    genuine live duplicates can still exceed one page.
  */
 async function cleanup(targets: string[]) {
   const { ctx, headers } = await apiContext();
