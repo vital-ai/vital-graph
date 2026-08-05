@@ -236,9 +236,17 @@ test.describe('KG Frames sorting and paging', () => {
     for (let p = 0; p < pages; p++) {
       const expected = p === pages - 1 ? TOTAL - p * PAGE : PAGE;
       await expectRowCount(page, expected);
-      seen.push(...await visibleOrder(page));
+      const current = await visibleOrder(page);
+      seen.push(...current);
       if (p === pages - 1) break;
       await page.getByRole('button', { name: /next/i }).click();
+      // Wait for the FIRST row to change. Row count alone cannot detect the
+      // page turn — every full page has PAGE rows, so `expectRowCount` at the
+      // top of the next iteration passes instantly against the stale page and
+      // the same page gets collected twice. See issues/022.
+      await expect(async () => {
+        expect((await visibleOrder(page))[0]).not.toBe(current[0]);
+      }).toPass({ timeout: 20_000 });
     }
 
     expect(new Set(seen).size).toBe(seen.length);   // no frame on two pages

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Alert,
@@ -77,20 +78,26 @@ const FtsIndexes: React.FC = () => {
   }, []);
 
   // Load indexes when space changes
+  // Discard responses from superseded requests — see useLatestRequest.
+  const beginRequest = useLatestRequest();
+
   const loadIndexes = useCallback(async () => {
     if (!selectedSpace) return;
     setLoading(true);
     setError(null);
+    const isStale = beginRequest();
     try {
       const data = await searchFtsService.getFtsIndexes(selectedSpace);
+      if (isStale()) return;   // a newer request already answered
       setIndexes(data);
     } catch (err: unknown) {
+      if (isStale()) return;
       setError(err instanceof Error ? err.message : 'Failed to load FTS indexes');
       setIndexes([]);
     } finally {
-      setLoading(false);
+      if (!isStale()) setLoading(false);
     }
-  }, [selectedSpace]);
+  }, [selectedSpace, beginRequest]);
 
   useEffect(() => {
     loadIndexes();

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 import { useParams, useNavigate } from 'react-router-dom';
 import { apiService } from '../services/ApiService';
 import {
@@ -88,8 +89,13 @@ const KGEntities: React.FC = () => {
     setCurrentPage(1);
   }, [searchTerm]);
 
+
+  // Discard responses from superseded requests — see useLatestRequest.
+  const beginRequest = useLatestRequest();
+
   const fetchEntities = useCallback(async () => {
     if (!selectedSpace || !selectedGraph) return;
+    const isStale = beginRequest();
     try {
       setLoading(true);
       setError(null);
@@ -103,6 +109,7 @@ const KGEntities: React.FC = () => {
         sort_by: (sortBy && (committedSearch || entityTypeFilter)) ? sortBy : undefined,
         sort_order: (sortBy && (committedSearch || entityTypeFilter)) ? sortOrder : undefined,
       });
+      if (isStale()) return;   // a newer fetch already answered
       const quads: Quad[] = data.results || [];
       const grouped = parseEntitiesFromQuads(quads);
       const parsed: KGEntity[] = grouped.map(e => ({
@@ -115,12 +122,13 @@ const KGEntities: React.FC = () => {
       setEntities(parsed);
       setTotalCount(data.total_count ?? parsed.length);
     } catch {
+      if (isStale()) return;
       setError('Failed to load KG entities.');
       setEntities([]);
     } finally {
-      setLoading(false);
+      if (!isStale()) setLoading(false);
     }
-  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage, committedSearch, entityTypeFilter, sortBy, sortOrder]);
+  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage, committedSearch, entityTypeFilter, sortBy, sortOrder, beginRequest]);
 
   useEffect(() => { fetchEntities(); }, [fetchEntities]);
 

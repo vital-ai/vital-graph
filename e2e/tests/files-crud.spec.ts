@@ -25,7 +25,6 @@ const MEDIUM_CONTENT = crypto.randomBytes(MEDIUM_SIZE);
 const LARGE_SIZE = 1024 * 1024;
 const LARGE_CONTENT = crypto.randomBytes(LARGE_SIZE);
 
-const fileUris: string[] = [];
 
 /** Get auth headers. */
 async function getAuthHeaders() {
@@ -40,7 +39,7 @@ async function getAuthHeaders() {
 }
 
 /** Create a FileNode and return its URI. */
-async function createFileNode(name: string, filename: string): Promise<string> {
+async function createFileNode(track: string[], name: string, filename: string): Promise<string> {
   const { ctx, headers } = await getAuthHeaders();
   const fileUri = `urn:e2e:file:${filename}-${Date.now()}`;
   const createResp = await ctx.post('/api/files', {
@@ -57,7 +56,7 @@ async function createFileNode(name: string, filename: string): Promise<string> {
   expect(createResp.ok(), `Create file failed: ${await createResp.text()}`).toBeTruthy();
   const body = await createResp.json();
   const uri = body.created_uris?.[0] || fileUri;
-  fileUris.push(uri);
+  track.push(uri);
   await ctx.dispose();
   return uri;
 }
@@ -89,43 +88,46 @@ async function downloadContent(uri: string): Promise<Buffer> {
   return buf;
 }
 
-/** Cleanup all tracked file URIs. */
-async function cleanupAll() {
+/**
+ * Delete this block's own files.
+ *
+ * `graph_id` is REQUIRED or the delete finds nothing: the endpoint returns
+ * success:true / status:"no_op" ("File node not found") and deletes nothing, so
+ * this cleanup silently leaked every file it created — 103 leftovers had
+ * accumulated in the shared graph and eventually pushed this spec's fixture off
+ * page 1 of the Files list.
+ *
+ * Scoped to `uris`, NOT a sweep of everything matching "E2E". The two describe
+ * blocks below run in parallel (fullyParallel), so a shared sweep means one
+ * block's beforeAll deletes the other's fixtures mid-run. That stayed invisible
+ * only while the delete was a silent no-op; fixing the delete made it real.
+ * Same rule as entity-registry-lookups.spec.ts, which partitions by name.
+ */
+async function cleanupUris(uris: string[]) {
+  if (uris.length === 0) return;
   const { ctx, headers } = await getAuthHeaders();
-  for (const uri of fileUris) {
+  for (const uri of uris) {
     await ctx.delete('/api/files', {
-      params: { space_id: SPACE_ID, uri },
+      params: { space_id: SPACE_ID, graph_id: GRAPH_ID, uri },
       headers,
     }).catch(() => {});
   }
-  // Also clean up any leftover test files by name
-  const listResp = await ctx.get('/api/files', {
-    params: { space_id: SPACE_ID, graph_id: GRAPH_ID, page_size: 200, file_filter: 'E2E' },
-    headers,
-  });
-  if (listResp.ok()) {
-    const data = await listResp.json();
-    const results = data.results || [];
-    const uris = [...new Set(results.map((q: { s: string }) => q.s.replace(/^<|>$/g, '')))];
-    for (const u of uris) {
-      await ctx.delete('/api/files', {
-        params: { space_id: SPACE_ID, uri: u as string },
-        headers,
-      }).catch(() => {});
-    }
-  }
   await ctx.dispose();
-  fileUris.length = 0;
+  uris.length = 0;
 }
 
 test.describe('Files streaming — byte-level round-trip', () => {
   test.describe.configure({ mode: 'serial' });
 
-  test.beforeAll(async () => { await cleanupAll(); });
-  test.afterAll(async () => { await cleanupAll(); });
+  // This block's own files. Blocks run in parallel, so cleanup must never
+  // reach beyond what this block created.
+  const streamUris: string[] = [];
+
+  test.beforeAll(async () => { await cleanupUris(streamUris); });
+  test.afterAll(async () => { await cleanupUris(streamUris); });
 
   test('small file (57B): upload and download match byte-for-byte', async () => {
-    const uri = await createFileNode('E2E Small File', 'e2e_small.txt');
+    const uri = await createFileNode(streamUris, 'E2E Small File', 'e2e_small.txt');
     await uploadContent(uri, SMALL_CONTENT, 'e2e_small.txt', 'text/plain');
     const downloaded = await downloadContent(uri);
 
@@ -134,7 +136,7 @@ test.describe('Files streaming — byte-level round-trip', () => {
   });
 
   test('medium file (100KB): upload and download match byte-for-byte', async () => {
-    const uri = await createFileNode('E2E Medium File', 'e2e_medium.bin');
+    const uri = await createFileNode(streamUris, 'E2E Medium File', 'e2e_medium.bin');
     await uploadContent(uri, MEDIUM_CONTENT, 'e2e_medium.bin');
     const downloaded = await downloadContent(uri);
 
@@ -143,7 +145,7 @@ test.describe('Files streaming — byte-level round-trip', () => {
   });
 
   test('large file (1MB): upload and download match byte-for-byte', async () => {
-    const uri = await createFileNode('E2E Large File', 'e2e_large.bin');
+    const uri = await createFileNode(streamUris, 'E2E Large File', 'e2e_large.bin');
     await uploadContent(uri, LARGE_CONTENT, 'e2e_large.bin');
     const downloaded = await downloadContent(uri);
 
@@ -155,13 +157,14 @@ test.describe('Files streaming — byte-level round-trip', () => {
 test.describe('Files CRUD — UI lifecycle', () => {
   test.describe.configure({ mode: 'serial' });
 
+  const uiUris: string[] = [];
   let crudFileUri = '';
 
-  test.beforeAll(async () => { await cleanupAll(); });
-  test.afterAll(async () => { await cleanupAll(); });
+  test.beforeAll(async () => { await cleanupUris(uiUris); });
+  test.afterAll(async () => { await cleanupUris(uiUris); });
 
   test('create and upload a file for UI tests', async () => {
-    crudFileUri = await createFileNode(TEST_FILE_NAME, TEST_FILENAME);
+    crudFileUri = await createFileNode(uiUris, TEST_FILE_NAME, TEST_FILENAME);
     await uploadContent(crudFileUri, SMALL_CONTENT, TEST_FILENAME, 'text/plain');
   });
 
@@ -196,8 +199,8 @@ test.describe('Files CRUD — UI lifecycle', () => {
     await expect(page.locator('table tbody tr', { hasText: crudFileUri })).not.toBeVisible({ timeout: 5_000 });
 
     // Remove from tracked URIs
-    const idx = fileUris.indexOf(crudFileUri);
-    if (idx >= 0) fileUris.splice(idx, 1);
+    const idx = uiUris.indexOf(crudFileUri);
+    if (idx >= 0) uiUris.splice(idx, 1);
     crudFileUri = '';
   });
 });

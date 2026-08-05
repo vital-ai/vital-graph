@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 import { useNavigate } from 'react-router-dom';
 import { apiService } from '../services/ApiService';
 import {
@@ -47,14 +48,16 @@ const EntityRegistry: React.FC = () => {
   const [typeFilter, setTypeFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('active');
   const { items: entityTypes, error: typesError } = useEntityTypes();
-  const fetchIdRef = useRef(0);
+
+  // Discard responses from superseded requests — see useLatestRequest.
+  const beginRequest = useLatestRequest();
 
   const fetchEntities = useCallback(async () => {
     // Search refetches on every keystroke, so several requests can be in flight
     // at once. Without this guard a slow earlier response lands last and
     // replaces the filtered list with stale results — most visibly, typing a
     // search reverts to unfiltered page 1.
-    const reqId = ++fetchIdRef.current;
+    const isStale = beginRequest();
     try {
       setLoading(true);
       setError(null);
@@ -65,16 +68,16 @@ const EntityRegistry: React.FC = () => {
         limit: PAGE_SIZE,
         offset: (page - 1) * PAGE_SIZE,
       });
-      if (reqId !== fetchIdRef.current) return;
+      if (isStale()) return;
       setEntities(data.entities || []);
       setTotalCount(data.total_count || 0);
     } catch (err) {
-      if (reqId !== fetchIdRef.current) return;
+      if (isStale()) return;
       setError(err instanceof Error ? err.message : 'Failed to load entities');
     } finally {
-      if (reqId === fetchIdRef.current) setLoading(false);
+      if (!isStale()) setLoading(false);
     }
-  }, [search, typeFilter, statusFilter, page]);
+  }, [search, typeFilter, statusFilter, page, beginRequest]);
 
   useEffect(() => { fetchEntities(); }, [fetchEntities]);
 

@@ -64,7 +64,11 @@ test.describe('Graph Visualization — Sessions & Interaction', () => {
     // Ensure the space is the e2e test space
     const spaceSelect = page.locator(VIZ_PAGE).locator('select').first();
     await spaceSelect.selectOption(SPACE_ID);
-    await page.waitForTimeout(500);
+    // The select reflects the ACTIVE SESSION's space, which is updated
+    // asynchronously — wait for that round trip instead of sleeping 500 ms,
+    // which under load let the search run against the previous space. See
+    // issues/022.
+    await expect(spaceSelect).toHaveValue(SPACE_ID, { timeout: 10_000 });
 
     // Open search panel
     await page.locator('button[title="Search (Ctrl+F)"]').click();
@@ -85,7 +89,11 @@ test.describe('Graph Visualization — Sessions & Interaction', () => {
     // Set space and search
     const spaceSelect = page.locator(VIZ_PAGE).locator('select').first();
     await spaceSelect.selectOption(SPACE_ID);
-    await page.waitForTimeout(500);
+    // The select reflects the ACTIVE SESSION's space, which is updated
+    // asynchronously — wait for that round trip instead of sleeping 500 ms,
+    // which under load let the search run against the previous space. See
+    // issues/022.
+    await expect(spaceSelect).toHaveValue(SPACE_ID, { timeout: 10_000 });
 
     await page.locator('button[title="Search (Ctrl+F)"]').click();
     await page.locator('input[placeholder="Search database…"]').fill('Alice');
@@ -178,9 +186,13 @@ test.describe('Graph Visualization — Sessions & Interaction', () => {
     await page.goto('/visualization');
     await expect(page.locator(VIZ_PAGE)).toBeVisible({ timeout: 10_000 });
 
-    // Create a second session
+    // Create a second session. Wait for the session bar to be interactive
+    // first, as the two tests above already do — clicking before Session 1
+    // exists drops the click (handleNewSession returns early without a space)
+    // and "Session 2" never appears. See issues/022.
+    await expect(page.getByText('Session 1', { exact: true })).toBeVisible({ timeout: 10_000 });
     await page.locator('button[title="New session"]').click();
-    await expect(page.getByText('Session 2', { exact: true })).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText('Session 2', { exact: true })).toBeVisible({ timeout: 10_000 });
 
     // Hover over Session 2 to reveal the close button, then click it
     const session2Tab = page.getByText('Session 2', { exact: true }).locator('..');
@@ -201,7 +213,11 @@ test.describe('Graph Visualization — Sessions & Interaction', () => {
     // First, add a node so the legend has content
     const spaceSelect = page.locator(VIZ_PAGE).locator('select').first();
     await spaceSelect.selectOption(SPACE_ID);
-    await page.waitForTimeout(500);
+    // The select reflects the ACTIVE SESSION's space, which is updated
+    // asynchronously — wait for that round trip instead of sleeping 500 ms,
+    // which under load let the search run against the previous space. See
+    // issues/022.
+    await expect(spaceSelect).toHaveValue(SPACE_ID, { timeout: 10_000 });
 
     await page.locator('button[title="Search (Ctrl+F)"]').click();
     await page.locator('input[placeholder="Search database…"]').fill('Alice');
@@ -224,7 +240,11 @@ test.describe('Graph Visualization — Sessions & Interaction', () => {
     // Add a node for stats content
     const spaceSelect = page.locator(VIZ_PAGE).locator('select').first();
     await spaceSelect.selectOption(SPACE_ID);
-    await page.waitForTimeout(500);
+    // The select reflects the ACTIVE SESSION's space, which is updated
+    // asynchronously — wait for that round trip instead of sleeping 500 ms,
+    // which under load let the search run against the previous space. See
+    // issues/022.
+    await expect(spaceSelect).toHaveValue(SPACE_ID, { timeout: 10_000 });
 
     await page.locator('button[title="Search (Ctrl+F)"]').click();
     await page.locator('input[placeholder="Search database…"]').fill('Alice');

@@ -301,9 +301,16 @@ test.describe('KG Relations sorting and paging', () => {
     for (let p = 0; p < pages; p++) {
       const expected = p === pages - 1 ? total - p * PAGE : PAGE;
       await expectRowCount(page, expected);
-      seen.push(...await visibleOrder(page));
+      const current = await visibleOrder(page);
+      seen.push(...current);
       if (p === pages - 1) break;
       await page.getByRole('button', { name: /next/i }).click();
+      // Wait for the FIRST row to change — row count is identical on every full
+      // page, so it cannot detect the page turn and the stale page would be
+      // collected twice. See issues/022.
+      await expect(async () => {
+        expect((await visibleOrder(page))[0]).not.toBe(current[0]);
+      }).toPass({ timeout: 20_000 });
     }
 
     expect(new Set(seen).size).toBe(seen.length);   // no relation on two pages

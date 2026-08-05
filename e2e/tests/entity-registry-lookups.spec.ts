@@ -39,22 +39,42 @@ async function apiContext(): Promise<{ ctx: APIRequestContext; headers: Record<s
   return { ctx, headers: { Authorization: `Bearer ${access_token}` } };
 }
 
-/** Delete the named registry entities (idempotent). */
+/**
+ * Delete the named registry entities (idempotent).
+ *
+ * Two traps here, both of which silently defeated the previous version:
+ *
+ *  - The endpoint's page parameter is `page_size` (default 20, max 100), NOT
+ *    `limit`. Passing `limit: 50` was ignored, so only 20 rows were ever seen.
+ *  - Delete is a SOFT delete: the row stays and keeps matching the search with
+ *    `status: 'deleted'`. Tombstones accumulate one per run, and once 20 of
+ *    them precede the live row, the live row falls outside the first page —
+ *    cleanup deletes nothing, and the next run's beforeAll adds a SECOND live
+ *    entity with the same name. `getByText(SOURCE_NAME)` then hits two rows and
+ *    fails strict mode. That is why this failure looked intermittent and then
+ *    became permanent. See issues/022.
+ *
+ * So: page through every result and skip rows that are already deleted.
+ */
 async function cleanup(targets: string[]) {
   const { ctx, headers } = await apiContext();
+  const PAGE_SIZE = 100;
   for (const name of targets) {
-    const resp = await ctx.get('/api/registry/entities', {
-      params: { query: name, status: '', limit: 50 },
-      headers,
-    });
-    const { entities = [] } = await resp.json();
-    for (const e of entities) {
-      if (e.primary_name === name) {
-        await ctx.delete('/api/registry/entities/delete', {
-          params: { entity_id: e.entity_id },
-          headers,
-        });
+    for (let page = 1; ; page++) {
+      const resp = await ctx.get('/api/registry/entities', {
+        params: { query: name, status: '', page, page_size: PAGE_SIZE },
+        headers,
+      });
+      const { entities = [], total_count = 0 } = await resp.json();
+      for (const e of entities) {
+        if (e.primary_name === name && e.status !== 'deleted') {
+          await ctx.delete('/api/registry/entities/delete', {
+            params: { entity_id: e.entity_id },
+            headers,
+          });
+        }
       }
+      if (entities.length < PAGE_SIZE || page * PAGE_SIZE >= total_count) break;
     }
   }
   await ctx.dispose();

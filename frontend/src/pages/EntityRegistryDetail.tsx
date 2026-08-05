@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 import { useParams, useNavigate } from 'react-router-dom';
 import { apiService } from '../services/ApiService';
 import {
@@ -158,7 +159,6 @@ const EntityRegistryDetail: React.FC = () => {
   const [newRelType, setNewRelType] = useState('');
   const [newRelTarget, setNewRelTarget] = useState<PickedEntity | null>(null);
   const [relBusy, setRelBusy] = useState(false);
-  const relReqIdRef = useRef(0);
 
   // Identifiers / aliases — tag-style vocabularies, free text with suggestions
   const { names: namespaceSuggestions } = useIdentifierNamespaces();
@@ -174,6 +174,9 @@ const EntityRegistryDetail: React.FC = () => {
   const [locations, setLocations] = useState<{ location_id: number; location_name: string | null; location_type_key: string; latitude: number | null; longitude: number | null; formatted_address: string | null }[]>([]);
   const [subLoading, setSubLoading] = useState(false);
 
+
+  // Discard responses from superseded relationship fetches — see useLatestRequest.
+  const beginRelRequest = useLatestRequest();
   const fetchEntity = useCallback(async () => {
     if (!entityId || isNew) return;
     try {
@@ -224,7 +227,7 @@ const EntityRegistryDetail: React.FC = () => {
     // Changing the direction filter starts a new request while the previous one
     // may still be in flight; without this guard a slow earlier response can
     // land last and overwrite the filtered result.
-    const reqId = ++relReqIdRef.current;
+    const isStale = beginRelRequest();
     try {
       // Paginated: a hub entity's adjacency list is unbounded, so the route caps
       // page_size at 100. total_count is the full count, so the UI can show how
@@ -232,7 +235,7 @@ const EntityRegistryDetail: React.FC = () => {
       const data = await apiService.getEntityRelationships(
         entityId, relDirection, false, { page, pageSize: REL_PAGE_SIZE },
       );
-      if (reqId !== relReqIdRef.current) return;
+      if (isStale()) return;
       const rels: RelationshipItem[] = data.relationships ?? [];
       setRelTotal(data.total_count ?? rels.length);
       setRelPage(page);

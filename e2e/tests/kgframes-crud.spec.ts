@@ -14,6 +14,31 @@ const HAS_NAME = 'http://vital.ai/ontology/vital-core#hasName';
 const HAS_DESC = 'http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription';
 const ENCODED_GRAPH = encodeURIComponent(GRAPH_ID);
 
+/**
+ * Narrow the frames list to `name` via the search box and return its row.
+ *
+ * The seeded space/graph is SHARED with every other frame spec, and the sorting
+ * specs alone add ~30 fixture frames. With a 25-row page, a frame this spec just
+ * created is frequently not on page 1 — which presented as "created frame does
+ * not appear in the list" under full-suite load while the object existed on the
+ * server all along (confirmed from a trace: list total_count 51 without it,
+ * search total_count 1 with it). See issues/022.
+ *
+ * Searching asserts the frame is findable rather than that it happens to land
+ * on page 1 of a list other specs are concurrently filling.
+ */
+async function frameRowBySearch(page: import('@playwright/test').Page, name: string) {
+  const searched = page.waitForResponse(
+    // Match on `search=` plus the first token — the browser may encode spaces
+    // as '+' or '%20', so don't pin the whole encoded phrase.
+    (r) => r.url().includes('/api/graphs/kgframes') && /[?&]search=/.test(r.url()) && r.url().includes(name.split(' ')[0]),
+    { timeout: 15_000 },
+  ).catch(() => null);
+  await page.getByTestId('frames-search').fill(name);
+  await searched;
+  return page.locator('[data-testid="frame-row"]', { hasText: name });
+}
+
 /** Delete any frame with CRUD_FRAME_NAME via API (idempotent cleanup). */
 async function cleanupCrudFrame() {
   const baseURL = process.env.VG_TEST_URL || 'http://localhost:8002';
@@ -71,8 +96,8 @@ test.describe('KG Frames CRUD', () => {
     // Wait for frames table to render (at least one row)
     await expect(page.locator('[data-testid="frame-row"]').first()).toBeVisible({ timeout: 10_000 });
 
-    // Verify frame name appears
-    await expect(page.locator('[data-testid="frame-row"]', { hasText: CRUD_FRAME_NAME })).toBeVisible({ timeout: 5_000 });
+    // Verify the frame is findable (search, not page 1 — see frameRowBySearch)
+    await expect(await frameRowBySearch(page, CRUD_FRAME_NAME)).toBeVisible({ timeout: 10_000 });
   });
 
   test('update the frame via the UI', async ({ page }) => {
@@ -80,7 +105,7 @@ test.describe('KG Frames CRUD', () => {
     await expect(page.locator('[data-testid="frame-row"]').first()).toBeVisible({ timeout: 10_000 });
 
     // Click the View button on the row with our frame
-    const frameRow = page.locator('[data-testid="frame-row"]', { hasText: CRUD_FRAME_NAME });
+    const frameRow = await frameRowBySearch(page, CRUD_FRAME_NAME);
     await frameRow.locator('button[title="View"]').click();
 
     // Wait for detail page
@@ -107,8 +132,8 @@ test.describe('KG Frames CRUD', () => {
     await expect(page.locator('[data-testid="frame-row"]').first()).toBeVisible({ timeout: 10_000 });
 
     // Click the Delete (trash) button on the row with our frame
-    const frameRow = page.locator('[data-testid="frame-row"]', { hasText: CRUD_FRAME_NAME });
-    await expect(frameRow).toBeVisible({ timeout: 5_000 });
+    const frameRow = await frameRowBySearch(page, CRUD_FRAME_NAME);
+    await expect(frameRow).toBeVisible({ timeout: 10_000 });
     await frameRow.locator('button[title="Delete"]').click();
 
     // Confirm modal

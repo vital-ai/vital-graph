@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 import { useNavigate } from 'react-router-dom';
 import {
   Alert,
@@ -111,9 +112,14 @@ const Indexes: React.FC = () => {
     loadSpaces();
   }, []);
 
+
   // Load indexes
+  // Discard responses from superseded requests — see useLatestRequest.
+  const beginRequest = useLatestRequest();
+
   const loadData = useCallback(async () => {
     if (!selectedSpace) return;
+    const isStale = beginRequest();
     setLoading(true);
     setError(null);
     try {
@@ -171,14 +177,16 @@ const Indexes: React.FC = () => {
         ? unified.filter((idx) => idx.type === filterType)
         : unified;
 
+      if (isStale()) return;   // a newer fetch already answered
       setIndexes(filtered);
     } catch (err: unknown) {
+      if (isStale()) return;
       setError(err instanceof Error ? err.message : 'Failed to load indexes');
       setIndexes([]);
     } finally {
-      setLoading(false);
+      if (!isStale()) setLoading(false);
     }
-  }, [selectedSpace, filterType]);
+  }, [selectedSpace, filterType, beginRequest]);
 
   useEffect(() => {
     loadData();

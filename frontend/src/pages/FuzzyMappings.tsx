@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Alert,
@@ -86,22 +87,28 @@ const FuzzyMappings: React.FC = () => {
   }, []);
 
   // Load mappings when space changes
+  // Discard responses from superseded requests — see useLatestRequest.
+  const beginRequest = useLatestRequest();
+
   const loadData = useCallback(async () => {
     if (!selectedSpace) return;
     setLoading(true);
     setError(null);
+    const isStale = beginRequest();
     try {
       const mappingsData = await fuzzyMappingService.getFuzzyMappings(selectedSpace, {
         mapping_type: filterType || undefined,
       });
+      if (isStale()) return;   // a newer request already answered
       setMappings(mappingsData);
     } catch (err: unknown) {
+      if (isStale()) return;
       setError(err instanceof Error ? err.message : 'Failed to load fuzzy mappings');
       setMappings([]);
     } finally {
-      setLoading(false);
+      if (!isStale()) setLoading(false);
     }
-  }, [selectedSpace, filterType]);
+  }, [selectedSpace, filterType, beginRequest]);
 
   useEffect(() => {
     loadData();

@@ -16,7 +16,11 @@ export default defineConfig({
 
   use: {
     baseURL: process.env.VG_TEST_URL || 'http://localhost:8002',
-    trace: 'on-first-retry',
+    // 'retain-on-failure', not 'on-first-retry': locally `retries` is 0, so
+    // there is never a first retry and no trace was ever captured for the
+    // parallel-load flake under investigation (issues/022). CI still gets a
+    // trace on the failing attempt.
+    trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
 

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 import { useParams } from 'react-router-dom';
 import {
   Alert,
@@ -89,10 +90,14 @@ const GeoShapes: React.FC = () => {
     loadSpaces();
   }, []);
 
+  // Discard responses from superseded requests — see useLatestRequest.
+  const beginRequest = useLatestRequest();
+
   const loadPoints = useCallback(async () => {
     if (!selectedSpace) return;
     setLoading(true);
     setError(null);
+    const isStale = beginRequest();
     try {
       const query: GeoPointsQuery = {
         limit: pageSize,
@@ -104,15 +109,17 @@ const GeoShapes: React.FC = () => {
         query.radius_km = (parseFloat(radius) || 5000) / 1000;
       }
       const response = await vectorGeoService.getGeoPoints(selectedSpace, query);
+      if (isStale()) return;   // a newer request already answered
       setPoints(response.points || []);
       setTotalCount(response.total_count || 0);
     } catch (err: unknown) {
+      if (isStale()) return;
       setError(err instanceof Error ? err.message : 'Failed to load geo data');
       setPoints([]);
     } finally {
-      setLoading(false);
+      if (!isStale()) setLoading(false);
     }
-  }, [selectedSpace, lat, lon, radius, page]);
+  }, [selectedSpace, lat, lon, radius, page, beginRequest]);
 
   useEffect(() => {
     loadPoints();

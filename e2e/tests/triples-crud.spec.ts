@@ -54,8 +54,22 @@ test.describe('Triples CRUD', () => {
     await page.locator('#m-otype').selectOption('literal');
     await page.locator('#m-object').fill(TEST_OBJECT);
 
-    // Submit
+    // Submit, and assert the write actually reached the server.
+    //
+    // Waiting only for TEST_OBJECT to appear is not enough: in one full run the
+    // server log shows NO insert request for this space at all, yet this test
+    // passed and the next one then failed with an empty list. Pin the POST so a
+    // dropped submit fails here, where it happened. See issues/022.
+    const insert = page.waitForResponse(
+      (r) => r.url().includes('/api/graphs/triples')
+        && r.url().includes(`space_id=${SPACE_ID}`)
+        && r.request().method() === 'POST',
+      { timeout: 15_000 },
+    );
     await page.getByRole('button', { name: /add triple/i }).last().click();
+    const insertResp = await insert;
+    expect(insertResp.status(), 'triple insert should succeed').toBe(200);
+    expect((await insertResp.json()).success, 'insert body should report success').toBeTruthy();
 
     // Wait for list to refresh with the new triple
     await expect(page.getByText(TEST_OBJECT).first()).toBeVisible({ timeout: 10_000 });

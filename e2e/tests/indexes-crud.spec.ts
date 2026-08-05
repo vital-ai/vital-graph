@@ -20,6 +20,37 @@ const FTS_SPACE_ID = 'e2e_indexes_fts_space';
 const VEC_SPACE_ID = 'e2e_indexes_vec_space';
 const GRAPH_ID = 'urn:e2e:indexes:graph';
 
+/**
+ * Select a space and wait for the three list fetches it triggers to land.
+ *
+ * Replaces `waitForLoadState('networkidle')`, which only observes that the
+ * network went quiet and can resolve at the wrong moment under parallel load
+ * (see issues/022). Waiting on the actual responses also closes the
+ * stale-overwrite race: if a space-change fetch is still in flight when the
+ * test creates an index, its late response overwrites the list and drops the
+ * new row.
+ *
+ * The waiters are raced against a soft timeout because selecting the space
+ * that is already selected fires no refetch — in that case the page has
+ * already loaded and the caller's own assertion is the real check.
+ */
+async function selectSpaceAndSettle(page: import('@playwright/test').Page, spaceId: string) {
+  const listed = (path: string) =>
+    page.waitForResponse(
+      (r) => r.url().includes(path) && r.url().includes(`space_id=${spaceId}`) && r.request().method() === 'GET',
+      { timeout: 15_000 },
+    ).catch(() => null);
+
+  const settled = Promise.all([
+    listed('/api/vector-indexes'),
+    listed('/api/fts-indexes'),
+    listed('/api/fuzzy-mappings'),
+  ]);
+
+  await page.locator('#space').selectOption(spaceId);
+  await Promise.race([settled, page.waitForTimeout(15_000)]);
+}
+
 test.describe('Indexes CRUD — FTS', () => {
   test.describe.configure({ mode: 'serial' });
 
@@ -32,9 +63,7 @@ test.describe('Indexes CRUD — FTS', () => {
     await page.goto('/indexes');
     await expect(page.locator('[data-testid="indexes-page"]')).toBeVisible({ timeout: 10_000 });
 
-    // Select space and wait for any triggered fetch to settle
-    await page.locator('#space').selectOption(SPACE_ID);
-    await page.waitForLoadState('networkidle');
+    await selectSpaceAndSettle(page, SPACE_ID);
 
     // Click Create Index
     await page.locator('button', { hasText: 'Create Index' }).click();
@@ -62,8 +91,7 @@ test.describe('Indexes CRUD — FTS', () => {
     await page.goto('/indexes');
     await expect(page.locator('[data-testid="indexes-page"]')).toBeVisible({ timeout: 10_000 });
 
-    await page.locator('#space').selectOption(SPACE_ID);
-    await page.waitForLoadState('networkidle');
+    await selectSpaceAndSettle(page, SPACE_ID);
     await expect(page.locator('table').getByText(FTS_INDEX_NAME)).toBeVisible({ timeout: 10_000 });
   });
 
@@ -71,8 +99,7 @@ test.describe('Indexes CRUD — FTS', () => {
     await page.goto('/indexes');
     await expect(page.locator('[data-testid="indexes-page"]')).toBeVisible({ timeout: 10_000 });
 
-    await page.locator('#space').selectOption(SPACE_ID);
-    await page.waitForLoadState('networkidle');
+    await selectSpaceAndSettle(page, SPACE_ID);
     await expect(page.locator('table').getByText(FTS_INDEX_NAME)).toBeVisible({ timeout: 10_000 });
 
     // Find the row and click delete
@@ -101,8 +128,7 @@ test.describe('Indexes CRUD — Vector', () => {
     await page.goto('/indexes');
     await expect(page.locator('[data-testid="indexes-page"]')).toBeVisible({ timeout: 10_000 });
 
-    await page.locator('#space').selectOption(SPACE_ID);
-    await page.waitForLoadState('networkidle');
+    await selectSpaceAndSettle(page, SPACE_ID);
 
     // Click Create Index
     await page.locator('button', { hasText: 'Create Index' }).click();
@@ -146,8 +172,7 @@ test.describe('Indexes CRUD — Vector', () => {
     await page.goto('/indexes');
     await expect(page.locator('[data-testid="indexes-page"]')).toBeVisible({ timeout: 10_000 });
 
-    await page.locator('#space').selectOption(SPACE_ID);
-    await page.waitForLoadState('networkidle');
+    await selectSpaceAndSettle(page, SPACE_ID);
     await expect(page.locator('table').getByText(VECTOR_INDEX_NAME)).toBeVisible({ timeout: 10_000 });
   });
 
@@ -155,8 +180,7 @@ test.describe('Indexes CRUD — Vector', () => {
     await page.goto('/indexes');
     await expect(page.locator('[data-testid="indexes-page"]')).toBeVisible({ timeout: 10_000 });
 
-    await page.locator('#space').selectOption(SPACE_ID);
-    await page.waitForLoadState('networkidle');
+    await selectSpaceAndSettle(page, SPACE_ID);
     await expect(page.locator('table').getByText(VECTOR_INDEX_NAME)).toBeVisible({ timeout: 10_000 });
 
     // Find the row and click delete

@@ -59,8 +59,13 @@ test.describe('Search Execution', () => {
     // Select the e2e test space
     await page.locator('#space').selectOption(SPACE_ID);
 
-    // Wait for indexes to load, then switch to FTS mode
+    // Wait for indexes to actually load before switching to FTS mode. The
+    // comment used to claim this and there was no wait: under load the search
+    // fired with an empty index name, producing SQL against `<space>_fts_`
+    // ("relation does not exist") and no rows. See issues/022.
     await page.locator('#mode').selectOption('fts');
+    await expect(page.locator('#indexName')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('#indexName')).not.toHaveValue('', { timeout: 15_000 });
 
     // Enter search text
     await page.locator('#searchText').fill('alice');

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 import { useNavigate } from 'react-router-dom';
 import { apiService } from '../services/ApiService';
 import {
@@ -46,7 +47,11 @@ const AgentRegistry: React.FC = () => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
 
+  // Discard responses from superseded requests — see useLatestRequest.
+  const beginRequest = useLatestRequest();
+
   const fetchAgents = useCallback(async () => {
+    const isStale = beginRequest();
     try {
       setLoading(true);
       setError(null);
@@ -56,14 +61,16 @@ const AgentRegistry: React.FC = () => {
         limit: PAGE_SIZE,
         offset: (page - 1) * PAGE_SIZE,
       });
+      if (isStale()) return;   // a newer request already answered
       setAgents(data.agents || []);
       setTotalCount(data.total_count || 0);
     } catch (err) {
+      if (isStale()) return;
       setError(err instanceof Error ? err.message : 'Failed to load agents');
     } finally {
-      setLoading(false);
+      if (!isStale()) setLoading(false);
     }
-  }, [search, statusFilter, page]);
+  }, [search, statusFilter, page, beginRequest]);
 
   useEffect(() => { fetchAgents(); }, [fetchAgents]);
 

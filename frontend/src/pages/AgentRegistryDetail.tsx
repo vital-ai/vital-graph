@@ -98,7 +98,11 @@ const AgentRegistryDetail: React.FC = () => {
       setForm({
         name: a.agent_name || '',
         agent_uri: a.agent_uri || '',
-        agent_type: a.agent_type_label || a.agent_type_key || '',
+        // The key, not the label: handleSave submits this field as
+        // `agent_type_key`, and the API rejects a label with
+        // "Unknown agent type: <label>" — so seeding it with the label made
+        // every edit of an agent whose label differs from its key silently fail.
+        agent_type: a.agent_type_key || a.agent_type_label || '',
         description: a.description || '',
         version: a.version || '',
         status: a.status || 'active',
@@ -143,11 +147,16 @@ const AgentRegistryDetail: React.FC = () => {
         version: form.version || undefined,
         status: form.status,
       };
+      // Domain outcomes come back as HTTP 200 with success:false, so the
+      // envelope has to be inspected — otherwise a rejected save looks like a
+      // successful one and silently discards the user's edit.
       if (isNew) {
-        await apiService.createAgent(payload);
+        const resp = await apiService.createAgent(payload);
+        if (resp?.success === false) throw new Error(resp.message || 'Failed to create agent');
         navigate('/agent-registry');
       } else {
-        await apiService.updateAgent(agentId!, payload);
+        const resp = await apiService.updateAgent(agentId!, payload);
+        if (resp?.success === false) throw new Error(resp.message || 'Failed to save agent');
         await fetchAgent();
         setIsEditing(false);
       }

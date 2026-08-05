@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Alert,
@@ -87,10 +88,14 @@ const SearchMappings: React.FC = () => {
   }, [selectedSpace]);
 
   // Load mappings and FTS indexes when space changes
+  // Discard responses from superseded requests — see useLatestRequest.
+  const beginRequest = useLatestRequest();
+
   const loadData = useCallback(async () => {
     if (!selectedSpace) return;
     setLoading(true);
     setError(null);
+    const isStale = beginRequest();
     try {
       const [mappingsData, indexesData] = await Promise.all([
         searchFtsService.getSearchMappings(selectedSpace, {
@@ -99,15 +104,17 @@ const SearchMappings: React.FC = () => {
         }),
         searchFtsService.getFtsIndexes(selectedSpace),
       ]);
+      if (isStale()) return;   // a newer request already answered
       setMappings(mappingsData);
       setFtsIndexes(indexesData);
     } catch (err: unknown) {
+      if (isStale()) return;
       setError(err instanceof Error ? err.message : 'Failed to load data');
       setMappings([]);
     } finally {
-      setLoading(false);
+      if (!isStale()) setLoading(false);
     }
-  }, [selectedSpace, filterIndex, filterType]);
+  }, [selectedSpace, filterIndex, filterType, beginRequest]);
 
   useEffect(() => {
     loadData();

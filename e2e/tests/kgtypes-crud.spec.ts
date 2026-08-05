@@ -69,11 +69,24 @@ test.describe('KG Types CRUD', () => {
     await detail.locator('#new-value').fill(CRUD_TYPE_NAME);
     await detail.locator('button', { hasText: 'Add' }).click();
 
-    // Click Create
+    // Click Create and assert the write actually happened.
+    //
+    // The old assertion was `toHaveURL(/\/kg-types/)`, which the CREATE page's
+    // own URL (/kg-types/new?mode=create) already satisfies — so this test
+    // passed even when no POST was ever issued, and the failure surfaced one
+    // test later as "new type appears in the types list" finding an empty list.
+    // See issues/022. Anchor the URL and wait on the response instead.
+    const createPost = page.waitForResponse(
+      (r) => r.url().includes('/api/graphs/kgtypes') && r.request().method() === 'POST',
+      { timeout: 15_000 },
+    );
     await page.locator('button', { hasText: 'Create' }).click();
+    const createResp = await createPost;
+    expect(createResp.status(), 'create POST should succeed').toBe(200);
+    expect((await createResp.json()).success, 'create POST body should report success').toBeTruthy();
 
-    // Should redirect back to the KG Types list
-    await expect(page).toHaveURL(/\/kg-types/, { timeout: 10_000 });
+    // Should redirect back to the KG Types list (not stay on /kg-types/new)
+    await expect(page).toHaveURL(/\/kg-types(\?|$)/, { timeout: 10_000 });
   });
 
   test('new type appears in the types list', async ({ page }) => {
@@ -83,8 +96,9 @@ test.describe('KG Types CRUD', () => {
     // Wait for table rows to render
     await expect(page.locator('[data-testid="type-row"]').first()).toBeVisible({ timeout: 10_000 });
 
-    // Verify type name appears
-    await expect(page.locator('[data-testid="type-row"]', { hasText: CRUD_TYPE_NAME })).toBeVisible({ timeout: 5_000 });
+    // Verify type name appears. Same 10 s budget as the first-row wait above —
+    // the old 5 s was thin under full-suite load next to Docker + PostgreSQL.
+    await expect(page.locator('[data-testid="type-row"]', { hasText: CRUD_TYPE_NAME })).toBeVisible({ timeout: 10_000 });
   });
 
   test('update the type via the UI', async ({ page }) => {

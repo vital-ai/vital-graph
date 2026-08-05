@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   Alert, Badge, Button, Modal, Pagination, Select, Spinner,
@@ -95,8 +96,12 @@ const Triples: React.FC = () => {
   }, [fetchGraphs, graphId]);
 
   // Fetch triples
+  // Discard responses from superseded requests — see useLatestRequest.
+  const beginRequest = useLatestRequest();
+
   const fetchTriples = useCallback(async () => {
     if (!selectedSpace || !selectedGraph) return;
+    const isStale = beginRequest();
     try {
       setLoading(true);
       setError(null);
@@ -117,14 +122,16 @@ const Triples: React.FC = () => {
           objectType,
         };
       });
+      if (isStale()) return;   // a newer request already answered
       setTriples(parsed);
       setTotalCount(data.total_count || parsed.length);
     } catch {
+      if (isStale()) return;
       setError('Failed to load triples.');
       setTriples([]);
       setTotalCount(0);
-    } finally { setLoading(false); }
-  }, [selectedSpace, selectedGraph, debouncedSearch, currentPage, itemsPerPage]);
+    } finally { if (!isStale()) setLoading(false); }
+  }, [selectedSpace, selectedGraph, debouncedSearch, currentPage, itemsPerPage, beginRequest]);
 
   useEffect(() => { fetchTriples(); }, [fetchTriples]);
 

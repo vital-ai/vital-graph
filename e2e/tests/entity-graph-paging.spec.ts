@@ -239,16 +239,27 @@ test.describe('Entity graph frame/slot paging', () => {
     await openEntity(page, BIG);
 
     // Frame 0 (sequence BIG_FRAMES, so LAST in ascending order) holds the slots.
-    // Page to the end to reach it.
+    // Page to the end to reach it, waiting for the rendered page to actually
+    // change. `waitForLoadState('networkidle')` used to stand in for that and
+    // could return before React re-rendered, leaving the previous page's cards
+    // in the DOM. See issues/022.
     const next = page.locator('[data-testid="frame-pagination-next"]');
     while (!(await next.isDisabled())) {
+      const before = (await frameOrder(page))[0];
       await next.click();
-      await page.waitForLoadState('networkidle');
+      await expect(async () => {
+        expect((await frameOrder(page))[0]).not.toBe(before);
+      }).toPass({ timeout: 20_000 });
     }
 
-    const card = page.locator('[data-testid="frame-card"]')
-      .filter({ has: page.locator(`[data-testid="frame-slot-count"]`) })
-      .last();
+    // Address frame 0 by URI. Every card renders a `frame-slot-count` (it shows
+    // "0 slots" when empty), so filtering on it narrowed nothing and `.last()`
+    // just took whatever card was rendered last — which, on a stale page, was
+    // f005 (the last card of page 1) instead of f000. The traced failure was
+    // exactly that: a kgslots request for …:f005, which has no slots, so the
+    // slot pager never appeared.
+    const card = page.locator(`[data-testid="frame-card"][data-frame-uri="${BIG}:f000"]`);
+    await expect(card).toBeVisible({ timeout: 10_000 });
     await card.locator('[data-testid="frame-toggle"]').first().click();
 
     const slotPager = page.locator('[data-testid="slot-pagination"]');

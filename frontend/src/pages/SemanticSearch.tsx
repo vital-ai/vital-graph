@@ -334,9 +334,22 @@ const SemanticSearch: React.FC = () => {
     setGeneratedSparql(sparql);
   }, [searchMode, searchText, indexName, topK, minScore, alpha, geoSubMode, lat, lon, radius, minLat, minLon, maxLat, maxLon, polygonWkt, mappingProperties]);
 
+  // Index-backed modes cannot run without an index name: the generated SPARQL
+  // interpolates it into the backing table name, so an empty one produces
+  // `<space>_fts_` and the query fails with `relation ... does not exist`.
+  // Clicking Search before the index list finished loading did exactly that.
+  // See issues/022.
+  const indexRequired = ['vector', 'fts', 'hybrid'].includes(searchMode);
+
   const handleSearch = async () => {
     if (!selectedSpace) return;
     if (searchMode !== 'geo' && !searchText.trim()) return;
+    if (indexRequired && !isRegistrySpace && !indexName) {
+      setError(indexesLoading
+        ? 'Indexes are still loading — try again in a moment.'
+        : 'No index selected. This search mode needs a vector or FTS index.');
+      return;
+    }
 
     setLoading(true);
     setError(null);
@@ -637,7 +650,12 @@ const SemanticSearch: React.FC = () => {
           )}
 
           {/* Search Button */}
-          <Button color="blue" onClick={handleSearch} disabled={loading} className="w-full">
+          <Button
+            color="blue"
+            onClick={handleSearch}
+            disabled={loading || (indexRequired && !isRegistrySpace && indexesLoading)}
+            className="w-full"
+          >
             {loading ? <Spinner size="sm" className="mr-2" /> : <HiSearch className="mr-2 h-4 w-4" />}
             Search
           </Button>

@@ -110,7 +110,15 @@ test.describe('KG Frames — Filter & Search UI', () => {
 
     // Seeded frames should appear in the list
     await expect(page.locator('[data-testid="frame-row"]').first()).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator('[data-testid="frame-row"]', { hasText: FRAMES.alice_profile.name })).toBeVisible();
+
+    // Search for the seeded frame rather than expecting it on page 1: this
+    // space/graph is shared with the frame sorting specs, which add ~30 fixture
+    // frames, so page 1 of 25 often does not contain it under full-suite load.
+    // See issues/022.
+    await page.getByTestId('frames-search').fill(FRAMES.alice_profile.name);
+    await expect(
+      page.locator('[data-testid="frame-row"]', { hasText: FRAMES.alice_profile.name }),
+    ).toBeVisible({ timeout: 15_000 });
 
     // Click "Assertions" tab — page should re-render without error
     await page.locator('button', { hasText: 'Assertions' }).click();

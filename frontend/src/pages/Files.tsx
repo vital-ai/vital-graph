@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 import { useNavigate, useParams } from 'react-router-dom';
 import { apiService } from '../services/ApiService';
 import { Alert, Badge, Button, Label, Select, Spinner, TextInput } from 'flowbite-react';
@@ -83,8 +84,12 @@ const Files: React.FC = () => {
   }, [fetchGraphs, graphId]);
 
   // Fetch files
+  // Discard responses from superseded requests — see useLatestRequest.
+  const beginRequest = useLatestRequest();
+
   const fetchFiles = useCallback(async () => {
     if (!selectedSpace || !selectedGraph) return;
+    const isStale = beginRequest();
     try {
       setLoading(true);
       setError(null);
@@ -103,12 +108,14 @@ const Files: React.FC = () => {
         const fileType = getFirstValue(preds, HAS_FILE_TYPE);
         parsed.push({ uri, rdf_type: rdfType, filename, file_type: fileType, properties_count: preds.size });
       }
+      if (isStale()) return;   // a newer request already answered
       setFiles(parsed);
     } catch {
+      if (isStale()) return;
       setError('Failed to load files.');
       setFiles([]);
-    } finally { setLoading(false); }
-  }, [selectedSpace, selectedGraph, debouncedSearch]);
+    } finally { if (!isStale()) setLoading(false); }
+  }, [selectedSpace, selectedGraph, debouncedSearch, beginRequest]);
 
   useEffect(() => {
     if (selectedSpace && selectedGraph) fetchFiles();

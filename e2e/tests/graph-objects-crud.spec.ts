@@ -103,12 +103,13 @@ test.describe('Graph Objects CRUD', () => {
     // Find the hasName row by checking input values (hasText doesn't match input values)
     const rows = page.locator('table tbody tr');
     await expect(rows.first()).toBeVisible({ timeout: 5_000 });
-    const rowCount = await rows.count();
-    let nameRowIdx = -1;
-    for (let i = 0; i < rowCount; i++) {
-      const predVal = await rows.nth(i).locator('input').first().inputValue();
-      if (predVal === HAS_NAME) { nameRowIdx = i; break; }
-    }
+    // Read every row's predicate input in ONE call. A per-row `rows.nth(i)`
+    // loop re-resolves against the live DOM each iteration and can hit a
+    // detached node if the table re-renders mid-loop — see issues/022 §A.
+    const predValues = await rows.evaluateAll((trs) =>
+      trs.map((tr) => (tr.querySelector('input') as HTMLInputElement | null)?.value ?? ''),
+    );
+    const nameRowIdx = predValues.indexOf(HAS_NAME);
     expect(nameRowIdx).toBeGreaterThanOrEqual(0);
     await rows.nth(nameRowIdx).locator('input').nth(1).fill(UPDATED_OBJECT_NAME);
 

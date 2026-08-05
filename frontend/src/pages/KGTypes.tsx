@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 import { useNavigate } from 'react-router-dom';
 import { apiService } from '../services/ApiService';
 import {
@@ -66,9 +67,13 @@ const KGTypes: React.FC = () => {
   const activeTabDef = TABS.find(t => t.key === activeTab)!;
 
   // Fetch KG types — re-fetches when tab, space, page, or search changes
+  // Discard responses from superseded requests — see useLatestRequest.
+  const beginRequest = useLatestRequest();
+
   const fetchKGTypes = useCallback(async () => {
     if (!selectedSpace) { setKGTypes([]); setTotalCount(0); return; }
     if (committedSearch.trim()) return; // Skip list fetch when search is active
+    const isStale = beginRequest();
     try {
       setLoading(true);
       setError(null);
@@ -101,14 +106,16 @@ const KGTypes: React.FC = () => {
         }));
       }
 
+      if (isStale()) return;   // a newer request already answered
       setKGTypes(normalized);
       setTotalCount(responseData.total_count ?? normalized.length);
     } catch {
+      if (isStale()) return;
       setError('Failed to load KG types.');
       setKGTypes([]);
       setTotalCount(0);
-    } finally { setLoading(false); }
-  }, [selectedSpace, activeTabDef.type_uri, currentPage, itemsPerPage, committedSearch]);
+    } finally { if (!isStale()) setLoading(false); }
+  }, [selectedSpace, activeTabDef.type_uri, currentPage, itemsPerPage, committedSearch, beginRequest]);
 
   useEffect(() => { fetchKGTypes(); }, [fetchKGTypes]);
 

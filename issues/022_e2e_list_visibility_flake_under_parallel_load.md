@@ -2,9 +2,15 @@
 
 ## Status: PARTIALLY RESOLVED — flake fixed, one class not swept
 
-Three consecutive 273/273 full runs on an idle stack. Every *observed* failure
-has been traced and fixed across three passes; the header below is the first
-pass only, kept for the narrative.
+**278/278 twice, including on a cold build.** Every *observed* failure has been
+traced and fixed across four passes; the header below is the first pass only,
+kept for the narrative.
+
+The recurring shape, across every pass: **a cleanup or a check that silently did
+nothing** — a delete missing a required parameter, a lookup using a parameter
+name the API ignores, a route form that 405s, an assertion satisfied by the page
+it started on. Each hid a second problem until it was fixed. When something here
+looks impossible, check whether the thing you assume is running actually runs.
 
 **What remains is one unswept class, not a live flake** — see "Remaining work"
 at the end.
@@ -176,7 +182,7 @@ since been fixed (verified 2026-08-04 — it now reads every row in one
 `rows.evaluateAll()` and cites this section). (`graph-visualization-crud.spec.ts:107` also uses `nth`, but to pick a
 single `<select>`, not in a loop; it is not affected.)
 
-### B. Rapid control changes can leave a stale list — PRODUCT side, NOT fixed
+### B. Rapid control changes can leave a stale list — PRODUCT side, FIXED on 4 pages
 
 `KGRelations` (and the other list pages) fire a fetch per control change with
 **no request sequencing or cancellation**. Changing the source filter and then
@@ -392,29 +398,90 @@ Three consecutive full runs on an idle stack after the `Indexes.tsx` fix:
 **273/273, 273/273** (the run before the fix was 272/273, failing only
 `indexes-mappings.spec.ts:34`).
 
-### Environment warning
+**Latest (after the fourth pass and the issues/018 work): 278/278, twice**,
+including on a *cold* build — the case that used to fail. Container start time
+unchanged across both runs, so neither was disturbed.
 
-A `pytest tests/api` run against the same stack (`localhost:8002`) was found
-running concurrently with some of these suite runs, started outside this work.
-It writes into shared spaces including `sp_kg_types` and pushed the app
-container to 98% CPU. **Full-suite results are not trustworthy while it runs** —
-one run taken during that window showed mass failures (234 passed, 14 not run)
-in basic page-load specs. Check for it (`ps aux | grep pytest`, or
-`docker logs --since 60s vitalgraph-test-app | grep -c apitest_`) before
-reading anything into a red run. The three green runs above were taken after it
-finished, on an idle stack.
+### Environment warning — how to tell a real red run from a disturbed one
 
-It also leaves `apitest_*` spaces behind, and those sort ahead of `e2e_*`
-alphabetically — which is how they became the default selection that exposed
-the `Indexes.tsx` race above.
+Several runs during this work were invalidated by the stack changing underneath
+them. The failure signature is unmistakable once you know it: **dozens of
+"did not run"** plus failures in trivial page-load specs (234/14, 205/19,
+125/79 across three such runs). No product bug looks like that.
+
+**The reliable check is the container's start time**, before and after a run:
+
+```
+docker inspect vitalgraph-test-app --format '{{.State.StartedAt}}'
+```
+
+If it moved, the app was recreated mid-run and the result means nothing. Two
+runs were invalidated exactly this way (`20:20:54`, then `20:25:11`).
+
+**⚠️ Do NOT use `docker logs … | grep -c apitest_` as that check** — an earlier
+version of this section recommended it, and it is wrong. Those log lines are
+overwhelmingly `GET /api/graphs/graphs?space_id=apitest_X`,
+`GET /api/fuzzy-mappings?space_id=apitest_X` and similar: **reads issued by the
+e2e suite itself**, because leftover `apitest_*` spaces sit in the space
+selector and every page that lists spaces fetches against them. 97 such
+requests appeared during a run with no API suite running at all. Verify by
+looking for writes (`POST`/`DELETE`) rather than counting hits, or just use
+`ps aux | grep pytest`.
+
+A genuine concurrent `pytest tests/api` run *is* disruptive when it happens — it
+writes into shared spaces including `sp_kg_types` and drove the app container to
+98% CPU — but it was present for fewer of these runs than first reported.
+
+Separately, those leftover `apitest_*` spaces sort ahead of `e2e_*`
+alphabetically, which is how one became the default selection that exposed the
+`Indexes.tsx` race above.
+
+### Fourth pass — two more silent-cleanup failures (files) and the cold-start test
+
+Introducing document uploads (issues/018) surfaced three more, all of the same
+family as everything above: **a cleanup that silently did nothing**.
+
+1. **`DELETE /api/files` without `graph_id` is a no-op.** It returns
+   `success:true, status:"no_op"` — "File node not found — no deletion needed" —
+   while the object plainly exists in another graph. `files-crud.spec.ts`
+   omitted the parameter, so its cleanup had *never* deleted anything: **103
+   orphaned FileNodes** had accumulated in the shared graph, eventually pushing
+   that spec's own fixture off page 1 of the Files list. Same visible symptom as
+   the original flake, different root cause. Fixed, residue purged.
+
+2. **Fixing that cleanup exposed a latent shared-fixture bug it had been
+   masking.** `files-crud` has two `describe` blocks that ran in parallel and
+   shared one `cleanupAll()` sweeping everything matching `"E2E"`. While the
+   delete was a no-op this was invisible; the moment it worked, each block began
+   deleting the other's fixtures mid-run. Each block now tracks and cleans only
+   its own URIs — the partitioning `entity-registry-lookups.spec.ts` already
+   documents. *A dead cleanup can hide a second bug; expect one when you fix
+   one.*
+
+3. **Uploads orphan FileNodes.** Deleting a KGDocument does not remove the
+   FileNode holding its original bytes, and a document deleted through the UI is
+   gone before per-test cleanup can look up its URI. The spec now sweeps by URI
+   shape (`urn:kgdocument:…:source`), which covers every path. Verified by
+   count: 2 → 0 across two consecutive runs, stable.
+
+**The post-rebuild segmentation failure is also resolved** — and it was a real
+product inefficiency, not test flake. `kgdocuments-crud.spec.ts` "trigger
+segmentation" failed on the first run after a rebuild three separate times and
+passed on every warm run. Cause: `_get_tokenizer()` called `get_provider(...)`
+with **no cache key**, building a fresh tokenizer and ONNX `InferenceSession` on
+*every* segmentation, then checking an attribute the provider does not have and
+returning `None` — full model-load cost, no benefit, per job. The model is now
+warmed once at startup before the worker starts, and both call sites share the
+cached instance. The spec passes 17/17 on the first cold run.
 
 ## Note on shared fixtures
 
 Two of the three fixed causes trace back to the same structural choice: specs
 share `e2e_test_space` / `urn:e2e:graph:main` and assert against page 1 of a
 list other specs are concurrently filling. Search-scoping the lookups fixes the
-symptom. The structural fix — per-spec spaces, as `indexes-crud` already does —
-would remove the class. `tests/api` also writes into the shared `sp_kg_types`
+symptom. **Sharing itself is not the problem — writing into a shared fixture
+is;** see "Remaining work" item 2 for why per-spec spaces would be the wrong
+remedy and what to do instead. `tests/api` also writes into the shared `sp_kg_types`
 space, so a concurrent pytest run against the same stack can perturb the e2e
 suite.
 
@@ -422,43 +489,112 @@ suite.
 
 Verified against the code, not taken from the notes above.
 
-### 1. The overlapping-fetch race is guarded on 4 pages of ~18
+### 1. ~~The overlapping-fetch race is guarded on 4 pages of ~18~~ ✅ DONE (2026-08-04)
 
-`fetchSeq` is on `KGFrames`, `KGRelations`, `KGEntities`, `Indexes` — the four
-with direct trace evidence. Sampling the rest confirms the vulnerable shape is
-still there: a `useEffect` keyed on page/search/sort that refetches with no
-sequencing or cancellation.
+Extracted `useLatestRequest` (`frontend/src/hooks/useLatestRequest.ts`) and
+applied it to **all 18 list pages**. Zero hand-rolled guards remain.
 
-| Page | Refetches on control change | Guarded |
-|---|---|---|
-| `Triples`, `KGTypes`, `KGDocuments`, `EntityRegistry`, `AgentRegistry` | yes | **no** |
-| `Graphs` | no such effect | n/a |
-| `Files`, `FtsIndexes`, `VectorIndexes`, `FuzzyMappings`, `SearchMappings`, `IndexMappings`, `GeoShapes`, `GraphObjects` | unchecked | **no** |
+Two things the sweep turned up:
 
-This is a **user-visible product bug**, not test noise: change a filter and
-immediately change sort or page, and the older response can land last and leave
-a stale list with no trigger to refetch. Two of the four fixes were found only
-because a test happened to hit it.
+- `EntityRegistry.tsx` and `EntityRegistryDetail.tsx` **already had their own**
+  guards (`fetchIdRef`/`relReqIdRef`), with a comment describing the same bug —
+  someone hit this independently and solved it locally. The table above listed
+  `EntityRegistry` as unguarded; that was wrong. Seven hand-rolled copies
+  existed in total, which is the strongest argument for the shared hook.
+- The hook deliberately discards the response rather than aborting the request.
+  Aborting would mean threading an `AbortSignal` through every service call and
+  does not fix the bug — discarding is what makes the newest write win.
 
-The doc's own conclusion stands: **the remedy is a shared fetch-sequencing hook,
-not the guard repeated 14 more times.** Four hand-rolled copies already exist.
+Pages now covered: `KGFrames`, `KGRelations`, `KGEntities`, `Indexes`,
+`IndexMappings`, `EntityRegistry`, `EntityRegistryDetail`, `Triples`, `KGTypes`,
+`KGDocuments`, `AgentRegistry`, `Files`, `FtsIndexes`, `VectorIndexes`,
+`FuzzyMappings`, `SearchMappings`, `GeoShapes`, `GraphObjects`.
 
-*Coordination note:* `KGDocuments.tsx` is in scope for `issues/018`, which
-another process is working. Sequence the two or the edits will collide.
-
-### 2. Structural: specs share one space
+### 2. Structural: writers should isolate; readers should keep sharing
 
 Two of the three first-pass causes trace to specs sharing `e2e_test_space` /
 `urn:e2e:graph:main` and asserting against page 1 of a list other specs are
-concurrently filling. Search-scoping fixed the symptom. Per-spec spaces — as
-`indexes-crud` already does — would remove the class.
+concurrently filling. Search-scoping fixed the symptom.
 
-### 3. Undecided: should the seeded-space fixture assert its own preconditions?
+**Revised 2026-08-05 — "per-spec spaces" is the wrong prescription.** The
+earlier note here recommended giving every spec its own space, as
+`indexes-crud` does. Checking what the specs actually do says otherwise:
 
-Raised under "Resolved since" and never settled. Two failures were stale data
-(`urn:e2e:probe:e1` residue, `apitest_*` spaces sorting ahead of `e2e_*`), which
-a precondition check would have surfaced as a clear failure instead of a
-confusing one.
+| | count |
+|---|---|
+| Specs using the shared seeded space | ~20 |
+| Of those, specs that **write objects** into it | **5** |
+| Specs already owning an isolated space | 2 (`indexes-crud`, `triples-crud`) |
+
+Most specs are **readers of a read-only fixture**. Isolating them means seeding
+each one — including the FTS and vector indexes, whose ONNX population is the
+slowest thing in the suite — multiplying the expensive part by ~20 to fix a
+problem caused by 5. Worse, some specs are *inherently* about shared state
+(dashboard counts, the spaces list, page navigation); isolating those changes
+what they test rather than stabilising it.
+
+Note what is **not** an objection: cross-page workflows. A spec can own one
+space and drive Entities → Frames → Documents against it — per-*spec* is not
+per-*page*, and `entity-graph-paging` already works this way with its own graph.
+
+Every failure attributed to "sharing" was in fact **a writer polluting the
+shared graph**:
+
+- `kgframes-sorting` adds ~30 fixture frames → pushed `kgframes-crud`'s frame
+  off page 1
+- `files-crud` leaked FileNodes (the upload work added more) → pushed its own
+  fixture off page 1
+- `kgrelations-sorting` — same shape
+
+So the rule that fits the evidence is **writers isolate, readers share**.
+
+#### Follow-on step (not yet done)
+
+Give an isolated space to the writers that are cheap to isolate — they need only
+plain objects, nothing seeded:
+
+- `kgframes-sorting.spec.ts`
+- `kgrelations-sorting.spec.ts`
+- `kgrelations-crud.spec.ts`
+- `files-crud.spec.ts`
+
+Leave `kgdocuments-crud.spec.ts` sharing: it depends on the seeded FTS/vector
+indexes, so isolating it means paying ONNX population per run.
+
+Use the existing `createSpace`/`dropSpace` helpers in `tests/space-fixtures.ts`,
+as `indexes-crud` and `triples-crud` already do.
+
+**Priority: low.** The symptoms this prevents are already handled from three
+directions — search-scoped lookups, the `useLatestRequest` guard, and the
+seeded-fixture precondition check (item 3), which turns residue into a clear
+up-front failure instead of a confusing one. This is tidiness and future-proofing
+now, not a live defect.
+
+### 3. ~~Undecided: should the seeded-space fixture assert its own preconditions?~~ ✅ DONE (2026-08-05)
+
+Yes — added to `e2e/global-setup.ts`, which now verifies the seeded fixture
+after the health check and before any spec runs.
+
+- **Fails** when the seeded graph has missing or unexpected entities, naming the
+  offending URIs and how to clear them.
+- **Warns** about foreign spaces, flagging any that sort ahead of
+  `e2e_test_space` and could become a page's default selection.
+
+Verified by planting the exact residue that caused the original failure. What
+previously surfaced as `expected 3, received 4` in two unrelated specs now
+fails once, up front, as:
+
+```
+Seeded space e2e_test_space/urn:e2e:graph:main has 1 unexpected entity:
+urn:e2e:probe:e1 ("Probe").
+Specs assert exact counts against this graph, so leftovers surface as
+"expected 3, received 4" in unrelated tests.
+Delete them, or reset the stack:
+  docker compose -f docker-compose.test.yml down
+  docker compose -f docker-compose.test.yml up -d --build --wait
+```
+
+Cheap, and it would have saved time on both occasions it was needed.
 
 ### Not remaining
 

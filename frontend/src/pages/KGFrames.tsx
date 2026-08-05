@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 import { useParams, useNavigate } from 'react-router-dom';
 import { apiService } from '../services/ApiService';
 import {
@@ -102,8 +103,13 @@ const KGFrames: React.FC = () => {
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
+
+  // Discard responses from superseded requests — see useLatestRequest.
+  const beginRequest = useLatestRequest();
+
   const fetchFrames = useCallback(async () => {
     if (!selectedSpace || !selectedGraph) return;
+    const isStale = beginRequest();
     try {
       setLoading(true);
       setError(null);
@@ -117,6 +123,7 @@ const KGFrames: React.FC = () => {
         sort_order: (sortBy && (debouncedSearch || formType)) ? sortOrder : undefined,
         form_type: formType || undefined,
       });
+      if (isStale()) return;   // a newer fetch already answered
       const quads: Quad[] = data.results || [];
       const grouped = parseEntitiesFromQuads(quads);
       const parsed: KGFrame[] = grouped.map(e => ({
@@ -129,12 +136,13 @@ const KGFrames: React.FC = () => {
       setFrames(parsed);
       setTotalCount(data.total_count ?? parsed.length);
     } catch {
+      if (isStale()) return;
       setError('Failed to load KG frames.');
       setFrames([]);
     } finally {
-      setLoading(false);
+      if (!isStale()) setLoading(false);
     }
-  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage, debouncedSearch, sortBy, sortOrder, formType]);
+  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage, debouncedSearch, sortBy, sortOrder, formType, beginRequest]);
 
   useEffect(() => { fetchFrames(); }, [fetchFrames]);
 

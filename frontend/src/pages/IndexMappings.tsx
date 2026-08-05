@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Alert,
@@ -122,9 +123,14 @@ const IndexMappings: React.FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+
   // Load mappings from both endpoints
+  // Discard responses from superseded requests — see useLatestRequest.
+  const beginRequest = useLatestRequest();
+
   const loadData = useCallback(async () => {
     if (!selectedSpace) return;
+    const isStale = beginRequest();
     setLoading(true);
     setError(null);
     try {
@@ -168,14 +174,16 @@ const IndexMappings: React.FC = () => {
         ? unified.filter((m) => m.kind === filterKind)
         : unified;
 
+      if (isStale()) return;   // a newer fetch already answered
       setMappings(filtered);
     } catch (err: unknown) {
+      if (isStale()) return;
       setError(err instanceof Error ? err.message : 'Failed to load mappings');
       setMappings([]);
     } finally {
-      setLoading(false);
+      if (!isStale()) setLoading(false);
     }
-  }, [selectedSpace, filterKind, filterType]);
+  }, [selectedSpace, filterKind, filterType, beginRequest]);
 
   useEffect(() => {
     loadData();

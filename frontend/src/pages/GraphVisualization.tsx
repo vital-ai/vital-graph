@@ -1226,9 +1226,13 @@ export default function GraphVisualization() {
             </button>
           </div>
         ))}
+        {/* Disabled until a space is known: handleNewSession returns early
+            without one, so the click was a silent no-op while spaces loaded.
+            See issues/022. */}
         <button
           onClick={handleNewSession}
-          className="h-6 w-6 flex items-center justify-center rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 shrink-0 transition-colors"
+          disabled={!spaceId}
+          className="h-6 w-6 flex items-center justify-center rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 shrink-0 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           title="New session"
         >
           <HiPlus className="w-3.5 h-3.5" />

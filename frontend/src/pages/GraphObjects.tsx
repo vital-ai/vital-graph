@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 import { useParams, useNavigate } from 'react-router-dom';
 import { apiService } from '../services/ApiService';
 import {
@@ -81,8 +82,12 @@ const GraphObjects: React.FC = () => {
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
+  // Discard responses from superseded requests — see useLatestRequest.
+  const beginRequest = useLatestRequest();
+
   const fetchObjects = useCallback(async () => {
     if (!selectedSpace || !selectedGraph) return;
+    const isStale = beginRequest();
     try {
       setLoading(true);
       setError(null);
@@ -100,15 +105,17 @@ const GraphObjects: React.FC = () => {
         properties_count: e.properties_count,
       }));
 
+      if (isStale()) return;   // a newer request already answered
       setObjects(parsed);
       setTotalCount(data.total_count ?? parsed.length);
     } catch {
+      if (isStale()) return;
       setError('Failed to load objects.');
       setObjects([]);
     } finally {
-      setLoading(false);
+      if (!isStale()) setLoading(false);
     }
-  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage, debouncedSearch]);
+  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage, debouncedSearch, beginRequest]);
 
   useEffect(() => { fetchObjects(); }, [fetchObjects]);
 
