@@ -131,6 +131,24 @@ dev = [
     "httpx>=0.27.0",
     "aiohttp>=3.9.0",
     "aiofiles>=23.0.0",
+    # Document conversion. bs4 is a MODULE-LEVEL import in
+    # document.kgdocument_segmentation_processor, so four unit test modules
+    # fail at COLLECTION without it — that is what broke CI, and only bs4
+    # showed because collection stops there.
+    #   tests/unit/test_document_converter.py
+    #   tests/unit/test_kgdocument_quad_encoding.py      -> endpoint.kgdocuments_endpoint
+    #   tests/unit/test_kgdocument_write_protection.py   -> endpoint.kgdocuments_endpoint
+    #   tests/unit/test_segment_deletion.py              -> document.segment_deletion
+    # The other three are imported lazily inside document_converter, so they do
+    # not break collection — but test_document_converter EXERCISES every
+    # branch, so fixing bs4 alone would just move the failure:
+    #   markdownify -> HTML  (document_converter.py:109)
+    #   mammoth     -> DOCX  (:123)
+    #   pdfplumber  -> PDF   (:152)
+    "beautifulsoup4>=4.12.0",
+    "markdownify>=0.13.0",
+    "mammoth>=1.8.0",
+    "pdfplumber>=0.11.0",
 ]
 
 # Testing utilities
