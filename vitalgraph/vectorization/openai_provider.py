@@ -15,6 +15,10 @@ from vitalgraph.vectorization.base import VectorizationProvider
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "text-embedding-3-small"
+
+# Max input accepted by the embeddings API for every current model. Text beyond
+# this is rejected/truncated, so segmentation must stay under it.
+OPENAI_MAX_INPUT_TOKENS = 8191
 DEFAULT_DIMENSIONS = 1536
 DEFAULT_BATCH_SIZE = 100
 
@@ -64,6 +68,10 @@ class OpenAIProvider(VectorizationProvider):
     @property
     def dimensions(self) -> int:
         return self._dim
+
+    @property
+    def max_input_tokens(self) -> Optional[int]:
+        return OPENAI_MAX_INPUT_TOKENS
 
     @property
     def provider_name(self) -> str:

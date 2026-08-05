@@ -51,13 +51,38 @@ class DocumentSegmenter:
     the vector provider's tokenizer.
     """
 
-    def __init__(self, tokenizer: Optional[Callable[[str], int]] = None):
+    def __init__(
+        self,
+        tokenizer: Optional[Callable[[str], int]] = None,
+        max_input_tokens: Optional[int] = None,
+    ):
         """
         Args:
             tokenizer: Function that returns token count for a given text.
                        If None, uses a simple whitespace-based approximation.
+            max_input_tokens: Hard ceiling from the embedding model. Segment
+                       sizes are clamped to it, so a stored config asking for
+                       more cannot produce segments the model would truncate.
         """
         self._tokenizer = tokenizer or self._default_tokenizer
+        self._max_input_tokens = max_input_tokens
+        self._clamp_warned = False
+
+    def _effective_max_tokens(self, configured: int) -> int:
+        """Configured segment ceiling, bounded by what the model can embed."""
+        if self._max_input_tokens and configured > self._max_input_tokens:
+            # Once per segmenter — this is consulted per section, and a
+            # per-section warning buries the log for a large document.
+            if self._clamp_warned:
+                return self._max_input_tokens
+            self._clamp_warned = True
+            logger.warning(
+                "max_segment_tokens=%d exceeds the embedding model's limit of %d; "
+                "clamping — longer segments would be truncated at embed time.",
+                configured, self._max_input_tokens,
+            )
+            return self._max_input_tokens
+        return configured
 
     @staticmethod
     def _default_tokenizer(text: str) -> int:
@@ -113,7 +138,7 @@ class DocumentSegmenter:
             section_heading = section.get("heading")
             token_count = self._tokenizer(section_text)
 
-            if token_count <= config.max_segment_tokens:
+            if token_count <= self._effective_max_tokens(config.max_segment_tokens):
                 if token_count >= config.min_segment_tokens:
                     results.append(SegmentResult(
                         content=section_text,
@@ -155,7 +180,7 @@ class DocumentSegmenter:
                 # Oversized section — recursive split
                 sub_chunks = self._recursive_split(
                     section_text,
-                    config.max_segment_tokens,
+                    self._effective_max_tokens(config.max_segment_tokens),
                     config.overlap_tokens,
                 )
                 for chunk in sub_chunks:
@@ -272,7 +297,7 @@ class DocumentSegmenter:
     ) -> List[SegmentResult]:
         """Split text using recursive character splitting."""
         chunks = self._recursive_split(
-            text, config.max_segment_tokens, config.overlap_tokens
+            text, self._effective_max_tokens(config.max_segment_tokens), config.overlap_tokens
         )
 
         results: List[SegmentResult] = []

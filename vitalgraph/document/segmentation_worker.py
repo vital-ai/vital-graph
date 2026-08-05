@@ -361,7 +361,9 @@ class SegmentationWorker:
         from vitalgraph.document import KGDocumentSegmentationProcessor
 
         tokenizer = self._get_tokenizer()
-        processor = KGDocumentSegmentationProcessor(tokenizer=tokenizer)
+        processor = KGDocumentSegmentationProcessor(
+            tokenizer=tokenizer, max_input_tokens=self._get_max_input_tokens(),
+        )
 
         output = processor.process(
             original_uri=document_uri,
@@ -532,15 +534,40 @@ class SegmentationWorker:
             return None  # Auto-detect
 
     def _get_tokenizer(self):
-        """Get tokenizer from vector provider if available."""
+        """
+        Token counter from the shared local embedding model, or None.
+
+        Uses the process-wide cached provider. The previous version called
+        `get_provider("vitalsigns_onnx")` with no cache key, which built a fresh
+        tokenizer and ONNX InferenceSession on EVERY call — hundreds of ms to
+        seconds — and then looked for a `_tokenizer` attribute the provider does
+        not have, so it discarded the model and returned None anyway. That load
+        landed inside each segmentation request.
+        """
         try:
-            from vitalgraph.vectorization import get_provider
-            provider = get_provider("vitalsigns_onnx")
-            if provider and hasattr(provider, "_tokenizer"):
-                return provider._tokenizer
+            from vitalgraph.vectorization import get_local_provider
+            provider = get_local_provider()
+            embedder = getattr(provider, "_embedder", None) if provider else None
+            tokenizer = getattr(embedder, "tokenizer", None) if embedder else None
+            if tokenizer is not None:
+                return lambda text: len(tokenizer.encode(text))
+        except Exception as e:
+            logger.debug("Model tokenizer unavailable, using whitespace count: %s", e)
+        return None  # Falls back to whitespace tokenizer
+
+    def _get_max_input_tokens(self):
+        """
+        The embedding model's input ceiling, or None if unknown.
+
+        Segments longer than this are truncated at embed time, so the segmenter
+        clamps to it. Reads the shared cached provider — no model load.
+        """
+        try:
+            from vitalgraph.vectorization import get_local_provider
+            provider = get_local_provider()
+            return provider.max_input_tokens if provider else None
         except Exception:
-            pass
-        return None
+            return None
 
     async def _delete_existing_segmentation(
         self, backend_impl, space_id: str, graph_id: str,

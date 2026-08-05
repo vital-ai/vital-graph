@@ -45,6 +45,16 @@ class VitalSignsProvider(VectorizationProvider):
         return self._dim
 
     @property
+    def max_input_tokens(self) -> Optional[int]:
+        """Read from the bundled model's tokenizer rather than hardcoded."""
+        try:
+            limit = int(self._embedder.tokenizer.model_max_length)
+            # Some tokenizers use a sentinel (very large int) for "no limit".
+            return limit if 0 < limit < 1_000_000 else None
+        except Exception:
+            return None
+
+    @property
     def provider_name(self) -> str:
         return PROVIDER_NAME
 

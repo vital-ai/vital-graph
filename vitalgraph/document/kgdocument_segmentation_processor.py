@@ -15,15 +15,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, List, Optional, Tuple, Union
 
+from bs4 import BeautifulSoup
+
 from vitalgraph.document.document_segmenter import DocumentSegmenter, SegmentResult
 from vitalgraph.document.segment_config import MarkdownSegmentConfig, PlainSplitConfig
 from vitalgraph.document.segment_deletion import mint_uri
 
 logger = logging.getLogger(__name__)
-
-# HTML tag stripping regex (simple fallback; prefer BeautifulSoup if available)
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
-
 
 @dataclass
 class SegmentationOutput:
@@ -38,15 +36,21 @@ class SegmentationOutput:
 
 
 def strip_html(html_content: str) -> str:
-    """Strip HTML tags from content. Uses BeautifulSoup if available, else regex."""
-    try:
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(html_content, "html.parser")
-        return soup.get_text(separator="\n")
-    except ImportError:
-        # Fallback to regex
-        text = _HTML_TAG_RE.sub("", html_content)
-        return text
+    """
+    Strip HTML tags, leaving the text.
+
+    ``beautifulsoup4`` is a declared dependency (pyproject), so it is imported
+    directly. This used to sit behind ``try/except ImportError`` with a regex
+    fallback — and because bs4 was never actually declared, the fallback was the
+    only path that ever ran, silently producing worse text for years. A missing
+    dependency should fail loudly at import, not quietly degrade output quality.
+
+    Note this discards structure: headings become plain lines. Upload ingest
+    converts HTML to Markdown instead (see ``document_converter``); this remains
+    for documents that carry only ``hasKGDocumentHTMLContent``.
+    """
+    soup = BeautifulSoup(html_content, "html.parser")
+    return soup.get_text(separator="\n")
 
 
 def extract_content(document_properties: dict) -> Optional[str]:
@@ -119,13 +123,19 @@ class KGDocumentSegmentationProcessor:
             and stored in the RDF quad store).
     """
 
-    def __init__(self, tokenizer: Optional[Callable[[str], int]] = None):
+    def __init__(
+        self,
+        tokenizer: Optional[Callable[[str], int]] = None,
+        max_input_tokens: Optional[int] = None,
+    ):
         """
         Args:
             tokenizer: Token counting function matching vector provider.
                        If None, uses whitespace approximation.
         """
-        self._segmenter = DocumentSegmenter(tokenizer=tokenizer)
+        self._segmenter = DocumentSegmenter(
+            tokenizer=tokenizer, max_input_tokens=max_input_tokens,
+        )
 
     def process(
         self,

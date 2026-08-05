@@ -22,6 +22,27 @@ PROVIDER_ALIASES: Dict[str, str] = {}
 # Cache of instantiated providers (keyed by a unique config fingerprint)
 _provider_cache: Dict[str, VectorizationProvider] = {}
 
+# Instances keyed by what determines their behaviour (provider + config) rather
+# than by which caller asked. Several subsystems request "the local model" under
+# their own cache keys; without this each gets its own ONNX session.
+_instance_by_signature: Dict[str, VectorizationProvider] = {}
+
+
+def _provider_signature(provider_name: str, config: Optional[Dict[str, Any]]) -> str:
+    """Stable key for a (provider, config) pair."""
+    import json
+    return provider_name + "|" + json.dumps(config or {}, sort_keys=True, default=str)
+
+
+# Cache key for the process-wide local embedding model.
+#
+# Loading it builds a tokenizer and an ONNX InferenceSession — hundreds of
+# milliseconds to seconds on a cold container. Anything that just needs "the
+# local model" must share ONE instance under this key rather than constructing
+# its own, or the load is paid again on every call. Warmed at startup by
+# `warm_local_provider()` so the cost never lands inside a request.
+LOCAL_PROVIDER_CACHE_KEY = "shared:local-embedding-model"
+
 
 def register_provider(name: str, cls: Type[VectorizationProvider]) -> None:
     """Register a vectorization provider class by its canonical name."""
@@ -88,7 +109,22 @@ def get_provider(
             f"Available providers: {available}"
         )
 
-    instance = cls.from_config(config or {})
+    # Reuse an existing instance with the same provider + config, even when the
+    # caller asked under a different cache_key.
+    #
+    # Callers key by their own identity — the agent registry, the entity
+    # registry, each vector index, the startup warm-up — so identical
+    # configurations each built their own model. For the local ONNX provider
+    # that means a separate tokenizer and InferenceSession per caller: two were
+    # being constructed at startup alone. Keying instances by what actually
+    # determines behaviour collapses those to one.
+    signature = _provider_signature(provider_name, config)
+    instance = _instance_by_signature.get(signature)
+    if instance is None:
+        instance = cls.from_config(config or {})
+        _instance_by_signature[signature] = instance
+    else:
+        logger.debug("Reusing provider instance for %s", signature)
 
     if cache_key:
         _provider_cache[cache_key] = instance
@@ -183,6 +219,7 @@ def validate_index_dimensions(
 def clear_cache() -> None:
     """Clear the provider instance cache."""
     _provider_cache.clear()
+    _instance_by_signature.clear()
 
 
 def _register_builtin_providers() -> None:
@@ -209,3 +246,44 @@ def _register_builtin_providers() -> None:
 
 # Auto-register built-in providers on import
 _register_builtin_providers()
+
+
+def warm_local_provider() -> Optional[VectorizationProvider]:
+    """
+    Load the local embedding model once, ahead of any request.
+
+    Call during application startup. Returns the cached provider, or None if the
+    model is unavailable — warming is an optimisation, so a failure here must not
+    stop the app from starting; the first real use will surface the error.
+    """
+    try:
+        from vitalgraph.vectorization.vitalsigns_provider import PROVIDER_NAME
+        provider = get_provider(PROVIDER_NAME, cache_key=LOCAL_PROVIDER_CACHE_KEY)
+        # Construction builds the session; the FIRST inference is what pays for
+        # graph optimisation and memory arena setup, so do one here too.
+        embedder = getattr(provider, "_embedder", None)
+        if embedder is not None:
+            embedder.vectorize("warm")
+        logger.info(
+            "Local embedding model warmed: %s (%s dims)",
+            provider.model_name, provider.dimensions,
+        )
+        return provider
+    except Exception as e:
+        logger.warning("Could not warm the local embedding model: %s", e)
+        return None
+
+
+def get_local_provider() -> Optional[VectorizationProvider]:
+    """
+    The shared local embedding provider, loading it if warming has not run.
+
+    Prefer this over `get_provider(VITALSIGNS_ONNX)` with no cache key — that
+    builds and discards a whole ONNX session per call.
+    """
+    try:
+        from vitalgraph.vectorization.vitalsigns_provider import PROVIDER_NAME
+        return get_provider(PROVIDER_NAME, cache_key=LOCAL_PROVIDER_CACHE_KEY)
+    except Exception as e:
+        logger.warning("Local embedding provider unavailable: %s", e)
+        return None

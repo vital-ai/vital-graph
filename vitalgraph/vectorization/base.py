@@ -3,7 +3,7 @@ Abstract base class for vectorization providers.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Any
+from typing import Any, Dict, List, Optional
 
 
 class VectorizationProvider(ABC):
@@ -50,6 +50,18 @@ class VectorizationProvider(ABC):
     def provider_name(self) -> str:
         """Return the canonical provider name (e.g., 'vitalsigns_onnx', 'openai')."""
         ...
+
+    @property
+    def max_input_tokens(self) -> Optional[int]:
+        """
+        Longest input the model accepts, in ITS OWN tokens, or None if unknown.
+
+        Text beyond this is truncated by the model, silently — the tail simply
+        never reaches the vector. Segmentation uses this to bound segment size,
+        so a segment can never be built larger than what will actually be
+        embedded. Providers that know their limit should override.
+        """
+        return None
 
     @property
     def model_name(self) -> str:
