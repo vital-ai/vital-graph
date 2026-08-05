@@ -1,6 +1,79 @@
 # Unknown Predicates Are Silently Dropped on Write
 
-## Status: OPEN
+## Status: FIXED (2026-08-05) — warns; still does not reject
+
+Items 1 and 3 done. Item 2 (`dropped_predicates` in the response) is
+deliberately not done — see below.
+
+### What it does now
+
+```
+WARNING quad_list_to_graphobjects: 2 predicate(s) not properties of KGDocument
+        were dropped: hasKGDocumentFileNode (Edge_hasKGDocumentFileNode is an
+        Edge class — model it as an edge object with
+        hasEdgeSource/hasEdgeDestination, not as a predicate),
+        hasTotallyMadeUpProperty
+```
+
+The predicates are **still dropped**. This is a diagnostic, not a behaviour
+change, for the reason argued below: the failure mode is silence, not
+permissiveness, and rejecting would break callers relying on tolerance.
+
+### How
+
+`_allowed_property_uris(type_uri)` resolves the class through the VitalSigns
+registry (`get_vitalsigns_class`) and reads `get_allowed_properties()`, cached
+per type — a bulk write converts many subjects of the same few types.
+
+It returns `None`, not an empty set, when the class cannot be resolved. `None`
+means *cannot say*; an empty set would mean *nothing is allowed* and would
+accuse every predicate on every custom type. Nothing is logged in that case.
+
+`_predicate_hint` supplies item 3: if the dropped predicate is itself a class,
+or if `Edge_<name>` exists in the same namespace, it says so. That is the trap
+that cost the debugging session in issue 018.
+
+### Both paths, deliberately
+
+`_warn_dropped_predicates` is called from the fast path *and* from the rdflib
+fallback, which needed its own call and a small adapter
+(`_subject_map_from_triples`) because it never builds a property map. Per the
+correction above, they do not share a fix site — and the fallback runs only
+after the fast path raised, which is the worst moment to lose a diagnostic.
+
+### Item 2 not done
+
+Threading `dropped_predicates` into `QuadResultsResponse` means carrying the
+information up through the conversion utility, the space impl and the endpoint.
+The log line already turns the debugging session described below into a grep,
+which was the stated goal. Worth doing if a client ever needs to act on it
+programmatically; noted rather than silently skipped.
+
+### One thing this is not
+
+An **unregistered class** already fails loudly — VitalSigns'
+`get_vitalsigns_class` raises, the fast path falls back, and the fallback
+raises too. The silent case is a *known* class with an *unknown predicate*, and
+that is what this fix addresses.
+
+### Verification
+
+`tests/unit/test_dropped_predicate_warning.py` — 12 tests: the warning fires
+and names the count and class; valid predicates produce **no** warning; the
+Edge hint appears only when an Edge class actually exists; the rdflib fallback
+warns too; an unresolvable class stays silent; and the predicates are still
+dropped rather than rejected.
+
+Full local suite 2272 passed (three consecutive runs), `tests/api` 511 passed
+against a rebuilt stack.
+
+## Scope note: the conversion layer, not only the write path
+
+The title says "on write" because that is where it bit, but the drop happens in
+`quads → GraphObject` conversion, which the **read** path also uses via
+`graphobjects_to_quad_list`. The round-trip in the reproduction is what makes
+the loss visible at all. Anyone debugging a predicate missing from a read should
+land here too.
 
 ## Summary
 
@@ -49,8 +122,24 @@ The drop is inside the library, but vitalgraph is where the information needed
 to warn still exists: at `:428` the code has both `p_uri` and the subject's
 `type_uri` in hand, immediately before the properties are handed over.
 
-Note the fast path and the rdflib fallback (`_quad_list_to_graphobjects_rdflib`)
-both funnel through the same place, so one fix covers both.
+**Correction (verified 2026-08-05):** the fast path and the rdflib fallback do
+**not** share a fix site. They use different VitalSigns entry points —
+
+| path | entry point |
+|---|---|
+| fast (`_quad_list_to_graphobjects_fast`) | `GraphObject.from_property_maps` (`:450`) |
+| fallback (`_quad_list_to_graphobjects_rdflib`) | `GraphObject.from_triples_list` (`:471`) |
+
+— and the fallback never builds a property map at all, so a fix at `:428` would
+miss it. Both drop the predicates identically (confirmed by running the
+reproduction through each), so the *symptom* is shared; only the fix location
+is not.
+
+This matters more than it looks: the fallback is reached only when the fast
+path **raises** (`:311-315`). A fast-path-only fix would go silent precisely
+when something has already gone wrong — the worst moment to lose a diagnostic.
+The check therefore belongs in the public entry point, which both paths return
+through.
 
 ## Suggested fix
 

@@ -292,6 +292,113 @@ def _graphobjects_to_quad_list_fast(
     return quads
 
 
+# ---------------------------------------------------------------------------
+# Dropped-predicate diagnostics (issue 036)
+# ---------------------------------------------------------------------------
+
+#: type_uri -> frozenset of property URIs the class accepts. Resolving a class
+#: and reading its allowed properties is not free, and a bulk write converts
+#: many subjects of the same few types.
+_ALLOWED_PROPS_CACHE: dict = {}
+
+#: Scaffolding predicates handled structurally, never part of the property map.
+#: Read lazily — the constants are defined further down the module.
+def _structural_predicates() -> frozenset:
+    return frozenset({_RDF_TYPE, _VITALTYPE, _URI_PROP})
+
+
+def _allowed_property_uris(type_uri: str):
+    """Property URIs accepted by the class *type_uri*, or None if unresolvable.
+
+    None means "cannot say" — an unregistered type is not evidence that a
+    predicate is wrong, so callers must not warn on it.
+    """
+    if type_uri in _ALLOWED_PROPS_CACHE:
+        return _ALLOWED_PROPS_CACHE[type_uri]
+
+    allowed = None
+    try:
+        from vital_ai_vitalsigns.vitalsigns import VitalSigns
+        cls = VitalSigns().get_registry().get_vitalsigns_class(type_uri)
+        if cls is not None:
+            allowed = frozenset(
+                p['uri'] for p in cls().get_allowed_properties() if 'uri' in p
+            )
+    except Exception as e:  # unregistered type, ontology not loaded, etc.
+        logger.debug("Could not resolve allowed properties for %s: %s", type_uri, e)
+
+    _ALLOWED_PROPS_CACHE[type_uri] = allowed
+    return allowed
+
+
+def _predicate_hint(pred_uri: str) -> Optional[str]:
+    """Explain a dropped predicate when it is really a class.
+
+    The trap that motivated this: `hasKGDocumentFileNode` is an Edge *class*,
+    not a property, so writing it as a plain predicate is silently discarded
+    (issue 036). Naming that turns a debugging session into a log line.
+    """
+    try:
+        from vital_ai_vitalsigns.vitalsigns import VitalSigns
+        registry = VitalSigns().get_registry()
+
+        def is_class(uri: str) -> bool:
+            try:
+                return registry.get_vitalsigns_class(uri) is not None
+            except Exception:
+                return False
+
+        if is_class(pred_uri):
+            return "is a class, not a property"
+
+        ns, sep, local = pred_uri.rpartition('#')
+        if sep and is_class(f"{ns}#Edge_{local}"):
+            return (f"Edge_{local} is an Edge class — model it as an edge object "
+                    f"with hasEdgeSource/hasEdgeDestination, not as a predicate")
+    except Exception:
+        pass
+    return None
+
+
+def _warn_dropped_predicates(subjects: dict) -> None:
+    """Log predicates that the resolved class will not accept.
+
+    Warns rather than rejects: the failure mode here is silence, not
+    permissiveness, and rejecting would break callers that currently rely on
+    extra predicates being tolerated (issue 036).
+
+    Called from the public entry point so it covers the fast path and the
+    rdflib fallback alike — they use different VitalSigns entry points and do
+    not share a fix site.
+    """
+    dropped_by_type: dict = {}
+    structural = _structural_predicates()
+
+    for data in subjects.values():
+        type_uri = data.get('type_uri')
+        if not type_uri:
+            continue
+        allowed = _allowed_property_uris(type_uri)
+        if allowed is None:
+            continue  # cannot resolve the class — say nothing rather than guess
+        for pred in data.get('properties', {}):
+            if pred in structural or pred in allowed:
+                continue
+            dropped_by_type.setdefault(type_uri, set()).add(pred)
+
+    for type_uri, preds in dropped_by_type.items():
+        details = []
+        for pred in sorted(preds):
+            hint = _predicate_hint(pred)
+            local = pred.rpartition('#')[2] or pred
+            details.append(f"{local} ({hint})" if hint else local)
+        logger.warning(
+            "quad_list_to_graphobjects: %d predicate(s) not properties of %s "
+            "were dropped: %s",
+            len(preds), type_uri.rpartition('#')[2] or type_uri,
+            ", ".join(details))
+
+
 def quad_list_to_graphobjects(quads: List[Quad]) -> List[GraphObject]:
     """Convert a list of Quad models back to VitalSigns GraphObjects.
 
@@ -447,6 +554,11 @@ def _quad_list_to_graphobjects_fast(quads: List[Quad]) -> List[GraphObject]:
     if not entries:
         return []
 
+    # Predicates the resolved class will not accept are dropped by
+    # from_property_maps without a word (issue 036). Warn while the requested
+    # predicates and the type URI are both still in hand.
+    _warn_dropped_predicates(subjects)
+
     graph_objects = GraphObject.from_property_maps(entries)
     logger.debug("Converted %d quads to %d GraphObjects (fast path)", len(quads), len(graph_objects))
     return graph_objects
@@ -455,6 +567,23 @@ def _quad_list_to_graphobjects_fast(quads: List[Quad]) -> List[GraphObject]:
 # ---------------------------------------------------------------------------
 # Original rdflib path — kept for fallback / revert
 # ---------------------------------------------------------------------------
+
+
+def _subject_map_from_triples(triples_list) -> dict:
+    """Shape rdflib triples like the fast path's subject map, for the check.
+
+    Only the fields `_warn_dropped_predicates` reads are populated.
+    """
+    subjects: dict = {}
+    for s_term, p_term, o_term in triples_list:
+        s_uri, p_uri = str(s_term), str(p_term)
+        entry = subjects.setdefault(s_uri, {'type_uri': None, 'properties': {}})
+        if p_uri in (_RDF_TYPE, _VITALTYPE):
+            entry['type_uri'] = str(o_term)
+        else:
+            entry['properties'][p_uri] = str(o_term)
+    return subjects
+
 
 def _quad_list_to_graphobjects_rdflib(quads: List[Quad]) -> List[GraphObject]:
     """ORIGINAL: Convert quads to GraphObjects via rdflib. Kept for revert."""
@@ -467,7 +596,13 @@ def _quad_list_to_graphobjects_rdflib(quads: List[Quad]) -> List[GraphObject]:
         o = nquads_term_to_rdflib(quad.o)
         g.add((s, p, o))
 
-    triples_list = list(g.triples((None, None, None)))
+    # This path uses a different VitalSigns entry point and never builds a
+    # property map, so it needs its own call — and it is reached only when the
+    # fast path raised, which is exactly when a silent drop is worst
+    # (issue 036).
+    _warn_dropped_predicates(_subject_map_from_triples(triples_list := list(
+        g.triples((None, None, None)))))
+
     graph_objects = GraphObject.from_triples_list(triples_list)
     logger.debug("Converted %d quads to %d GraphObjects (rdflib path)", len(quads), len(graph_objects))
     return graph_objects
