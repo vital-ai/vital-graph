@@ -950,6 +950,14 @@ class SparqlSQLSchema:
             f"DROP TABLE IF EXISTS {space_id}_segmentation_jobs CASCADE"
         )
 
+        # Same for document_segmentation_config, created on demand by
+        # SegmentationConfigManager (segmentation_config_manager.py:85). It was
+        # missed here, so every space ever created left one behind: a local test
+        # stack had 116 orphans (7.4 MB) belonging to spaces long deleted.
+        await conn.execute(
+            f"DROP TABLE IF EXISTS {space_id}_document_segmentation_config CASCADE"
+        )
+
         # Also drop any trigger functions left by FTS data tables
         fn_rows = await conn.fetch(
             "SELECT routine_name FROM information_schema.routines "
@@ -968,7 +976,66 @@ class SparqlSQLSchema:
         schema = SparqlSQLSchema()
         for stmt in schema.drop_space_tables_sql(space_id):
             await conn.execute(stmt)
+
+        # Final sweep: anything still named for this space.
+        #
+        # Everything above is a hand-maintained list, and on-demand tables keep
+        # being added without anyone updating it — segmentation_jobs was caught
+        # once, document_segmentation_config was missed and leaked one table per
+        # space ever created (116 orphans on one local stack). This makes the
+        # drop self-healing: a new on-demand table is removed automatically, and
+        # the warning names it so the explicit list can be updated.
+        all_tables = [
+            r["table_name"] for r in await conn.fetch(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'public'"
+            )
+        ]
+        other_space_ids = [
+            r["space_id"] for r in await conn.fetch("SELECT space_id FROM space")
+            if r["space_id"] != space_id
+        ]
+        leftovers = SparqlSQLSchema.orphan_tables_for_space(
+            all_tables, space_id, other_space_ids,
+        )
+        if leftovers:
+            logger.warning(
+                "drop_space(%s): %d table(s) not in the explicit drop list — "
+                "dropping and worth adding there: %s",
+                space_id, len(leftovers), ", ".join(sorted(leftovers)),
+            )
+            for tbl in leftovers:
+                await conn.execute(f'DROP TABLE IF EXISTS "{tbl}" CASCADE')
+
         logger.info("Dropped space tables for: %s", space_id)
+
+    @staticmethod
+    def orphan_tables_for_space(
+        all_tables: List[str], space_id: str, other_space_ids: List[str],
+    ) -> List[str]:
+        """
+        Tables named for ``space_id`` that survived the explicit drops.
+
+        Prefix matching is done in Python rather than SQL ``LIKE`` on purpose:
+        ``_`` is a LIKE wildcard, so ``LIKE 'my_space_%'`` also matches
+        ``myXspace_...``. More importantly, one space id can be a prefix of
+        another — dropping ``e2e_test`` must never take ``e2e_test_extra``'s
+        tables with it — so any table belonging to a longer space id is excluded.
+        """
+        prefix = f"{space_id}_"
+        # Space ids that would themselves match our prefix, longest first.
+        shadowing = sorted(
+            (sid for sid in other_space_ids if sid.startswith(prefix)),
+            key=len, reverse=True,
+        )
+        out = []
+        for tbl in all_tables:
+            if not tbl.startswith(prefix):
+                continue
+            if any(tbl.startswith(f"{sid}_") or tbl == sid for sid in shadowing):
+                continue  # belongs to a different, longer-named space
+            out.append(tbl)
+        return out
 
     @staticmethod
     async def space_tables_exist(conn, space_id: str) -> bool:

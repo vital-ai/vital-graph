@@ -20,6 +20,28 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _split_endpoint(endpoint_url: Optional[str]) -> tuple:
+    """
+    Split a storage endpoint into (host, scheme).
+
+    Accepts both forms callers actually use — 'minio:9000' and
+    'http://minio:9000' — and returns the bare host[:port] plus the scheme when
+    one was given explicitly (else None). Trailing slashes are dropped so
+    joining a path never produces a double slash.
+
+    Returns (None, None) for a missing endpoint (the AWS S3 case).
+    """
+    if not endpoint_url:
+        return None, None
+
+    scheme = None
+    host = endpoint_url.strip()
+    if "://" in host:
+        scheme, host = host.split("://", 1)
+        scheme = scheme.lower()
+    return host.rstrip("/"), scheme
+
+
 class S3FileManager:
     """Unified S3-compatible file manager supporting both AWS S3 and MinIO."""
     
@@ -40,24 +62,45 @@ class S3FileManager:
         if not MINIO_AVAILABLE:
             raise ImportError("minio package not installed. Install with: pip install minio")
         
+        # Normalise the endpoint ONCE, here.
+        #
+        # Callers supply it both ways — the docstring says 'localhost:9000' but
+        # deployments set 'http://minio:9000' (see STORAGE_ENDPOINT in
+        # docker-compose). Every consumer used to re-derive what it needed:
+        # the client stripped the scheme into a local variable, while
+        # get_file_url prepended one unconditionally and produced
+        # 'http://http://minio:9000/...'. Normalising here means no consumer has
+        # to think about it, and a new one cannot get it wrong.
+        self.endpoint_host, endpoint_scheme = _split_endpoint(endpoint_url)
+
+        # An explicit scheme in the endpoint is the more specific statement, so
+        # it wins over `use_ssl`. Contradictions are almost always a config
+        # mistake — say so rather than silently connecting the wrong way.
+        if endpoint_scheme is not None:
+            scheme_ssl = endpoint_scheme == "https"
+            if scheme_ssl != use_ssl:
+                logger.warning(
+                    "Endpoint '%s' specifies %s but use_ssl=%s; using %s from the endpoint.",
+                    endpoint_url, endpoint_scheme, use_ssl, endpoint_scheme,
+                )
+            use_ssl = scheme_ssl
+
+        # Raw, as configured — for logging and error messages ONLY. It may or
+        # may not carry a scheme. Anything building a URL or connecting must use
+        # `endpoint_host` (scheme-free) instead; using this is what produced
+        # 'http://http://minio:9000/...'.
         self.endpoint_url = endpoint_url
         self.access_key_id = access_key_id
         self.secret_access_key = secret_access_key
         self.bucket_name = bucket_name
         self.use_ssl = use_ssl
         self.region = region
-        
+
         # Initialize MinIO client
         if endpoint_url:
-            # MinIO or custom S3-compatible endpoint
-            # Strip scheme if present — Minio() expects host:port only
-            clean_endpoint = endpoint_url
-            if clean_endpoint.startswith("http://"):
-                clean_endpoint = clean_endpoint[len("http://"):]
-            elif clean_endpoint.startswith("https://"):
-                clean_endpoint = clean_endpoint[len("https://"):]
+            # MinIO or custom S3-compatible endpoint. Minio() wants host:port.
             self.client = Minio(
-                clean_endpoint,
+                self.endpoint_host,
                 access_key=access_key_id,
                 secret_key=secret_access_key,
                 secure=use_ssl
@@ -317,10 +360,11 @@ class S3FileManager:
         bucket = bucket_name or self.bucket_name
         
         # Construct the URL based on endpoint
-        if self.endpoint_url:
-            # MinIO or custom S3-compatible endpoint
+        if self.endpoint_host:
+            # endpoint_host is already scheme-free (normalised in __init__), so
+            # this cannot produce 'http://http://minio:9000/...'.
             protocol = "https" if self.use_ssl else "http"
-            url = f"{protocol}://{self.endpoint_url}/{bucket}/{object_key}"
+            url = f"{protocol}://{self.endpoint_host}/{bucket}/{object_key}"
         else:
             # AWS S3
             url = f"https://s3.{self.region}.amazonaws.com/{bucket}/{object_key}"

@@ -6,16 +6,25 @@
 #   - Distinct project name (vg-test) to avoid image/network collisions
 #     with the dev stack (vital-graph)
 #   - PostgreSQL included (dev compose relies on host-local PG)
-#   - No persistent volumes — every `up` starts from a clean database
+#   - No persistent volumes — BUT the data lives in the postgres *container*,
+#     so it survives `up --build`. Only `down` (which removes the container)
+#     resets it. See Usage below and issues/035.
 #   - Non-default ports (8002, 5433, 7071) — runs alongside dev stack
 #   - VG_AUTO_INIT=true triggers admin table initialization on startup
 #   - Bootstrap admin credentials set via AUTH_ROOT_USERNAME/PASSWORD
 #
-# Usage:
+# Usage — the `down` is what gives you a clean database, NOT `--build`:
+#   docker compose -f docker-compose.test.yml down
 #   docker compose -f docker-compose.test.yml up -d --build --wait
 #   python -m tests.shared.seed_ui_test_data
 #   cd e2e && npx playwright test
-#   docker compose -f docker-compose.test.yml down
+#
+# Skipping the `down` keeps the existing database. `up --build` only recreates
+# containers whose own image or config changed, so rebuilding the app image
+# leaves the postgres container — and everything in it — running. Test data then
+# accumulates across builds: one local stack reached 426 registry tombstones and
+# 116 orphaned tables that way. `e2e/run-tests.sh` already does the `down` for
+# you (unless --no-down).
 #
 # Running the pytest API suite (tests/api) against THIS stack
 # -----------------------------------------------------------
@@ -65,7 +74,8 @@ services:
       POSTGRES_PASSWORD: testpass
     ports:
       - "5433:5432"
-    # No volumes — starts empty every time
+    # No volumes: PGDATA lives in the container's writable layer, so it is
+    # wiped when the CONTAINER is recreated — not when the image is rebuilt.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 2s

@@ -299,11 +299,59 @@ async def _seed_registry_reference_types(client) -> None:
                     filename, created, skipped)
 
 
+async def _find_seeded_entities(client) -> list:
+    """
+    Live registry entities whose primary_name is exactly REGISTRY_PRIMARY_NAME.
+
+    `search_entities` filters to status='active' by default, so soft-deleted
+    tombstones are excluded — matching them would make the seed think the entity
+    still exists after it was deleted. The query is an ILIKE over name and
+    aliases, so it can return near-matches; compare the name exactly.
+    """
+    PAGE_SIZE = 100  # the endpoint's maximum
+    found, page = [], 1
+    while True:
+        resp = await client.entity_registry.search_entities(
+            query=REGISTRY_PRIMARY_NAME, status="active", page=page, page_size=PAGE_SIZE,
+        )
+        entities = getattr(resp, "entities", None) or []
+        found.extend(e for e in entities if e.primary_name == REGISTRY_PRIMARY_NAME)
+        if len(entities) < PAGE_SIZE:
+            return found
+        page += 1
+
+
 async def _seed_entity_registry(client) -> None:
-    """Create a seeded entity-registry entry."""
+    """
+    Create the seeded entity-registry entry, once.
+
+    Idempotent by necessity: `primary_name` has no unique constraint, so an
+    unconditional create added another row on every run. Those duplicates are
+    not harmless — a second row with the same name is what made
+    `getByText(...)` match two elements and fail Playwright's strict mode in
+    entity-registry-lookups.spec.ts (see issues/022, issues/035).
+    """
     from vitalgraph.model.entity_registry_model import EntityCreateRequest
 
     try:
+        existing = await _find_seeded_entities(client)
+        if existing:
+            if len(existing) > 1:
+                # Pre-existing duplicates from before this became idempotent.
+                # Reported rather than deleted: removing registry rows is not a
+                # seed script's call.
+                logger.warning(
+                    "Entity-registry has %d live entries named '%s' (expected 1): %s — "
+                    "duplicates can break name-based UI assertions",
+                    len(existing), REGISTRY_PRIMARY_NAME,
+                    ", ".join(e.entity_id for e in existing),
+                )
+            logger.info(
+                "Entity-registry entry '%s' already present (%s) — not creating another",
+                REGISTRY_PRIMARY_NAME, existing[0].entity_id,
+            )
+            return
+
         req = EntityCreateRequest(
             type_key=REGISTRY_TYPE_KEY,
             primary_name=REGISTRY_PRIMARY_NAME,
