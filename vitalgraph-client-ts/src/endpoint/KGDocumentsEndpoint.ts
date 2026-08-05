@@ -5,6 +5,7 @@ import type {
   KGDocumentResponse,
   KGDocumentsListResponse,
   KGDocumentCreateResponse,
+  KGDocumentUploadResponse,
   KGDocumentUpdateResponse,
   KGDocumentDeleteResponse,
   KGDocumentSegmentsResponse,
@@ -22,6 +23,37 @@ export class KGDocumentsEndpoint extends BaseEndpoint {
     validateRequired({ space_id: spaceId, graph_id: graphId, uri });
     return this.request('GET', '/api/graphs/kgdocuments', {
       params: { space_id: spaceId, graph_id: graphId, uri },
+    });
+  }
+
+  /**
+   * Upload a document file; the server converts it to Markdown and creates the
+   * KGDocument. Handles HTML, DOCX and PDF as well as Markdown/plain text —
+   * binary formats cannot be read in the browser, which is why this posts the
+   * file rather than extracting text client-side.
+   *
+   * No Content-Type is set: the browser must add the multipart boundary itself.
+   */
+  async upload(
+    spaceId: string,
+    graphId: string,
+    file: File | Blob,
+    options?: { filename?: string; headline?: string; sourceUrl?: string; storeOriginal?: boolean },
+  ): Promise<KGDocumentUploadResponse> {
+    validateRequired({ space_id: spaceId, graph_id: graphId });
+
+    const form = new FormData();
+    const filename = options?.filename ?? (file instanceof File ? file.name : 'upload');
+    form.append('file', file, filename);
+    if (options?.headline) form.append('headline', options.headline);
+    if (options?.sourceUrl) form.append('source_url', options.sourceUrl);
+    if (options?.storeOriginal !== undefined) {
+      form.append('store_original', String(options.storeOriginal));
+    }
+
+    return this.request('POST', '/api/graphs/kgdocuments/upload', {
+      params: { space_id: spaceId, graph_id: graphId },
+      body: form,
     });
   }
 

@@ -18,9 +18,11 @@ Routes:
 
 import asyncio
 import logging
+import re
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel
 
 from ..model.kgdocuments_model import (
@@ -33,11 +35,13 @@ from ..model.kgdocuments_model import (
     SegmentationJobStatusResponse,
     SegmentationStatusSummaryResponse,
     SegmentationWorkerStatus,
+    KGDocumentUploadResponse,
 )
 from vitalgraph.document.segment_deletion import delete_segmentation
 from vitalgraph.model.quad_model import Quad, QuadRequest, QuadResponse, QuadResultsResponse
 from vitalgraph.model.result_status import OperationStatus
 from vitalgraph.utils.quad_format_utils import (
+    _escape_nquads_string,
     graphobjects_to_quad_list,
     parse_nquads_object,
     parse_nquads_uri,
@@ -54,15 +58,55 @@ logger = logging.getLogger(__name__)
 # Endpoint class
 # ---------------------------------------------------------------------------
 
+VITAL_CORE = "http://vital.ai/ontology/vital-core#"
+# FileNode and its hasFile* properties live in the vital# domain namespace, NOT
+# vital-core# — using the wrong one fails at store time with
+# "No VitalSigns class registered for URI".
+VITAL_DOMAIN = "http://vital.ai/ontology/vital#"
+HALEY_KG = "http://vital.ai/ontology/haley-ai-kg#"
+RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+HAS_NAME = f"{VITAL_CORE}hasName"
+
+
+def _uri_term(uri: str) -> str:
+    """N-Quads URI term: angle-bracketed."""
+    return f"<{uri}>"
+
+
+def _literal_term(value: str) -> str:
+    """
+    N-Quads literal term: quoted and escaped.
+
+    Quads carry N-Quads-encoded terms (see Quad in quad_model.py), so a literal
+    MUST be quoted. Passing a bare string mostly works by accident — the parser
+    falls through to "plain string" — but a value that starts with '<' and ends
+    with '>' is then read back as a URI and silently loses both characters.
+    Every HTML document looks exactly like that, so unquoted HTML round-trips as
+    `p>alpha</p`. Always encode.
+    """
+    return f'"{_escape_nquads_string(value)}"'
+
+
 class KGDocumentsEndpoint:
     """KGDocument CRUD and segmentation management endpoint."""
 
-    def __init__(self, space_manager, auth_dependency, segmentation_worker=None):
+    def __init__(self, space_manager, auth_dependency, segmentation_worker=None, config=None):
         self.space_manager = space_manager
         self.auth_dependency = auth_dependency
         self._segmentation_worker = segmentation_worker
         self.logger = logging.getLogger(f"{__name__}.KGDocumentsEndpoint")
         self.router = APIRouter()
+
+        # Object storage for uploaded originals. Optional: without it, uploads
+        # still work and the converted Markdown is stored — only the original
+        # bytes are not retained. Same construction as FilesEndpoint.
+        self.file_manager = None
+        if config:
+            try:
+                from ..storage.s3_file_manager import create_s3_file_manager_from_config
+                self.file_manager = create_s3_file_manager_from_config(config)
+            except Exception as e:
+                self.logger.warning(f"Object storage unavailable for document uploads: {e}")
 
         # Read processor (same pattern as KGTypes)
         self.read_processor = KGDocumentsReadProcessor()
@@ -135,6 +179,31 @@ class KGDocumentsEndpoint:
         ):
             require_space_write(current_user, space_id)
             return await self._create(space_id, graph_id, body.quads)
+
+        @self.router.post(
+            "/kgdocuments/upload",
+            response_model=KGDocumentUploadResponse,
+            tags=["KG Documents"],
+            summary="Upload a document file and create a KGDocument",
+            description=(
+                "Accepts a file (HTML, DOCX, PDF, Markdown, plain text), converts it to "
+                "Markdown server-side, stores the original in object storage, and creates "
+                "a KGDocument whose extracted content is the Markdown."
+            ),
+        )
+        async def upload_kgdocument(
+            space_id: str = Query(..., description="Space ID"),
+            graph_id: str = Query(..., description="Graph ID"),
+            file: UploadFile = File(..., description="Document file to ingest"),
+            headline: Optional[str] = Form(None, description="Document title (defaults to filename)"),
+            source_url: Optional[str] = Form(None, description="Original source URL"),
+            store_original: bool = Form(True, description="Keep the uploaded bytes in object storage"),
+            current_user: Dict = Depends(auth),
+        ):
+            require_space_write(current_user, space_id)
+            return await self._upload_document(
+                space_id, graph_id, file, headline, source_url, store_original
+            )
 
         @self.router.put(
             "/kgdocuments",
@@ -532,7 +601,9 @@ class KGDocumentsEndpoint:
         # Get tokenizer from vector provider if available
         tokenizer = self._get_tokenizer()
 
-        processor = KGDocumentSegmentationProcessor(tokenizer=tokenizer)
+        processor = KGDocumentSegmentationProcessor(
+            tokenizer=tokenizer, max_input_tokens=self._get_max_input_tokens(),
+        )
         output = processor.process(
             original_uri=document_uri,
             original_properties=doc_properties,
@@ -588,16 +659,40 @@ class KGDocumentsEndpoint:
             return None
 
     def _get_tokenizer(self):
-        """Get tokenizer from vector provider if available."""
-        # Try to get the VitalSigns provider tokenizer
+        """
+        Token counter from the shared local embedding model, or None.
+
+        Uses the process-wide cached provider. The previous version called
+        `get_provider("vitalsigns_onnx")` with no cache key, which built a fresh
+        tokenizer and ONNX InferenceSession on EVERY call — hundreds of ms to
+        seconds — and then looked for a `_tokenizer` attribute the provider does
+        not have, so it discarded the model and returned None anyway. That load
+        landed inside each segmentation request.
+        """
         try:
-            from vitalgraph.vectorization import get_provider
-            provider = get_provider("vitalsigns_onnx")
-            if provider and hasattr(provider, "_tokenizer"):
-                return provider._tokenizer
-        except Exception:
-            pass
+            from vitalgraph.vectorization import get_local_provider
+            provider = get_local_provider()
+            embedder = getattr(provider, "_embedder", None) if provider else None
+            tokenizer = getattr(embedder, "tokenizer", None) if embedder else None
+            if tokenizer is not None:
+                return lambda text: len(tokenizer.encode(text))
+        except Exception as e:
+            logger.debug("Model tokenizer unavailable, using whitespace count: %s", e)
         return None  # Falls back to whitespace tokenizer
+
+    def _get_max_input_tokens(self):
+        """
+        The embedding model's input ceiling, or None if unknown.
+
+        Segments longer than this are truncated at embed time, so the segmenter
+        clamps to it. Reads the shared cached provider — no model load.
+        """
+        try:
+            from vitalgraph.vectorization import get_local_provider
+            provider = get_local_provider()
+            return provider.max_input_tokens if provider else None
+        except Exception:
+            return None
 
     async def _fetch_document_properties(
         self, backend_impl, space_id: str, graph_id: str, document_uri: str
@@ -1046,6 +1141,262 @@ class KGDocumentsEndpoint:
             self.logger.error(f"Error listing KGDocuments: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
+    # ------------------------------------------------------------------
+    # Upload + convert (issue 018 item 4)
+    # ------------------------------------------------------------------
+
+    # Conversion needs the whole file in memory — pdfplumber and mammoth both
+    # want a seekable buffer, so this path cannot stream the way
+    # /files/stream/upload does. Bound it explicitly rather than letting a large
+    # upload decide how much memory the server uses.
+    MAX_UPLOAD_BYTES = 64 * 1024 * 1024
+
+    async def _upload_document(
+        self,
+        space_id: str,
+        graph_id: str,
+        file: "UploadFile",
+        headline: Optional[str],
+        source_url: Optional[str],
+        store_original: bool,
+    ) -> KGDocumentUploadResponse:
+        """Convert an uploaded file to Markdown and create a KGDocument from it."""
+        from vitalgraph.document.document_converter import (
+            ConversionError,
+            EXT_HTML,
+            convert_to_markdown,
+        )
+
+        filename = file.filename or "upload"
+
+        data = await file.read()
+        if len(data) > self.MAX_UPLOAD_BYTES:
+            return KGDocumentUploadResponse(
+                status=OperationStatus.INVALID_REQUEST,
+                message=(
+                    f"File is {len(data)} bytes, over the "
+                    f"{self.MAX_UPLOAD_BYTES} byte limit for converted uploads"
+                ),
+            )
+        if not data:
+            return KGDocumentUploadResponse(
+                status=OperationStatus.INVALID_REQUEST,
+                message="Uploaded file is empty",
+            )
+
+        # Unsupported type and unreadable file are DOMAIN outcomes: HTTP 200
+        # with a non-success status, per the project convention (issues/034).
+        try:
+            conversion = await asyncio.to_thread(convert_to_markdown, data, filename)
+        except ConversionError as e:
+            self.logger.info(f"Upload conversion rejected for '{filename}': {e}")
+            return KGDocumentUploadResponse(
+                status=OperationStatus.INVALID_REQUEST,
+                message=str(e),
+            )
+
+        title = (headline or "").strip() or filename
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+        safe_name = re.sub(r"[^a-zA-Z0-9]", "_", filename)
+        doc_uri = f"urn:kgdocument:{timestamp}:{safe_name}"
+
+        # Preserve the original bytes so the conversion is never the only copy.
+        file_node_uri = None
+        if store_original:
+            file_node_uri = await self._store_original_file(
+                space_id, graph_id, doc_uri, filename, data, file.content_type
+            )
+
+        quads = self._build_document_quads(
+            doc_uri=doc_uri,
+            title=title,
+            conversion=conversion,
+            source_url=source_url,
+            file_node_uri=file_node_uri,
+            html_extensions=EXT_HTML,
+        )
+
+        create_result = await self._create(space_id, graph_id, quads)
+        if not create_result.success:
+            return KGDocumentUploadResponse(
+                status=create_result.status,
+                message=create_result.message or "Failed to store the converted document",
+            )
+
+        return KGDocumentUploadResponse(
+            status=OperationStatus.CREATED,
+            message=(
+                f"Created '{title}' from {conversion.source_format or 'file'}"
+                + (" (converted to Markdown)" if conversion.converted else "")
+            ),
+            document_uri=doc_uri,
+            file_node_uri=file_node_uri,
+            source_format=conversion.source_format,
+            converted=conversion.converted,
+            heading_count=conversion.heading_count,
+            content_length=len(conversion.markdown),
+        )
+
+    async def _store_original_file(
+        self,
+        space_id: str,
+        graph_id: str,
+        doc_uri: str,
+        filename: str,
+        data: bytes,
+        content_type: Optional[str],
+    ) -> Optional[str]:
+        """
+        Put the uploaded bytes in object storage and create a FileNode for them.
+
+        Returns the FileNode URI, or None when object storage is unavailable —
+        losing the original copy must not fail the upload, since the converted
+        Markdown (the thing users actually search) was produced successfully.
+        """
+        if not self.file_manager:
+            self.logger.info("No object storage configured — original bytes not retained")
+            return None
+
+        import io
+        import mimetypes
+
+        file_uri = f"{doc_uri}:source"
+        object_key = file_uri.replace(":", "_").replace("/", "_")
+        resolved_type = (
+            content_type
+            or mimetypes.guess_type(filename)[0]
+            or "application/octet-stream"
+        )
+
+        try:
+            await asyncio.to_thread(
+                self.file_manager.upload_file,
+                io.BytesIO(data),
+                object_key,
+                resolved_type,
+                {
+                    "file_uri": file_uri,
+                    "space_id": space_id,
+                    "graph_id": graph_id or "",
+                    "original_filename": filename,
+                },
+            )
+        except Exception as e:
+            self.logger.warning(f"Could not store original upload '{filename}': {e}")
+            return None
+
+        try:
+            file_url = self.file_manager.get_file_url(object_key)
+        except Exception:
+            file_url = ""
+
+        file_quads = [
+            Quad(s=_uri_term(file_uri), p=_uri_term(RDF_TYPE), o=_uri_term(f"{VITAL_DOMAIN}FileNode")),
+            Quad(s=_uri_term(file_uri), p=_uri_term(HAS_NAME), o=_literal_term(filename)),
+            Quad(s=_uri_term(file_uri), p=_uri_term(f"{VITAL_DOMAIN}hasFileName"), o=_literal_term(filename)),
+            Quad(s=_uri_term(file_uri), p=_uri_term(f"{VITAL_DOMAIN}hasFileType"), o=_literal_term(resolved_type)),
+            Quad(s=_uri_term(file_uri), p=_uri_term(f"{VITAL_DOMAIN}hasFileLength"), o=_literal_term(str(len(data)))),
+        ]
+        if file_url:
+            file_quads.append(
+                Quad(s=_uri_term(file_uri), p=_uri_term(f"{VITAL_DOMAIN}hasFileURL"), o=_literal_term(file_url))
+            )
+
+        # _create raises HTTPException on a store failure. Retaining the original
+        # is best-effort: the converted Markdown is what users search, so a
+        # FileNode problem must degrade to "no original kept", never fail the
+        # upload the caller asked for.
+        try:
+            stored = await self._create(space_id, graph_id, file_quads)
+        except Exception as e:
+            self.logger.warning(f"FileNode metadata not stored for '{filename}': {e}")
+            return None
+        if not stored.success:
+            self.logger.warning(f"FileNode metadata not stored for '{filename}': {stored.message}")
+            return None
+        return file_uri
+
+    def _build_document_quads(
+        self,
+        *,
+        doc_uri: str,
+        title: str,
+        conversion,
+        source_url: Optional[str],
+        file_node_uri: Optional[str],
+        html_extensions,
+    ) -> List[Quad]:
+        """
+        Build the KGDocument quads for a converted upload.
+
+        Property choice follows the priority order `extract_content` already
+        implements (kgdocument_segmentation_processor.py:52) — the segmenter
+        needs no changes:
+
+          hasKGDocumentExtractedContent  ← the Markdown (preferred by the reader)
+          hasKGDocumentHTMLContent       ← the original HTML, when the source was HTML
+          hasKGDocumentContent           ← the raw text, when the source was already text
+        """
+        quads = [
+            Quad(s=_uri_term(doc_uri), p=_uri_term(RDF_TYPE), o=_uri_term(f"{HALEY_KG}KGDocument")),
+            Quad(s=_uri_term(doc_uri), p=_uri_term(HAS_NAME), o=_literal_term(title)),
+            Quad(s=_uri_term(doc_uri), p=_uri_term(f"{HALEY_KG}hasKGDocumentHeadline"), o=_literal_term(title)),
+            Quad(
+                s=_uri_term(doc_uri),
+                p=_uri_term(f"{HALEY_KG}hasKGDocumentExtractedContent"),
+                o=_literal_term(conversion.markdown),
+            ),
+        ]
+
+        if conversion.original_html and conversion.source_format in html_extensions:
+            quads.append(
+                Quad(
+                    s=_uri_term(doc_uri),
+                    p=_uri_term(f"{HALEY_KG}hasKGDocumentHTMLContent"),
+                    o=_literal_term(conversion.original_html),
+                )
+            )
+        elif not conversion.converted:
+            # Already text — Content and ExtractedContent are the same string.
+            # Binary sources deliberately get no Content: the original lives in
+            # the FileNode, not as an RDF literal.
+            quads.append(
+                Quad(
+                    s=_uri_term(doc_uri),
+                    p=_uri_term(f"{HALEY_KG}hasKGDocumentContent"),
+                    o=_literal_term(conversion.markdown),
+                )
+            )
+
+        if source_url:
+            quads.append(
+                Quad(s=_uri_term(doc_uri), p=_uri_term(f"{HALEY_KG}hasKGDocumentURL"), o=_literal_term(source_url))
+            )
+        if file_node_uri:
+            # hasKGDocumentFileNode is an EDGE class, not a datatype property on
+            # KGDocument. Writing it as a plain predicate is accepted by the API
+            # and then silently dropped at store time, so the link vanishes with
+            # no error anywhere. Model it as a real edge object.
+            edge_uri = f"{doc_uri}:filenode_edge"
+            quads.extend([
+                Quad(
+                    s=_uri_term(edge_uri),
+                    p=_uri_term(RDF_TYPE),
+                    o=_uri_term(f"{HALEY_KG}Edge_hasKGDocumentFileNode"),
+                ),
+                Quad(
+                    s=_uri_term(edge_uri),
+                    p=_uri_term(f"{VITAL_CORE}hasEdgeSource"),
+                    o=_uri_term(doc_uri),
+                ),
+                Quad(
+                    s=_uri_term(edge_uri),
+                    p=_uri_term(f"{VITAL_CORE}hasEdgeDestination"),
+                    o=_uri_term(file_node_uri),
+                ),
+            ])
+        return quads
+
     async def _create(self, space_id: str, graph_id: str, quads: List[Quad]) -> QuadResultsResponse:
         """Create KGDocument(s) from quad payload, with write protection for managed segments."""
         try:
@@ -1333,7 +1684,9 @@ class KGDocumentsEndpoint:
 # Factory
 # ---------------------------------------------------------------------------
 
-def create_kgdocuments_router(space_manager, auth_dependency, segmentation_worker=None) -> APIRouter:
+def create_kgdocuments_router(space_manager, auth_dependency, segmentation_worker=None, config=None) -> APIRouter:
     """Factory function to create the KGDocuments router."""
-    endpoint = KGDocumentsEndpoint(space_manager, auth_dependency, segmentation_worker=segmentation_worker)
+    endpoint = KGDocumentsEndpoint(
+        space_manager, auth_dependency, segmentation_worker=segmentation_worker, config=config
+    )
     return endpoint.router

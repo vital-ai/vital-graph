@@ -775,6 +775,20 @@ class VitalGraphAppImpl:
                     except Exception as e:
                         self.logger.warning(f"ImportExportJobManager init failed (non-critical): {e}")
 
+                    # Warm the local embedding model BEFORE the worker can pick
+                    # up a job. Building the tokenizer + ONNX InferenceSession
+                    # and running the first inference costs hundreds of ms to
+                    # seconds on a cold container; paid here, it never lands
+                    # inside a segmentation request. Runs in a thread so it does
+                    # not block the event loop during startup.
+                    try:
+                        import asyncio as _asyncio
+                        from vitalgraph.vectorization import warm_local_provider
+                        await _asyncio.to_thread(warm_local_provider)
+                    except Exception as e:
+                        # Warming is an optimisation — never block startup on it.
+                        self.logger.warning(f"Embedding model warm-up skipped: {e}")
+
                     # Start segmentation background worker
                     try:
                         if self.space_manager:
@@ -1016,7 +1030,7 @@ class VitalGraphAppImpl:
         kgframes_router = create_kgframes_router(self.space_manager, self.get_current_user)
         kgrelations_router = create_kgrelations_router(self.space_manager, self.get_current_user)
         kgqueries_router = create_kgqueries_router(self.space_manager, self.get_current_user)
-        kgdocuments_router = create_kgdocuments_router(self.space_manager, self.get_current_user, segmentation_worker=self._segmentation_worker)
+        kgdocuments_router = create_kgdocuments_router(self.space_manager, self.get_current_user, segmentation_worker=self._segmentation_worker, config=self.config.config_data)
         files_router = create_files_router(self.space_manager, self.get_current_user, config=self.config.config_data)
         
         # Include routers in the FastAPI app  

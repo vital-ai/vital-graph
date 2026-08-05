@@ -478,6 +478,21 @@ export interface KGDocumentCreateResponse extends VitalGraphResponse {
   created_uris: string[];
 }
 
+export interface KGDocumentUploadResponse extends VitalGraphResponse {
+  /** URI of the created KGDocument. */
+  document_uri: string | null;
+  /** URI of the FileNode holding the original bytes, null when not retained. */
+  file_node_uri: string | null;
+  /** Detected source extension, e.g. '.pdf'. */
+  source_format: string | null;
+  /** True when the content was converted to Markdown rather than passed through. */
+  converted: boolean;
+  /** Markdown headings in the stored content; >=2 selects the heading-based split. */
+  heading_count: number;
+  /** Characters of Markdown stored. */
+  content_length: number;
+}
+
 export interface KGDocumentUpdateResponse extends VitalGraphResponse {
   updated: boolean;
   updated_count: number;

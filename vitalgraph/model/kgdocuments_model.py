@@ -153,3 +153,27 @@ class SegmentationStatusSummaryResponse(ResultStatus):
     cancelled: int = 0
     jobs: List[SegmentationJobStatusResponse] = Field(default_factory=list)
     worker_status: Optional[SegmentationWorkerStatus] = None
+
+
+class KGDocumentUploadResponse(ResultStatus):
+    """Result of uploading a file and creating a KGDocument from it.
+
+    Conversion outcomes (unsupported type, unreadable file) are domain outcomes
+    reported here at HTTP 200 with a non-success ``status`` — see issues/034.
+    """
+
+    status: OperationStatus = Field(
+        OperationStatus.CREATED, description="Outcome of the upload"
+    )
+    document_uri: Optional[str] = Field(None, description="URI of the created KGDocument")
+    file_node_uri: Optional[str] = Field(
+        None, description="URI of the FileNode holding the original bytes, if stored"
+    )
+    source_format: Optional[str] = Field(None, description="Detected source extension, e.g. '.pdf'")
+    converted: bool = Field(
+        False, description="True when the content was converted to Markdown rather than passed through"
+    )
+    heading_count: int = Field(
+        0, description="Markdown headings in the stored content; >=2 selects the heading-based split"
+    )
+    content_length: int = Field(0, description="Characters of Markdown stored")
