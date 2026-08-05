@@ -74,23 +74,44 @@ class TestWarnsOnDroppedPredicates:
         assert "2 predicate(s)" in _warnings(caplog)[0]
 
 
-class TestEdgeClassHint:
-    """The trap that actually bit: an Edge *class* written as a predicate."""
+class TestClassUsedAsPredicate:
+    """A class URI written where a property belongs.
 
-    def test_names_the_edge_class(self, caplog):
+    The hint resolves the URI it is handed and derives nothing. An earlier
+    version built `<namespace>Edge_<localname>` to guess which Edge class a
+    property-style name "meant" — that requires splitting a URI and appending
+    to it on a naming convention, which is guessing rather than resolving.
+    """
+
+    def test_a_class_uri_is_named_as_a_class(self, caplog):
+        with caplog.at_level(logging.WARNING, logger=LOGGER):
+            qfu.quad_list_to_graphobjects(
+                _quads((f"{H}Edge_hasKGDocumentFileNode", "<urn:file:1>")))
+        assert "Edge_hasKGDocumentFileNode is a class, not a property" in _warnings(caplog)[0]
+
+    def test_property_style_name_is_reported_without_a_guess(self, caplog):
+        """`hasKGDocumentFileNode` is not itself a class, so it gets no hint —
+        but it is still reported, which is what stops the silence."""
         with caplog.at_level(logging.WARNING, logger=LOGGER):
             qfu.quad_list_to_graphobjects(
                 _quads((f"{H}hasKGDocumentFileNode", "<urn:file:1>")))
         msg = _warnings(caplog)[0]
-        assert "Edge_hasKGDocumentFileNode" in msg
-        assert "hasEdgeSource" in msg, "the hint must say how to model it"
+        assert f"{H}hasKGDocumentFileNode" in msg
+        assert "is a class" not in msg
 
-    def test_plain_unknown_predicate_gets_no_edge_hint(self, caplog):
-        """Only claim an Edge class when one actually exists."""
+    def test_plain_unknown_predicate_gets_no_hint(self, caplog):
         with caplog.at_level(logging.WARNING, logger=LOGGER):
             qfu.quad_list_to_graphobjects(
                 _quads((f"{H}hasTotallyMadeUpProperty", '"x"')))
-        assert "Edge_" not in _warnings(caplog)[0]
+        assert "is a class" not in _warnings(caplog)[0]
+
+    def test_predicates_are_reported_as_full_uris(self, caplog):
+        """Abbreviating would mean splitting on a separator this code has no
+        business assuming, and two namespaces can share a local name."""
+        with caplog.at_level(logging.WARNING, logger=LOGGER):
+            qfu.quad_list_to_graphobjects(
+                _quads((f"{H}hasTotallyMadeUpProperty", '"x"')))
+        assert f"{H}hasTotallyMadeUpProperty" in _warnings(caplog)[0]
 
 
 class TestBothConversionPaths:

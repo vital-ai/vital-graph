@@ -296,10 +296,14 @@ def _graphobjects_to_quad_list_fast(
 # Dropped-predicate diagnostics (issue 036)
 # ---------------------------------------------------------------------------
 
-#: type_uri -> frozenset of property URIs the class accepts. Resolving a class
-#: and reading its allowed properties is not free, and a bulk write converts
-#: many subjects of the same few types.
+#: type_uri -> resolved GraphObject subclass, or None when unresolvable.
+#: Resolving a class and reading its allowed properties is not free, and a bulk
+#: write converts many subjects of the same few types.
+_CLASS_CACHE: dict = {}
+
+#: type_uri -> frozenset of property URIs the class accepts.
 _ALLOWED_PROPS_CACHE: dict = {}
+
 
 #: Scaffolding predicates handled structurally, never part of the property map.
 #: Read lazily — the constants are defined further down the module.
@@ -307,56 +311,66 @@ def _structural_predicates() -> frozenset:
     return frozenset({_RDF_TYPE, _VITALTYPE, _URI_PROP})
 
 
+def _resolve_class(class_uri: str):
+    """The registered GraphObject subclass for *class_uri*, or None.
+
+    None means "not a registered class" — used both to look up allowed
+    properties and to decide whether a predicate is really a class.
+    """
+    if class_uri in _CLASS_CACHE:
+        return _CLASS_CACHE[class_uri]
+
+    cls = None
+    try:
+        from vital_ai_vitalsigns.vitalsigns import VitalSigns
+        cls = VitalSigns().get_registry().get_vitalsigns_class(class_uri)
+    except Exception as e:  # unregistered URI, ontology not loaded, etc.
+        logger.debug("Could not resolve class %s: %s", class_uri, e)
+
+    _CLASS_CACHE[class_uri] = cls
+    return cls
+
+
 def _allowed_property_uris(type_uri: str):
     """Property URIs accepted by the class *type_uri*, or None if unresolvable.
 
     None means "cannot say" — an unregistered type is not evidence that a
-    predicate is wrong, so callers must not warn on it.
+    predicate is wrong, so callers must not warn on it. An empty set would say
+    the opposite and would accuse every predicate on every custom type.
     """
     if type_uri in _ALLOWED_PROPS_CACHE:
         return _ALLOWED_PROPS_CACHE[type_uri]
 
     allowed = None
-    try:
-        from vital_ai_vitalsigns.vitalsigns import VitalSigns
-        cls = VitalSigns().get_registry().get_vitalsigns_class(type_uri)
-        if cls is not None:
+    cls = _resolve_class(type_uri)
+    if cls is not None:
+        try:
             allowed = frozenset(
                 p['uri'] for p in cls().get_allowed_properties() if 'uri' in p
             )
-    except Exception as e:  # unregistered type, ontology not loaded, etc.
-        logger.debug("Could not resolve allowed properties for %s: %s", type_uri, e)
+        except Exception as e:
+            logger.debug("Could not read allowed properties for %s: %s", type_uri, e)
 
     _ALLOWED_PROPS_CACHE[type_uri] = allowed
     return allowed
 
 
 def _predicate_hint(pred_uri: str) -> Optional[str]:
-    """Explain a dropped predicate when it is really a class.
+    """Explain a dropped predicate when the URI is itself a registered class.
 
-    The trap that motivated this: `hasKGDocumentFileNode` is an Edge *class*,
-    not a property, so writing it as a plain predicate is silently discarded
-    (issue 036). Naming that turns a debugging session into a log line.
+    Writing a class URI where a property belongs is silently discarded
+    (issue 036), and naming it turns a debugging session into a log line.
+
+    This resolves the URI it was given; it does not derive one. An earlier
+    version synthesised ``<namespace>Edge_<localname>`` to guess the Edge class
+    a mistyped predicate "meant" — that requires splitting a URI and appending
+    to it on the strength of a naming convention, which is guessing rather than
+    resolving. A predicate that is not a registered class is simply reported as
+    dropped.
     """
-    try:
-        from vital_ai_vitalsigns.vitalsigns import VitalSigns
-        registry = VitalSigns().get_registry()
-
-        def is_class(uri: str) -> bool:
-            try:
-                return registry.get_vitalsigns_class(uri) is not None
-            except Exception:
-                return False
-
-        if is_class(pred_uri):
-            return "is a class, not a property"
-
-        ns, sep, local = pred_uri.rpartition('#')
-        if sep and is_class(f"{ns}#Edge_{local}"):
-            return (f"Edge_{local} is an Edge class — model it as an edge object "
-                    f"with hasEdgeSource/hasEdgeDestination, not as a predicate")
-    except Exception:
-        pass
+    own_class = _resolve_class(pred_uri)
+    if own_class is not None:
+        return f"{own_class.__name__} is a class, not a property"
     return None
 
 
@@ -367,9 +381,12 @@ def _warn_dropped_predicates(subjects: dict) -> None:
     permissiveness, and rejecting would break callers that currently rely on
     extra predicates being tolerated (issue 036).
 
-    Called from the public entry point so it covers the fast path and the
-    rdflib fallback alike — they use different VitalSigns entry points and do
-    not share a fix site.
+    Called from both conversion paths — they use different VitalSigns entry
+    points and do not share a fix site.
+
+    Predicates are reported as full URIs. Abbreviating them would mean
+    splitting on a separator this code has no business assuming, and two
+    namespaces can share a local name.
     """
     dropped_by_type: dict = {}
     structural = _structural_predicates()
@@ -390,13 +407,13 @@ def _warn_dropped_predicates(subjects: dict) -> None:
         details = []
         for pred in sorted(preds):
             hint = _predicate_hint(pred)
-            local = pred.rpartition('#')[2] or pred
-            details.append(f"{local} ({hint})" if hint else local)
+            details.append(f"{pred} ({hint})" if hint else pred)
+        cls = _resolve_class(type_uri)
+        class_name = cls.__name__ if cls is not None else type_uri
         logger.warning(
             "quad_list_to_graphobjects: %d predicate(s) not properties of %s "
             "were dropped: %s",
-            len(preds), type_uri.rpartition('#')[2] or type_uri,
-            ", ".join(details))
+            len(preds), class_name, ", ".join(details))
 
 
 def quad_list_to_graphobjects(quads: List[Quad]) -> List[GraphObject]:

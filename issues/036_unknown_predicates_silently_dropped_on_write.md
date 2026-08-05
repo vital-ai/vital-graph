@@ -9,11 +9,14 @@ deliberately not done — see below.
 
 ```
 WARNING quad_list_to_graphobjects: 2 predicate(s) not properties of KGDocument
-        were dropped: hasKGDocumentFileNode (Edge_hasKGDocumentFileNode is an
-        Edge class — model it as an edge object with
-        hasEdgeSource/hasEdgeDestination, not as a predicate),
-        hasTotallyMadeUpProperty
+        were dropped: http://vital.ai/ontology/haley-ai-kg#hasKGDocumentFileNode,
+        http://vital.ai/ontology/haley-ai-kg#hasTotallyMadeUpProperty
 ```
+
+Predicates are reported as **full URIs**. Abbreviating them would mean
+splitting on a separator this code has no business assuming, and two namespaces
+can share a local name. Class names come from the resolved Python class
+(`cls.__name__`), not from the URI text.
 
 The predicates are **still dropped**. This is a diagnostic, not a behaviour
 change, for the reason argued below: the failure mode is silence, not
@@ -29,9 +32,30 @@ It returns `None`, not an empty set, when the class cannot be resolved. `None`
 means *cannot say*; an empty set would mean *nothing is allowed* and would
 accuse every predicate on every custom type. Nothing is logged in that case.
 
-`_predicate_hint` supplies item 3: if the dropped predicate is itself a class,
-or if `Edge_<name>` exists in the same namespace, it says so. That is the trap
-that cost the debugging session in issue 018.
+### Item 3 is only partly delivered — deliberately
+
+`_predicate_hint` names the cause when the dropped predicate **is itself a
+registered class**:
+
+```
+... were dropped: http://vital.ai/ontology/haley-ai-kg#Edge_hasKGDocumentFileNode
+    (Edge_hasKGDocumentFileNode is a class, not a property)
+```
+
+It does **not** fire for the literal input from issue 018. Writing
+`hasKGDocumentFileNode` — the property-style name — is reported as dropped, but
+with no "you meant the Edge class" nudge.
+
+A first version did produce that nudge, by splitting the predicate URI and
+synthesising `<namespace>Edge_<localname>` to look up. That was removed:
+deriving one URI from another on the strength of a naming convention is
+guessing dressed as resolution, and it breaks on any ontology that does not
+follow the `Edge_` convention or uses a different separator. The hint now
+resolves only the URI it is handed.
+
+Restoring the nudge properly would need an ontology lookup relating a property
+to its Edge class. Worth doing if the trap recurs; faking it with string
+manipulation is not.
 
 ### Both paths, deliberately
 
@@ -58,9 +82,10 @@ that is what this fix addresses.
 
 ### Verification
 
-`tests/unit/test_dropped_predicate_warning.py` — 12 tests: the warning fires
-and names the count and class; valid predicates produce **no** warning; the
-Edge hint appears only when an Edge class actually exists; the rdflib fallback
+`tests/unit/test_dropped_predicate_warning.py` — 14 tests: the warning fires
+and names the count and class; valid predicates produce **no** warning; a class
+URI used as a predicate is named as a class while a property-style name is
+reported without a guess; predicates appear as full URIs; the rdflib fallback
 warns too; an unresolvable class stays silent; and the predicates are still
 dropped rather than rejected.
 
