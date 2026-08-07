@@ -145,6 +145,7 @@ def _collect_bgp(op: OpBGP, space_id: str, aliases: AliasGenerator,
                 constraint = f"{full_uuid} = {subq}"
                 plan.constraints.append(constraint)
                 plan.tagged_constraints.append((q_id, constraint))
+                plan.leaf_terms[(q_id, uuid_col_name)] = (node.value, 'U')
 
             elif isinstance(node, LiteralNode):
                 if node.lang:
@@ -160,6 +161,7 @@ def _collect_bgp(op: OpBGP, space_id: str, aliases: AliasGenerator,
                     constraint = f"{full_uuid} = {subq}"
                     plan.constraints.append(constraint)
                     plan.tagged_constraints.append((q_id, constraint))
+                    plan.leaf_terms[(q_id, uuid_col_name)] = (node.value, 'L')
 
         # Graph lock — always applied (scoping / security)
         if aliases.graph_lock_uri:

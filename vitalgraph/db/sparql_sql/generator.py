@@ -408,6 +408,93 @@ def _check_unresolved_vars(unresolved) -> None:
     )
 
 
+# Bounded so a common pair costs a fixed amount to classify. The gate compares
+# match count against candidate count; both saturate at the cap, which only
+# blurs the decision for pairs far larger than any page could need.
+_PAIR_COUNT_CAP = 50_000
+_pair_count_cache: Dict[tuple, int] = {}
+
+
+async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
+                                   conn_params=None) -> None:
+    """Fetch row counts for the plan's leaf pairs that the preload lacks.
+
+    `_load_quad_stats` caps itself at the 10,000 least-common pairs, which is
+    right for join reordering and wrong for a selectivity gate: the anchor's
+    pair is common, so it is missing, and the gate cannot tell "common" from
+    "unknown". This asks for exactly the handful of pairs this query needs.
+    """
+    from .semijoin import needed_pairs
+    aliases.extra_quad_stats = {}
+    aliases.range_stats = {}
+    if conn is None and conn_params is None:
+        return
+    try:
+        pairs = needed_pairs(plan, aliases)
+        missing = [pr for pr in pairs if pr not in (aliases.quad_stats or {})]
+        if not missing:
+            return
+        from . import db_provider as db
+        values = ", ".join(f"('{p}'::uuid, '{o}'::uuid)" for p, o in missing)
+        rows = await db.execute_query(
+            f"SELECT predicate_uuid::text, object_uuid::text, row_count "
+            f"FROM {space_id}_rdf_stats "
+            f"WHERE (predicate_uuid, object_uuid) IN ({values})",
+            conn=conn, conn_params=conn_params)
+        aliases.extra_quad_stats = {
+            (r["predicate_uuid"], r["object_uuid"]): r["row_count"] for r in rows
+        }
+
+        # rdf_stats does not hold every pair either — the anchor's
+        # (vitaltype, KGEntity) is absent from it on a space where it matches
+        # 10,000 rows. For what is left, count directly but BOUNDED: the gate
+        # only needs to know whether a pair is large, not how large, so a
+        # capped count answers it at fixed cost. Cached per process because
+        # these move slowly and the alternative is paying it per query.
+        still = [pr for pr in missing if pr not in aliases.extra_quad_stats]
+        for p_uuid, o_uuid in still:
+            ck = (space_id, p_uuid, o_uuid)
+            if ck in _pair_count_cache:
+                aliases.extra_quad_stats[(p_uuid, o_uuid)] = _pair_count_cache[ck]
+                continue
+            crows = await db.execute_query(
+                f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_rdf_quad "
+                f"WHERE predicate_uuid = '{p_uuid}'::uuid "
+                f"AND object_uuid = '{o_uuid}'::uuid "
+                f"LIMIT {_PAIR_COUNT_CAP}) s",
+                conn=conn, conn_params=conn_params)
+            n = crows[0]["n"] if crows else 0
+            _pair_count_cache[ck] = n
+            aliases.extra_quad_stats[(p_uuid, o_uuid)] = n
+
+        # Range leaves: no constant object, so count through the same bounded
+        # form. The num_val index makes this an index scan.
+        from .semijoin import needed_ranges
+        from .sparql_sql_schema import NUMERIC_TERM_COLUMN
+        aliases.range_stats = {}
+        for p_uuid, op, literal in needed_ranges(plan, aliases):
+            ck = (space_id, p_uuid, op, literal)
+            if ck in _pair_count_cache:
+                aliases.range_stats[(p_uuid, op, literal)] = _pair_count_cache[ck]
+                continue
+            crows = await db.execute_query(
+                f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_rdf_quad q "
+                f"WHERE q.predicate_uuid = '{p_uuid}'::uuid AND q.object_uuid IN "
+                f"(SELECT term_uuid FROM {space_id}_term "
+                f" WHERE {NUMERIC_TERM_COLUMN} {op} {literal}) "
+                f"LIMIT {_PAIR_COUNT_CAP}) s",
+                conn=conn, conn_params=conn_params)
+            n = crows[0]["n"] if crows else 0
+            _pair_count_cache[ck] = n
+            aliases.range_stats[(p_uuid, op, literal)] = n
+
+        logger.debug("semijoin gate: resolved %d/%d pair stats (%d counted), "
+                     "%d range(s)", len(aliases.extra_quad_stats), len(missing),
+                     len(still), len(aliases.range_stats))
+    except Exception as e:
+        logger.debug("semijoin gate: pair stats lookup failed: %s", e)
+
+
 async def generate_sql(
     compile_result: CompileResult,
     space_id: str,
@@ -519,6 +606,13 @@ async def generate_sql(
         # Stage 2d: Vector/geo optimization hints (pure, no I/O)
         from .vg_optimize import vg_optimize
         plan = vg_optimize(plan)
+
+        # Stage 2d.1: Mark joins emittable as existence tests, and the DISTINCT
+        # each one makes redundant. After 2c so it sees the plan emit will see.
+        from .semijoin import mark_semijoins, needed_pairs
+        await _load_missing_pair_stats(plan, aliases, space_id,
+                                       conn=conn, conn_params=conn_params)
+        plan = mark_semijoins(plan, aliases)
 
         # Stage 2e: Pre-load vector + FTS index metadata
         vector_index_meta: Dict[str, Dict[str, Any]] = {}

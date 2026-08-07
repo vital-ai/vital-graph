@@ -30,6 +30,14 @@ def emit_distinct(plan: PlanV2, ctx: EmitContext) -> str:
     """
     from .emit import emit
 
+    # A semi-join below yields at most one row per outer row, so this DISTINCT
+    # removes nothing — and the Unique/HashAggregate it would emit is a
+    # blocking node that stops LIMIT terminating the scan early, which is the
+    # entire point of the rewrite. semijoin.mark_semijoins proves the condition.
+    if plan.hints.get('distinct_redundant'):
+        ctx.log("distinct", "elided: semi-join below guarantees uniqueness")
+        return emit(plan.child, ctx)
+
     if _can_pushdown(plan, ctx):
         return _emit_pushdown(plan, ctx)
 

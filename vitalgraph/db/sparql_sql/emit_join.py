@@ -52,7 +52,6 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
     right_ctx = ctx.child()
 
     left_sql = emit(left_child, left_ctx)
-    right_sql = emit(right_child, right_ctx)
 
     l_alias = ctx.aliases.next("j")
     r_alias = ctx.aliases.next("j")
@@ -64,6 +63,8 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
     right_vars = right_scope.all_visible
     shared = left_vars & right_vars
     all_vars = left_vars | right_vars
+
+
 
     ctx.log("join", f"left_vars={sorted(left_vars)}, right_vars={sorted(right_vars)}, "
             f"shared={sorted(shared)}, is_left={is_left}")
@@ -78,6 +79,45 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
     # VALUES (KIND_TABLE) uses UNDEF → NULL; joins must be NULL-tolerant
     left_is_table = left_child.kind == KIND_TABLE
     right_is_table = right_child.kind == KIND_TABLE
+
+    # Semi-join: emit the right side as a flat existence probe correlated on the
+    # shared variable. Requires the left side emitted first, for its alias.
+    exists_sql = None
+    if (not is_left) and plan.hints.get('semijoin') and len(shared) == 1:
+        from .emit_bgp import emit_bgp_exists, find_bgp
+        v = next(iter(shared))
+        l_info = left_ctx.types.get(v)
+        rbgp = find_bgp(right_child)
+        if rbgp is not None and l_info and l_info.has_term_identity():
+            exists_sql = emit_bgp_exists(
+                rbgp, right_ctx, (v, f"{l_alias}.{l_info.sql_name}__uuid"))
+
+    if exists_sql is not None:
+        semi_cols = []
+        for v2 in sorted(left_vars):
+            semi_cols.extend(
+                TypeRegistry.passthrough_columns(_child_sn(v2, left_ctx), l_alias))
+        if semi_cols:
+            # Only the left side survives. Register its variables as this node's
+            # output — without this an ORDER BY above cannot resolve them and
+            # emits the raw SPARQL name as a column. Drop the probed side's
+            # private variables for the same reason, in reverse.
+            for v2 in sorted(left_vars):
+                ci = left_ctx.types.get(v2)
+                ctx.types.register(ColumnInfo.simple_output(
+                    v2, ci.sql_name if ci else v2,
+                    typed_lane=ci.typed_lane if ci else None,
+                    from_triple=ci.from_triple if ci else False,
+                    text_materialized=ci.text_materialized if ci else True))
+            for v2 in sorted(right_vars - left_vars):
+                ctx.types.drop(v2)
+            ctx.log("join", f"SEMI JOIN via flat probe; dropped "
+                            f"{sorted(right_vars - left_vars)}")
+            return (f"SELECT {', '.join(semi_cols)}\n"
+                    f"FROM ({left_sql}) AS {l_alias}\n"
+                    f"WHERE EXISTS (\n{exists_sql}\n)")
+
+    right_sql = emit(right_child, right_ctx)
 
     # ON clause: shared variables joined by UUID, typed lane, or text
     if shared:

@@ -117,26 +117,18 @@ def _prune_recursive(plan: PlanV2, dead_tokens: Set[str]) -> int:
 
 
 def _replace_plan_in_place(target: PlanV2, source: PlanV2) -> None:
-    """Replace *target*'s fields with *source*'s fields, keeping the same
-    object identity (so parent references remain valid)."""
-    target.kind = source.kind
-    target.tables = source.tables
-    target.var_slots = source.var_slots
-    target.constraints = source.constraints
-    target.tagged_constraints = source.tagged_constraints
-    target.children = source.children
-    target.project_vars = source.project_vars
-    target.limit = source.limit
-    target.offset = source.offset
-    target.order_conditions = source.order_conditions
-    target.filter_exprs = source.filter_exprs
-    target.extend_var = source.extend_var
-    target.extend_expr = source.extend_expr
-    target.group_vars = source.group_vars
-    target.aggregates = source.aggregates
-    target.having_exprs = source.having_exprs
-    target.left_join_exprs = source.left_join_exprs
-    target.values_vars = source.values_vars
-    target.values_rows = source.values_rows
+    """Replace *target*'s fields with *source*'s, keeping object identity so
+    parent references remain valid.
+
+    Copies every dataclass field rather than enumerating them by hand. The
+    hand-written version silently dropped any field added to the IR later:
+    `leaf_terms` was lost exactly that way, and the symptom surfaced several
+    layers off as a selectivity gate that could not read cardinality, with no
+    error raised anywhere. A generic copy cannot go stale.
+    """
+    from dataclasses import fields
+    for f in fields(source):
+        if f.name == "kind" or not f.name.startswith("_"):
+            setattr(target, f.name, getattr(source, f.name))
     target.path_meta = source.path_meta
     target.graph_uri = source.graph_uri

@@ -155,6 +155,19 @@ class PlanV2:
     var_slots: Dict[str, VarSlot] = field(default_factory=dict)
     constraints: List[str] = field(default_factory=list)
     tagged_constraints: List[Tuple[str, str]] = field(default_factory=list)
+    # (quad_alias, uuid_column) -> (term_text, term_type) for leaf positions
+    # bound to a constant. Recorded at collect time, when the value is known,
+    # so consumers do not have to parse it back out of the generated SQL — that
+    # couples them to the SQL text and fails silently when it differs.
+    leaf_terms: Dict[Tuple[str, str], Tuple[str, str]] = field(
+        default_factory=dict)
+    # (quad_alias, uuid_column) -> (sql_operator, literal) for a numeric range
+    # pushed to this leaf. A range binds no constant object, so it leaves no
+    # entry in leaf_terms and the selectivity gate would otherwise see nothing
+    # to estimate — and decline to probe the broad range queries that need it
+    # most.
+    range_leaves: Dict[Tuple[str, str], Tuple[str, str]] = field(
+        default_factory=dict)
 
     # --- Children ---
     # Relation kinds: join/left_join/union/minus have 2 children.

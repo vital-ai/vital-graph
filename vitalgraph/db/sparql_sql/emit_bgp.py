@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Optional, Set
 
-from .ir import PlanV2, TableRef, VarSlot
+from .ir import PlanV2, TableRef, VarSlot, KIND_BGP
 from .emit_context import EmitContext
 from .collect import _esc, _const_subquery
 
@@ -203,3 +203,147 @@ def emit_bgp(plan: PlanV2, ctx: EmitContext) -> str:
     ctx.log_scope("bgp", defined=set(plan.var_slots.keys()))
 
     return sql
+
+
+def emit_bgp_exists(plan: PlanV2, ctx: EmitContext,
+                    correlation: tuple) -> Optional[str]:
+    """Emit a BGP as a flat existence test for use inside EXISTS.
+
+    `correlation` is (sparql_var, outer_sql_ref): the variable shared with the
+    anchor, and the column on the outer row to bind it to.
+
+    Deliberately NOT `emit_bgp` with a different projection. `emit_bgp` builds
+    an inner/outer split — an inner subquery over the quad tables wrapped in an
+    outer one that joins the term table and projects companion columns. As the
+    body of an EXISTS that wrapper is what PostgreSQL evaluates per outer row,
+    and it does not collapse into index probes: measured 1.3M buffers against a
+    45,945 baseline, unchanged by pushing the correlation inward or by removing
+    the term JOINs. The wrapper itself is the cost.
+
+    So this emits one flat statement — quad and edge tables joined directly,
+    `SELECT 1`, no term JOINs, no projection — with the correlation as an
+    ordinary constraint so `reorder_joins` can seed the chain from it rather
+    than reaching it last. Join ordering still matters inside the probe: a naive
+    order measured 9.7s against the set-based plan's 31ms.
+
+    Returns None when the BGP is not a shape this can handle, in which case the
+    caller falls back to a plain join.
+    """
+    from .reorder_bgp import reorder_joins
+
+    quad_tables = [t for t in plan.tables
+                   if t.kind in ("quad", "edge", "frame_entity")]
+    if not quad_tables or not plan.var_slots:
+        return None
+
+    corr_var, corr_ref = correlation
+    slot = plan.var_slots.get(corr_var)
+    if not slot or not slot.positions:
+        return None
+    q_alias, uuid_col = slot.positions[0]
+    if q_alias not in {t.alias for t in quad_tables}:
+        return None
+
+    # The correlation is a constraint like any other, which is what lets the
+    # reorderer treat the correlated table as a candidate chain root.
+    corr_cond = f"{q_alias}.{uuid_col} = {corr_ref}"
+    tagged = list(plan.tagged_constraints) + [(q_alias, corr_cond)]
+
+    ordered, on_map, first_conds = reorder_joins(
+        quad_tables, tagged,
+        quad_stats=ctx.aliases.quad_stats,
+        pred_stats=ctx.aliases.pred_stats,
+    )
+
+    first_t = ordered[0]
+    parts = ["SELECT 1", f"FROM {first_t.table_name} AS {first_t.alias}"]
+    for qt in ordered[1:]:
+        conds = on_map.get(qt.alias)
+        if conds:
+            parts.append(f"JOIN {qt.table_name} AS {qt.alias} ON "
+                         + " AND ".join(conds))
+        else:
+            parts.append(f"JOIN {qt.table_name} AS {qt.alias} ON TRUE")
+    if first_conds:
+        parts.append("WHERE " + " AND ".join(first_conds))
+    # OFFSET 0 is an optimisation fence. Without it PostgreSQL pulls the
+    # correlated subquery up into a hash semi-join: it builds the full set of
+    # qualifying anchors, which both costs the whole match set and destroys the
+    # anchor scan's ordering, so LIMIT cannot stop early. With it the subquery
+    # stays a per-row probe and the ordered scan survives.
+    parts.append("OFFSET 0")
+
+    ctx.log("bgp", f"EXISTS probe: {len(ordered)} table(s), root "
+                   f"{first_t.alias}, correlated on {corr_cond}")
+    return "\n".join(parts)
+
+
+def find_bgp(node: Optional[PlanV2], depth: int = 0) -> Optional[PlanV2]:
+    """The single BGP under a chain of transparent modifiers, if there is one.
+
+    Only descends where the node cannot change which rows exist — a FILTER or a
+    second BGP would make the existence test mean something different.
+    """
+    from .ir import KIND_PROJECT, KIND_ORDER
+    if node is None or depth > 4:
+        return None
+    if node.kind == KIND_BGP:
+        return node
+    if node.kind in (KIND_PROJECT, KIND_ORDER) and node.children:
+        return find_bgp(node.children[0], depth + 1)
+    return None
+
+
+def emit_bgp_anchor(plan: PlanV2, ctx: EmitContext, var: str):
+    """Emit a BGP as a flat FROM/WHERE over its quad tables, for the anchor.
+
+    Returns (column_ref, from_where_sql) or None.
+
+    The point is that `column_ref` is a real column of a real table, so an
+    `ORDER BY` on it can be satisfied by an index and `LIMIT` can stop the scan.
+    `emit_bgp` wraps every BGP in a subquery, which puts the ordering above the
+    scan where no index reaches it — PostgreSQL then computes the whole match
+    set and top-N sorts it, which is what a 25-row page was paying for.
+    """
+    from .reorder_bgp import reorder_joins
+
+    quad_tables = [t for t in plan.tables
+                   if t.kind in ("quad", "edge", "frame_entity")]
+    slot = plan.var_slots.get(var)
+    if not quad_tables or not slot or not slot.positions:
+        return None
+    q_alias, uuid_col = slot.positions[0]
+    if q_alias not in {t.alias for t in quad_tables}:
+        return None
+
+    if plan.tagged_constraints:
+        ordered, on_map, first_conds = reorder_joins(
+            quad_tables, plan.tagged_constraints,
+            quad_stats=ctx.aliases.quad_stats,
+            pred_stats=ctx.aliases.pred_stats)
+    else:
+        ordered, on_map, first_conds = quad_tables, {}, list(plan.constraints)
+
+    first_t = ordered[0]
+    parts = [f"FROM {first_t.table_name} AS {first_t.alias}"]
+    for qt in ordered[1:]:
+        conds = on_map.get(qt.alias)
+        parts.append(f"JOIN {qt.table_name} AS {qt.alias} ON "
+                     + (" AND ".join(conds) if conds else "TRUE"))
+    where = list(first_conds)
+    return (f"{q_alias}.{uuid_col}", "\n".join(parts), where)
+
+
+def find_semijoin(node, depth: int = 0):
+    """The nearest JOIN below that was marked as an existence test."""
+    from .ir import KIND_JOIN
+    if node is None or depth > 6:
+        return None
+    if node.kind == KIND_JOIN and getattr(node, "hints", None) \
+            and node.hints.get("semijoin"):
+        return node
+    for c in (getattr(node, "children", None) or []):
+        f = find_semijoin(c, depth + 1)
+        if f is not None:
+            return f
+    return None

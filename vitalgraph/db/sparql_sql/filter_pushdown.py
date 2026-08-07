@@ -340,24 +340,27 @@ def _try_numeric_filter(
     if ref_id not in quad_aliases:
         return None
 
-    # Must reproduce the __num projection exactly (sql_type_generation), or the
-    # push-down and the column it replaces would disagree about which literals
-    # count as numeric. CASE rather than `AND` because PostgreSQL does not
-    # guarantee AND evaluation order, and an unguarded CAST over the term table
-    # raises on the first URI it meets.
-    from .sql_type_generation import numeric_term_expr
-    from .emit_bgp import _NUMERIC_DATATYPES
+    # The generated column, not the equivalent expression. PostgreSQL does not
+    # use statistics for an indexed expression here — it estimated 3,489,209
+    # rows against 99 actual, the 1/3 default — and then hashed the whole entity
+    # population rather than driving from the selective leaf. An ordinary column
+    # estimates accurately (160 against 99) and the plan follows.
+    # See sparql_sql_schema.numeric_term_column.
+    from .sparql_sql_schema import NUMERIC_TERM_COLUMN
+    num_expr = NUMERIC_TERM_COLUMN
 
-    num_ids = ctx.dt_ids_for_uris(_NUMERIC_DATATYPES)
-    if num_ids == "NULL":
-        return None      # no numeric datatypes in this space — nothing to match
-
-    num_expr = numeric_term_expr(num_ids)
-
+    # No OFFSET 0 fence here. One was needed while the predicate was an
+    # expression, to stop the planner folding the subquery into the join and
+    # mis-costing it. With the generated column the estimate is accurate, so
+    # the planner can be left to choose — and letting it choose is better,
+    # since a fence also blocks legitimate optimisations.
     constraint_sql = (
         f"{ref_id}.{col_name} IN "
         f"(SELECT term_uuid FROM {term_table} WHERE {num_expr} {op} {literal})"
     )
+    # Record structurally so the selectivity gate can estimate this leaf.
+    bgp.range_leaves[(ref_id, col_name)] = (op, literal)
+
     logger.debug("Numeric filter pushdown: %s %s %s -> %s",
                  var_name, op, literal, constraint_sql[:80])
     return (ref_id, constraint_sql)
