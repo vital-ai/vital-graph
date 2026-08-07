@@ -46,6 +46,36 @@ TABLE_IDENTIFIER = "csv_import_001"  # Change this between runs if needed
 BLOCK_SIZE = 1024 * 1024  # 1MB blocks for optimal COPY performance
 
 
+# ---------------------------------------------------------------------------
+# datatype URI -> datatype_id
+#
+# {space}_datatype is a BIGSERIAL seeded from SparqlSQLSchema.STANDARD_DATATYPES
+# in list order, so the id is that list's 1-based index. Derived from the schema
+# rather than hardcoded, so a change to the seed list cannot silently desync the
+# CSVs from the table.
+#
+# Getting this wrong is invisible: the term row loads fine with a NULL
+# datatype_id, and the generator's numeric/boolean/datetime CASE expressions all
+# gate on `datatype_id IN (...)`, so every typed comparison quietly evaluates to
+# NULL and the query returns zero rows instead of failing. That is exactly what
+# happened to the first generated lead fixture — `MQLRating >= 65` matched 0 of
+# a known 3,559.
+# ---------------------------------------------------------------------------
+try:
+    from vitalgraph.db.sparql_sql.sparql_sql_schema import STANDARD_DATATYPES
+    DATATYPE_IDS = {uri: i for i, (uri, _name) in
+                    enumerate(STANDARD_DATATYPES, start=1)}
+except Exception:  # pragma: no cover - schema import is optional for CSV-only use
+    DATATYPE_IDS = {}
+
+
+def datatype_id_for(datatype_uri: str) -> str:
+    """Return the seeded datatype_id for a URI, or '' (SQL NULL) if unknown."""
+    if not datatype_uri:
+        return ''
+    return str(DATATYPE_IDS.get(datatype_uri, '')) or ''
+
+
 class TermUUIDGenerator:
     """Generate deterministic UUIDs for RDF terms."""
     
@@ -54,24 +84,46 @@ class TermUUIDGenerator:
     def generate_term_uuid(term_text: str, term_type: str, lang: Optional[str] = None, datatype: Optional[str] = None) -> str:
         """
         Generate a deterministic UUID for an RDF term based on its components.
-        
+
+        MUST match vitalgraph's own derivation exactly — see
+        `emit_update._generate_term_uuid`. The runtime hashes the integer
+        **datatype_id**, not the datatype URI:
+
+            parts = [term_text, term_type]
+            if lang is not None:      parts.append(f"lang:{lang}")
+            if datatype_id is not None: parts.append(f"datatype:{datatype_id}")
+
+        Getting this wrong does not fail loudly. Reads still work, because query
+        constants are resolved by a (term_text, term_type) lookup rather than by
+        computing the uuid. But any write through the runtime — emit_update,
+        auto_sync, the backfill task — computes the canonical uuid, does not find
+        the CSV-loaded row, and inserts a *second* term row for the same literal
+        that existing quads do not join to.
+
+        Measured on "true"^^xsd:boolean: runtime 2b7add47…, converter (bracketed
+        URI) 521791b8…, converter (bare URI) dbd34433…, no datatype 1aa5301d… —
+        four uuids for one term.
+
         Args:
             term_text: The term's text value
             term_type: The term type ('U' for URI, 'L' for literal, 'B' for blank node)
             lang: Language tag for literals (optional)
-            datatype: Datatype URI for typed literals (optional)
-            
+            datatype: Datatype **URI** for typed literals (optional) — mapped to
+                its seeded datatype_id here so callers can keep passing the URI
+
         Returns:
             str: Deterministic UUID for the term
         """
         # Create a consistent string representation of the term
         components = [term_text, term_type]
-        
+
         if lang is not None:
             components.append(f"lang:{lang}")
-        
+
         if datatype is not None:
-            components.append(f"datatype:{datatype}")
+            dt_id = DATATYPE_IDS.get(datatype)
+            if dt_id is not None:
+                components.append(f"datatype:{dt_id}")
         
         # Join components with a separator that won't appear in normal term text
         term_string = "\x00".join(components)
@@ -100,11 +152,12 @@ class NTriplesCSVConverter:
         graph_uri: str = DEFAULT_GRAPH_URI,
         table_identifier: str = 'primary',
         batch_size: int = DEFAULT_BATCH_SIZE,
-        progress_callback: Optional[Callable] = None
+        progress_callback: Optional[Callable] = None,
+        uuid_only_quads: bool = False
     ) -> str:
         """
         Parse N-Triples file and convert to CSV format for PostgreSQL import.
-        
+
         Args:
             ntriples_file: Path to N-Triples file
             output_csv: Output CSV file path (optional, creates temp file if None)
@@ -112,7 +165,14 @@ class NTriplesCSVConverter:
             table_identifier: Dataset identifier to use in generated CSVs
             batch_size: Batch size for progress reporting
             progress_callback: Optional callback for progress updates
-            
+            uuid_only_quads: Emit the quads CSV with ONLY the four uuid columns,
+                in quad-table order, so it can be COPY'd straight into
+                {space}_rdf_quad with no staging table and no INSERT..SELECT
+                transfer.  The terms CSV is written inline during the same pass
+                instead of by re-reading the quads CSV afterwards.  Use this for
+                loading; the default 14-column form keeps the text values and is
+                the one to use if you want a human-readable/debuggable export.
+
         Returns:
             str: Path to generated CSV file
         """
@@ -140,17 +200,55 @@ class NTriplesCSVConverter:
         
         try:
             
+            # uuid_only mode writes the terms CSV inline, during this same pass.
+            terms_ctx = None
+            if uuid_only_quads:
+                quads_path = Path(csv_file_path)
+                terms_csv_path = quads_path.parent / f"{quads_path.stem}_terms.csv"
+                terms_fh = open(terms_csv_path, 'w', newline='', encoding='utf-8')
+                terms_writer = csv.writer(terms_fh, quoting=csv.QUOTE_MINIMAL)
+                terms_writer.writerow([
+                    'term_uuid', 'term_text', 'term_type', 'lang',
+                    'datatype_id', 'created_time', 'dataset'
+                ])
+                seen_terms: Set[str] = set()
+                terms_ctx = (terms_fh, terms_writer, seen_terms)
+
+                def _emit_term(term_uuid, term_text, term_type, language='',
+                               datatype=''):
+                    if term_uuid in seen_terms:
+                        return
+                    seen_terms.add(term_uuid)
+                    terms_writer.writerow([
+                        term_uuid, term_text, term_type, language or '',
+                        datatype_id_for(datatype), '', table_identifier,
+                    ])
+
             with csv_file:
                 csv_writer = csv.writer(csv_file, quoting=csv.QUOTE_NONNUMERIC)
-                
-                # Write CSV header
-                csv_writer.writerow([
-                    'subject_text', 'predicate_text', 'object_text', 
-                    'object_datatype', 'object_language', 'is_literal', 
-                    'graph_uri', 'import_batch_id',
-                    'subject_uuid', 'predicate_uuid', 'object_uuid', 'context_uuid',
-                    'processing_status', 'dataset'
-                ])
+
+                # Write CSV header.
+                #
+                # uuid_only_quads emits ONLY the four uuid columns, in the order
+                # the quad table expects, so the file can be COPY'd straight into
+                # {space}_rdf_quad. COPY's column list has to match the file's
+                # column order, so the 14-column form (text values, flags, batch
+                # ids) cannot go directly into the quad table — it needs a staging
+                # table plus an INSERT..SELECT to project the four columns across.
+                # Measured on wordnet (8.58M quads): that transfer cost 134s on top
+                # of a 69s COPY. The slim form skips it entirely.
+                if uuid_only_quads:
+                    csv_writer.writerow([
+                        'subject_uuid', 'predicate_uuid', 'object_uuid', 'context_uuid'
+                    ])
+                else:
+                    csv_writer.writerow([
+                        'subject_text', 'predicate_text', 'object_text',
+                        'object_datatype', 'object_language', 'is_literal',
+                        'graph_uri', 'import_batch_id',
+                        'subject_uuid', 'predicate_uuid', 'object_uuid', 'context_uuid',
+                        'processing_status', 'dataset'
+                    ])
                 
                 logger.info("Starting N-Triples parsing with oxigraph...")
                 
@@ -163,17 +261,36 @@ class NTriplesCSVConverter:
                         elif batch_count % 100000 == 0:
                             logger.info(f"Parsed {batch_count:,} triples so far...")
                         
-                        # Extract subject, predicate, object
-                        subject_uri = str(triple.subject)
-                        predicate_uri = str(triple.predicate)
-                        
+                        # Extract subject, predicate, object.
+                        #
+                        # Use `.value`, NOT `str()`. pyoxigraph's __str__ returns the
+                        # N-Triples *serialization*, not the term value:
+                        #     str(NamedNode) -> '<http://example.org/x>'
+                        #     str(Literal)   -> '"hello"@en' / '"5"^^<...#integer>'
+                        #     .value         -> 'http://example.org/x' / 'hello' / '5'
+                        # Using str() stored bracketed URIs and quoted, datatype-suffixed
+                        # literals as term_text, and — because the UUID is derived from
+                        # term_text — produced term_uuids that disagree with
+                        # vitalgraph's _generate_term_uuid for every single term.
+                        # (Verified: uuid5 of '<http://…KGFrame/1716488385293_691816894>'
+                        # = 8348cb61-…, the value in wordnet_output_terms.csv, whereas the
+                        # bare URI gives 72c08705-…, which is what the system computes.)
+                        subject_uri = triple.subject.value
+                        predicate_uri = triple.predicate.value
+
                         # Handle different object types using oxigraph's type system
                         obj = triple.object
                         if str(type(obj).__name__) == 'Literal':
-                            object_value = str(obj)
+                            object_value = obj.value
                             # Extract datatype and language if present
                             if hasattr(obj, 'datatype') and obj.datatype:
-                                object_datatype = str(obj.datatype)
+                                # .value, not str() — str(NamedNode) returns the
+                                # N-Triples serialization '<http://...>', and the
+                                # bracketed form matches no key in DATATYPE_IDS,
+                                # so every typed literal silently lost its
+                                # datatype. Same trap as the subject/predicate
+                                # note above, one level deeper.
+                                object_datatype = obj.datatype.value
                                 object_language = ''
                             elif hasattr(obj, 'language') and obj.language:
                                 object_datatype = ''
@@ -185,11 +302,11 @@ class NTriplesCSVConverter:
                             object_term_type = 'L'
                         else:
                             # URI or blank node
-                            object_value = str(obj)
+                            object_value = obj.value
                             object_datatype = ''
                             object_language = ''
                             is_literal = False
-                            object_term_type = 'U' if not str(obj).startswith('_:') else 'B'
+                            object_term_type = 'B' if type(obj).__name__ == 'BlankNode' else 'U'
                         
                         # Generate deterministic UUIDs for all terms
                         subject_uuid = self.uuid_generator.generate_term_uuid(subject_uri, 'U')
@@ -206,15 +323,26 @@ class NTriplesCSVConverter:
                         import_batch_id = f"batch_{batch_count // batch_size}"
                         dataset_value = f"import_{int(start_time)}"
                         
-                        triple_data = (
-                            subject_uri, predicate_uri, object_value, 
-                            object_datatype, object_language, is_literal, 
-                            graph_uri, import_batch_id,
-                            subject_uuid, predicate_uuid, object_uuid, context_uuid,
-                            'processed', dataset_value
-                        )
-                        
-                        csv_writer.writerow(triple_data)
+                        if uuid_only_quads:
+                            csv_writer.writerow((subject_uuid, predicate_uuid,
+                                                 object_uuid, context_uuid))
+                            # Terms inline — avoids a second full pass over the
+                            # quads CSV (64s of the 152s conversion on wordnet).
+                            _emit_term(subject_uuid, subject_uri, 'U')
+                            _emit_term(predicate_uuid, predicate_uri, 'U')
+                            _emit_term(object_uuid, object_value, object_term_type,
+                                       object_language, object_datatype)
+                            _emit_term(context_uuid, graph_uri, 'U')
+                        else:
+                            triple_data = (
+                                subject_uri, predicate_uri, object_value,
+                                object_datatype, object_language, is_literal,
+                                graph_uri, import_batch_id,
+                                subject_uuid, predicate_uuid, object_uuid, context_uuid,
+                                'processed', dataset_value
+                            )
+
+                            csv_writer.writerow(triple_data)
                         self.stats['total_triples'] += 1
                         batch_count += 1
                         
@@ -236,10 +364,18 @@ class NTriplesCSVConverter:
             logger.info(f"Processing time: {self.stats['processing_time']:.2f}s")
             logger.info(f"Output CSV: {csv_file_path}")
             
-            # Generate terms CSV from the quads CSV
-            terms_csv_path = self._generate_terms_csv(csv_file_path, table_identifier, batch_size)
-            logger.info(f"Terms CSV generated: {terms_csv_path}")
-            
+            if uuid_only_quads:
+                terms_fh, _, seen_terms = terms_ctx
+                terms_fh.flush()
+                os.fsync(terms_fh.fileno())
+                terms_fh.close()
+                logger.info(f"Terms CSV generated inline: {terms_csv_path} "
+                            f"({len(seen_terms):,} unique terms)")
+            else:
+                # Generate terms CSV from the quads CSV
+                terms_csv_path = self._generate_terms_csv(csv_file_path, table_identifier, batch_size)
+                logger.info(f"Terms CSV generated: {terms_csv_path}")
+
             return csv_file_path
                 
         except Exception as e:
@@ -301,7 +437,7 @@ class NTriplesCSVConverter:
                         term_text,
                         term_type,
                         language or '',  # Empty string for NULL
-                        '',  # datatype_id (empty string for NULL)
+                        datatype_id_for(datatype),
                         '',  # created_time (empty string for NULL)
                         table_identifier  # dataset
                     ])
