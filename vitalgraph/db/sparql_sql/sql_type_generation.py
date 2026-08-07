@@ -346,6 +346,38 @@ class TypedExpr:
 # TypeRegistry — central companion column manager
 # ---------------------------------------------------------------------------
 
+# Guard for casting term_text to NUMERIC. Anything reading or reproducing the
+# __num column must use THIS pattern — a push-down whose regex differs from the
+# projection's will disagree about which literals are numeric, and the planner
+# cannot match a partial index built on one to a query written with the other.
+NUM_RE = r"'^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$'"
+
+
+def numeric_term_expr(num_dt_ids: str, term_col: str = "term_text",
+                      dt_col: str = "datatype_id") -> str:
+    """The canonical `term_text -> NUMERIC` expression.
+
+    One definition, three consumers that must agree exactly:
+
+      * the ``__num`` projection column (below)
+      * the numeric range push-down (filter_pushdown._try_numeric_filter)
+      * the partial expression index built on it (sparql_sql_schema)
+
+    PostgreSQL matches an expression index by comparing normalised expression
+    trees, so any difference — a reordered datatype id list, a different regex,
+    `AND` instead of `CASE` — silently costs the index rather than failing. The
+    id list must therefore be built in the SAME ORDER on both sides; it is
+    rendered as an array constant and its element order is part of the tree.
+
+    CASE rather than a plain `AND` because PostgreSQL does not guarantee `AND`
+    evaluation order, and an unguarded CAST over the term table raises on the
+    first URI it meets.
+    """
+    return (f"CASE WHEN {dt_col} IN ({num_dt_ids})"
+            f" AND {term_col} ~ {NUM_RE}"
+            f" THEN CAST({term_col} AS NUMERIC) END")
+
+
 class TypeRegistry:
     """Manages type information for all variables in the current scope.
 
@@ -516,7 +548,7 @@ class TypeRegistry:
         """
         # Guard CASTs with lightweight validation to avoid errors on
         # malformed literals (e.g. "xyz"^^xsd:integer).
-        _NUM_RE = r"'^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$'"
+        _NUM_RE = NUM_RE
         _DT_RE = r"'^\d{4}-'"
 
         if dt_alias:

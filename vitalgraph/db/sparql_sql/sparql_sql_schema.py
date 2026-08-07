@@ -70,6 +70,45 @@ STANDARD_DATATYPES: List[Tuple[str, str]] = [
 ]
 
 
+def numeric_datatype_ids() -> str:
+    """Comma-separated datatype_ids for the XSD numeric types, in emit order.
+
+    Mirrors `EmitContext.dt_ids_for_uris(_NUMERIC_DATATYPES)`, which preserves
+    the order of the URI list it is given. The order is not cosmetic: the id
+    list becomes an array constant inside the indexed expression, so a
+    differently-ordered list produces a different expression tree and the
+    partial index below stops matching the push-down's predicate — silently.
+    """
+    from .emit_bgp import _NUMERIC_DATATYPES
+    ids = {uri: i for i, (uri, _n) in enumerate(STANDARD_DATATYPES, start=1)}
+    return ", ".join(str(ids[u]) for u in _NUMERIC_DATATYPES if u in ids)
+
+
+def numeric_term_index_sql(space_id: str, term_table: str) -> str:
+    """Partial expression index for numeric range push-down (issues/040 W4).
+
+    Without it the semi-join the push-down emits has to scan the term table by
+    value. Measured on sp_lead_synth (1.05M terms, `MQLRating >= 99.9`, 16
+    matches): 24,575 buffers before, 4,396 after, for a **48 kB** index.
+
+    Partial on `<expr> IS NOT NULL` rather than on `datatype_id IN (...)`:
+    the query says `<expr> >= 99.9`, and PostgreSQL can prove a strict
+    comparison implies IS NOT NULL, so the predicate is usable. It cannot prove
+    the datatype membership, which is buried inside the CASE. Making it partial
+    keeps the index to the numeric literals — 48 kB rather than one entry per
+    term.
+
+    This index is inert on its own. It only pays off in combination with the
+    push-down (W2) that creates a value-ordered scan for it to serve; before
+    that, the range predicate was applied above the join and never touched the
+    term table by value at all.
+    """
+    from .sql_type_generation import numeric_term_expr
+    expr = numeric_term_expr(numeric_datatype_ids())
+    return (f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_num "
+            f"ON {term_table} (({expr})) WHERE ({expr}) IS NOT NULL")
+
+
 class SparqlSQLSchema:
     """
     PostgreSQL schema for the sparql_sql backend.
@@ -705,6 +744,8 @@ class SparqlSQLSchema:
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_type ON {t['term']} (term_type)",
             # GIN trigram index for REGEX/CONTAINS/LIKE text filters (requires pg_trgm)
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_trgm ON {t['term']} USING gin (term_text gin_trgm_ops)",
+            # Numeric range push-down support — see numeric_term_index_sql.
+            numeric_term_index_sql(space_id, t['term']),
 
             # Quad table indexes — essential for V2 SQL generation
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_pred ON {t['rdf_quad']} (predicate_uuid)",
@@ -725,7 +766,23 @@ class SparqlSQLSchema:
             # dropped as redundant — the 5-column PK (subject, predicate, object,
             # context, quad_uuid) already serves subject-scoped-within-graph
             # lookups index-only (measured identical: 4 buffers, 0 heap fetches).
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_ctx_pred ON {t['rdf_quad']} (context_uuid, predicate_uuid) INCLUDE (subject_uuid, object_uuid)",
+            # object_uuid is a KEY column, not INCLUDE payload. In INCLUDE it can
+            # only ever be a filter, so a graph+predicate+object query — every
+            # typed-entity listing, every slot-value filter — scanned the whole
+            # (context, predicate) range and discarded almost all of it. Measured
+            # on wordnet_frames (8.58M quads), 25-row page: 14,876 buffers /592ms
+            # as a filter vs 5 buffers /0.21ms as an index condition, ~1,850x.
+            #
+            # Not a cardinality problem — the row estimate was already accurate
+            # (111,113 est vs 109,745 actual), so extended statistics do not help
+            # (tried). It is the LIMIT cost model assuming matching rows are
+            # spread uniformly through the index range when they are clustered.
+            #
+            # Keeping subject_uuid in INCLUDE preserves the covering property:
+            # the object-unbound graph-scoped scan is unchanged — Index Only
+            # Scan, 0 heap fetches, identical buffers. Index size +0.24%.
+            # See issues/039.
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_ctx_pred ON {t['rdf_quad']} (context_uuid, predicate_uuid, object_uuid) INCLUDE (subject_uuid)",
 
             # Stats: support the capped stats load (ORDER BY row_count LIMIT).
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_rdf_stats_rc ON {t['rdf_stats']} (row_count)",
@@ -807,6 +864,7 @@ class SparqlSQLSchema:
             f"DROP INDEX IF EXISTS idx_{space_id}_term_tt",
             f"DROP INDEX IF EXISTS idx_{space_id}_term_type",
             f"DROP INDEX IF EXISTS idx_{space_id}_term_trgm",
+            f"DROP INDEX IF EXISTS idx_{space_id}_term_num",
             f"DROP INDEX IF EXISTS idx_{space_id}_quad_pred",
             f"DROP INDEX IF EXISTS idx_{space_id}_quad_subj",
             f"DROP INDEX IF EXISTS idx_{space_id}_quad_obj",

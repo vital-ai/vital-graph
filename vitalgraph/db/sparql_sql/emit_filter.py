@@ -19,10 +19,10 @@ def emit_filter(plan: PlanV2, ctx: EmitContext) -> str:
     """
     from .emit import emit
     from .emit_expressions import expr_to_sql
-    from .filter_pushdown import push_text_filters
+    from .filter_pushdown import push_filters
 
-    # Push text filters into child BGP before emitting it
-    push_text_filters(plan, ctx.space_id)
+    # Push text and numeric-range filters into the child BGP before emitting
+    push_filters(plan, ctx.space_id, ctx)
 
     child_sql = emit(plan.child, ctx)
 
