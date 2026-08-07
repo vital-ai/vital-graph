@@ -50,9 +50,13 @@ named. `KGQueryCriteriaBuilder` hardcodes `Edge_hasEntityKGFrame`
 cannot drive the KGQuery entity-criteria path at any scale. It remains correct
 for the generic SPARQL fast-path benches.
 
-AFTER W1/W3 both curves should flatten to ~1: tighten EQ_GROWTH_RATIO_MAX and
-RANGE_PENALTY_MAX then. They are loose now on purpose, so the bench records the
-status quo rather than failing on it.
+Both gates are dimensionless ratios against a baseline measured from the same
+fixture in the same run — never an absolute buffer count. The fixtures are
+generated at whatever size is asked for, so a constant in buffers is valid only
+at the size it was derived from and turns into either a false alarm or a
+rubber stamp as soon as the data changes. `EQ_GROWTH_VS_MATCHES_MAX` compares
+page-cost growth to match-count growth; `RANGE_VS_EQUALITY_MAX` compares the
+range comparator's cost per matched row to equality's on the same data.
 """
 
 from __future__ import annotations
@@ -64,16 +68,17 @@ from pathlib import Path
 import pytest
 
 from .conftest import skip_no_pg, space_exists
+from .lead_fixtures import SYNTH, require_usable
 from .harness import assert_plan, explain_json, total_shared_buffers
 
 pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
 
-SPACE_ID = "sp_lead_synth"
-GRAPH_ID = "urn:lead_synth"
 SIDECAR_URL = os.environ.get("VG_TEST_SIDECAR_URL", "http://localhost:7071")
-MANIFEST = (Path(__file__).resolve().parents[2]
-            / "internal_data" / "lead_synth" / "manifest.json")
+
+# Fixture definitions are shared with the API-level bench so the two layers
+# cannot drift onto different data — see lead_fixtures.
+FIXTURES = SYNTH
 
 NS = "urn:acme:kg"
 TEXT_SLOT = "http://vital.ai/ontology/haley-ai-kg#KGTextSlot"
@@ -89,34 +94,57 @@ EQ_STATES = ["CA", "TX", "NY", "IL", "VT"]
 # Mirrors GTE_THRESHOLDS in the generator; the manifest has a count for each.
 RANGE_THRESHOLDS = [99.9, 99, 90, 65, 50, 0]
 
-# Buffers at the largest match set / buffers at the smallest, over the equality
-# sweep. O(page) → ~1. O(matches) → tracks the ~9.5x match spread.
-EQ_GROWTH_RATIO_MAX = 30.0
-
-# Buffers per matched row at the tightest threshold.
+# Both bounds below are DIMENSIONLESS RATIOS measured within the same run.
 #
-# History, because the number alone is not interpretable:
-#   28,683  original — predicate applied above the join, every candidate carried
-#    1,536  after W2 (range push-down): leaf semi-join, but an unindexed scan
-#      274  after W4 (partial expression index on the numeric term expression)
+# Nothing here may be an absolute buffer count. The fixtures are generated at
+# whatever size is asked for — 10k and 100k today — so any constant expressed in
+# buffers is only valid for the size it was derived from and silently becomes
+# either unenforceable or a false alarm when the data changes. Earlier revisions
+# of this file carried exactly such a constant and it had to be re-derived twice
+# in one day.
 #
-# 274 at 16 matches is the fixed per-query floor (~4,400 buffers), not per-row
-# work: by 10,000 matches the figure is 45.0, which is the equality baseline to
-# one decimal place. The range comparator no longer costs more per matched row
-# than equality does.
+# Each bound is therefore stated against a baseline measured from the same
+# fixture in the same run, so it holds at any size.
+
+# Growth of page cost across the equality sweep, as a fraction of the growth in
+# match count. O(page) → ~0. O(matches) → ~1. Above 1 means page cost grows
+# faster than the result set, which is the regression worth catching.
+EQ_GROWTH_VS_MATCHES_MAX = 1.25
+
+# Cost per matched row of a range comparator, as a multiple of the equality
+# baseline — compared AT COMPARABLE SELECTIVITY, which is the part that matters.
 #
-# NOTE this bound is proportional to candidates/matches and so is tied to the
-# fixture's size and threshold set. Re-derive it if either changes rather than
-# nudging it upward — an unexplained increase is the regression it exists to
-# catch.
-RANGE_PENALTY_MAX = 400.0
+# The original form compared the tightest threshold against the largest equality
+# case and started failing once paging became O(page): equality fell to ~3
+# buffers/match while a deliberately-unprobed tight range sat at ~53, giving
+# 17.7x. Neither number was bad; the denominator had collapsed. Selectivity is
+# now the thing the two sides must share, because the semi-join gate routes
+# low-selectivity criteria to the set-based join by design — so a tight range
+# and a broad equality are simply different plans and comparing them says
+# nothing.
+#
+# The invariant that survives: at similar selectivity a range should cost about
+# what equality costs. Before the push-down it cost ~700x more.
+RANGE_VS_EQUALITY_MAX = 8.0
 
 
-def _load_manifest() -> dict:
-    if not MANIFEST.is_file():
-        pytest.skip(f"fixture manifest not found: {MANIFEST} — generate with "
-                    f"scripts/generate_lead_dataset.py")
-    return json.loads(MANIFEST.read_text())
+async def _require_loaded(conn, fx) -> None:
+    """Skip unless the fixture is present, non-empty and in the right namespace.
+
+    Every bound in this module is an upper bound, so an empty or
+    wrong-namespace fixture passes them all and reports nonsense (measured: 2
+    buffers at every threshold).
+    """
+    reason = await require_usable(conn, fx)
+    if reason:
+        pytest.skip(reason)
+
+
+def _load_manifest(fx) -> dict:
+    if not fx.manifest_path.is_file():
+        pytest.skip(f"fixture manifest not found: {fx.manifest_path} — generate "
+                    f"with scripts/generate_lead_dataset.py")
+    return json.loads(fx.manifest_path.read_text())
 
 
 def _eq_criteria(state: str):
@@ -145,7 +173,7 @@ def _range_criteria(threshold: float):
                 comparator="gte")])])]
 
 
-async def _criteria_to_sql(conn, frame_criteria) -> str:
+async def _criteria_to_sql(conn, frame_criteria, fx) -> str:
     from .test_kgquery_generated_sql_plans import _to_builder_frame
     from vitalgraph.sparql.kg_query_builder import (
         KGQueryCriteriaBuilder, EntityQueryCriteria as BuilderEntityQueryCriteria)
@@ -158,7 +186,7 @@ async def _criteria_to_sql(conn, frame_criteria) -> str:
         frame_criteria=[_to_builder_frame(f) for f in frame_criteria],
         use_edge_pattern=True)
     sparql = KGQueryCriteriaBuilder().build_entity_query_sparql(
-        entity_criteria, GRAPH_ID, PAGE_SIZE, 0)
+        entity_criteria, fx.graph, PAGE_SIZE, 0)
 
     client = AsyncSidecarClient(SIDECAR_URL)
     try:
@@ -173,25 +201,24 @@ async def _criteria_to_sql(conn, frame_criteria) -> str:
     cr = map_compile_response(raw)
     if not cr.ok:
         pytest.fail(f"KGQuery SPARQL failed to compile: {cr.error}\n\n{sparql}")
-    gen = await generate_sql(cr, SPACE_ID, conn=conn)
+    gen = await generate_sql(cr, fx.space, conn=conn)
     return gen.sql
 
 
 @pytest.mark.bench("query.kgquery.growth_curve.eq")
+@pytest.mark.parametrize("fx", FIXTURES, ids=[f.label for f in FIXTURES])
 @pytest.mark.parametrize("state", EQ_STATES)
-async def test_page_cost_vs_match_count_equality(perf_conn, perf_record, state):
+async def test_page_cost_vs_match_count_equality(perf_conn, perf_record, fx, state):
     """Equality: rows through the join == matches, so this is the real curve."""
-    if not await space_exists(perf_conn, SPACE_ID):
-        pytest.skip(f"space {SPACE_ID} not loaded — see "
-                    f"scripts/generate_lead_dataset.py")
+    await _require_loaded(perf_conn, fx)
 
-    counts = _load_manifest()["actual_matches"]["companystatecode_eq"]
+    counts = _load_manifest(fx)["actual_matches"]["companystatecode_eq"]
     total_matches = counts.get(state, 0)
 
-    sql = await _criteria_to_sql(perf_conn, _eq_criteria(state))
+    sql = await _criteria_to_sql(perf_conn, _eq_criteria(state), fx)
     plan = await assert_plan(
         perf_conn, sql,
-        no_seq_scan_on=[f"{SPACE_ID}_rdf_quad"],
+        no_seq_scan_on=[f"{fx.space}_rdf_quad"],
         no_spill=True,
         # A criterion matching nothing satisfies every upper bound here. The
         # manifest says how many there should be, so require them.
@@ -200,23 +227,23 @@ async def test_page_cost_vs_match_count_equality(perf_conn, perf_record, state):
 
     buffers = total_shared_buffers(plan)
     perf_record(
-        plan=plan, dataset=SPACE_ID,
+        plan=plan, dataset=fx.space,
         metrics={"total_matches": total_matches, "page_size": PAGE_SIZE,
                  "buffers_per_match": round(buffers / max(total_matches, 1), 3)},
-        notes=f"CompanyStateCode = {state} — {total_matches:,} matches, "
-              f"{PAGE_SIZE}-row page")
+        notes=f"[{fx.label}] CompanyStateCode = {state} — {total_matches:,} "
+              f"matches, {PAGE_SIZE}-row page")
 
 
 @pytest.mark.bench("query.kgquery.growth_ratio")
-async def test_growth_ratio_equality(perf_conn, perf_record):
+@pytest.mark.parametrize("fx", FIXTURES, ids=[f.label for f in FIXTURES])
+async def test_growth_ratio_equality(perf_conn, perf_record, fx):
     """The fix, as one number: page cost against a 9.5x change in match count."""
-    if not await space_exists(perf_conn, SPACE_ID):
-        pytest.skip(f"space {SPACE_ID} not loaded")
+    await _require_loaded(perf_conn, fx)
 
-    counts = _load_manifest()["actual_matches"]["companystatecode_eq"]
+    counts = _load_manifest(fx)["actual_matches"]["companystatecode_eq"]
     measured = {}
     for state in EQ_STATES:
-        sql = await _criteria_to_sql(perf_conn, _eq_criteria(state))
+        sql = await _criteria_to_sql(perf_conn, _eq_criteria(state), fx)
         plan = await assert_plan(perf_conn, sql, no_spill=True)
         measured[state] = total_shared_buffers(plan)
 
@@ -224,7 +251,7 @@ async def test_growth_ratio_equality(perf_conn, perf_record):
     ratio = measured[big] / max(measured[small], 1)
     spread = counts.get(big, 1) / max(counts.get(small, 1), 1)
 
-    print(f"\n  {'state':>6} {'matches':>9} {'buffers':>10} {'buf/match':>10}")
+    print(f"\n  [{fx.label}] {'state':>6} {'matches':>9} {'buffers':>10} {'buf/match':>10}")
     for s in EQ_STATES:
         n = counts.get(s, 0)
         print(f"  {s:>6} {n:>9,} {measured[s]:>10,} "
@@ -232,23 +259,32 @@ async def test_growth_ratio_equality(perf_conn, perf_record):
     print(f"\n  match spread {spread:.1f}x → buffer growth {ratio:.1f}x "
           f"(O(page) predicts ~1.0)")
 
+    # Growth as a fraction of the growth in match count: 0 = O(page),
+    # 1 = O(matches). Derived from this fixture's own numbers, so it means the
+    # same thing at 10k or 100k entities.
+    vs_matches = (ratio - 1.0) / max(spread - 1.0, 1e-9)
+
     perf_record(
-        dataset=SPACE_ID,
+        dataset=fx.space,
         metrics={"growth_ratio": round(ratio, 2),
                  "match_spread": round(spread, 2),
+                 "growth_vs_matches": round(vs_matches, 3),
                  "buffers_smallest": measured[small],
                  "buffers_largest": measured[big]},
-        notes=(f"25-row page, matches {counts.get(small, 0):,}→{counts.get(big, 0):,}. "
+        notes=(f"[{fx.label}] 25-row page, matches "
+               f"{counts.get(small, 0):,}→{counts.get(big, 0):,}. "
                f"O(page) predicts ~1.0; O(matches) predicts ~{spread:.1f}"))
 
-    assert ratio <= EQ_GROWTH_RATIO_MAX, (
+    assert vs_matches <= EQ_GROWTH_VS_MATCHES_MAX, (
         f"page cost grew {ratio:.1f}x across a {spread:.1f}x change in match "
-        f"count (limit {EQ_GROWTH_RATIO_MAX}). A 25-row page should not scale "
-        f"with the size of the match set — see issues/040.")
+        f"count — {vs_matches:.2f} of linear, limit "
+        f"{EQ_GROWTH_VS_MATCHES_MAX}. Above 1.0 the page is getting more "
+        f"expensive faster than the result set grows. See issues/040.")
 
 
 @pytest.mark.bench("query.kgquery.range_penalty")
-async def test_range_comparator_pays_for_every_candidate(perf_conn, perf_record):
+@pytest.mark.parametrize("fx", FIXTURES, ids=[f.label for f in FIXTURES])
+async def test_range_comparator_pays_for_every_candidate(perf_conn, perf_record, fx):
     """Range comparators cost the same whatever the threshold.
 
     Sweeping the threshold changes the match count by 625x and the buffer count
@@ -261,23 +297,41 @@ async def test_range_comparator_pays_for_every_candidate(perf_conn, perf_record)
     the pathology, not the fix, and a flat line here would be indistinguishable
     from success if it were used that way.
     """
-    if not await space_exists(perf_conn, SPACE_ID):
-        pytest.skip(f"space {SPACE_ID} not loaded")
+    await _require_loaded(perf_conn, fx)
 
-    counts = _load_manifest()["actual_matches"]["mqlrating_gte"]
+    counts = _load_manifest(fx)["actual_matches"]["mqlrating_gte"]
     measured = {}
     for t in RANGE_THRESHOLDS:
-        sql = await _criteria_to_sql(perf_conn, _range_criteria(t))
+        sql = await _criteria_to_sql(perf_conn, _range_criteria(t), fx)
         plan = await explain_json(perf_conn, sql)
         measured[t] = total_shared_buffers(plan)
 
-    tight = RANGE_THRESHOLDS[0]
+
+    # Judge the range at a threshold whose selectivity is comparable to an
+    # available equality case, rather than at the extreme.
     loose = RANGE_THRESHOLDS[-1]
+    eq_counts_pre = _load_manifest(fx)["actual_matches"]["companystatecode_eq"]
+    eq_max = max(eq_counts_pre.get(st, 0) for st in EQ_STATES)
+    tight = min(RANGE_THRESHOLDS,
+                key=lambda t: abs(counts[str(t)] - eq_max))
     tight_matches = counts[str(tight)]
+
+    # Equality baseline from the same fixture and run, chosen at the closest
+    # match count to the range threshold being judged — like against like. The
+    # gate sends low-selectivity criteria to the set-based join and high ones to
+    # the probe, so a comparison across that boundary compares two different
+    # plans and means nothing.
+    eq_counts = _load_manifest(fx)["actual_matches"]["companystatecode_eq"]
+    eq_state = min(EQ_STATES,
+                   key=lambda st: abs(eq_counts.get(st, 0) - tight_matches))
+    eq_sql = await _criteria_to_sql(perf_conn, _eq_criteria(eq_state), fx)
+    eq_plan = await explain_json(perf_conn, eq_sql)
+    eq_per_match = (total_shared_buffers(eq_plan)
+                    / max(eq_counts.get(eq_state, 1), 1))
     per_match_tight = measured[tight] / max(tight_matches, 1)
     flatness = measured[tight] / max(measured[loose], 1)
 
-    print(f"\n  {'t':>6} {'matches':>9} {'buffers':>10} {'buf/match':>11}")
+    print(f"\n  [{fx.label}] {'t':>6} {'matches':>9} {'buffers':>10} {'buf/match':>11}")
     for t in RANGE_THRESHOLDS:
         n = counts[str(t)]
         print(f"  {t:>6} {n:>9,} {measured[t]:>10,} "
@@ -285,18 +339,26 @@ async def test_range_comparator_pays_for_every_candidate(perf_conn, perf_record)
     print(f"\n  {counts[str(loose)] / max(tight_matches, 1):,.0f}x fewer matches "
           f"→ {flatness:.2f}x the cost (1.0 = pays for every candidate)")
 
+    vs_equality = per_match_tight / max(eq_per_match, 1e-9)
+    print(f"  equality baseline {eq_per_match:.1f} buf/match ({eq_state}) "
+          f"→ range is {vs_equality:.1f}x that")
+
     perf_record(
-        dataset=SPACE_ID,
+        dataset=fx.space,
         metrics={"buffers_per_match_tightest": round(per_match_tight, 1),
+                 "equality_buffers_per_match": round(eq_per_match, 1),
+                 "range_vs_equality": round(vs_equality, 2),
                  "flatness": round(flatness, 3),
                  "tightest_matches": tight_matches,
                  "buffers_tightest": measured[tight]},
-        notes=(f"MQLRating >= {tight} returns {tight_matches:,} rows and still "
+        notes=(f"[{fx.label}] MQLRating >= {tight} returns {tight_matches:,} rows and still "
                f"reads {measured[tight]:,} buffers — the candidate set, not the "
                f"match set (issues/040)"))
 
-    assert per_match_tight <= RANGE_PENALTY_MAX, (
-        f"a range comparator matching {tight_matches:,} rows read "
-        f"{measured[tight]:,} buffers ({per_match_tight:,.0f} per matched row, "
-        f"limit {RANGE_PENALTY_MAX:,.0f}). The predicate is applied above the "
-        f"join so every candidate is carried — see issues/040 W2.")
+    assert vs_equality <= RANGE_VS_EQUALITY_MAX, (
+        f"a range comparator matching {tight_matches:,} rows cost "
+        f"{per_match_tight:,.0f} buffers per matched row against an equality "
+        f"baseline of {eq_per_match:,.0f} on the same fixture — "
+        f"{vs_equality:.1f}x, limit {RANGE_VS_EQUALITY_MAX}. A range predicate "
+        f"applied above the join carries every candidate; pushed to the leaf it "
+        f"should cost about what equality costs. See issues/040 W2.")
