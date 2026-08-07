@@ -1,0 +1,364 @@
+{
+  "schema": 1,
+  "env": {
+    "started_at": "2026-08-06T13:54:58.648054+00:00",
+    "git": {
+      "commit": "e0bd80832b2fd48492fa3d38d4d61c1074bdeedc",
+      "short": "e0bd808",
+      "branch": "main",
+      "dirty": true
+    },
+    "machine": {
+      "host": "ip-192-168-1-153.ec2.internal",
+      "platform": "macOS-14.6.1-arm64-arm-64bit",
+      "machine": "arm64",
+      "cpu_count": 10,
+      "python": "3.12.11"
+    },
+    "runner": {
+      "class": "vg-test-docker-persist",
+      "persist": true,
+      "seeded": true,
+      "pg_host": "localhost",
+      "pg_port": "5433",
+      "pg_database": "sparql_sql_graph"
+    },
+    "pg": {},
+    "finished_at": "2026-08-06T13:55:04.007911+00:00"
+  },
+  "benches": [
+    {
+      "bench_id": "api.frame_paging.deep_offset",
+      "kind": "api",
+      "status": "ok",
+      "metrics": {
+        "first_page_ms": 616.0,
+        "deep_page_ms": 547.1,
+        "deep_offset_ratio": 0.89,
+        "offset": 375,
+        "rows": 25
+      },
+      "dataset": "synthetic:400frames",
+      "notes": "offset paging is O(offset); the ratio is the signal"
+    },
+    {
+      "bench_id": "api.frame_paging.first_page",
+      "kind": "api",
+      "status": "ok",
+      "metrics": {
+        "unsorted_ms": 141.0,
+        "sorted_ms": 537.1,
+        "rows": 25
+      },
+      "dataset": "synthetic:400frames",
+      "notes": "page 1 of 400 frames, page_size=25"
+    },
+    {
+      "bench_id": "query.covering.advantage_growth",
+      "status": "skipped",
+      "reason": "Skipped: Bench cannot demonstrate its claim on this generator's data shape. generate_scale_data emits exactly 2 quads per entity (vitaltype + hasName) in a single context, so the probe predicate matches ~50% of the table. At that selectivity PG18 picks a Bitmap Heap Scan via a predicate-leading index and never uses idx_*_quad_ctx_pred at all \u2014 measured WITH vs WITHOUT the covering index are byte-identical (2938/2938, 8811/8811, 26426/26426 buffers at 100K/300K/900K entities, ratio 1.0x). This is a property of the synthetic data, NOT a covering-index regression: the index-only gate on the realistic lead dataset (test_covering_indexes.py, moved there by 701c08b) is unaffected. Re-enable once the generator grows a predicate-cardinality knob so a selective probe exists \u2014 see performance_regression_tracking_plan.md."
+    },
+    {
+      "bench_id": "query.covering.graph_scoped_scan_index_only",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Index Only Scan"
+        ],
+        "indexes": [
+          "idx_space_lead_dataset_test_quad_ctx_pred"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 5,
+        "shared_read": 4,
+        "temp_written": 0,
+        "actual_rows": 100,
+        "max_actual_rows": 100,
+        "estimated_rows": 100,
+        "heap_fetches": 0,
+        "planning_ms": 0.228,
+        "execution_ms": 0.134,
+        "matched_rows": 100
+      },
+      "dataset": "space_lead_dataset_test"
+    },
+    {
+      "bench_id": "query.fastpath.deep_offset",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Index Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_wordnet_frames_quad_ps",
+          "wordnet_frames_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 14860,
+        "shared_read": 13628,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 1025,
+        "estimated_rows": 25,
+        "heap_fetches": 0,
+        "planning_ms": 0.13,
+        "execution_ms": 362.337
+      },
+      "dataset": "wordnet_frames"
+    },
+    {
+      "bench_id": "query.fastpath.typed_subject_page[wordnet_frames-urn:wordnet_frames-type_uris0]",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Index Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_wordnet_frames_quad_ps",
+          "wordnet_frames_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 481,
+        "shared_read": 411,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 25,
+        "estimated_rows": 25,
+        "heap_fetches": 0,
+        "planning_ms": 0.663,
+        "execution_ms": 12.848
+      },
+      "dataset": "wordnet_frames"
+    },
+    {
+      "bench_id": "query.fastpath.typed_subject_page[wordnet_frames-urn:wordnet_frames-type_uris1]",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Index Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_wordnet_frames_quad_ps",
+          "wordnet_frames_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 235,
+        "shared_read": 25,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 25,
+        "estimated_rows": 25,
+        "heap_fetches": 0,
+        "planning_ms": 0.129,
+        "execution_ms": 0.766
+      },
+      "dataset": "wordnet_frames"
+    },
+    {
+      "bench_id": "query.frame_nesting.edge_hops_index_only",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Index Only Scan"
+        ],
+        "indexes": [
+          "idx_perf_edgehop_edge_src_dst"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 3,
+        "shared_read": 0,
+        "temp_written": 0,
+        "actual_rows": 10,
+        "max_actual_rows": 10,
+        "estimated_rows": 10,
+        "heap_fetches": 0,
+        "planning_ms": 0.111,
+        "execution_ms": 0.013
+      },
+      "dataset": "synthetic:edges",
+      "notes": "forward hop (source\u2192dest)"
+    },
+    {
+      "bench_id": "query.growth.entity_page_buffers",
+      "kind": "query",
+      "status": "ok",
+      "metrics": {
+        "growth_class": "flat",
+        "buffers_at_50000": 128,
+        "buffers_at_150000": 128,
+        "buffers_at_450000": 128
+      },
+      "dataset": "synthetic:[50000, 150000, 450000]"
+    },
+    {
+      "bench_id": "query.lead.kgquery[hierarchical]",
+      "kind": "api",
+      "status": "ok",
+      "metrics": {
+        "wall_ms": 42.6,
+        "results": 100
+      },
+      "dataset": "sp_sql_lead_dataset",
+      "notes": "Hierarchical frame query"
+    },
+    {
+      "bench_id": "query.lead.kgquery[high_rated]",
+      "kind": "api",
+      "status": "ok",
+      "metrics": {
+        "wall_ms": 56.3,
+        "results": 73
+      },
+      "dataset": "sp_sql_lead_dataset",
+      "notes": "Find high-rated leads (MQLRating >= 65)"
+    },
+    {
+      "bench_id": "query.lead.kgquery[mql]",
+      "kind": "api",
+      "status": "ok",
+      "metrics": {
+        "wall_ms": 116.4,
+        "results": 99
+      },
+      "dataset": "sp_sql_lead_dataset",
+      "notes": "Find MQL leads"
+    },
+    {
+      "bench_id": "query.lead.kgquery[state_ca]",
+      "kind": "api",
+      "status": "ok",
+      "metrics": {
+        "wall_ms": 43.9,
+        "results": 13
+      },
+      "dataset": "sp_sql_lead_dataset",
+      "notes": "Find leads in California"
+    },
+    {
+      "bench_id": "query.partition.graph_scoped_pruning",
+      "kind": "query",
+      "status": "ok",
+      "metrics": {
+        "partitions_scanned": 1,
+        "partitions_total": 4,
+        "node_types": "Seq Scan"
+      },
+      "dataset": "synthetic:4part"
+    },
+    {
+      "bench_id": "query.stats.correlated_leaf_estimate",
+      "kind": "query",
+      "status": "ok",
+      "metrics": {
+        "actual_rows": 4170,
+        "est_with_stats": 4170,
+        "est_without_stats": 126,
+        "underestimate_factor": 33.1
+      },
+      "dataset": "space_lead_dataset_test"
+    },
+    {
+      "bench_id": "query.wordnet.aggregate.entity_type_counts",
+      "kind": "api",
+      "status": "ok",
+      "metrics": {
+        "wall_ms": 1504.1,
+        "rows": 4
+      },
+      "dataset": "wordnet_frames",
+      "notes": "GROUP BY vitaltype over the whole space"
+    },
+    {
+      "bench_id": "query.wordnet.aggregate.triple_count",
+      "kind": "api",
+      "status": "ok",
+      "metrics": {
+        "wall_ms": 326.4,
+        "rows": 1
+      },
+      "dataset": "wordnet_frames",
+      "notes": "COUNT(*) over the whole space"
+    },
+    {
+      "bench_id": "query.wordnet.traversal.frame_union",
+      "kind": "api",
+      "status": "ok",
+      "metrics": {
+        "wall_ms": 66.3,
+        "rows": 425
+      },
+      "dataset": "wordnet_frames",
+      "notes": "happy_words_v2 frame UNION"
+    },
+    {
+      "bench_id": "query.wordnet.traversal.relationships",
+      "kind": "api",
+      "status": "ok",
+      "metrics": {
+        "wall_ms": 38.3,
+        "rows": 45
+      },
+      "dataset": "wordnet_frames",
+      "notes": "happy_words_v2 relationship traversal"
+    },
+    {
+      "bench_id": "write.ingest.bulk_vs_executemany",
+      "kind": "write",
+      "status": "ok",
+      "metrics": {
+        "executemany_quads_per_sec": 13813,
+        "copy_quads_per_sec": 91172,
+        "bulk_e2e_quads_per_sec": 45295,
+        "index_rebuild_s": 4.444,
+        "copy_speedup": 6.601,
+        "e2e_speedup": 3.279
+      },
+      "dataset": "synthetic:400000q"
+    },
+    {
+      "bench_id": "write.per_write_curve.incremental_probe",
+      "kind": "write",
+      "status": "ok",
+      "metrics": {
+        "growth_class": "flat",
+        "probe_ms_at_100000q": 28.29,
+        "probe_ms_at_300000q": 30.28,
+        "probe_ms_at_900000q": 30.11
+      },
+      "dataset": "synthetic:[50000, 150000, 450000]",
+      "notes": "probe=300 quads, min of 3 rolled-back runs"
+    }
+  ],
+  "baseline": {
+    "name": "main",
+    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260806T135150Z-e0bd808.json",
+    "reason": ""
+  }
+}

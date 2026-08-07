@@ -131,6 +131,7 @@ async def assert_plan(
     index_only: bool = False,
     require_zero_heap_fetches: bool = True,
     max_actual_rows_bound: Optional[int] = None,
+    min_actual_rows: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Assert the plan's *shape and work* — the size-independent scaling gate.
 
@@ -147,6 +148,11 @@ async def assert_plan(
       the plan *shape* (Index Only Scan, no Seq Scan) is the invariant under test.
     - ``max_actual_rows_bound``: no operator may handle more than this many rows
       (e.g. a paged query must not materialize the whole table).
+    - ``min_actual_rows``: the query must return at least this many rows. Every
+      other check here is an *upper* bound, so a query matching nothing passes
+      all of them trivially — a partially-loaded space silently turns the whole
+      assertion into a no-op. Set this on any bench whose data is expected to
+      exist so "measured nothing" fails instead of passing.
 
     Returns the plan (for further ad-hoc checks / logging).
     """
@@ -176,6 +182,13 @@ async def assert_plan(
         if require_zero_heap_fetches:
             hf = index_only_heap_fetches(plan)
             assert hf == 0, f"Index Only Scan did {hf} heap fetches (not covering)"
+
+    if min_actual_rows is not None:
+        got = actual_rows(plan)
+        assert got >= min_actual_rows, (
+            f"query returned {got} rows (< {min_actual_rows}) — the bounds "
+            f"asserted here are upper bounds, so an empty result would pass them "
+            f"vacuously. Is the space fully loaded?")
 
     if max_actual_rows_bound is not None:
         got = max_actual_rows(plan)

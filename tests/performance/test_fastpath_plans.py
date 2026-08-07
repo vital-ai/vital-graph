@@ -52,8 +52,9 @@ def _fast_page_sql(space_id: str) -> str:
     )
 
 
+@pytest.mark.bench("query.fastpath.typed_subject_page")
 @pytest.mark.parametrize("space_id,graph_uri,type_uris", CASES)
-async def test_fast_page_is_o_page(perf_conn, space_id, graph_uri, type_uris):
+async def test_fast_page_is_o_page(perf_conn, perf_record, space_id, graph_uri, type_uris):
     if not await space_exists(perf_conn, space_id):
         pytest.skip(f"space {space_id} not loaded")
 
@@ -70,14 +71,17 @@ async def test_fast_page_is_o_page(perf_conn, space_id, graph_uri, type_uris):
         no_seq_scan_on=[f"{space_id}_rdf_quad"],
         max_shared_buffers=8_000,     # observed ~464 on 109K; O(N) would be ~450K
         max_actual_rows_bound=5_000,  # a page examines a bounded slice, not all rows
+        min_actual_rows=25,           # a full page — else the bounds pass vacuously
         no_spill=True,
     )
+    perf_record(plan=plan, dataset=space_id)
     # Informational (helps when tuning bounds / diagnosing regressions).
     print(f"\n[{space_id}/{type_uris[-1].split('#')[-1]}] "
           f"buffers={total_shared_buffers(plan)} max_rows={max_actual_rows(plan)}")
 
 
-async def test_deep_page_offset_stays_bounded(perf_conn):
+@pytest.mark.bench("query.fastpath.deep_offset")
+async def test_deep_page_offset_stays_bounded(perf_conn, perf_record):
     """A deeper page (OFFSET) must still be bounded — guards against a plan that
     re-materializes everything for later pages."""
     space_id, graph_uri, type_uris = CASES[0]
@@ -89,10 +93,12 @@ async def test_deep_page_offset_stays_bounded(perf_conn):
     g_uuid = _generate_term_uuid(graph_uri, "U")
 
     # OFFSET 1000 still bounded (index walk + skip), no seq scan, no spill.
-    await assert_plan(
+    plan = await assert_plan(
         perf_conn, _fast_page_sql(space_id),
         p_uuid, obj_uuids, g_uuid, 25, 1000,
         no_seq_scan_on=[f"{space_id}_rdf_quad"],
         max_shared_buffers=20_000,
+        min_actual_rows=25,
         no_spill=True,
     )
+    perf_record(plan=plan, dataset=space_id)

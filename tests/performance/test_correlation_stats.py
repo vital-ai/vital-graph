@@ -46,7 +46,8 @@ def _stats_ddl(space_id):
         f"ALTER STATISTICS {stat} SET STATISTICS 1000")
 
 
-async def test_extended_stats_fix_correlation_estimate(perf_pool):
+@pytest.mark.bench("query.stats.correlated_leaf_estimate")
+async def test_extended_stats_fix_correlation_estimate(perf_pool, perf_record):
     async with perf_pool.acquire() as conn:
         space_id = await _pick_loaded(conn)
         if not space_id:
@@ -80,6 +81,11 @@ async def test_extended_stats_fix_correlation_estimate(perf_pool):
             print(f"\n[{space_id}] correlated leaf: actual={act} "
                   f"est_with={est_with} est_without={est_without} "
                   f"(under-est {act / max(est_without, 1):.0f}x without)")
+
+            perf_record(dataset=space_id, metrics={
+                "actual_rows": act, "est_with_stats": est_with,
+                "est_without_stats": est_without,
+                "underestimate_factor": round(act / max(est_without, 1), 2)})
 
             assert 0.25 * act <= est_with <= 4 * act, (
                 f"extended stats did not correct the estimate: est={est_with} actual={act}")

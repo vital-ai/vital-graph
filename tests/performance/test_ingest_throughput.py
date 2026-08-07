@@ -30,7 +30,17 @@ pytestmark = [pytest.mark.performance, pytest.mark.slow, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
 
 N_QUADS = 400_000       # large enough that ratios are stable (100k is noisy)
-MIN_COPY_SPEEDUP = 5.0  # COPY data movement vs executemany (~6x measured, robust)
+
+# Absolute floors, not expected values. These exist to catch COPY losing its
+# mechanism-level advantage entirely; the *baseline* is what detects drift.
+#
+# The floor was 5.0 and turned into a false failure: measured 7.68x on a clean
+# container DB, 5.40x on a persisted volume, and 4.85x once that volume also
+# held the 8.6M-quad wordnet space and the lead dataset. Same code, same test —
+# the ratio tracks how much unrelated data shares the buffer pool. A literal
+# tuned on an empty DB cannot survive a realistic one, so it is set below the
+# worst observed and the baseline comparison carries the real signal.
+MIN_COPY_SPEEDUP = 3.5  # COPY data movement vs executemany (4.85-7.68x measured)
 MIN_E2E_SPEEDUP = 1.5   # full load incl. index rebuild (~2.7x measured, noisier)
 
 
@@ -67,7 +77,8 @@ async def two_spaces(perf_pool):
             await SparqlSQLSchema.drop_space(conn, sid)
 
 
-async def test_bulk_rebuild_beats_executemany(perf_pool, two_spaces):
+@pytest.mark.bench("write.ingest.bulk_vs_executemany")
+async def test_bulk_rebuild_beats_executemany(perf_pool, two_spaces, perf_record):
     em_sid, bulk_sid = two_spaces
     term_args, quad_rows = _synth_rows(N_QUADS)
     schema = SparqlSQLSchema()
@@ -105,6 +116,17 @@ async def test_bulk_rebuild_beats_executemany(perf_pool, two_spaces):
           f"\n  index rebuild     = {rebuild_t:6.3f}s"
           f"\n  bulk end-to-end   = {bulk_t:6.3f}s ({len(quad_rows)/bulk_t:>8,.0f} q/s)  "
           f"= {e2e_speedup:.1f}x")
+
+    perf_record(
+        kind="write", dataset=f"synthetic:{N_QUADS}q",
+        metrics={
+            "executemany_quads_per_sec": round(len(quad_rows) / em_t),
+            "copy_quads_per_sec": round(len(quad_rows) / copy_t),
+            "bulk_e2e_quads_per_sec": round(len(quad_rows) / bulk_t),
+            "index_rebuild_s": round(rebuild_t, 3),
+            "copy_speedup": round(copy_speedup, 3),
+            "e2e_speedup": round(e2e_speedup, 3),
+        })
 
     # Identical landing: both spaces hold the same term/quad counts.
     async with perf_pool.acquire() as conn:

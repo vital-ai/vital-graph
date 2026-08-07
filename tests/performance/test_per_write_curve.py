@@ -72,7 +72,8 @@ async def _probe_latency(pool, sid, term_args, quad_rows, subjects, repeats=3):
     return best
 
 
-async def test_per_write_cost_stays_flat(perf_pool):
+@pytest.mark.bench("write.per_write_curve.incremental_probe")
+async def test_per_write_cost_stays_flat(perf_pool, perf_record):
     term_args, quad_rows, subjects = _probe_rows()
     sid = f"perf_perwrite_{uuid.uuid4().hex[:8]}"
     points = {}
@@ -99,6 +100,12 @@ async def test_per_write_cost_stays_flat(perf_pool):
               + "  ".join(f"{n:,}q={ms*1000:.1f}ms" for n, ms in sorted(points.items())))
         cls = assert_growth_class(points, ["flat", "log"])
         print(f"growth class: {cls}")
+        perf_record(
+            kind="write", dataset=f"synthetic:{SIZES}",
+            metrics={"growth_class": cls,
+                     **{f"probe_ms_at_{n}q": round(ms * 1000, 2)
+                        for n, ms in sorted(points.items())}},
+            notes=f"probe={PROBE} quads, min of 3 rolled-back runs")
     finally:
         async with perf_pool.acquire() as conn:
             await SparqlSQLSchema.drop_space(conn, sid)

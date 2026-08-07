@@ -129,7 +129,8 @@ def _walk(plan):
         stack.extend(n.get("Plans", []) or [])
 
 
-async def test_graph_scoped_query_prunes_to_one_partition(pg18_pool, part_space):
+@pytest.mark.bench("query.partition.graph_scoped_pruning")
+async def test_graph_scoped_query_prunes_to_one_partition(pg18_pool, part_space, perf_record):
     sid = part_space
     t = SparqlSQLSchema.get_table_names(sid)
     graphs = [uuid.uuid4() for _ in range(N_PARTITIONS + 2)]
@@ -151,6 +152,11 @@ async def test_graph_scoped_query_prunes_to_one_partition(pg18_pool, part_space)
                 g, analyze=False)
             scanned = _partitions_scanned(plan, sid)
             assert len(scanned) == 1, (g, scanned, node_types(plan))
+
+        perf_record(dataset=f"synthetic:{N_PARTITIONS}part",
+                    metrics={"partitions_scanned": len(scanned),
+                             "partitions_total": N_PARTITIONS,
+                             "node_types": ",".join(node_types(plan))})
 
 
 async def test_edge_and_frame_entity_are_co_partitioned(pg18_pool, part_space):

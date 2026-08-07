@@ -1,0 +1,126 @@
+# Regression thresholds for scripts/perf_compare.py
+#
+# Rationale (performance_regression_tracking_plan.md R5): structural metrics are
+# deterministic on a clean vg-test DB with a pinned dataset, so they get tight
+# bounds and gate the build. Timing metrics are noisy on a laptop and are
+# report-only at L0-L2 — they become gates only on the dedicated L3 environment.
+#
+# direction = "increase"  → higher is worse (buffers, rows, latency)
+# direction = "decrease"  → lower is worse (throughput, speedup ratios)
+
+[metrics.shared_buffers]
+direction = "increase"
+warn_pct = 5
+fail_pct = 15
+min_abs_delta = 16     # a couple of buffers is noise, not a regression
+
+[metrics.shared_read]
+direction = "increase"
+warn_pct = 10
+fail_pct = 25
+min_abs_delta = 16
+
+[metrics.max_actual_rows]
+direction = "increase"
+warn_pct = 5
+fail_pct = 15
+min_abs_delta = 25     # one page
+
+[metrics.actual_rows]
+direction = "increase"
+warn_pct = 5
+fail_pct = 15
+min_abs_delta = 25
+
+[metrics.heap_fetches]
+direction = "increase"
+warn_pct = 0
+fail_pct = 0          # an index that stopped covering is always a regression
+
+[metrics.temp_written]
+direction = "increase"
+warn_pct = 0
+fail_pct = 0          # any new spill is a regression
+
+# Planner estimate quality — drift here precedes plan flips.
+[metrics.estimated_rows]
+direction = "increase"
+report_only = true
+
+# Throughput / speedup ratios: timing-based, moderately noisy.
+[metrics.quads_per_sec]
+direction = "decrease"
+warn_pct = 10
+fail_pct = 20
+
+[metrics.copy_speedup]
+direction = "decrease"
+warn_pct = 10
+fail_pct = 20
+
+[metrics.e2e_speedup]
+direction = "decrease"
+warn_pct = 10
+fail_pct = 20
+
+# Load-driver throughput (load_test_scripts/load_test.py --record).
+[metrics.requests_per_sec]
+direction = "decrease"
+warn_pct = 10
+fail_pct = 20
+
+# Any failed request under load is a regression regardless of rate.
+[metrics.failures]
+direction = "increase"
+warn_pct = 0
+fail_pct = 0
+
+# API bench wall-clock — report-only for now.  One 120s run does not establish a
+# noise floor, and gating on laptop latency produces flakes rather than signal
+# (scaling_test_strategy.md §6).  Promote to a gate once a dozen runs show what
+# the spread actually is.
+[metrics.wall_ms]
+direction = "increase"
+report_only = true
+
+# Result counts on API benches: a query that stops matching rows has regressed,
+# however fast it became.  The per-bench assertions are the primary guard; this
+# catches a drop that stays above the assertion's floor.
+[metrics.results]
+direction = "decrease"
+warn_pct = 5
+fail_pct = 20
+
+[metrics.rows]
+direction = "decrease"
+warn_pct = 5
+fail_pct = 20
+
+# Wall-clock: context only. Never the gate at L0-L2 (strategy doc §6 anti-pattern).
+[metrics.execution_ms]
+direction = "increase"
+report_only = true
+
+[metrics.planning_ms]
+direction = "increase"
+report_only = true
+
+[metrics.p50_ms]
+direction = "increase"
+report_only = true
+
+[metrics.p95_ms]
+direction = "increase"
+report_only = true
+
+[metrics.p99_ms]
+direction = "increase"
+report_only = true
+
+# ---------------------------------------------------------------------------
+# Per-bench overrides — for benches with known extra variance.
+# Example:
+#   [bench."query.fastpath.deep_offset".shared_buffers]
+#   warn_pct = 15
+#   fail_pct = 30
+# ---------------------------------------------------------------------------

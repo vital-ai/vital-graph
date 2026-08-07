@@ -51,7 +51,8 @@ async def _seed_edges(pool, n_sources=1000, fanout=10):
     return _uuid.uuid5(_NS, "src:0"), _uuid.uuid5(_NS, "dst:0:0")
 
 
-async def test_edge_hops_are_index_only_both_directions(perf_pool):
+@pytest.mark.bench("query.frame_nesting.edge_hops_index_only")
+async def test_edge_hops_are_index_only_both_directions(perf_pool, perf_record):
     src, dst = await _seed_edges(perf_pool)
     try:
         async with perf_pool.acquire() as conn:
@@ -73,6 +74,8 @@ async def test_edge_hops_are_index_only_both_directions(perf_pool):
                 must_use_index=f"idx_{SPACE}_edge_dst_src",
                 index_only=True, require_zero_heap_fetches=False,
                 no_seq_scan_on=[f"{SPACE}_edge"], no_spill=True)
+            perf_record(plan=p1, dataset="synthetic:edges",
+                        notes="forward hop (source→dest)")
             print(f"\nedge hops: fwd={node_types(p1)} rev={node_types(p2)}")
     finally:
         async with perf_pool.acquire() as conn:

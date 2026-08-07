@@ -44,7 +44,8 @@ def _fast_page_sql(space_id: str) -> str:
     )
 
 
-async def test_entity_page_growth_is_flat(perf_pool):
+@pytest.mark.bench("query.growth.entity_page_buffers")
+async def test_entity_page_growth_is_flat(perf_pool, perf_record):
     p_uuid = _generate_term_uuid(VITALTYPE, "U")
     obj_uuids = [_generate_term_uuid(u, "U") for u in KGENTITY_TYPES]
     g_uuid = _generate_term_uuid(GRAPH, "U")
@@ -59,7 +60,11 @@ async def test_entity_page_growth_is_flat(perf_pool):
 
     print(f"\nentity-page buffers by entity count: {points}")
     # O(page): buffers must not grow ~linearly with entity count.
-    assert_growth_class(points, allowed=["flat", "log"])
+    cls = assert_growth_class(points, allowed=["flat", "log"])
+    perf_record(
+        dataset=f"synthetic:{SIZES}",
+        metrics={"growth_class": cls,
+                 **{f"buffers_at_{n}": int(v) for n, v in sorted(points.items())}})
 
     # Clean up the synthetic space.
     async with perf_pool.acquire() as conn:

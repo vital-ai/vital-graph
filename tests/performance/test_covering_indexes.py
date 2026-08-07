@@ -29,7 +29,14 @@ pytestmark = [pytest.mark.performance, skip_no_pg,
 CANDIDATES = [
     ("space_lead_dataset_test", "urn:lead_entity_graph_dataset",
      "http://vital.ai/ontology/haley-ai-kg#hasKGEntityType"),
-    ("sp_sql_lead_dataset", "urn:lead_entity_graph_dataset",
+    # urn:sql_lead_dataset, NOT urn:lead_entity_graph_dataset — this space is
+    # loaded by test_scripts/.../test_sparql_sql_lead_dataset.py, which uses a
+    # different graph from space_lead_dataset_test above. With the wrong graph
+    # the probe matches nothing and the planner picks another index, so the
+    # index-only assertion fails for a reason that has nothing to do with
+    # covering indexes. Masked until the 2026-08-06 vg-test rebuild removed
+    # space_lead_dataset_test and this entry became the one that gets picked.
+    ("sp_sql_lead_dataset", "urn:sql_lead_dataset",
      "http://vital.ai/ontology/haley-ai-kg#hasKGEntityType"),
 ]
 _INCLUDE = "(context_uuid, predicate_uuid) INCLUDE (subject_uuid, object_uuid)"
@@ -42,7 +49,8 @@ async def _pick_loaded(conn):
     return None
 
 
-async def test_selective_graph_scoped_scan_is_index_only(perf_pool):
+@pytest.mark.bench("query.covering.graph_scoped_scan_index_only")
+async def test_selective_graph_scoped_scan_is_index_only(perf_pool, perf_record):
     async with perf_pool.acquire() as conn:
         pick = await _pick_loaded(conn)
         if not pick:
@@ -71,5 +79,6 @@ async def test_selective_graph_scoped_scan_is_index_only(perf_pool):
         matched = await conn.fetchval(
             f"SELECT count(*) FROM {space_id}_rdf_quad "
             f"WHERE context_uuid = $1 AND predicate_uuid = $2", g_uuid, p_uuid)
+        perf_record(plan=plan, dataset=space_id, metrics={"matched_rows": matched})
         print(f"\n[{space_id}] graph-scoped scan matched {matched} rows: "
               f"{node_types(plan)} buffers={total_shared_buffers(plan)}")
