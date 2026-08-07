@@ -40,10 +40,10 @@ def builder():
 def _frame_criteria():
     return [
         FrameCriteria(
-            frame_type="urn:cardiff:kg:frame:ContactReferenceFrame",
+            frame_type="urn:acme:kg:frame:ContactReferenceFrame",
             slot_criteria=[
                 SlotCriteria(
-                    slot_type="urn:cardiff:kg:slot:CtRefSFLeadId",
+                    slot_type="urn:acme:kg:slot:CtRefSFLeadId",
                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGTextSlot",
                     value="00QUg00000Y6qq0MAB",
                     comparator="eq",
@@ -57,19 +57,19 @@ def test_union_suppressed_when_entity_type_pins_entity(builder):
     """The production shape: hasKGEntityType already constrains ?entity."""
     where = builder._build_entity_where_clause(
         EntityQueryCriteria(
-            entity_type="urn:cardiff:kg:entity:NurtureAction",
+            entity_type="urn:acme:kg:entity:NurtureAction",
             frame_criteria=_frame_criteria(),
         )
     )
     assert SUBTYPE_MARKER not in where
     # The constraint that replaces it must still be present.
-    assert "hasKGEntityType <urn:cardiff:kg:entity:NurtureAction>" in where
+    assert "hasKGEntityType <urn:acme:kg:entity:NurtureAction>" in where
 
 
 def test_union_suppressed_when_entity_uris_pin_entity(builder):
     """A VALUES list pins ?entity even harder than a type constraint."""
     where = builder._build_entity_where_clause(
-        EntityQueryCriteria(entity_uris=["urn:cardiff:kg:entity:abc"])
+        EntityQueryCriteria(entity_uris=["urn:acme:kg:entity:abc"])
     )
     assert SUBTYPE_MARKER not in where
     assert "VALUES ?entity" in where
@@ -99,7 +99,7 @@ def test_union_retained_for_explicit_base_kgentity_type(builder):
 def test_no_empty_group_emitted_when_union_suppressed(builder):
     """Suppressing the clause must not leave a stray blank in the WHERE body."""
     where = builder._build_entity_where_clause(
-        EntityQueryCriteria(entity_uris=["urn:cardiff:kg:entity:abc"])
+        EntityQueryCriteria(entity_uris=["urn:acme:kg:entity:abc"])
     )
     assert "{ }" not in where.replace("\n", " ")
     assert not where.lstrip().startswith(".")

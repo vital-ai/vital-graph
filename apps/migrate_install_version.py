@@ -4,7 +4,7 @@
 Motivation
 ----------
 During the 2026-07-29 prod saturation investigation, the deployed code vintage of
-``cardiff-postgres-prod`` could not be read from the database. It had to be
+the production database could not be read from the database itself. It had to be
 *inferred* from schema artifacts — whether ``idx_{space}_rdf_stats_rc`` existed and
 whether ``{space}_rdf_stats`` had been pruned — because the ``install`` table
 carries only install/update timestamps. That inference cost real investigation time

@@ -1,77 +1,235 @@
 # KGQuery Paging Costs O(total matches), Not O(page)
 
-## Status: RANGE HALF FIXED 2026-08-06 · PAGING HALF CLOSED AS NOT ACHIEVABLE AS FRAMED
+## Status: BOTH HALVES FIXED (verified at two scales)
 
-**Read this section before implementing anything below it.** The range-comparator
-half of this issue is fixed and shipped. The paging half — the title of the
-issue — was pursued through three separate approaches, all measured, all dead.
-The framing "O(matches) is the pathology, O(page) is the fix" **does not survive
-measurement**, and the sections further down still assert it.
+### 2026-08-07: the paging half is fixed
 
-### Fixed: range comparators (W2 + W4)
+The four lead criteria on `sp_lead_synth_100k` (100,000 entities), first page of
+25, measured on the generated SQL:
 
-`FILTER(?val >= t)` is now pushed into the BGP as a term-table semi-join
-(`filter_pushdown._try_numeric_filter`) and served by a partial expression index
-(`idx_{space}_term_num`, 48 kB). On `sp_lead_synth` (10,000 entities, 25-row
-page):
+| criterion | before | after |
+|---|---|---|
+| `mql` | **timeout >30s** | **325 ms** |
+| `hierarchical` | **timeout >30s** | **9 ms** |
+| `high_rated` | **timeout >30s** | **532 ms** |
+| `state_ca` | 909 ms | 928 ms |
 
-| t | matches | before | after | time before → after |
-|---|---|---|---|---|
-| 99.9 | 16 | 458,924 | **4,391** | 746 ms → **13 ms** |
-| 99 | 110 | 458,928 | 8,640 | 695 ms → 19 ms |
-| 90 | 1,031 | 458,949 | 49,798 | 999 ms → 54 ms |
-| 0 | 10,000 | 458,923 | 449,942 | 754 ms → 1,098 ms |
+At 10,000 entities everything is 1–21 ms. Every page verified as a subset of the
+true match set; DAWG conformance 0 failures.
 
-Range cost per matched row went 28,683 → 274 buffers, and at large match counts
-reaches 45.0 — the equality baseline to one decimal place. Caveat recorded
-honestly: at `t=0`, where the filter excludes nothing, the push-down is **1.34x
-slower** in wall time (725 ms → 975 ms) because the semi-join is pure overhead.
-Buffers *improved* slightly there, so a buffer-only gate does not catch it.
+**How.** Five pieces, none of which works alone — each was measured as neutral
+or a regression on its own, which is why this took several attempts:
 
-### Closed: O(page) paging — three approaches, all measured, all dead
+1. **Flat existence emission** (`emit_bgp.emit_bgp_exists`). `emit_bgp` wraps
+   every BGP in an inner/outer subquery with term JOINs and companion columns;
+   as the body of an `EXISTS` that wrapper is what PostgreSQL evaluates per
+   outer row and it never collapses into index probes. Measured 1.3M buffers
+   against a 45,945 baseline before this — the wrapper *was* the cost.
+2. **DISTINCT elision** (`semijoin`, `emit_distinct`). `EXISTS` yields one row
+   per outer row, so the DISTINCT removes nothing — but as a
+   Unique/HashAggregate it is a blocking node that stops `LIMIT` terminating
+   the scan.
+3. **Flat phase-1 paging** (`emit_slice._emit_two_phase`). The `ORDER BY` has to
+   land on a real column of the anchor's own table so an index can supply the
+   order; wrapped in a subquery it cannot, and PostgreSQL computes the whole
+   match set and top-N sorts it.
+4. **`OFFSET 0` fence** on the probe. Without it the correlated subquery is
+   pulled up into a hash semi-join, which both computes the full match set and
+   destroys the anchor's ordering.
+5. **Selectivity gate** (`semijoin`, `MIN_SELECTIVITY`). Probing is
+   O(page / selectivity): a criterion matching 9% of entities went to 0.77x
+   baseline while one matching 0.96% went to **889x**. Without the gate this
+   rewrite is a catastrophe on exactly the queries that are cheap today.
 
-| approach | result |
-|---|---|
-| **M1** — order by `subject_uuid` instead of URI text | **no effect.** 36,466 buffers before and after, measured twice: with and without a `(context, predicate, object, subject)` index that lets the scan emit in subject order |
-| **W1** — anchored semi-join rewrite (`JOIN` → `WHERE EXISTS`) | **no effect, 9% worse.** Implemented as a live-variable pass + `emit_join` support; mark fired, `WHERE EXISTS` reached the SQL, acceptance and DAWG conformance clean. CA 36,466 → 39,715 buffers. Reverted. |
-| **W1 + M1 + subject-ordered index together** | **no effect.** Plan still `Sort → Nested Loop rows=908`: the full match set is computed before the sort |
-| **Forced driver** — `OFFSET 0` fence to stop the `EXISTS` being pulled up, forcing per-entity probing | **catastrophic.** 31 ms → **>200 s**, cancelled by statement timeout |
+**What blocked it for so long.** `prune_union._replace_plan_in_place` copied
+PlanV2 field by field and silently dropped `leaf_terms` for the surviving UNION
+branch, so the gate could never read the anchor's cardinality and failed closed.
+The symptom appeared several layers away with no error anywhere. That function
+now copies via `dataclasses.fields()` so the next IR field cannot repeat it.
 
-**Why O(page) is not reachable here.** There are only two ways to return page 1
-of the entities matching criteria C:
+**A correctness trap worth recording.** Getting `high_rated` to probe requires
+treating the range filter's variable as not-needed-above. Done naively the probe
+drops the variable and the range is never applied — the page comes back
+containing entities *outside* the result set, while row counts and timings both
+look correct. Only comparing page membership against the true match set exposed
+it. The emit path now pushes the filter into the probe and **verifies it was
+consumed**, falling back to the set-based join if not.
 
-- **(a)** compute all matches, sort, take 25 — O(matches), ~40 buffers per match
-- **(b)** scan entities in order, probe each, stop at 25 — O(25 / selectivity × probe cost)
+Note also that page *contents* legitimately differ from before: two-phase paging
+orders by `subject_uuid` rather than URI text (decision D1). Subset-of-truth is
+the correct invariant to test, not page equality.
 
-(a) is cheap *per match* precisely because it is set-based: `reorder_bgp` picks a
-good order and the ten-table frame/slot chain is processed in bulk. (b) cannot
-amortize any of that — it re-walks the chain once per candidate, and a single
-walk costs far more than the ~40 buffers the bulk plan spends per match. The
-measured 4-orders-of-magnitude gap is that difference, not a tuning failure.
+## Superseded: the paging half as a functional failure
 
-So **O(matches) is close to optimal for this query shape**, and the premise of
-this issue's title is wrong. PostgreSQL's `rows=1` estimate against 908 actual
-is a contributing factor — a planner that believes there is one row never
-prefers an early-termination plan — but fixing the estimate would only let it
-choose (b), which is measurably worse.
+### 2026-08-07: at 100k entities the paging half stops returning at all
 
-### What is actually left
+Measured through the running service on the host (`POST /api/graphs/kgqueries`),
+`sp_lead_synth_100k` (100,000 entities), the four standard lead criteria at page
+sizes 25 and 100:
 
-The extrapolation below (100,000 matches ≈ 3M buffers) still holds. The lever is
-**reducing the match set or precomputing the path**, not restructuring paging:
+| criterion | matches | result |
+|---|---|---|
+| `mql` | 50,300 | **timeout** (>30s, both page sizes) |
+| `hierarchical` | — | **timeout** (>30s, both page sizes) |
+| `high_rated` | 34,790 | **timeout** (>30s, both page sizes) |
+| `state_ca` | 9,080 | returns |
 
-- W2/W4 did exactly this for ranges — 104x by making the predicate selective at
-  the leaf.
-- `{space}_frame_entity` already exists as a precomputed frame→entity mapping.
-  It holds 285,348 rows on `wordnet_frames` and **0 on both lead spaces**, which
-  is why it never appears in these plans. Why it is empty for lead-shaped data,
-  and whether it can serve the KGQuery frame path, is the most promising open
-  direction — and it is a materialization question, not a planner one.
+Six of eight cases fail with `VitalGraphClientTimeoutError` / `httpcore.ReadTimeout`
+against the client's 30s limit — not with a `min_results` assertion, so this is
+not a fixture artefact.
 
-Everything below this section predates these measurements. `M1`, `M2` and the
-`W1`/`W3` workstreams in
-`planning/planning_performance/kgquery_o_page_paging_generator_plan.md` are kept
-for the reasoning, not as a plan of record.
+**This changes the character of the issue.** It was filed as a scaling
+characteristic: cost proportional to the match set rather than the page. At
+10,000 entities that was a latency problem (~6s). At 100,000 it is an
+availability problem — three of four ordinary queries do not complete. Page size
+makes no difference, which is the signature of the cost being in computing the
+match set rather than in producing the page.
+
+`high_rated` is the clearest case: it matches 34,790 of 100,000 entities, and
+computing all of them to return 25 rows exceeds the request timeout no matter
+how cheap each match is. The per-match cost is already healthy (≈49 buffers,
+verified) — there are simply too many matches to enumerate.
+
+The fix is not an optimisation at this scale. See
+`planning/planning_performance/two_phase_kgquery_paging_plan.md`: the measured
+two-phase probe returns the same page after probing 55 entities instead of
+computing 5,030 matches.
+
+### Resolution 2026-08-07: the scale regression is fixed
+
+The regression recorded below was real, and its cause was not what the earlier
+fixes assumed. **PostgreSQL never consults statistics for an indexed
+expression** on this predicate — the estimate was the hardcoded 1/3 default at
+every scale (350,288 of 1.05M terms; 3,489,209 of 10.47M). Raising the
+statistics target built an 88-bucket histogram that nothing read. It was never a
+partial-vs-full index question; no expression index's statistics were used.
+
+Replaced the expression index with a **STORED generated column** on the term
+table, `num_val`, indexed normally. An ordinary column gets ordinary statistics:
+
+| | expression index | generated column |
+|---|---|---|
+| `n_distinct` | `-1` | `-0.00012` (~1,256, correct) |
+| `null_frac` | `0` | `0.9999` (correct) |
+| estimate for `>= 99.9` | 3,489,209 | **160** (99 actual) |
+
+With an accurate estimate the planner drives from the selective term leaf
+instead of hashing the entity population:
+
+| 100k, `MQLRating >= 99.9`, 145 matches | buffers | per match | vs equality |
+|---|---|---|---|
+| original regression | 578,885 | 3,992 | 76.8x |
+| `OFFSET 0` fence | 36,483 | 251.6 | 4.8x |
+| **generated column** | **7,802** | **53.8** | **1.03x** |
+
+Parity with equality at 100k, and 1.3x at 10k. The `OFFSET 0` fence is removed —
+it existed only to work around the bad estimate, and a fence also blocks
+legitimate optimisations.
+
+**This is a required migration.** The push-down emits `num_val >= t`, so a space
+without the column fails with `column "num_val" does not exist`. Loud rather
+than silent, deliberately. `ADD COLUMN ... STORED` rewrites the table under
+ACCESS EXCLUSIVE — 3m16s for 10.4M terms, 12s for 1.05M — so it is not an online
+migration. `scripts/migrate_term_num_index.py` applies it.
+
+Two earlier conclusions in this issue are superseded by the above: the
+partial→non-partial index change bought less than claimed, and the statistics
+target added alongside it did nothing for this query.
+
+## Superseded: the regression as first recorded
+
+### Correction 2026-08-07: "RANGE HALF FIXED" was 10k-only evidence
+
+W2/W4 were declared fixed on a 10,000-entity fixture. On a 100,000-entity
+fixture of the same shape they **regress**, and the reason is the planner
+abandoning the index:
+
+| | `MQLRating >= 99.9` | matches | buffers | per match | vs equality baseline |
+|---|---|---|---|---|---|
+| 10k | uses `idx_*_term_num` | 16 | 1,337 | 83.6 | **1.6x** |
+| 100k | **falls back to PK lookup** | 145 | 578,885 | 3,992 | **76.8x** |
+
+10x the data and 9x the matches, but **433x the buffers**. Flatness 0.00 → 0.11:
+drifting back toward paying for every candidate, which is the original
+pathology.
+
+`EXPLAIN` confirms it directly — `Index Scan using idx_sp_lead_synth_10k_term_num`
+at 10k, `Index Scan using sp_lead_synth_100k_term_pkey` at 100k.
+
+**Root cause is the same estimate problem as the partial-index defect, resurfacing
+at scale.** PostgreSQL estimates the numeric expression as a fixed fraction of
+the table, so at 10.4M terms it predicts ~3.5M rows from a range that returns 145
+and concludes the index is not worth using. Making the index non-partial fixed
+where the estimate *comes from*; it did not make the estimate *accurate*.
+
+The likely fix is the same family as the `OFFSET 0` discovery on the paging half:
+stop relying on the planner choosing correctly and force the shape — emit a
+push-down whose selectivity is visible (a materialised uuid list, or a fenced
+subquery), or extend statistics so the estimate tracks the real distribution.
+
+**Process note.** This was caught only because the bench runs two fixture sizes
+and gates on a dimensionless ratio measured in the same run
+(`RANGE_VS_EQUALITY_MAX`, 76.8x against a limit of 8.0). A single fixture, or an
+absolute buffer bound calibrated on that fixture, would have reported this as
+finished. Anything asserted about scaling behaviour needs at least two scales.
+
+## Status of each half: PAGING HALF — plan exists, planner will not choose it
+
+### Correction 2026-08-06 (supersedes an earlier "closed as not achievable")
+
+An earlier revision of this section concluded that O(page) paging was not
+reachable and that O(matches) was "close to optimal for this shape". **That was
+wrong, and it was wrong on the evidence available at the time.** It generalised
+from three failed attempts to a claim about what is possible.
+
+What is actually established:
+
+**The early-terminating plan exists and has been observed.** An entity-anchored
+query with the criteria as nested correlated `EXISTS`, driven from an index
+ordered `(context, predicate, object, subject)`, plans as a `Nested Loop Semi
+Join` and stops at `rows=25` at the top node. It does not compute the match set.
+
+**PostgreSQL will not choose it.** Given the same query with the term constants
+written as literals — which is what the generator emits — it flattens the nested
+`EXISTS` into `HashAggregate` + `Parallel Hash Semi Join` over a sequential scan
+of the edge table, computes all 5,030 matches, and returns 25 of them. Forcing
+nested loops (`enable_hashjoin=off`) makes it worse still, 61s, because it then
+drives from the wrong relation.
+
+The reason is cardinality estimation: the plan carries `rows=1` and `rows=40`
+against 5,030 and 3,333 actual. A planner that believes a join yields one row
+has no reason to prefer a plan whose only advantage is stopping early.
+
+So the blocker is **the planner's cost model, not the query shape**. The three
+approaches recorded below (M1 ordering, W1 semi-join rewrite, forced driver)
+each failed to make PostgreSQL choose the good plan. None of them showed the
+good plan does not exist — one of them showed it does.
+
+### What must not be used as an explanation
+
+Earlier measurements were taken while a 50M-quad load ran on the same server,
+and the slow figures were partly attributed to that. **That is not an
+acceptable explanation.** Queries have to be fast while other operations are in
+flight; a concurrent bulk load is a normal condition, not an excuse. Any figure
+here that needs a quiet machine to look acceptable should be treated as a
+failure, not a caveat.
+
+### The measured problem
+
+`mql` (a boolean-equality criterion matching 5,030 of 10,000 entities), first
+page of 25, through the API: **~6 seconds**. That is the number to fix. Its
+per-matched-row cost is normal — 47.5 buffers against `state_ca`'s 41.6 — which
+is precisely the point: the work is proportional to the match set when it should
+be proportional to the page.
+
+### Next
+
+Stop trying to persuade the planner and force the shape: resolve the term
+constants once, then page entity uuids in a step the planner cannot collapse
+into a set-based join, and resolve text for the page afterwards. That is what
+M1's two-phase idea was, and it is the only shape that has measured well in
+isolation. It was dismissed together with the others without being tried in the
+form that matters.
 
 ## Original status: OPEN — scaling characteristic, not yet a live failure
 

@@ -64,8 +64,22 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
     except Exception as e:
         logger.warning("Geo resync failed (non-critical): %s", e)
 
-    # 5. ANALYZE all space tables
-    for table_name in t.values():
+    # 5. ANALYZE all space tables the space actually has.
+    #
+    # get_table_names() describes the current schema, but a space created by an
+    # older version does not necessarily have every table in it. Failing the
+    # whole resync because one optional table is absent leaves the derived
+    # tables half-rebuilt, which is worse than skipping the ANALYZE — and the
+    # caller has usually just finished a bulk load at that point.
+    present = {r["tablename"] for r in await conn.fetch(
+        "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+        "AND tablename = ANY($1)", list(t.values()))}
+    missing = sorted(set(t.values()) - present)
+    if missing:
+        logger.info("resync(%s): skipping ANALYZE of %d table(s) this space "
+                    "does not have: %s", space_id, len(missing),
+                    ", ".join(missing))
+    for table_name in sorted(present):
         await conn.execute(f"ANALYZE {table_name}")
 
     # 6. Invalidate in-memory stats cache + reset change counter
