@@ -506,9 +506,9 @@ class KGQueryCriteriaBuilder:
         # redundant: it enumerates every entity of four vitaltypes to establish
         # something the other triple already establishes.
         #
-        # prune_union.py drops UNION branches whose subtype URIs are absent from
-        # the term table, which is why this measured free in cardiff_kg — only
-        # KGEntity exists there, so three of four branches are pruned before SQL
+        # prune_union.py drops UNION branches whose subtype URIs are absent
+        # from the term table, which is why this measures free on a space that
+        # only holds KGEntity — three of four branches are pruned before SQL
         # emission. In a space where the subtypes DO exist, nothing prunes them.
         # See planning/planning_performance/prod_db_saturation_plan.md
         _entity_already_pinned = bool(criteria.entity_uris) or bool(
@@ -878,13 +878,24 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
         
         return query.strip()
     
-    def build_entity_count_query_sparql(self, criteria: EntityQueryCriteria, graph_id: str) -> str:
+    def build_entity_count_query_sparql(self, criteria: EntityQueryCriteria,
+                                        graph_id: str,
+                                        cap: Optional[int] = None) -> str:
         """Build SPARQL COUNT query for entity search with criteria.
         
         Uses the same full WHERE clause as ``build_entity_query_sparql``
         (including frame criteria, slot criteria, sort join patterns,
         and all filters) so the count is consistent with the paginated
         results.
+
+        ``cap`` bounds the work: the distinct entities are selected in a
+        subquery with ``LIMIT cap + 1`` and then counted, so the query stops as
+        soon as it knows the total exceeds the cap. A count is inherently
+        O(matches) — it cannot be paged — so without a bound it costs the same
+        whatever the page size. Measured on a 100,000-entity space, the page
+        query took 325ms and the uncapped count 41.7s, which is what pushed the
+        request past its timeout. A capped result is a lower bound and the
+        caller must render it as "N+".
         
         Args:
             criteria: Entity query criteria
@@ -906,25 +917,33 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
             if sort_patterns:
                 sort_extra_where = " " + " ".join(sort_patterns)
         
+        # LIMIT cap+1 inside the subquery: enough to tell "exactly n" from
+        # "more than cap" without enumerating the rest.
+        limit_clause = f"LIMIT {cap + 1}" if cap and cap > 0 else ""
+
         if graph_id is None:
             query = f"""
             {self.prefixes}
-            
-            SELECT (COUNT(DISTINCT ?entity) AS ?count) WHERE {{
-                {where_clause}{sort_extra_where}
+
+            SELECT (COUNT(*) AS ?count) WHERE {{
+                {{ SELECT DISTINCT ?entity WHERE {{
+                    {where_clause}{sort_extra_where}
+                }} {limit_clause} }}
             }}
             """
         else:
             query = f"""
             {self.prefixes}
-            
-            SELECT (COUNT(DISTINCT ?entity) AS ?count) WHERE {{
-                GRAPH <{graph_id}> {{
-                    {where_clause}{sort_extra_where}
-                }}
+
+            SELECT (COUNT(*) AS ?count) WHERE {{
+                {{ SELECT DISTINCT ?entity WHERE {{
+                    GRAPH <{graph_id}> {{
+                        {where_clause}{sort_extra_where}
+                    }}
+                }} {limit_clause} }}
             }}
             """
-        
+
         return query.strip()
     
     def build_frame_query_sparql(self, criteria: FrameQueryCriteria, graph_id: str,

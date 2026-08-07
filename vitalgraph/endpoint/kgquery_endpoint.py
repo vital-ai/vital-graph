@@ -30,6 +30,15 @@ from vitalgraph.model.result_status import OperationStatus
 from ..auth.role_dependencies import require_space_read
 
 
+# Upper bound on total_count when a caller opts in. A count is
+# COUNT(DISTINCT ?entity) over the whole match set — it cannot be paged, so it
+# costs O(matches) however cheap the page is. Measured on a 100,000-entity
+# space: page 325ms, uncapped count 41.7s, which is what pushed the request
+# past its timeout. Capping makes it bounded work whose answer is a lower
+# bound, flagged in the response so a UI renders "1,000+".
+TOTAL_COUNT_CAP = 1000
+
+
 class KGQueriesEndpoint:
     """REST API endpoint for KG entity-to-entity connection queries."""
     
@@ -631,9 +640,22 @@ class KGQueriesEndpoint:
             self.logger.info(f"Generated frame SPARQL query:\n{sparql_query}")
             
             # Build count query (same WHERE clause, no LIMIT/OFFSET)
+            # Off unless asked for: the count cannot be paged, so it costs
+            # O(matches) even when the page is O(page). `exact` opts into that
+            # cost deliberately; `capped` bounds it; `none` skips it.
+            from ..model.kgqueries_model import TotalCountMode
+            count_mode = query_request.include_total_count
+            if query_request.count_only and count_mode == TotalCountMode.NO:
+                # count_only asking for no count is contradictory — the caller
+                # wants a count, just not a page. Bound it unless told otherwise.
+                count_mode = TotalCountMode.YES
+            want_count = count_mode != TotalCountMode.NO
+            cap = None if count_mode == TotalCountMode.EXACT else TOTAL_COUNT_CAP
             count_query = self.query_builder.build_entity_count_query_sparql(
-                entity_criteria, graph_id
+                entity_criteria, graph_id, cap=cap
             )
+            total_count = 0
+            total_count_capped = False
             
             # count_only short-circuit: run only the count query
             t0 = _time.monotonic()
@@ -646,13 +668,20 @@ class KGQueriesEndpoint:
                     count_results = await backend.execute_sparql_query(space_id, count_query)
                     total_count = self._extract_total_count(count_results)
                     _count_cache.put(space_id, graph_id, _qh, total_count)
-                self.logger.info(f"Frame count_only: {total_count}, {(_time.monotonic() - t0)*1000:.0f}ms")
+                total_count_capped = cap is not None and total_count > cap
+                if total_count_capped:
+                    total_count = cap
+                self.logger.info(
+                    f"Frame count_only: {total_count}"
+                    f"{'+' if total_count_capped else ''}, "
+                    f"{(_time.monotonic() - t0)*1000:.0f}ms")
                 return KGQueryResponse(
                     status=OperationStatus.EMPTY,
                     query_type="frame",
                     relation_connections=None,
                     frame_connections=[],
                     total_count=total_count,
+                    total_count_capped=total_count_capped,
                     page_size=0,
                     offset=0,
                 )
@@ -660,10 +689,15 @@ class KGQueriesEndpoint:
             # Count-first short-circuit: when offset > 0 run the cheap count
             # query first so we can skip the expensive paginated query if the
             # caller has already paged past the end of the result set.
-            if query_request.offset > 0:
+            if query_request.offset > 0 and want_count:
                 count_results = await backend.execute_sparql_query(space_id, count_query)
                 total_count = self._extract_total_count(count_results)
-                if query_request.offset >= total_count:
+                total_count_capped = cap is not None and total_count > cap
+                if total_count_capped:
+                    total_count = cap
+                # Only short-circuit on an exact count: a capped total is a
+                # lower bound, so an offset beyond it may still have rows.
+                if not total_count_capped and query_request.offset >= total_count:
                     t_query = _time.monotonic()
                     self.logger.info(
                         f"Frame query short-circuit: offset {query_request.offset} >= total {total_count}, "
@@ -678,12 +712,17 @@ class KGQueriesEndpoint:
                         offset=query_request.offset
                     )
                 results = await backend.execute_sparql_query(space_id, sparql_query)
-            else:
+            elif want_count:
                 results, count_results = await asyncio.gather(
                     backend.execute_sparql_query(space_id, sparql_query),
                     backend.execute_sparql_query(space_id, count_query),
                 )
                 total_count = self._extract_total_count(count_results)
+                total_count_capped = cap is not None and total_count > cap
+                if total_count_capped:
+                    total_count = cap
+            else:
+                results = await backend.execute_sparql_query(space_id, sparql_query)
             t_query = _time.monotonic()
             
             # Convert results to FrameConnection objects
@@ -710,6 +749,7 @@ class KGQueriesEndpoint:
             
             return KGQueryResponse(
                 query_type="frame",
+                total_count_capped=total_count_capped,
                 relation_connections=None,
                 frame_connections=connections,
                 total_count=total_count,
