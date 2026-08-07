@@ -102,6 +102,40 @@ class SPARQLQueryRequest(BaseModel):
     )
 
 
+class SPARQLQueryTiming(BaseModel):
+    """Server-side stage breakdown for one SPARQL query, in milliseconds.
+
+    These are measured inside the backend pipeline and were previously only
+    written to a log line, which meant the one place that could explain a slow
+    query was the one place a caller could not reach. Returning them lets a
+    client attribute latency without shell access to the server: `total_ms`
+    against the caller's own wall-clock shows transport and serialization
+    overhead, and the stages show where server time went.
+
+    Always populated for `sparql_sql` backend SELECT/ASK/CONSTRUCT/DESCRIBE
+    queries; `None` for backends that do not report stages.
+    """
+    acquire_ms: Optional[float] = Field(
+        None, description="Waiting for a connection from the pool")
+    sidecar_ms: Optional[float] = Field(
+        None, description="SPARQL→AST compilation by the Jena sidecar")
+    gen_ms: Optional[float] = Field(
+        None, description="SQL generation from the AST")
+    exec_ms: Optional[float] = Field(
+        None, description="SQL execution in PostgreSQL")
+    rows_to_dict_ms: Optional[float] = Field(
+        None, description="Converting result rows to dicts")
+    bindings_ms: Optional[float] = Field(
+        None, description="Building SPARQL JSON bindings from rows")
+    total_ms: Optional[float] = Field(
+        None, description="Server-side total across the stages above")
+    rows: Optional[int] = Field(None, description="Result rows returned")
+    joins: Optional[int] = Field(
+        None, description="JOIN count in the generated SQL (complexity hint)")
+    sql_chars: Optional[int] = Field(
+        None, description="Length of the generated SQL")
+
+
 class SPARQLQueryResponse(BaseModel):
     """Response model for SPARQL query results."""
     head: Optional[Dict[str, Any]] = Field(
@@ -128,7 +162,15 @@ class SPARQLQueryResponse(BaseModel):
     )
     query_time: Optional[float] = Field(
         None,
-        description="Query execution time in seconds"
+        description="Query execution time in seconds, measured at the endpoint"
+    )
+    timing: Optional[SPARQLQueryTiming] = Field(
+        None,
+        description=(
+            "Server-side stage breakdown in milliseconds. Always present for "
+            "the sparql_sql backend; use with query_time to separate server "
+            "cost from transport."
+        )
     )
     error: Optional[str] = Field(
         None,

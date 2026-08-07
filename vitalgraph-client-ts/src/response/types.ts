@@ -576,9 +576,48 @@ export interface ApiKeyDeleteResponse extends VitalGraphResponse {
 // SPARQL Responses
 // ============================================================================
 
+/**
+ * Server-side stage breakdown for one SPARQL query, in milliseconds.
+ *
+ * Mirrors `SPARQLQueryTiming` in vitalgraph/model/sparql_model.py. Always
+ * populated by the sparql_sql backend; absent for backends that do not report
+ * stages. Compare `total_ms` against your own wall-clock to separate server
+ * cost from transport and deserialization.
+ */
+export interface SPARQLQueryTiming {
+  /** Waiting for a connection from the pool. */
+  acquire_ms?: number;
+  /** SPARQL→AST compilation by the Jena sidecar. */
+  sidecar_ms?: number;
+  /** SQL generation from the AST. */
+  gen_ms?: number;
+  /** SQL execution in PostgreSQL. */
+  exec_ms?: number;
+  /** Converting result rows to dicts. */
+  rows_to_dict_ms?: number;
+  /** Building SPARQL JSON bindings from rows. */
+  bindings_ms?: number;
+  /** Server-side total across the stages above. */
+  total_ms?: number;
+  rows?: number;
+  /** JOIN count in the generated SQL (complexity hint). */
+  joins?: number;
+  sql_chars?: number;
+}
+
 export interface SPARQLQueryResponse extends VitalGraphResponse {
+  /** Query result metadata (variables, links) for SELECT queries. */
+  head?: Record<string, unknown>;
+  /** SELECT results; bindings live at `results.bindings`, not top level. */
   results?: Record<string, unknown>;
-  bindings?: Record<string, unknown>[];
+  /** Boolean result for ASK queries. */
+  boolean?: boolean;
+  /** RDF triples for CONSTRUCT/DESCRIBE queries. */
+  triples?: Record<string, unknown>[];
+  /** Endpoint-measured query time in seconds. */
+  query_time?: number;
+  /** Server-side stage breakdown; see SPARQLQueryTiming. */
+  timing?: SPARQLQueryTiming;
 }
 
 export interface SPARQLUpdateResponse extends VitalGraphResponse {

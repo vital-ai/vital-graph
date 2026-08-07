@@ -1430,22 +1430,36 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             join_count = sql.upper().count(' JOIN ')
             sql_len = len(sql)
 
-            acquire_ms = (t_acquired - t_pre_acquire) * 1000
+            # Compute once, then both log and return. These used to exist only
+            # inside the log call, so the one breakdown that explains a slow
+            # query was unreachable to the caller that experienced it.
+            timing = {
+                'acquire_ms': round((t_acquired - t_pre_acquire) * 1000, 2),
+                'sidecar_ms': round((t_sidecar - t0) * 1000, 2),
+                'gen_ms': round((t_gen - t_acquired) * 1000, 2),
+                'exec_ms': round((t_exec - t_gen) * 1000, 2),
+                'rows_to_dict_ms': round((t_convert_rows - t_exec) * 1000, 2),
+                'bindings_ms': round((t_bindings - t_convert_rows) * 1000, 2),
+                'total_ms': round((t_bindings - t0) * 1000, 2),
+                'rows': len(rows),
+                'joins': join_count,
+                'sql_chars': sql_len,
+            }
             logger.info(
                 "SPARQL pipeline [%s]: acquire=%.0fms sidecar=%.0fms gen=%.0fms exec=%.0fms "
                 "rows→dict=%.0fms bindings=%.0fms total=%.0fms "
                 "(%d rows, %d joins, %d chars SQL)",
                 space_id,
-                acquire_ms,
-                (t_sidecar - t0) * 1000,
-                (t_gen - t_acquired) * 1000,
-                (t_exec - t_gen) * 1000,
-                (t_convert_rows - t_exec) * 1000,
-                (t_bindings - t_convert_rows) * 1000,
-                (t_bindings - t0) * 1000,
-                len(rows),
-                join_count,
-                sql_len,
+                timing['acquire_ms'],
+                timing['sidecar_ms'],
+                timing['gen_ms'],
+                timing['exec_ms'],
+                timing['rows_to_dict_ms'],
+                timing['bindings_ms'],
+                timing['total_ms'],
+                timing['rows'],
+                timing['joins'],
+                timing['sql_chars'],
             )
             logger.debug("Generated SQL [%s]:\n%s", space_id, sql)
 
@@ -1454,6 +1468,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 'success': True,
                 'sql': sql,
                 'query_type': cr.meta.query_type,
+                'timing': timing,
             }
 
             # ASK answers from the EXISTS wrapper above, not from the bindings

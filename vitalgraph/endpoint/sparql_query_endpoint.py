@@ -112,6 +112,10 @@ class SPARQLQueryEndpoint:
             self.logger.info(f" ENDPOINT: Backend returned result: {result_dict}")
             
             query_time = time.time() - start_time
+            # Server-side stage breakdown, forwarded verbatim from the
+            # backend. Always on: timing that only appears when you
+            # remember to ask for it is absent exactly when needed.
+            timing = result_dict.get('timing')
             
             # Check if query was successful
             if not result_dict.get('success', False):
@@ -119,7 +123,8 @@ class SPARQLQueryEndpoint:
                 self.logger.error(f"SPARQL query failed: {error_msg}")
                 return SPARQLQueryResponse(
                     error=error_msg,
-                    query_time=query_time
+                    query_time=query_time,
+                    timing=timing
                 )
             
             # Extract bindings from result structure
@@ -136,7 +141,8 @@ class SPARQLQueryEndpoint:
                 # The backend derives the boolean; do not recompute it here.
                 return SPARQLQueryResponse(
                     boolean=result_dict.get('boolean', False),
-                    query_time=query_time
+                    query_time=query_time,
+                    timing=timing
                 )
 
             elif query_type == 'SELECT':
@@ -148,7 +154,8 @@ class SPARQLQueryEndpoint:
                 return SPARQLQueryResponse(
                     head={"vars": variables},
                     results={"bindings": bindings},
-                    query_time=query_time
+                    query_time=query_time,
+                    timing=timing
                 )
 
             elif query_type in ('CONSTRUCT', 'DESCRIBE'):
@@ -164,11 +171,13 @@ class SPARQLQueryEndpoint:
                         query_type)
                     return SPARQLQueryResponse(
                         error=f"{query_type} queries are not supported by this backend",
-                        query_time=query_time
+                        query_time=query_time,
+                    timing=timing
                     )
                 return SPARQLQueryResponse(
                     triples=triples,
-                    query_time=query_time
+                    query_time=query_time,
+                    timing=timing
                 )
 
             else:
@@ -177,7 +186,8 @@ class SPARQLQueryEndpoint:
                 self.logger.error(f"Unrecognised SPARQL query form: {query_type!r}")
                 return SPARQLQueryResponse(
                     error=f"Unrecognised SPARQL query form: {query_type!r}",
-                    query_time=query_time
+                    query_time=query_time,
+                    timing=timing
                 )
         
         except HTTPException:
