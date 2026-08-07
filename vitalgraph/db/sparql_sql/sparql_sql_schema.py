@@ -84,6 +84,38 @@ def numeric_datatype_ids() -> str:
     return ", ".join(str(ids[u]) for u in _NUMERIC_DATATYPES if u in ids)
 
 
+NUMERIC_TERM_COLUMN = "num_val"
+
+
+def numeric_term_column() -> str:
+    """The generated column that makes numeric range push-down estimable.
+
+    A STORED generated column, deliberately, rather than an index on the
+    equivalent expression. PostgreSQL does not consult statistics for an
+    indexed *expression* when estimating this predicate: measured on a
+    10.4M-term space the estimate was 3,489,209 rows against 99 actual —
+    exactly 1/3 of the table, the hardcoded default for a comparison it cannot
+    estimate. Raising the statistics target built an 88-bucket histogram that
+    nothing read. This is not a partial-vs-full index issue; no expression
+    index's statistics were used.
+
+    An ordinary column gets ordinary statistics. Measured after the change:
+    n_distinct -0.00012 (~1,256 distinct, correct), null_frac 0.9999
+    (correct), estimate 160 against 99 actual. That accuracy is what lets the
+    planner drive from the selective term leaf instead of hashing the whole
+    entity population — 36,483 buffers/470ms became 7,802/57ms, and cost per
+    matched row fell to 53.8 against an equality baseline of 52.0.
+
+    Cost: one numeric column per term row, NULL for the ~96% that are not
+    numeric literals. On an existing space `ALTER TABLE ... ADD COLUMN ...
+    STORED` rewrites the table — 3m16s for 10.4M rows.
+    """
+    from .sql_type_generation import numeric_term_expr
+    expr = numeric_term_expr(numeric_datatype_ids())
+    return (f"{NUMERIC_TERM_COLUMN} NUMERIC "
+            f"GENERATED ALWAYS AS ({expr}) STORED")
+
+
 def numeric_term_index_sql(space_id: str, term_table: str) -> str:
     """Partial expression index for numeric range push-down (issues/040 W4).
 
@@ -91,12 +123,21 @@ def numeric_term_index_sql(space_id: str, term_table: str) -> str:
     value. Measured on sp_lead_synth (1.05M terms, `MQLRating >= 99.9`, 16
     matches): 24,575 buffers before, 4,396 after, for a **48 kB** index.
 
-    Partial on `<expr> IS NOT NULL` rather than on `datatype_id IN (...)`:
-    the query says `<expr> >= 99.9`, and PostgreSQL can prove a strict
-    comparison implies IS NOT NULL, so the predicate is usable. It cannot prove
-    the datatype membership, which is buried inside the CASE. Making it partial
-    keeps the index to the numeric literals — 48 kB rather than one entry per
-    term.
+    NOT partial, and that is deliberate — an earlier version was.
+
+    PostgreSQL collects statistics for an indexed *expression* only from a
+    NON-partial expression index. A partial one is 48 kB instead of 23 MB on a
+    1.05M-term space, but leaves the planner with no idea what the expression
+    selects: it estimated 350,288 rows against 99 actual. At that estimate a
+    server with room to hash the imagined 350k rows chooses a hash semi-join
+    over a full term-table scan and never touches the index — measured 183,388
+    buffers, against 1,325 once the statistics existed, a 138x difference on
+    identical data.
+
+    The plan choice was therefore config-dependent: the same query used the
+    index on a small-work_mem instance and ignored it on a larger one. An index
+    exists to make the plan good, so paying 23 MB to make the planner reliably
+    choose it is the right trade.
 
     This index is inert on its own. It only pays off in combination with the
     push-down (W2) that creates a value-ordered scan for it to serve; before
@@ -106,7 +147,7 @@ def numeric_term_index_sql(space_id: str, term_table: str) -> str:
     from .sql_type_generation import numeric_term_expr
     expr = numeric_term_expr(numeric_datatype_ids())
     return (f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_num "
-            f"ON {term_table} (({expr})) WHERE ({expr}) IS NOT NULL")
+            f"ON {term_table} (({expr}))")
 
 
 class SparqlSQLSchema:
@@ -486,7 +527,8 @@ class SparqlSQLSchema:
                 lang         VARCHAR(20),
                 datatype_id  BIGINT,
                 created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                dataset      VARCHAR(50) NOT NULL DEFAULT 'primary'
+                dataset      VARCHAR(50) NOT NULL DEFAULT 'primary',
+                {numeric_term_column()}
             )
         ''')
 
@@ -744,8 +786,11 @@ class SparqlSQLSchema:
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_type ON {t['term']} (term_type)",
             # GIN trigram index for REGEX/CONTAINS/LIKE text filters (requires pg_trgm)
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_trgm ON {t['term']} USING gin (term_text gin_trgm_ops)",
-            # Numeric range push-down support — see numeric_term_index_sql.
-            numeric_term_index_sql(space_id, t['term']),
+            # Numeric range push-down support (issues/040 W2/W4). A plain
+            # index on the generated column, NOT an expression index — see
+            # numeric_term_column for why that distinction decides everything.
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_num "
+            f"ON {t['term']} ({NUMERIC_TERM_COLUMN})",
 
             # Quad table indexes — essential for V2 SQL generation
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_pred ON {t['rdf_quad']} (predicate_uuid)",

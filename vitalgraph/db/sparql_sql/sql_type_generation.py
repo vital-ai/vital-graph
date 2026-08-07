@@ -417,6 +417,15 @@ class TypeRegistry:
     def has(self, var: str) -> bool:
         return var in self._columns
 
+    def drop(self, var: str) -> None:
+        """Forget a variable — it is no longer present in the emitted output.
+
+        Needed by the semi-join rewrite: the tested side's private variables are
+        not selected, so leaving them registered would let a later consumer emit
+        a column reference that no longer exists.
+        """
+        self._columns.pop(var, None)
+
     def all_vars(self) -> Set[str]:
         return set(self._columns.keys())
 
