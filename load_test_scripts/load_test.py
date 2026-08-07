@@ -70,6 +70,53 @@ class Metrics:
         print(f"{'='*96}\n")
         return fails
 
+    def to_records(self, duration, users, ramp, think, read_only):
+        """Emit the same numbers as perf-framework bench records.
+
+        Shares the record format used by tests/performance so
+        scripts/perf_compare.py can baseline these alongside the plan-counter
+        benches — see planning/planning_performance/
+        folding_query_timing_tests_into_the_framework.md.
+
+        The run parameters are recorded on every bench, not just in the run
+        envelope: a p99 from 20 users is not comparable with a p99 from 5, and a
+        comparison that silently mixes them is worse than no comparison.
+        """
+        mode = "read_only" if read_only else "mixed"
+        params = {"users": users, "duration_s": duration, "ramp_s": ramp,
+                  "think_min_s": think[0], "think_max_s": think[1]}
+        total = sum(len(v) for v in self.lat.values())
+        fails = sum(self.fail.values())
+
+        records = [{
+            "bench_id": f"load.{mode}.throughput",
+            "kind": "load",
+            "status": "ok",
+            "metrics": {"requests_per_sec": round(total / max(duration, 1e-9), 2),
+                        "requests": total, "failures": fails},
+            "params": params,
+        }]
+        for op in sorted(self.lat):
+            xs = self.lat[op]
+            if not xs:
+                continue
+            records.append({
+                "bench_id": f"load.{mode}.{op}",
+                "kind": "load",
+                "status": "ok",
+                "metrics": {
+                    "p50_ms": round(self._pct(xs, 50), 1),
+                    "p95_ms": round(self._pct(xs, 95), 1),
+                    "p99_ms": round(self._pct(xs, 99), 1),
+                    "max_ms": round(max(xs), 1),
+                    "avg_ms": round(sum(xs) / len(xs), 1),
+                    "requests": len(xs),
+                    "failures": self.fail[op],
+                },
+                "params": params,
+            })
+        return records
+
 
 # ── Client + operation set ───────────────────────────────────────────
 async def _open_client(cfg):
@@ -149,7 +196,33 @@ async def _worker(cfg, ops, weights, deadline, metrics, think):
         await client.close()
 
 
-async def run(users, duration, ramp, think, read_only):
+def _write_records(path, records, cfg):
+    """Write bench records in the perf-framework run format.
+
+    Reuses tests/performance/perf_record for the environment stamp so a load run
+    and a pytest run carry the identical envelope (git commit, machine, PG
+    settings, runner class) and can be compared by the same tool.
+    """
+    import json
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from tests.performance.perf_record import PerfRun
+
+    run = PerfRun(path)
+    run.env["load_target"] = cfg["url"]
+    # The default runner class is derived from the VG_TEST_PG_* vars, which say
+    # nothing about what a load run actually measured — it drives the API, not
+    # PostgreSQL directly, and would otherwise be stamped "host-pg-clean" while
+    # hammering the container on :8002.  Class by API target instead, so load
+    # runs only ever compare against load runs against the same server.
+    from urllib.parse import urlparse
+    run.env["runner"]["class"] = f"api-{urlparse(cfg['url']).netloc}"
+    for rec in records:
+        run.add(rec.pop("bench_id"), **rec)
+    run.write()
+    print(f"📊 load run recorded → {path}")
+
+
+async def run(users, duration, ramp, think, read_only, record_path=None):
     cfg = load_env()
     uris = get_entity_uris()
     if not uris:
@@ -168,6 +241,10 @@ async def run(users, duration, ramp, think, read_only):
             await asyncio.sleep(ramp / users)
     await asyncio.gather(*tasks)
     fails = metrics.report(duration, users)
+    if record_path:
+        _write_records(record_path,
+                       metrics.to_records(duration, users, ramp, think, read_only),
+                       cfg)
     return 1 if fails else 0
 
 
@@ -179,8 +256,12 @@ def main():
     p.add_argument("--think-min", type=float, default=0.1)
     p.add_argument("--think-max", type=float, default=0.5)
     p.add_argument("--read-only", action="store_true")
+    p.add_argument("--record", metavar="PATH", default=os.environ.get("VG_PERF_RECORD"),
+                   help="write bench records for scripts/perf_compare.py "
+                        "(defaults to $VG_PERF_RECORD)")
     a = p.parse_args()
-    rc = asyncio.run(run(a.users, a.duration, a.ramp, (a.think_min, a.think_max), a.read_only))
+    rc = asyncio.run(run(a.users, a.duration, a.ramp, (a.think_min, a.think_max),
+                         a.read_only, a.record))
     sys.exit(rc)
 
 

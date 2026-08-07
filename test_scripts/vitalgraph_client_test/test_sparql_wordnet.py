@@ -27,8 +27,14 @@ import asyncio
 import logging
 from pathlib import Path
 
-# Add the project root to Python path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add the project root to Python path for imports.
+#
+# parent.parent is test_scripts/, not the project root — that is one more level
+# up.  Using test_scripts/ broke this script two ways: `vitalgraph` was not
+# importable at all, and putting test_scripts/ at sys.path[0] shadowed this
+# directory's `sparql` package with test_scripts/sparql/, so the case modules
+# below failed with "No module named 'sparql.case_wordnet_basic_queries'".
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from vitalgraph.client.vitalgraph_client import VitalGraphClient
 

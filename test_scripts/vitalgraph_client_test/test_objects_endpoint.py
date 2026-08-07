@@ -17,7 +17,12 @@ from pathlib import Path
 from typing import Optional
 
 # Add the project root to Python path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# `parent.parent` is test_scripts/, not the project root — `vitalgraph`
+# lives one level further up, so this used to fail at `import vitalgraph`.
+# test_scripts/ is appended (not inserted) so it cannot shadow packages in
+# this directory: test_scripts/sparql/ vs vitalgraph_client_test/sparql/.
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+sys.path.append(str(Path(__file__).parent.parent))
 
 from vitalgraph.client.vitalgraph_client import VitalGraphClient, VitalGraphClientError
 from vitalgraph.client.response.client_response import ObjectsListResponse, ObjectResponse, ObjectCreateResponse, ObjectUpdateResponse, ObjectDeleteResponse

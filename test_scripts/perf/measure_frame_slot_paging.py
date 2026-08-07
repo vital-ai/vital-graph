@@ -19,6 +19,11 @@ Usage (stack must be up and built):
 
 Seeds via SPARQL INSERT (bulk) rather than the CRUD API — seeding thousands of
 frames one create-call at a time dominates the run and measures the wrong thing.
+
+
+Perf-framework counterpart: tests/performance/test_frame_slot_paging_bench.py (imports seed() from here)
+This script stays as the manual exploration tool; the bench is the
+recorded/baselined one. Change a query here and mirror it there.
 """
 
 from __future__ import annotations

@@ -17,8 +17,13 @@ from dotenv import load_dotenv
 # ---------------------------------------------------------------------------
 # Path & env setup
 # ---------------------------------------------------------------------------
-project_root = Path(__file__).parent.parent
+# `parent.parent` is test_scripts/, not the project root — `vitalgraph`
+# lives one level further up, so this used to fail at `import vitalgraph`.
+# test_scripts/ is appended (not inserted) so it cannot shadow packages in
+# this directory: test_scripts/sparql/ vs vitalgraph_client_test/sparql/.
+project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
+sys.path.append(str(project_root / "test_scripts"))
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)

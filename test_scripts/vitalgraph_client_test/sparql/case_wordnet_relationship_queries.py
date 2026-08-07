@@ -4,6 +4,12 @@ WordNet Happy Words SPARQL Query Test Cases
 Uses the exact queries from vitalgraph_sparql_sql/scripts/happy_words_v2.py:
   1. Relationships query — REGEX("happy","i") on hasName, traverse KGFrame graph
   2. Frame UNION query — REGEX("animal","i") on hasKGraphDescription, source OR dest
+
+
+Perf-framework counterpart: tests/performance/test_wordnet_query_bench.py (imports RELATIONSHIPS_SPARQL /
+FRAME_UNION_SPARQL from here, so those two cannot drift)
+This script stays as the manual exploration tool; the bench is the
+recorded/baselined one. Change a query here and mirror it there.
 """
 
 import logging

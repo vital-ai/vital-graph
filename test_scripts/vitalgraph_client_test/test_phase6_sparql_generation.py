@@ -10,7 +10,12 @@ import sys
 from pathlib import Path
 
 # Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# `parent.parent` is test_scripts/, not the project root — `vitalgraph`
+# lives one level further up, so this used to fail at `import vitalgraph`.
+# test_scripts/ is appended (not inserted) so it cannot shadow packages in
+# this directory: test_scripts/sparql/ vs vitalgraph_client_test/sparql/.
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+sys.path.append(str(Path(__file__).parent.parent))
 
 from vitalgraph.sparql.kg_connection_query_builder import KGConnectionQueryBuilder
 from vitalgraph.model.kgqueries_model import KGQueryCriteria

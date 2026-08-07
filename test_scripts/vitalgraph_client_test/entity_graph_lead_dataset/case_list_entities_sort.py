@@ -13,8 +13,48 @@ Sort Scenarios:
 5. Invalid sort_by — expect 400 error
 """
 
+import re
 import time
 from typing import List, Optional
+
+
+def _collation_key(name: str):
+    """Sort key approximating PostgreSQL's `en_US.utf8` collation.
+
+    The server sorts in the database's collation; Python's `<=` compares raw
+    codepoints. Those disagree, and asserting the Python order made a correct
+    result look like a bug:
+
+        server : ['Alana Bagley', 'Albert Mesa Peralta', 'Alicia Chalumeau', 'Ali Suleiman', ...]
+        python : ['Alana Bagley', 'Albert Mesa Peralta', 'Ali Suleiman', 'Alicia Chalumeau', ...]
+
+    Python compares `'Ali '` vs `'Alic'` → space (0x20) < `c` (0x63), so it wants
+    *Ali Suleiman* first. `en_US.utf8` gives spaces and punctuation no primary
+    weight and compares case-insensitively at that level, so it compares `alic`
+    vs `alis` and puts *Alicia Chalumeau* first. Verified directly:
+
+        select x from (values ('Alicia Chalumeau'),('Ali Suleiman')) t(x) order by x;
+         Alicia Chalumeau
+         Ali Suleiman
+
+    PostgreSQL's answer is the right one for a human-facing name sort, so the
+    test is what needed fixing.
+
+    This mirrors the primary/secondary weights (alphanumerics only, case-folded)
+    and falls back to the raw string to keep the ordering total. It is an
+    approximation of full UCA — it is not trying to be a collation
+    implementation, only to stop the assertion firing on a correct result.
+    """
+    folded = name.casefold()
+    return (re.sub(r'[^0-9a-z]+', '', folded), folded, name)
+
+
+def _is_ordered(names: List[str], descending: bool = False) -> bool:
+    """True if `names` is ordered under the database's collation."""
+    keys = [_collation_key(n) for n in names]
+    if descending:
+        return all(keys[i] >= keys[i + 1] for i in range(len(keys) - 1))
+    return all(keys[i] <= keys[i + 1] for i in range(len(keys) - 1))
 
 
 class ListEntitiesSortTester:
@@ -99,7 +139,7 @@ class ListEntitiesSortTester:
                         names.append(str(obj.name))
 
             if len(names) >= 2:
-                is_sorted = all(names[i] <= names[i + 1] for i in range(len(names) - 1))
+                is_sorted = _is_ordered(names)
                 print(f"     Got {len(names)} entities: first='{names[0][:40]}', last='{names[-1][:40]}'")
                 self._record_test(
                     "Sort by hasName ASC", is_sorted,
@@ -138,7 +178,7 @@ class ListEntitiesSortTester:
                         names.append(str(obj.name))
 
             if len(names) >= 2:
-                is_sorted = all(names[i] >= names[i + 1] for i in range(len(names) - 1))
+                is_sorted = _is_ordered(names, descending=True)
                 print(f"     Got {len(names)} entities: first='{names[0][:40]}', last='{names[-1][:40]}'")
                 self._record_test(
                     "Sort by hasName DESC", is_sorted,

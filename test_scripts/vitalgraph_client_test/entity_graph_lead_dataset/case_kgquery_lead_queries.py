@@ -14,6 +14,11 @@ Query Scenarios:
 6. Find converted leads - filter by isConverted=true
 7. Find abandoned leads - filter by abandoned flag
 8. Multi-criteria query - combine multiple frame/slot filters
+
+
+Perf-framework counterpart: tests/performance/test_lead_kgquery_bench.py
+This script stays as the manual exploration tool; the bench is the
+recorded/baselined one. Change a query here and mirror it there.
 """
 
 import logging

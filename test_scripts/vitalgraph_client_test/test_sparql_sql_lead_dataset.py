@@ -26,7 +26,14 @@ from dotenv import load_dotenv
 # ---------------------------------------------------------------------------
 # Path & env setup
 # ---------------------------------------------------------------------------
-project_root = Path(__file__).parent.parent
+# Two entries are needed, and the original had only the second:
+#   project root  -> `vitalgraph` (parent.parent was test_scripts/, one short,
+#                    so `import vitalgraph` failed outright)
+#   test_scripts/ -> the `vitalgraph_client_test.*` case modules below
+# Project root goes first so it is not shadowed by same-named packages under
+# test_scripts/.
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root / "test_scripts"))
 sys.path.insert(0, str(project_root))
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
