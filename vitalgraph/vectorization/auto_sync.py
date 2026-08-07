@@ -64,7 +64,8 @@ async def _sync_vectors_for_subjects(
 
     For upserts with multiple subjects, uses a three-phase approach:
       1. Batch-fetch all literal properties (single DB query)
-      2. Concurrently embed texts (bounded by _VECTOR_CONCURRENCY)
+      2. Embed all texts in one batched provider call (falls back to
+         per-subject, bounded by _VECTOR_CONCURRENCY, if the batch fails)
       3. Sequentially upsert embeddings on the single connection
     """
     from vitalgraph.vectorization.vector_populator import (
@@ -149,23 +150,45 @@ async def _sync_vectors_for_subjects(
         if not to_embed:
             continue
 
-        # Phase 3: Concurrent embedding with bounded parallelism
-        sem = asyncio.Semaphore(_VECTOR_CONCURRENCY)
+        # Phase 3: Batch embedding.
+        #
+        # One request for the whole set, not one per subject.  vectorize_texts
+        # chunks internally at the provider's batch_size (100 for OpenAI), so a
+        # large set is safe; results come back in input order, which Phase 4
+        # relies on when it zips embeddings[i] against to_embed[i].
+        #
+        # This used to fire vectorize_text() per subject through a semaphore of
+        # _VECTOR_CONCURRENCY, i.e. one HTTP round trip per entity/frame/slot
+        # covered by the index — 100 subjects meant 100 requests in 13 waves of
+        # 8.  See issues/038.
         embeddings: List[Optional[List[float]]] = [None] * len(to_embed)
+        texts = [text for _, text in to_embed]
+        try:
+            embeddings = list(await provider.vectorize_texts(texts))
+        except Exception as e:
+            # A batch failure would otherwise lose every subject in the set, so
+            # fall back to per-subject embedding to preserve the previous
+            # behaviour of isolating one bad text from the rest.
+            logger.warning(
+                "auto_sync batch embed %s/%s (%d texts) failed: %s — "
+                "falling back to per-subject",
+                space_id, idx_name, len(texts), e,
+            )
+            sem = asyncio.Semaphore(_VECTOR_CONCURRENCY)
 
-        async def _embed(idx: int, text: str):
-            async with sem:
-                try:
-                    embeddings[idx] = await provider.vectorize_text(text)
-                except Exception as e:
-                    logger.warning(
-                        "auto_sync embed %s/%s/%s failed: %s",
-                        space_id, idx_name, to_embed[idx][0], e,
-                    )
+            async def _embed(idx: int, text: str):
+                async with sem:
+                    try:
+                        embeddings[idx] = await provider.vectorize_text(text)
+                    except Exception as e2:
+                        logger.warning(
+                            "auto_sync embed %s/%s/%s failed: %s",
+                            space_id, idx_name, to_embed[idx][0], e2,
+                        )
 
-        await asyncio.gather(*[
-            _embed(i, text) for i, (_, text) in enumerate(to_embed)
-        ])
+            await asyncio.gather(*[
+                _embed(i, text) for i, text in enumerate(texts)
+            ])
 
         # Phase 4: Sequential upsert on the single connection
         for i, (subj_uuid, _) in enumerate(to_embed):

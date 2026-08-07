@@ -345,9 +345,30 @@ def _allowed_property_uris(type_uri: str):
     cls = _resolve_class(type_uri)
     if cls is not None:
         try:
-            allowed = frozenset(
-                p['uri'] for p in cls().get_allowed_properties() if 'uri' in p
-            )
+            inst = cls()
+            # get_allowed_properties() is NOT the full set: it returns only the
+            # properties reachable through the class's own ontology, so
+            # properties contributed to a base class by *other* ontology
+            # packages are missing.  For KGEntity it returns 34 URIs while
+            # get_allowed_domain_properties() returns 93 — the gap includes
+            # vital-aimp#hasObjectCreationTime, vital-aimp#hasObjectStatusType,
+            # vital#hasObjectModificationDateTime and haley-ai-kg#hasKGGraphURI,
+            # all of which are declared on VITAL_Node (KGEntity's ancestor) and
+            # are perfectly valid.  Warning off the narrow set accused those four
+            # on every single entity fetch while the data round-tripped fine.
+            #
+            # Union both: the domain set is the authoritative inherited view, and
+            # keeping the narrow set costs nothing if the two ever diverge.
+            uris = set()
+            for getter in ('get_allowed_domain_properties', 'get_allowed_properties'):
+                fn = getattr(inst, getter, None)
+                if fn is None:
+                    continue
+                try:
+                    uris.update(p['uri'] for p in fn() if isinstance(p, dict) and 'uri' in p)
+                except Exception as e:  # one accessor failing must not blind the other
+                    logger.debug("Could not read %s for %s: %s", getter, type_uri, e)
+            allowed = frozenset(uris) if uris else None
         except Exception as e:
             logger.debug("Could not read allowed properties for %s: %s", type_uri, e)
 

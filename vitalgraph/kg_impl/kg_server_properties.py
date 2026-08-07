@@ -447,6 +447,27 @@ async def _backfill_one_batch_sql(
         st_val_uuid = await _ensure_term_row(conn, t_term, DEFAULT_STATUS, 'U')
         et_val_uuid = await _ensure_term_row(conn, t_term, DEFAULT_ENTITY_TYPE, 'U')
 
+        # Ensure the PREDICATE terms too, not just the values above.
+        #
+        # These predicates are synthesized by the backfill rather than arriving
+        # through ingestion, so nothing else ever creates their term rows. The
+        # quads still store fine and the "needs backfill" check above still
+        # converges — both derive the UUID with _term_uuid() and never consult
+        # the term table. But a SPARQL query resolves a bound predicate URI
+        # *through* the term table (emit_path.py builds
+        # `predicate_uuid = (SELECT term_uuid FROM term WHERE term_text = ...)`),
+        # which yields NULL and matches nothing — so the backfilled properties
+        # are invisible to queries.
+        #
+        # Observed on wordnet_frames: hasObjectCreationTime returned 0 bindings
+        # via /api/graphs/sparql/query despite 11,400 entities having the quad,
+        # while hasKGEntityType returned rows — the latter only because that
+        # predicate already existed in the source data. The other three had no
+        # term row at all.
+        for _pred_uri in (CREATION_TIME_URI, MODIFICATION_TIME_URI,
+                          STATUS_TYPE_URI, ENTITY_TYPE_URI):
+            await _ensure_term_row(conn, t_term, _pred_uri, 'U')
+
         # For each entity, check which properties are missing and insert
         patched_uris: List[str] = []
         for subj_uuid in entity_uuids:

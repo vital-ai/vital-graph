@@ -117,6 +117,19 @@ class BackfillServerPropertiesTask:
 
         # Configuration
         self.enabled = _env_bool('BACKFILL_ENABLED', True)
+        # Spaces the backfill must leave alone, comma-separated. Unlike
+        # BACKFILL_ENABLED this is per-space, so backfill keeps running
+        # everywhere else.
+        #
+        # The motivating case is benchmark spaces: the task appends ~4 quads per
+        # KGEntity, which on wordnet_frames is ~439K quads over tens of minutes.
+        # That is correct behaviour, but it changes the dataset *while a
+        # performance run is measuring it* — buffer counts drift between runs and
+        # baseline comparisons stop meaning anything.
+        self.exclude_spaces = {
+            s.strip() for s in os.environ.get('BACKFILL_EXCLUDE_SPACES', '').split(',')
+            if s.strip()
+        }
         self.batch_size = _env_int('BACKFILL_BATCH_SIZE', 200)
         self.active_interval = _env_float('BACKFILL_ACTIVE_INTERVAL', 0.5)
         self.idle_timeout = _env_float('BACKFILL_IDLE_TIMEOUT', 1800.0)
@@ -279,6 +292,12 @@ class BackfillServerPropertiesTask:
         """Discover all (space_id, graph_id) pairs with KGEntity data."""
         targets: List[Tuple[str, str]] = []
         spaces = self.space_manager.list_spaces()
+        if self.exclude_spaces:
+            skipped = [s for s in spaces if s in self.exclude_spaces]
+            if skipped:
+                logger.info("Backfill: skipping excluded space(s): %s",
+                            ", ".join(sorted(skipped)))
+            spaces = [s for s in spaces if s not in self.exclude_spaces]
         for space_id in spaces:
             try:
                 graphs = await discover_graphs_sql(self.pool, space_id)

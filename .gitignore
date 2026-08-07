@@ -319,3 +319,6 @@ deploy/fuseki_deploy_test/docker/databases/
 #/test_files/wikipedia/*
 
 planning/*
+
+# Performance run records — machine-local measurements (baselines ARE tracked).
+tests/performance/results/
