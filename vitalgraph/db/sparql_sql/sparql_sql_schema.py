@@ -823,23 +823,19 @@ class SparqlSQLSchema:
             # (tried). It is the LIMIT cost model assuming matching rows are
             # spread uniformly through the index range when they are clustered.
             #
-            # subject_uuid is a trailing KEY column, not INCLUDE, so that with
-            # the first three bound to constants the scan also yields rows IN
-            # subject order. That is what lets a paging LIMIT stop early instead
-            # of sorting the whole match set (issues/047): with subject_uuid in
-            # INCLUDE the ordering is unavailable, the planner adds a blocking
-            # Sort above a Bitmap Heap Scan, and every candidate is probed —
-            # measured 48,034 ms for a 100-row page against 1,289 ms with this
-            # form, and 44-131 s against 1.4-4.0 s for a capped total_count.
+            # Keeping subject_uuid in INCLUDE preserves the covering property:
+            # the object-unbound graph-scoped scan is unchanged — Index Only
+            # Scan, 0 heap fetches, identical buffers. Index size +0.24%.
+            # See issues/039.
             #
-            # Free, in space terms: the same four columns are stored either way,
-            # key or payload. Measured identical to the byte on a 5.06M-quad
-            # space (417 MB both). The covering property is likewise unchanged —
-            # subject_uuid is still in the index, so the object-unbound
-            # graph-scoped scan stays an Index Only Scan with 0 heap fetches.
-            # See issues/039 for how object_uuid became a key, and issues/047
-            # for why subject_uuid had to follow it.
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_ctx_pred ON {t['rdf_quad']} (context_uuid, predicate_uuid, object_uuid, subject_uuid)",
+            # It was briefly promoted to a trailing KEY column, to give the
+            # paging LIMIT of issues/047 an ordered scan to stop on. Reverted:
+            # it made wordnet multi-hop frame traversal ~2x slower —
+            # frame_union 66ms -> 135ms, relationships 38ms -> 71ms — and the
+            # 047 fence (SET LOCAL enable_sort = off) turns out not to need it,
+            # holding at every page size on both anchors with this form. The
+            # ordering it wanted is available from the primary key.
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_ctx_pred ON {t['rdf_quad']} (context_uuid, predicate_uuid, object_uuid) INCLUDE (subject_uuid)",
 
             # Stats: support the capped stats load (ORDER BY row_count LIMIT).
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_rdf_stats_rc ON {t['rdf_stats']} (row_count)",
