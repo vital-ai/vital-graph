@@ -82,7 +82,9 @@ SLOTS = {
     DOUBLE:   ("MQLRating",        65.0,   "LeadStatusFrame", "LeadStatusQualificationFrame"),
     BOOL:     ("MQLv2",            True,   "LeadStatusFrame", "LeadStatusQualificationFrame"),
     INT:      ("MQLRatingPoints",  50,     "LeadStatusFrame", "LeadStatusQualificationFrame"),
-    DATETIME: ("CreatedDate", "2020-01-01T04:24:00",
+    # Must land on the generator's day grid: at second resolution the old
+    # value matched nothing and every datetime cell was vacuous.
+    DATETIME: ("CreatedDate", "2020-06-01T00:00:00",
                                            "LeadStatusFrame", "LeadStatusTimestampsFrame"),
     # Choice slots hold enum URIs, not bare labels — "Working" matched nothing.
     CHOICE:   ("LeadStatus", "urn:acme:kg:enum:LeadStatus:Working",
