@@ -1,79 +1,68 @@
-# The frame_entity Rewrite Returns Wrong Results — Far Too Many Rows
+# The frame_entity Rewrite Cross-Products When the Query Constrains the Edge Node
 
-## Status: OPEN — correctness defect, 2026-08-08
+## Status: FIXED 2026-08-09 — narrower than first recorded
 
-When `rewrite_frame_entity_table` fires, it does not return the same rows as the
-query it replaced. It returns many more.
+An earlier revision of this issue said the rewrite "returns wrong results", full
+stop. That was too broad, and it was based on a query I wrote specifically to
+force the rewrite to fire. On the real queries it returns exactly right answers.
 
-## Measured
+## What is actually true
 
-wordnet_frames, the pattern the rewrite exists for — a frame with a
-`hasSourceEntity` slot group and a `hasDestinationEntity` slot group sharing
-`?frame`, projecting both entities:
+The defect needs one specific ingredient: a constraint on the **edge node**.
 
-| | rows | time |
-|---|---|---|
-| rewrite **OFF** | **285,348** | 7,771 ms |
-| rewrite **ON** | **≥ 1,000,000** (hit the LIMIT) | 5,371 ms |
+| query shape | rewrite | rows ON | rows OFF | |
+|---|---|---|---|---|
+| `?sourceEdge a Edge_hasKGSlot` present | fired | over a million | 285,348 | **WRONG** |
+| frame type constraint only | fires | 285,348 | 285,348 | correct |
+| no type constraints | fires | 285,348 | 285,348 | correct |
 
-285,348 is correct: each frame carries exactly one source and one destination
-slot, so the answer is one row per frame, and `{space}_frame_entity` holds
-exactly 285,348 rows. The rewritten form over-produces by at least 3.5x. An
-unbounded `count(*)` over it did not finish in ten minutes, while the correct
-form counts in about eight seconds.
+285,348 is right — one row per frame, exactly the `frame_entity` row count.
 
-At a 25-row page the defect is invisible and the rewrite looks like a clear win —
-**808 ms against 4,549 ms, a 5.6x speed-up** — because a page of wrong rows
-comes back faster than a page of right ones. That is the shape of the problem:
-every cheap check passes.
+The real queries do not have edge constraints and were never affected:
 
-## Why this matters more than the speed-up
+| query | rewrite ON | rewrite OFF | |
+|---|---|---|---|
+| `FRAME_UNION_SPARQL` ("happy") | 425 rows, 16 ms | 425 rows, 396 ms | MATCH |
+| `RELATIONSHIPS_SPARQL` | 45 rows, 6 ms | 45 rows, 23 ms | MATCH |
 
-The 5.6x is real and shows the traversal table works: collapsing six tables into
-one `frame_entity` row is exactly the join reduction the edge table already
-delivers 8x on elsewhere. The mechanism is sound and the table is populated
-(285,348 rows on wordnet, maintained by insert/delete hooks, resync, backfill and
-drift detection).
+So the rewrite delivers **25x** on the happy frame union and **4x** on
+relationships, correctly, and always did.
 
-It is the rewrite's row semantics that are wrong, not the idea. Until that is
-fixed the table cannot be used, which is the direct answer to "why aren't the
-traversal tables being used".
+## Mechanism
 
-## Not the same as issues/048
+`rewrite_frame_entity_table` remaps each variable position onto a
+`frame_entity` column. A position with no counterpart column was dropped
+*silently*:
 
-`048` is a *different* failure of the same rewrite: on the canonical reference
-query (`vitalgraph_sparql_sql_dev/sql_reference/happy_frame_query.sparql`) it
-emitted SQL referencing a collapsed alias — `missing FROM-clause entry for table
-"mv0"` — and now declines instead. That decline is triggered by a type
-constraint on the **slot** node (`?sourceSlot a KGEntitySlot`), which has no
-column in `frame_entity` to remap onto.
+```python
+new_col = col_map.get(col_name)
+if new_col is None:
+    continue          # <- position discarded
+```
 
-So the rewrite has two independent problems:
+`?sourceEdge` is bound twice: at `mv0.edge_uuid` (collapsed away, no
+frame_entity column) and at the type quad's `subject_uuid` (survives). Dropping
+the first leaves the type quad with nothing tying it to the frame, so it scans
+every `Edge_hasKGSlot` in the space — 1.14M on wordnet — and the result
+multiplies.
 
-1. it cannot carry constraints on the slot node through the collapse, and now
-   declines when it meets one (`048`, fixed by declining);
-2. when it *does* fire, it returns too many rows (this issue, open).
+## Fix
 
-Removing the slot type constraints is what makes it fire — and firing is when
-the over-production appears.
+Decline when a variable loses a position to the collapse *and* is still bound by
+a surviving table. That is exactly the "lost its tie to the frame" condition,
+and it is checkable at the point the position is dropped.
 
-## Likely cause, not yet confirmed
+Verified: the edge-constrained shape now declines and returns 285,348; the two
+safe shapes still fire and still return 285,348; the happy queries are
+unchanged. Full suite clean.
 
-A cross product between the source and destination slot groups. The rewrite
-replaces six tables with one `frame_entity` row precisely to avoid pairing every
-source slot with every destination slot; if the join condition tying the two
-groups to the same frame is dropped rather than absorbed, the result multiplies.
-The row counts are consistent with that, but this has not been traced.
-
-## Reproduce
-
-Query: frame → source slot → entity and frame → dest slot → entity, sharing
-`?frame`, **without** `?slot a KGEntitySlot` type quads (those make it decline
-per `048`). Run with `rewrite_frame_entity_table` monkeypatched to identity and
-compare row counts. 285,348 is the right answer.
+This is the third guard of the same kind on this rewrite — the other two are in
+`issues/048` — and they share a cause: the rewrite removes tables and then
+assumes everything referring to them can be remapped. When it cannot, the
+correct answer is to decline, not to emit something plausible.
 
 ## Related
 
-- `issues/048` — the decline path, and the search error that first mis-scoped this
-- `issues/041` — the same table's staleness detection
+- `issues/048` — the alias-reference guard, and the boundary bug in my first
+  version of it
 - `vitalgraph/db/sparql_sql/rewrite_frame_entity_table.py`
