@@ -68,7 +68,7 @@ from pathlib import Path
 import pytest
 
 from .conftest import skip_no_pg, space_exists
-from .lead_fixtures import SYNTH, require_usable
+from .lead_fixtures import SYNTH, DUP, duplicate_anchor_rows, require_usable
 from .harness import assert_plan, explain_json, total_shared_buffers
 
 pytestmark = [pytest.mark.performance, skip_no_pg,
@@ -126,6 +126,10 @@ EQ_GROWTH_VS_MATCHES_MAX = 1.25
 # The invariant that survives: at similar selectivity a range should cost about
 # what equality costs. Before the push-down it cost ~700x more.
 RANGE_VS_EQUALITY_MAX = 8.0
+# A specific entity type is a *more* selective anchor than the generic
+# vitaltype, so it should never cost materially more. It measured 646x
+# worse before issues/045.
+SPECIFIC_VS_GENERIC_MAX = 3.0
 
 
 async def _require_loaded(conn, fx) -> None:
@@ -173,7 +177,8 @@ def _range_criteria(threshold: float):
                 comparator="gte")])])]
 
 
-async def _criteria_to_sql(conn, frame_criteria, fx) -> str:
+async def _criteria_to_sql(conn, frame_criteria, fx, entity_type=KGENTITY,
+                           page_size=None) -> str:
     from .test_kgquery_generated_sql_plans import _to_builder_frame
     from vitalgraph.sparql.kg_query_builder import (
         KGQueryCriteriaBuilder, EntityQueryCriteria as BuilderEntityQueryCriteria)
@@ -182,11 +187,11 @@ async def _criteria_to_sql(conn, frame_criteria, fx) -> str:
     from vitalgraph.db.sparql_sql.generator import generate_sql
 
     entity_criteria = BuilderEntityQueryCriteria(
-        entity_type=KGENTITY, entity_uris=None,
+        entity_type=entity_type, entity_uris=None,
         frame_criteria=[_to_builder_frame(f) for f in frame_criteria],
         use_edge_pattern=True)
     sparql = KGQueryCriteriaBuilder().build_entity_query_sparql(
-        entity_criteria, fx.graph, PAGE_SIZE, 0)
+        entity_criteria, fx.graph, page_size or PAGE_SIZE, 0)
 
     client = AsyncSidecarClient(SIDECAR_URL)
     try:
@@ -362,3 +367,189 @@ async def test_range_comparator_pays_for_every_candidate(perf_conn, perf_record,
         f"{vs_equality:.1f}x, limit {RANGE_VS_EQUALITY_MAX}. A range predicate "
         f"applied above the join carries every candidate; pushed to the leaf it "
         f"should cost about what equality costs. See issues/040 W2.")
+
+
+# ---------------------------------------------------------------------------
+# The two axes issues/045 and issues/046 travelled on, neither of which the
+# benches above vary.
+# ---------------------------------------------------------------------------
+
+# A specific entity type rather than the generic vitaltype. The builder folds
+# `hasKGEntityType = X` into the same basic graph pattern as the frame chain
+# instead of emitting it as its own group, so collect produces ONE BGP and the
+# semi-join pass has no join node to mark. Left unhandled that was 24.5-32.3s
+# against 2ms on a production copy, silently — the rewrite simply declined.
+SPECIFIC_ENTITY_TYPE = f"{NS}:entity:Lead"
+
+
+@pytest.mark.bench("query.kgquery.entity_type_axis")
+@pytest.mark.parametrize("fx", FIXTURES, ids=[f.label for f in FIXTURES])
+async def test_specific_entity_type_still_pages_cheaply(perf_conn, perf_record, fx):
+    """A specific entity type must page like the generic one (issues/045).
+
+    Asserting on cost rather than on plan shape: how the rewrite becomes
+    reachable is an implementation choice, but a page that costs proportional to
+    the match set is the defect either way.
+    """
+    await _require_loaded(perf_conn, fx)
+    state = EQ_STATES[-1]
+
+    generic = await _criteria_to_sql(perf_conn, _eq_criteria(state), fx)
+    specific = await _criteria_to_sql(perf_conn, _eq_criteria(state), fx,
+                                      entity_type=SPECIFIC_ENTITY_TYPE)
+
+    g_buffers = total_shared_buffers(await explain_json(perf_conn, generic))
+    s_buffers = total_shared_buffers(await explain_json(perf_conn, specific))
+
+    ratio = s_buffers / max(g_buffers, 1)
+    perf_record(
+        dataset=fx.space,
+        metrics={"generic_buffers": g_buffers, "specific_buffers": s_buffers,
+                 "ratio": round(ratio, 2)},
+        notes=f"[{fx.label}] specific vs generic entity type, {PAGE_SIZE}-row page")
+
+    assert ratio <= SPECIFIC_VS_GENERIC_MAX, (
+        f"a specific entity type costs {ratio:.1f}x the generic one "
+        f"({s_buffers:,} vs {g_buffers:,} buffers) — the semi-join rewrite is "
+        f"probably not reaching this shape (issues/045)")
+
+
+@pytest.mark.bench("query.kgquery.no_duplicate_rows")
+@pytest.mark.parametrize("fx", FIXTURES, ids=[f.label for f in FIXTURES])
+@pytest.mark.parametrize("entity_type", [KGENTITY, SPECIFIC_ENTITY_TYPE],
+                         ids=["generic", "specific"])
+async def test_page_has_no_duplicate_entities(perf_conn, fx, entity_type):
+    """Row multiplicity, not just membership (issues/046).
+
+    The original verification for issues/040 checked that a page was a SUBSET of
+    the true match set. A duplicated page is still a subset, so the check could
+    not see the semi-join returning 34,659 rows for 34,423 entities. Membership
+    and multiplicity are different properties; assert the second one too.
+    """
+    await _require_loaded(perf_conn, fx)
+
+    sql = await _criteria_to_sql(perf_conn, _eq_criteria(EQ_STATES[-1]), fx,
+                                 entity_type=entity_type)
+    rows = await perf_conn.fetch(sql)
+    col = next((c for c in ("entity__uuid", "v0__uuid") if rows and c in rows[0].keys()),
+               None)
+    assert col, f"no entity uuid column in {list(rows[0].keys()) if rows else []}"
+
+    seen = [str(r[col]) for r in rows]
+    assert len(seen) == len(set(seen)), (
+        f"page repeats {len(seen) - len(set(seen))} entit(y/ies) — DISTINCT was "
+        f"elided or weakened somewhere below (issues/046)")
+
+
+@pytest.mark.bench("query.kgquery.duplicate_anchor_quads")
+@pytest.mark.parametrize("entity_type", [KGENTITY, SPECIFIC_ENTITY_TYPE],
+                         ids=["generic", "specific"])
+async def test_duplicate_anchor_quads_do_not_reach_the_result(perf_conn, entity_type):
+    """The regression test for issues/046, on data that can actually regress it.
+
+    `test_page_has_no_duplicate_entities` above runs against the generated
+    fixtures, where every triple appears once — so it asserts a property the data
+    guarantees regardless of what the generator does. This one runs against DUP,
+    where 100 of 500 entities carry their anchor quads 2-4 times, and is the only
+    place a reintroduced DISTINCT elision would actually show up.
+    """
+    reason = await require_usable(perf_conn, DUP)
+    if reason:
+        pytest.skip(f"{reason} — build it with "
+                    f"scripts/load_duplicate_quad_dataset.sh")
+
+    # Non-vacuity first. Without this the test passes just as happily against a
+    # fixture with no duplicates, which is the failure mode it exists to close.
+    extra = await duplicate_anchor_rows(perf_conn, DUP)
+    assert extra > 0, (
+        f"{DUP.space} contains no duplicate quads, so this test cannot detect "
+        f"the defect it is named for — regenerate with "
+        f"scripts/load_duplicate_quad_dataset.sh")
+
+    sql = await _criteria_to_sql(perf_conn, _eq_criteria(EQ_STATES[0]), DUP,
+                                 entity_type=entity_type)
+    rows = await perf_conn.fetch(sql)
+    col = next((c for c in ("entity__uuid", "v0__uuid")
+                if rows and c in rows[0].keys()), None)
+    assert col, f"no entity uuid column in {list(rows[0].keys()) if rows else []}"
+
+    seen = [str(r[col]) for r in rows]
+    assert seen, "criteria matched nothing — a page of zero rows has no duplicates"
+    assert len(seen) == len(set(seen)), (
+        f"{len(seen) - len(set(seen))} duplicate entit(y/ies) in a "
+        f"{len(seen)}-row page against a fixture with {extra} duplicate anchor "
+        f"rows — the DISTINCT was elided or weakened below (issues/046)")
+
+
+# The largest page a caller may reasonably ask for and still get the
+# early-terminating plan. Not a tuning knob — it is the claim this test defends.
+# Above the flip the page costs O(matches): measured 48s for 100 rows on a
+# production-shaped space, against 1-2ms for 50 (issues/047).
+MIN_SAFE_PAGE_SIZE = 100
+
+# Where to stop searching. Past this the answer is "no practical limit".
+PAGE_SIZE_SEARCH_MAX = 2000
+
+
+async def _flips_to_blocking_plan(conn, fx, page_size, entity_type=KGENTITY) -> bool:
+    """Does the page plan lose its early-terminating ordered scan at this size?
+
+    Plain EXPLAIN, never ANALYZE: past the flip the query takes minutes, and the
+    whole point is to detect that without paying it. The discriminator is a Sort
+    between the Unique and the scan — the good plan feeds Unique directly from an
+    index scan already in subject order.
+    """
+    sql = await _criteria_to_sql(conn, _eq_criteria(EQ_STATES[0]), fx,
+                                 entity_type=entity_type, page_size=page_size)
+    plan = "\n".join(r[0] for r in await conn.fetch("EXPLAIN " + sql))
+    return "->  Sort" in plan
+
+
+@pytest.mark.bench("query.kgquery.page_size_cliff")
+@pytest.mark.parametrize("fx", FIXTURES, ids=[f.label for f in FIXTURES])
+@pytest.mark.parametrize("entity_type", [
+    pytest.param(KGENTITY, id="generic"),
+    pytest.param(SPECIFIC_ENTITY_TYPE, id="specific",
+                 marks=pytest.mark.xfail(
+                     reason="issues/047 — the split-BGP anchor flips to a "
+                            "blocking sort at 19 rows on 10k, below the "
+                            "default page size of 25",
+                     strict=False)),
+])
+async def test_page_size_before_plan_flip(perf_conn, perf_record, fx, entity_type):
+    """Find the page size at which paging stops being O(page) (issues/047).
+
+    Asserting the *threshold* rather than a fixed page size, because the
+    threshold is data-dependent — 52 on a production copy, 161-180 on the 100k
+    fixture. A test pinned to one page size would certify a bound the other
+    dataset does not honour.
+    """
+    await _require_loaded(perf_conn, fx)
+
+    if await _flips_to_blocking_plan(perf_conn, fx, 1, entity_type):
+        pytest.skip("no early-terminating plan at any page size — this fixture "
+                    "cannot measure the threshold")
+
+    lo, hi = 1, PAGE_SIZE_SEARCH_MAX
+    if not await _flips_to_blocking_plan(perf_conn, fx, hi, entity_type):
+        threshold = None                      # never flips within the range
+    else:
+        while lo + 1 < hi:                    # last size that still plans well
+            mid = (lo + hi) // 2
+            if await _flips_to_blocking_plan(perf_conn, fx, mid, entity_type):
+                hi = mid
+            else:
+                lo = mid
+        threshold = lo
+
+    perf_record(
+        dataset=fx.space,
+        metrics={"max_page_size_before_flip": threshold or PAGE_SIZE_SEARCH_MAX,
+                 "flips_within_range": threshold is not None},
+        notes=f"[{fx.label}] largest page still served by an ordered, "
+              f"early-terminating scan (entity_type={entity_type})")
+
+    assert threshold is None or threshold >= MIN_SAFE_PAGE_SIZE, (
+        f"paging falls back to a blocking plan above {threshold} rows — a "
+        f"caller asking for {threshold + 1} gets a page costing O(matches) "
+        f"rather than O(page) (issues/047)")
