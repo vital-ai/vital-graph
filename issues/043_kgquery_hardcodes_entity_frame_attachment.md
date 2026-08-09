@@ -2,6 +2,41 @@
 
 ## Status: OPEN — whole datasets are unqueryable, silently
 
+**Consolidated with `issues/048` on 2026-08-08.** That issue approached the same
+defect from the connection side and found the missing half. Together they show
+three query paths, each assuming a different entity-to-frame topology, and no
+agreement between them.
+
+Edge kinds actually present, measured:
+
+| | wordnet_frames | sp_lead_synth_10k |
+|---|---|---|
+| `Edge_hasEntityKGFrame` (entity contains frame) | **0** | 40,000 |
+| `Edge_hasKGSlot` (frame contains slot) | 1,141,392 | 775,400 |
+| `Edge_hasKGRelation` (direct entity-to-entity) | **0** | **0** |
+
+And the three paths:
+
+| path | requires | works on |
+|---|---|---|
+| `build_entity_query_sparql` | `Edge_hasEntityKGFrame` | lead only — this issue |
+| `build_relation_query` | `Edge_hasKGRelation` | **nothing**, in any space here — `issues/048` |
+| `rewrite_frame_entity_table` | frame → slot → entity | matches wordnet's data, but is emitted by **no builder** |
+
+So wordnet-shaped data — frames referencing entities through slot values — is
+queryable by **no** KGQuery path at all, while `{space}_frame_entity` maintains
+285,348 rows indexing precisely that topology, for a rewrite nothing reaches.
+The materialised index for the unsupported shape is the one that exists; the
+supported shape's copy of that table is empty.
+
+`Edge_hasKGRelation` appears zero times in wordnet, both lead fixtures, and the
+restored production copy. Whatever the relation query was written against is not
+represented in any data available here.
+
+That makes this a modelling decision rather than three separate bugs: which
+entity-to-frame topologies are supported, and which of the derived tables and
+rewrites should exist to serve them.
+
 `KGQueryCriteriaBuilder` assumes exactly one shape for the entity→frame
 relationship. A KG that models the connection any other way cannot be queried
 through KGQuery at all, at any scale, and gets **zero rows with no error** rather
