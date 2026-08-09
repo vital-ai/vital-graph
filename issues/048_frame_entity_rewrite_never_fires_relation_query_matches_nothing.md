@@ -1,10 +1,78 @@
-# The frame_entity Rewrite May Be a Pessimization — and Nothing Tests It
+# The frame_entity Rewrite Never Fires, and the Relation Query Matches No Data
 
-## Status: SUSPECTED, not confirmed — 2026-08-08
+## Status: SETTLED 2026-08-08 — not a pessimization; dead on every API path
 
-Strong signal from one hand-written query. Recorded so it is not lost, but the
-caveats at the bottom are load-bearing and this should not be acted on before
-they are cleared.
+The original suspicion was that `rewrite_frame_entity_table` might be a
+pessimization: hand-written SPARQL matching its documented pattern produced a
+plan costing 337 billion, driven by a sequential scan of the term table, that
+timed out where the unrewritten form returned in 27s.
+
+Driving the same comparison from the real builder settles it, and the answer is
+neither "it is slow" nor "it is fine":
+
+**1. The rewrite never fires on API output.** With the rewrite enabled,
+`_frame_entity` does not appear in the generated SQL at all. Its pattern —
+a frame with `hasSourceEntity` and `hasDestinationEntity` slot groups — is
+emitted by **no builder in the codebase**. `grep -rl hasSourceEntity
+vitalgraph/sparql vitalgraph/endpoint` returns nothing. It can only be reached
+by hand-written SPARQL, which is how the original signal was produced.
+
+So the 337-billion plan is real but unreachable. Nothing in production is slowed
+by it, because nothing in production runs it.
+
+**2. `{space}_frame_entity` is written and never read.** 285,348 rows are
+maintained on wordnet by `sync_frame_entity_table` — insert hooks, delete hooks,
+resync, backfill and drift detection — for a table no query path consults. That
+is write amplification and a correctness surface (`issues/041`, `043`) bought
+for nothing.
+
+**3. The relation query cannot return wordnet's relations.**
+`kg_connection_query_builder.build_relation_query` looks for direct
+entity-to-entity edges:
+
+```sparql
+?relation_edge vital:vitaltype haley:Edge_hasKGRelation .
+?relation_edge vital:hasEdgeSource ?source_entity .
+?relation_edge vital:hasEdgeDestination ?destination_entity .
+```
+
+`Edge_hasKGRelation` count, measured:
+
+| space | rows |
+|---|---|
+| wordnet_frames | **0** |
+| sp_lead_synth_10k | **0** |
+| sp_sql_lead_dataset | **0** |
+| restored production copy | **0** |
+
+Not one instance anywhere. wordnet models its relations as connection *frames*
+(`hasKGFrameType urn:Edge_WordnetHyponym` plus source/destination entity slots),
+which is exactly the shape `frame_entity` materialises — and exactly what the
+relation query does not ask for. The query returns 0 rows on every dataset
+available here.
+
+So there are two representations of entity-to-entity connection: the frame form,
+which the data uses and `frame_entity` indexes, and the direct-edge form, which
+the API queries. Nothing joins them.
+
+## What to do
+
+This needs a decision rather than a fix, and it is not mine to make:
+
+1. If connections are meant to be frames, `build_relation_query` is querying the
+   wrong shape and the rewrite should be reachable from it.
+2. If they are meant to be direct edges, then `frame_entity` and its sync
+   machinery are maintaining an index for a representation the API abandoned,
+   and should be removed rather than repaired.
+3. Either way the relation path has **no test coverage at all** — no
+   performance test, and nothing that would have noticed it returning 0 rows on
+   every dataset in the repository.
+
+Before acting, confirm against a dataset that exercises relation queries in
+anger. Every space available here is either wordnet-shaped or lead-shaped, and
+neither uses `Edge_hasKGRelation`; a tenant that does would change the picture.
+
+## Evidence
 
 ## Context: the system has two disjoint query families
 
@@ -54,25 +122,12 @@ O(matches) shape `issues/040` addressed on the attribute side. The connection
 path appears never to have had that work — and it has no performance coverage
 at all, which stands regardless of how the rewrite question resolves.
 
-## Why this is not yet a confirmed defect
+## How it was settled
 
-1. **The SPARQL is hand-written**, not produced by
-   `kg_connection_query_builder`. The real relation path may emit a different
-   shape that the rewrite handles correctly.
-2. **Correctness was not established.** The rewritten query times out, so its
-   results could not be compared against the unrewritten ones.
-3. **The obvious controlled test did not work.** Binding the source entity to a
-   constant makes both sides fast — but it also stops the rewrite firing, so it
-   compares nothing.
-
-## To settle it
-
-Drive the comparison from `kg_connection_query_builder.build_relation_query`
-rather than hand-written SPARQL, on wordnet, with the rewrite monkeypatched on
-and off — the same differential harness the shape matrix already uses
-(`scripts/perf_shape_matrix.py`, `run_cell`). That answers both questions at
-once: whether the rewrite fires on real API output, and whether its results
-match.
+Driving the differential from `build_relation_query` rather than hand-written
+SPARQL, rewrite monkeypatched on and off. Both sides produced identical SQL with
+no `_frame_entity` reference, identical plans, identical (empty) results — which
+is what "the rewrite never fires" looks like from the outside.
 
 ## Join reduction is proven — which is why this instance looks like a bug
 
