@@ -18,6 +18,7 @@ This eliminates 5 JOINs per hop.
 
 from __future__ import annotations
 
+import copy
 import logging
 import re
 from typing import Dict, List, NamedTuple, Optional, Set, Tuple
@@ -55,6 +56,10 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
     that form a frame traversal pattern and replaces each group with a
     single frame_entity table lookup.
     """
+    # Kept so a decline can return the plan untouched rather than a
+    # half-rewritten one.
+    original_plan = copy.deepcopy(plan)
+
     if plan.kind != KIND_BGP or not plan.tables:
         for i, child in enumerate(plan.children):
             plan.children[i] = rewrite_frame_entity_table(child, aliases, space_id)
@@ -349,6 +354,28 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
 
         new_tagged.append((new_owner, new_sql))
         new_constraints.append(new_sql)
+
+    # Every reference to a collapsed table must have been remapped. Some cannot
+    # be: frame_entity holds (frame, source_entity, dest_entity), so a
+    # constraint on the SLOT node — `?sourceSlot a KGEntitySlot` in the
+    # canonical query — has no column to remap onto. Emitting anyway produced
+    # SQL PostgreSQL rejects outright:
+    #
+    #     missing FROM-clause entry for table "mv0"
+    #
+    # on the very query this rewrite exists to serve. Declining is the correct
+    # outcome — the query then runs unrewritten, slower but valid — and it is
+    # what the equivalent check in semijoin does when its BGP split cannot be
+    # completed. See issues/048.
+    leftover = sorted(
+        a for a in removed_aliases
+        if any(f"{a}." in sql for sql in new_constraints))
+    if leftover:
+        logger.info(
+            "rewrite_frame_entity_table: declining — constraints still "
+            "reference collapsed table(s) %s with no frame_entity column to "
+            "remap onto (issues/048)", leftover)
+        return original_plan
 
     plan.tagged_constraints = new_tagged
     plan.constraints = new_constraints

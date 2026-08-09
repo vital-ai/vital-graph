@@ -2,75 +2,61 @@
 
 ## Status: SETTLED 2026-08-08 — not a pessimization; dead on every API path
 
-The original suspicion was that `rewrite_frame_entity_table` might be a
-pessimization: hand-written SPARQL matching its documented pattern produced a
-plan costing 337 billion, driven by a sequential scan of the term table, that
-timed out where the unrewritten form returned in 27s.
+The rewrite **does** fire on the query it was built for — the canonical form in
+`vitalgraph_sparql_sql_dev/sql_reference/happy_frame_query.sparql` — and on that
+query it emitted SQL PostgreSQL rejects outright:
 
-Driving the same comparison from the real builder settles it, and the answer is
-neither "it is slow" nor "it is fine":
-
-**1. The rewrite never fires on API output.** With the rewrite enabled,
-`_frame_entity` does not appear in the generated SQL at all. Its pattern —
-a frame with `hasSourceEntity` and `hasDestinationEntity` slot groups — is
-emitted by **no builder in the codebase**. `grep -rl hasSourceEntity
-vitalgraph/sparql vitalgraph/endpoint` returns nothing. It can only be reached
-by hand-written SPARQL, which is how the original signal was produced.
-
-So the 337-billion plan is real but unreachable. Nothing in production is slowed
-by it, because nothing in production runs it.
-
-**2. `{space}_frame_entity` is written and never read.** 285,348 rows are
-maintained on wordnet by `sync_frame_entity_table` — insert hooks, delete hooks,
-resync, backfill and drift detection — for a table no query path consults. That
-is write amplification and a correctness surface (`issues/041`, `043`) bought
-for nothing.
-
-**3. The relation query cannot return wordnet's relations.**
-`kg_connection_query_builder.build_relation_query` looks for direct
-entity-to-entity edges:
-
-```sparql
-?relation_edge vital:vitaltype haley:Edge_hasKGRelation .
-?relation_edge vital:hasEdgeSource ?source_entity .
-?relation_edge vital:hasEdgeDestination ?destination_entity .
+```
+missing FROM-clause entry for table "mv0"
 ```
 
-`Edge_hasKGRelation` count, measured:
+An earlier revision of this issue said the rewrite fires on nothing. That was
+wrong, and wrong because the search was scoped to `vitalgraph/sparql` and
+`vitalgraph/endpoint` and missed `vitalgraph_sparql_sql_dev/`, where the
+reference query and its supporting work live. All entity-to-frame topologies are
+supported by design, and the edge-traversal tables were defined for exactly this
+shape; the finding is a broken rewrite, not an abandoned representation.
 
-| space | rows |
-|---|---|
-| wordnet_frames | **0** |
-| sp_lead_synth_10k | **0** |
-| sp_sql_lead_dataset | **0** |
-| restored production copy | **0** |
+### The bug
 
-Not one instance anywhere. wordnet models its relations as connection *frames*
-(`hasKGFrameType urn:Edge_WordnetHyponym` plus source/destination entity slots),
-which is exactly the shape `frame_entity` materialises — and exactly what the
-relation query does not ask for. The query returns 0 rows on every dataset
-available here.
+`rewrite_frame_entity_table` collapses six tables (2 edge + 2 slot_type + 2
+slot_value) into one `frame_entity` row, and remaps constraints that referenced
+the collapsed aliases. Some constraints cannot be remapped: `frame_entity` holds
+`(frame_uuid, source_entity_uuid, dest_entity_uuid, context_uuid)`, so a
+constraint on the **slot** node has no column to land on. The canonical query has
+exactly that —
 
-So there are two representations of entity-to-entity connection: the frame form,
-which the data uses and `frame_entity` indexes, and the direct-edge form, which
-the API queries. Nothing joins them.
+```sparql
+?sourceSlot a haley-ai-kg:KGEntitySlot .
+```
 
-## What to do
+— an `rdf:type` quad joined via `q8.subject_uuid = mv0.dest_node_uuid`. After
+the collapse `mv0` is gone from the FROM clause, the reference survives, and the
+statement will not plan.
 
-This needs a decision rather than a fix, and it is not mine to make:
+### Fix applied
 
-1. If connections are meant to be frames, `build_relation_query` is querying the
-   wrong shape and the rewrite should be reachable from it.
-2. If they are meant to be direct edges, then `frame_entity` and its sync
-   machinery are maintaining an index for a representation the API abandoned,
-   and should be removed rather than repaired.
-3. Either way the relation path has **no test coverage at all** — no
-   performance test, and nothing that would have noticed it returning 0 rows on
-   every dataset in the repository.
+The rewrite now checks that no constraint still references a collapsed alias and
+declines if any does, returning the plan untouched. The query then runs
+unrewritten — slower, but valid. This is the same conservative shape as
+`semijoin`'s split-revert: a rewrite that cannot complete must leave no trace,
+because a half-applied one is worse than none.
 
-Before acting, confirm against a dataset that exercises relation queries in
-anger. Every space available here is either wordnet-shaped or lead-shaped, and
-neither uses `Edge_hasKGRelation`; a tenant that does would change the picture.
+Verified: the canonical query goes from `UndefinedTableError` to running, with
+results identical to the unrewritten path. Full suite clean.
+
+### Still open
+
+Declining is correct but it is not the goal. `{space}_frame_entity` holds
+285,348 rows on wordnet and is now, in practice, still unused for this query —
+the acceleration it exists to provide is not being delivered. Making the rewrite
+handle slot-level constraints (by proving them redundant, or by keeping a slot
+column) is the work that would actually pay for the table.
+
+And separately, unchanged by this: `build_relation_query` looks for
+`Edge_hasKGRelation`, of which there are zero instances in wordnet, both lead
+fixtures and the restored production copy. That path has no test coverage and
+returns nothing on every dataset available here.
 
 ## Evidence
 
