@@ -4,7 +4,7 @@ sys.path.insert(0, os.getcwd()); sys.path.insert(0, os.path.join(os.getcwd(), "s
 import asyncpg
 from perf_shape_matrix import build_criteria, sql_for, COMPARATORS, SLOTS, KGENTITY
 SP  = os.environ.get("TSPACE", "sp_lead_synth_100k")
-GR  = os.environ.get("TGRAPH", "urn:lead_synth_100k")
+GR  = os.environ.get("TGRAPH", "urn:sp_lead_synth_100k")
 DSN = os.environ.get("TDSN", "postgresql://hadfield@localhost:5432/sparql_sql_graph")
 SIDE= os.environ.get("TSIDE", "http://localhost:7070")
 BUDGET = float(os.environ.get("TBUDGET", "60"))

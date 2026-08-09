@@ -24,7 +24,7 @@ single file and a generated dataset arrives as shards.
 
     # generated lead fixture (sharded)
     python scripts/convert_nt_to_csv.py internal_data/lead_synth/lead_syn_*.nt \\
-        --out test_data/lead_synth.csv --graph urn:lead_synth \\
+        --out test_data/lead_synth.csv --graph urn:sp_lead_synth_10k \\
         --dataset lead_synth
 
 The terms CSV is written alongside as `<out-stem>_terms.csv`, which is the

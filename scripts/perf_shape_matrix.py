@@ -41,11 +41,11 @@ multiplicity differs from the baseline, while any subset check passes.
 Usage
 -----
     python scripts/perf_shape_matrix.py --space sp_lead_synth_10k \\
-        --graph urn:lead_synth_10k --out /tmp/matrix.md
+        --graph urn:sp_lead_synth_10k --out /tmp/matrix.md
 
     # plan classification only, no execution (fast, safe on any size)
     python scripts/perf_shape_matrix.py --space sp_lead_synth_100k \\
-        --graph urn:lead_synth_100k --no-execute
+        --graph urn:sp_lead_synth_100k --no-execute
 """
 
 from __future__ import annotations

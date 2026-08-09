@@ -56,8 +56,9 @@ REAL = LeadFixture("sp_sql_lead_dataset", "urn:sql_lead_dataset", "real100",
                    synthetic=False)
 
 SYNTH = [
-    LeadFixture("sp_lead_synth_10k", "urn:lead_synth_10k", "10k", "lead_synth"),
-    LeadFixture("sp_lead_synth_100k", "urn:lead_synth_100k", "100k",
+    LeadFixture("sp_lead_synth_10k", "urn:sp_lead_synth_10k", "10k",
+                "lead_synth"),
+    LeadFixture("sp_lead_synth_100k", "urn:sp_lead_synth_100k", "100k",
                 "lead_synth_100k"),
 ]
 

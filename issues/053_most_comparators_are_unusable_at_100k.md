@@ -97,7 +97,7 @@ these as `set-based` rather than broken. Only timing at scale separates the two.
 
 Sweep with timing rather than plan classification:
 
-    TSPACE=sp_lead_synth_100k TGRAPH=urn:lead_synth_100k \
+    TSPACE=sp_lead_synth_100k TGRAPH=urn:sp_lead_synth_100k \
       python scripts/perf_comparator_timing.py
 
 ## Suggested order
