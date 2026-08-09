@@ -30,8 +30,32 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
+import sys
 
 import pytest
+
+# Loaded by PATH, not by package name. `import scripts.perf_shape_matrix` is
+# ambiguous in this repo: tests/conformance/conftest.py prepends
+# vitalgraph_sparql_sql_dev to sys.path, and that directory contains a real
+# `scripts/` package with an __init__.py, which then shadows the repo-root
+# namespace package. Collected alone this file passed; collected alongside
+# tests/conformance every case failed with ModuleNotFoundError. Which suite
+# wins a name should not decide whether these assertions run.
+_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+
+def _load_matrix():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_vg_perf_shape_matrix", _ROOT / "scripts" / "perf_shape_matrix.py")
+    mod = importlib.util.module_from_spec(spec)
+    # Registered before executing: @dataclass resolves its own module through
+    # sys.modules, and without this the decorator raises on the module's first
+    # dataclass rather than anything to do with the import path.
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
 
 from .conftest import skip_no_pg
 from .lead_fixtures import TYPES, require_usable
@@ -128,7 +152,8 @@ CASES = [
 async def test_comparator_returns_the_expected_count(perf_conn, comparator,
                                                      slot_class):
     """The comparator selects exactly the subset the manifest describes."""
-    from scripts.perf_shape_matrix import build_criteria, sql_for
+    matrix = _load_matrix()
+    build_criteria, sql_for = matrix.build_criteria, matrix.sql_for
 
     reason = await require_usable(perf_conn, TYPES)
     if reason:
