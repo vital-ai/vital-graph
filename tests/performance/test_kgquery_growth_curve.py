@@ -267,15 +267,16 @@ async def test_page_cost_vs_match_count_equality(perf_conn, perf_record, fx, sta
 @pytest.mark.bench("query.kgquery.growth_ratio")
 @pytest.mark.parametrize("fx", FIXTURES, ids=[f.label for f in FIXTURES])
 @pytest.mark.xfail(
-    reason="EQ_GROWTH_VS_MATCHES_MAX was calibrated against a hand-made "
-           "idx_*_quad_ctx_pred_subj that only sp_lead_synth_10k carried and "
-           "the schema never creates. With the schema's own index the ratio is "
-           "12.6x, not 7.4x. Promoting subject_uuid to a key column would "
-           "restore it, and was tried and REVERTED: it doubled wordnet "
-           "multi-hop traversal (frame_union 66ms -> 135ms). So either the gate "
-           "needs recalibrating against the real index configuration, or "
-           "O(page) genuinely does not hold at this scale without an index the "
-           "product does not ship. Do not 'fix' by loosening the constant.",
+    reason="This ratio compares two DIFFERENT plan strategies, so it does not "
+           "measure O(page). EQ_STATES spans semijoin.MIN_SELECTIVITY (0.05): "
+           "CA is 908/10000 = 0.091 and takes the probe path, VT is "
+           "96/10000 = 0.010 and falls back to the set-based plan. Dividing a "
+           "probe-path buffer count by a set-based one is a comparison of "
+           "algorithms, not of scaling. It passed previously only because "
+           "sp_lead_synth_10k carried a hand-made 4-key index that changed "
+           "absolute buffers on the probe path; that index doubled wordnet "
+           "traversal time and was reverted. Fix by splitting the curve at the "
+           "gate and asserting within each regime, not by moving the constant.",
     strict=False)
 async def test_growth_ratio_equality(perf_conn, perf_record, fx):
     """The fix, as one number: page cost against a 9.5x change in match count."""
