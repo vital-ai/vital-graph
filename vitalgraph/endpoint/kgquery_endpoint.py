@@ -39,6 +39,38 @@ from ..auth.role_dependencies import require_space_read
 TOTAL_COUNT_CAP = 1000
 
 
+async def _gather_cancelling(*coros):
+    """`asyncio.gather` that cancels the survivors when one leg fails.
+
+    Python's `gather` propagates the first exception immediately but leaves the
+    other awaitables running. Here each leg is a database query holding its own
+    pool connection, so the losing leg becomes server-side work with nobody
+    waiting for it and no accounting. Reproduced directly: with one leg failing
+    at 3s, the other was still in `pg_stat_activity` 6s later and ran to
+    completion.
+
+    That this matters is not theoretical. A `psql` killed by shell timeout left
+    a backend plus two parallel workers scanning a 22.4M-row table for eighteen
+    hours, which wasted the CPU and also skewed every timing taken on that
+    cluster meanwhile. See issues/044.
+
+    Cancelling is enough to stop the query: asyncpg turns task cancellation into
+    a PostgreSQL CancelRequest and the backend disappears from
+    `pg_stat_activity` immediately. The second gather is what makes that true —
+    it waits for the cancellations to actually be delivered, rather than
+    returning while the queries are still winding down.
+    """
+    tasks = [asyncio.ensure_future(c) for c in coros]
+    try:
+        return await asyncio.gather(*tasks)
+    except BaseException:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+
 class KGQueriesEndpoint:
     """REST API endpoint for KG entity-to-entity connection queries."""
     
@@ -283,7 +315,7 @@ class KGQueriesEndpoint:
                 results = await backend.execute_sparql_query(space_id, sparql_query)
             else:
                 # First page: run both in parallel for lowest latency
-                results, count_results = await asyncio.gather(
+                results, count_results = await _gather_cancelling(
                     backend.execute_sparql_query(space_id, sparql_query),
                     backend.execute_sparql_query(space_id, count_query),
                 )
@@ -526,7 +558,7 @@ class KGQueriesEndpoint:
                     space_id, sparql_query, multi_vector_config=_mv_config)
             else:
                 # First page: run both in parallel for lowest latency
-                results, count_results = await asyncio.gather(
+                results, count_results = await _gather_cancelling(
                     backend.execute_sparql_query(
                         space_id, sparql_query, multi_vector_config=_mv_config),
                     backend.execute_sparql_query(space_id, count_query),
@@ -713,7 +745,7 @@ class KGQueriesEndpoint:
                     )
                 results = await backend.execute_sparql_query(space_id, sparql_query)
             elif want_count:
-                results, count_results = await asyncio.gather(
+                results, count_results = await _gather_cancelling(
                     backend.execute_sparql_query(space_id, sparql_query),
                     backend.execute_sparql_query(space_id, count_query),
                 )
@@ -871,7 +903,7 @@ class KGQueriesEndpoint:
                     )
                 results = await backend.execute_sparql_query(space_id, sparql_query)
             else:
-                results, count_results = await asyncio.gather(
+                results, count_results = await _gather_cancelling(
                     backend.execute_sparql_query(space_id, sparql_query),
                     backend.execute_sparql_query(space_id, count_query),
                 )
@@ -1302,7 +1334,7 @@ class KGQueriesEndpoint:
                 results = await backend.execute_sparql_query(
                     space_id, sparql_query, multi_vector_config=_mv_config)
             else:
-                results, count_results = await asyncio.gather(
+                results, count_results = await _gather_cancelling(
                     backend.execute_sparql_query(
                         space_id, sparql_query, multi_vector_config=_mv_config),
                     backend.execute_sparql_query(space_id, count_query),
