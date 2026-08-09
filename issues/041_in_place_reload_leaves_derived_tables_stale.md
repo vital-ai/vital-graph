@@ -27,6 +27,23 @@ while it runs. Doing that unattended on a maintenance tick is a worse failure
 than the one being repaired, so the job logs loudly and leaves the decision to
 an operator.
 
+**Context is part of the check, added 2026-08-09 after the probe missed a real
+instance.** Reloading a space under a DIFFERENT graph URI leaves every edge row
+pointing at the old context. The `edge_uuid`s still resolve, so the original
+identity-only probe reported a healthy 0% — while every edge-rewrite query
+filtered on the new context and matched nothing.
+
+That is not hypothetical: `sp_lead_synth_100k` was reloaded from
+`urn:lead_synth_100k` to `urn:sp_lead_synth_100k`, and a criterion with 9,220
+expected matches returned **0 rows in 154 seconds**. Counts agreed
+(4,977,000 = 4,977,000), the orphan rate read 0%, and the plan showed the anchor
+scanning all 100,000 entities with the probe matching on none of them. With the
+context in the probe it reads 100% and is caught.
+
+Worth stating plainly: the first version of this detector would not have caught
+the failure it was written for, had that failure arrived via a graph rename
+rather than a data reload. Both are "reloaded in place".
+
 What remains open is the underlying cause — that an in-place reload has no way
 to signal its derived tables — and the fact that the same argument applies to
 `{space}_frame_entity`, which has no equivalent probe.

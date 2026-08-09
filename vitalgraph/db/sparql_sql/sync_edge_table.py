@@ -277,6 +277,15 @@ async def edge_table_orphan_rate(conn, space_id: str, sample: int = 200) -> floa
     full resync rather than a backfill — backfill only adds, so it cannot
     repair a table whose existing rows are all wrong.
 
+    The context is part of the check, not just the edge identity. Reloading a
+    space under a DIFFERENT graph URI leaves every edge row pointing at the old
+    context: the edge_uuids still resolve, so an identity-only probe reports a
+    healthy 0%, while every edge-rewrite query filters on the new context and
+    matches nothing. That happened — sp_lead_synth_100k reloaded from
+    urn:lead_synth_100k to urn:sp_lead_synth_100k returned 0 rows for a
+    criterion with 9,220 matches, and this probe called it healthy until the
+    context was added here.
+
     Bounded by `sample`: one index probe each, so a few hundred lookups
     regardless of table size.
     """
@@ -285,11 +294,12 @@ async def edge_table_orphan_rate(conn, space_id: str, sample: int = 200) -> floa
     orphans = await conn.fetchval(
         f"""
         SELECT count(*) FROM (
-            SELECT edge_uuid FROM {t_edge} LIMIT {int(sample)}
+            SELECT edge_uuid, context_uuid FROM {t_edge} LIMIT {int(sample)}
         ) s
         WHERE NOT EXISTS (
             SELECT 1 FROM {t_quad} q
             WHERE q.subject_uuid = s.edge_uuid AND q.predicate_uuid = $1
+              AND q.context_uuid = s.context_uuid
         )
         """, _EDGE_SRC_UUID)
     checked = await conn.fetchval(
