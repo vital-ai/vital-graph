@@ -87,6 +87,19 @@ DUP = LeadFixture("sp_lead_dup", "urn:lead_dup", "dup500", "lead_dup")
 # takes --base-depth for this. Built by scripts/generate_depth_mix_dataset.py.
 DEPTH1 = LeadFixture("sp_lead_depth1", "urn:lead_depth1", "depth1", "lead_depth1")
 
+# A fixture where some slots EXIST but hold NO VALUE (issues/052).
+#
+# Every other fixture emits a value for every slot, so `is_empty` and
+# `not_exists` return nothing and any test over them compares empty sets. That
+# is how a change to SPARQL join semantics nearly shipped on three comparisons
+# that had "matched" while both sides were empty.
+#
+# MQLv2 is emptied for one slot in three and left valued for the rest, so the
+# correct answer is a specific number (334 of 1,000) rather than none or all.
+# Both degenerate ends hide a wrong join equally well.
+# Built by scripts/generate_empty_value_dataset.py.
+EMPTY = LeadFixture("sp_lead_empty", "urn:lead_empty", "empty1k", "lead_empty")
+
 # Everything the API bench can time. The growth curve uses SYNTH only, since it
 # needs the manifest.
 ALL = [REAL] + SYNTH
