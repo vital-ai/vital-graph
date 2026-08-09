@@ -5,11 +5,28 @@ from __future__ import annotations
 import logging
 from typing import Set
 
-from .ir import PlanV2, KIND_TABLE
+from .ir import KIND_BGP, PlanV2, KIND_TABLE
 from .emit_context import EmitContext
 from .var_scope import compute_scope
 
 logger = logging.getLogger(__name__)
+
+
+def _all_required(node, depth: int = 0) -> bool:
+    """True if every variable this subtree binds is necessarily bound.
+
+    Only holds when the subtree contains nothing that can produce an unbound
+    variable: a LEFT JOIN (OPTIONAL), a UNION branch that omits a variable, or
+    a VALUES table carrying UNDEF. Used to drop the SPARQL compatible-mapping
+    disjuncts from a join condition, which is what turns it back into an
+    equijoin PostgreSQL can hash or merge on.
+    """
+    from .ir import KIND_LEFT_JOIN, KIND_UNION, KIND_TABLE, KIND_MINUS
+    if node is None or depth > 12:
+        return False
+    if node.kind in (KIND_LEFT_JOIN, KIND_UNION, KIND_TABLE, KIND_MINUS):
+        return False
+    return all(_all_required(c, depth + 1) for c in (node.children or []))
 
 
 def _boundness_col(alias: str, sql_name: str, info) -> str:
@@ -161,7 +178,36 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
             if right_is_table or left_is_table or is_left:
                 l_null_col = _boundness_col(l_alias, l_sn, left_info)
                 r_null_col = _boundness_col(r_alias, r_sn, right_info)
-                cond = f"({l_null_col} IS NULL OR {r_null_col} IS NULL OR {cond})"
+                # The right-hand disjunct is dead when the right side is a plain
+                # BGP and the variable comes from one of its triples: the ON
+                # clause is evaluated against real right-hand rows, where such a
+                # variable is always bound. A nested OPTIONAL inside the right
+                # side could leave it NULL, which is why this requires KIND_BGP
+                # rather than trusting from_triple alone.
+                #
+                # Dropping it matters because `(a IS NULL OR b IS NULL OR a = b)`
+                # is not an equijoin: PostgreSQL cannot hash or merge on it and
+                # falls back to a nested loop with a join filter. On is_empty —
+                # OPTIONAL + FILTER(!BOUND) — that was over 120s against 1.3s
+                # for the same query with a plain equality (issues/052).
+                def _always_bound(child, info):
+                    # "child.kind is a BGP" was too strict: the left side of a
+                    # LEFT JOIN is usually a JOIN of BGPs, whose variables are
+                    # every bit as bound. What matters is that nothing in the
+                    # subtree can leave a variable unbound — no OPTIONAL, no
+                    # UNION branch that omits it, no VALUES carrying UNDEF.
+                    return (info is not None and info.from_triple
+                            and _all_required(child))
+
+                plain_left_join = (is_left and not right_is_table
+                                   and not left_is_table)
+                disjuncts = []
+                if not (plain_left_join and _always_bound(left_child, left_info)):
+                    disjuncts.append(f"{l_null_col} IS NULL")
+                if not (plain_left_join and _always_bound(right_child, right_info)):
+                    disjuncts.append(f"{r_null_col} IS NULL")
+                if disjuncts:
+                    cond = "(" + " OR ".join(disjuncts + [cond]) + ")"
             on_parts.append(cond)
         on_clause = " AND ".join(on_parts)
         ctx.log("join", f"ON: {', '.join(on_parts[:3])}{'...' if len(on_parts) > 3 else ''}")

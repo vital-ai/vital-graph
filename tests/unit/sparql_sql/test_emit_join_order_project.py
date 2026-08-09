@@ -210,8 +210,20 @@ class TestEmitJoin:
         sql = emit_join(plan, ctx)
         assert "ON TRUE" in sql
 
-    def test_left_join_shared_var(self):
-        """LEFT JOIN with shared var → NULL-tolerant ON."""
+    def test_left_join_shared_var_required_sides_is_a_plain_equijoin(self):
+        """Both sides required → plain equijoin, no compatible-mapping disjuncts.
+
+        SPARQL's compatible-mapping rule says an unbound variable matches
+        anything, which is emitted as `(l IS NULL OR r IS NULL OR l = r)`. When
+        neither side can produce an unbound value — no OPTIONAL, UNION or VALUES
+        anywhere beneath — those disjuncts are dead, and keeping them is not
+        free: the condition stops being an equijoin, so PostgreSQL cannot hash
+        or merge on it and falls back to a nested loop with a join filter. An
+        `is_empty` criterion took over 120s that way and 1.5s without.
+
+        The NULL-extension that OPTIONAL requires still happens — it comes from
+        the LEFT JOIN itself, not from the ON clause.
+        """
         from vitalgraph.db.sparql_sql.emit_join import emit_left_join
         ctx = _make_ctx({})
         left = self._bgp_with_var("x")
@@ -219,7 +231,24 @@ class TestEmitJoin:
         plan = PlanV2(kind=KIND_LEFT_JOIN, children=[left, right])
         sql = emit_left_join(plan, ctx)
         assert "LEFT JOIN" in sql
-        assert "IS NULL" in sql  # NULL-tolerant for compatible-mapping
+        assert "IS NULL" not in sql
+
+    def test_left_join_keeps_null_tolerance_when_a_side_can_be_unbound(self):
+        """A nested OPTIONAL under one side → disjuncts must come back.
+
+        This is the case the compatible-mapping form exists for: sequential
+        OPTIONALs sharing a variable, where the inner one may leave it unbound.
+        """
+        from vitalgraph.db.sparql_sql.emit_join import emit_left_join
+        ctx = _make_ctx({})
+        left = self._bgp_with_var("x")
+        nested = PlanV2(kind=KIND_LEFT_JOIN,
+                        children=[self._bgp_with_var("x"),
+                                  self._bgp_with_var("x")])
+        plan = PlanV2(kind=KIND_LEFT_JOIN, children=[left, nested])
+        sql = emit_left_join(plan, ctx)
+        assert "LEFT JOIN" in sql
+        assert "IS NULL" in sql
 
     def test_left_join_with_exprs(self):
         """LEFT JOIN with filter expressions → appended to ON clause."""
