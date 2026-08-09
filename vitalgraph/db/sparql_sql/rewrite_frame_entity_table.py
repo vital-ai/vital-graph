@@ -280,13 +280,25 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
 
     # --- Rewrite variable positions ---
     seen_positions: Set[Tuple[str, str]] = set()
+    # A variable that loses a position here because frame_entity has no column
+    # for it, but is STILL bound by a surviving table, has quietly lost its tie
+    # to the frame — and an unconstrained quad table is a cross product.
+    #
+    # That is issues/051: `?sourceEdge a Edge_hasKGSlot` binds the edge variable
+    # both at mv0.edge_uuid (collapsed away) and at the type quad's subject
+    # (surviving). Dropping the first leaves the type quad scanning every
+    # Edge_hasKGSlot in the space. Measured on wordnet: 285,348 rows correct,
+    # over a million produced, and an unbounded count that would not finish.
+    broken: List[str] = []
     for _var_name, slot in plan.var_slots.items():
         new_positions = []
+        lost_to_fe = False
         for ref_id, col_name in slot.positions:
             if ref_id in alias_map:
                 new_fe, col_map = alias_map[ref_id]
                 new_col = col_map.get(col_name)
                 if new_col is None:
+                    lost_to_fe = True
                     continue
                 pos_key = (new_fe, new_col)
                 if pos_key not in seen_positions:
@@ -294,7 +306,16 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
                     seen_positions.add(pos_key)
             else:
                 new_positions.append((ref_id, col_name))
+        if lost_to_fe and any(ref not in alias_map for ref, _ in new_positions):
+            broken.append(_var_name)
         slot.positions = new_positions
+    if broken:
+        logger.info(
+            "rewrite_frame_entity_table: declining — %s would lose the binding "
+            "that ties them to the frame while still being bound by a "
+            "surviving table, which reads as a cross product (issues/051)",
+            sorted(broken))
+        return original_plan
     plan.var_slots = {k: v for k, v in plan.var_slots.items() if v.positions}
 
     # --- Rewrite constraints ---
