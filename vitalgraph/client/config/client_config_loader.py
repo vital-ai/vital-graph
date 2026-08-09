@@ -180,11 +180,21 @@ class VitalGraphClientConfig:
         """
         Get the read/write timeout in seconds for a single attempt.
 
+        Must not be below the server's own per-statement fence, currently 60s
+        (`command_timeout` in sparql_sql_db_impl). At 30s the client always gave
+        up first, so the server never got to surface the error — it just kept
+        executing an abandoned query while the client retried and started a
+        second copy of it. See issues/044.
+
+        Matching the 60s request budget also means a timed-out request is not
+        retried, which is the intent: a query cancelled for taking too long is
+        not a transient fault, and retrying it doubles load at the worst moment.
+
         Returns:
             Timeout in seconds
         """
         client_config = self.get_client_config()
-        return float(client_config.get('timeout', 30))
+        return float(client_config.get('timeout', 60))
 
     def get_connect_timeout(self) -> float:
         """

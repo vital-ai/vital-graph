@@ -39,7 +39,7 @@ So the enforcement table is:
 |---|---|---|
 | server per-statement cancel | 60s | `command_timeout` default, `sparql_sql_db_impl.py:138` |
 | server pool acquire | 15s | `DEFAULT_ACQUIRE_TIMEOUT`, `pool.py:33` |
-| client per-attempt read timeout | 30s | `LOCAL_CLIENT_TIMEOUT` in `.env` |
+| client per-attempt read timeout | **60s** (was 30s — see below) | `LOCAL_CLIENT_TIMEOUT`, and the loader default |
 | client per-call wall-clock budget | 60s | `request_budget`, `client_config_loader.py:224` |
 | client retries | 3 | `LOCAL_CLIENT_MAX_RETRIES` |
 
@@ -206,16 +206,25 @@ two seconds cold and under 50 ms warm.
 That makes the timer ordering tractable, where before it was not: no fence could
 accommodate a 51–130 s capped count, so item (3) had no solution. It does now.
 
-**Proposed ordering** — the constraint is `pool.py`'s own docstring, that the
-server should surface the failure before the client abandons and retries blind:
+**Resolved 2026-08-08 by raising the client rather than lowering the server:**
 
-    pool acquire         15 s   (unchanged, already correct)
-    server read fence    20-25 s  (new; clears the 11 s worst case with margin)
-    client per-attempt   30 s   (unchanged)
+    pool acquire         15 s   (unchanged)
+    server read fence    60 s   (unchanged)
+    client per-attempt   60 s   (was 30 s)
     client wall-clock    60 s   (unchanged)
 
-That inverts today's arrangement, where the server fence (60 s) sits *above* the
-client attempt (30 s) so the client is guaranteed to give up first, every time.
+`LOCAL_CLIENT_TIMEOUT` 30 -> 60, and the loader's fallback with it.
+`PROD_CLIENT_TIMEOUT` was already 60, so this also removes a local/production
+divergence that made the fault reproducible only locally.
+
+This is the better direction than the 20-25 s server fence considered earlier.
+Lowering the server would have required splitting read and write policy first,
+since bulk load and index rebuild share the pool and legitimately run for
+minutes — a prerequisite that no longer applies.
+
+It also gets item (7) for free. Per-attempt now equals the wall-clock budget, so
+a timed-out request has no room left to retry: a query cancelled for taking too
+long is not a transient fault, and retrying it doubles load at the worst moment.
 
 **The write path must not inherit this.** Bulk load and index rebuild acquire
 from the same pool and are bounded by the same `command_timeout`, so a 20-25 s
