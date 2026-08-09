@@ -125,8 +125,23 @@ def _emit_two_phase(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
     t_alias = f"t_{sn}"
     suffix = " DESC" if direction == "DESC" else ""
 
+    # DISTINCT, and it must stay (issues/046). EXISTS does not multiply the
+    # anchor's rows, but it does not deduplicate them either, and the anchor was
+    # never one row per entity: rdf_quad can hold the same (s,p,o,c) more than
+    # once, differing by quad_uuid/dataset. Measured on a production copy, 82
+    # subjects carried the anchor quad more than once and the page came back
+    # with 34,659 rows for 34,423 entities — the right set, the wrong
+    # multiplicity, which a subset check cannot see.
+    #
+    # DISTINCT ON, not DISTINCT, and the difference is the whole ballgame.
+    # Plain `SELECT DISTINCT x ... ORDER BY x` lets the planner satisfy the
+    # dedup with a HashAggregate and sort afterwards — a blocking node, so every
+    # candidate is probed before LIMIT sees anything. Measured: HashAggregate
+    # over 35,987 rows, 81-122s. `DISTINCT ON` has only one implementation,
+    # Unique over sorted input, so the planner must keep the index-ordered scan
+    # and LIMIT still stops early — 52 probes instead of 35,987.
     conds = list(where_conds) + [f"EXISTS (\n{probe}\n)"]
-    page = (f"SELECT {col_ref} AS {sn}__uuid\n"
+    page = (f"SELECT DISTINCT ON ({col_ref}) {col_ref} AS {sn}__uuid\n"
             f"{from_sql}\n"
             f"WHERE {' AND '.join(conds)}\n"
             f"ORDER BY {col_ref}{suffix}\n"
@@ -142,6 +157,11 @@ def _emit_two_phase(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
         boolean_dt_id=ctx.dt_ids_for_uris([_BOOLEAN_DT]),
         datetime_dt_id_list=ctx.dt_ids_for_uris(_DATETIME_DATATYPES),
     )
+    # This shape is only O(page) while the planner drives it from an ordered,
+    # early-terminating scan. Above a data-dependent LIMIT (measured 19, 52 and
+    # 174 on three datasets) it switches to a blocking Sort and probes every
+    # candidate. Tell the executor, which fences the statement (issues/047).
+    ctx.needs_ordered_scan = True
     ctx.log("slice", f"two-phase page: uuid-only LIMIT {plan.limit}, "
                      f"text resolved after")
     return (f"SELECT {', '.join(cols)}\n"

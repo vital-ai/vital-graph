@@ -30,14 +30,16 @@ def emit_distinct(plan: PlanV2, ctx: EmitContext) -> str:
     """
     from .emit import emit
 
-    # A semi-join below yields at most one row per outer row, so this DISTINCT
-    # removes nothing — and the Unique/HashAggregate it would emit is a
-    # blocking node that stops LIMIT terminating the scan early, which is the
-    # entire point of the rewrite. semijoin.mark_semijoins proves the condition.
-    if plan.hints.get('distinct_redundant'):
-        ctx.log("distinct", "elided: semi-join below guarantees uniqueness")
-        return emit(plan.child, ctx)
-
+    # This DISTINCT used to be elided when a semi-join sat below it, on the
+    # grounds that EXISTS yields at most one row per outer row. That is true and
+    # insufficient (issues/046): EXISTS does not multiply the outer rows, but it
+    # does not deduplicate them either, and the outer side is not one row per
+    # entity whenever the anchor quad is repeated across datasets. The elision
+    # returned 34,659 rows for 34,423 entities on a production copy.
+    #
+    # The blocking-node concern that motivated it is handled where it actually
+    # matters — emit_slice._emit_two_phase deduplicates on the ORDER BY key, so
+    # Unique streams over an ordered scan and LIMIT still stops early.
     if _can_pushdown(plan, ctx):
         return _emit_pushdown(plan, ctx)
 

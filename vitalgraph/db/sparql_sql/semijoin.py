@@ -16,12 +16,21 @@ This pass marks two things, and the second is as important as the first:
 
   hints['semijoin']          on the JOIN — emit the right side as an existence
                              test rather than a join
-  hints['distinct_redundant'] on the DISTINCT above it — EXISTS yields at most
-                             one row per outer row, so the DISTINCT no longer
-                             removes anything, and the Unique/HashAggregate it
-                             emits is a blocking node that stops LIMIT from
-                             terminating the scan early. Leaving it in place
-                             defeats the whole rewrite.
+
+This pass used to also mark hints['distinct_redundant'] on the DISTINCT above,
+reasoning that EXISTS yields at most one row per outer row so the DISTINCT
+removed nothing. That was wrong and is removed (issues/046). EXISTS does not
+multiply the outer rows, but it does not deduplicate them either, and the outer
+side is not one row per entity whenever the same (s,p,o,c) is stored more than
+once — which rdf_quad permits, the rows differing by quad_uuid/dataset. On a
+production copy 82 subjects carried the anchor quad twice or more and the result
+came back with 34,659 rows for 34,423 entities: the right set, the wrong
+multiplicity. Set-membership checks cannot see that, which is how it shipped.
+
+The blocking-node problem the elision was meant to solve is real, and is now
+solved where it belongs: emit_slice._emit_two_phase deduplicates on the ORDER BY
+key itself, so PostgreSQL emits Unique over an already-ordered scan, which
+streams rather than blocks.
 
 WHEN THE REWRITE IS VALID, and every clause matters:
 
@@ -33,8 +42,9 @@ WHEN THE REWRITE IS VALID, and every clause matters:
    matches more than once; EXISTS does not. Without a DISTINCT collapsing them
    anyway the rewrite silently *changes the row count* — the query still runs
    and still looks reasonable. This is what makes the two forms equivalent
-   rather than merely similar, and it is also what makes (2) above safe to
-   remove.
+   rather than merely similar. Note what it does NOT license: the DISTINCT is
+   required for the rewrite to be sound, so it cannot then be removed as
+   redundant (issues/046).
 4. **Shared variables exist.** With none the join is a cartesian product.
 5. **Neither side is a VALUES table.** Those carry UNDEF and join under
    compatible-mapping rules that EXISTS does not reproduce.
@@ -53,6 +63,7 @@ from typing import List, Optional, Set
 
 from .ir import (
     PlanV2,
+    KIND_BGP,
     KIND_JOIN, KIND_LEFT_JOIN, KIND_UNION, KIND_MINUS, KIND_TABLE,
     KIND_PROJECT, KIND_DISTINCT, KIND_REDUCED, KIND_SLICE, KIND_ORDER,
     KIND_FILTER, KIND_EXTEND, KIND_GROUP,
@@ -235,13 +246,160 @@ def _bgps(node, depth: int = 0):
         yield from _bgps(c, depth + 1)
 
 
+_QUAD_KINDS = ("quad", "edge", "frame_entity")
+
+
+def _split_bgp(bgp: PlanV2, key: str) -> Optional[PlanV2]:
+    """Partition one BGP into JOIN(anchor, rest) around `key`, or None.
+
+    The anchor is every quad table binding `key` and nothing else; the rest is
+    everything remaining. The cross-link constraint between them is dropped —
+    the EXISTS correlation replaces it.
+
+    Returns None whenever the shape is not clean, since the whole value here is
+    an optimisation and a wrong split is a wrong answer.
+    """
+    from .ir import TableRef, VarSlot
+
+    slot = bgp.var_slots.get(key)
+    if not slot or len(slot.positions or []) < 2:
+        return None
+
+    bound: dict = {}
+    for var, vs in bgp.var_slots.items():
+        for alias, _col in (vs.positions or []):
+            bound.setdefault(alias, set()).add(var)
+
+    quad_aliases = {t.alias for t in bgp.tables if t.kind in _QUAD_KINDS}
+    anchor_aliases = {a for a in quad_aliases if bound.get(a) == {key}}
+    rest_aliases = quad_aliases - anchor_aliases
+    if not anchor_aliases or not rest_aliases:
+        return None
+    # The probe correlates on `key`, so the rest must bind it somewhere.
+    if not any(key in bound.get(a, set()) for a in rest_aliases):
+        return None
+
+    a_pos = [(al, c) for al, c in slot.positions if al in anchor_aliases]
+    r_pos = [(al, c) for al, c in slot.positions if al in rest_aliases]
+    if not a_pos or not r_pos:
+        return None
+
+    anchor = PlanV2(kind=KIND_BGP)
+    rest = PlanV2(kind=KIND_BGP)
+    for t in bgp.tables:
+        if t.kind in _QUAD_KINDS:
+            (anchor if t.alias in anchor_aliases else rest).tables.append(t)
+
+    # The key's term table has to hang off a column the anchor actually has, so
+    # repoint its join rather than reusing a join_col naming a rest alias.
+    term_tr = next((t for t in bgp.tables if t.alias == slot.term_ref_id), None)
+    if term_tr is not None:
+        anchor.tables.append(TableRef(
+            ref_id=term_tr.ref_id, kind="term", table_name=term_tr.table_name,
+            join_col=f"{a_pos[0][0]}.{a_pos[0][1]}", alias=term_tr.alias))
+
+    anchor.var_slots[key] = VarSlot(name=key, positions=a_pos,
+                                    term_ref_id=slot.term_ref_id)
+    rest.var_slots[key] = VarSlot(name=key, positions=r_pos)
+    for var, vs in bgp.var_slots.items():
+        if var == key:
+            continue
+        rest.var_slots[var] = vs
+        tt = next((t for t in bgp.tables if t.alias == vs.term_ref_id), None)
+        if tt is not None:
+            rest.tables.append(tt)
+
+    def _refs(sql: str, aliases_: Set[str]) -> bool:
+        # Constraints are SQL strings in the IR, so alias membership is the only
+        # test available. Aliases are generator-issued (q0, mv1, …), which makes
+        # the prefix match unambiguous.
+        return any(f"{a}." in sql for a in aliases_)
+
+    for tag, c in (bgp.tagged_constraints or []):
+        if tag in anchor_aliases and not _refs(c, rest_aliases):
+            anchor.tagged_constraints.append((tag, c))
+        elif tag in rest_aliases and not _refs(c, anchor_aliases):
+            rest.tagged_constraints.append((tag, c))
+    for c in (bgp.constraints or []):
+        in_a, in_r = _refs(c, anchor_aliases), _refs(c, rest_aliases)
+        if in_a and not in_r:
+            anchor.constraints.append(c)
+        elif in_r and not in_a:
+            rest.constraints.append(c)
+
+    for (al, col), v in (bgp.leaf_terms or {}).items():
+        (anchor if al in anchor_aliases else rest).leaf_terms[(al, col)] = v
+    for (al, col), v in (bgp.range_leaves or {}).items():
+        (anchor if al in anchor_aliases else rest).range_leaves[(al, col)] = v
+
+    logger.info("semijoin: split BGP on ?%s — anchor %s, probe %s",
+                key, sorted(anchor_aliases), sorted(rest_aliases))
+    return PlanV2(kind=KIND_JOIN, children=[anchor, rest])
+
+
+def _split_anchors(node: Optional[PlanV2], distinct_seen: bool,
+                   key: Optional[str], undo: List[tuple]) -> None:
+    """Find `DISTINCT … BGP` chains and split the BGP into a JOIN.
+
+    Whether a two-child JOIN exists at all turns out to depend on the caller's
+    entity type: a generic vitaltype anchor is emitted as its own group and
+    collects into a separate BGP, while a specific one folds into the same basic
+    graph pattern as the rest of the criteria. The rewrite was therefore skipped
+    entirely on the commoner shape — 24.5s versus 4ms on identical criteria
+    (issues/045). Nothing about the rewrite requires two BGPs; it only requires
+    being able to see the boundary, so put one there.
+    """
+    if node is None:
+        return
+    if node.kind in (KIND_DISTINCT, KIND_REDUCED):
+        distinct_seen = True
+    if node.kind == KIND_PROJECT and node.project_vars is not None:
+        key = node.project_vars[0] if len(node.project_vars) == 1 else None
+
+    for i, child in enumerate(list(node.children or [])):
+        if child.kind == KIND_BGP and distinct_seen and key:
+            split = _split_bgp(child, key)
+            if split is not None:
+                node.children[i] = split
+                undo.append((node, i, child, split))
+                continue
+        _split_anchors(child, distinct_seen, key, undo)
+
+
 def mark_semijoins(plan: PlanV2, aliases=None) -> PlanV2:
-    """Annotate eligible JOINs, and the DISTINCT each one makes redundant."""
+    """Annotate the JOINs that can be emitted as existence tests."""
+    # Split first so the walk has a boundary to work with, then UNDO any split
+    # the walk did not go on to mark.
+    #
+    # A split BGP is only equivalent to the original as a semi-join. The split
+    # drops the cross-link constraint tying the two halves together, because
+    # the EXISTS correlation replaces it — so if the gate then declines and the
+    # node stays an ordinary JOIN, that constraint is simply gone. Measured: a
+    # criterion at 1.0% selectivity fell below MIN_SELECTIVITY, kept the split
+    # as a plain join, and returned 0 rows instead of 96. Reverting is what
+    # makes the split safe to attempt speculatively.
+    undo: List[tuple] = []
+    _split_anchors(plan, False, None, undo)
+
     marked: List[PlanV2] = []
     _walk(plan, needed=_root_needed(plan), distinct_node=None, marked=marked,
           aliases=aliases)
+
+    reverted = 0
+    for parent, i, original, split in undo:
+        if not split.hints.get('semijoin'):
+            parent.children[i] = original
+            reverted += 1
+
     if marked:
-        logger.info("semijoin: marked %d join(s)", len(marked))
+        logger.info("semijoin: marked %d join(s) (%d split BGP, %d reverted)",
+                    len(marked), len(undo) - reverted, reverted)
+    else:
+        # Declining is worth a line. Every defect found in this pass so far has
+        # been silent — a dropped leaf_terms field, an unseen range, an
+        # unreachable BGP — and each cost 24s+ per query while looking healthy.
+        logger.info("semijoin: no join rewritten (%d BGP split(s) reverted)",
+                    reverted)
     return plan
 
 
@@ -370,10 +528,6 @@ def _walk(node: Optional[PlanV2], needed: Set[str],
                 and not _contains_values(right)
                 and _selective_enough(left, right, aliases)):
             node.hints['semijoin'] = True
-            # EXISTS yields one row per outer row, so this DISTINCT no longer
-            # removes anything — and as a Unique/HashAggregate it would block
-            # the LIMIT from stopping the scan early.
-            distinct_node.hints['distinct_redundant'] = True
             marked.append(node)
             logger.debug("semijoin: shared=%s right_private=%s",
                          sorted(shared), sorted(right_private))

@@ -248,6 +248,15 @@ class EmitContext:
         # vectorization before SQL execution.  Shared across the entire
         # pipeline (child contexts reference the same list).
         self._vector_requests: List['VectorRequest'] = []
+        # Set by emit_slice._emit_two_phase: this SQL's O(page) property
+        # depends on the planner choosing an ordered, early-terminating scan.
+        # Above a data-dependent LIMIT it stops choosing one and probes every
+        # candidate instead — 48s for a 100-row page against 2ms for 50
+        # (issues/047). The executor uses this to fence the statement.
+        # A one-element list, shared with child contexts the same way the
+        # request lists are, so a SLICE emitted inside a subquery still
+        # surfaces to the executor rather than setting a flag nobody reads.
+        self._needs_ordered_scan = [False]
         # FuzzyRequests: vg:fuzzyMatch calls that need MinHash LSH + RapidFuzz
         # resolution before SQL execution.
         self._fuzzy_requests: List['FuzzyRequest'] = []
@@ -452,6 +461,14 @@ class EmitContext:
         """Pending fuzzy search requests for this query."""
         return self._fuzzy_requests
 
+    @property
+    def needs_ordered_scan(self) -> bool:
+        return self._needs_ordered_scan[0]
+
+    @needs_ordered_scan.setter
+    def needs_ordered_scan(self, value: bool) -> None:
+        self._needs_ordered_scan[0] = bool(value)
+
     def child(self, types: Optional[TypeRegistry] = None) -> EmitContext:
         """Create a child context for nested emission.
 
@@ -477,6 +494,8 @@ class EmitContext:
         ctx._fuzzy_requests = self._fuzzy_requests
         # Share deferred UUIDs list across parent/child contexts
         ctx._deferred_uuids = self._deferred_uuids
+        # Share the ordered-scan flag (issues/047)
+        ctx._needs_ordered_scan = self._needs_ordered_scan
         # Share unresolved-variable records so nested contexts (EXISTS bodies,
         # UNION branches) surface to the same post-generation check
         ctx._unresolved_vars = self._unresolved_vars

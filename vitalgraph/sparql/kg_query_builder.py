@@ -921,6 +921,16 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
         # "more than cap" without enumerating the rest.
         limit_clause = f"LIMIT {cap + 1}" if cap and cap > 0 else ""
 
+        # ORDER BY only when capped, and only to reach a plan shape. A capped
+        # count asks "how many, up to cap", so which entities come back and in
+        # what order is immaterial to the answer. But the SQL generator's
+        # two-phase paging rewrite keys on SLICE-over-ORDER, and without it the
+        # count never takes that path, never gets fenced, and falls off the
+        # plan cliff every time — its bound is cap+1, always past the threshold
+        # (issues/047). Uncapped there is no LIMIT to terminate early anyway,
+        # so ordering would be pure cost.
+        order_clause = "ORDER BY ?entity" if limit_clause else ""
+
         if graph_id is None:
             query = f"""
             {self.prefixes}
@@ -928,7 +938,7 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
             SELECT (COUNT(*) AS ?count) WHERE {{
                 {{ SELECT DISTINCT ?entity WHERE {{
                     {where_clause}{sort_extra_where}
-                }} {limit_clause} }}
+                }} {order_clause} {limit_clause} }}
             }}
             """
         else:
@@ -940,7 +950,7 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
                     GRAPH <{graph_id}> {{
                         {where_clause}{sort_extra_where}
                     }}
-                }} {limit_clause} }}
+                }} {order_clause} {limit_clause} }}
             }}
             """
 

@@ -1416,7 +1416,31 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 if cr.meta.query_type == 'ASK':
                     sql = f"SELECT EXISTS (SELECT 1 FROM ({sql}) _ask_sub) AS _ask_result"
 
-                rows = await conn.fetch(sql)
+                if gen.needs_ordered_scan:
+                    # This plan is O(page) only while PostgreSQL drives it from
+                    # an ordered scan that stops at the LIMIT. Its cost model
+                    # prorates that scan's total by the LIMIT assuming matching
+                    # rows are spread uniformly, which for a 96%-selective
+                    # criterion is wrong by nearly the whole scan — so above a
+                    # data-dependent row count it switches to a blocking Sort
+                    # and probes every candidate. Measured 48s for a 100-row
+                    # page against 2ms for 50, and 51-130s for a capped count.
+                    #
+                    # enable_sort is a discouragement, not a prohibition: if a
+                    # sort is genuinely the only way to plan the query, the
+                    # planner still uses one. So this cannot make the statement
+                    # unplannable — it only removes the cheap-looking blocking
+                    # alternative. SET LOCAL keeps it to this transaction.
+                    #
+                    # A GUC rather than pg_hint_plan because the hint that
+                    # would fix the cause — Rows(), correcting the estimate —
+                    # does not apply here: the EXISTS runs as a SubPlan filter,
+                    # with no join relation to correct. See issues/047.
+                    async with conn.transaction():
+                        await conn.execute("SET LOCAL enable_sort = off")
+                        rows = await conn.fetch(sql)
+                else:
+                    rows = await conn.fetch(sql)
                 t_exec = _time.monotonic()
                 result_rows = [dict(r) for r in rows]
 

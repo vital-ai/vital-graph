@@ -50,6 +50,11 @@ class GenerateResult:
     # FuzzyRequests that need MinHash LSH + RapidFuzz resolution before execution.
     # Non-empty when the query uses vg:fuzzyMatch with a text argument.
     fuzzy_requests: List[Any] = field(default_factory=list)
+    # True when the SQL's O(page) property depends on the planner picking an
+    # ordered, early-terminating scan. The executor fences the statement so it
+    # cannot fall back to a blocking sort over the whole match set
+    # (issues/047).
+    needs_ordered_scan: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -732,6 +737,7 @@ async def generate_sql(
             trace_json=ctx.trace.to_json(),
             vector_requests=ctx.vector_requests,
             fuzzy_requests=ctx.fuzzy_requests,
+            needs_ordered_scan=ctx.needs_ordered_scan,
         )
 
     except Exception as e:
