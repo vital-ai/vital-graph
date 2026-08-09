@@ -378,6 +378,28 @@ def numeric_term_expr(num_dt_ids: str, term_col: str = "term_text",
             f" THEN CAST({term_col} AS NUMERIC) END")
 
 
+# The ISO-8601 date prefix. Guards the parser so it is only called on values
+# that could be dates, keeping the generated column cheap on term tables that
+# are mostly URIs.
+DT_RE = "'^\\d{4}-\\d{2}-\\d{2}'"
+
+
+def datetime_term_expr(dt_type_ids: str, term_col: str = "term_text",
+                       dt_col: str = "datatype_id") -> str:
+    """The canonical ``term_text -> TIMESTAMP`` expression.
+
+    Uses vitalgraph_iso_to_utc rather than a CAST, because a CAST is not
+    immutable and a generated column requires one (issues/053).
+
+    Same exact-match discipline as the numeric expression: this string must be
+    byte-identical everywhere it appears, or the index silently stops matching
+    the push-down's predicate.
+    """
+    return (f"CASE WHEN {dt_col} IN ({dt_type_ids})"
+            f" AND {term_col} ~ {DT_RE}"
+            f" THEN vitalgraph_iso_to_utc({term_col}) END")
+
+
 class TypeRegistry:
     """Manages type information for all variables in the current scope.
 

@@ -286,6 +286,33 @@ _NUMERIC_OPS = {
 }
 _FLIPPED = {"<": ">", "<=": ">=", ">": "<", ">=": "<="}
 
+_XSD = "http://www.w3.org/2001/XMLSchema#"
+_DATETIME_DTS = (f"{_XSD}dateTime", f"{_XSD}date")
+_ISO_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?)?"
+    r"(?:[+-]\d{2}:\d{2}|Z)?$")
+
+
+def _datetime_literal(node) -> Optional[str]:
+    """Lexical form of an xsd:dateTime / xsd:date literal, or None.
+
+    Returned as text and handed to vitalgraph_iso_to_utc rather than parsed
+    here, so the comparison value goes through exactly the same normalisation
+    as the stored column. Parsing it in Python would introduce a second
+    interpretation of ISO-8601 that could disagree with the first.
+
+    The pattern is also the injection guard: anything not matching is refused
+    rather than quoted into SQL.
+    """
+    if not isinstance(node, ExprValue) or not isinstance(node.node, LiteralNode):
+        return None
+    if node.node.datatype not in _DATETIME_DTS:
+        return None
+    value = (node.node.value or "").strip()
+    if not _ISO_RE.match(value):
+        return None
+    return value
+
 
 def _numeric_literal(expr) -> Optional[str]:
     """Return the SQL numeric literal for an ExprValue, or None.
@@ -321,11 +348,18 @@ def _try_numeric_filter(
         return None
 
     left, right = args
+    is_dt = False
     if isinstance(left, ExprVar):
         var_name, literal = left.var, _numeric_literal(right)
+        if literal is None:
+            literal = _datetime_literal(right)
+            is_dt = literal is not None
     elif isinstance(right, ExprVar):
         # Variable on the right: `65 <= ?v` means `?v >= 65`.
         var_name, literal = right.var, _numeric_literal(left)
+        if literal is None:
+            literal = _datetime_literal(left)
+            is_dt = literal is not None
         op = _FLIPPED[op]
     else:
         return None
@@ -346,8 +380,18 @@ def _try_numeric_filter(
     # population rather than driving from the selective leaf. An ordinary column
     # estimates accurately (160 against 99) and the plan follows.
     # See sparql_sql_schema.numeric_term_column.
-    from .sparql_sql_schema import NUMERIC_TERM_COLUMN
-    num_expr = NUMERIC_TERM_COLUMN
+    from .sparql_sql_schema import NUMERIC_TERM_COLUMN, DATETIME_TERM_COLUMN
+    if is_dt:
+        # The datetime column, for the same reason as the numeric one, and the
+        # comparison value is normalised through the same parser so both sides
+        # mean the same instant. Comparing against a raw TIMESTAMP literal
+        # would work only while every stored value carries the same offset.
+        col_expr = DATETIME_TERM_COLUMN
+        value_sql = f"vitalgraph_iso_to_utc('{literal}')"
+    else:
+        col_expr = NUMERIC_TERM_COLUMN
+        value_sql = str(literal)
+    num_expr = col_expr
 
     # No OFFSET 0 fence here. One was needed while the predicate was an
     # expression, to stop the planner folding the subquery into the join and
@@ -356,7 +400,7 @@ def _try_numeric_filter(
     # since a fence also blocks legitimate optimisations.
     constraint_sql = (
         f"{ref_id}.{col_name} IN "
-        f"(SELECT term_uuid FROM {term_table} WHERE {num_expr} {op} {literal})"
+        f"(SELECT term_uuid FROM {term_table} WHERE {num_expr} {op} {value_sql})"
     )
     # Record structurally so the selectivity gate can estimate this leaf.
     bgp.range_leaves[(ref_id, col_name)] = (op, literal)
@@ -376,8 +420,15 @@ def _numeric_var(expr) -> Optional[str]:
     if len(args) != 2:
         return None
     left, right = args
-    if isinstance(left, ExprVar) and _numeric_literal(right) is not None:
+    # Datetimes count too: this gate decides whether _try_numeric_filter is
+    # reached at all, so leaving it numeric-only meant the datetime branch
+    # there was unreachable and dt_val never appeared in a query.
+    def _comparable(node):
+        return (_numeric_literal(node) is not None
+                or _datetime_literal(node) is not None)
+
+    if isinstance(left, ExprVar) and _comparable(right):
         return left.var
-    if isinstance(right, ExprVar) and _numeric_literal(left) is not None:
+    if isinstance(right, ExprVar) and _comparable(left):
         return right.var
     return None

@@ -85,6 +85,20 @@ def numeric_datatype_ids() -> str:
 
 
 NUMERIC_TERM_COLUMN = "num_val"
+DATETIME_TERM_COLUMN = "dt_val"
+
+
+
+def datetime_datatype_ids() -> str:
+    """Comma-separated datatype_ids for xsd:dateTime and xsd:date, in emit order.
+
+    Mirrors ``EmitContext.dt_ids_for_uris(_DATETIME_DATATYPES)``. The order is
+    part of the generated column's expression tree, so it must match the emit
+    side exactly for the index to be usable.
+    """
+    from .emit_bgp import _DATETIME_DATATYPES
+    ids = {uri: i for i, (uri, _n) in enumerate(STANDARD_DATATYPES, start=1)}
+    return ", ".join(str(ids[u]) for u in _DATETIME_DATATYPES if u in ids)
 
 
 def numeric_term_column() -> str:
@@ -113,6 +127,29 @@ def numeric_term_column() -> str:
     from .sql_type_generation import numeric_term_expr
     expr = numeric_term_expr(numeric_datatype_ids())
     return (f"{NUMERIC_TERM_COLUMN} NUMERIC "
+            f"GENERATED ALWAYS AS ({expr}) STORED")
+
+
+def datetime_term_column() -> str:
+    """The generated column that makes datetime range push-down estimable.
+
+    Same purpose as num_val, reached differently. A CAST cannot be used here —
+    it is not immutable — so this leans on `vitalgraph_iso_to_utc`, which
+    assembles the timestamp from parsed components and therefore is. See
+    sparql_sql_admin._VITALGRAPH_ISO_TO_UTC_DDL.
+
+    Being a generated column rather than one the write path maintains is the
+    point: it cannot drift. The alternative was an ordinary column set on
+    insert, which is the shape of every derived-data defect in this codebase
+    (issues/041, 043, and an edge table that was 25% incomplete in production).
+
+    Cost: one timestamp per term row, NULL for every term that is not a date
+    literal. Adding it to an existing space rewrites the table, so it belongs
+    in a migration.
+    """
+    from .sql_type_generation import datetime_term_expr
+    expr = datetime_term_expr(datetime_datatype_ids())
+    return (f"{DATETIME_TERM_COLUMN} TIMESTAMP "
             f"GENERATED ALWAYS AS ({expr}) STORED")
 
 
@@ -528,7 +565,8 @@ class SparqlSQLSchema:
                 datatype_id  BIGINT,
                 created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 dataset      VARCHAR(50) NOT NULL DEFAULT 'primary',
-                {numeric_term_column()}
+                {numeric_term_column()},
+                {datetime_term_column()}
             )
         ''')
 
@@ -791,6 +829,10 @@ class SparqlSQLSchema:
             # numeric_term_column for why that distinction decides everything.
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_num "
             f"ON {t['term']} ({NUMERIC_TERM_COLUMN})",
+            # Same rationale as idx_*_term_num: without it the datetime
+            # push-down's semi-join scans the term table by value.
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_dt "
+            f"ON {t['term']} ({DATETIME_TERM_COLUMN})",
 
             # Quad table indexes — essential for V2 SQL generation
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_pred ON {t['rdf_quad']} (predicate_uuid)",

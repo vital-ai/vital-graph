@@ -68,6 +68,11 @@ _NUMERIC_SLOT_CLASSES = {
     f"{_HALEY_NS}KGLongSlot":     "xsd:integer",
 }
 
+_DATETIME_SLOT_CLASSES = {
+    f"{_HALEY_NS}KGDateTimeSlot",
+    f"{_HALEY_NS}KGDateSlot",
+}
+
 _TEXT_SLOT_CLASSES = {
     f"{_HALEY_NS}KGChoiceOptionSlot",
     f"{_HALEY_NS}KGChoiceSlot",
@@ -1474,6 +1479,14 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
                 escaped_value = f'<{value}>'
             elif (slot_class_uri in _TEXT_SLOT_CLASSES) or (slot_type in _TEXT_SLOT_CLASSES):
                 escaped_value = f'"{value}"^^xsd:string'
+            elif (slot_class_uri in _DATETIME_SLOT_CLASSES) or (slot_type in _DATETIME_SLOT_CLASSES):
+                # Typed, so the SQL layer can recognise it as a datetime and
+                # push the comparison to the indexed dt_val column. Emitted
+                # untyped it reads as a plain string, the push-down declines,
+                # and the range is evaluated above the join over every
+                # candidate — which is why datetime ranges timed out at 100k
+                # while the numeric ones ran in milliseconds (issues/053).
+                escaped_value = f'"{value}"^^xsd:dateTime'
             else:
                 escaped_value = f'"{value}"'
         else:

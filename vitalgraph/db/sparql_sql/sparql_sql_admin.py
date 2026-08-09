@@ -19,6 +19,49 @@ logger = logging.getLogger(__name__)
 
 # DDL for deterministic UUID v5 function — mirrors Python's _generate_term_uuid()
 # exactly, including \x00 separators. Requires pgcrypto extension.
+_VITALGRAPH_ISO_TO_UTC_DDL = """
+-- Parse a strict ISO-8601 literal to a UTC timestamp, IMMUTABLY.
+--
+-- The obvious `CAST(term_text AS TIMESTAMP)` cannot be used in a generated
+-- column: it honours the DateStyle setting, so PostgreSQL rejects it with
+-- "generation expression is not immutable". `to_timestamp` is STABLE for the
+-- same reason. num_val exists only because text->numeric happens to be
+-- immutable — that was luck, not a pattern that generalises (issues/053).
+--
+-- Assembling the value from components avoids the settings dependency
+-- entirely: make_timestamp, make_interval, regexp_match and the text->int
+-- casts are all immutable, so this function genuinely is too. Nothing is
+-- mislabelled, which matters because an IMMUTABLE lie produces wrong answers
+-- after a dump/restore rather than an error.
+--
+-- An explicit offset is applied to normalise to UTC, so
+-- 2020-01-01T12:00:00+05:00 and 2020-01-01T07:00:00+00:00 compare equal — the
+-- case lexicographic comparison on term_text gets silently backwards.
+-- A literal with no offset is taken as UTC. That is a policy choice: the
+-- alternative, ::timestamptz, reads it in the SESSION timezone and is
+-- therefore not immutable and not reproducible.
+--
+-- Returns NULL for anything that is not a strict ISO date/dateTime, which is
+-- what makes it safe to apply across a term table holding URIs and free text.
+CREATE OR REPLACE FUNCTION vitalgraph_iso_to_utc(t text)
+RETURNS timestamp
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $iso$
+SELECT CASE WHEN m IS NULL THEN NULL ELSE
+  make_timestamp(m[1]::int, m[2]::int, m[3]::int,
+                 COALESCE(m[4], '0')::int, COALESCE(m[5], '0')::int,
+                 COALESCE(m[6], '0')::double precision)
+  - make_interval(
+      hours => COALESCE(m[8], '0')::int * CASE WHEN m[7] = '-' THEN -1 ELSE 1 END,
+      mins  => COALESCE(m[9], '0')::int * CASE WHEN m[7] = '-' THEN -1 ELSE 1 END)
+END
+FROM regexp_match(
+  t,
+  '^(\\d{4})-(\\d{2})-(\\d{2})(?:[T ](\\d{2}):(\\d{2}):(\\d{2}(?:\\.\\d+)?))?(?:([+-])(\\d{2}):(\\d{2})|Z)?$'
+) AS m
+$iso$;
+"""
+
+
 _VITALGRAPH_TERM_UUID_DDL = """
 CREATE OR REPLACE FUNCTION vitalgraph_term_uuid(
     p_text text, p_type char(1),
@@ -83,6 +126,7 @@ class SparqlSQLAdmin(DbAdminInterface):
         await db_impl.execute_update("CREATE EXTENSION IF NOT EXISTS vector")
         await db_impl.execute_update("CREATE EXTENSION IF NOT EXISTS postgis")
         await db_impl.execute_update(_VITALGRAPH_TERM_UUID_DDL)
+        await db_impl.execute_update(_VITALGRAPH_ISO_TO_UTC_DDL)
 
         status = await self.check_admin_tables(db_impl)
 
