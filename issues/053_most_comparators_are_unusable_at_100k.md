@@ -36,17 +36,45 @@ And what does not:
 
 ## Three causes, not twenty-one
 
-**1. No typed column for datetimes.** `num_val` is a STORED generated column on
-the term table with its own index, added so numeric ranges could be indexed and
-*estimated* — PostgreSQL does not collect statistics for indexed expressions.
-There is no equivalent for datetimes, so a datetime range compares a CAST
-expression. That is the whole difference between `lte/KGDoubleSlot` at 273ms and
+**1. No typed column for datetimes — and PostgreSQL will not allow the obvious
+one.** `num_val` is a STORED generated column on the term table with its own
+index, added so numeric ranges could be indexed and *estimated*. There is no
+equivalent for datetimes, so a datetime range compares a CAST expression. That
+is the whole difference between `lte/KGDoubleSlot` at 273ms and
 `lte/KGDateTimeSlot` timing out. Term table columns today:
 
     term_uuid, term_text, term_type, lang, datatype_id, created_time,
     dataset, num_val
 
-The fix is the one already taken for numerics, applied again.
+An earlier revision of this issue said "the fix is the one already taken for
+numerics, applied again". **That is wrong, and worth recording.** A generated
+column's expression must be IMMUTABLE, and text-to-timestamp conversion is not:
+
+    text -> numeric              provolatile = i   (immutable)
+    to_timestamp(text, text)     provolatile = s   (stable)
+    text -> timestamp cast       not immutable
+
+`ALTER TABLE ... ADD COLUMN dt_val TIMESTAMP GENERATED ALWAYS AS
+(CAST(term_text AS TIMESTAMP)) STORED` fails outright with *generation
+expression is not immutable*. Timestamp parsing depends on `DateStyle`, so
+PostgreSQL refuses to store a value that a session setting could change.
+`num_val` works only because `text -> numeric` happens to be immutable — that
+was luck, not a pattern to copy.
+
+Real options, none free:
+
+  * a generated **TEXT** column holding the ISO string (a CASE over
+    `term_text` is immutable) and lexicographic comparison, which is correct
+    for ISO-8601 only while every value is written in the same form —
+    inconsistent precision or timezone suffixes break the ordering;
+  * an ordinary column maintained by the write path or a trigger, giving real
+    timestamp semantics at the cost of a maintenance surface, which is the
+    class of thing `issues/041` and `043` are about;
+  * a partial index on `term_text` restricted to the datetime datatypes, with
+    the same lexicographic caveat.
+
+Choosing needs to know whether datetime literals are canonically formatted on
+ingest. They are in the fixtures; whether that holds for real data is unknown.
 
 **2. Negation and anti-joins.** `ne`, `not_exists`, `is_empty`, `not_has`,
 `not_has_any` all time out. `is_empty` was improved from >120s to 1.5s at 10k by
