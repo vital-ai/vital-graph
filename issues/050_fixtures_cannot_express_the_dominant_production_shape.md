@@ -1,6 +1,32 @@
 # The Fixtures Cannot Express Depth-1 Frames — 98% of Production
 
-## Status: OPEN — measured 2026-08-08
+## Status: FIXTURE BUILT 2026-08-08 — depth does not change the conclusions
+
+`scripts/generate_depth_mix_dataset.py` builds a uniformly depth-1 fixture by
+promoting every child frame to attach directly to its entity. Slot count is
+identical before and after (96,925); only depth moves. Loaded as
+`sp_lead_depth1`, registered as `lead_fixtures.DEPTH1`.
+
+**The shape matrix run against it says depth changes nothing.** 46 cells are
+non-vacuous on both the depth-1 and depth-2 fixtures, and **0 differ in plan
+class**; correctness mismatches are 0 on both. So the issues/040/045/046/047
+conclusions, all derived on depth-2 data, do hold on the shape that is 98% of
+production.
+
+That is a null result, and worth having as one: the gap was real and had to be
+closed before anything could be said about it, but having closed it, no finding
+needs revising. What remains open is *cost* rather than plan class — depth-1
+queries carry 6 quad joins against depth-2's 8, so absolute timings recorded on
+depth-2 fixtures remain pessimistic relative to production.
+
+Two things this exercise cost, both worth remembering. The first flatten dropped
+everything under the parent's URI prefix, deleting its three sibling frames —
+46,300 triples per 500 entities, silently. The second flattened only the Company
+chain, leaving every other chain at depth 2, which made every non-Company cell
+vacuous. Both were caught by the matrix's VACUOUS verdict rather than by
+inspection.
+
+## Original finding
 
 Slot URIs encode their frame containment, so nesting depth is directly
 countable. Production against the 10k fixture:

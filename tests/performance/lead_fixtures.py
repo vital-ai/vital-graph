@@ -76,6 +76,17 @@ SYNTH = [
 # something.
 DUP = LeadFixture("sp_lead_dup", "urn:lead_dup", "dup500", "lead_dup")
 
+# A uniformly DEPTH-1 fixture — entity -> frame -> slot (issues/050).
+#
+# Every other fixture is uniformly depth 2, because the generator clones
+# templates that are. Production is 98% depth 1, so until this existed no
+# benchmark ran the dominant shape; all recorded numbers describe the 1.9% case.
+#
+# Criteria against it must address the frame directly rather than through a
+# parent, so a bench using it needs its own depth-1 criteria — the shape matrix
+# takes --base-depth for this. Built by scripts/generate_depth_mix_dataset.py.
+DEPTH1 = LeadFixture("sp_lead_depth1", "urn:lead_depth1", "depth1", "lead_depth1")
+
 # Everything the API bench can time. The growth curve uses SYNTH only, since it
 # needs the manifest.
 ALL = [REAL] + SYNTH

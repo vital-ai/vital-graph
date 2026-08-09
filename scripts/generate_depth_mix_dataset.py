@@ -82,20 +82,17 @@ HAS_ENTITY_FRAME = "<http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame>
 HAS_KG_FRAME = "<http://vital.ai/ontology/haley-ai-kg#Edge_hasKGFrame>"
 EDGE_SOURCE = "<http://vital.ai/ontology/vital-core#hasEdgeSource>"
 
-# The chain to flatten. Chosen because the growth-curve benches already filter
-# on CompanyStateCode, so the depth-1 fixture answers the same criteria.
-PARENT = "companyframe"
-CHILD = "companyaddressframe"
-
+# Every parent -> child chain is flattened, not one named pair. A fixture that
+# is depth 1 for the Company chain and depth 2 everywhere else is not a depth-1
+# fixture — it is a mixture that makes every non-Company cell vacuous, which is
+# exactly what the first version produced.
+_NESTED_RE = re.compile(r":frame:(\w+):0:frame:(\w+):0")
+_PARENT_EDGE_RE = re.compile(r"^(urn:acme:lead:[A-Za-z0-9]+):frame:(\w+):0:edge:to_(\w+)$")
 _SUBJ_RE = re.compile(r"^<([^>]+)>")
 
 
 def flatten(out_dir: Path, every: int) -> dict:
-    """Promote CHILD out from under PARENT for every Nth entity, in place."""
-    nested = f":frame:{PARENT}:0:frame:{CHILD}:0"
-    promoted = f":frame:{CHILD}:0"
-    parent_prefix = f":frame:{PARENT}:0"
-
+    """Promote every child frame to attach directly to its entity."""
     entity_index: dict[str, int] = {}
     flattened: set[str] = set()
     rewired = 0
@@ -108,43 +105,38 @@ def flatten(out_dir: Path, every: int) -> dict:
             m = _SUBJ_RE.match(line)
             subj = m.group(1) if m else ""
             ent = subj.split(":frame:")[0].split(":edge:")[0]
-            if ent.startswith("urn:acme:lead:"):
-                if ent not in entity_index:
-                    entity_index[ent] = len(entity_index)
-                selected = entity_index[ent] % every == 0
-            else:
-                selected = False
-
-            if not selected or nested not in line and parent_prefix not in line:
+            if not ent.startswith("urn:acme:lead:"):
+                keep.append(line)
+                continue
+            if ent not in entity_index:
+                entity_index[ent] = len(entity_index)
+            if entity_index[ent] % every:
                 keep.append(line)
                 continue
 
-            flattened.add(ent)
+            # Collapse every nested pair, repeatedly, so a depth-3 chain lands
+            # at depth 1 rather than 2.
+            new = line
+            while True:
+                collapsed = _NESTED_RE.sub(r":frame:\2:0", new)
+                if collapsed == new:
+                    break
+                new = collapsed
+            if new != line:
+                flattened.add(ent)
 
-            # The child and everything under it moves up a level.
-            if nested in line:
-                keep.append(line.replace(nested, promoted))
-                continue
-
-            # What remains touches the parent frame. Only the edge that carried
-            # parent -> child changes, becoming entity -> child. The parent
-            # itself STAYS: it has three other children
-            # (companyfinancial/identity/operations), and dropping everything
-            # under its prefix deleted those too — 46,300 triples per 500
-            # entities, silently. Re-parenting one child must not disturb its
-            # siblings, or the fixture measures different data rather than the
-            # same data at a different depth.
-            if f"{parent_prefix}:edge:to_{CHILD}" in subj:
-                line = line.replace(nested, promoted)
-                if line.endswith(f"{HAS_KG_FRAME} ."):
-                    line = line.replace(HAS_KG_FRAME, HAS_ENTITY_FRAME)
+            # A parent -> child edge now points entity -> child, so it has to
+            # become an entity-frame edge and be sourced from the entity. Its
+            # own URI keeps the parent segment; that is just its identity.
+            pm = _PARENT_EDGE_RE.match(subj)
+            if pm:
+                if new.rstrip().endswith(f"{HAS_KG_FRAME} ."):
+                    new = new.replace(HAS_KG_FRAME, HAS_ENTITY_FRAME)
                     rewired += 1
-                elif EDGE_SOURCE in line:
-                    line = re.sub(r"<[^>]*:frame:%s:0>" % PARENT, f"<{ent}>", line)
-                keep.append(line)
-                continue
-
-            keep.append(line)                 # parent frame and its siblings
+                elif EDGE_SOURCE in new:
+                    new = re.sub(r"<%s:frame:\w+:0>" % re.escape(ent),
+                                 f"<{ent}>", new)
+            keep.append(new)
 
         shard.write_text("\n".join(keep) + "\n", encoding="utf-8")
 
@@ -152,7 +144,7 @@ def flatten(out_dir: Path, every: int) -> dict:
         "flattened_entities": len(flattened),
         "edges_rewired_to_entity": rewired,
         "flatten_every": every,
-        "chain": f"{PARENT} -> {CHILD}",
+        "chain": "all parent -> child chains",
     }
 
 
