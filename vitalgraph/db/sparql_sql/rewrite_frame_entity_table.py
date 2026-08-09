@@ -102,6 +102,12 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
                     entry["slot_var"] = var_name
 
     if not edge_bindings:
+        # Silent declines are how a materialised table ends up maintained and
+        # unused with nobody able to say why. Every exit says which precondition
+        # failed (issues/048).
+        logger.info("frame_entity rewrite: no edge table bindings — the "
+                    "frame->slot hops were not rewritten to %s_edge first",
+                    space_id)
         return plan
 
     # --- Step 4: Find slot_type and slot_value quads ---
@@ -119,6 +125,11 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
             slot_value_quads.add(q_alias)
 
     if not slot_type_quads or not slot_value_quads:
+        logger.info("frame_entity rewrite: no source/dest slot groups "
+                    "(hasKGSlotType quads matching %s / %s: %d; "
+                    "hasEntitySlotValue quads: %d)",
+                    SOURCE_ENTITY_URI, DEST_ENTITY_URI,
+                    len(slot_type_quads), len(slot_value_quads))
         return plan
 
     # --- Step 5: Build subject/object variable maps for quads ---
@@ -190,6 +201,9 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
             pairs.append((roles["source"], roles["dest"]))
 
     if not pairs:
+        logger.info("frame_entity rewrite: %d slot group(s) but no frame "
+                    "variable carries BOTH a source and a dest group, which "
+                    "is what a frame_entity row represents", len(frame_groups))
         return plan
 
     logger.debug("Frame-entity table rewrite: found %d frame pattern(s)", len(pairs))
@@ -367,14 +381,22 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
     # outcome — the query then runs unrewritten, slower but valid — and it is
     # what the equivalent check in semijoin does when its BGP split cannot be
     # completed. See issues/048.
+    # Alias boundaries matter: the frame_entity alias is "fe" + the edge alias
+    # it replaced, so a substring test for "mv0." also matches "femv0." and
+    # declines on the very constraint the rewrite just created correctly.
+    def _refs(sql: str, alias: str) -> bool:
+        return re.search(rf"(?<![A-Za-z0-9_]){re.escape(alias)}\.", sql) is not None
+
     leftover = sorted(
         a for a in removed_aliases
-        if any(f"{a}." in sql for sql in new_constraints))
+        if any(_refs(sql, a) for sql in new_constraints))
     if leftover:
+        offenders = [c for c in new_constraints
+                     if any(_refs(c, a) for a in leftover)]
         logger.info(
             "rewrite_frame_entity_table: declining — constraints still "
             "reference collapsed table(s) %s with no frame_entity column to "
-            "remap onto (issues/048)", leftover)
+            "remap onto: %s (issues/048)", leftover, offenders[:3])
         return original_plan
 
     plan.tagged_constraints = new_tagged
