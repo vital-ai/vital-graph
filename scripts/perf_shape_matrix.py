@@ -306,6 +306,10 @@ async def main() -> int:
     ap.add_argument("--no-execute", action="store_true",
                     help="classify plans only; skip the differential check")
     ap.add_argument("--only", default=None, help="run one dimension by name")
+    ap.add_argument("--base-depth", type=int, default=2,
+                    help="nesting depth of the base shape. Must match the "
+                         "fixture: a depth-2 base against a depth-1 fixture "
+                         "matches nothing and every cell reports VACUOUS.")
     a = ap.parse_args()
 
     import asyncpg
@@ -317,8 +321,10 @@ async def main() -> int:
     async def sweep(dim, value, **kw):
         if a.only and a.only != dim:
             return
-        crit = build_criteria(**{k: v for k, v in kw.items()
-                                 if k in ("comparator", "slot_class", "depth", "negate")})
+        kwargs = {k: v for k, v in kw.items()
+                  if k in ("comparator", "slot_class", "depth", "negate")}
+        kwargs.setdefault("depth", a.base_depth)
+        crit = build_criteria(**kwargs)
         cell = Cell(dimension=dim, value=value)
         cell = await run_cell(conn, cell, crit, a.space, a.graph,
                               kw.get("entity_type", KGENTITY),
