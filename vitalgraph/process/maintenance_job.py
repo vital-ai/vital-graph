@@ -37,6 +37,10 @@ VACUUM_STALENESS_MINUTES = 30        # skip if vacuumed within this many minutes
 # minus edge rows; resync when it exceeds both an absolute and a relative floor.
 EDGE_DRIFT_MIN_ABS = 1_000           # ignore drift below this many edges
 EDGE_DRIFT_MIN_PCT = 0.01            # ...and below this fraction of edges
+# Above this fraction of sampled edge rows referencing vanished quads, the table
+# is stale rather than incomplete. Set high because a partially-backfilled table
+# has a genuinely low orphan rate; only a wholesale mismatch should trip it.
+EDGE_ORPHAN_STALE_PCT = 0.5
 
 # Cleanup
 CLEANUP_RETENTION_DAYS = 30
@@ -466,20 +470,45 @@ class MaintenanceJob:
         while it runs.  Backfill only *adds* missing edges — deletes stay in
         sync via sync_edge_table_before_delete, so there are no orphans to prune.
         """
-        from ..db.sparql_sql.sync_edge_table import edge_table_drift, backfill_edge_table
+        from ..db.sparql_sql.sync_edge_table import (
+            edge_table_drift, edge_table_orphan_rate, backfill_edge_table)
 
         worst_space = None
         worst_drift = 0
+        stale_space = None
         for space_id in space_ids:
             try:
                 async with self._pool.acquire() as conn:
                     src_quads, edge_rows = await edge_table_drift(conn, space_id)
+                    # Counts agreeing does not mean the rows are right. A space
+                    # reloaded in place leaves an edge table that is a faithful
+                    # materialisation of the PREVIOUS contents — same size,
+                    # disjoint set, every count check green and every frame
+                    # traversal returning nothing (issues/041). Only a
+                    # referential probe sees that.
+                    orphan_rate = await edge_table_orphan_rate(conn, space_id)
             except Exception:
                 continue  # space has no edge table (e.g. non-KG) — skip
+            if orphan_rate > EDGE_ORPHAN_STALE_PCT:
+                stale_space = stale_space or (space_id, orphan_rate)
+                continue
             drift = src_quads - edge_rows
             if drift > max(EDGE_DRIFT_MIN_ABS, int(EDGE_DRIFT_MIN_PCT * src_quads)):
                 if drift > worst_drift:
                     worst_drift, worst_space = drift, space_id
+
+        if stale_space:
+            # Backfill only ADDS rows, so it cannot repair a table whose
+            # existing rows are all wrong. This needs a full rebuild, which
+            # takes ACCESS EXCLUSIVE and blocks edge-rewrite queries — so it is
+            # logged loudly rather than done silently on a maintenance tick.
+            sid, rate = stale_space
+            logger.error(
+                "edge table for %s is STALE, not merely behind: %.0f%% of "
+                "sampled rows reference quads that no longer exist. Every frame "
+                "traversal on this space returns zero rows with no error. "
+                "Backfill cannot fix this; run resync_edge_table(%s). "
+                "See issues/041.", sid, rate * 100, sid)
 
         if not worst_space:
             return None

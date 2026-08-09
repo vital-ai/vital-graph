@@ -1,6 +1,35 @@
 # Reloading a Space In Place Leaves Derived Tables Stale, Undetectably
 
-## Status: OPEN — silent wrong results, not an error
+## Status: DETECTION ADDED 2026-08-08 — repair still manual
+
+`sync_edge_table.edge_table_orphan_rate` samples edge rows and asks whether each
+still corresponds to a `hasEdgeSource` quad. The maintenance job calls it
+alongside the existing drift check and logs an error naming the space when the
+rate exceeds 50%.
+
+Why a second check was needed: `edge_table_drift` compares **counts**, and this
+failure mode has identical counts. Reproduced against a fixture by replacing
+every `edge_uuid` with a fresh value — same 24,885 rows either side:
+
+```
+count_drift = 0        -> "healthy" — MISSED IT
+orphan_rate = 100%     -> "stale"   — caught
+```
+
+0% on every healthy space (wordnet_frames, both lead fixtures, the depth-1 and
+duplicate-quad fixtures), so it does not false-positive. Bounded to a 200-row
+sample, one index probe each, so cost is independent of table size.
+
+**Repair is deliberately not automatic.** Backfill only adds rows, so it cannot
+fix a table whose existing rows are all wrong; that needs `resync_edge_table`,
+which TRUNCATEs and holds ACCESS EXCLUSIVE, blocking every edge-rewrite query
+while it runs. Doing that unattended on a maintenance tick is a worse failure
+than the one being repaired, so the job logs loudly and leaves the decision to
+an operator.
+
+What remains open is the underlying cause — that an in-place reload has no way
+to signal its derived tables — and the fact that the same argument applies to
+`{space}_frame_entity`, which has no equivalent probe.
 
 Replacing a space's quads without going through the API import path leaves
 `{space}_edge` holding rows built from the *previous* contents. Nothing detects

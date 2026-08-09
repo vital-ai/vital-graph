@@ -256,3 +256,44 @@ async def edge_table_drift(conn, space_id: str) -> tuple[int, int]:
         f"SELECT count(*) FROM {t_quad} WHERE predicate_uuid = $1", _EDGE_SRC_UUID)
     edge_rows = await conn.fetchval(f"SELECT count(*) FROM {t_edge}")
     return int(src_quads or 0), int(edge_rows or 0)
+
+
+async def edge_table_orphan_rate(conn, space_id: str, sample: int = 200) -> float:
+    """Fraction of sampled edge rows that no longer correspond to any quad.
+
+    `edge_table_drift` compares COUNTS, which cannot see the failure mode in
+    issues/041: a space reloaded in place leaves an edge table that is a
+    faithful materialisation of the *previous* contents. Observed on wordnet —
+    570,696 quads, 570,696 edge rows, and **zero** edge_uuid values in common.
+    Identical sizes, disjoint sets, every count check green, every frame
+    traversal returning nothing.
+
+    Zero rows is the worst failure mode available here, because an empty result
+    satisfies every upper-bound a performance test asserts.
+
+    This asks a different question: do these rows still refer to anything? Each
+    sampled edge_uuid should appear as the subject of a hasEdgeSource quad. A
+    high orphan rate means stale rather than merely incomplete, and calls for a
+    full resync rather than a backfill — backfill only adds, so it cannot
+    repair a table whose existing rows are all wrong.
+
+    Bounded by `sample`: one index probe each, so a few hundred lookups
+    regardless of table size.
+    """
+    t_edge = f"{space_id}_edge"
+    t_quad = f"{space_id}_rdf_quad"
+    orphans = await conn.fetchval(
+        f"""
+        SELECT count(*) FROM (
+            SELECT edge_uuid FROM {t_edge} LIMIT {int(sample)}
+        ) s
+        WHERE NOT EXISTS (
+            SELECT 1 FROM {t_quad} q
+            WHERE q.subject_uuid = s.edge_uuid AND q.predicate_uuid = $1
+        )
+        """, _EDGE_SRC_UUID)
+    checked = await conn.fetchval(
+        f"SELECT count(*) FROM (SELECT 1 FROM {t_edge} LIMIT {int(sample)}) s")
+    if not checked:
+        return 0.0
+    return float(orphans or 0) / float(checked)
