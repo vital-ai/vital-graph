@@ -1,6 +1,19 @@
 # Covering Index Puts `object_uuid` in INCLUDE, Not a Key — 1,850x Buffer Blowup
 
-## Status: OPEN — diagnosed and fix verified, not applied
+## Status: FIXED 2026-08-07 (schema + migration)
+
+Applied in `1eaf71e` as part of the range push-down work:
+`sparql_sql_schema.py:830` now declares
+`(context_uuid, predicate_uuid, object_uuid) INCLUDE (subject_uuid)`.
+Because the DDL is `IF NOT EXISTS`, **spaces created before that commit keep the
+old two-key index and will never pick the new one up** —
+`scripts/migrate_quad_ctx_pred_index.py` exists to rebuild them, and has to be
+run per space.
+
+Two of the four pre-apply checks below are not recorded as having been done:
+index size on a realistic space, and whether `idx_{space}_quad_po`
+(`sparql_sql_schema.py:800`) is now dead weight for graph-scoped queries. Both
+are follow-ups, not blockers.
 
 `idx_{space}_quad_ctx_pred` is declared
 

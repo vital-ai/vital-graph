@@ -1,21 +1,45 @@
 # KGQuery Paging Costs O(total matches), Not O(page)
 
-## Status: BOTH HALVES FIXED (verified at two scales)
+## Status: BOTH HALVES FIXED (verified at two scales) — but see `issues/045` and `issues/046`
+
+**Coverage caveat, found 2026-08-07.** The paging fix only engages when the plan
+contains a two-child JOIN, and that depends on the caller's `entity_type`: the
+generic `KGEntity` anchor produces one, a *specific* entity type does not. On a
+22.4M-quad production copy the identical criteria run 2–4 ms warm with the
+generic anchor and **24.5–32.3 s** with a specific one, because the rewrite is
+never considered. Every fixture below uses the generic anchor. `issues/045`.
+
+**Correctness regression, same date.** Where the rewrite *does* fire, the
+DISTINCT elision returns duplicate rows: 34,659 rows for 34,423 distinct
+entities on the same production copy, because the anchor pattern matches 82
+subjects more than once. The deduplicated set is exactly right, so the selection
+is correct and only the multiplicity is wrong. The page verification recorded
+below is a **subset** check, which cannot detect duplication. `issues/046`.
 
 ### 2026-08-07: the paging half is fixed
 
-The four lead criteria on `sp_lead_synth_100k` (100,000 entities), first page of
-25, measured on the generated SQL:
+Measured **end to end through the running service** (`POST
+/api/graphs/kgqueries`), median of 4 warm calls, first page of 25:
 
-| criterion | before | after |
-|---|---|---|
-| `mql` | **timeout >30s** | **325 ms** |
-| `hierarchical` | **timeout >30s** | **9 ms** |
-| `high_rated` | **timeout >30s** | **532 ms** |
-| `state_ca` | 909 ms | 928 ms |
+| criterion | before (100k) | 100k | 10k |
+|---|---|---|---|
+| `mql` | **timeout** | **17 ms** | 19 ms |
+| `hierarchical` | **timeout** | **14 ms** | 11 ms |
+| `high_rated` | **timeout** | **27 ms** | 23 ms |
+| `state_ca` | 909 ms | **29 ms** | 31 ms |
 
-At 10,000 entities everything is 1–21 ms. Every page verified as a subset of the
-true match set; DAWG conformance 0 failures.
+Two properties matter more than the absolute numbers:
+
+**100k is no slower than 10k.** Ten times the data, the same latency. That is
+O(page) holding, not a constant-factor win.
+
+**Page size 25 vs 100 now differs by 2–4x.** Under the old behaviour the two
+were nearly identical, because the cost was in computing the match set rather
+than producing the page. Asking for four times the rows now costing more is
+direct evidence the work follows the page.
+
+The full API bench runs 24 cases with **0 failures**. Every page verified as a
+subset of the true match set; DAWG conformance 0 failures.
 
 **How.** Five pieces, none of which works alone — each was measured as neutral
 or a regression on its own, which is why this took several attempts:
@@ -54,6 +78,25 @@ containing entities *outside* the result set, while row counts and timings both
 look correct. Only comparing page membership against the true match set exposed
 it. The emit path now pushes the filter into the probe and **verifies it was
 consumed**, falling back to the set-based join if not.
+
+**The gate has to see range criteria too, and they hide.** A range binds no
+constant object, so the pair lookup finds nothing for it and the gate declines —
+wrong for exactly the queries a range makes broad. It also cannot be found by
+walking the probed subtree for FILTERs, because the FILTER sits *above* the join
+while the predicate it constrains lives below; the two are associated by
+predicate uuid. Missing this read a 0.16%-selective range as 100% selective and
+probed it at 646x the cost, which the growth curve caught.
+
+### The count, once paging was fixed
+
+With the page fast, `total_count` became the remaining reason a request timed
+out: `COUNT(DISTINCT ?entity)` over the whole match set cannot be paged, so it
+costs O(matches) regardless. At 100k the page took 325ms and the count 41.7s.
+
+`include_total_count` is now `no` (default) | `yes` (capped at 1,000, sets
+`total_count_capped`) | `exact`. Capped measures 8.6s at 100k where uncapped did
+not finish inside 120s. `exact` still exceeds the standard client budget at that
+scale — deliberately available, not recommended there.
 
 Note also that page *contents* legitimately differ from before: two-phase paging
 orders by `subject_uuid` rather than URI text (decision D1). Subset-of-truth is

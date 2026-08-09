@@ -1,6 +1,11 @@
 # A Client Giving Up Does Not Stop the Query — The Server-Side Fence Is Per-Statement, Not Per-Request
 
-## Status: OPEN — researched 2026-08-07, original diagnosis partly wrong
+## Status: OPEN — researched 2026-08-07, remeasured 2026-08-08
+
+The original diagnosis was partly wrong (see the correction below). The
+remeasurement changes the *priorities*, not the findings: since `issues/040`,
+`045` and `046` the page query is no longer a contributor at all, and the count
+is the entire unbounded surface.
 
 When a request exceeds the client's time budget the client stops waiting, but
 PostgreSQL keeps executing. The work is not cancelled, the connection is not
@@ -49,6 +54,19 @@ metadata, FTS-index metadata and search-mapping prefetches
 gets its own independent 60s. **Nothing bounds the request as a whole.** This is
 why the symptom reads as "no server-side timeout" even though a fence exists.
 
+**2026-08-08: the two legs are now four orders of magnitude apart.** Measured on
+the 22.4M-quad restored production copy, the standard high-cardinality criteria
+(~34.6k matching entities):
+
+| leg | before `issues/040` | now |
+|---|---|---|
+| page of 50 | 24.5–32.3 s | **2–10 ms** |
+| count, capped at 1,000 | — | **51–130 s** |
+| count, exact | — | did not finish in a 4-minute window |
+
+So the request-level bound in (3) is really a bound on the count. Everything else
+in a KGQuery request is now noise beside it.
+
 ### 2. `asyncio.gather` orphans the sibling query — confirmed
 
 `kgquery_endpoint.py:286, 529, 716, 874, 1305` all run the page query and the
@@ -67,10 +85,17 @@ directly: with one leg failing at 3s, the other leg's query was still in
 `pg_stat_activity` 6s later and ran to completion, holding its pool connection
 the whole time.
 
-So whenever the count query errors or hits its 60s fence, the page query becomes
-an orphan — server-side work with no one waiting for it and no accounting. This
-is the most concrete, code-level source of the "copies left running" observation
-and is fixable independently of any timeout policy.
+So whenever one leg errors or hits its 60s fence, the other becomes an orphan —
+server-side work with no one waiting for it and no accounting.
+
+**2026-08-08: still a real leak, but no longer the main source of orphaned
+work.** When this was written the two legs were comparable in cost, so a failing
+count stranded an expensive page query. With the page now at 2–10 ms, that
+direction strands nothing worth measuring, and the reverse direction (page
+fails, count orphaned) is rare. The bulk of "copies left running" is the count
+outliving the *client*, which is gaps 3 and 4, not this one. Fix it anyway — it
+is a confirmed defect, cheap and local, and it stops being harmless the moment
+the two legs are comparable again.
 
 ### 3. The timers are ordered backwards
 
@@ -127,38 +152,97 @@ statement rather than the request. The comment should say that.
 
 ## Revised fix, in priority order
 
+Reordered 2026-08-08. (1) is unchanged — it is a confirmed leak, cheap and local.
+But the new (2) displaces the timeout-policy work, because a capped count that
+cost tens of milliseconds instead of 51–130 s would leave nothing in a KGQuery
+request that any reasonable fence would ever trip.
+
 1. **Stop orphaning the sibling in `gather`** (5 sites). Wrap in tasks and
    cancel the survivor on first failure, or `return_exceptions=True` plus
    explicit cancellation. Cheap, local, no policy decision needed, and it
    removes a confirmed leak.
-2. **Reorder the timers.** The server fence must be below the client's
+2. ~~**Fix `issues/047`**~~ — **DONE 2026-08-08.** It was the largest
+   contributor to abandoned work, and the numbers this issue was built on no
+   longer hold: a 100-row page went 48,034 → 4 ms, and a capped `total_count`
+   51,368–130,751 → 40–52 ms. What is left that a fence would ever trip is
+   `include_total_count=exact`, which is inherently O(matches) — 2.9–5.6 s on
+   22.4M quads. **Re-derive the timer values in (3)–(6) against that**, not
+   against the numbers recorded below.
+3. **Reorder the timers.** The server fence must be below the client's
    per-attempt timeout, not above it — otherwise the client is guaranteed to
    abandon first, every time. Either lower the read-path fence or raise the
    client attempt timeout; they must not cross.
-3. **Add a per-request bound**, not just per-statement — the metadata
+4. **Add a per-request bound**, not just per-statement — the metadata
    prefetches plus page plus count each carrying their own 60s is the actual
    unbounded surface.
-4. **Set a real `statement_timeout`** on the read path so the limit survives a
+5. **Set a real `statement_timeout`** on the read path so the limit survives a
    stalled loop or a dead worker, instead of relying on asyncpg to be alive to
    enforce it. `analytics_job.py:98` already does this
    (`SET LOCAL statement_timeout = '120s'`) and is the pattern to follow.
-5. **Split read and write policy explicitly.** Today they share one pool and one
+6. **Split read and write policy explicitly.** Today they share one pool and one
    number. Bulk load and index rebuild need their own — currently 60s, almost
    certainly by accident.
-6. **Make timeout non-retryable in the client.** A cancelled-by-timeout query is
+7. **Make timeout non-retryable in the client.** A cancelled-by-timeout query is
    not a transient fault; retrying it doubles load at the worst moment.
-7. **Log at the boundary.** Abandoned work currently produces no log line
+8. **Log at the boundary.** Abandoned work currently produces no log line
    anywhere — it surfaces only as unexplained database load.
 
-Choosing the values in (2)–(5) still needs benchmark numbers: a capped
-`total_count` at 100k measures 6–12s today (issues/040), so any read fence has
-to clear that with margin.
+### The numbers for (3)–(6) — SUPERSEDED, see above
+
+Everything in this section predates the `issues/047` fix. Kept because the
+reasoning about *which* leg constrains the fence still holds; the magnitudes do
+not. Re-measure before choosing a value.
+
+### The numbers as of 2026-08-08, before `047` was fixed
+
+The earlier note here said a capped `total_count` measures 6–12s and that any
+read fence has to clear it. That figure came from the 100k synthetic lead space.
+On the restored production copy the same capped count is **51–130 s** — it blows
+through the 30s client attempt *and* the 60s server fence, every time, on a
+query the user asked to be cheap.
+
+That settles the shape of (3): the fence cannot be chosen to accommodate a capped
+count, because no tolerable fence does. Either the count gets fast, or
+`include_total_count=yes` is a request the server should decline rather than
+attempt. It does **not** need to accommodate the page, which no longer costs
+anything worth fencing.
+
+**Investigated 2026-08-08 — it is `issues/047`.** The semi-join does fire on the
+count query, but above `LIMIT ~51` the planner abandons the early-terminating
+ordered scan for a blocking `Sort → Bitmap Heap Scan` and probes every
+candidate. The count's bound is `cap + 1` = 1001, so it is always past the
+cliff — and so is any `page_size` over ~51, which is the same defect reaching
+the page path. Forcing the ordered plan: 89–209 ms warm against 51–130 s.
+
+This changes what the fence has to accommodate. It is not that counting is
+expensive; it is that one query shape falls off a cost-model cliff. Fix `047`
+and the numbers this section is built on stop being the constraint.
+
+## Observed accidentally, 2026-08-08 — and it cost a day of measurements
+
+A `psql` killed by shell `timeout` left its backend **plus two parallel workers**
+scanning a 22.4M-row table for **18 hours**. Found only because an unrelated
+check ran `pg_stat_activity` and the oldest query age read `18:08:10`.
+
+This is gap 5 in its purest form: nothing client-side was alive to cancel, and
+PostgreSQL will not notice a dead client on a long `SELECT` until it tries to
+return rows. `pg_cancel_backend` cleared it instantly, so no fence was in play
+at all.
+
+The damage was not just wasted CPU. Those three backends were competing for I/O
+on the cluster where the `issues/047` timings were taken, and inflated them by
+roughly 40x — a 100-row page measured 48,034 ms under contention against
+1,196 ms quiet. Plan shapes were unaffected, but every absolute number recorded
+that day had to be re-measured. **An abandoned query is not only a resource
+leak; it silently corrupts any measurement taken alongside it.**
 
 ## Reproduce
 
 Issue a KGQuery frame criteria against a large space with
-`include_total_count=true` (see issues/040 for why the count is slow), then
-while the client is failing:
+`include_total_count=yes` — the parameter is now the `TotalCountMode` enum
+`no` (default) | `yes` (capped at `TOTAL_COUNT_CAP`, 1,000) | `exact`, not a
+boolean (see issues/040 for why the count is slow). Then while the client is
+failing:
 
 ```sql
 SELECT pid, state, now() - query_start AS age, left(query, 60)
@@ -178,6 +262,13 @@ For gap 2 in isolation, no large dataset needed: `asyncio.gather` a
 
 - `issues/040` — where this surfaced; the slow count that triggered it is now
   opt-in and capped, which reduces how often this is hit but does not address it
+- `issues/047` — the reason the count is slow, and the largest single source of
+  abandoned work. Fix it before choosing any timer value here
+- `issues/045`, `issues/046` — the two follow-on defects in the paging rewrite.
+  Between them and `040` the page leg went from being the reason this issue
+  existed to being irrelevant to it; the count leg did not move
+- `scripts/probe_semijoin_entity_query.sh` — `PROBE_COUNT=cap|exact` reproduces
+  the count timings above against the restored production copy
 - `vitalgraph/db/pool.py` — the acquire fence, and the docstring stating the
   timer ordering the command timeout violates
 - `vitalgraph/process/analytics_job.py:98` — the one place a real
