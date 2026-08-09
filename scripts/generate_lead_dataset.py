@@ -115,12 +115,49 @@ LAST_NAMES = [
 # these to vary match count while the dataset stays fixed.
 GTE_THRESHOLDS = (0, 50, 65, 90, 99, 99.9)
 
+# Integer thresholds, reported exactly like the double ones so `gte`/`lt` on an
+# integer slot can be asserted rather than guessed at.
+INT_GTE_THRESHOLDS = (0, 25, 50, 75, 90, 100)
+
+# Datetimes are drawn from a BOUNDED set of days rather than uniformly over a
+# range at second resolution. Second resolution made every value distinct, so
+# `eq` on a datetime matched exactly one row and every range threshold had an
+# unknown count — the slot existed but no operator over it could be asserted.
+# A day grid gives eq a real bucket and makes range selectivity computable.
+DT_DAYS = 200
+DT_GTE_DAYS = (0, 50, 100, 150, 190)
+
+# Choice slots hold enum URIs, not bare labels. Weighted so `eq` has a
+# non-round selectivity and `ne` has a large complement.
+LEAD_STATUS_WEIGHTS = {
+    "Assigned": 45.0, "Working": 25.0, "Qualified": 15.0,
+    "Nurturing": 10.0, "Disqualified": 5.0,
+}
+
+# Currency: a long-tailed distribution, since revenue is not uniform and a
+# uniform one would make every threshold equally selective.
+CURRENCY_BUCKETS = (1_000, 10_000, 50_000, 250_000, 1_000_000)
+
+# A needle planted in a known fraction of company names so `contains` has an
+# expected count instead of "whatever the random names happened to contain".
+CONTAINS_NEEDLE = "Zyx"
+CONTAINS_EVERY = 7
+
+# One slot in this many is emitted WITHOUT a value, so `is_empty` and
+# `not_exists` select a known non-trivial subset. Every slot having a value is
+# why those comparators returned nothing and their tests compared empty sets.
+EMPTY_EVERY = 8
+EMPTY_SLOT = "mqlratingpoints"
+
 DT_START = datetime(2020, 1, 1)
 DT_END = datetime(2026, 1, 1)
 
 
 def lit(value: str, dtype: str) -> str:
     return f'"{value}"^^<{XSD}{dtype}>'
+
+
+DROP_VALUE = object()
 
 
 class Sampler:
@@ -144,6 +181,22 @@ class Sampler:
         self.mqlv2_true = 0
         self.mqlv2_total = 0
         self.state_counts: dict[str, int] = {}
+        # Every other type now carries the same kind of exact tally, so a bench
+        # can assert a number for each operator rather than "more than zero".
+        self.n_ratingpoints = 0
+        self.ratingpoints_gte = {t: 0 for t in INT_GTE_THRESHOLDS}
+        self.n_datetime = 0
+        self.datetime_gte = {d: 0 for d in DT_GTE_DAYS}
+        self.leadstatus_counts: dict[str, int] = {}
+        self.currency_gte = {c: 0 for c in CURRENCY_BUCKETS}
+        self.n_currency = 0
+        self.contains_hits = 0
+        self.n_names = 0
+        self.empty_slots = 0
+        self.valued_slots = 0
+        self._statuses = list(LEAD_STATUS_WEIGHTS)
+        self._status_weights = [LEAD_STATUS_WEIGHTS[k] for k in self._statuses]
+        self._empty_seen = 0
 
     def value_for(self, slot: str, predicate: str) -> str | None:
         """Return a replacement literal, or None to keep the original."""
@@ -158,7 +211,39 @@ class Sampler:
                     self.mqlrating_gte[t] += 1
             return lit(f"{v:.1f}", "float")
         if slot == "mqlratingpoints":
-            return lit(str(self.rng.randint(0, 100)), "integer")
+            # Emitted WITHOUT a value one time in EMPTY_EVERY. `is_empty` and
+            # `not_exists` are unanswerable otherwise: with every slot valued
+            # they select nothing, so a test over them passes while comparing
+            # empty sets. Returning the sentinel drops the value triple and
+            # leaves the slot node, which is what "empty" means here.
+            self._empty_seen += 1
+            if self._empty_seen % EMPTY_EVERY == 0:
+                self.empty_slots += 1
+                return DROP_VALUE
+            self.valued_slots += 1
+            v = self.rng.randint(0, 100)
+            self.n_ratingpoints += 1
+            for t in INT_GTE_THRESHOLDS:
+                if v >= t:
+                    self.ratingpoints_gte[t] += 1
+            return lit(str(v), "integer")
+        if slot == "leadstatus":
+            st = self.rng.choices(self._statuses, self._status_weights)[0]
+            self.leadstatus_counts[st] = self.leadstatus_counts.get(st, 0) + 1
+            # A LITERAL, not a URI node. The source data stores enum values as
+            # term_type 'L' — emitting <...> instead produced a URI term that no
+            # criterion matched, and the slot silently answered nothing.
+            return lit(f"urn:acme:kg:enum:LeadStatus:{st}", "string")
+        if slot in ("monthlygrosssales", "verifiedrevenue"):
+            # Log-uniform: revenue is long-tailed, and a uniform draw would make
+            # every threshold equally selective, which tests nothing about
+            # estimation.
+            v = round(self.rng.lognormvariate(10.5, 1.2), 2)
+            self.n_currency += 1
+            for c in CURRENCY_BUCKETS:
+                if v >= c:
+                    self.currency_gte[c] += 1
+            return lit(f"{v:.2f}", "decimal")
         if slot == "mqlv2":
             is_true = self.rng.random() < self.mql_true_rate
             self.mqlv2_total += 1
@@ -169,14 +254,31 @@ class Sampler:
             self.state_counts[st] = self.state_counts.get(st, 0) + 1
             return lit(st, "string")
         if predicate == f"{KG}hasDateTimeSlotValue":
-            span = int((DT_END - DT_START).total_seconds())
-            dt = DT_START + timedelta(seconds=self.rng.randrange(span))
-            return lit(dt.strftime("%Y-%m-%dT%H:%M:%S"), "dateTime")
+            # A day grid, not seconds. At second resolution every value was
+            # distinct, so `eq` matched one row and no range threshold had a
+            # known count — the slot was present but no operator over it could
+            # be asserted. DT_DAYS buckets give eq a real selectivity and make
+            # every range computable.
+            day = self.rng.randrange(DT_DAYS)
+            dt = DT_START + timedelta(days=day)
+            self.n_datetime += 1
+            for d in DT_GTE_DAYS:
+                if day >= d:
+                    self.datetime_gte[d] += 1
+            return lit(dt.strftime("%Y-%m-%dT00:00:00"), "dateTime")
         return None
 
     def name(self) -> str:
-        return (f"{self.rng.choice(FIRST_NAMES)} "
-                f"{self.rng.choice(LAST_NAMES)}")
+        # A known fraction carries CONTAINS_NEEDLE, so `contains` has an
+        # expected count rather than whatever the random names happened to
+        # share.
+        self.n_names += 1
+        first = self.rng.choice(FIRST_NAMES)
+        last = self.rng.choice(LAST_NAMES)
+        if self.n_names % CONTAINS_EVERY == 0:
+            self.contains_hits += 1
+            last = f"{last}{CONTAINS_NEEDLE}"
+        return f"{first} {last}"
 
 
 def load_templates(template_dir: Path, limit: int | None) -> list[tuple[str, list[str]]]:
@@ -233,6 +335,8 @@ def render_entity(lead_id: str, lines: list[str], new_id: str,
             sm = SLOT_LOCAL_RE.search(subj)
             if sm:
                 repl = sampler.value_for(sm.group(1), pred)
+                if repl is DROP_VALUE:
+                    continue        # slot stays, value triple is not emitted
                 if repl is not None:
                     obj = repl
 
@@ -326,6 +430,23 @@ def generate(template_dir: Path, out_dir: Path, n_entities: int, seed: int,
             "mqlv2_total": sampler.mqlv2_total,
             "companystatecode_eq": dict(sorted(sampler.state_counts.items(),
                                                key=lambda kv: -kv[1])),
+            "ratingpoints_total": sampler.n_ratingpoints,
+            "ratingpoints_gte": {str(t): c
+                                 for t, c in sampler.ratingpoints_gte.items()},
+            "datetime_total": sampler.n_datetime,
+            "datetime_gte_day": {str(d): c
+                                 for d, c in sampler.datetime_gte.items()},
+            "datetime_day_grid": DT_DAYS,
+            "datetime_start": DT_START.strftime("%Y-%m-%dT00:00:00"),
+            "leadstatus_eq": dict(sorted(sampler.leadstatus_counts.items(),
+                                         key=lambda kv: -kv[1])),
+            "currency_total": sampler.n_currency,
+            "currency_gte": {str(c): n for c, n in sampler.currency_gte.items()},
+            "name_contains": {CONTAINS_NEEDLE: sampler.contains_hits,
+                              "of": sampler.n_names},
+            "empty_slots": {"slot": EMPTY_SLOT,
+                            "empty": sampler.empty_slots,
+                            "valued": sampler.valued_slots},
         },
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
