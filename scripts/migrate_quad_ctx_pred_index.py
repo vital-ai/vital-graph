@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Rebuild idx_{space}_quad_ctx_pred with object_uuid as a KEY column.
+"""Rebuild idx_{space}_quad_ctx_pred with object_uuid AND subject_uuid as KEY columns.
 
     (context_uuid, predicate_uuid) INCLUDE (subject_uuid, object_uuid)
  -> (context_uuid, predicate_uuid, object_uuid) INCLUDE (subject_uuid)
@@ -51,7 +51,9 @@ import time
 import asyncpg
 
 OLD_KEYS = "(context_uuid, predicate_uuid)"
-NEW_COLS = "(context_uuid, predicate_uuid, object_uuid) INCLUDE (subject_uuid)"
+# subject_uuid trailing KEY, not INCLUDE — it supplies the scan order a
+# paging LIMIT needs to stop early (issues/047). Same size either way.
+NEW_COLS = "(context_uuid, predicate_uuid, object_uuid, subject_uuid)"
 
 
 def _dsn_from_env() -> str:
@@ -74,10 +76,15 @@ async def find_targets(conn, only_space: str | None):
         space = idx[len("idx_"):-len("_quad_ctx_pred")] if idx.startswith("idx_") else None
         if not space or (only_space and space != only_space):
             continue
-        # Already migrated when object_uuid appears among the key columns, i.e.
-        # before the INCLUDE clause.
+        # Up to date when BOTH object_uuid and subject_uuid are key columns —
+        # i.e. present before any INCLUDE clause. There are two stale forms in
+        # the wild and both need rebuilding: the original
+        # (context, predicate) INCLUDE (subject, object), and the issues/039
+        # intermediate (context, predicate, object) INCLUDE (subject), which
+        # fixed the scan condition but left the paging cliff of issues/047.
         keys = r["indexdef"].split("INCLUDE")[0]
-        out.append((space, idx, r["indexdef"], "object_uuid" in keys))
+        current = "object_uuid" in keys and "subject_uuid" in keys
+        out.append((space, idx, r["indexdef"], current))
     return out
 
 
