@@ -277,6 +277,45 @@ def _is_numeric_expr(expr, ctx: EmitContext) -> bool:
     return False
 
 
+
+def _is_boolean_expr(expr, ctx: EmitContext) -> bool:
+    """Is this expression known to be boolean at compile time?
+
+    Mirrors _is_numeric_expr. As there, a BGP variable's bool_col existing does
+    not make the variable boolean — it is a CASE that yields NULL for
+    non-boolean terms — so only typed_lane='bool' is trusted for variables.
+    """
+    if isinstance(expr, ExprValue) and expr.node and isinstance(expr.node, LiteralNode):
+        return expr.node.datatype == f"{XSD}boolean"
+    if isinstance(expr, ExprVar):
+        info = ctx.types.get(expr.var)
+        if info and info.typed_lane == "bool":
+            return True
+    if isinstance(expr, ExprFunction):
+        if expr.function_iri and _XSD_CAST_MAP.get(expr.function_iri) == "BOOLEAN":
+            return True
+    return False
+
+
+def _boolean_arg(expr, ctx: EmitContext) -> Optional[str]:
+    """Convert an expression to a boolean SQL expression, or None.
+
+    Returning None lets the caller fall back rather than emit something
+    untypeable — the failure this exists to prevent.
+    """
+    if isinstance(expr, ExprVar):
+        info = ctx.types.get(expr.var)
+        if info and getattr(info, "bool_col", None):
+            return info.bool_col
+    sql = expr_to_sql(expr, ctx)
+    if sql is None:
+        return None
+    if isinstance(expr, ExprValue) and expr.node and isinstance(expr.node, LiteralNode):
+        if expr.node.datatype == f"{XSD}boolean":
+            return sql
+    return f"CAST({sql} AS BOOLEAN)"
+
+
 def _cmp_pair(left, right, ctx: EmitContext):
     """Return (left_sql, right_sql) using numeric columns when appropriate.
 
@@ -290,10 +329,22 @@ def _cmp_pair(left, right, ctx: EmitContext):
         a = _numeric_arg(left, ctx)
         b = _numeric_arg(right, ctx)
         return a, b
-    else:
-        a = expr_to_sql(left, ctx)
-        b = expr_to_sql(right, ctx)
-        return a, b
+
+    # Booleans need the same treatment as numerics, for the same reason. A
+    # variable's default lane is term_text, so comparing it to a boolean
+    # literal emitted `v8 != TRUE` — `operator does not exist: text <> boolean`,
+    # a query that cannot run at all. `eq` on a boolean slot escaped this only
+    # because the builder turns equality into a triple pattern (term identity,
+    # no lane involved) rather than a FILTER; every other comparator produces a
+    # FILTER and hit it. Found by the shape matrix, which was the first thing to
+    # exercise `ne`.
+    if _is_boolean_expr(left, ctx) or _is_boolean_expr(right, ctx):
+        a = _boolean_arg(left, ctx)
+        b = _boolean_arg(right, ctx)
+        if a and b:
+            return a, b
+
+    return expr_to_sql(left, ctx), expr_to_sql(right, ctx)
 
 
 _XSD_CAST_MAP = {
