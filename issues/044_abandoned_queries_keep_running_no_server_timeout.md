@@ -187,54 +187,46 @@ request that any reasonable fence would ever trip.
 8. **Log at the boundary.** Abandoned work currently produces no log line
    anywhere — it surfaces only as unexplained database load.
 
-### The numbers for (3)–(6) — SUPERSEDED, see above
+### The numbers for (3)–(6), re-measured 2026-08-08 after issues/047
 
-Everything in this section predates the `issues/047` fix. Kept because the
-reasoning about *which* leg constrains the fence still holds; the magnitudes do
-not. Re-measure before choosing a value.
+Everything recorded here before this date was taken either before `047` was
+fixed or alongside an 18-hour orphaned scan, and both inflated it. Re-measured
+on a quiet cluster, production copy, 22.4M quads, 34,423 matching entities:
 
-### The numbers as of 2026-08-08, before `047` was fixed
+| read leg | cold | warm |
+|---|---|---|
+| page of 1,000 | 80 ms | 40 ms |
+| `include_total_count=yes` (capped 1,000) | 1,671 ms | 34 ms |
+| `include_total_count=exact` | **11,081 ms** | 1,346 ms |
 
-The earlier note here said a capped `total_count` measures 6–12s and that any
-read fence has to clear it. That figure came from the 100k synthetic lead space.
-On the restored production copy the same capped count is **51–130 s** — it blows
-through the 30s client attempt *and* the 60s server fence, every time, on a
-query the user asked to be cheap.
+**The worst legitimate read is now ~11 s cold**, and it is the exact count —
+inherently O(matches), which is why the cap exists. Everything else is under
+two seconds cold and under 50 ms warm.
 
-That settles the shape of (3): the fence cannot be chosen to accommodate a capped
-count, because no tolerable fence does. Either the count gets fast, or
-`include_total_count=yes` is a request the server should decline rather than
-attempt. It does **not** need to accommodate the page, which no longer costs
-anything worth fencing.
+That makes the timer ordering tractable, where before it was not: no fence could
+accommodate a 51–130 s capped count, so item (3) had no solution. It does now.
 
-**Investigated 2026-08-08 — it is `issues/047`.** The semi-join does fire on the
-count query, but above `LIMIT ~51` the planner abandons the early-terminating
-ordered scan for a blocking `Sort → Bitmap Heap Scan` and probes every
-candidate. The count's bound is `cap + 1` = 1001, so it is always past the
-cliff — and so is any `page_size` over ~51, which is the same defect reaching
-the page path. Forcing the ordered plan: 89–209 ms warm against 51–130 s.
+**Proposed ordering** — the constraint is `pool.py`'s own docstring, that the
+server should surface the failure before the client abandons and retries blind:
 
-This changes what the fence has to accommodate. It is not that counting is
-expensive; it is that one query shape falls off a cost-model cliff. Fix `047`
-and the numbers this section is built on stop being the constraint.
+    pool acquire         15 s   (unchanged, already correct)
+    server read fence    20-25 s  (new; clears the 11 s worst case with margin)
+    client per-attempt   30 s   (unchanged)
+    client wall-clock    60 s   (unchanged)
 
-## Observed accidentally, 2026-08-08 — and it cost a day of measurements
+That inverts today's arrangement, where the server fence (60 s) sits *above* the
+client attempt (30 s) so the client is guaranteed to give up first, every time.
 
-A `psql` killed by shell `timeout` left its backend **plus two parallel workers**
-scanning a 22.4M-row table for **18 hours**. Found only because an unrelated
-check ran `pg_stat_activity` and the oldest query age read `18:08:10`.
+**The write path must not inherit this.** Bulk load and index rebuild acquire
+from the same pool and are bounded by the same `command_timeout`, so a 20-25 s
+read fence would break loads that legitimately run for minutes. Item (6) — split
+read and write policy — becomes a prerequisite rather than a nicety.
 
-This is gap 5 in its purest form: nothing client-side was alive to cancel, and
-PostgreSQL will not notice a dead client on a long `SELECT` until it tries to
-return rows. `pg_cancel_backend` cleared it instantly, so no fence was in play
-at all.
-
-The damage was not just wasted CPU. Those three backends were competing for I/O
-on the cluster where the `issues/047` timings were taken, and inflated them by
-roughly 40x — a 100-row page measured 48,034 ms under contention against
-1,196 ms quiet. Plan shapes were unaffected, but every absolute number recorded
-that day had to be re-measured. **An abandoned query is not only a resource
-leak; it silently corrupts any measurement taken alongside it.**
+**One caveat on the number.** 11 s is this dataset. Exact counts scale with the
+match set, so a larger tenant is slower and no fixed fence bounds them. The
+honest options are to give `exact` its own longer budget, or to treat it as a
+request the server declines above some size rather than attempts. Choosing
+needs the largest real tenant's match counts, which are not measurable here.
 
 ## Reproduce
 
