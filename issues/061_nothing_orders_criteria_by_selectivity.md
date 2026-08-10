@@ -71,6 +71,64 @@ A per-predicate policy — keep the most common objects for each predicate, the
 way PostgreSQL's MCV lists work — would survive that, and is what makes the table
 usable for ranking rather than only for seeding.
 
+## The missing metric is fan-out, not more predicate/object correlation
+
+Predicate/object correlation is already recorded twice — `rdf_stats` holds
+`(predicate, object) -> row_count`, and `stat_{space}_quad_po (mcv, ndistinct)`
+teaches PostgreSQL the same thing. More of it would not help, because the errors
+are not in single-table selectivity. They are **join** cardinality: 305x and
+4,761x underestimates on multi-hop traversal steps (`issues/059`).
+
+What no stored metric expresses is **edge fan-out**: given N nodes, how many rows
+does one traversal step produce? Measured on the 100k fixture's edge table:
+
+| direction | fan-out per hop |
+|---|---|
+| forward (source -> dest) | avg **4.15**, p99 10, max 10 |
+| backward (dest -> source) | avg **1.00**, p99 1, max 1 |
+
+Over the three hops those queries walk, that is **~71x amplification forward and
+1x backward** — which is the whole of the 700 ms vs >200 s gap in `issues/059`,
+and the same order as the observed underestimates.
+
+### It is a property of the model, but only for containment edges
+
+Confirmed with the data owner, 2026-08-10:
+
+* a **slot** has exactly one parent;
+* a **frame** has no parent or exactly one (an entity or a frame).
+
+So for the containment hierarchy, backward fan-out is 1 **by construction**, not
+by observation. A rewrite that walks containment backward is non-amplifying by
+the shape of the model, which is a much stronger guarantee than a measurement on
+one fixture.
+
+It does **not** generalise to the other edge kinds:
+
+* **relations** have a source and a destination, and an entity may participate in
+  many, in either role — many-to-many in both directions;
+* a **slot value** may be an entity or arbitrary URI, and many slots may point at
+  the same target, so walking from a target back to its slots fans out. (This
+  case is already covered by existing stats: it is an `(predicate, object)` count
+  in `rdf_stats`, not an edge-table hop.)
+
+So a blanket "always traverse backward" rule would be wrong. Fan-out has to be
+recorded **per edge type**, which makes `issues/060` (the edge type column) a
+prerequisite for the metric and not only a performance win — without it the edge
+table cannot even distinguish the cases.
+
+### Coverage gap this exposes
+
+The fixture contains only `Edge_hasKGSlot` (3,877,000), `Edge_hasKGFrame`
+(900,000) and `Edge_hasEntityKGFrame` (200,000). **No relation edges exist in it
+at all**, which matches `issues/043`/`048`: `build_relation_query` requires
+`Edge_hasKGRelation`, which has zero instances anywhere.
+
+Every fan-out number above therefore describes the tree-shaped half of the model.
+An optimisation designed on it could be wrong for relations and no fixture would
+catch it. A relation-bearing fixture should exist before any direction-choosing
+rewrite ships.
+
 ## Suggested order
 
 1. **Per-predicate stats retention** (problem 2). Self-contained, no query-path
