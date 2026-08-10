@@ -214,6 +214,76 @@ async def resync_stats_tables(conn, space_id: str) -> Dict[str, int]:
     return {'pred_stats': pred_count, 'quad_stats': stats_count}
 
 
+async def resync_stats_for_predicates(conn, space_id: str,
+                                      predicate_uuids: List[uuid.UUID],
+                                      max_rows: int = 2_000_000) -> int:
+    """Recompute stats for specific predicates from the quad table.
+
+    The repair for a write whose affected quads cannot be enumerated. A SPARQL
+    `DELETE WHERE { ?s <p> ?o }` binds its subject and object but names the
+    PREDICATE concretely, so while the individual quads are unknowable without
+    executing, the set of predicates whose counts moved is known exactly — and
+    recomputing those is bounded by one predicate's rows rather than the table.
+
+    Without this, `execute_sparql_update` left rdf_stats untouched entirely and
+    nothing else repaired it: unlike the edge table, the maintenance job only
+    PRUNES stats and never resyncs. A stale count does not produce a wrong
+    answer; it produces a wrong PLAN, silently, and the query returns the right
+    rows too slowly.
+
+    Skipped for a predicate above `max_rows`, because the recompute is a GROUP BY
+    over that predicate's quads and doing it inline on `vitaltype` (10,054,000
+    rows in one measured space) would be a serious per-write regression. Skips
+    are logged rather than silent — the alternative is drift nobody knows about.
+
+    Returns the number of predicates recomputed.
+    """
+    if not predicate_uuids:
+        return 0
+
+    t_stats = f"{space_id}_rdf_stats"
+    t_pred = f"{space_id}_rdf_pred_stats"
+    t_quad = f"{space_id}_rdf_quad"
+    done = 0
+
+    for p_uuid in set(predicate_uuids):
+        n = await conn.fetchval(
+            f"SELECT count(*) FROM (SELECT 1 FROM {t_quad} "
+            f"WHERE predicate_uuid = $1 LIMIT {int(max_rows) + 1}) s", p_uuid)
+        if n > max_rows:
+            logger.warning(
+                "resync_stats_for_predicates(%s): predicate %s has >%d quads, "
+                "skipping inline recompute — its stats may now be stale",
+                space_id, p_uuid, max_rows)
+            continue
+
+        await conn.execute(
+            f"DELETE FROM {t_stats} WHERE predicate_uuid = $1", p_uuid)
+        await conn.execute(f"""
+            INSERT INTO {t_stats} (predicate_uuid, object_uuid, row_count)
+            SELECT predicate_uuid, object_uuid, count(*)
+            FROM {t_quad} WHERE predicate_uuid = $1
+            GROUP BY predicate_uuid, object_uuid
+            ON CONFLICT (predicate_uuid, object_uuid)
+            DO UPDATE SET row_count = EXCLUDED.row_count
+        """, p_uuid)
+
+        # pred_stats is not pruned, so it must be exactly right; a delete that
+        # empties a predicate has to leave 0, not a stale row.
+        await conn.execute(f"""
+            INSERT INTO {t_pred} (predicate_uuid, row_count)
+            SELECT $1, count(*) FROM {t_quad} WHERE predicate_uuid = $1
+            ON CONFLICT (predicate_uuid)
+            DO UPDATE SET row_count = EXCLUDED.row_count
+        """, p_uuid)
+        done += 1
+
+    if done:
+        logger.debug("resync_stats_for_predicates(%s): %d predicate(s)",
+                     space_id, done)
+    return done
+
+
 async def prune_stats_tables(conn, space_id: str,
                              keep_top_n: int = STATS_KEEP_DEFAULT,
                              per_predicate_n: int = STATS_PER_PREDICATE_DEFAULT

@@ -103,6 +103,36 @@ def _has_where_bound_delete(ops) -> bool:
     return False
 
 
+def _concrete_predicates_from_update_ops(ops) -> set:
+    """Predicate URIs an update inserts or deletes with, where concrete.
+
+    A SPARQL update usually binds its subject and object but names the predicate
+    literally — `DELETE WHERE { ?s <p> ?o }`. So even when the affected quads
+    cannot be enumerated, the set of predicates whose counts moved is known, and
+    recomputing those is bounded by one predicate's rows.
+
+    Used to keep rdf_stats true after execute_sparql_update, which otherwise
+    maintains no stats at all (issues/068).
+    """
+    from ..jena_sparql.jena_types import (
+        URINode, UpdateDataInsert, UpdateDataDelete, UpdateModify,
+        UpdateDeleteWhere,
+    )
+    preds: set = set()
+    for op in ops or []:
+        if isinstance(op, (UpdateDataInsert, UpdateDataDelete, UpdateDeleteWhere)):
+            quads = getattr(op, 'quads', [])
+        elif isinstance(op, UpdateModify):
+            quads = (list(getattr(op, 'delete_quads', []))
+                     + list(getattr(op, 'insert_quads', [])))
+        else:
+            continue
+        for q in quads:
+            if isinstance(q.predicate, URINode):
+                preds.add(q.predicate.value)
+    return preds
+
+
 def _cleared_graphs_from_update_ops(ops) -> set:
     """Graph URIs a SPARQL update empties via CLEAR or DROP.
 
@@ -875,6 +905,10 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             inserted = 0
 
             subjects: set = set()
+            # Rows actually inserted, for the stats sync below. Only the ones
+            # that really landed: ON CONFLICT DO NOTHING means a duplicate quad
+            # inserts no row, and counting it would inflate rdf_stats.
+            inserted_rows: list = []
 
             async def _do(conn):
                 nonlocal inserted
@@ -891,6 +925,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     )
                     if 'INSERT' in result:
                         inserted += 1
+                        inserted_rows.append((s_uuid, p_uuid, o_uuid, g_uuid))
                     subjects.add(s_uuid)
                 # Keep {space}_edge in sync — this path bypasses the bulk sync,
                 # so edge quads inserted here would otherwise never reach the
@@ -902,6 +937,16 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     await sync_edge_table_after_insert(conn, space_id, list(subjects))
                     from .sync_frame_entity_table import sync_frame_entity_after_edge_insert
                     await sync_frame_entity_after_edge_insert(conn, space_id, list(subjects))
+                # rdf_stats too. Only the BULK path synced these, so every quad
+                # written through this one left the planner's cardinality
+                # estimates behind — the same write-path gap as the edge table
+                # (edge_table_integrity_bug), and worse, because nothing
+                # self-heals stats: the maintenance job prunes them and never
+                # resyncs. A stale count does not produce a wrong answer, it
+                # produces a wrong PLAN, silently.
+                if inserted_rows:
+                    from .sync_stats_tables import sync_stats_after_insert
+                    await sync_stats_after_insert(conn, space_id, inserted_rows)
 
             if connection:
                 # Caller owns the connection/transaction — don't open a nested one.
@@ -1774,6 +1819,18 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                         # Referential sweep, bounded, and only for updates that
                         # actually deferred something: the anti-join is real
                         # work and the all-concrete case is the common one.
+                        # rdf_stats: execute_sparql_update maintained none at
+                        # all, and nothing else repairs them — the maintenance
+                        # job prunes stats and never resyncs. Recompute the
+                        # predicates this update touched; bounded per predicate.
+                        pred_uris = _concrete_predicates_from_update_ops(cr.update_ops)
+                        if pred_uris:
+                            from .sync_stats_tables import resync_stats_for_predicates
+                            pred_uuids = [_generate_term_uuid(u, 'U') for u in pred_uris]
+                            async with conn.transaction():
+                                await resync_stats_for_predicates(
+                                    conn, space_id, pred_uuids)
+
                         if _has_where_bound_delete(cr.update_ops):
                             from .sync_edge_table import cleanup_orphan_edges
                             from .sync_frame_entity_table import (
