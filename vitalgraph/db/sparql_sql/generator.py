@@ -590,15 +590,33 @@ async def generate_sql(
         # Stage 2a.1: Edge table rewrite
         from .ensure_edge_table import ensure_edge_table
         from .ensure_frame_entity_table import ensure_frame_entity_table
+        edge_ready = frame_entity_ready = False
         if conn is not None or conn_params is not None:
-            if await ensure_edge_table(space_id, conn=conn, conn_params=conn_params):
+            edge_ready = await ensure_edge_table(space_id, conn=conn,
+                                                 conn_params=conn_params)
+            if edge_ready:
                 from .rewrite_edge_table import rewrite_edge_table
                 plan = rewrite_edge_table(plan, aliases, space_id)
 
             # Stage 2a.2: Frame-entity table rewrite
-            if await ensure_frame_entity_table(space_id, conn=conn, conn_params=conn_params):
+            frame_entity_ready = await ensure_frame_entity_table(
+                space_id, conn=conn, conn_params=conn_params)
+            if frame_entity_ready:
                 from .rewrite_frame_entity_table import rewrite_frame_entity_table
                 plan = rewrite_frame_entity_table(plan, aliases, space_id)
+
+        # Stage 2a.3: Build the plans inside FILTER EXISTS / NOT EXISTS bodies.
+        #
+        # Has to happen HERE — after the rewrites, so the bodies get the same
+        # treatment as the outer plan, and while a connection is still in scope.
+        # Emit is synchronous, so the alternative was collecting the body at
+        # emit time, which is what made every negated criterion walk raw quads
+        # and resolve each predicate URI with a runtime subquery (issues/057).
+        from .exists_subplan import prepare_exists_subplans
+        await prepare_exists_subplans(
+            plan, space_id, conn=conn, conn_params=conn_params,
+            graph_lock_uri=graph_lock_uri,
+            edge_table_ready=edge_ready, frame_entity_ready=frame_entity_ready)
 
         # Stage 2b: Load datatype cache
         datatype_cache = await _load_datatype_cache(

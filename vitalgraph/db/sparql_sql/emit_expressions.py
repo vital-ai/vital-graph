@@ -1081,12 +1081,18 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext) -> Optional[str]:
     if gp is None:
         return None
 
-    # Build a fresh alias generator with a prefix to avoid collisions
-    inner_aliases = AliasGenerator(alias_prefix="ex_")
-
-    # Collect the inner graph pattern into a PlanV2
-    inner_plan = collect(gp, ctx.space_id, inner_aliases,
-                         graph_uri=ctx.graph_lock_uri)
+    # Prefer the plan prepared by generator.prepare_exists_subplans: it has been
+    # through constant materialization and the edge-table rewrite, which cannot
+    # be done here because emit is synchronous and those need I/O. Collecting
+    # inline is the fallback for callers that skipped preparation (no
+    # connection, or a body preparation declined) — correct, just slow.
+    if expr.prepared_plan is not None and expr.prepared_aliases is not None:
+        inner_plan = expr.prepared_plan
+        inner_aliases = expr.prepared_aliases
+    else:
+        inner_aliases = AliasGenerator(alias_prefix="ex_")
+        inner_plan = collect(gp, ctx.space_id, inner_aliases,
+                             graph_uri=ctx.graph_lock_uri)
 
     # Create a child EmitContext for the inner subquery
     from .sql_type_generation import TypeRegistry
@@ -1141,13 +1147,26 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext) -> Optional[str]:
 
     # Substitute inner constants with direct term table lookups
     # (inner aliases' constants are NOT in the outer CTE)
+    # Prefer a materialized uuid literal; fall back to the lookup subquery only
+    # for constants nobody resolved.
+    #
+    # This used to emit the subquery unconditionally. Each one is a correlated
+    # lookup evaluated inside the probe, and a KGQuery frame path carries seven
+    # of them — measured at 245ms apiece against a term table with no term_text
+    # index, and still a per-probe InitPlan with one. The outer query never paid
+    # this because substitute_constants resolves its tokens to literals; the
+    # body was simply never given the same treatment (issues/057).
     term_table = f"{ctx.space_id}_term"
     for (text, ttype), col_name in inner_aliases.constants.items():
         token = f"__CONST_{col_name}__"
-        replacement = (
-            f"(SELECT term_uuid FROM {term_table} "
-            f"WHERE term_text = '{_esc(text)}' AND term_type = '{ttype}' LIMIT 1)"
-        )
+        uuid_str = inner_aliases.resolved_constants.get(col_name)
+        if uuid_str:
+            replacement = f"'{uuid_str}'::uuid"
+        else:
+            replacement = (
+                f"(SELECT term_uuid FROM {term_table} "
+                f"WHERE term_text = '{_esc(text)}' AND term_type = '{ttype}' LIMIT 1)"
+            )
         inner_sql = inner_sql.replace(token, replacement)
 
     # Variables the inner pattern binds itself correlate through an explicit

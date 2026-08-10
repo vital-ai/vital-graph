@@ -165,6 +165,23 @@ class ExprExists:
     graph_pattern: Any  # Op node (forward ref to avoid circular import)
     negated: bool = False  # True for NOT EXISTS
 
+    # An optimized plan for `graph_pattern`, attached by
+    # generator.prepare_exists_subplans before emit.
+    #
+    # Why it lives here rather than being built where it is used: emit is
+    # synchronous, and the passes that matter — constant materialization above
+    # all — need database I/O. So `_exists_to_sql` used to call collect() at
+    # emit time and emit the result raw, which meant every EXISTS body missed
+    # the entire pipeline: no uuid literals, no edge-table rewrite, no
+    # semi-join marking, no text pruning. One probe cost 435ms walking raw
+    # quads (issues/057).
+    #
+    # Both fields are set together or not at all. When they are None the emit
+    # path falls back to collecting inline, so a query that never reaches
+    # preparation still produces correct SQL.
+    prepared_plan: Any = None      # PlanV2
+    prepared_aliases: Any = None   # AliasGenerator that owns its constants
+
 
 Expr = Union[ExprVar, ExprValue, ExprFunction, ExprAggregator, ExprExists]
 
