@@ -899,6 +899,26 @@ class SparqlSQLSchema:
             f"ALTER COLUMN subject_uuid SET STATISTICS 1000, "
             f"ALTER COLUMN context_uuid SET STATISTICS 500, "
             f"ALTER COLUMN object_uuid SET STATISTICS 500",
+            # num_val and dt_val are EXTREMELY sparse, and that breaks range
+            # estimation at scale in a way that inverts with table size.
+            #
+            # Terms are deduplicated, so 100,000 entities sharing ~1,000 distinct
+            # one-decimal ratings produce ~1,000 non-NULL num_val rows in a 10.4M
+            # row term table — null_frac 0.99993. The default target samples
+            # ~30,000 rows and therefore catches about TWO non-NULL values, which
+            # is not a histogram. `num_val <= 65.0` then estimates rows=1 against
+            # 809 actual, the planner drives a nested loop from that leaf, and a
+            # 25-row page times out at 60s. The same index at 10k has 46 buckets,
+            # estimates correctly, and makes the same query 4x FASTER — so the
+            # index looked validated at the only scale where it works
+            # (issues/056).
+            #
+            # A high target is cheap here precisely because the column is sparse:
+            # ANALYZE on 10.4M rows took 8.3s and produced 356 buckets, which
+            # turned two timeouts into 61ms and 229ms.
+            f"ALTER TABLE {t['term']} "
+            f"ALTER COLUMN {NUMERIC_TERM_COLUMN} SET STATISTICS 10000, "
+            f"ALTER COLUMN {DATETIME_TERM_COLUMN} SET STATISTICS 10000",
 
             # Datatype lookup index
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_datatype_uri ON {t['datatype']} (datatype_uri)",

@@ -61,11 +61,14 @@ _URI_VALUE_SLOT_CLASSES = {
     f"{_HALEY_NS}KGVideoSlot",
 }
 
-_NUMERIC_SLOT_CLASSES = {
-    f"{_HALEY_NS}KGCurrencySlot": "xsd:double",
-    f"{_HALEY_NS}KGDoubleSlot":   "xsd:double",
-    f"{_HALEY_NS}KGIntegerSlot":  "xsd:integer",
-    f"{_HALEY_NS}KGLongSlot":     "xsd:integer",
+# The range comparators and their SPARQL operators. One table so all four are
+# emitted by one code path — they were four near-identical branches that had
+# drifted apart, and the drift was a 60-second timeout (issues/053).
+_RANGE_OPS = {
+    "gt": ">", "greater_than": ">",
+    "gte": ">=", "greater_than_or_equal": ">=",
+    "lt": "<", "less_than": "<",
+    "lte": "<=", "less_than_or_equal": "<=",
 }
 
 _DATETIME_SLOT_CLASSES = {
@@ -1097,18 +1100,6 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
         # Default to text slot value
         return "haley:hasTextSlotValue"
 
-    def _is_numeric_slot(self, slot_class_uri: Optional[str] = None, slot_type: Optional[str] = None) -> tuple[bool, str]:
-        """Check if slot is numeric and return the XSD type.
-        
-        Returns:
-            Tuple of (is_numeric, xsd_type)
-        """
-        for uri in (slot_class_uri, slot_type):
-            if uri and uri in _NUMERIC_SLOT_CLASSES:
-                return True, _NUMERIC_SLOT_CLASSES[uri]
-        
-        return False, ""
-
     def _validate_no_double_negation(self, frame_criterion) -> None:
         """Validate that a negated frame does not contain not_exists slot comparators.
         
@@ -1496,37 +1487,34 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
             return f"?{var_name} {property_name} {escaped_value} ."
         elif comparator == "ne":
             return f"?{var_name} {property_name} ?{value_var} . FILTER(?{value_var} != {escaped_value})"
-        elif comparator in ["gt", "greater_than"]:
-            # Use XSD casting for numeric comparisons
-            is_numeric, xsd_type = self._is_numeric_slot(slot_class_uri, slot_type)
-            if is_numeric:
-                return f"?{var_name} {property_name} ?{value_var} . FILTER({xsd_type}(?{value_var}) > {escaped_value})"
-            else:
-                return f"?{var_name} {property_name} ?{value_var} . FILTER(?{value_var} > {escaped_value})"
-        elif comparator in ["lt", "less_than"]:
-            # Use XSD casting for numeric comparisons on double and integer slots
-            if slot_type == "http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot":
-                return f"?{var_name} {property_name} ?{value_var} . FILTER(xsd:double(?{value_var}) < {escaped_value})"
-            elif slot_type == "http://vital.ai/ontology/haley-ai-kg#KGIntegerSlot":
-                return f"?{var_name} {property_name} ?{value_var} . FILTER(xsd:integer(?{value_var}) < {escaped_value})"
-            else:
-                return f"?{var_name} {property_name} ?{value_var} . FILTER(?{value_var} < {escaped_value})"
-        elif comparator in ["gte", "greater_than_or_equal"]:
-            # Use XSD casting for numeric comparisons on double and integer slots
-            if slot_type == "http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot":
-                return f"?{var_name} {property_name} ?{value_var} . FILTER(xsd:double(?{value_var}) >= {escaped_value})"
-            elif slot_type == "http://vital.ai/ontology/haley-ai-kg#KGIntegerSlot":
-                return f"?{var_name} {property_name} ?{value_var} . FILTER(xsd:integer(?{value_var}) >= {escaped_value})"
-            else:
-                return f"?{var_name} {property_name} ?{value_var} . FILTER(?{value_var} >= {escaped_value})"
-        elif comparator in ["lte", "less_than_or_equal"]:
-            # Use XSD casting for numeric comparisons on double and integer slots
-            if slot_type == "http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot":
-                return f"?{var_name} {property_name} ?{value_var} . FILTER(xsd:double(?{value_var}) <= {escaped_value})"
-            elif slot_type == "http://vital.ai/ontology/haley-ai-kg#KGIntegerSlot":
-                return f"?{var_name} {property_name} ?{value_var} . FILTER(xsd:integer(?{value_var}) <= {escaped_value})"
-            else:
-                return f"?{var_name} {property_name} ?{value_var} . FILTER(?{value_var} <= {escaped_value})"
+        elif comparator in _RANGE_OPS:
+            # All four range comparators emit the SAME uncast shape, because an
+            # uncast comparison is the only one the num_val push-down can carry.
+            #
+            # The push-down REPLACES this filter rather than restricting it
+            # (filter_pushdown.push_filters clears filter_exprs), so its
+            # constraint has to be exactly equivalent. `?v >= 65` is: SPARQL
+            # raises a type error for a string-typed value, excluding the row,
+            # and num_val is NULL for precisely those terms. `xsd:double(?v) >=
+            # 65` is not: SPARQL casts numeric-looking STRINGS and includes
+            # them, while num_val still excludes them. Pushing the cast form
+            # down would silently drop rows.
+            #
+            # `gt` used to emit the cast, alone among the four — it was the only
+            # one that identified numeric slots correctly, since the other three
+            # compared slot_type (a slot INSTANCE uri) against a class uri and
+            # so never matched. It was punished for it: with no push-down, `gt`
+            # on a double slot timed out at 60s where `gte` on the same slot and
+            # threshold ran in 505ms (issues/053).
+            #
+            # The cost of dropping the cast is that a numeric value stored as an
+            # untyped or string literal no longer matches any range comparator.
+            # That was already true of gte/lt/lte, which is what production uses;
+            # this makes gt agree with them rather than answering differently
+            # from `gte` on an adjacent threshold. See issues/054 for the
+            # underlying assumption that ingest types numeric literals.
+            return (f"?{var_name} {property_name} ?{value_var} . "
+                    f"FILTER(?{value_var} {_RANGE_OPS[comparator]} {escaped_value})")
         elif comparator == "contains":
             return f"?{var_name} {property_name} ?{value_var} . FILTER(CONTAINS(LCASE(?{value_var}), LCASE({escaped_value})))"
         elif comparator == "has":
