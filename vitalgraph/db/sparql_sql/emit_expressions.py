@@ -1066,11 +1066,33 @@ def _aggregator_to_sql(expr: ExprAggregator, ctx: EmitContext) -> Optional[str]:
     return f"{agg_name}({distinct_prefix}*)"
 
 
-def _exists_to_sql(expr: ExprExists, ctx: EmitContext) -> Optional[str]:
+def expr_to_sql_exists_with_overrides(expr: ExprExists, ctx: EmitContext,
+                                      overrides: dict) -> Optional[str]:
+    """Public entry for emitting an EXISTS correlated to explicit SQL columns.
+
+    Used by emit_slice._emit_two_phase to fold a negation into the probe. Kept
+    as a named function rather than exposing the private one, so the contract —
+    the caller supplies the outer column for every correlated variable — is
+    stated somewhere.
+    """
+    return _exists_to_sql(expr, ctx, outer_uuid_overrides=overrides)
+
+
+def _exists_to_sql(expr: ExprExists, ctx: EmitContext,
+                   outer_uuid_overrides: Optional[dict] = None) -> Optional[str]:
     """Emit EXISTS / NOT EXISTS as a correlated SQL subquery.
 
     Runs the inner graph pattern through collect → emit with a child context,
     finds shared variables, and builds UUID-based correlation conditions.
+
+    `outer_uuid_overrides` maps a SPARQL variable to the SQL expression that
+    holds its uuid in the ENCLOSING scope. Normally the correlation is written
+    against `<sql_name>__uuid`, an unqualified column of the surrounding
+    projection. Inside the two-phase probe there is no such projection — the
+    probe is deliberately flat, `SELECT 1` over raw quad tables, because the
+    inner/outer wrapper is what stops PostgreSQL collapsing it into index probes
+    (see emit_bgp.emit_bgp_exists). There the correlation has to name a raw
+    column such as `q7.subject_uuid`, which is what this supplies.
     """
     from .collect import collect
     from .emit import emit
@@ -1171,18 +1193,25 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext) -> Optional[str]:
 
     # Variables the inner pattern binds itself correlate through an explicit
     # predicate below; the filter-only ones were bound to outer columns above.
-    shared = outer_vars & inner_vars
+    # An overridden variable counts as shared even when the enclosing context's
+    # type registry does not carry it — inside the two-phase probe the caller
+    # knows the column and ctx may not.
+    shared = (outer_vars | set(outer_uuid_overrides or {})) & inner_vars
 
     # Build correlation conditions on UUID columns
     ex_alias = ctx.aliases.next("_ex")
     corr_parts = []
+    overrides = outer_uuid_overrides or {}
     for var in sorted(shared):
         o_info = ctx.types.get(var)
         i_info = inner_ctx.types.get(var)
-        if o_info and i_info and o_info.sql_name and i_info.sql_name:
-            o_uuid = f"{o_info.sql_name}__uuid"
-            i_uuid = f"{i_info.sql_name}__uuid"
-            corr_parts.append(f"{o_uuid} = {ex_alias}.{i_uuid}")
+        if not (i_info and i_info.sql_name):
+            continue
+        i_uuid = f"{ex_alias}.{i_info.sql_name}__uuid"
+        if var in overrides:
+            corr_parts.append(f"{overrides[var]} = {i_uuid}")
+        elif o_info and o_info.sql_name:
+            corr_parts.append(f"{o_info.sql_name}__uuid = {i_uuid}")
 
     if corr_parts:
         corr_where = " AND ".join(corr_parts)

@@ -1,6 +1,51 @@
 # EXISTS / NOT EXISTS Bodies Receive None of the Optimization Pipeline
 
-## Status: FIXED (the probe), but CLOSES NO CELLS — 2026-08-10
+## Status: FIXED — 4 of 6 cells closed; the other 2 match nothing — 2026-08-10
+
+Two changes, in the order that mattered:
+
+1. **EXISTS bodies get the pipeline** (`exists_subplan.prepare_exists_subplans`).
+   Probe cost 435 ms -> 0.11 ms. Closed nothing on its own.
+2. **The negation folds into the probe** (`emit_slice._foldable_exists_join` +
+   `emit_bgp_exists(extra_conds=...)` + `_exists_to_sql(outer_uuid_overrides=)`).
+
+| cell | before | after |
+|---|---|---|
+| `not_has`/Text | TIMED OUT | **163 ms** |
+| `not_has`/Choice | TIMED OUT | **108 ms** |
+| `not_has_any`/Text | TIMED OUT | **52 ms** |
+| `not_has_any`/Choice | TIMED OUT | **47 ms** |
+| `not_exists`/Text, `not_exists`/Double | TIMED OUT | TIMED OUT |
+
+Tests: 2,195 conformance + unit, 30 comparator coverage, 0 failures.
+
+### The two that remain are not a paging problem
+
+`not_exists` matches **0 of 100,000 entities** in this fixture — every entity has
+the slot, and `test_comparator_coverage` pins the expected answer at 0. Proving
+that nothing matches requires visiting everything, so no early-terminating plan
+can help; O(page) is impossible when the page is empty. This is the same shape as
+`eq`/DateTime, and it belongs to D3 (match density) in
+`two_phase_kgquery_paging_plan.md`: a density-aware gate would choose a set-based
+plan here instead of probing 100,000 times to return nothing.
+
+### A bug this introduced, and what caught it
+
+The first version computed the set of correlated variables from
+`ctx.types.all_vars()`. At that point two-phase has emitted only the anchor, so
+that set is empty — the soundness check passed **vacuously**, no correlation
+overrides were built, and the fold emitted an *uncorrelated*
+`NOT EXISTS (SELECT 1 FROM ...)`. That asks "does any slot anywhere have this
+value", which is always true, so every entity was excluded and `not_has` returned
+**0 rows instead of 1,508**.
+
+`test_comparator_coverage` failed on 4 cells immediately. It exists because a
+comparator returning 0 rows looks fast and plausible; here it was the difference
+between a working rewrite and a silently empty one. The fix derives the variable
+sets from the plan (`left_bgp` / `right_bgp` var_slots) rather than the emit
+context, and refuses when any correlated variable has no probe column.
+
+## Original status: FIXED (the probe), but CLOSES NO CELLS
 
 The pipeline now runs on EXISTS bodies (`exists_subplan.prepare_exists_subplans`,
 called from `generate_sql` stage 2a.3, consumed by `_exists_to_sql`). Measured on

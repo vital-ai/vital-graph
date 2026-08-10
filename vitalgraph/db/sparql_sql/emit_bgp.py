@@ -206,11 +206,20 @@ def emit_bgp(plan: PlanV2, ctx: EmitContext) -> str:
 
 
 def emit_bgp_exists(plan: PlanV2, ctx: EmitContext,
-                    correlation: tuple) -> Optional[str]:
+                    correlation: tuple,
+                    extra_conds: Optional[list] = None) -> Optional[str]:
     """Emit a BGP as a flat existence test for use inside EXISTS.
 
     `correlation` is (sparql_var, outer_sql_ref): the variable shared with the
     anchor, and the column on the outer row to bind it to.
+
+    `extra_conds` are additional WHERE predicates evaluated INSIDE this
+    subquery. They exist for criteria that correlate to a variable this BGP
+    binds rather than to the anchor — a `FILTER NOT EXISTS` asking whether
+    *this* frame has a slot, for instance. Such a condition cannot stay above
+    the join, because the two-phase rewrite does not project the variable it
+    needs; folding it in here is what lets the shape be paged at all
+    (issues/057).
 
     Deliberately NOT `emit_bgp` with a different projection. `emit_bgp` builds
     an inner/outer split — an inner subquery over the quad tables wrapped in an
@@ -264,8 +273,9 @@ def emit_bgp_exists(plan: PlanV2, ctx: EmitContext,
                          + " AND ".join(conds))
         else:
             parts.append(f"JOIN {qt.table_name} AS {qt.alias} ON TRUE")
-    if first_conds:
-        parts.append("WHERE " + " AND ".join(first_conds))
+    where_conds = list(first_conds) + list(extra_conds or [])
+    if where_conds:
+        parts.append("WHERE " + " AND ".join(where_conds))
     # OFFSET 0 is an optimisation fence. Without it PostgreSQL pulls the
     # correlated subquery up into a hash semi-join: it builds the full set of
     # qualifying anchors, which both costs the whole match set and destroys the

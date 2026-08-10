@@ -34,6 +34,47 @@ def _has_semijoin(node, depth: int = 0) -> bool:
     return any(_has_semijoin(c, depth + 1) for c in (getattr(node, "children", None) or []))
 
 
+def _foldable_exists_join(node, depth: int = 0):
+    """`(filter_node, join_node, exists_expr)` for a foldable negation, else None.
+
+    The shape KGQuery produces for `not_exists` / `not_has` / `not_has_any`:
+
+        filter [ExprExists(NOT EXISTS)]
+          join
+            bgp   <- anchor
+            bgp   <- the frame path the EXISTS correlates into
+
+    `mark_semijoins` never marks that join, and it is right not to. The body
+    references a variable the RIGHT bgp binds — `?frame_0_0`, meaning "does
+    *this* frame have such a slot" — and per SPARQL 1.1 §8.1.1 the body is
+    evaluated with the current solution mapping substituted. Dropping the right
+    side would drop that binding and change the question being asked.
+
+    So the fold has to go the other way: the EXISTS moves INSIDE the probe,
+    where the variable it needs is in scope. This function only recognises the
+    shape; the precondition that makes the move sound — every variable the body
+    shares with the outer query must be bound by the right bgp — is checked at
+    the point of use, where both bgps are known.
+    """
+    from .ir import KIND_FILTER, KIND_JOIN
+    from ..jena_sparql.jena_types import ExprExists
+
+    if node is None or depth > 6:
+        return None
+    if (node.kind == KIND_FILTER and node.filter_exprs
+            and len(node.filter_exprs) == 1
+            and isinstance(node.filter_exprs[0], ExprExists)
+            and node.children):
+        child = node.children[0]
+        if child.kind == KIND_JOIN and len(child.children or []) == 2:
+            return (node, child, node.filter_exprs[0])
+    for c in (node.children or []):
+        found = _foldable_exists_join(c, depth + 1)
+        if found is not None:
+            return found
+    return None
+
+
 def _filters_between(node, stop, depth: int = 0):
     """FILTER nodes on the path from `node` down to `stop` (exclusive)."""
     from .ir import KIND_FILTER
@@ -66,8 +107,16 @@ def _emit_two_phase(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
     from .sql_type_generation import TypeRegistry
     from .emit_bgp import _NUMERIC_DATATYPES, _BOOLEAN_DT, _DATETIME_DATATYPES
 
-    if plan.limit < 0 or not _has_semijoin(plan.child):
+    if plan.limit < 0:
         return None
+    # Either a marked semi-join, or the negation shape: a FILTER whose whole
+    # expression is a correlated EXISTS sitting on a two-child JOIN. The latter
+    # is never marked, and correctly so — see _foldable_exists_join.
+    exists_join = None
+    if not _has_semijoin(plan.child):
+        exists_join = _foldable_exists_join(plan.child)
+        if exists_join is None:
+            return None
 
     buried = _find_buried_order(plan.child)
     if len(buried) != 1:
@@ -83,7 +132,11 @@ def _emit_two_phase(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
     # match set and top-N sorts it.
     from .emit_bgp import emit_bgp_anchor, emit_bgp_exists, find_bgp, find_semijoin
 
-    sj = find_semijoin(plan.child)
+    if exists_join is not None:
+        exists_filter, sj, exists_expr = exists_join
+    else:
+        exists_filter, exists_expr = None, None
+        sj = find_semijoin(plan.child)
     if sj is None or len(sj.children or []) != 2:
         return None
     left_bgp = find_bgp(sj.children[0])
@@ -109,12 +162,64 @@ def _emit_two_phase(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
     # and let the ordinary path handle it, slower and correct.
     from .filter_pushdown import push_filters
     for filt in _filters_between(plan.child, sj):
+        if filt is exists_filter:
+            continue        # folded into the probe below, not pushed
         push_filters(filt, ctx.space_id, ctx)
         if filt.filter_exprs:
             ctx.log("slice", "two-phase declined: filter not pushed into probe")
             return None
 
-    probe = emit_bgp_exists(right_bgp, ctx, (key, col_ref))
+    # Fold a correlated EXISTS into the probe, where the variable it correlates
+    # on is in scope.
+    extra_conds = None
+    if exists_expr is not None:
+        from .var_scope import compute_scope
+        from .emit_expressions import expr_to_sql_exists_with_overrides
+
+        # SOUNDNESS: every variable the body shares with the outer query must be
+        # bound by the right bgp. If it referenced something bound only by the
+        # anchor, moving the condition inside the probe would re-scope it — the
+        # body would correlate to the wrong row, or to nothing at all.
+        #
+        # Derived from the PLAN, never from ctx.types: at this point two-phase
+        # has emitted only the anchor, so ctx.types does not yet carry the
+        # query's variables. Reading it here returned an empty set, which made
+        # this check pass vacuously, produced no overrides, and emitted an
+        # UNCORRELATED `NOT EXISTS (...)` — "does any slot anywhere have this
+        # value", always true, so every entity was excluded and the query
+        # returned 0 rows instead of 1,508. Caught by test_comparator_coverage.
+        body_vars = set(compute_scope(exists_expr.prepared_plan).all_visible
+                        if exists_expr.prepared_plan is not None else ())
+        right_vars = set((right_bgp.var_slots or {}).keys())
+        left_vars = set((left_bgp.var_slots or {}).keys())
+        correlated = body_vars & (right_vars | left_vars)
+        outside = correlated - right_vars
+        if not body_vars or outside:
+            ctx.log("slice", "two-phase declined: EXISTS correlates outside "
+                             f"the probe ({sorted(outside)})")
+            return None
+
+        overrides = {}
+        for var in correlated:
+            slot = (right_bgp.var_slots or {}).get(var)
+            if slot and slot.positions:
+                q_alias, uuid_col = slot.positions[0]
+                overrides[var] = f"{q_alias}.{uuid_col}"
+        # Every correlated variable must have produced a column. A missing one
+        # means an uncorrelated subquery, which is silently wrong rather than an
+        # error, so refuse instead.
+        if set(overrides) != correlated:
+            ctx.log("slice", "two-phase declined: no probe column for "
+                             f"{sorted(correlated - set(overrides))}")
+            return None
+        cond = expr_to_sql_exists_with_overrides(exists_expr, ctx, overrides)
+        if not cond:
+            ctx.log("slice", "two-phase declined: EXISTS body did not emit")
+            return None
+        extra_conds = [cond]
+
+    probe = emit_bgp_exists(right_bgp, ctx, (key, col_ref),
+                            extra_conds=extra_conds)
     if probe is None:
         return None
 
