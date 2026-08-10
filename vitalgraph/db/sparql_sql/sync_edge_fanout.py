@@ -138,6 +138,95 @@ async def compute_edge_fanout(conn, space_id: str) -> int:
     return written
 
 
+# A hop whose tail exceeds this is not safe to walk: the cost of being wrong is
+# a timeout, not a slightly worse plan, so the bound is deliberately tight. Set
+# above the containment tree (1) and the observed friend-graph tail (6) but far
+# below a hub (886 on worksFor, 1,342 on wordnet slot values).
+MAX_SAFE_HOP_TAIL = 16
+
+# Amplification a whole path may reach before the walk stops being worth it.
+# Three containment hops at the observed forward fan-out of ~4 land at ~71x,
+# which is the case issues/059 measures as 700ms backward against >200s forward.
+MAX_SAFE_PATH_AMPLIFICATION = 100
+
+
+def assess_traversal(fanout: Dict[tuple, dict], hops, direction: str) -> dict:
+    """Is walking `hops` in `direction` bounded, and by how much?
+
+    `hops` is an ordered list of `(edge_type_uuid, relation_type_uuid)`, the
+    path a traversal follows. Returns:
+
+        {"safe": bool, "amplification": float, "worst_hop": ..., "reason": str}
+
+    Uses the TAIL (p99, falling back to max) rather than the average, because
+    the distributions here are skewed enough that the mean is not the typical
+    cost of being wrong: `worksFor` backward averages 39 with a p99 of 468, and
+    wordnet's slot-value in-degree averages 5.20 against a maximum of 1,342. A
+    plan chosen on the mean is off by that ratio, and off means a timeout.
+
+    A hop with NO recorded fan-out is treated as unsafe rather than as 1. The
+    table is recomputed on the maintenance cadence, so a missing entry means
+    "not measured", and assuming the favourable value for unmeasured data is how
+    a rewrite ships looking correct and behaves badly on the shapes nobody
+    profiled.
+    """
+    amplification = 1.0
+    worst = None
+    worst_tail = 0
+
+    for hop in hops:
+        edge_type, relation_type = hop
+        stats = fanout.get((edge_type, relation_type or NO_RELATION, direction))
+        if stats is None:
+            return {"safe": False, "amplification": float("inf"),
+                    "worst_hop": hop,
+                    "reason": f"no fan-out recorded for {hop} {direction}"}
+
+        tail = stats.get("p99") or stats.get("max") or 0
+        if tail > worst_tail:
+            worst_tail, worst = tail, hop
+        if tail > MAX_SAFE_HOP_TAIL:
+            return {"safe": False, "amplification": float("inf"),
+                    "worst_hop": hop,
+                    "reason": (f"hop tail {tail} exceeds {MAX_SAFE_HOP_TAIL} "
+                               f"— this direction fans out")}
+        amplification *= max(1.0, float(tail))
+
+    if amplification > MAX_SAFE_PATH_AMPLIFICATION:
+        return {"safe": False, "amplification": amplification,
+                "worst_hop": worst,
+                "reason": (f"path amplification {amplification:.0f} exceeds "
+                           f"{MAX_SAFE_PATH_AMPLIFICATION}")}
+    return {"safe": True, "amplification": amplification, "worst_hop": worst,
+            "reason": "bounded"}
+
+
+def choose_direction(fanout: Dict[tuple, dict], hops) -> dict:
+    """Which direction to walk a traversal, if either is safe.
+
+    Returns the assessment of the chosen direction with a `direction` key, or
+    `direction=None` when neither is bounded — which is the honest answer for a
+    relation graph, where an entity may be source or destination in many and
+    NEITHER direction is safe. A rewrite that assumed one always was would be
+    wrong on exactly that shape, and the tree-only fixtures could not have shown
+    it (`issues/061`).
+
+    Prefers backward when both qualify: the constrained end of a negation is
+    normally the far end, so walking back to the anchor visits the selective set
+    once rather than probing from every anchor row.
+    """
+    back = assess_traversal(fanout, hops, "backward")
+    if back["safe"]:
+        return {**back, "direction": "backward"}
+    fwd = assess_traversal(fanout, hops, "forward")
+    if fwd["safe"]:
+        return {**fwd, "direction": "forward"}
+    return {"direction": None, "safe": False,
+            "amplification": min(back["amplification"], fwd["amplification"]),
+            "worst_hop": back["worst_hop"],
+            "reason": f"neither direction bounded (backward: {back['reason']})"}
+
+
 async def load_edge_fanout(conn, space_id: str) -> Dict[tuple, dict]:
     """Read the table into `{(edge_type, relation_type, direction): stats}`.
 

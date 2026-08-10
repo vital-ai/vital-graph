@@ -191,3 +191,100 @@ class TestEdgeFanout:
         assert back["max_fanout"] > back["avg_fanout"] * 5, (
             "a caller planning on the average would be off by this ratio; "
             "storing only the mean would hide it")
+
+
+class TestDirectionChoice:
+    """The decision layer that consumes the fan-out table.
+
+    Pure given a fan-out map, so these build the map explicitly rather than
+    measuring it — the point is what the rule DOES with numbers, not whether the
+    numbers are right, which the tests above cover.
+    """
+
+    E = uuid.UUID("11111111-1111-1111-1111-111111111111")
+    R_TREE = uuid.UUID("22222222-2222-2222-2222-222222222222")
+    R_HUB = uuid.UUID("33333333-3333-3333-3333-333333333333")
+
+    def _map(self, spec: dict) -> dict:
+        return {k: {"avg": v, "p99": v, "max": v, "nodes": 100}
+                for k, v in spec.items()}
+
+    def test_containment_tree_chooses_backward(self):
+        from vitalgraph.db.sparql_sql.sync_edge_fanout import (
+            choose_direction, NO_RELATION)
+        fo = self._map({
+            (self.E, NO_RELATION, "backward"): 1,
+            (self.E, NO_RELATION, "forward"): 4,
+        })
+        r = choose_direction(fo, [(self.E, None), (self.E, None), (self.E, None)])
+        assert r["direction"] == "backward"
+        assert r["amplification"] == 1.0, (
+            "three hops of fan-out 1 must not amplify — this is the property "
+            "that makes walking a containment hierarchy backward safe by "
+            "construction")
+
+    def test_hub_refuses_backward_and_takes_forward(self):
+        """The case a naive 'always backward' rule gets catastrophically wrong.
+
+        `worksFor` on real data: forward 1, backward 886. Backward must be
+        rejected outright rather than merely scored worse.
+        """
+        from vitalgraph.db.sparql_sql.sync_edge_fanout import choose_direction
+        fo = self._map({
+            (self.E, self.R_HUB, "backward"): 886,
+            (self.E, self.R_HUB, "forward"): 1,
+        })
+        r = choose_direction(fo, [(self.E, self.R_HUB)])
+        assert r["direction"] == "forward", (
+            f"chose {r['direction']} for a hop with backward fan-out 886")
+
+    def test_neither_direction_safe_returns_none(self):
+        """A relation graph can fan out both ways, and the honest answer is no.
+
+        An entity may be source or destination in many relations. A rewrite that
+        assumed some direction is always safe would be wrong here, and the
+        tree-shaped fixtures could not have shown it (issues/061).
+        """
+        from vitalgraph.db.sparql_sql.sync_edge_fanout import choose_direction
+        fo = self._map({
+            (self.E, self.R_HUB, "backward"): 400,
+            (self.E, self.R_HUB, "forward"): 380,
+        })
+        r = choose_direction(fo, [(self.E, self.R_HUB)])
+        assert r["direction"] is None, (
+            f"chose {r['direction']} when both directions fan out by hundreds")
+        assert "neither" in r["reason"]
+
+    def test_unmeasured_hop_is_unsafe_not_assumed_cheap(self):
+        """A missing entry means 'not measured', never 'fan-out 1'.
+
+        The table is recomputed on the maintenance cadence, so absence is
+        common. Assuming the favourable value for unmeasured data is how a
+        rewrite ships looking correct and behaves badly on the shapes nobody
+        profiled — the same mistake as reading an unpopulated column as evidence
+        (issues/060).
+        """
+        from vitalgraph.db.sparql_sql.sync_edge_fanout import choose_direction
+        r = choose_direction({}, [(self.E, None)])
+        assert r["direction"] is None
+        assert "no fan-out recorded" in r["reason"]
+
+    def test_amplification_compounds_across_hops(self):
+        """Per-hop bounds are not enough; the product is what matters.
+
+        Each hop here is under the per-hop tail limit, but three of them
+        multiply past the path budget — which is exactly the 4.15^3 ~ 71x
+        forward case that makes the backward walk worth doing at all.
+        """
+        from vitalgraph.db.sparql_sql.sync_edge_fanout import (
+            choose_direction, NO_RELATION)
+        fo = self._map({
+            (self.E, NO_RELATION, "backward"): 10,
+            (self.E, NO_RELATION, "forward"): 10,
+        })
+        one = choose_direction(fo, [(self.E, None)])
+        assert one["direction"] == "backward" and one["amplification"] == 10.0
+        four = choose_direction(fo, [(self.E, None)] * 4)
+        assert four["direction"] is None, (
+            f"10^4 amplification was accepted (amp={four['amplification']}); "
+            f"each hop passes its own bound but the path does not")
