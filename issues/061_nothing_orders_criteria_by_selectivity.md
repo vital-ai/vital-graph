@@ -117,6 +117,31 @@ recorded **per edge type**, which makes `issues/060` (the edge type column) a
 prerequisite for the metric and not only a performance win — without it the edge
 table cannot even distinguish the cases.
 
+### Measured on real data: the direction rule INVERTS between edge kinds
+
+`wordnet_frames` carries 570,696 `hasEntitySlotValue` quads — slot values that
+point at entities — so the non-tree case is measurable on real data rather than
+hypothesised:
+
+| edge kind | forward | backward |
+|---|---|---|
+| containment (`Edge_hasKGSlot`) | avg 2.00, max 2 | **avg 1.00, max 1** |
+| slot value (`hasEntitySlotValue`) | **avg 1.00, max 1** | avg 5.20, p50 2, p99 40, **max 1,342** |
+
+Two conclusions, both of which constrain the design:
+
+1. **Containment backward = 1 holds on real data**, confirming the model
+   guarantee rather than a synthetic artefact.
+2. **The safe direction is per edge kind and it inverts.** For a slot-value hop
+   the safe direction is *forward*; walking it backward hits 1,342x at worst. A
+   blanket "traverse backward" rule — which the 100k fixture alone would have
+   justified — is wrong.
+
+**The distribution is skewed, so an average is not enough.** 5.20 average against
+a 1,342 maximum: a plan chosen on the mean can hit 250x that. The metric needs a
+tail statistic (p99 and max), not a mean, and a direction choice should use the
+tail when the cost of being wrong is a timeout.
+
 ### Coverage gap this exposes
 
 The fixture contains only `Edge_hasKGSlot` (3,877,000), `Edge_hasKGFrame`
@@ -124,10 +149,16 @@ The fixture contains only `Edge_hasKGSlot` (3,877,000), `Edge_hasKGFrame`
 at all**, which matches `issues/043`/`048`: `build_relation_query` requires
 `Edge_hasKGRelation`, which has zero instances anywhere.
 
-Every fan-out number above therefore describes the tree-shaped half of the model.
-An optimisation designed on it could be wrong for relations and no fixture would
-catch it. A relation-bearing fixture should exist before any direction-choosing
-rewrite ships.
+Every fan-out number from that fixture therefore describes the tree-shaped half
+of the model. `wordnet_frames` covers the slot-value case above and is the
+fixture any direction-choosing rewrite must be validated against — it is the one
+that would have caught a blanket backward rule.
+
+**Relations remain uncovered.** `wordnet_frames` holds only `Edge_hasKGSlot`
+(570,696), so neither fixture has a relation edge, and relations are the case
+with no safe direction at all — an entity may be source or destination in many.
+A relation-bearing fixture should exist before any direction-choosing rewrite
+ships.
 
 ## Suggested order
 
