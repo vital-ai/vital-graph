@@ -109,13 +109,57 @@ gate is now the binding constraint, and the ordering was the whole point — doi
 the gate first would have produced a correct plan that was still far too slow,
 and the probe fix would have looked unnecessary.
 
-The obstacle noted below still stands and still has to be solved: `not_exists`
-produces `filter -> join -> (bgp, bgp)` with the negation inside a filter
-*expression*, so there is no negated join node to mark. The gate would have to
-recognize a filter whose expression is a single correlated `ExprExists` and
-treat it as a probe — with the same filter-consumption verification
-`_emit_two_phase` already does, since an unconsumed filter above a probed join
-silently returns rows that do not satisfy the criterion.
+### But NOT the way first proposed — that would return wrong answers
+
+The obvious version — recognize a filter whose expression is a correlated
+`ExprExists` and mark the join beneath it as a semi-join — is **unsound here**.
+
+The plan is:
+
+    order
+      filter [ExprExists(NOT EXISTS)]
+        join
+          bgp  tables=2   vars=[entity]                             <- anchor
+          bgp  tables=11  vars=[entity, frame_0, frame_0_0, ...]    <- frame path
+
+and the variables tell the story:
+
+    outside the NOT EXISTS:  entity, frame_0, frame_0_0, frame_edge_0, frame_edge_0_0
+    inside  the NOT EXISTS:  entity, frame_0_0, slot_0_0_0, slot_edge_0_0_0
+
+`?frame_0_0` is bound by the right BGP and referenced inside the body. Per SPARQL
+1.1 §8.1.1 the body is evaluated with the current solution mapping substituted,
+so the criterion means "**this** frame has no slot of type X", not "no frame
+does". Marking the join would drop the side that binds `frame_0_0` and change the
+question being asked.
+
+`mark_semijoins` is therefore declining **correctly**, via
+`not (right_private & (needed - pushable_vars))` — the `ExprExists` is not
+pushable, so `_expr_list_vars` puts `frame_0_0` into `needed`, and it is in
+`right_private`. Nothing is broken; the gate is right.
+
+### The design that would work
+
+Fold the negation **into** the probe rather than leaving it above the join.
+`emit_bgp_exists` already emits `EXISTS (...)` over the right BGP; the
+`NOT EXISTS` condition belongs *inside* that subquery, where `frame_0_0` is in
+scope and correlation to the anchor is only on `entity`. That is what
+`_filters_between` + `push_filters` is for — the machinery exists, it just cannot
+consume an `ExprExists`.
+
+Two ends have to agree, as always:
+
+1. `semijoin._pushable_range_var` (or a sibling) must report the `ExprExists` as
+   pushable **only** when every variable it references is bound within the probe
+   BGP or is the anchor key — otherwise the correlation escapes the subquery.
+2. `filter_pushdown` / `_emit_two_phase` must actually emit it inside the probe,
+   and `_emit_two_phase`'s existing consumption check must still bail out when it
+   does not.
+
+If those two disagree the gate marks a join whose filter then fails to push, and
+the result is a page containing entities outside the result set — which has
+happened before (item 5 in `two_phase_kgquery_paging_plan.md`) and is why that
+check is not optional.
 
 ## Original reasoning: why this was the right fix, and two-phase paging was not
 
