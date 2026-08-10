@@ -1,5 +1,23 @@
 # Negation Traverses Forward Per Entity When It Should Run Backward Once
 
+## Status: OPEN — prerequisites built and wired, emitter not started
+
+Everything the rewrite depends on is committed and tested:
+
+* `edge_type_uuid` (`issues/060`) — a typed hop is a column predicate, 42s -> 1.5s
+* `{space}_edge_fanout` — per edge type x relation type x direction, with p99/max
+* `choose_direction` — validated on all three fixtures, and it declines the
+  dangerous case: `worksFor` gets FORWARD because its backward tail is 886
+* `extract_traversal` — reads the edge chain out of a BGP
+* a gate in `_emit_two_phase` that declines when the probe amplifies forward
+* `sp_kg_rel` — the only fixture that can refute a wrong direction rule
+
+**The emitter is not started, and the remaining work is larger than this issue
+first implied.** The `NOT EXISTS` body is a ONE-hop traversal — the outer query
+has already walked entity -> frame -> frame — so the 700ms measurement came from
+restructuring the whole query backward, not the sub-plan. See the correction
+below.
+
 ## Status: OPEN, measured 2026-08-10 — 285x on the table, `sp_lead_synth_100k`
 
     current engine (anchor + forward probe per entity)   > 200 s (timeout)
@@ -66,6 +84,22 @@ Honest limits of the measurement:
 * It computes the whole anti-join rather than a page. For an empty answer that is
   the same thing; for a non-empty one, ordering and limiting the result set is
   cheap relative to the traversal.
+
+## Correction to the 700ms measurement
+
+The hand-written backward query anti-joined the entity population against
+"entities reachable from a matching slot". That is only the right answer because
+in `sp_lead_synth_100k` **every** entity has the frame path, so "entities with
+the path" and "all entities" coincide.
+
+In general the answer is
+
+    entities WITH the positive path   MINUS   entities with the path AND the slot
+
+and both sides have to be computed. The 700ms figure is therefore a floor rather
+than an estimate of the finished thing — a shortcut the fixture happened to
+permit, and the kind that makes a measurement look better than the
+implementation will be. Worth stating plainly before anyone plans around it.
 
 ## Cost to implement
 
