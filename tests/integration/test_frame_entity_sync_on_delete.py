@@ -174,3 +174,66 @@ class TestFrameEntitySyncOnDelete:
         assert left == 0, (
             f"{left} frame_entity row(s) survived DROP GRAPH — the frames they "
             f"describe no longer exist at all")
+
+    async def test_slot_value_update_refreshes_frame_entity(
+        self, test_space, space_impl, pg_conn
+    ):
+        """Incremental CRUD: change a slot's entity value on an EXISTING frame.
+
+        The frame is not a subject of this write — only the slot is — so a sync
+        that matches the frame position alone never fires, and frame_entity
+        keeps asserting the OLD entity. It still has a row, so nothing looks
+        wrong; the row just describes a relationship that has changed.
+
+        This is the case the frame-position-only filter missed. Creating a frame
+        works either way, because a new frame carries its own type triple and is
+        therefore a subject of its own creation.
+        """
+        frame = URIRef("urn:test:crud:frame")
+        sslot = URIRef("urn:test:crud:slot:src")
+        dslot = URIRef("urn:test:crud:slot:dst")
+        old_entity = URIRef("urn:test:crud:entity:old")
+        new_entity = URIRef("urn:test:crud:entity:new")
+
+        quads = [(frame, VITALTYPE, URIRef(f"{KG}KGFrame"), GRAPH)]
+        for slot, edge, stype, ent in (
+            (sslot, URIRef("urn:test:crud:edge:src"), SOURCE_ENTITY, old_entity),
+            (dslot, URIRef("urn:test:crud:edge:dst"), DEST_ENTITY,
+             URIRef("urn:test:crud:entity:d")),
+        ):
+            quads += [
+                (edge, VITALTYPE, EDGE_HAS_SLOT, GRAPH),
+                (edge, HAS_EDGE_SOURCE, frame, GRAPH),
+                (edge, HAS_EDGE_DEST, slot, GRAPH),
+                (slot, HAS_SLOT_TYPE, stype, GRAPH),
+                (slot, HAS_ENTITY_SLOT_VALUE, ent, GRAPH),
+            ]
+        await space_impl.add_rdf_quads_batch(test_space, quads)
+        assert await _fe_rows(pg_conn, test_space) >= 1, "seed produced no row"
+
+        # Repoint the source slot at a different entity — the frame itself is
+        # untouched by this update.
+        await space_impl.execute_sparql_update(
+            test_space,
+            f"DELETE DATA {{ GRAPH <{GRAPH}> {{ "
+            f"<{sslot}> <{HAS_ENTITY_SLOT_VALUE}> <{old_entity}> . }} }}")
+        await space_impl.execute_sparql_update(
+            test_space,
+            f"INSERT DATA {{ GRAPH <{GRAPH}> {{ "
+            f"<{sslot}> <{HAS_ENTITY_SLOT_VALUE}> <{new_entity}> . }} }}")
+
+        stale = await _stale_fe_rows(pg_conn, test_space)
+        assert stale == 0, (
+            f"{stale} frame_entity row(s) still name the old entity after the "
+            f"slot was repointed. Relationship queries return a stale answer "
+            f"and the row count is unchanged, so no drift check can see it.")
+        row = await pg_conn.fetchrow(
+            f"""
+            SELECT t.term_text AS src FROM {test_space}_frame_entity fe
+            JOIN {test_space}_term t ON t.term_uuid = fe.source_entity_uuid
+            JOIN {test_space}_term tf ON tf.term_uuid = fe.frame_uuid
+            WHERE tf.term_text = $1
+            """, str(frame))
+        assert row and row["src"] == str(new_entity), (
+            f"frame_entity source is {row['src'] if row else None}, "
+            f"expected {new_entity}")

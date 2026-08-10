@@ -61,17 +61,17 @@ async def sync_frame_entity_after_edge_insert(
     if the write touched the frame itself, one of its slots, or the edge joining
     them — so all three positions are matched, not just one.
 
-    This used to take "the source_node_uuid values from newly inserted edge rows
-    (these are the frame UUIDs)". Both callers pass QUAD SUBJECTS instead, which
-    are edge and slot uuids and never the frame, so `source_node_uuid = ANY(...)`
-    matched nothing and the incremental sync populated **nothing, on any write
-    path, ever**. The symptom was easy to misread: `resync_all_auxiliary_tables`
-    reports `frame_entity_rows=0` for every space, which looks like "no space has
-    relation frames" rather than "the incremental path is dead" — and the full
-    resync has no such filter, so a rebuild masked it by working correctly.
+    This used to match only `emv.source_node_uuid` — the frame. That is enough
+    when the frame is itself a subject of the same write, which it is whenever
+    the frame is created (it carries its own type triple), so the common case
+    worked.
 
-    Found by a fixture-guard test asserting that the seed shape actually
-    produces rows before testing deletion against it.
+    It is NOT enough for incremental CRUD on an existing frame. Changing a
+    slot's `hasEntitySlotValue`, or adding a slot to a frame that already
+    exists, touches only the slot (and maybe the edge) — the frame is not a
+    subject of that write, nothing matched, and frame_entity kept the old
+    entity. Silently: the table still has a row, it just describes a
+    relationship that has changed.
     """
     if not touched_uuids:
         return 0
@@ -108,11 +108,17 @@ async def sync_frame_entity_after_edge_insert(
                 ON sv.subject_uuid = emv.dest_node_uuid
                 AND sv.predicate_uuid = $2
             WHERE st.object_uuid IN ($3, $4)
-              -- The frame, its slot, or the edge between them: a write to any
-              -- of the three can create or invalidate a frame_entity row.
-              AND (emv.source_node_uuid = ANY($5)
-                   OR emv.dest_node_uuid = ANY($5)
-                   OR emv.edge_uuid = ANY($5))
+              -- Select the FRAMES the write touched, then aggregate over ALL
+              -- of each frame's slots. Filtering the join rows themselves by
+              -- the touched uuid instead restricts the aggregate to the one
+              -- slot that changed, so the HAVING below — which requires both a
+              -- source and a destination role — drops the frame entirely and
+              -- the row is deleted and never rebuilt.
+              AND emv.source_node_uuid IN (
+                    SELECT e2.source_node_uuid FROM {t_edge} e2
+                    WHERE e2.source_node_uuid = ANY($5)
+                       OR e2.dest_node_uuid = ANY($5)
+                       OR e2.edge_uuid = ANY($5))
             GROUP BY emv.source_node_uuid, emv.context_uuid
             HAVING (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $3))[1] IS NOT NULL
                AND (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $4))[1] IS NOT NULL
@@ -131,27 +137,46 @@ async def sync_frame_entity_before_delete(
     subject_uuids: List[uuid.UUID],
     context_uuid: Optional[uuid.UUID] = None,
 ) -> int:
-    """Before entity quads are deleted, remove corresponding frame_entity rows.
+    """Before quads are deleted, remove the frame_entity rows they invalidate.
 
-    Removes rows where frame_uuid is in subject_uuids (frames being deleted).
-    Also removes rows where source_entity_uuid or dest_entity_uuid is in
-    subject_uuids (entities being deleted).
-    Returns total rows deleted.
+    Removes rows for any frame the write touched — directly, or through one of
+    its slots or the edge joining them. Callers pair this with
+    `sync_frame_entity_after_edge_insert` to drop and re-derive.
+
+    Resolving slots and edges back to their frame is what makes an UPDATE work.
+    This used to delete only `frame_uuid = ANY(subjects)`, and repointing a
+    slot's `hasEntitySlotValue` touches the SLOT, not the frame: nothing was
+    dropped, the re-derive hit ON CONFLICT DO NOTHING, and the row kept naming
+    the OLD entity indefinitely. The row count never changes, so no drift check
+    can see it — the table simply asserts a relationship that has moved.
+
+    (The previous docstring also claimed it removed rows by source_entity_uuid
+    and dest_entity_uuid, for entities being deleted. It never did. That case is
+    now covered by `cleanup_stale_frame_entity`, which is referential rather
+    than subject-driven.)
     """
     if not subject_uuids:
         return 0
 
     t_fe = f"{space_id}_frame_entity"
+    t_edge = f"{space_id}_edge"
     deleted = 0
+
+    frame_filter = f"""
+        (frame_uuid = ANY($1)
+         OR frame_uuid IN (
+            SELECT source_node_uuid FROM {t_edge}
+            WHERE dest_node_uuid = ANY($1) OR edge_uuid = ANY($1)))
+    """
 
     if context_uuid:
         result = await conn.execute(
-            f"DELETE FROM {t_fe} WHERE frame_uuid = ANY($1) AND context_uuid = $2",
+            f"DELETE FROM {t_fe} WHERE {frame_filter} AND context_uuid = $2",
             subject_uuids, context_uuid,
         )
     else:
         result = await conn.execute(
-            f"DELETE FROM {t_fe} WHERE frame_uuid = ANY($1)",
+            f"DELETE FROM {t_fe} WHERE {frame_filter}",
             subject_uuids,
         )
     deleted += int(result.split()[-1]) if result else 0
