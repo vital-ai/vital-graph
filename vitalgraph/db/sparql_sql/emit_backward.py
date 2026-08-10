@@ -5,32 +5,43 @@ placing the set form where it fits made the plan WORSE. Kept because the
 recogniser is the hard part and is right; what is wrong is where the condition
 was put.
 
-What was tried
---------------
-The condition was emitted as an `extra_cond` on the two-phase probe, replacing
-the correlated `NOT EXISTS`. That is correct — a differential test against the
-correlated form returned identical 300-row sets on a case with a non-empty
-answer — and it is slower:
+Two placements were tried and measured. Both are CORRECT — a differential test
+against the correlated form returned identical 300-row sets on a case
+constructed to have a non-empty answer — and neither is faster.
+
+**1. Inlined into the probe** as an `extra_cond`:
 
     per-probe cost   ~21  ->  ~69,928
     total estimate   6.5 billion
 
-because the subquery lands INSIDE `SubPlan 2`, the per-anchor-row probe, so
-PostgreSQL evaluates it per row instead of once. An uncorrelated subquery nested
-inside a correlated one does not get hoisted out of it.
+The subquery lands inside `SubPlan 2`, the per-anchor-row probe, and an
+uncorrelated subquery nested inside a correlated one is not hoisted out of it —
+PostgreSQL re-evaluates it per row.
+
+**2. As a MATERIALIZED CTE scoped to phase 1**, with the probe testing
+membership. This fixed the re-evaluation: the CTE is computed exactly once, cost
+69,796. The query still times out, because the outer `Unique` is 95 million.
+
+The reason is the part neither placement addresses: **the anchor still drives**.
+Phase 1 scans 100,000 entities and probes each, and when the answer is empty
+that scan exhausts no matter how cheap the probe becomes.
 
 What is actually required
 -------------------------
-The set has to be computed at the TOP level and drive the query, not sit inside
-the probe:
+Phase 1 must be DRIVEN BY the walked-back set rather than filtered by it:
 
-    WITH excluded AS (<walk back from the constrained leaf>)
-    ... anchor ... WHERE frame NOT IN (SELECT n FROM excluded)
+    FROM (walk back from the surviving leaves) AS candidates
+    JOIN anchor ON anchor.subject = candidates.n
 
-which means replacing the anchor-and-probe structure rather than adding a
-condition to it — the whole-query restructure `issues/059` describes. The
-hand-written form of exactly that measures 205-337ms against a >200s timeout, so
-the win is real; only this placement of it is not.
+The hand-written form of that measures 205-337ms against >200s, and the reason
+it wins is that when the negation excludes everything the candidate set is
+EMPTY, so nothing is walked and nothing is scanned. A filter cannot reproduce
+that; only choosing a different driver can.
+
+That is a genuine alternative to `_emit_two_phase`, not a modification of it, and
+it trades away the ordered-scan property two-phase relies on for O(page) — which
+is only an acceptable trade when the answer is sparse. Hence the density gate in
+`issues/059`.
 
 
 The rewrite `issues/059` asks for. The engine answers `not_exists` by scanning
@@ -100,8 +111,25 @@ class Traversal:
                 f"hops={len(self.hops)}, corr={self.correlated_var})")
 
 
-def emit_backward_set_condition(trav: Traversal, space_id: str,
-                                corr_col: str, context_uuid: str) -> str:
+def emit_backward_walk_cte(trav: Traversal, space_id: str, cte_name: str,
+                           context_uuid: str) -> str:
+    """A MATERIALIZED CTE holding the nodes the negation excludes.
+
+    `WITH <name> AS MATERIALIZED (SELECT ... AS n ...)`, for a caller to test
+    membership against. MATERIALIZED is not decoration: without it PostgreSQL 12+
+    may inline the CTE back into the correlated probe that references it, which
+    is precisely the arrangement measured at ~69,928 per probe against ~21.
+
+    The walk starts at the constrained end — an index range scan on
+    (predicate, object, context) — and each hop is a column predicate on
+    `edge_type_uuid`, which is why `issues/060` is a prerequisite: without that
+    column every hop needs a join back to a 24 GB quad table, 42s against 1.5s.
+    """
+    body = _walk_select(trav, space_id, context_uuid)
+    return f"WITH {cte_name} AS MATERIALIZED (\n    {body}\n  )"
+
+
+def _walk_select(trav: Traversal, space_id: str, context_uuid: str) -> str:
     """SQL for "this node is not one the negation excludes", as a SET.
 
     The correlated form asks, once per anchor row, "walk from this frame and see
@@ -149,7 +177,7 @@ def emit_backward_set_condition(trav: Traversal, space_id: str,
         f" AND lf.object_uuid = '{trav.leaf_obj}'::uuid"
         f" AND lf.context_uuid = '{context_uuid}'::uuid")
 
-    return f"{corr_col} NOT IN (\n    " + "\n    ".join(parts) + "\n  )"
+    return "\n    ".join(parts)
 
 
 def _const_map(aliases) -> dict:
