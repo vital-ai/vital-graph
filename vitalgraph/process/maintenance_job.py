@@ -477,11 +477,15 @@ class MaintenanceJob:
         """
         from ..db.sparql_sql.sync_edge_table import (
             edge_table_drift, edge_table_orphan_rate,
-            edge_table_untyped_rate, backfill_edge_table)
+            edge_table_untyped_rate, backfill_edge_table,
+            cleanup_orphan_edges)
 
         worst_space = None
         worst_drift = 0
         stale_space = None
+        # Tracked independently of drift — see the note at the selection below.
+        worst_orphan_space = None
+        worst_orphan_rate = 0.0
         for space_id in space_ids:
             try:
                 async with self._pool.acquire() as conn:
@@ -522,6 +526,14 @@ class MaintenanceJob:
             if orphan_rate > EDGE_ORPHAN_STALE_PCT:
                 stale_space = stale_space or (space_id, orphan_rate)
                 continue
+            # Orphan cleanup is selected SEPARATELY from drift, because drift
+            # cannot see orphans: an orphan is an extra row, so it makes
+            # `src_quads - edge_rows` smaller, and a space with orphans but no
+            # missing edges scores as healthier than one with neither. They can
+            # also cancel exactly, which is the whole reason edge_table_drift
+            # missed this for so long.
+            if orphan_rate > 0 and orphan_rate > worst_orphan_rate:
+                worst_orphan_rate, worst_orphan_space = orphan_rate, space_id
             drift = src_quads - edge_rows
             if drift > max(EDGE_DRIFT_MIN_ABS, int(EDGE_DRIFT_MIN_PCT * src_quads)):
                 if drift > worst_drift:
@@ -541,7 +553,19 @@ class MaintenanceJob:
                 "See issues/041.", sid, rate * 100, sid)
 
         if not worst_space:
-            return None
+            # No space needs edges ADDED — but one may still need orphans
+            # removed, and that is the case this returned early on. Orphans do
+            # not produce positive drift (they are extra rows), so "nothing to
+            # backfill" was silently read as "the edge tables are fine".
+            if not worst_orphan_space:
+                return None
+            async with self._pool.acquire() as conn:
+                removed = await cleanup_orphan_edges(conn, worst_orphan_space)
+            if not removed:
+                return None
+            logger.info("Edge integrity: removed %d orphaned row(s) from %s "
+                        "(no backfill needed)", removed, worst_orphan_space)
+            return {"space_id": worst_orphan_space, "orphans_removed": removed}
 
         process_id = None
         if self._tracker:
@@ -552,13 +576,27 @@ class MaintenanceJob:
         try:
             # Non-blocking backfill (ROW EXCLUSIVE only) — edge-rewrite queries
             # keep running while missing edges are added.
+            #
+            # Then the delete side. Backfill only ADDS, so for years this
+            # "self-heal" reconciled exactly half of what it claimed: a SPARQL
+            # UPDATE whose subjects are WHERE-bound is deferred here, and its
+            # inserts were eventually backfilled while its deletes left edge
+            # rows pointing at quads that no longer exist. 20,461 of them had
+            # accumulated across four spaces (issues/064). Also bounded and
+            # ROW EXCLUSIVE, so it cannot block readers either.
             async with self._pool.acquire() as conn:
                 inserted = await backfill_edge_table(conn, worst_space)
-            result = {"space_id": worst_space, "drift": worst_drift, "edges_added": inserted}
+                removed = await cleanup_orphan_edges(conn, worst_space)
+                # The orphan target is usually a DIFFERENT space, because the
+                # two problems are selected on different evidence.
+                if worst_orphan_space and worst_orphan_space != worst_space:
+                    removed += await cleanup_orphan_edges(conn, worst_orphan_space)
+            result = {"space_id": worst_space, "drift": worst_drift,
+                      "edges_added": inserted, "orphans_removed": removed}
             if self._tracker and process_id:
                 await self._tracker.mark_completed(process_id, result_details=result)
-            logger.info("Edge integrity: backfilled %s (drift=%d → +%d edges)",
-                        worst_space, worst_drift, inserted)
+            logger.info("Edge integrity: %s (drift=%d → +%d edges, -%d orphans)",
+                        worst_space, worst_drift, inserted, removed)
             return result
         except Exception as e:
             if self._tracker and process_id:

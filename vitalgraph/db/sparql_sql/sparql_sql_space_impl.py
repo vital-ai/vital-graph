@@ -76,6 +76,35 @@ def _concrete_subjects_from_update_ops(ops) -> set:
     return subjects
 
 
+def _cleared_graphs_from_update_ops(ops) -> set:
+    """Graph URIs a SPARQL update empties via CLEAR or DROP.
+
+    These forms name no subjects, so `_concrete_subjects_from_update_ops`
+    returns nothing for them and the per-subject edge hooks never run — leaving
+    every edge row of the dropped graph orphaned while its quads are gone
+    (issues/064).
+
+    Only a NAMED graph is returned. `CLEAR ALL` / `CLEAR DEFAULT` are
+    deliberately not handled here: they are not scoped to one context, and
+    guessing a context to delete by would be worse than leaving it to the
+    background orphan cleanup, which is bounded and correct for any shape.
+    """
+    from ..jena_sparql.jena_types import UpdateClear, UpdateDrop
+    graphs: set = set()
+    for op in ops or []:
+        if not isinstance(op, (UpdateClear, UpdateDrop)):
+            continue
+        g = getattr(op, 'graph', None)
+        if g:
+            graphs.add(g)
+        else:
+            target = (getattr(op, 'target', '') or '')
+            # A target that is itself a URI rather than DEFAULT/NAMED/ALL.
+            if target and target not in ("DEFAULT", "NAMED", "ALL"):
+                graphs.add(target)
+    return graphs
+
+
 class _SparqlSQLGraphsAdapter:
     """Lightweight adapter so endpoint code can call ``db_space_impl.graphs.list_graphs()``
     and ``db_space_impl.graphs.get_graph()`` exactly like the fuseki_postgresql backend."""
@@ -1668,6 +1697,18 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     # the committed quads intact) instead of poisoning the pooled
                     # connection. Background self-heal reconciles anything skipped.
                     try:
+                        # CLEAR / DROP name no subjects, so the per-subject
+                        # hooks below never fire for them and every edge row of
+                        # the dropped graph is left orphaned — quads gone, edge
+                        # rows answering traversals with edges to nowhere
+                        # (issues/064). Handled by context instead.
+                        for g_uri in _cleared_graphs_from_update_ops(cr.update_ops):
+                            from .sync_edge_table import delete_edges_for_context
+                            ctx_uuid = _generate_term_uuid(g_uri, 'U')
+                            async with conn.transaction():
+                                await delete_edges_for_context(
+                                    conn, space_id, ctx_uuid)
+
                         subj_uris = _concrete_subjects_from_update_ops(cr.update_ops)
                         if subj_uris:
                             from .sync_edge_table import (

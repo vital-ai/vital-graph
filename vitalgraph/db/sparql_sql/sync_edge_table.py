@@ -156,6 +156,65 @@ async def cleanup_orphan_edges_for_subjects(conn, space_id: str,
     return deleted
 
 
+async def cleanup_orphan_edges(conn, space_id: str, limit: int = 50_000) -> int:
+    """Remove edge rows whose defining quads are gone. Bounded, non-blocking.
+
+    The delete-side counterpart to `backfill_edge_table`, and the piece that was
+    missing. `cleanup_orphan_edges_for_subjects` needs a subject list, which the
+    SPARQL UPDATE path cannot produce for WHERE-bound subjects, so those deletes
+    were deferred to "background self-heal" — but the self-heal is
+    `backfill_edge_table`, a plain INSERT, which only ever ADDS. The insert half
+    of a deferred update was reconciled and the delete half never was
+    (issues/064).
+
+    That is how 20,461 orphans accumulated across four spaces, 5.3% of a
+    production-shaped one, each answering traversals with an edge to nowhere.
+
+    Bounded by `limit` and using a plain DELETE, so it takes ROW EXCLUSIVE and
+    does not block edge-rewrite queries — unlike `resync_edge_table`, which
+    TRUNCATEs under ACCESS EXCLUSIVE. Repeated maintenance ticks converge.
+
+    The context is part of the check for the same reason it is in
+    `edge_table_orphan_rate`: a space reloaded under a different graph URI keeps
+    edge_uuids that still resolve, so an identity-only test calls every row
+    healthy while every query filters on the new context and matches nothing.
+    """
+    t_edge = f"{space_id}_edge"
+    t_quad = f"{space_id}_rdf_quad"
+    result = await conn.execute(f"""
+        DELETE FROM {t_edge} WHERE ctid IN (
+            SELECT e.ctid FROM {t_edge} e
+            WHERE NOT EXISTS (
+                SELECT 1 FROM {t_quad} q
+                WHERE q.subject_uuid = e.edge_uuid
+                  AND q.predicate_uuid = $1
+                  AND q.context_uuid = e.context_uuid)
+            LIMIT {int(limit)})
+    """, _EDGE_SRC_UUID)
+    deleted = int(result.split()[-1]) if result else 0
+    if deleted:
+        logger.info("cleanup_orphan_edges(%s): removed %d orphaned row(s)",
+                    space_id, deleted)
+    return deleted
+
+
+async def delete_edges_for_context(conn, space_id: str, context_uuid) -> int:
+    """Remove every edge row for a graph. For DROP GRAPH / CLEAR GRAPH.
+
+    Those update forms name no subjects, so `_concrete_subjects_from_update_ops`
+    yields nothing and the per-subject hooks never fire — leaving the whole
+    graph's edges orphaned while its quads are gone (issues/064).
+    """
+    t_edge = f"{space_id}_edge"
+    result = await conn.execute(
+        f"DELETE FROM {t_edge} WHERE context_uuid = $1", context_uuid)
+    deleted = int(result.split()[-1]) if result else 0
+    if deleted:
+        logger.info("delete_edges_for_context(%s): removed %d row(s) for %s",
+                    space_id, deleted, context_uuid)
+    return deleted
+
+
 async def resync_edge_table(conn, space_id: str) -> int:
     """Rebuild {space}_edge from scratch by scanning rdf_quad.
 
