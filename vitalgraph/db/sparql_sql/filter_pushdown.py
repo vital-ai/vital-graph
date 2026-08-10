@@ -35,7 +35,7 @@ import re
 from typing import List, Optional, Tuple
 
 from ..jena_sparql.jena_types import (
-    ExprVar, ExprValue, ExprFunction, LiteralNode,
+    ExprVar, ExprValue, ExprFunction, LiteralNode, URINode,
 )
 
 from .ir import (PlanV2, KIND_BGP, KIND_FILTER, KIND_EXTEND, KIND_JOIN,
@@ -146,7 +146,19 @@ def push_filters(plan: PlanV2, space_id: str, ctx=None) -> None:
             # sit under an inner JOIN — which is the usual shape for a KGQuery
             # (FILTER over JOIN over two BGPs), and one the single-chain walk
             # above cannot see at all.
-            var_name = _numeric_var(expr)
+            if constraint is None:
+                # `!=` reaches BGPs under an inner JOIN for the same reason
+                # numeric ranges do, and is looked up by variable.
+                v = _inequality_var(expr)
+                if v is not None:
+                    b = _find_bgp_binding(
+                        plan.children[0] if plan.children else None, v)
+                    if b is not None:
+                        constraint = _try_inequality_filter(
+                            expr, b, term_table, _quad_aliases(b), ctx)
+                        if constraint:
+                            target = b
+            var_name = _numeric_var(expr) if constraint is None else None
             if var_name is not None:
                 bgp = _find_bgp_binding(plan.children[0] if plan.children else None,
                                         var_name)
@@ -432,3 +444,128 @@ def _numeric_var(expr) -> Optional[str]:
     if isinstance(right, ExprVar) and _comparable(left):
         return right.var
     return None
+
+
+# `!=` gets its own path because the obvious rewrite is wrong. Comparing
+# `object_uuid <> <uuid of the literal>` is only sound where the lexical form IS
+# the value: `"5.0"^^xsd:double != 5` is FALSE in SPARQL and the two terms have
+# different uuids, so uuid inequality answers TRUE (issues/058).
+#
+# The sound form negates the EQUALITY SET instead — "not one of the terms equal
+# to this value" — computed with the same typed columns the range push-down
+# uses, so numeric equality is numeric:
+#
+#     ?v != 5        ->  object_uuid NOT IN (SELECT term_uuid ... WHERE num_val = 5)
+#     ?v != "CA"     ->  object_uuid NOT IN (SELECT term_uuid ... WHERE term_text = 'CA')
+#
+# The equality set is tiny — one value — where the inequality set is the whole
+
+
+# `!=` gets its own path because the obvious rewrite is wrong. Comparing
+# `object_uuid <> <uuid of the literal>` is only sound where the lexical form IS
+# the value: `"5.0"^^xsd:double != 5` is FALSE in SPARQL while the two terms have
+# different uuids, so uuid inequality answers TRUE (issues/058).
+#
+# The sound form negates the EQUALITY SET — "not one of the terms equal to this
+# value" — computed with the same typed columns the range push-down uses, so
+# numeric equality is numeric:
+#
+#     ?v != 5      ->  object_uuid NOT IN (SELECT term_uuid ... WHERE num_val = 5)
+#     ?v != "CA"   ->  object_uuid NOT IN (SELECT term_uuid ... WHERE term_text = 'CA')
+#
+# The equality set is one value, where the inequality set is the whole term
+# table — which is also why this form is usable at all.
+_NE_OPS = {"ne", "notequals", "not_equals", "!="}
+
+
+def _ne_equality_cond(value_node) -> Optional[str]:
+    """Term-table condition matching values EQUAL to this literal, or None.
+
+    The single source of truth for which inequalities are pushable. Both the
+    emitter and `semijoin`'s gate go through it, because they must accept
+    exactly the same expressions: the gate drops the variable from `needed` on
+    the promise that the filter will be pushed, and if the push then declines,
+    the variable is gone and its value compiles to NULL. Not hypothetical — a
+    first version matched only the SHAPE and the boolean case raised
+    UnresolvedVariableError immediately (issues 023, 027).
+    """
+    from .sparql_sql_schema import NUMERIC_TERM_COLUMN, DATETIME_TERM_COLUMN
+
+    if isinstance(value_node, URINode):
+        return f"term_text = '{_esc(value_node.value)}' AND term_type = 'U'"
+    if not isinstance(value_node, LiteralNode):
+        return None
+
+    raw = value_node.value or ""
+    dt = value_node.datatype or ""
+    num = _numeric_literal(ExprValue(node=value_node))
+    if num is not None:
+        # Numeric equality, so "5.0"^^double and 5^^integer both match and are
+        # both correctly excluded — which uuid inequality gets wrong.
+        return f"{NUMERIC_TERM_COLUMN} = {num}"
+    if dt in _DATETIME_DTS and _ISO_RE.match(raw.strip()):
+        return (f"{DATETIME_TERM_COLUMN} = "
+                f"vitalgraph_iso_to_utc('{_esc(raw.strip())}')")
+    if dt in ("", f"{_XSD}string"):
+        # A plain literal and an xsd:string literal are one value in RDF 1.1, so
+        # match lexically without pinning the datatype id.
+        return f"term_text = '{_esc(raw)}' AND term_type = 'L'"
+    # Booleans especially: "true" and "1" are one value and there is no bool_val
+    # column to say so, so lexical matching would leave the other spelling
+    # wrongly included. Decline rather than answer approximately.
+    return None
+
+
+def _ne_operands(expr):
+    """(var_name, value_node) for a PUSHABLE `?var != <literal>`, else None."""
+    if not isinstance(expr, ExprFunction):
+        return None
+    if (expr.name or "").lower() not in _NE_OPS:
+        return None
+    args = expr.args or []
+    if len(args) != 2:
+        return None
+    if isinstance(args[0], ExprVar) and isinstance(args[1], ExprValue):
+        var, node = args[0].var, args[1].node
+    elif isinstance(args[1], ExprVar) and isinstance(args[0], ExprValue):
+        var, node = args[1].var, args[0].node
+    else:
+        return None
+    if _ne_equality_cond(node) is None:
+        return None
+    return var, node
+
+
+def _inequality_var(expr) -> Optional[str]:
+    """Variable of a pushable `?var != <literal>`, or None.
+
+    Defers to `_ne_operands` so the gate and the emitter cannot drift apart.
+    """
+    ops = _ne_operands(expr)
+    return ops[0] if ops else None
+
+
+def _try_inequality_filter(expr, bgp, term_table: str, quad_aliases: set, ctx):
+    """Convert `?var != <literal>` into a NOT IN over the equality set.
+
+    Returns (alias, sql) or None. Declines on anything whose equality semantics
+    this cannot express exactly — a wrong answer here is a row silently included
+    or dropped, not a slow query.
+    """
+    ops = _ne_operands(expr)
+    if ops is None:
+        return None
+    var_name, value_node = ops
+
+    slot = bgp.var_slots.get(var_name)
+    if not slot or not slot.positions:
+        return None
+    ref_id, col_name = slot.positions[0]
+    if ref_id not in quad_aliases:
+        return None
+
+    eq_cond = _ne_equality_cond(value_node)
+    if eq_cond is None:
+        return None
+    return (ref_id, f"{ref_id}.{col_name} NOT IN "
+                    f"(SELECT term_uuid FROM {term_table} WHERE {eq_cond})")

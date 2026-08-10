@@ -492,6 +492,17 @@ def _walk(node: Optional[PlanV2], needed: Set[str],
         pushable, kept = set(), set()
         for expr in (node.filter_exprs or []):
             v = _pushable_range_var(expr)
+            if v is None:
+                # `!=` is pushable too, as a NOT IN over the equality set. Both
+                # ends have to recognise exactly the same expressions or the
+                # gate marks a join whose filter then fails to push, which is
+                # how `gt` became uniquely slow (issues/054) — so this defers to
+                # filter_pushdown's own predicate rather than restating it.
+                try:
+                    from .filter_pushdown import _inequality_var
+                    v = _inequality_var(expr)
+                except Exception:
+                    v = None
             if v is not None:
                 pushable.add(v)
             else:

@@ -1,6 +1,46 @@
 # `ne` Times Out on All Five Slot Classes Because `!=` Is Not Pushable
 
-## Status: DIAGNOSED, not fixed — 2026-08-10, `sp_lead_synth_100k`
+## Status: FIXED for 4 of 5 slot classes — 2026-08-10
+
+    ne/Text     timeout -> 314 ms
+    ne/Double   timeout -> 169 ms
+    ne/Integer  timeout -> 239 ms
+    ne/Choice   timeout -> 123 ms
+    ne/Boolean  still times out — declined on purpose, see below
+
+Neither of the two options this issue laid out. The sound form negates the
+EQUALITY SET rather than comparing uuids:
+
+    ?v != 5      ->  object_uuid NOT IN (SELECT term_uuid ... WHERE num_val = 5)
+    ?v != "CA"   ->  object_uuid NOT IN (SELECT term_uuid ... WHERE term_text = 'CA')
+
+That fixes the soundness problem this issue identified. `num_val = 5` matches
+`"5.0"^^xsd:double` and `5^^xsd:integer` alike, so both are correctly excluded —
+which uuid inequality gets wrong. It is also cheap for the same reason it is
+correct: the equality set is one value, where the inequality set is the entire
+term table.
+
+With `?val` no longer live above the join, the semi-join fires, two-phase
+engages, and these become O(page).
+
+**Boolean is declined, not fixed.** `"true"` and `"1"` are the same value and
+there is no `bool_val` column to say so, so a lexical match would leave the other
+spelling wrongly included. Adding a generated `bool_val` alongside `num_val` and
+`dt_val` would close it; until then the cell is slow and correct rather than
+fast and wrong.
+
+### The trap this hit, which the codebase already guarded
+
+`semijoin`'s gate and `filter_pushdown` must accept EXACTLY the same
+expressions. A first version matched only the SHAPE of `?v != <literal>` in the
+gate while the emitter declined booleans on their semantics — so the gate
+dropped `?val` from `needed` on a promise the push-down did not keep, and the
+value compiled to NULL. `UnresolvedVariableError` caught it on the first run
+(issues 023, 027). Both ends now go through one predicate,
+`_ne_equality_cond`, precisely so they cannot drift — which is the same failure
+mode as `issues/054`.
+
+## Original diagnosis — 2026-08-10, `sp_lead_synth_100k`
 
 Five cells in `issues/053`. Split out because the cause is distinct from
 `issues/057`, which an earlier revision wrongly folded it into: `ne` emits a
