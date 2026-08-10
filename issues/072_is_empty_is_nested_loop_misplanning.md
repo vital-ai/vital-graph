@@ -1,22 +1,61 @@
-# Five of the Nine Remaining Slow Cells Are Nested-Loop Misplanning
+# `is_empty` Is Nested-Loop Misplanning — and Four Other Cells Were Not
 
-## Status: DIAGNOSED, not fixed — 2026-08-10, `sp_lead_synth_100k`
+## Status: CORRECTED — 2026-08-10. One cell, not five.
 
-`SET LOCAL enable_nestloop = off`, everything else unchanged:
+    is_empty/Text    47,514 ms -> 5,310 ms    8.9x    REAL
+    eq/Integer            37 ms ->    37 ms    ~same
+    eq/Double              4 ms ->     4 ms    ~same
+    not_exists/Text      173 ms ->   177 ms    ~same
+    eq/Text               24 ms ->    23 ms    ~same   (two-phase, sort fence applied)
+    has_all/Text          22 ms ->    23 ms    ~same
+    lt/DateTime           40 ms ->    38 ms    ~same
+    contains/Text         22 ms ->    24 ms    ~same
 
-| cell | nestloop on | nestloop off | |
-|---|---|---|---|
-| `is_empty`/Text | 56,993 ms | 5,831 ms | 9.8x |
-| `eq`/Integer | 2,114 ms | **39 ms** | 54x |
-| `has_all`/Text | 1,255 ms | **29 ms** | 43x |
-| `lt`/DateTime | 1,291 ms | **41 ms** | 31x |
-| `eq`/Text | 1,070 ms | **21 ms** | 51x |
-| `has_any`/Text | 15,276 ms | 12,251 ms | not this |
-| `has_any`/Choice | 13,755 ms | 11,514 ms | not this |
+Alternating arms, three reps, first discarded.
 
-Four of these drop under 50 ms. This is the largest single lever left in
-`issues/053`, and it is not a push-down problem — the SQL is already the SQL we
-want, and PostgreSQL is executing it badly.
+### The retraction, and the mistake that produced it
+
+The first revision of this issue claimed FIVE cells were nested-loop
+misplanning, with `eq`/Integer at 54x and `eq`/Text at 51x. Those numbers came
+from a harness that ran `for off in (False, True)` — **nestloop=on first on a
+cold cache, nestloop=off second on a warm one**. The 50x was the buffer cache,
+not the join method.
+
+This is the same cold-cache contamination that voided an earlier round of
+measurements in this same effort, reintroduced by writing a fresh loop instead
+of reusing `scripts/perf_ordered_scan_fence.py`, which alternates and discards
+the first run precisely to prevent it. The lesson is not "be careful" — it is
+that a comparison harness should be a shared, reviewed thing, not written inline
+each time.
+
+`is_empty` survived because its two arms were run in the opposite order —
+nestloop=off FIRST, cold — so its 8.9x is if anything understated.
+
+### What this also retracts
+
+`eq`/Text was described as BIMODAL (1,124 / 107 / 1,335 / 1,258 ms across
+sweeps) with the planner "flipping between join methods on a knife-edge
+estimate". That was wrong too. It is 23 ms warm, every time. The spread is
+first-touch I/O.
+
+### What it says about the sweep itself
+
+Most cells the sweep reports at 0.8-2 s run in **2-40 ms** on immediate
+re-execution:
+
+    eq/Text        1,070 ms in sweep    ->  24 ms warm
+    has_all/Text   1,255 ms in sweep    ->  22 ms warm
+    contains/Text    817 ms in sweep    ->  22 ms warm
+    gte/DateTime      36 ms in sweep    ->   4 ms warm
+
+`scripts/perf_comparator_timing.py` executes each cell ONCE, so what it measures
+is dominated by first-touch cost, not steady-state. That is a legitimate thing
+to measure — production cold-start latency is real, and it is what made the
+original timeouts real — but it must not be read as the cost of the query. Cells
+in the 1-2 s band are cold-start artifacts; only cells that stay slow warm
+(`is_empty`, `has_any`, and the two genuine timeouts) are query-cost problems.
+
+`issues/053`'s "N cells exceed 1s" counts cold-start. Worth reporting both.
 
 ## The estimate
 

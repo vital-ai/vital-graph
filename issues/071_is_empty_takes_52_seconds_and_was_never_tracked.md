@@ -34,8 +34,10 @@ guess below — that it pays for proving absence — is half right: it IS O(enti
 because the answer is empty, but the 56 s was the planner running a nested loop
 100,000 times on a `rows=1` estimate, not the cost of the scan.
 
-`eq`/Integer, noted at the bottom of this file as also uninvestigated, has the
-same cause and drops from 2,114 ms to 39 ms.
+`eq`/Integer, noted at the bottom of this file as also uninvestigated, does NOT
+have the same cause — an earlier revision said it did, from a contaminated
+measurement. It runs in 37 ms warm with or without nested loops; its ~2 s in the
+sweep is first-touch I/O. See the retraction in `issues/072`.
 
 ## Original guess, kept because it was only half right
 
