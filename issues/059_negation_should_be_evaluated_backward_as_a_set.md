@@ -1,6 +1,42 @@
 # Negation Traverses Forward Per Entity When It Should Run Backward Once
 
-## Status: OPEN — prerequisites built and wired, emitter not started
+## Status: FIXED 2026-08-10 — `_try_candidate_driven` in `emit_slice`
+
+    not_exists/Text     timeout -> 450 ms
+    not_exists/Double   timeout -> 186 ms
+
+All six negation cells now complete. Three placements were built and measured;
+only the third works, and the two failures are what identified why.
+
+| placement | outcome |
+|---|---|
+| set inlined as an `extra_cond` on the probe | per-probe ~21 -> ~69,928; nested in a correlated EXISTS, PostgreSQL re-evaluates per row |
+| set as a `MATERIALIZED` CTE the probe filters against | CTE computed once — fixed that — but outer `Unique` still 95 million |
+| **candidate set in the FROM, driving** | **works** |
+
+Both failures shared a cause: the ANCHOR still drove, so phase 1 scanned 100,000
+entities and probed each, and an empty answer means the scan exhausts however
+cheap the probe becomes. The working form puts the walked-back set in the FROM —
+when the negation excludes everything that set is EMPTY, so no hop is walked and
+the anchor is never scanned. A filter cannot reproduce that; it must still visit
+every row to discover none qualify.
+
+`extract_positive_chain` re-applies each level's TYPE constraint on the way back.
+Dropping them would admit nodes the forward form never reached — a different
+query, not a faster one.
+
+Gated on density: it fires only when the negation excludes at least half the
+population, and declines when that selectivity is unknown rather than guessing
+favourably. `not_has` / `not_has_any` are not recognised and keep the forward
+probe that already answers them in 66-264 ms.
+
+**Verified against independent ground truth**, not against the old path, which
+times out on this shape — and a first differential attempt compared 0 against 0
+and proved nothing. With 400 slot-type quads deleted in a rolled-back
+transaction the rewrite returned exactly the 400 entities a hand-written set
+query identifies, in 858 ms.
+
+## Original report — OPEN, prerequisites built
 
 Everything the rewrite depends on is committed and tested:
 

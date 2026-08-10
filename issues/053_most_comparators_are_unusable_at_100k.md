@@ -1,6 +1,19 @@
 # Twenty-One Comparator Shapes Time Out at 100k for a 25-Row Page
 
-## Status: OPEN, narrowed from 21 cells to 17 with three causes — 2026-08-10
+## Status: OPEN — 11 of 21 cells closed, 10 remain — 2026-08-10
+
+| cells | status |
+|---|---|
+| `gt` x2 | fixed — `issues/054`, the XSD cast defeated the push-down |
+| `lt` / `lte` x4 | fixed — `issues/056`, `num_val` too sparse for ANALYZE to sample |
+| `not_has` / `not_has_any` x4 | fixed — `issues/057`, negation folded into the probe |
+| `not_exists` x2 | fixed — `issues/059`, candidate-driven emission |
+| **`ne` x5** | **diagnosed, not fixed** — `issues/058`. `!=` is not pushable, so `?val` stays live, the semi-join declines and paging reverts to a blocking sort. The obvious fix (uuid inequality) is unsound for 3 of 5 slot classes |
+| **datetime x3** (`eq`, `gt`, `gte`) | **open** — near-empty or near-total match sets; the typed column landed and cannot help a query whose cost is its match set |
+| **`contains`** | **open** — no indexable push-down path exists |
+| **`has_any` x2** | **open** — a disjunction over probes |
+
+## Original status: narrowed from 21 cells to 17 with three causes
 
 Final sweep on a verified environment (complete indexes, idle cluster, raised
 statistics targets, all three fixtures on matching schemas):
