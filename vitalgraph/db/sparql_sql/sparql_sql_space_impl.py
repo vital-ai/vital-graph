@@ -1731,8 +1731,15 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                         # (issues/064). Handled by context instead.
                         for g_uri in _cleared_graphs_from_update_ops(cr.update_ops):
                             from .sync_edge_table import delete_edges_for_context
+                            from .sync_frame_entity_table import (
+                                delete_frame_entity_for_context)
                             ctx_uuid = _generate_term_uuid(g_uri, 'U')
                             async with conn.transaction():
+                                # frame_entity first: it is derived FROM the
+                                # edge table, so clearing edges first would
+                                # leave it unable to describe what it lost.
+                                await delete_frame_entity_for_context(
+                                    conn, space_id, ctx_uuid)
                                 await delete_edges_for_context(
                                     conn, space_id, ctx_uuid)
 
@@ -1769,7 +1776,15 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                         # work and the all-concrete case is the common one.
                         if _has_where_bound_delete(cr.update_ops):
                             from .sync_edge_table import cleanup_orphan_edges
+                            from .sync_frame_entity_table import (
+                                cleanup_stale_frame_entity)
                             async with conn.transaction():
+                                # frame_entity is validated against the edge
+                                # table, so clean it BEFORE the edges it reads
+                                # are removed — otherwise a row whose edge is
+                                # about to go looks stale for the wrong reason
+                                # and the two passes disagree about why.
+                                await cleanup_stale_frame_entity(conn, space_id)
                                 await cleanup_orphan_edges(conn, space_id)
                     except Exception as ee:
                         logger.debug("edge sync after SPARQL UPDATE failed (non-critical): %s", ee)

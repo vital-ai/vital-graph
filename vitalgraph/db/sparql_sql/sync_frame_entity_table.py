@@ -53,15 +53,27 @@ async def _resolve_uuids(conn, space_id: str):
 async def sync_frame_entity_after_edge_insert(
     conn,
     space_id: str,
-    edge_source_uuids: List[uuid.UUID],
+    touched_uuids: List[uuid.UUID],
 ) -> int:
     """After edge rows are inserted, find new frame_entity rows.
 
-    edge_source_uuids: the source_node_uuid values from newly inserted
-    edge rows (these are the frame UUIDs in the frame→slot pattern).
-    Returns the number of frame_entity rows inserted.
+    `touched_uuids` are the subject uuids a write touched. A frame is affected
+    if the write touched the frame itself, one of its slots, or the edge joining
+    them — so all three positions are matched, not just one.
+
+    This used to take "the source_node_uuid values from newly inserted edge rows
+    (these are the frame UUIDs)". Both callers pass QUAD SUBJECTS instead, which
+    are edge and slot uuids and never the frame, so `source_node_uuid = ANY(...)`
+    matched nothing and the incremental sync populated **nothing, on any write
+    path, ever**. The symptom was easy to misread: `resync_all_auxiliary_tables`
+    reports `frame_entity_rows=0` for every space, which looks like "no space has
+    relation frames" rather than "the incremental path is dead" — and the full
+    resync has no such filter, so a rebuild masked it by working correctly.
+
+    Found by a fixture-guard test asserting that the seed shape actually
+    produces rows before testing deletion against it.
     """
-    if not edge_source_uuids:
+    if not touched_uuids:
         return 0
 
     uuids = await _resolve_uuids(conn, space_id)
@@ -76,7 +88,7 @@ async def sync_frame_entity_after_edge_insert(
     from .sync_edge_table import chunk_uuids
 
     inserted = 0
-    for chunk in chunk_uuids(edge_source_uuids):
+    for chunk in chunk_uuids(touched_uuids):
         result = await conn.execute(f"""
             INSERT INTO {t_fe} (frame_uuid, source_entity_uuid, dest_entity_uuid, context_uuid)
             SELECT
@@ -96,7 +108,11 @@ async def sync_frame_entity_after_edge_insert(
                 ON sv.subject_uuid = emv.dest_node_uuid
                 AND sv.predicate_uuid = $2
             WHERE st.object_uuid IN ($3, $4)
-              AND emv.source_node_uuid = ANY($5)
+              -- The frame, its slot, or the edge between them: a write to any
+              -- of the three can create or invalidate a frame_entity row.
+              AND (emv.source_node_uuid = ANY($5)
+                   OR emv.dest_node_uuid = ANY($5)
+                   OR emv.edge_uuid = ANY($5))
             GROUP BY emv.source_node_uuid, emv.context_uuid
             HAVING (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $3))[1] IS NOT NULL
                AND (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $4))[1] IS NOT NULL
@@ -142,6 +158,82 @@ async def sync_frame_entity_before_delete(
 
     if deleted:
         logger.debug("sync_frame_entity_before_delete(%s): %d rows", space_id, deleted)
+    return deleted
+
+
+async def cleanup_stale_frame_entity(conn, space_id: str,
+                                     limit: int = 50_000) -> int:
+    """Remove frame_entity rows whose defining slot chain is gone. Bounded.
+
+    The delete-side counterpart, and the piece frame_entity never had.
+    `sync_frame_entity_before_delete` needs a frame uuid list, which a SPARQL
+    UPDATE cannot produce for WHERE-bound subjects, so those deletions left rows
+    asserting a relationship between entities that no longer exists
+    (`issues/064`).
+
+    Validity is defined exactly as `resync_frame_entity_table` defines it: the
+    frame must still reach a slot typed `urn:hasSourceEntity` carrying the
+    recorded source entity, and likewise for the destination. Anything else is
+    a row the rebuild would not produce.
+
+    Bounded and a plain DELETE, so it takes ROW EXCLUSIVE and does not block
+    readers the way the resync's TRUNCATE does.
+    """
+    uuids = await _resolve_uuids(conn, space_id)
+    if not uuids:
+        return 0
+    st_uuid, sv_uuid, src_uuid, dst_uuid = uuids
+
+    t_fe = f"{space_id}_frame_entity"
+    t_edge = f"{space_id}_edge"
+    t_quad = f"{space_id}_rdf_quad"
+
+    result = await conn.execute(f"""
+        DELETE FROM {t_fe} WHERE ctid IN (
+            SELECT fe.ctid FROM {t_fe} fe
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM {t_edge} emv
+                JOIN {t_quad} st ON st.subject_uuid = emv.dest_node_uuid
+                    AND st.predicate_uuid = $1 AND st.object_uuid = $3
+                JOIN {t_quad} sv ON sv.subject_uuid = emv.dest_node_uuid
+                    AND sv.predicate_uuid = $2
+                    AND sv.object_uuid = fe.source_entity_uuid
+                WHERE emv.source_node_uuid = fe.frame_uuid
+                  AND emv.context_uuid = fe.context_uuid)
+            OR NOT EXISTS (
+                SELECT 1
+                FROM {t_edge} emv
+                JOIN {t_quad} st ON st.subject_uuid = emv.dest_node_uuid
+                    AND st.predicate_uuid = $1 AND st.object_uuid = $4
+                JOIN {t_quad} sv ON sv.subject_uuid = emv.dest_node_uuid
+                    AND sv.predicate_uuid = $2
+                    AND sv.object_uuid = fe.dest_entity_uuid
+                WHERE emv.source_node_uuid = fe.frame_uuid
+                  AND emv.context_uuid = fe.context_uuid)
+            LIMIT {int(limit)})
+    """, st_uuid, sv_uuid, src_uuid, dst_uuid)
+    deleted = int(result.split()[-1]) if result else 0
+    if deleted:
+        logger.info("cleanup_stale_frame_entity(%s): removed %d stale row(s)",
+                    space_id, deleted)
+    return deleted
+
+
+async def delete_frame_entity_for_context(conn, space_id: str,
+                                          context_uuid) -> int:
+    """Remove every frame_entity row for a graph. For DROP GRAPH / CLEAR GRAPH.
+
+    Those forms name no subjects, so the per-frame hook never fires and the
+    whole graph's rows survive it (`issues/064`).
+    """
+    t_fe = f"{space_id}_frame_entity"
+    result = await conn.execute(
+        f"DELETE FROM {t_fe} WHERE context_uuid = $1", context_uuid)
+    deleted = int(result.split()[-1]) if result else 0
+    if deleted:
+        logger.info("delete_frame_entity_for_context(%s): removed %d row(s)",
+                    space_id, deleted)
     return deleted
 
 
