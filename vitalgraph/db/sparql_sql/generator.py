@@ -630,6 +630,18 @@ async def generate_sql(
             graph_lock_uri=graph_lock_uri,
             edge_table_ready=edge_ready, frame_entity_ready=frame_entity_ready)
 
+        # Stage 2a.4: Edge fan-out, for the traversal-direction gate in
+        # emit_slice. Loaded like the other statistics rather than queried at
+        # emit time, because emit is synchronous.
+        if conn is not None or conn_params is not None:
+            try:
+                from .sync_edge_fanout import load_edge_fanout
+                aliases.edge_fanout = await load_edge_fanout(conn, space_id)
+            except Exception:
+                aliases.edge_fanout = {}
+        else:
+            aliases.edge_fanout = {}
+
         # Stage 2b: Load datatype cache
         datatype_cache = await _load_datatype_cache(
             space_id, conn_params=conn_params, conn=conn)

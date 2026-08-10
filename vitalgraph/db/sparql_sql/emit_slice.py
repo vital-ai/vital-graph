@@ -144,6 +144,33 @@ def _emit_two_phase(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
     if left_bgp is None or right_bgp is None:
         return None
 
+    # The probe walks the right bgp FORWARD, once per anchor row, so a traversal
+    # that amplifies makes the per-row cost the amplification factor. Recorded
+    # fan-out is the only thing that knows: PostgreSQL underestimates these
+    # joins by 305x and 4,761x (issues/059), and the reorder heuristic scores
+    # leaf selectivity with no notion of what a join multiplies by.
+    #
+    # An UNRECOGNISED traversal means no opinion, NOT decline. That looks like
+    # the opposite of choose_direction's "unmeasured is unsafe", and is the same
+    # principle applied to a different question: conservative means "do not move
+    # away from the known-good state". There, the known-good state is not
+    # rewriting; here, it is the rewrite that currently answers not_has and
+    # not_has_any in 47-163ms and whose bodies this recogniser deliberately does
+    # not parse.
+    try:
+        from .sync_edge_fanout import extract_traversal, assess_traversal
+        fanout = getattr(ctx.aliases, "edge_fanout", None) or {}
+        if fanout:
+            hops = extract_traversal(right_bgp, ctx.aliases)
+            if hops:
+                verdict = assess_traversal(fanout, hops, "forward")
+                if not verdict["safe"]:
+                    ctx.log("slice", f"two-phase declined: probe traversal "
+                                     f"amplifies forward — {verdict['reason']}")
+                    return None
+    except Exception:
+        pass        # a statistic must never be able to fail a query
+
     anchor = emit_bgp_anchor(left_bgp, ctx, key)
     if anchor is None:
         return None

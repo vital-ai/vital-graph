@@ -227,6 +227,72 @@ def choose_direction(fanout: Dict[tuple, dict], hops) -> dict:
             "reason": f"neither direction bounded (backward: {back['reason']})"}
 
 
+_VITALTYPE_URI = "http://vital.ai/ontology/vital-core#vitaltype"
+_VITALTYPE_UUID = uuid.uuid5(_VITALGRAPH_NS, f"{_VITALTYPE_URI}\x00U")
+
+
+def extract_traversal(plan, aliases) -> list:
+    """The ordered edge hops a BGP walks, as `(edge_type_uuid, relation_type)`.
+
+    Reads the edge tables out of a BGP and pairs each with the constant its
+    `vitaltype` constraint names — that is where the edge type lives after
+    `rewrite_edge_table`, since the edge table itself carries no type in the
+    join (it is a separate quad, aliased and constrained alongside).
+
+    Returns `[]` when the shape is not a plain edge chain, which is the
+    conservative answer: an empty traversal makes any caller decline rather than
+    reason about a shape it did not recognise.
+
+    Deliberately does NOT infer direction. Direction is a property of how the
+    caller intends to walk the chain, not of the plan, and conflating the two is
+    how a rewrite ends up assuming the direction it happens to have emitted.
+    """
+    import re
+
+    tables = getattr(plan, "tables", None) or []
+    edges = [t for t in tables if getattr(t, "kind", None) == "edge"]
+    if not edges:
+        return []
+
+    # constant column -> resolved uuid, so a __CONST_ token can be read back
+    const_uuid = {}
+    for col, resolved in (getattr(aliases, "resolved_constants", None) or {}).items():
+        try:
+            const_uuid[col] = uuid.UUID(str(resolved))
+        except Exception:
+            continue
+
+    # alias -> {predicate_const, object_const} from the tagged constraints
+    by_alias: dict = {}
+    for owner, sql in (getattr(plan, "tagged_constraints", None) or []):
+        m = re.search(r"\.(predicate_uuid|object_uuid|subject_uuid)\s*=\s*"
+                      r"__CONST_(\w+)__", sql)
+        if m:
+            by_alias.setdefault(owner, {})[m.group(1)] = m.group(2)
+        m2 = re.search(r"(\w+)\.edge_uuid\s*=\s*(\w+)\.subject_uuid", sql)
+        if m2:
+            by_alias.setdefault(m2.group(1), {})["type_via"] = m2.group(2)
+
+    hops = []
+    for e in edges:
+        info = by_alias.get(e.alias, {})
+        type_alias = info.get("type_via")
+        if not type_alias:
+            return []          # no vitaltype join: not a shape we recognise
+        tinfo = by_alias.get(type_alias, {})
+        pred_const = tinfo.get("predicate_uuid")
+        obj_const = tinfo.get("object_uuid")
+        if not pred_const or not obj_const:
+            return []
+        if const_uuid.get(pred_const) != _VITALTYPE_UUID:
+            return []          # constrained on something other than the type
+        edge_type = const_uuid.get(obj_const)
+        if edge_type is None:
+            return []          # unresolved constant — do not guess
+        hops.append((edge_type, None))
+    return hops
+
+
 async def load_edge_fanout(conn, space_id: str) -> Dict[tuple, dict]:
     """Read the table into `{(edge_type, relation_type, direction): stats}`.
 
