@@ -26,7 +26,18 @@ Worth fixing in the process as well as in the code: the sweep prints
 `N of the swept cells exceed 1s`, and that number — not a hand-maintained
 table — should be what the issue tracks.
 
-## Not yet diagnosed
+## DIAGNOSED — see `issues/072`
+
+Nested-loop misplanning from a 100,000x cardinality underestimate.
+`enable_nestloop = off` takes it from 56,993 ms to 5,831 ms, reproducibly. The
+guess below — that it pays for proving absence — is half right: it IS O(entities)
+because the answer is empty, but the 56 s was the planner running a nested loop
+100,000 times on a `rows=1` estimate, not the cost of the scan.
+
+`eq`/Integer, noted at the bottom of this file as also uninvestigated, has the
+same cause and drops from 2,114 ms to 39 ms.
+
+## Original guess, kept because it was only half right
 
 `is_empty` returns 0 rows, so like `eq`/DateTime it pays the cost of *proving
 absence*: an ordered scan that early-terminates on a broad match set has to walk
