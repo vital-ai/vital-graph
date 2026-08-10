@@ -220,6 +220,21 @@ so nothing runs against it automatically.
 
 Steps 1 and 2 are prerequisites for 3 having anything to decide with.
 
+### Step 1 has to answer the write path too
+
+Per-predicate retention changes *what is kept*; it does not change *how it is
+maintained*, and maintenance has the same hole the edge table just turned out to
+have (`issues/064`). `sync_stats_after_delete` is subject-driven exactly like
+the edge hooks, so a SPARQL UPDATE whose subjects are WHERE-bound misses it.
+
+Stats are the harder version because they are also pruned: a pruned row that a
+later write resurrects comes back holding only its post-prune delta —
+demonstrated at 100,000 → 1 (`issues/062`). So a write hook alone is not enough.
+Absence has to *mean* something, which is exactly what the MCV shape provides:
+"smaller than the smallest listed", rather than ambiguous between small, pruned,
+and never-seen. Design the retention and the maintenance together, or the first
+will keep being undone by the second.
+
 ## Related
 
 - `issues/059` — backward negation; 700 ms vs >200 s, the case this would unlock
