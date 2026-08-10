@@ -47,12 +47,35 @@ QUAD_CSV_COLUMNS = [
 ]
 
 
+def pg_env() -> dict:
+    """The ONE set of connection parameters this script uses.
+
+    It reads the same VG_TEST_PG_* variables as tests/performance/conftest.py
+    and scripts/perf_seed_data.py, so a fixture lands in the cluster the tests
+    that use it will look in.
+
+    There used to be two of these — the COPY path defaulted to port 5433 with
+    password 'testpass', and the auxiliary resync below to port 5432 with an
+    empty password. With no overrides that wrote the quad and term tables to the
+    container cluster and then resynced auxiliary tables on the HOST cluster,
+    against whatever space happened to share the name there. The resync is the
+    step that exists to stop a stale edge table answering frame queries with
+    zero rows (issues/041); pointing it at another database is the same failure
+    with a longer fuse. One source, so the two cannot drift apart again.
+    """
+    return dict(
+        host=os.environ.get("VG_TEST_PG_HOST", "localhost"),
+        port=int(os.environ.get("VG_TEST_PG_PORT", "5433")),
+        database=os.environ.get("VG_TEST_PG_DATABASE", "sparql_sql_graph"),
+        user=os.environ.get("VG_TEST_PG_USER", "postgres"),
+        password=os.environ.get("VG_TEST_PG_PASSWORD", "testpass"),
+    )
+
+
 def dsn() -> str:
-    return (f"host={os.environ.get('VG_TEST_PG_HOST', 'localhost')} "
-            f"port={os.environ.get('VG_TEST_PG_PORT', '5433')} "
-            f"dbname={os.environ.get('VG_TEST_PG_DATABASE', 'sparql_sql_graph')} "
-            f"user={os.environ.get('VG_TEST_PG_USER', 'postgres')} "
-            f"password={os.environ.get('VG_TEST_PG_PASSWORD', 'testpass')}")
+    p = pg_env()
+    return (f"host={p['host']} port={p['port']} dbname={p['database']} "
+            f"user={p['user']} password={p['password']}")
 
 
 async def copy_file(cur, sql: str, path: str) -> float:
@@ -201,12 +224,7 @@ async def resync_aux(space: str) -> None:
     from vitalgraph.db.sparql_sql.resync_all import resync_all_auxiliary_tables
 
     t0 = time.time()
-    conn = await asyncpg.connect(
-        host=os.environ.get("VG_TEST_PG_HOST", "localhost"),
-        port=int(os.environ.get("VG_TEST_PG_PORT", "5432")),
-        user=os.environ.get("VG_TEST_PG_USER", "postgres"),
-        password=os.environ.get("VG_TEST_PG_PASSWORD", ""),
-        database=os.environ.get("VG_TEST_PG_DATABASE", "sparql_sql_graph"))
+    conn = await asyncpg.connect(**pg_env())
     try:
         counts = await resync_all_auxiliary_tables(conn, space)
     finally:

@@ -147,35 +147,79 @@ CASES = [
 ]
 
 
+async def _count(perf_conn, comparator, slot_class) -> int:
+    """Rows a criterion selects, run the way the service runs it."""
+    matrix = _load_matrix()
+    gen = await matrix.sql_for(
+        perf_conn, matrix.build_criteria(comparator=comparator,
+                                         slot_class=slot_class),
+        TYPES.space, TYPES.graph,
+        "http://vital.ai/ontology/haley-ai-kg#KGEntity", 100_000, SIDECAR)
+
+    if gen.needs_ordered_scan:
+        async with perf_conn.transaction():
+            await perf_conn.execute("SET LOCAL enable_sort = off")
+            return len(await perf_conn.fetch(gen.sql))
+    return len(await perf_conn.fetch(gen.sql))
+
+
 @pytest.mark.parametrize("comparator,slot_class", CASES,
                          ids=[f"{c}-{sc.split('#')[-1]}" for c, sc in CASES])
 async def test_comparator_returns_the_expected_count(perf_conn, comparator,
                                                      slot_class):
     """The comparator selects exactly the subset the manifest describes."""
-    matrix = _load_matrix()
-    build_criteria, sql_for = matrix.build_criteria, matrix.sql_for
-
     reason = await require_usable(perf_conn, TYPES)
     if reason:
-        pytest.skip(f"{reason} — build with scripts/generate_lead_dataset.py")
+        pytest.skip(f"{reason} — build with scripts/load_lead_types_dataset.sh")
 
     expected = _expected(_manifest())[(comparator, slot_class)]
+    got = await _count(perf_conn, comparator, slot_class)
 
-    gen = await sql_for(perf_conn, build_criteria(comparator=comparator,
-                                                  slot_class=slot_class),
-                        TYPES.space, TYPES.graph,
-                        "http://vital.ai/ontology/haley-ai-kg#KGEntity",
-                        100_000, SIDECAR)
-
-    if gen.needs_ordered_scan:
-        async with perf_conn.transaction():
-            await perf_conn.execute("SET LOCAL enable_sort = off")
-            rows = await perf_conn.fetch(gen.sql)
-    else:
-        rows = await perf_conn.fetch(gen.sql)
-
-    assert len(rows) == expected, (
-        f"{comparator} on {slot_class.split('#')[-1]} returned {len(rows)} "
+    assert got == expected, (
+        f"{comparator} on {slot_class.split('#')[-1]} returned {got} "
         f"rows, expected {expected} from the fixture manifest. A count of 0 "
         f"means the criterion matched nothing, which is how this class of "
         f"defect hides — see issues/049, 052, 053.")
+
+
+# (slot class, manifest key holding the number of entities with a value)
+PARTITIONS = [(DOUBLE, "mqlrating_total"), (INT, "ratingpoints_total")]
+
+
+@pytest.mark.parametrize("slot_class,total_key", PARTITIONS,
+                         ids=[sc.split("#")[-1] for sc, _k in PARTITIONS])
+@pytest.mark.parametrize("pair", [("gt", "lte"), ("gte", "lt")],
+                         ids=["gt+lte", "gte+lt"])
+async def test_range_comparators_partition_the_population(perf_conn, slot_class,
+                                                          total_key, pair):
+    """`gt`/`lte` and `gte`/`lt` each split the valued entities exactly once.
+
+    This is how `gt` gets tested at all. Its exact count is NOT in the manifest
+    and cannot be: mqlrating carries one decimal place, so a couple of entities
+    sit exactly on the 65.0 threshold and `gt` differs from `gte` by an amount
+    the generator does not tally. The partition identity needs no such tally and
+    is still exact — every valued entity falls on exactly one side.
+
+    Worth having beyond bookkeeping. `gt` was the only range comparator that
+    emitted an XSD cast, which the num_val push-down cannot carry, so it timed
+    out at 60s where `gte` on the same slot and threshold ran in 505ms
+    (issues/053). Nothing failed, because nothing ran `gt`. An identity across a
+    pair also catches the degenerate pass that a count assertion invites: two
+    comparators both returning 0 sum to 0, not to the population.
+    """
+    reason = await require_usable(perf_conn, TYPES)
+    if reason:
+        pytest.skip(f"{reason} — build with scripts/load_lead_types_dataset.sh")
+
+    total = _manifest()[total_key]
+    lo, hi = pair
+    n_lo = await _count(perf_conn, lo, slot_class)
+    n_hi = await _count(perf_conn, hi, slot_class)
+
+    assert n_lo + n_hi == total, (
+        f"{lo}={n_lo} and {hi}={n_hi} sum to {n_lo + n_hi} on "
+        f"{slot_class.split('#')[-1]}, but {total} entities carry a value. "
+        f"The two sides must partition the valued population exactly.")
+    assert n_lo and n_hi, (
+        f"{lo}={n_lo}, {hi}={n_hi} — a zero side means the comparator matched "
+        f"nothing, which sums correctly only by accident.")
