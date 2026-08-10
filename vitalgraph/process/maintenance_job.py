@@ -41,6 +41,11 @@ EDGE_DRIFT_MIN_PCT = 0.01            # ...and below this fraction of edges
 # is stale rather than incomplete. Set high because a partially-backfilled table
 # has a genuinely low orphan rate; only a wholesale mismatch should trip it.
 EDGE_ORPHAN_STALE_PCT = 0.5
+# Fraction of edge rows with no edge_type_uuid that is worth reporting. Low,
+# because in a correctly loaded space the expected value is exactly zero — every
+# graph object carries a vitaltype — so anything above noise means either
+# orphaned rows or a space loaded without vitaltype triples.
+EDGE_UNTYPED_WARN_PCT = 0.01
 
 # Cleanup
 CLEANUP_RETENTION_DAYS = 30
@@ -471,7 +476,8 @@ class MaintenanceJob:
         sync via sync_edge_table_before_delete, so there are no orphans to prune.
         """
         from ..db.sparql_sql.sync_edge_table import (
-            edge_table_drift, edge_table_orphan_rate, backfill_edge_table)
+            edge_table_drift, edge_table_orphan_rate,
+            edge_table_untyped_rate, backfill_edge_table)
 
         worst_space = None
         worst_drift = 0
@@ -487,8 +493,30 @@ class MaintenanceJob:
                     # traversal returning nothing (issues/041). Only a
                     # referential probe sees that.
                     orphan_rate = await edge_table_orphan_rate(conn, space_id)
+                    # Exact, whole-table companion to the sampled probe above.
+                    # Every graph object carries a vitaltype, so a NULL
+                    # edge_type_uuid means the row does not correspond to a live
+                    # edge. One index-only count sees every orphan, where the
+                    # sample above sees 200 rows — it found 20,461 stale rows
+                    # across four spaces the first time it ran, 5.3% of a
+                    # production-shaped one (issues/060).
+                    untyped_rate = await edge_table_untyped_rate(conn, space_id)
             except Exception:
                 continue  # space has no edge table (e.g. non-KG) — skip
+            if untyped_rate > EDGE_UNTYPED_WARN_PCT:
+                # Reported, not acted on. A space whose source never carried
+                # vitaltype reads as 100% untyped while being perfectly live —
+                # wordnet_exp has 1,536,485 `type` quads and zero `vitaltype` —
+                # so rebuilding on this signal alone would churn a healthy table
+                # to no effect. Typed traversal there matches nothing, which is
+                # worth knowing either way.
+                logger.warning(
+                    "edge table for %s has %.1f%% rows with no edge_type_uuid. "
+                    "Either they are orphans (defining quads deleted) or the "
+                    "space was loaded without vitaltype triples. Typed "
+                    "traversals will not match them. Check with "
+                    "scripts/rebuild_edge_tables.py --space %s --dry-run",
+                    space_id, 100.0 * untyped_rate, space_id)
             if orphan_rate > EDGE_ORPHAN_STALE_PCT:
                 stale_space = stale_space or (space_id, orphan_rate)
                 continue

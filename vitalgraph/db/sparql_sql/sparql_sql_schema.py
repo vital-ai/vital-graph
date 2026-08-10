@@ -640,6 +640,19 @@ class SparqlSQLSchema:
                 source_node_uuid UUID NOT NULL,
                 dest_node_uuid   UUID NOT NULL,
                 context_uuid     UUID NOT NULL,
+                -- The edge node's vitaltype. Without it, telling
+                -- Edge_hasKGSlot from Edge_hasEntityKGFrame needs a join back
+                -- to rdf_quad on edge_uuid, which hands back the join
+                -- reduction this table exists to provide. Measured on a
+                -- three-hop traversal: 700ms untyped, 22s typed via quad
+                -- joins (issues/060).
+                --
+                -- NULLABLE on purpose. An edge with hasEdgeSource and
+                -- hasEdgeDestination but no vitaltype triple is still an edge,
+                -- and populating this with an inner join would silently drop
+                -- it — changing which rows the table describes rather than
+                -- only how fast it answers.
+                edge_type_uuid   UUID,
                 PRIMARY KEY (edge_uuid, context_uuid)
             ){_part}''')
         if partition_quads > 0:
@@ -927,6 +940,14 @@ class SparqlSQLSchema:
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_edge_src_dst ON {t['edge']} (source_node_uuid, dest_node_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_edge_dst_src ON {t['edge']} (dest_node_uuid, source_node_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_edge_edge ON {t['edge']} (edge_uuid)",
+            # Typed traversal in each direction. A hop is normally "these
+            # destinations, of this edge type", so the type leads and the
+            # endpoint follows; without these the type predicate is a filter
+            # applied after the endpoint lookup rather than part of the seek.
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_edge_type_dst "
+            f"ON {t['edge']} (edge_type_uuid, dest_node_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_edge_type_src "
+            f"ON {t['edge']} (edge_type_uuid, source_node_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_edge_ctx ON {t['edge']} (context_uuid)",
 
             # Frame-entity table indexes

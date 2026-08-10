@@ -113,16 +113,37 @@ async def test_benched_space_indexes_match_schema(perf_conn, space):
         "AND tablename = ANY($1::text[])", tables)}
     absent_tables = sorted(set(tables) - present_tables)
 
-    mismatched = []
+    # Column inventory, so a missing index can be told apart from an index that
+    # CANNOT exist because the table predates the column it indexes. Those are
+    # different problems: the first is repairable by creating the index, the
+    # second means the table itself is an older schema version and no amount of
+    # index creation will fix it.
+    cols: dict = {}
+    for r in await perf_conn.fetch(
+            "SELECT table_name, column_name FROM information_schema.columns "
+            "WHERE table_schema='public' AND table_name = ANY($1::text[])",
+            tables):
+        cols.setdefault(r["table_name"], set()).add(r["column_name"])
+
+    mismatched, drifted = [], []
     for name, (table, want) in sorted(expected.items()):
         if table not in present_tables:
             continue
         if name not in actual:
-            mismatched.append(f"{name} on {table}: MISSING (schema creates it)")
+            absent_cols = [c for c in (want or ())
+                           if c and c not in cols.get(table, set())]
+            if absent_cols:
+                drifted.append(f"{table}: no column(s) {absent_cols} — the "
+                               f"table is an older schema version, so "
+                               f"{name} cannot be created")
+            else:
+                mismatched.append(
+                    f"{name} on {table}: MISSING (schema creates it)")
         elif _key_columns(actual[name]) != want:
             mismatched.append(
                 f"{name}: key columns {_key_columns(actual[name])} "
                 f"but schema builds {want}")
+    mismatched.extend(drifted)
 
     if absent_tables:
         mismatched.append(
