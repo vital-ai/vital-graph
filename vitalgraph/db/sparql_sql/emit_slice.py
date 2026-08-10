@@ -257,6 +257,26 @@ def _emit_two_phase(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
     t_alias = f"t_{sn}"
     suffix = " DESC" if direction == "DESC" else ""
 
+    # ---- candidate-driven alternative -------------------------------------
+    # For a negation whose answer is SPARSE, driving from the walked-back set
+    # beats probing from the anchor: when the negation excludes everything the
+    # candidate set is empty, so no hop is walked and the anchor is never
+    # scanned. Two earlier placements kept the anchor driving and did not help —
+    # inlining the set into the probe (per-probe ~21 -> ~69,928) and hanging it
+    # off a CTE the probe filtered against (outer Unique still 95 million).
+    #
+    # Gated on DENSITY, because the trade is real: this gives up the ordered
+    # early-terminating scan, so it costs work proportional to the ANSWER —
+    # 22-27s when the negation excludes nothing, against a probe that stops
+    # after 25 rows.
+    if exists_expr is not None and exists_expr.negated:
+        cand_sql = _try_candidate_driven(
+            plan, ctx, left_bgp, right_bgp, exists_expr, key, col_ref,
+            from_sql, where_conds, sn, t_alias)
+        if cand_sql is not None:
+            return cand_sql
+
+
     # DISTINCT, and it must stay (issues/046). EXISTS does not multiply the
     # anchor's rows, but it does not deduplicate them either, and the anchor was
     # never one row per entity: rdf_quad can hold the same (s,p,o,c) more than
@@ -355,3 +375,94 @@ def emit_slice(plan: PlanV2, ctx: EmitContext) -> str:
     ctx.log("slice", f"LIMIT={plan.limit}, OFFSET={plan.offset}")
 
     return "\n".join(parts)
+
+
+def _try_candidate_driven(plan, ctx, left_bgp, right_bgp, exists_expr,
+                          key, col_ref, from_sql, where_conds, sn, t_alias):
+    """Phase 1 driven by the walked-back candidate set, or None to decline.
+
+    The alternative to probing from the anchor. See emit_backward for why a
+    filter cannot reproduce it: an empty candidate set costs nothing, whereas a
+    filter still visits every anchor row to discover that none qualify.
+
+    Declines on anything it does not fully recognise. This path returns
+    different SQL for the same question, so an approximation here is a wrong
+    answer rather than a slow one.
+    """
+    from .sql_type_generation import TypeRegistry
+    from .emit_bgp import _NUMERIC_DATATYPES, _BOOLEAN_DT, _DATETIME_DATATYPES
+    from .emit_backward import (extract_negated_traversal,
+                                extract_positive_chain, emit_candidate_ctes)
+
+    if exists_expr.prepared_plan is None:
+        return None
+    trav = extract_negated_traversal(exists_expr.prepared_plan,
+                                     exists_expr.prepared_aliases)
+    if trav is None:
+        return None
+    chain = extract_positive_chain(right_bgp, ctx.aliases)
+    if chain is None:
+        return None
+    levels, ctx_uuid = chain
+    if not levels:
+        return None
+
+    # DENSITY gate. The negation must exclude most of the population, or the
+    # answer is dense and the forward probe — which stops after one page — wins.
+    # The selectivity is already in rdf_stats; an unknown one declines, because
+    # guessing favourably is how a rewrite ships looking correct and behaves
+    # badly on the shapes nobody profiled.
+    stats = getattr(ctx.aliases, "quad_stats", None) or {}
+    extra = getattr(ctx.aliases, "extra_quad_stats", None) or {}
+    deepest = levels[-1]
+    excluded_n = stats.get((trav.leaf_pred, trav.leaf_obj)) or \
+        extra.get((trav.leaf_pred, trav.leaf_obj))
+    population_n = stats.get((deepest.dest_pred, deepest.dest_obj)) or \
+        extra.get((deepest.dest_pred, deepest.dest_obj))
+    if not excluded_n or not population_n:
+        ctx.log("slice", "candidate-driven declined: negation selectivity "
+                         "unknown")
+        return None
+    if excluded_n < 0.5 * population_n:
+        ctx.log("slice", f"candidate-driven declined: negation excludes only "
+                         f"{excluded_n}/{population_n} — answer is dense, the "
+                         f"probe stops sooner")
+        return None
+
+    with_clause, cands = emit_candidate_ctes(
+        trav, levels, ctx.space_id, str(ctx_uuid), ctx.aliases.next)
+
+    # `candidates` goes in the FROM so it DRIVES; the anchor becomes a lookup.
+    # That is the entire difference from the two placements that did not work.
+    c_alias = ctx.aliases.next("cd")
+    anchor_from = from_sql.strip()
+    if not anchor_from.upper().startswith("FROM "):
+        return None
+    anchor_tables = anchor_from[5:]
+    conds = list(where_conds) + [f"{col_ref} = {c_alias}.n"]
+
+    page = (f"{with_clause}\n"
+            f"SELECT DISTINCT ON ({c_alias}.n) {c_alias}.n AS {sn}__uuid\n"
+            f"FROM {cands} AS {c_alias}, {anchor_tables}\n"
+            f"WHERE {' AND '.join(conds)}\n"
+            f"ORDER BY {c_alias}.n\n"
+            f"LIMIT {plan.limit}")
+    if plan.offset > 0:
+        page += f"\nOFFSET {plan.offset}"
+
+    r_alias = ctx.aliases.next("r")
+    cols = TypeRegistry.term_table_columns(
+        sn, t_alias, r_alias, "",
+        dt_case_sql=ctx.dt_case_expr(t_alias),
+        numeric_dt_id_list=ctx.dt_ids_for_uris(_NUMERIC_DATATYPES),
+        boolean_dt_id=ctx.dt_ids_for_uris([_BOOLEAN_DT]),
+        datetime_dt_id_list=ctx.dt_ids_for_uris(_DATETIME_DATATYPES),
+    )
+    # No ordered-scan fence here: this shape does not depend on an early
+    # terminating index scan, it depends on the candidate set being small.
+    ctx.log("slice", f"candidate-driven: {len(levels)} level(s) walked back, "
+                     f"negation excludes {excluded_n}/{population_n}")
+    return (f"SELECT {', '.join(cols)}\n"
+            f"FROM ({page}) AS {r_alias}\n"
+            f"JOIN {ctx.space_id}_term AS {t_alias} "
+            f"ON {r_alias}.{sn}__uuid = {t_alias}.term_uuid")

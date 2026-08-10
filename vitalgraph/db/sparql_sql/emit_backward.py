@@ -295,3 +295,156 @@ def extract_negated_traversal(plan, aliases) -> Optional[Traversal]:
     contexts = {v for v in ctx_of.values() if v}
     return Traversal(str(leaf_pred), str(leaf_obj), hops, corr,
                      str(next(iter(contexts))) if contexts else None)
+
+
+class Level:
+    """One hop of the positive traversal, anchor-side first.
+
+    `edge_type` is the hop; `dest_pred`/`dest_obj` are the type constraint on the
+    node it lands on, which the backward walk has to re-apply — dropping it would
+    admit nodes the forward form never reached.
+    """
+
+    def __init__(self, edge_type, dest_pred, dest_obj):
+        self.edge_type = edge_type
+        self.dest_pred = dest_pred
+        self.dest_obj = dest_obj
+
+
+def extract_positive_chain(plan, aliases):
+    """The anchor -> ... -> node chain a BGP walks, anchor-side first.
+
+    Returns None unless the BGP is a single chain of typed edge hops, each
+    landing on a node with a type constraint. That is the shape the candidate
+    driven form can invert; anything else is refused rather than approximated,
+    because a backward walk that drops a constraint returns rows the forward form
+    would not.
+    """
+    tables = getattr(plan, "tables", None) or []
+    edges = [t for t in tables if getattr(t, "kind", None) == "edge"]
+    if not edges:
+        return None
+
+    consts = _const_map(aliases)
+    pred_of, obj_of, ctx_of = {}, {}, {}
+    type_via, dest_typed, follows = {}, {}, {}
+
+    for _owner, sql in (getattr(plan, "tagged_constraints", None) or []):
+        m = re.search(r"(\w+)\.predicate_uuid\s*=\s*__CONST_(\w+)__", sql)
+        if m:
+            pred_of[m.group(1)] = consts.get(m.group(2))
+        m = re.search(r"(\w+)\.object_uuid\s*=\s*__CONST_(\w+)__", sql)
+        if m:
+            obj_of[m.group(1)] = consts.get(m.group(2))
+        m = re.search(r"(\w+)\.context_uuid\s*=\s*__CONST_(\w+)__", sql)
+        if m:
+            ctx_of[m.group(1)] = consts.get(m.group(2))
+        m = re.search(r"(\w+)\.edge_uuid\s*=\s*(\w+)\.subject_uuid", sql)
+        if m:
+            type_via[m.group(1)] = m.group(2)
+        m = re.search(r"(\w+)\.subject_uuid\s*=\s*(\w+)\.dest_node_uuid", sql)
+        if m:
+            dest_typed[m.group(2)] = m.group(1)
+        m = re.search(r"(\w+)\.source_node_uuid\s*=\s*(\w+)\.dest_node_uuid", sql)
+        if m:
+            follows[m.group(1)] = m.group(2)
+
+    by_alias = {e.alias: e for e in edges}
+    # The anchor-side hop is the one that follows nothing.
+    roots = [e.alias for e in edges if e.alias not in follows]
+    if len(roots) != 1:
+        return None
+    order, cur, seen = [], roots[0], set()
+    nxt = {v: k for k, v in follows.items()}
+    while cur and cur not in seen:
+        seen.add(cur)
+        order.append(cur)
+        cur = nxt.get(cur)
+    if len(order) != len(edges):
+        return None
+
+    levels = []
+    for alias in order:
+        tv = type_via.get(alias)
+        etype = obj_of.get(tv) if tv else None
+        dq = dest_typed.get(alias)
+        if not etype or not dq:
+            return None
+        dp, do = pred_of.get(dq), obj_of.get(dq)
+        if not dp or not do:
+            return None
+        levels.append(Level(str(etype), str(dp), str(do)))
+
+    contexts = {v for v in ctx_of.values() if v}
+    if len(contexts) != 1:
+        return None
+    return levels, str(next(iter(contexts)))
+
+
+def emit_candidate_ctes(trav: Traversal, levels, space_id: str,
+                        context_uuid: str, name) -> tuple:
+    """CTEs computing the anchor-side nodes that satisfy path-AND-negation.
+
+    Returns `(with_clause, candidates_cte_name)`.
+
+    Walks from the constrained end back to the anchor, re-applying each level's
+    type constraint on the way. Dropping those would admit nodes the forward form
+    never reached, which is the difference between an optimisation and a
+    different query.
+
+    Every CTE is MATERIALIZED. Without it PostgreSQL 12+ may inline them back
+    into the outer query and rebuild the walk per anchor row, which is exactly
+    the arrangement measured at ~69,928 per probe.
+
+    The reason this wins where a filter cannot: when the negation excludes
+    everything, `surviving` is EMPTY and every later CTE is empty, so no hop is
+    walked and the anchor is never scanned. A filter still has to visit each
+    anchor row to discover that none qualify.
+    """
+    t_quad = f"{space_id}_rdf_quad"
+    t_edge = f"{space_id}_edge"
+    ctx = context_uuid
+    parts = []
+
+    excl = name("excl")
+    parts.append(
+        f"{excl} AS MATERIALIZED (\n    {_walk_select(trav, space_id, ctx)}\n  )")
+
+    deepest = levels[-1]
+    surv = name("surv")
+    parts.append(
+        f"{surv} AS MATERIALIZED (\n"
+        f"    SELECT q.subject_uuid AS n FROM {t_quad} q\n"
+        f"    WHERE q.predicate_uuid = '{deepest.dest_pred}'::uuid\n"
+        f"      AND q.object_uuid = '{deepest.dest_obj}'::uuid\n"
+        f"      AND q.context_uuid = '{ctx}'::uuid\n"
+        f"    EXCEPT SELECT n FROM {excl}\n  )")
+
+    prev = surv
+    # Walk back level by level, applying the type of the node each hop lands on.
+    for i in range(len(levels) - 1, 0, -1):
+        hop = levels[i].edge_type
+        landing = levels[i - 1]
+        step = name("bw")
+        parts.append(
+            f"{step} AS MATERIALIZED (\n"
+            f"    SELECT DISTINCT e.source_node_uuid AS n FROM {prev} p\n"
+            f"    JOIN {t_edge} e ON e.dest_node_uuid = p.n\n"
+            f"      AND e.edge_type_uuid = '{hop}'::uuid\n"
+            f"      AND e.context_uuid = '{ctx}'::uuid\n"
+            f"    WHERE EXISTS (SELECT 1 FROM {t_quad} tq\n"
+            f"      WHERE tq.subject_uuid = e.source_node_uuid\n"
+            f"        AND tq.predicate_uuid = '{landing.dest_pred}'::uuid\n"
+            f"        AND tq.object_uuid = '{landing.dest_obj}'::uuid\n"
+            f"        AND tq.context_uuid = '{ctx}'::uuid)\n  )")
+        prev = step
+
+    cands = name("cand")
+    parts.append(
+        f"{cands} AS MATERIALIZED (\n"
+        f"    SELECT DISTINCT e.source_node_uuid AS n FROM {prev} p\n"
+        f"    JOIN {t_edge} e ON e.dest_node_uuid = p.n\n"
+        f"      AND e.edge_type_uuid = '{levels[0].edge_type}'::uuid\n"
+        f"      AND e.context_uuid = '{ctx}'::uuid\n  )")
+
+    return "WITH " + ",\n  ".join(parts), cands
