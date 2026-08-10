@@ -516,6 +516,7 @@ class SparqlSQLSchema:
             'rdf_pred_stats': f'{space_id}_rdf_pred_stats',
             'rdf_stats': f'{space_id}_rdf_stats',
             'edge': f'{space_id}_edge',
+            'edge_fanout': f'{space_id}_edge_fanout',
             'frame_entity': f'{space_id}_frame_entity',
             'vector_index': f'{space_id}_vector_index',
             'geo': f'{space_id}_geo',
@@ -673,6 +674,51 @@ class SparqlSQLSchema:
             ){_part}''')
         if partition_quads > 0:
             stmts += self._partition_children(t['edge'], partition_quads)
+
+
+        # 6b. Edge fan-out: how many rows one traversal step produces, per edge
+        # kind and per direction.
+        #
+        # The metric no existing statistic expresses. rdf_stats and PostgreSQL's
+        # stat_*_quad_po both describe single-table selectivity; the errors that
+        # matter here are JOIN cardinality -- measured at 305x and 4,761x
+        # underestimates on multi-hop traversals (issues/059). Fan-out is what
+        # multiplies through those hops, and PostgreSQL cannot infer it from
+        # column statistics.
+        #
+        # Keyed by relation type as well as edge type, because pooling loses the
+        # answer. Measured on sp_kg_rel, all four Edge_hasKGRelation:
+        #
+        #     reportsTo  forward 1.00/1     backward 4.77/5      a tree
+        #     worksFor   forward 1.00/1     backward 39.00/886   a hub
+        #
+        # Per edge type those average to something describing neither, and per
+        # space (1.80/1.51) hides both.
+        #
+        # p99 and max are stored, not just avg, because the distribution is
+        # skewed enough that a mean is unusable: wordnet's slot-value in-degree
+        # averages 5.20 with a maximum of 1,342, so a plan chosen on the mean can
+        # be 250x off.
+        #
+        # Bounded by (edge types x relation types x 2), so tens of rows.
+        stmts.append(f'''
+            CREATE TABLE IF NOT EXISTS {t['edge_fanout']} (
+                edge_type_uuid     UUID NOT NULL,
+                -- The all-zero uuid means "not a relation", because a NULL
+                -- cannot participate in a primary key and a containment edge
+                -- genuinely has no relation type. A sentinel keeps ON CONFLICT
+                -- simple; the alternative is a unique index over COALESCE and
+                -- an inference clause that has to match it exactly.
+                relation_type_uuid UUID NOT NULL
+                    DEFAULT '00000000-0000-0000-0000-000000000000'::uuid,
+                direction          TEXT NOT NULL CHECK (direction IN ('forward','backward')),
+                avg_fanout         DOUBLE PRECISION NOT NULL DEFAULT 0,
+                p99_fanout         BIGINT NOT NULL DEFAULT 0,
+                max_fanout         BIGINT NOT NULL DEFAULT 0,
+                sample_nodes       BIGINT NOT NULL DEFAULT 0,
+                updated_time       TIMESTAMP DEFAULT NOW(),
+                PRIMARY KEY (edge_type_uuid, relation_type_uuid, direction)
+            )''')
 
         # 7. Frame-entity table (maintained by app-level sync; replaces frame_entity MV)
         stmts.append(f'''

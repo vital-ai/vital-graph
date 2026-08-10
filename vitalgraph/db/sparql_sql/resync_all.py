@@ -39,6 +39,19 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
     # 3. Stats tables
     stats = await resync_stats_tables(conn, space_id)
 
+    # 3b. Edge fan-out. After the edge table, which it reads, and recomputed in
+    # full because fan-out is a structural property that moves slowly — making
+    # it incremental would mean maintaining a distribution under every write.
+    fanout_rows = 0
+    try:
+        from .sync_edge_fanout import compute_edge_fanout
+        fanout_rows = await compute_edge_fanout(conn, space_id)
+    except Exception as exc:
+        # A space predating the table should not fail a resync over a statistic
+        # that only affects plan choice.
+        logger.warning("resync_all(%s): edge fan-out skipped (%s)",
+                       space_id, exc)
+
     # 4. Geo table — extract lat/lon from existing quads
     geo_points = 0
     try:
@@ -102,6 +115,7 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
         'frame_entity_rows': fe_count,
         'pred_stats_rows': stats['pred_stats'],
         'quad_stats_rows': stats['quad_stats'],
+        'edge_fanout_rows': fanout_rows,
         'geo_points': geo_points,
     }
     logger.info("resync_all_auxiliary_tables(%s): %s", space_id, result)
