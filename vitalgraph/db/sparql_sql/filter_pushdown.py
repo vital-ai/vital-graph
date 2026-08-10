@@ -50,6 +50,37 @@ def _quad_aliases(bgp: PlanV2) -> set:
             if t.kind in ("quad", "edge", "frame_entity")}
 
 
+def _term_set(ctx, term_table: str, cond: str) -> str:
+    """The set of term uuids matching `cond`, as a subquery to be used with IN.
+
+    Deliberately INLINE, and deliberately not a MATERIALIZED CTE.
+
+    `issues/070` observed that this subquery is uncorrelated yet lands inside
+    the correlated two-phase probe, which PostgreSQL re-executes per candidate,
+    and proposed hoisting it into a CTE so the term set is computed once. That
+    was implemented and measured, and it is WORSE:
+
+        contains/Text    1,284 ms -> 53,098 ms   (41x)
+        ne/Text            228 ms ->  1,692 ms   (7.4x)
+        has_any/Text    12,684 ms -> 20,603 ms
+
+    The reasoning behind the CTE was wrong in a way worth keeping. "Evaluated
+    once" is only cheaper than "evaluated per row" when the per-row evaluation
+    cannot early-terminate. Under two-phase paging it can: the probe tests ~25
+    candidates and stops, and each test is an index lookup that never builds the
+    whole term set. Materialising computes EVERY matching term eagerly —
+    hundreds of thousands of rows for a broad predicate like
+    `term_text ILIKE '%ca%'` — before the page is even started. The `LIMIT` is
+    what makes the inline form cheap, and a CTE is exactly the barrier that
+    throws it away.
+
+    A CTE could still pay off where the term set is small AND the candidate
+    count is large. Nothing in the sweep is that shape, so it is not worth the
+    machinery until something is.
+    """
+    return f"(SELECT term_uuid FROM {term_table} WHERE {cond})"
+
+
 # Descending past these would change what the filter means: pushing into the
 # right side of an OPTIONAL turns "keep the row, unbound" into "drop the row",
 # and pushing into one UNION branch silently drops the other's contribution.
@@ -146,7 +177,7 @@ def push_filters(plan: PlanV2, space_id: str, ctx=None) -> None:
         if child_bgp is not None and not in_correlated:
             quad_aliases = _quad_aliases(child_bgp)
             constraint = _try_text_filter(expr, child_bgp, term_table,
-                                          quad_aliases)
+                                          quad_aliases, ctx)
             if constraint:
                 target = child_bgp
 
@@ -215,7 +246,7 @@ push_text_filters = push_filters
 
 
 def _try_text_filter(
-    expr, bgp: PlanV2, term_table: str, quad_aliases: set
+    expr, bgp: PlanV2, term_table: str, quad_aliases: set, ctx=None
 ) -> Optional[Tuple[str, str]]:
     """Try to convert a single text filter expression to a quad-level constraint.
 
@@ -297,10 +328,7 @@ def _try_text_filter(
     else:
         return None
 
-    constraint_sql = (
-        f"{uuid_col} IN "
-        f"(SELECT term_uuid FROM {term_table} WHERE {term_cond})"
-    )
+    constraint_sql = f"{uuid_col} IN {_term_set(ctx, term_table, term_cond)}"
     logger.debug("Text filter pushdown: %s(%s, '%s') → %s",
                  name, var_name, literal_value, constraint_sql[:80])
     return (ref_id, constraint_sql)
@@ -378,7 +406,7 @@ def _text_search_var(expr) -> Optional[str]:
 
 def _try_text_search(expr, bgp, term_table: str, quad_aliases: set, ctx):
     """`_try_text_filter` under the by-variable dispatch signature."""
-    return _try_text_filter(expr, bgp, term_table, quad_aliases)
+    return _try_text_filter(expr, bgp, term_table, quad_aliases, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -511,7 +539,7 @@ def _try_numeric_filter(
     # since a fence also blocks legitimate optimisations.
     constraint_sql = (
         f"{ref_id}.{col_name} IN "
-        f"(SELECT term_uuid FROM {term_table} WHERE {num_expr} {op} {value_sql})"
+        f"{_term_set(ctx, term_table, f'{num_expr} {op} {value_sql}')}"
     )
     # Record structurally so the selectivity gate can estimate this leaf.
     bgp.range_leaves[(ref_id, col_name)] = (op, literal)
@@ -667,7 +695,7 @@ def _try_inequality_filter(expr, bgp, term_table: str, quad_aliases: set, ctx):
     if eq_cond is None:
         return None
     return (ref_id, f"{ref_id}.{col_name} NOT IN "
-                    f"(SELECT term_uuid FROM {term_table} WHERE {eq_cond})")
+                    f"{_term_set(ctx, term_table, eq_cond)}")
 
 
 # `?v IN (a, b, c)` is a disjunction of equalities, so it is the same problem as
@@ -724,5 +752,4 @@ def _try_in_filter(expr, bgp, term_table: str, quad_aliases: set, ctx):
         return None
 
     return (ref_id, f"{ref_id}.{col_name} {sql_op} "
-                    f"(SELECT term_uuid FROM {term_table} "
-                    f"WHERE {' OR '.join(conds)})")
+                    f"{_term_set(ctx, term_table, ' OR '.join(conds))}")

@@ -30,6 +30,7 @@ from vitalgraph.db.sparql_sql.var_scope import compute_scope, compute_text_neede
 from vitalgraph.db.sparql_sql.emit_context import EmitContext, ProcessingTrace
 from vitalgraph.db.sparql_sql.emit import emit
 from vitalgraph.db.sparql_sql.filter_pushdown import push_text_filters
+from vitalgraph.db.sparql_sql.generator import prepend_ctes
 from vitalgraph.db.sparql_sql.ir import KIND_FILTER
 
 
@@ -53,11 +54,6 @@ def _generate_sql_from_fixture(fixture: dict) -> str:
     aliases = AliasGenerator()
     plan = collect(compile_result.algebra, SPACE_ID, aliases)
 
-    # Apply filter pushdown (pure, no DB)
-    for node in list(plan.walk()):
-        if node.kind == KIND_FILTER:
-            push_text_filters(node, SPACE_ID)
-
     # Compute text-needed vars
     text_needed = compute_text_needed_vars(plan)
 
@@ -70,9 +66,24 @@ def _generate_sql_from_fixture(fixture: dict) -> str:
         text_needed_vars=text_needed,
     )
 
-    # Emit SQL
+    # Apply filter pushdown (pure, no DB). Passing ctx matters: without it the
+    # push-down cannot register its hoisted term-set CTEs, so the CTE path goes
+    # unexercised and the SQL validated below is not the SQL production emits.
+    for node in list(plan.walk()):
+        if node.kind == KIND_FILTER:
+            push_text_filters(node, SPACE_ID, ctx)
+
+    # Emit SQL, then assemble the statement the way generate_sql does.
+    #
+    # This used to return `emit(...)` directly — the query BODY, without the
+    # leading WITH clause. That is not what runs, and it is why a real syntax
+    # error survived here: `generator` concatenated `WITH _const AS (...)` in
+    # front of SQL that could already open with its own WITH, producing
+    # `WITH a AS (...) WITH b AS (...)`. These tests parse the SQL with a real
+    # PostgreSQL parser and still could not see it, because the prefix they
+    # validate was never attached. See issues/070.
     sql = emit(plan, ctx)
-    return sql
+    return prepend_ctes(sql, aliases, f"{SPACE_ID}_term")
 
 
 FIXTURES = _load_fixtures()

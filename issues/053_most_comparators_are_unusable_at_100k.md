@@ -1,6 +1,56 @@
 # Twenty-One Comparator Shapes Time Out at 100k for a 25-Row Page
 
-## Status: OPEN — 16 of 21 original cells closed; 9 cells still exceed 1s — 2026-08-10
+## Status: OPEN — 9 cells exceed 1s, down from 14 — 2026-08-10
+
+Latest verified sweep (`/tmp/sweep4`, cluster idle, HEAD baseline for comparison):
+
+    eq/DateTime          TIMED OUT (>60s)   unique-per-row datetimes, issues/050
+    ne/Boolean           TIMED OUT (>60s)   declined on purpose, needs bool_val
+    is_empty/Text           56,780 ms       undiagnosed, issues/071
+    has_any/Choice          13,108 ms       issues/070
+    has_any/Text            12,101 ms       issues/070
+    eq/Integer               2,030 ms       undiagnosed, issues/071
+    eq/Text                  1,258 ms       noisy cell — 1,124 / 107 / 1,335 / 1,258
+    lt/DateTime              1,141 ms
+    has_all/Text             1,112 ms
+
+### The datetime range cells are fixed — the gate, not the data
+
+`gt`, `gte`, `lt` and `lte` on DateTime were attributed here to "near-total or
+near-empty match sets; the typed column landed and cannot help a query whose
+cost is its match set". That was wrong. The match set was never the problem;
+the plan was.
+
+`semijoin._pushable_range_var` RESTATED the pushable-range shape instead of
+deferring to `filter_pushdown._numeric_var`. The emitter had been widened to
+accept datetime literals — without which its own `dt_val` branch was
+unreachable — but the gate still tested `_numeric_literal` alone. So a datetime
+range was pushed while the gate kept `?val` live, the semi-join declined,
+two-phase paging declined, and the plan fell back to a blocking sort whose cost
+IS its match set. That is why the timings tracked match-set size so exactly: the
+correlation was real, but it was a symptom of the blocking sort, not the cause.
+
+    gte/DateTime   TIMED OUT ->     36 ms
+    gt/DateTime    TIMED OUT ->     70 ms
+    lte/DateTime    12,183 ms ->    86 ms
+    lt/DateTime      9,417 ms -> 1,141 ms
+
+The gate now defers to the emitter. This is the FOURTH time two ends of one
+push-down predicate drifted apart — `issues/054`, `issues/058`, the `contains`
+fold, and this. Each was found by a different route and each looked like a
+data-shape problem first.
+
+### Careful: this sweep's cells are not independent
+
+Every numeric range cell also improved this run (`gte`/Double 668 -> 46 ms,
+`lte`/Double 208 -> 37 ms, and so on) and NONE of them should have: the gate
+change is a no-op for numeric literals, which both the old and new predicate
+accept identically. The likely cause is that `gt` and `gte` on DateTime no
+longer burn 60 s of heavy scanning each, so later cells run against a warmer
+cache. Cells earlier in the sweep affect cells later in it. Do not read a
+single run's numeric deltas as attributable to a change.
+
+## Superseded status: 16 of 21 original cells closed — 2026-08-10
 
 | cells | status |
 |---|---|
@@ -36,6 +86,24 @@ in rows this table calls fixed:
 `is_empty`/Text at ~52 s has never appeared in this issue's accounting at all.
 It is not a regression — it measures the same at HEAD — it was simply never
 counted, which is its own finding about how this list was maintained.
+
+### The ordered-scan fence is NOT what costs `eq`/DateTime — 2026-08-10
+
+Hypothesis worth recording because it was wrong: `needs_ordered_scan` disables
+sorting so the planner walks the ORDER BY index and early-terminates at LIMIT,
+which should be a *loss* on a near-empty match set — proving there is nothing to
+return means walking the whole index, where a selective probe plus a sort over
+~0 rows would be instant. This fixture's datetimes are unique per row
+(`issues/050`), so `eq`/DateTime is the extreme case.
+
+Measured both ways, alternating arms, discarding the first run of each
+(`scripts/perf_ordered_scan_fence.py`):
+
+    eq/DateTime   fence on   rep0/1/2   TIMED OUT (>45s)
+    eq/DateTime   fence off  rep0/1/2   TIMED OUT (>45s)
+
+Identical. The fence is not the cause and removing it would not help, so the
+cost is in the scan itself, not in the plan shape the fence forces.
 
 ### Measurement note: only claim a cell you can name a mechanism for
 

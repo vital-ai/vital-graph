@@ -44,7 +44,50 @@ paging declines and the plan reverts to a blocking sort over the whole match set
 (`issues/058` documents that chain). Declining would return these cells to
 timeout. The constraint needs to stay — it just needs to be evaluated once.
 
-## The fix: evaluate the term set once, in a MATERIALIZED CTE
+## The proposed fix was implemented, measured, and REVERTED — 2026-08-10
+
+The MATERIALIZED CTE below was built and swept. It is **much worse**:
+
+    contains/Text    1,284 ms -> 53,098 ms   (41x, nearly back to timeout)
+    ne/Text            228 ms ->  1,692 ms   (7.4x)
+    has_any/Text    12,684 ms -> 20,603 ms
+    has_any/Choice  13,269 ms -> 12,114 ms   (the only cell not hurt)
+
+No cell improved. Reverted; `filter_pushdown._term_set` now emits the inline
+subquery and carries this result so it is not re-attempted.
+
+### Why the reasoning was wrong
+
+"Evaluated once" only beats "evaluated per row" when the per-row evaluation
+cannot early-terminate. Under two-phase paging it can, and that is the whole
+design: the probe tests candidates until the page is full — about 25 of them —
+and each test is an index lookup that never materialises the term set.
+
+The CTE throws that away. `term_text ILIKE '%ca%'` under the trigram index costs
+almost nothing per probe, but as a CTE it must produce EVERY matching term
+before the first page row exists. The `LIMIT` is what makes the inline form
+cheap, and a CTE is precisely the optimisation barrier that discards it. That
+`contains` — the cell with the cheapest per-probe cost and the broadest term set
+— regressed hardest is the signature of exactly this.
+
+So the diagnosis in this issue is right and the prescription was backwards: the
+subquery does re-execute per candidate, and that is FINE, because per-candidate
+work bounded by LIMIT beats unbounded work done once.
+
+### What would actually help
+
+Not "compute once" but "compute less". `has_any` on text and choice resolves to
+a handful of exact literals, so resolving them to uuids at generation time — the
+way `eq` already does through `materialize_constants` — yields a constant
+`IN (uuid, uuid)` that the index probes directly, with no term scan per
+candidate at all. That is narrower than the CTE and does not fight the LIMIT.
+
+Blocked on the same thing noted below: `_ne_equality_cond` produces a lexical
+condition, and the uuid depends on the per-space `datatype_id`, so the mapping
+from literal to uuid needs the resolution machinery rather than a local
+computation.
+
+## The original proposal (superseded — kept for the record)
 
     WITH _f0 AS MATERIALIZED (
       SELECT term_uuid FROM {space}_term WHERE term_text ILIKE '%ca%'

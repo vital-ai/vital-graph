@@ -111,6 +111,38 @@ def build_constants_cte(aliases: AliasGenerator, term_table: str) -> str:
     )
 
 
+def prepend_ctes(sql: str, aliases: AliasGenerator, term_table: str) -> str:
+    """Attach the constants CTE and any hoisted push-down term sets.
+
+    Emitted SQL sometimes already opens with its own `WITH` — the
+    candidate-driven negation path builds one (`emit_backward.emit_candidate_ctes`).
+    Concatenating a second `WITH` in front of that produces
+    `WITH a AS (...) WITH b AS (...)`, which is a syntax error, so the clauses
+    are MERGED rather than stacked.
+
+    Filter push-down deliberately does NOT register CTEs here — see
+    `filter_pushdown._term_set`, where hoisting the term set into a MATERIALIZED
+    CTE was implemented, measured, and reverted for being 41x slower.
+    """
+    parts = []
+
+    const = build_constants_cte(aliases, term_table)
+    if const:
+        # strip the "WITH " and the trailing newline, keeping just the body
+        parts.append(const[len("WITH "):].rstrip("\n"))
+
+    if not parts:
+        return sql
+
+    stripped = sql.lstrip()
+    if stripped[:5].upper() == "WITH ":
+        # Fold this query's own CTEs in after ours, as one WITH clause.
+        parts.append(stripped[len("WITH "):].lstrip())
+        return "WITH " + ",\n".join(parts)
+
+    return "WITH " + ",\n".join(parts) + "\n" + sql
+
+
 # ---------------------------------------------------------------------------
 # Term constants cache: (space_id, term_text, term_type) → term_uuid
 # Populated incrementally by materialize_constants; avoids a DB round
@@ -746,10 +778,9 @@ async def generate_sql(
         # Stage 4: Substitute constants
         sql_str = substitute_constants(sql_str, aliases)
 
-        # Stage 5: Prepend CTE for unresolved constants
-        cte_prefix = build_constants_cte(aliases, term_table)
-        if cte_prefix:
-            sql_str = cte_prefix + sql_str
+        # Stage 5: Prepend CTEs — unresolved constants, and term sets hoisted
+        # out of filter push-down (issues/070).
+        sql_str = prepend_ctes(sql_str, aliases, term_table)
 
         # Extract sparql_vars
         sparql_vars = []

@@ -434,22 +434,35 @@ def _order_key_vars(plan: PlanV2) -> Set[str]:
 
 
 def _pushable_range_var(expr) -> Optional[str]:
-    """Variable of a numeric range that `filter_pushdown` will consume, else None."""
+    """Variable of a range comparison that `filter_pushdown` will consume.
+
+    Defers to `filter_pushdown._numeric_var` rather than restating the shape.
+    This gate and that emitter MUST accept exactly the same expressions: the
+    gate drops the variable from `needed` on the promise the filter will be
+    pushed, and if the push declines the variable is gone.
+
+    Restating it here is how DATETIME ranges came to be uniquely slow. The
+    emitter's `_numeric_var` was widened to accept datetime literals — without
+    which the `dt_val` branch below it was unreachable — but this copy still
+    tested `_numeric_literal` alone. So a datetime range was pushed and yet the
+    gate kept `?val` live, the semi-join declined, two-phase paging declined,
+    and the plan fell back to a blocking sort whose cost is its match set:
+
+        lt/DateTime    28,524 matching terms     9,527 ms
+        lte/DateTime   28,524 matching terms    11,029 ms
+        gt/DateTime   380,493 matching terms    TIMED OUT
+        gte/DateTime  380,493 matching terms    TIMED OUT
+
+    which is the 13.3x match-set ratio `issues/053` measured, and why the broad
+    side was hopeless while the narrow side merely hurt. Same failure as
+    issues/054, 058 and the `contains` fold — four times now, always two ends of
+    one predicate drifting apart.
+    """
     try:
-        from .filter_pushdown import _NUMERIC_OPS, _numeric_literal
-        from ..jena_sparql.jena_types import ExprVar, ExprFunction
+        from .filter_pushdown import _numeric_var
     except Exception:
         return None
-    if not isinstance(expr, ExprFunction):
-        return None
-    if (expr.name or "").lower() not in _NUMERIC_OPS or len(expr.args or []) != 2:
-        return None
-    left, right = expr.args
-    if isinstance(left, ExprVar) and _numeric_literal(right) is not None:
-        return left.var
-    if isinstance(right, ExprVar) and _numeric_literal(left) is not None:
-        return right.var
-    return None
+    return _numeric_var(expr)
 
 
 def _walk(node: Optional[PlanV2], needed: Set[str],

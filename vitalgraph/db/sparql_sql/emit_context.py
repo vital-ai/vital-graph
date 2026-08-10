@@ -497,6 +497,11 @@ class EmitContext:
         ctx._depth = self._depth + 1
         # Propagate query-wide variable set for diagnostic warnings
         ctx.query_all_vars = self.query_all_vars
+        # Being inside a correlated subquery is a property of the ENCLOSING SQL,
+        # so it survives into every nested context. Without this a UNION branch
+        # or subquery within an EXISTS body would silently re-enable the filter
+        # push-down that issues/070 disables there.
+        ctx.in_correlated_subquery = self.in_correlated_subquery
         # Share vector requests list across parent/child contexts
         ctx._vector_requests = self._vector_requests
         # Share fuzzy requests list across parent/child contexts
