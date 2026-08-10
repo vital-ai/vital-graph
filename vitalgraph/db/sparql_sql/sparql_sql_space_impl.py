@@ -76,6 +76,33 @@ def _concrete_subjects_from_update_ops(ops) -> set:
     return subjects
 
 
+def _has_where_bound_delete(ops) -> bool:
+    """Does this update DELETE quads whose subject is a variable?
+
+    Those subjects cannot be enumerated before executing, so the per-subject
+    edge hooks cannot run for them. Everything else in an update is handled
+    directly; this is the one case that needs a referential sweep afterwards.
+
+    Detected rather than assumed, because the sweep costs an anti-join over the
+    edge table and paying it on every update — including the overwhelmingly
+    common all-concrete ones — would be a real per-write regression.
+    """
+    from ..jena_sparql.jena_types import (
+        URINode, UpdateDataDelete, UpdateModify, UpdateDeleteWhere,
+    )
+    for op in ops or []:
+        if isinstance(op, (UpdateDataDelete, UpdateDeleteWhere)):
+            quads = getattr(op, 'quads', [])
+        elif isinstance(op, UpdateModify):
+            quads = list(getattr(op, 'delete_quads', []))
+        else:
+            continue
+        for q in quads:
+            if not isinstance(q.subject, URINode):
+                return True
+    return False
+
+
 def _cleared_graphs_from_update_ops(ops) -> set:
     """Graph URIs a SPARQL update empties via CLEAR or DROP.
 
@@ -1729,6 +1756,21 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                                 await cleanup_orphan_edges_for_subjects(conn, space_id, subj_uuids)
                                 await sync_frame_entity_before_delete(conn, space_id, subj_uuids)
                                 await sync_frame_entity_after_edge_insert(conn, space_id, subj_uuids)
+
+                        # Subjects bound by a WHERE clause could not be
+                        # enumerated above, so nothing removed the edge rows
+                        # their deletion orphaned. This used to be deferred to
+                        # the background self-heal, which is a backfill and only
+                        # ADDS — so those rows survived indefinitely, answering
+                        # traversals with edges to nowhere (issues/064).
+                        #
+                        # Referential sweep, bounded, and only for updates that
+                        # actually deferred something: the anti-join is real
+                        # work and the all-concrete case is the common one.
+                        if _has_where_bound_delete(cr.update_ops):
+                            from .sync_edge_table import cleanup_orphan_edges
+                            async with conn.transaction():
+                                await cleanup_orphan_edges(conn, space_id)
                     except Exception as ee:
                         logger.debug("edge sync after SPARQL UPDATE failed (non-critical): %s", ee)
 
