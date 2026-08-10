@@ -432,6 +432,9 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
     from .semijoin import needed_pairs
     aliases.extra_quad_stats = {}
     aliases.range_stats = {}
+    # Pairs whose count hit _PAIR_COUNT_CAP, so their recorded value is a lower
+    # bound rather than a measurement. See where it is populated below.
+    aliases.saturated_pairs = set()
     if conn is None and conn_params is None:
         return
     try:
@@ -471,6 +474,15 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
             n = crows[0]["n"] if crows else 0
             _pair_count_cache[ck] = n
             aliases.extra_quad_stats[(p_uuid, o_uuid)] = n
+            # A count that hit the cap is a LOWER BOUND, not a measurement.
+            # The gate only asks "is this large?", for which they are the same
+            # thing — but ranking two criteria against each other is not, and
+            # both drivers in the query at issues/059 report exactly 50,000
+            # against an actual 100,000 each. Recorded so a caller that ranks
+            # can tell the two apart instead of silently treating a saturated
+            # bound as exact (issues/061).
+            if n >= _PAIR_COUNT_CAP:
+                aliases.saturated_pairs.add((p_uuid, o_uuid))
 
         # Range leaves: no constant object, so count through the same bounded
         # form. The num_val index makes this an index scan.

@@ -26,6 +26,12 @@ STATS_MAX_ROW_COUNT = 200_000
 STATS_LOAD_LIMIT = 10_000
 # Keep comfortably more than the load limit so the lowest-N window is intact.
 STATS_KEEP_DEFAULT = 50_000
+# Rows retained per predicate before the global cap. Bounds any single predicate
+# so it cannot evict the others: with a few hundred distinct predicates this
+# stays well under STATS_KEEP_DEFAULT, and it guarantees the structural
+# predicates (vitaltype, hasKGSlotType, hasKGFrameType) survive even when a
+# high-cardinality literal predicate has orders of magnitude more pairs.
+STATS_PER_PREDICATE_DEFAULT = 2_000
 
 
 async def sync_stats_after_insert(
@@ -209,19 +215,21 @@ async def resync_stats_tables(conn, space_id: str) -> Dict[str, int]:
 
 
 async def prune_stats_tables(conn, space_id: str,
-                             keep_top_n: int = STATS_KEEP_DEFAULT) -> int:
+                             keep_top_n: int = STATS_KEEP_DEFAULT,
+                             per_predicate_n: int = STATS_PER_PREDICATE_DEFAULT
+                             ) -> int:
     """Bound {space}_rdf_stats to what the join reorder actually reads.
 
     rdf_stats accumulates one row per distinct (predicate, object) pair — at
     scale dominated by row_count=1 singletons (one per unique object) that the
     reorder loader never reads (it filters row_count >= 2). This removes the
-    pairs outside the reorder's window (row_count < MIN or > MAX) and then
-    hard-caps the remainder to the ``keep_top_n`` lowest-row_count pairs.
+    pairs outside the reorder's window (row_count < MIN or > MAX), keeps the
+    ``per_predicate_n`` most selective objects FOR EACH PREDICATE, and then
+    applies ``keep_top_n`` as an overall size bound.
 
-    Because the loader takes only the lowest STATS_LOAD_LIMIT pairs in
-    [MIN, MAX], any keep_top_n >= that limit leaves the reorder's input
-    unchanged — this is a size bound, not a behavior change. Returns rows kept.
-    pred_stats is left alone (bounded by the distinct-predicate count).
+    The per-predicate step is what stops one high-cardinality predicate evicting
+    every other — see the comment at step 2. Returns rows kept. pred_stats is
+    left alone (bounded by the distinct-predicate count).
     """
     t_stats = f"{space_id}_rdf_stats"
 
@@ -231,12 +239,47 @@ async def prune_stats_tables(conn, space_id: str,
         f"WHERE row_count < $1 OR row_count > $2",
         STATS_MIN_ROW_COUNT, STATS_MAX_ROW_COUNT)
 
-    # 2. Hard cap: keep the keep_top_n lowest-row_count pairs (the window the
-    #    loader draws from), delete the rest. Deterministic tiebreak.
+    # 2. Hard cap, PER PREDICATE rather than globally.
+    #
+    # A global "lowest N" ranking lets one high-cardinality predicate evict every
+    # other. Measured on sp_lead_synth_100k: of 50,000 surviving rows, 49,516
+    # were hasEdgeSource and 484 were hasDateTimeSlotValue, every one with
+    # row_count=2 — while vitaltype (10,054,000 quads), hasKGSlotType (3,877,000)
+    # and hasKGFrameType (1,100,000) were absent entirely. Those are exactly the
+    # predicates that decide plan shape, so the table held nothing useful for the
+    # queries that needed it (issues/061).
+    #
+    # The fixture's unique-per-row datetimes made it extreme (409,017 distinct
+    # values at ~2 occurrences each, issues/050), but any high-cardinality
+    # literal does the same in production — the flooding predicate is whichever
+    # one happens to have the most distinct objects.
+    #
+    # Per-predicate retention is the same shape as PostgreSQL's own MCV lists:
+    # every predicate keeps its own most-selective objects, so no predicate can
+    # starve another. The global cap still applies afterwards as a size bound.
     await conn.execute(
         f"DELETE FROM {t_stats} WHERE ctid IN ("
-        f"  SELECT ctid FROM {t_stats} "
-        f"  ORDER BY row_count ASC, predicate_uuid, object_uuid "
+        f"  SELECT ctid FROM ("
+        f"    SELECT ctid, row_number() OVER ("
+        f"      PARTITION BY predicate_uuid "
+        f"      ORDER BY row_count ASC, object_uuid) AS rn"
+        f"    FROM {t_stats}) r"
+        f"  WHERE r.rn > $1)",
+        per_predicate_n)
+
+    # 3. Global size bound. Ordered by the PER-PREDICATE rank, not by row_count:
+    #    ordering by row_count here would undo step 2, since the structural
+    #    pairs it just protected are precisely the high-count ones and would sort
+    #    to the end again. Taking rank 1 of every predicate, then rank 2, and so
+    #    on, trims every predicate's tail evenly instead of one predicate whole.
+    await conn.execute(
+        f"DELETE FROM {t_stats} WHERE ctid IN ("
+        f"  SELECT ctid FROM ("
+        f"    SELECT ctid, row_number() OVER ("
+        f"      PARTITION BY predicate_uuid "
+        f"      ORDER BY row_count ASC, object_uuid) AS rn"
+        f"    FROM {t_stats}) r"
+        f"  ORDER BY r.rn ASC, r.ctid "
         f"  OFFSET $1)",
         keep_top_n)
 
