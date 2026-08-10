@@ -1,6 +1,35 @@
 # A Pruned `rdf_stats` Row Reappears Carrying Only Its Post-Prune Delta
 
-## Status: OPEN — demonstrated 2026-08-10, live on every space
+## Status: FIXED 2026-08-10 — option (1), the tombstone, at predicate granularity
+
+`rdf_pred_stats` gains a `pruned` boolean. It makes ABSENCE from rdf_stats mean
+something, which is the whole defect: absence was ambiguous between "this pair
+has no quads" and "this pair was pruned", and the incremental sync resolved it
+the wrong way.
+
+* `prune_stats_tables` collects the predicates it removed rows from, with
+  `RETURNING` on all three DELETE steps rather than inferring them afterwards —
+  inferring means comparing stats against the quad table, the expensive thing
+  pruning exists to avoid.
+* `sync_stats_after_insert` degrades to UPDATE-only for a pruned predicate.
+  Existing rows stay accurate (their base is right, the delta is right); absent
+  ones stay absent, which sends the reader to the bounded count that answers
+  honestly. A wrong-but-present row is worse than an absent one, because the
+  reader trusts what it finds and only counts what it does not.
+* `resync_stats_tables` and `resync_stats_for_predicates` clear the flag, since
+  a recompute makes the table complete again. Without that the degradation
+  would be permanent and nothing would ever have lifted it.
+
+Per PREDICATE, not per pair: one boolean on a table holding one row per distinct
+predicate — about 21 in a real space — rather than tombstones for the pairs
+pruning exists to delete.
+
+Migrated across all 41 spaces on this host.
+
+**Test:** `test_pruned_pair_is_not_resurrected_with_a_wrong_count`, verified to
+fail with the fix disabled rather than merely to pass with it.
+
+## Original report — OPEN, demonstrated 2026-08-10
 
     before prune:              100,000
     after prune + ONE write:         1

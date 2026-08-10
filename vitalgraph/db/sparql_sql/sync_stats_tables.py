@@ -69,13 +69,36 @@ async def sync_stats_after_insert(
     upserted += len(pred_counts)
 
     # Upsert predicate+object stats
-    await conn.executemany(
-        f"INSERT INTO {t_stats} (predicate_uuid, object_uuid, row_count) "
-        f"VALUES ($1, $2, $3) "
-        f"ON CONFLICT (predicate_uuid, object_uuid) "
-        f"DO UPDATE SET row_count = {t_stats}.row_count + EXCLUDED.row_count",
-        [(p, o, cnt) for (p, o), cnt in po_counts.items()],
-    )
+    # For a predicate whose rows have been pruned, a MISSING pair does not mean
+    # "count is zero" — it means "count is unknown". Inserting the delta as
+    # though the base were zero is what turned a pair holding 100,000 quads into
+    # a stored count of 1 after a single write (issues/062), and a
+    # wrong-but-present row is worse than an absent one: the reader trusts what
+    # it finds and only counts what it does not.
+    #
+    # So for pruned predicates this degrades to UPDATE-only. Existing rows stay
+    # accurate — their base is right and the delta is right — and absent ones
+    # stay absent, which sends the reader to the bounded count that answers
+    # honestly.
+    pruned = {r["predicate_uuid"] for r in await conn.fetch(
+        f"SELECT predicate_uuid FROM {t_pred} WHERE pruned")}
+
+    fresh = [(p, o, c) for (p, o), c in po_counts.items() if p not in pruned]
+    if fresh:
+        await conn.executemany(
+            f"INSERT INTO {t_stats} (predicate_uuid, object_uuid, row_count) "
+            f"VALUES ($1, $2, $3) "
+            f"ON CONFLICT (predicate_uuid, object_uuid) "
+            f"DO UPDATE SET row_count = {t_stats}.row_count + EXCLUDED.row_count",
+            fresh,
+        )
+    stale = [(c, p, o) for (p, o), c in po_counts.items() if p in pruned]
+    if stale:
+        await conn.executemany(
+            f"UPDATE {t_stats} SET row_count = row_count + $1 "
+            f"WHERE predicate_uuid = $2 AND object_uuid = $3",
+            stale,
+        )
     upserted += len(po_counts)
 
     logger.debug("sync_stats_after_insert(%s): %d pred + %d po upserts",
@@ -209,6 +232,12 @@ async def resync_stats_tables(conn, space_id: str) -> Dict[str, int]:
     await conn.execute(f"ANALYZE {t_pred}")
     await conn.execute(f"ANALYZE {t_stats}")
 
+    # A full rebuild makes rdf_stats complete, so absence means zero again
+    # for every predicate. Leaving the flags set would keep the incremental
+    # sync permanently degraded to UPDATE-only long after the reason was
+    # gone, and nothing would ever have cleared it.
+    await conn.execute(f"UPDATE {t_pred} SET pruned = FALSE WHERE pruned")
+
     logger.info("resync_stats_tables(%s): %d pred_stats, %d quad_stats",
                 space_id, pred_count, stats_count)
     return {'pred_stats': pred_count, 'quad_stats': stats_count}
@@ -270,11 +299,13 @@ async def resync_stats_for_predicates(conn, space_id: str,
 
         # pred_stats is not pruned, so it must be exactly right; a delete that
         # empties a predicate has to leave 0, not a stale row.
+        # This predicate is complete again, so absence of one of its pairs
+        # once more means zero rather than unknown.
         await conn.execute(f"""
-            INSERT INTO {t_pred} (predicate_uuid, row_count)
-            SELECT $1, count(*) FROM {t_quad} WHERE predicate_uuid = $1
+            INSERT INTO {t_pred} (predicate_uuid, row_count, pruned)
+            SELECT $1, count(*), FALSE FROM {t_quad} WHERE predicate_uuid = $1
             ON CONFLICT (predicate_uuid)
-            DO UPDATE SET row_count = EXCLUDED.row_count
+            DO UPDATE SET row_count = EXCLUDED.row_count, pruned = FALSE
         """, p_uuid)
         done += 1
 
@@ -302,12 +333,25 @@ async def prune_stats_tables(conn, space_id: str,
     left alone (bounded by the distinct-predicate count).
     """
     t_stats = f"{space_id}_rdf_stats"
+    t_pred = f"{space_id}_rdf_pred_stats"
+
+    # Every predicate that loses a row here. Collected with RETURNING rather
+    # than inferred afterwards, because inferring it means comparing stats
+    # against the quad table — the expensive thing pruning exists to avoid.
+    #
+    # Marking them is what lets sync_stats_after_insert tell "absent because
+    # pruned" from "absent because zero". Without that distinction it treats a
+    # pruned pair's missing row as a zero base and stores only the post-prune
+    # delta: 100,000 -> 1 after one write (issues/062).
+    pruned_preds: set = set()
 
     # 1. Drop pairs the reorder never uses: singletons and super-common pairs.
-    await conn.execute(
+    rows = await conn.fetch(
         f"DELETE FROM {t_stats} "
-        f"WHERE row_count < $1 OR row_count > $2",
+        f"WHERE row_count < $1 OR row_count > $2 "
+        f"RETURNING predicate_uuid",
         STATS_MIN_ROW_COUNT, STATS_MAX_ROW_COUNT)
+    pruned_preds.update(r["predicate_uuid"] for r in rows)
 
     # 2. Hard cap, PER PREDICATE rather than globally.
     #
@@ -327,22 +371,23 @@ async def prune_stats_tables(conn, space_id: str,
     # Per-predicate retention is the same shape as PostgreSQL's own MCV lists:
     # every predicate keeps its own most-selective objects, so no predicate can
     # starve another. The global cap still applies afterwards as a size bound.
-    await conn.execute(
+    rows = await conn.fetch(
         f"DELETE FROM {t_stats} WHERE ctid IN ("
         f"  SELECT ctid FROM ("
         f"    SELECT ctid, row_number() OVER ("
         f"      PARTITION BY predicate_uuid "
         f"      ORDER BY row_count ASC, object_uuid) AS rn"
         f"    FROM {t_stats}) r"
-        f"  WHERE r.rn > $1)",
+        f"  WHERE r.rn > $1) RETURNING predicate_uuid",
         per_predicate_n)
+    pruned_preds.update(r["predicate_uuid"] for r in rows)
 
     # 3. Global size bound. Ordered by the PER-PREDICATE rank, not by row_count:
     #    ordering by row_count here would undo step 2, since the structural
     #    pairs it just protected are precisely the high-count ones and would sort
     #    to the end again. Taking rank 1 of every predicate, then rank 2, and so
     #    on, trims every predicate's tail evenly instead of one predicate whole.
-    await conn.execute(
+    rows = await conn.fetch(
         f"DELETE FROM {t_stats} WHERE ctid IN ("
         f"  SELECT ctid FROM ("
         f"    SELECT ctid, row_number() OVER ("
@@ -350,8 +395,14 @@ async def prune_stats_tables(conn, space_id: str,
         f"      ORDER BY row_count ASC, object_uuid) AS rn"
         f"    FROM {t_stats}) r"
         f"  ORDER BY r.rn ASC, r.ctid "
-        f"  OFFSET $1)",
+        f"  OFFSET $1) RETURNING predicate_uuid",
         keep_top_n)
+    pruned_preds.update(r["predicate_uuid"] for r in rows)
+
+    if pruned_preds:
+        await conn.execute(
+            f"UPDATE {t_pred} SET pruned = TRUE WHERE predicate_uuid = ANY($1)",
+            list(pruned_preds))
 
     kept = await conn.fetchval(f"SELECT count(*) FROM {t_stats}")
     logger.info("prune_stats_tables(%s): kept %d rows (cap %d)",

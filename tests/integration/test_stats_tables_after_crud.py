@@ -176,3 +176,55 @@ class TestStatsTablesAfterCrud:
         assert not bad, (
             f"rdf_pred_stats disagrees with the quad table after a delete: "
             f"{_describe(bad)}")
+
+    async def test_pruned_pair_is_not_resurrected_with_a_wrong_count(
+        self, test_space, space_impl, pg_conn
+    ):
+        """A pruned pair must not reappear holding only its post-prune delta.
+
+        The failure this reproduces (`issues/062`): `prune_stats_tables` DELETEs
+        a row, then `sync_stats_after_insert` upserts
+        `row_count = row_count + delta`, which on a missing row inserts the
+        delta as the whole count. Measured at 100,000 -> 1 on a real pair.
+
+        A wrong-but-present row is worse than an absent one, because the reader
+        trusts what it finds and only counts what it does not — so the assertion
+        is that the stored value is either right or gone, never small.
+        """
+        from vitalgraph.db.sparql_sql.sync_stats_tables import prune_stats_tables
+
+        # A pair well above STATS_MAX_ROW_COUNT is unreachable in a test, so
+        # force the same situation directly: a populated pair, then pruned.
+        quads = [(URIRef(f"urn:test:stats:r{i}"), PRED, Literal("keep"), GRAPH)
+                 for i in range(10)]
+        await space_impl.add_rdf_quads_batch(test_space, quads)
+
+        p_uuid, o_uuid = await pg_conn.fetchrow(
+            f"SELECT predicate_uuid, object_uuid FROM {test_space}_rdf_stats "
+            f"ORDER BY row_count DESC LIMIT 1")
+        before = await pg_conn.fetchval(
+            f"SELECT row_count FROM {test_space}_rdf_stats "
+            f"WHERE predicate_uuid=$1 AND object_uuid=$2", p_uuid, o_uuid)
+        assert before >= 10
+
+        # Prune everything, then keep writing to the pruned pair.
+        await prune_stats_tables(pg_conn, test_space, keep_top_n=0,
+                                 per_predicate_n=0)
+        assert await pg_conn.fetchval(
+            f"SELECT count(*) FROM {test_space}_rdf_stats") == 0
+
+        await space_impl.add_rdf_quads_batch(test_space, [
+            (URIRef("urn:test:stats:r99"), PRED, Literal("keep"), GRAPH)])
+
+        stored = await pg_conn.fetchval(
+            f"SELECT row_count FROM {test_space}_rdf_stats "
+            f"WHERE predicate_uuid=$1 AND object_uuid=$2", p_uuid, o_uuid)
+        actual = await pg_conn.fetchval(
+            f"SELECT count(*) FROM {test_space}_rdf_quad "
+            f"WHERE predicate_uuid=$1 AND object_uuid=$2", p_uuid, o_uuid)
+
+        assert stored is None or stored == actual, (
+            f"a pruned pair reappeared in rdf_stats holding {stored} against "
+            f"{actual} actual quads. The planner reads that as a highly "
+            f"selective predicate and seeds the join from it. Absent would "
+            f"have been correct — the reader counts what it cannot find.")

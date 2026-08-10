@@ -616,7 +616,23 @@ class SparqlSQLSchema:
         stmts.append(f'''
             CREATE TABLE IF NOT EXISTS {t['rdf_pred_stats']} (
                 predicate_uuid UUID PRIMARY KEY,
-                row_count      BIGINT NOT NULL DEFAULT 0
+                row_count      BIGINT NOT NULL DEFAULT 0,
+                -- TRUE once prune_stats_tables has removed any (predicate,
+                -- object) row for this predicate.
+                --
+                -- It makes ABSENCE from rdf_stats mean something. Without it,
+                -- absence is ambiguous between "this pair has no quads" and
+                -- "this pair was pruned", and the incremental sync resolves the
+                -- ambiguity the wrong way: it upserts `row_count = row_count +
+                -- delta`, so a pruned pair reappears holding ONLY its
+                -- post-prune delta. Measured at 100,000 -> 1 after a single
+                -- write (issues/062), and it looks authoritative.
+                --
+                -- Per PREDICATE rather than per pair, so it costs one boolean
+                -- on a table with one row per distinct predicate — about 21
+                -- rows in a real space — instead of tracking tombstones for
+                -- the pairs pruning exists to remove.
+                pruned         BOOLEAN NOT NULL DEFAULT FALSE
             )
         ''')
 
