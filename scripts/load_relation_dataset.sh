@@ -46,10 +46,19 @@ python - "$SPACE" <<'PY'
 import asyncio, os, sys
 sys.path.insert(0, os.getcwd())
 from scripts.perf_seed_data import ensure_space, pg_params  # noqa: E402
+from vitalgraph.space.space_manager import SpaceAlreadyExistsError  # noqa: E402
 
 space_id = sys.argv[1]
-asyncio.run(ensure_space(space_id, pg_params()))
-print(f"   space {space_id} ready")
+try:
+    asyncio.run(ensure_space(space_id, pg_params()))
+    print(f"   space {space_id} created")
+except SpaceAlreadyExistsError:
+    # Re-running the loader to pick up regenerated data is the normal case, and
+    # step 4 truncates the term and quad tables before COPY. Failing here left
+    # the space holding the PREVIOUS generation while the script reported an
+    # error most of the way down its output — easy to miss, and the measurement
+    # taken afterwards described data nobody meant to be testing.
+    print(f"   space {space_id} already exists — reusing")
 PY
 
 echo "▶ 4/4 bulk load"

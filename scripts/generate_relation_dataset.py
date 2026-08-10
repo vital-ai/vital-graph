@@ -1,55 +1,71 @@
 #!/usr/bin/env python
-"""Generate a fixture containing KG RELATIONS and both frame form types.
+"""Generate a fixture of KG RELATIONS with social-network shape, plus both frame
+form types.
 
 Why this exists
 ---------------
-Every performance fixture is tree-shaped. `sp_lead_synth_100k` holds only
-containment edges — Edge_hasKGSlot, Edge_hasKGFrame, Edge_hasEntityKGFrame — and
-`wordnet_frames` only Edge_hasKGSlot. Neither has a single relation edge, which
-matches `issues/043`/`048`: `build_relation_query` requires Edge_hasKGRelation
-and it has zero instances anywhere outside a handful of tiny test spaces holding
-96 of them.
+Every other performance fixture is tree-shaped. `sp_lead_synth_100k` holds the
+three containment edge types and `wordnet_frames` only Edge_hasKGSlot, so neither
+has a relation edge — matching `issues/043`/`048`, where `build_relation_query`
+requires Edge_hasKGRelation and it has essentially zero instances anywhere.
 
-That matters because traversal cost is decided by FAN-OUT, and fan-out is a
-property of the edge kind (`issues/061`). Measured:
+Traversal cost is decided by FAN-OUT, and fan-out is a property of the edge kind
+(`issues/061`). On tree-shaped data a rule like "traverse backward, it never
+amplifies" looks unconditionally correct, because a slot has exactly one parent
+and a frame none or one. Relations refute it: an entity may be source or
+destination in many.
 
-    edge kind                         forward           backward
-    containment (Edge_hasKGSlot)      avg 2.00 max 2    avg 1.00 max 1
-    slot value (hasEntitySlotValue)   avg 1.00 max 1    avg 5.20 max 1,342
+Relations are simple binary relationships — `person1 --friendOf--> person2`,
+`person1 --worksFor--> company1` — so this generates them with the structure such
+data actually has rather than uniformly at random.
 
-Containment is a tree — a slot has exactly one parent, a frame none or one — so
-walking it backward never amplifies. On the tree-shaped fixtures alone, "always
-traverse backward" looks unconditionally correct. It is not: on a slot-value hop
-the safe direction is forward, and backward hits 1,342x.
+The point: fan-out varies by RELATION TYPE, not just by edge type
+------------------------------------------------------------------
+All of these are `Edge_hasKGRelation`, and their fan-out profiles are opposites:
 
-Relations are the case with **no safe direction at all**. An entity may be source
-or destination in many, so both directions fan out. A direction-choosing rewrite
-validated only against the existing fixtures would ship a rule that is wrong here
-and no test would notice.
+    reportsTo   person -> manager    backward ~1      (one manager each: a tree)
+    worksFor    person -> company    backward = company size (many-to-one hub)
+    friendOf    person -> person     both directions similar, power-law tail
+    mentions    person -> any        diffuse
 
-What this generates
+So a metric recorded per *edge type* still pools a tree with a hub and averages
+them into a number describing neither. Whatever granularity the fan-out statistic
+ends up with has to reach `hasKGRelationType`, and this fixture is what
+demonstrates that.
+
+Structure generated
 -------------------
-* **Entities** — plain KGEntity anchors.
-* **Assertion frames** — top-level, no parent, `hasKGFormType KGFormType_Assertion`.
-  A fraction leave the property UNSET, because unset defaults to assertion and a
-  fixture where the default is never exercised cannot catch a reader that
-  requires the explicit triple.
-* **Aspect frames** — `hasKGFormType KGFormType_Aspect`, attached either to an
-  entity (Edge_hasEntityKGFrame) or beneath an assertion (Edge_hasKGFrame), so
-  both parent kinds appear.
-* **Slots** on frames, including `hasEntitySlotValue` pointing at entities with a
-  SKEWED target distribution, reproducing the many-to-one shape wordnet has.
-* **Relations** — Edge_hasKGRelation with hasEdgeSource / hasEdgeDestination both
-  entities, a hasKGRelationType, and a skewed degree distribution in both roles.
+* **Persons** and **Companies** — two entity types, since worksFor needs a range
+  distinct from its domain.
+* **friendOf** — Watts-Strogatz small world: a ring lattice of k nearest
+  neighbours, each edge rewired with probability p. That yields the high
+  clustering and short characteristic path length of a social graph.
 
-Skew is the point. A uniform degree would make average and tail agree, and the
-whole reason fan-out needs recording is that they do not: wordnet's slot-value
-in-degree averages 5.20 with a maximum of 1,342, so a plan chosen on the mean can
-be 250x off. This fixture is generated with hubs so a bench can tell a
-tail-aware cost model from a mean-based one.
+  Known limitation: Watts-Strogatz produces a *tight* degree distribution
+  (measured here: out max 3, in max 6), not the heavy tail real friendship
+  networks have. Small-world and scale-free are different properties;
+  Barabasi-Albert preferential attachment would be the model for the latter. The
+  heavy tail in this fixture comes from `worksFor` instead, which is enough for
+  the fan-out work — but if a bench ever needs a power-law *social* degree, this
+  is the knob that does not provide it.
+* **worksFor** — each person to one company, company sizes Zipf-skewed, so a few
+  companies hold most employees. Backward fan-out is the company size.
+* **reportsTo** — a management tree inside each company: every person except a
+  root has exactly one manager. Backward fan-out is 1 by construction — a tree
+  living *inside* the relation edge type, which is exactly why pooling by edge
+  type loses information.
+* **Assertion frames** — top-level. A fraction leave `hasKGFormType` UNSET, since
+  unset defaults to assertion and a fixture that always states it cannot catch a
+  reader that requires the explicit triple.
+* **Aspect frames** — attached to an entity, or beneath an assertion, so both
+  parent kinds appear.
+* **Slots**, including `hasEntitySlotValue` pointing at entities with a skewed
+  target distribution, reproducing the many-to-one shape wordnet has (measured
+  there: in-degree avg 5.20, max 1,342).
 
-The manifest records the exact degree distributions, so a test can assert them
-rather than recompute them from the data it is meant to be checking.
+The manifest records the degree distribution of every relation type in both
+directions, so a test can assert them instead of recomputing them from the data
+it is meant to be checking.
 
 Usage
 -----
@@ -92,32 +108,25 @@ HAS_ENTITY_VALUE = f"<{KG}hasEntitySlotValue>"
 FORM_ASSERTION = f"<{KG}KGFormType_Assertion>"
 FORM_ASPECT = f"<{KG}KGFormType_Aspect>"
 
-RELATION_TYPES = ["knows", "worksWith", "reportsTo", "mentions"]
+# One company per this many persons. Company sizes are then Zipf-skewed on top,
+# so the mean is not the typical value.
+PERSONS_PER_COMPANY = 40
 
-# One assertion frame in this many omits hasKGFormType entirely. Unset defaults
-# to assertion, and a fixture that always states it cannot catch a reader that
-# requires the explicit triple.
+# Watts-Strogatz: each person starts joined to K_NEIGHBOURS on a ring, and each
+# of those edges is rewired to a random target with probability REWIRE_P. Low p
+# keeps clustering high while collapsing path length — the small-world regime.
+K_NEIGHBOURS = 6
+REWIRE_P = 0.08
+
+# Management tree fan-out inside a company.
+REPORTS_PER_MANAGER = 5
+
+MENTIONS_PER_PERSON = (0, 0, 1, 2)
+
 FORM_TYPE_UNSET_EVERY = 4
 
-# Relation degree. Most entities get a few; HUB_FRACTION of them get a large
-# number, so the distribution has the heavy tail that makes a mean useless.
-BASE_REL_DEGREE = (0, 1, 2, 3)
-HUB_FRACTION = 0.01
-HUB_REL_DEGREE = (40, 120, 400)
-
-# Destinations are skewed too, and separately from sources. A first version drew
-# them uniformly, which gave out-degree a max of 400 and in-degree a max of 12 —
-# so the fixture had a tail in one direction only and would have let a rewrite
-# that always drives from the destination side look safe. Real relation graphs
-# are preferentially attached in both roles: some entities are popular targets.
-REL_DEST_HUB_FRACTION = 0.005
-REL_DEST_HUB_BIAS = 0.55
-
-# Slot values that point at entities. Targets are drawn from a small hub set most
-# of the time, so in-degree is skewed the way wordnet's is: there, in-degree
-# averages 5.20 with a maximum of 1,342 — a 258x mean-to-max ratio. A hub set of
-# a few thousandths of the population reproduces that order; 2% did not, giving
-# a max of only 49.
+# Entity-valued slot targets. wordnet measures in-degree avg 5.20 / max 1,342,
+# a 258x mean-to-max ratio; a hub set of a few thousandths reproduces that order.
 ENTITY_VALUE_HUB_FRACTION = 0.002
 ENTITY_VALUE_HUB_BIAS = 0.75
 
@@ -127,72 +136,120 @@ def _t(s: str, p: str, o: str) -> str:
 
 
 def _lit(v: str) -> str:
-    esc = v.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{esc}"'
+    return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def _pct(values, q: float) -> int:
-    if not values:
+def _pct(vals, q: float) -> int:
+    if not vals:
         return 0
-    ordered = sorted(values)
-    idx = min(len(ordered) - 1, int(q * (len(ordered) - 1)))
-    return ordered[idx]
+    o = sorted(vals)
+    return o[min(len(o) - 1, int(q * (len(o) - 1)))]
 
 
-def _degree_stats(counts: dict, population: int) -> dict:
-    """Degree distribution including the zeros, which are part of the shape."""
+def _degree(counts: dict, population: int) -> dict:
+    """Degree distribution including zeros, which are part of the shape."""
     vals = list(counts.values()) + [0] * max(0, population - len(counts))
     total = sum(vals)
-    return {
-        "total": total,
-        "avg": round(total / len(vals), 3) if vals else 0,
-        "p50": _pct(vals, 0.50),
-        "p99": _pct(vals, 0.99),
-        "max": max(vals) if vals else 0,
-        "nonzero": len([v for v in vals if v]),
-    }
+    return {"total": total,
+            "avg": round(total / len(vals), 3) if vals else 0,
+            "p50": _pct(vals, 0.50), "p99": _pct(vals, 0.99),
+            "max": max(vals) if vals else 0,
+            "nonzero": len([v for v in vals if v])}
 
 
 def generate(out_dir: Path, entities: int, seed: int) -> dict:
     rng = random.Random(seed)
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / "kg_rel_0001.nt"
 
-    ent = [f"<{NS}:entity:{i}>" for i in range(entities)]
-    hubs = set(rng.sample(range(entities),
-                          max(1, int(entities * HUB_FRACTION))))
-    value_hubs = rng.sample(range(entities),
-                            max(1, int(entities * ENTITY_VALUE_HUB_FRACTION)))
-    dest_hubs = rng.sample(range(entities),
-                           max(1, int(entities * REL_DEST_HUB_FRACTION)))
-
-    rel_out: dict[int, int] = {}
-    rel_in: dict[int, int] = {}
-    value_in: dict[int, int] = {}
-    n_assertion = n_assertion_unset = n_aspect = 0
-    n_aspect_under_entity = n_aspect_under_assertion = 0
-    n_slots = n_entity_values = n_text_values = 0
-    rel_by_type: dict[str, int] = {}
+    n_companies = max(2, entities // PERSONS_PER_COMPANY)
+    n_persons = entities - n_companies
+    person = [f"<{NS}:entity:person:{i}>" for i in range(n_persons)]
+    company = [f"<{NS}:entity:company:{i}>" for i in range(n_companies)]
 
     lines: list[str] = []
     emit = lines.append
 
-    for i in range(entities):
-        e = ent[i]
-        emit(_t(e, VITALTYPE, KGENTITY))
-        emit(_t(e, HAS_ENTITY_TYPE, f"<{NS}:entity_type:Person>"))
+    for u in person:
+        emit(_t(u, VITALTYPE, KGENTITY))
+        emit(_t(u, HAS_ENTITY_TYPE, f"<{NS}:entity_type:Person>"))
+    for u in company:
+        emit(_t(u, VITALTYPE, KGENTITY))
+        emit(_t(u, HAS_ENTITY_TYPE, f"<{NS}:entity_type:Company>"))
 
-        # --- one assertion frame (top-level, no parent) ---
+    # ---- relations -------------------------------------------------------
+    rel_seq = [0]
+    per_type_out: dict[str, dict] = {}
+    per_type_in: dict[str, dict] = {}
+
+    def relate(src: str, dst: str, rtype: str, si: int, di: int) -> None:
+        u = f"<{NS}:edge:rel:{rel_seq[0]}>"
+        rel_seq[0] += 1
+        emit(_t(u, VITALTYPE, E_RELATION))
+        emit(_t(u, URIPROP, _lit(u[1:-1])))
+        emit(_t(u, EDGE_SOURCE, src))
+        emit(_t(u, EDGE_DEST, dst))
+        emit(_t(u, HAS_RELATION_TYPE, f"<{NS}:rel_type:{rtype}>"))
+        o = per_type_out.setdefault(rtype, {})
+        i_ = per_type_in.setdefault(rtype, {})
+        o[si] = o.get(si, 0) + 1
+        i_[di] = i_.get(di, 0) + 1
+
+    # friendOf: Watts-Strogatz ring lattice with rewiring.
+    half = max(1, K_NEIGHBOURS // 2)
+    for i in range(n_persons):
+        for step in range(1, half + 1):
+            j = (i + step) % n_persons
+            if rng.random() < REWIRE_P:
+                j = rng.randrange(n_persons)
+                if j == i:
+                    continue
+            relate(person[i], person[j], "friendOf", i, j)
+
+    # worksFor: Zipf-skewed company sizes, so a few employ most people.
+    weights = [1.0 / (r + 1) for r in range(n_companies)]
+    staff: dict[int, list[int]] = {}
+    for i in range(n_persons):
+        c = rng.choices(range(n_companies), weights)[0]
+        relate(person[i], company[c], "worksFor", i, c)
+        staff.setdefault(c, []).append(i)
+
+    # reportsTo: a management tree inside each company. Everyone but the root
+    # has exactly one manager, so BACKWARD fan-out is 1 by construction — a tree
+    # nested inside the same edge type as the hubs above.
+    for c, members in staff.items():
+        for pos, p_idx in enumerate(members):
+            if pos == 0:
+                continue                     # the root reports to nobody
+            mgr = members[(pos - 1) // REPORTS_PER_MANAGER]
+            if mgr != p_idx:
+                relate(person[p_idx], person[mgr], "reportsTo", p_idx, mgr)
+
+    # mentions: diffuse, no structure — the control case.
+    for i in range(n_persons):
+        for _ in range(rng.choice(MENTIONS_PER_PERSON)):
+            j = rng.randrange(n_persons)
+            if j != i:
+                relate(person[i], person[j], "mentions", i, j)
+
+    # ---- frames and slots on persons -------------------------------------
+    value_hubs = rng.sample(range(n_persons),
+                            max(1, int(n_persons * ENTITY_VALUE_HUB_FRACTION)))
+    value_in: dict[int, int] = {}
+    n_assert_set = n_assert_unset = n_aspect = 0
+    n_aspect_entity = n_aspect_assertion = n_slots = 0
+    n_text = n_entity_vals = 0
+
+    for i in range(n_persons):
+        e = person[i]
         af = f"<{NS}:frame:assert:{i}>"
         emit(_t(af, VITALTYPE, KGFRAME))
         emit(_t(af, HAS_FRAME_TYPE, f"<{NS}:frame_type:Profile>"))
         if i % FORM_TYPE_UNSET_EVERY:
             emit(_t(af, HAS_FORM_TYPE, FORM_ASSERTION))
-            n_assertion += 1
+            n_assert_set += 1
         else:
-            n_assertion_unset += 1   # unset: defaults to assertion
+            n_assert_unset += 1
 
-        # --- an aspect frame enclosed by the entity ---
         pf = f"<{NS}:frame:aspect:e{i}>"
         emit(_t(pf, VITALTYPE, KGFRAME))
         emit(_t(pf, HAS_FRAME_TYPE, f"<{NS}:frame_type:Contact>"))
@@ -202,9 +259,8 @@ def generate(out_dir: Path, entities: int, seed: int) -> dict:
         emit(_t(ee, EDGE_SOURCE, e))
         emit(_t(ee, EDGE_DEST, pf))
         n_aspect += 1
-        n_aspect_under_entity += 1
+        n_aspect_entity += 1
 
-        # --- an aspect frame beneath the assertion (frame -> frame) ---
         cf = f"<{NS}:frame:aspect:a{i}>"
         emit(_t(cf, VITALTYPE, KGFRAME))
         emit(_t(cf, HAS_FRAME_TYPE, f"<{NS}:frame_type:Detail>"))
@@ -214,13 +270,13 @@ def generate(out_dir: Path, entities: int, seed: int) -> dict:
         emit(_t(fe, EDGE_SOURCE, af))
         emit(_t(fe, EDGE_DEST, cf))
         n_aspect += 1
-        n_aspect_under_assertion += 1
+        n_aspect_assertion += 1
 
-        # --- slots: one text, one pointing at an entity ---
         for frame, tag in ((pf, "c"), (cf, "d")):
             s = f"<{NS}:slot:{tag}{i}>"
             emit(_t(s, VITALTYPE, KGSLOT))
-            emit(_t(s, HAS_SLOT_TYPE, f"<{NS}:slot_type:{'Note' if tag == 'c' else 'Ref'}>"))
+            emit(_t(s, HAS_SLOT_TYPE,
+                    f"<{NS}:slot_type:{'Note' if tag == 'c' else 'Ref'}>"))
             se = f"<{NS}:edge:sl:{tag}{i}>"
             emit(_t(se, VITALTYPE, E_SLOT))
             emit(_t(se, EDGE_SOURCE, frame))
@@ -228,65 +284,49 @@ def generate(out_dir: Path, entities: int, seed: int) -> dict:
             n_slots += 1
             if tag == "c":
                 emit(_t(s, HAS_TEXT_VALUE, _lit(f"note {i}")))
-                n_text_values += 1
+                n_text += 1
             else:
-                # Skewed: most references land on a small hub set, which is what
-                # gives the target in-degree its heavy tail.
-                if rng.random() < ENTITY_VALUE_HUB_BIAS:
-                    tgt = rng.choice(value_hubs)
-                else:
-                    tgt = rng.randrange(entities)
-                emit(_t(s, HAS_ENTITY_VALUE, ent[tgt]))
+                tgt = (rng.choice(value_hubs)
+                       if rng.random() < ENTITY_VALUE_HUB_BIAS
+                       else rng.randrange(n_persons))
+                emit(_t(s, HAS_ENTITY_VALUE, person[tgt]))
                 value_in[tgt] = value_in.get(tgt, 0) + 1
-                n_entity_values += 1
+                n_entity_vals += 1
 
-        # --- relations: entity -> entity, skewed degree ---
-        degree = (rng.choice(HUB_REL_DEGREE) if i in hubs
-                  else rng.choice(BASE_REL_DEGREE))
-        for k in range(degree):
-            # Skewed destination, independently of the source's degree.
-            dst = (rng.choice(dest_hubs) if rng.random() < REL_DEST_HUB_BIAS
-                   else rng.randrange(entities))
-            if dst == i:
-                continue
-            rtype = RELATION_TYPES[(i + k) % len(RELATION_TYPES)]
-            re_uri = f"<{NS}:edge:rel:{i}:{k}>"
-            emit(_t(re_uri, VITALTYPE, E_RELATION))
-            emit(_t(re_uri, URIPROP, _lit(f"{NS}:edge:rel:{i}:{k}")))
-            emit(_t(re_uri, EDGE_SOURCE, e))
-            emit(_t(re_uri, EDGE_DEST, ent[dst]))
-            emit(_t(re_uri, HAS_RELATION_TYPE, f"<{NS}:rel_type:{rtype}>"))
-            rel_out[i] = rel_out.get(i, 0) + 1
-            rel_in[dst] = rel_in.get(dst, 0) + 1
-            rel_by_type[rtype] = rel_by_type.get(rtype, 0) + 1
+    (out_dir / "kg_rel_0001.nt").write_text("\n".join(lines) + "\n",
+                                            encoding="utf-8")
 
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    pop = {"friendOf": n_persons, "mentions": n_persons,
+           "reportsTo": n_persons, "worksFor": n_persons}
+    pop_in = {"friendOf": n_persons, "mentions": n_persons,
+              "reportsTo": n_persons, "worksFor": n_companies}
 
     manifest = {
         "n_entities": entities,
+        "n_persons": n_persons,
+        "n_companies": n_companies,
         "n_triples": len(lines),
         "seed": seed,
-        "frames": {
-            "assertion_explicit": n_assertion,
-            "assertion_unset": n_assertion_unset,
-            "aspect": n_aspect,
-            "aspect_under_entity": n_aspect_under_entity,
-            "aspect_under_assertion": n_aspect_under_assertion,
-        },
-        "slots": {"total": n_slots,
-                  "text_values": n_text_values,
-                  "entity_values": n_entity_values},
+        "small_world": {"k_neighbours": K_NEIGHBOURS, "rewire_p": REWIRE_P},
+        "frames": {"assertion_explicit": n_assert_set,
+                   "assertion_unset": n_assert_unset,
+                   "aspect": n_aspect,
+                   "aspect_under_entity": n_aspect_entity,
+                   "aspect_under_assertion": n_aspect_assertion},
+        "slots": {"total": n_slots, "text_values": n_text,
+                  "entity_values": n_entity_vals},
         "relations": {
-            "total": sum(rel_by_type.values()),
-            "by_type": dict(sorted(rel_by_type.items())),
-            # Both roles, because a relation fans out in BOTH directions and a
-            # direction-choosing rewrite has to be judged against both.
-            "out_degree": _degree_stats(rel_out, entities),
-            "in_degree": _degree_stats(rel_in, entities),
+            "total": rel_seq[0],
+            # Per RELATION TYPE, both directions. Pooling these by edge type
+            # averages a tree (reportsTo, backward 1) with a hub (worksFor,
+            # backward = company size) into a number describing neither.
+            "by_type": {
+                t: {"out_degree": _degree(per_type_out.get(t, {}), pop[t]),
+                    "in_degree": _degree(per_type_in.get(t, {}), pop_in[t])}
+                for t in sorted(pop)
+            },
         },
-        # The whole point of the fixture: an edge kind whose backward fan-out is
-        # not 1, so "always traverse backward" is refutable here.
-        "entity_value_in_degree": _degree_stats(value_in, entities),
+        "entity_value_in_degree": _degree(value_in, n_persons),
         "form_types": {"assertion": f"{KG}KGFormType_Assertion",
                        "aspect": f"{KG}KGFormType_Aspect"},
     }
@@ -304,19 +344,18 @@ def main() -> int:
     a = ap.parse_args()
 
     m = generate(Path(a.out), a.entities, a.seed)
-    print(f"✅ {m['n_triples']:,} triples for {m['n_entities']:,} entities "
-          f"-> {a.out}")
+    print(f"✅ {m['n_triples']:,} triples — {m['n_persons']:,} persons, "
+          f"{m['n_companies']:,} companies -> {a.out}")
     print(f"   frames: {m['frames']['assertion_explicit']:,} assertion "
           f"(+{m['frames']['assertion_unset']:,} unset), "
           f"{m['frames']['aspect']:,} aspect")
-    r = m["relations"]
-    print(f"   relations: {r['total']:,}  out-degree avg {r['out_degree']['avg']} "
-          f"p99 {r['out_degree']['p99']} max {r['out_degree']['max']}")
-    print(f"                        in-degree  avg {r['in_degree']['avg']} "
-          f"p99 {r['in_degree']['p99']} max {r['in_degree']['max']}")
+    print(f"   relations: {m['relations']['total']:,}")
+    for t, d in m["relations"]["by_type"].items():
+        o, i = d["out_degree"], d["in_degree"]
+        print(f"     {t:<10} out avg {o['avg']:>6} max {o['max']:>5}"
+              f"   | in avg {i['avg']:>6} max {i['max']:>5}")
     v = m["entity_value_in_degree"]
-    print(f"   entity-valued slot targets: avg {v['avg']} p99 {v['p99']} "
-          f"max {v['max']}")
+    print(f"   entity-valued slot targets: avg {v['avg']} max {v['max']}")
     return 0
 
 

@@ -169,16 +169,34 @@ Fan-out measured from the loaded space, per edge type:
 | `Edge_hasKGSlot` | avg 1.00, max 1 | avg 1.00, max 1 |
 | **`Edge_hasKGRelation`** | **avg 4.24, max 400** | **avg 4.20, max 387** |
 
-Two things this establishes that no existing fixture could:
+Relations are simple binary relationships — `person1 --friendOf--> person2`,
+`person1 --worksFor--> company1` — so the fixture generates them with the
+structure such data has: a Watts-Strogatz small world for `friendOf`,
+Zipf-skewed company sizes for `worksFor`, and a management tree for `reportsTo`.
 
-1. **Relations fan out symmetrically — neither direction is safe.** A rule of the
-   form "traverse in the direction whose fan-out is 1" has no answer here and
-   must fall back to something else.
-2. **The pooled statistic is useless.** Across all edges this space reports
-   forward 1.80 / backward 1.51, which hides both the tree (1/1) and the hub
-   (400/387). Fan-out recorded per space rather than per edge type would produce
-   exactly this misleading number, so `issues/060`'s type column is a
-   prerequisite for the metric and not merely a performance win.
+**The granularity has to reach `hasKGRelationType`, not stop at the edge type.**
+Measured from the loaded space, per relation type:
+
+| relation | forward | backward |
+|---|---|---|
+| `friendOf` | 3.00 / max 3 | 3.00 / max 6 |
+| `mentions` | 1.49 / max 2 | 1.41 / max 5 |
+| `reportsTo` | 1.00 / **max 1** | 4.77 / max 5 |
+| `worksFor` | 1.00 / **max 1** | 39.00 / **max 886** |
+
+All four are `Edge_hasKGRelation`. Backward fan-out across them ranges from 5 to
+886, and `reportsTo` is a *tree living inside the same edge type as the hub* —
+every person has exactly one manager. A statistic recorded per edge type averages
+those into a number describing none of them.
+
+So there are three levels, and each one loses information the next needs:
+
+    per space       forward 1.80 / backward 1.51   hides everything
+    per edge type   relation 4.2 / 4.2             hides reportsTo vs worksFor
+    per relation type                              usable
+
+`issues/060`'s type column is therefore a prerequisite for the metric and not
+merely a performance win — and it is not sufficient on its own.
 
 The fixture also carries both frame form types, including assertion frames that
 leave `hasKGFormType` unset (1,250 of 5,000), since unset defaults to assertion
