@@ -1,17 +1,50 @@
 # Twenty-One Comparator Shapes Time Out at 100k for a 25-Row Page
 
-## Status: OPEN — 11 of 21 cells closed, 10 remain — 2026-08-10
+## Status: OPEN — 16 of 21 original cells closed; 9 cells still exceed 1s — 2026-08-10
 
 | cells | status |
 |---|---|
 | `gt` x2 | fixed — `issues/054`, the XSD cast defeated the push-down |
-| `lt` / `lte` x4 | fixed — `issues/056`, `num_val` too sparse for ANALYZE to sample |
+| `lt` / `lte` x4 (numeric) | fixed — `issues/056`, `num_val` too sparse for ANALYZE to sample |
 | `not_has` / `not_has_any` x4 | fixed — `issues/057`, negation folded into the probe |
 | `not_exists` x2 | fixed — `issues/059`, candidate-driven emission |
-| **`ne` x5** | **diagnosed, not fixed** — `issues/058`. `!=` is not pushable, so `?val` stays live, the semi-join declines and paging reverts to a blocking sort. The obvious fix (uuid inequality) is unsound for 3 of 5 slot classes |
+| `ne` x4 | fixed — `issues/058`, `!=` pushed as a negated equality set |
+| **`ne`/Boolean** | **declined** — `"true"` and `"1"` are one value and there is no `bool_val` column to say so. Slow and correct beats fast and wrong |
+| `contains` | improved, not closed — timeout -> 1.3 s. `issues/070` |
+| `has_any` x2 | improved, not closed — timeout -> ~13 s. `issues/070` |
 | **datetime x3** (`eq`, `gt`, `gte`) | **open** — near-empty or near-total match sets; the typed column landed and cannot help a query whose cost is its match set |
-| **`contains`** | **open** — no indexable push-down path exists |
-| **`has_any` x2** | **open** — a disjunction over probes |
+
+### Do not read "closed" as "under 1s"
+
+`056` and the `dt_val` column moved cells from *timeout* to *seconds*, and an
+earlier revision of this file recorded that as closed. Against a 25-row page it
+is not. Nine cells still exceed 1s on the verified sweep, and four of them are
+in rows this table calls fixed:
+
+    eq/DateTime          TIMED OUT (>60s)
+    ne/Boolean           TIMED OUT (>60s)     declined, see above
+    gt/DateTime          TIMED OUT (>60s)
+    gte/DateTime         TIMED OUT (>60s)
+    is_empty/Text           52,374 ms         never tracked here — see below
+    has_any/Choice          13,269 ms         issues/070
+    has_any/Text            12,684 ms         issues/070
+    lte/DateTime            11,029 ms         "fixed" by dt_val, still 11 s
+    lt/DateTime              9,527 ms         "fixed" by dt_val, still 9.5 s
+    eq/Integer               2,015 ms         consistent across 3 runs, uninvestigated
+    contains/Text            1,284 ms         issues/070
+
+`is_empty`/Text at ~52 s has never appeared in this issue's accounting at all.
+It is not a regression — it measures the same at HEAD — it was simply never
+counted, which is its own finding about how this list was maintained.
+
+### Measurement note: only claim a cell you can name a mechanism for
+
+The three-way sweep (HEAD / change / change+guard) showed `eq`/Text at
+1,124 -> 1,045 -> 107 ms and `has_all`/Text at 2,401 -> 551 -> 1,099 ms. Neither
+compiles to a FILTER at all, so no push-down change can touch them: that spread
+is cache and run-to-run variance, not an improvement. A sweep is a coarse
+instrument and a single run of one arm cannot tell a 2x change from noise —
+claim a cell only when a mechanism explains it AND repeated runs agree.
 
 ## Original status: narrowed from 21 cells to 17 with three causes
 

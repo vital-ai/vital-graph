@@ -120,6 +120,15 @@ def push_filters(plan: PlanV2, space_id: str, ctx=None) -> None:
 
     term_table = f"{space_id}_term"
 
+    # Every push-down here emits an UNCORRELATED `IN (SELECT term_uuid FROM
+    # term WHERE ...)`. PostgreSQL does not hoist one of those out of a
+    # correlated subquery, so inside an EXISTS body it re-executes per outer
+    # row — pushing `?v IN (...)` into a NOT EXISTS body cost 190x on
+    # not_has_any/Choice (56 ms -> 10.6 s). Nothing is lost by declining:
+    # generator.prepare_exists_subplans has already materialised these bodies'
+    # constants to uuids, which is the better constraint anyway.
+    in_correlated = bool(getattr(ctx, "in_correlated_subquery", False))
+
     # The single-chain BGP, if there is one. Text push-down still targets only
     # this, unchanged.
     child_bgp = _find_descendant_bgp(plan)
@@ -134,7 +143,7 @@ def push_filters(plan: PlanV2, space_id: str, ctx=None) -> None:
         constraint = None
         target = None
 
-        if child_bgp is not None:
+        if child_bgp is not None and not in_correlated:
             quad_aliases = _quad_aliases(child_bgp)
             constraint = _try_text_filter(expr, child_bgp, term_table,
                                           quad_aliases)
@@ -146,19 +155,37 @@ def push_filters(plan: PlanV2, space_id: str, ctx=None) -> None:
             # sit under an inner JOIN — which is the usual shape for a KGQuery
             # (FILTER over JOIN over two BGPs), and one the single-chain walk
             # above cannot see at all.
-            if constraint is None:
-                # `!=` reaches BGPs under an inner JOIN for the same reason
-                # numeric ranges do, and is looked up by variable.
-                v = _inequality_var(expr)
-                if v is not None:
-                    b = _find_bgp_binding(
-                        plan.children[0] if plan.children else None, v)
-                    if b is not None:
-                        constraint = _try_inequality_filter(
-                            expr, b, term_table, _quad_aliases(b), ctx)
-                        if constraint:
-                            target = b
-            var_name = _numeric_var(expr) if constraint is None else None
+            root = plan.children[0] if plan.children else None
+            # `!=`, `IN`, and the text searches all reach BGPs under an inner
+            # JOIN for the same reason numeric ranges do, and are looked up by
+            # variable. Text search is here as well as above because the
+            # single-chain walk misses the KGQuery shape entirely, which is why
+            # `contains` was never pushed despite having an emitter.
+            #
+            # Not inside a correlated EXISTS body: these all emit an
+            # UNCORRELATED `IN (SELECT term_uuid ...)`, which PostgreSQL will
+            # not hoist out of a correlated subquery and so re-runs per outer
+            # row. Pushing `?v IN (...)` into a NOT EXISTS body cost 190x on
+            # not_has_any/Choice before this guard existed.
+            by_var = ()
+            if not in_correlated:
+                by_var = ((_inequality_var, _try_inequality_filter),
+                          (_in_var, _try_in_filter),
+                          (_text_search_var, _try_text_search))
+            for find_var, try_push in by_var:
+                if constraint is not None:
+                    break
+                v = find_var(expr)
+                if v is None:
+                    continue
+                b = _find_bgp_binding(root, v)
+                if b is not None:
+                    constraint = try_push(expr, b, term_table,
+                                          _quad_aliases(b), ctx)
+                    if constraint:
+                        target = b
+            var_name = (_numeric_var(expr)
+                        if constraint is None and not in_correlated else None)
             if var_name is not None:
                 bgp = _find_bgp_binding(plan.children[0] if plan.children else None,
                                         var_name)
@@ -203,19 +230,11 @@ def _try_text_filter(
     var_name = None
     literal_value = None
     flags_arg = None
+    ci = False
 
-    if name in ("contains", "strstarts", "strends") and len(args) == 2:
-        if isinstance(args[0], ExprVar) and isinstance(args[1], ExprValue):
-            if isinstance(args[1].node, LiteralNode):
-                var_name = args[0].var
-                literal_value = args[1].node.value
-    elif name == "regex" and len(args) >= 2:
-        if isinstance(args[0], ExprVar) and isinstance(args[1], ExprValue):
-            if isinstance(args[1].node, LiteralNode):
-                var_name = args[0].var
-                literal_value = args[1].node.value
-                if len(args) >= 3:
-                    flags_arg = args[2]
+    ops = _text_search_operands(expr)
+    if ops is not None:
+        var_name, _, literal_value, ci, flags_arg = ops
     elif name == "eq" and len(args) == 2:
         for i, j in ((0, 1), (1, 0)):
             if isinstance(args[i], ExprVar) and isinstance(args[j], ExprValue):
@@ -247,12 +266,17 @@ def _try_text_filter(
     # metacharacters (\ % _) escaped, else CONTAINS(?x, "50%") over-matches.
     # Escaping keeps the GIN trigram index usable (pg_trgm honors '\').
     like_esc = _esc(_like_escape(literal_value))
+    # ILIKE when both operands were case-folded. That is not an approximation of
+    # the folded comparison, it is the SAME rewrite `emit_expressions` already
+    # applies to CONTAINS(LCASE(x), LCASE(y)) above the join — so pushing it
+    # changes only where the predicate is evaluated, never what it answers.
+    like = "ILIKE" if ci else "LIKE"
     if name == "contains":
-        term_cond = f"term_text LIKE '%{like_esc}%'"
+        term_cond = f"term_text {like} '%{like_esc}%'"
     elif name == "strstarts":
-        term_cond = f"term_text LIKE '{like_esc}%'"
+        term_cond = f"term_text {like} '{like_esc}%'"
     elif name == "strends":
-        term_cond = f"term_text LIKE '%{like_esc}'"
+        term_cond = f"term_text {like} '%{like_esc}'"
     elif name == "regex":
         raw_flags = ""
         if flags_arg and isinstance(flags_arg, ExprValue):
@@ -280,6 +304,81 @@ def _try_text_filter(
     logger.debug("Text filter pushdown: %s(%s, '%s') → %s",
                  name, var_name, literal_value, constraint_sql[:80])
     return (ref_id, constraint_sql)
+
+
+# Text-search operators whose push-down is a pure function of the lexical form,
+# so pushing them means the same thing as evaluating them above the join. `eq`
+# is deliberately NOT here even though `_try_text_filter` handles it: it pushes
+# as `term_text = '5'`, which misses `"5.0"^^xsd:double` — the same lexical-vs-
+# value trap that made uuid inequality unsound in issues/058. Widening the gate
+# to cover `eq` would turn that latent bug into a reachable one.
+_TEXT_SEARCH_OPS = ("contains", "strstarts", "strends", "regex")
+_FOLD_FNS = ("lcase", "ucase")
+
+
+def _unwrap_fold(node):
+    """(inner, fold_name) if node is LCASE(x) / UCASE(x), else (node, None)."""
+    if (isinstance(node, ExprFunction)
+            and (node.name or "").lower() in _FOLD_FNS
+            and len(node.args or []) == 1):
+        return node.args[0], (node.name or "").lower()
+    return node, None
+
+
+def _text_search_operands(expr):
+    """(var, op, literal, case_insensitive, flags) for a pushable text search.
+
+    The gate in `semijoin` and the emitter must accept EXACTLY the same
+    expressions — see issues/054 and issues/058 for what happens when the two
+    ends drift. This states the shape once; `_try_text_filter` re-derives the
+    rest from the BGP, and `_emit_two_phase` verifies consumption before it
+    relies on the variable being gone.
+    """
+    if not isinstance(expr, ExprFunction):
+        return None
+    name = (expr.name or "").lower()
+    args = expr.args or []
+    if name in ("contains", "strstarts", "strends"):
+        if len(args) != 2:
+            return None
+    elif name == "regex":
+        if len(args) < 2:
+            return None
+    else:
+        return None
+
+    # KGQuery emits CONTAINS(LCASE(?v), LCASE("x")), so the raw shape never
+    # matched and `contains` was never pushed at all — the gate was only half
+    # the reason it was slow.
+    a0, f0 = _unwrap_fold(args[0])
+    a1, f1 = _unwrap_fold(args[1])
+    # Both sides must be folded by the SAME function. LCASE(?v) against an
+    # unfolded needle is case-SENSITIVE against a lowercased haystack, which
+    # ILIKE would over-match; that asymmetry is a wrong answer, not a slow one.
+    if f0 != f1:
+        return None
+    ci = f0 is not None
+    if name == "regex" and ci:
+        # regex carries its own case-insensitivity in flags; folding on top has
+        # no established rewrite here, so leave it above the join.
+        return None
+    if not isinstance(a0, ExprVar) or not isinstance(a1, ExprValue):
+        return None
+    if not isinstance(a1.node, LiteralNode):
+        return None
+    flags = args[2] if (name == "regex" and len(args) >= 3) else None
+    return a0.var, name, a1.node.value, ci, flags
+
+
+def _text_search_var(expr) -> Optional[str]:
+    """Variable of a pushable text-search FILTER, or None."""
+    ops = _text_search_operands(expr)
+    return ops[0] if ops else None
+
+
+def _try_text_search(expr, bgp, term_table: str, quad_aliases: set, ctx):
+    """`_try_text_filter` under the by-variable dispatch signature."""
+    return _try_text_filter(expr, bgp, term_table, quad_aliases)
 
 
 # ---------------------------------------------------------------------------
@@ -569,3 +668,61 @@ def _try_inequality_filter(expr, bgp, term_table: str, quad_aliases: set, ctx):
         return None
     return (ref_id, f"{ref_id}.{col_name} NOT IN "
                     f"(SELECT term_uuid FROM {term_table} WHERE {eq_cond})")
+
+
+# `?v IN (a, b, c)` is a disjunction of equalities, so it is the same problem as
+# `!=` with the negation dropped and the union widened — `_ne_equality_cond` is
+# reused verbatim, which is what makes this sound for the numeric and datetime
+# slot classes and declining for booleans, exactly as it is for `ne`.
+_IN_OPS = {"in": "IN", "notin": "NOT IN"}
+
+
+def _in_operands(expr):
+    """(var, sql_op, [equality conds]) for a pushable `?var IN (...)`, else None."""
+    if not isinstance(expr, ExprFunction):
+        return None
+    sql_op = _IN_OPS.get((expr.name or "").lower())
+    if sql_op is None:
+        return None
+    args = expr.args or []
+    # One arg is the empty list, which means a constant FALSE/TRUE rather than a
+    # value test; leave that for the general emitter.
+    if len(args) < 2 or not isinstance(args[0], ExprVar):
+        return None
+    conds = []
+    for item in args[1:]:
+        if not isinstance(item, ExprValue):
+            return None
+        cond = _ne_equality_cond(item.node)
+        if cond is None:
+            return None
+        conds.append(f"({cond})")
+    return args[0].var, sql_op, conds
+
+
+def _in_var(expr) -> Optional[str]:
+    """Variable of a pushable `?var IN (...)` / `NOT IN (...)`, or None."""
+    ops = _in_operands(expr)
+    return ops[0] if ops else None
+
+
+def _try_in_filter(expr, bgp, term_table: str, quad_aliases: set, ctx):
+    """Convert `?var IN (...)` into a semi-join over the union of equality sets.
+
+    Returns (alias, sql) or None.
+    """
+    ops = _in_operands(expr)
+    if ops is None:
+        return None
+    var_name, sql_op, conds = ops
+
+    slot = bgp.var_slots.get(var_name)
+    if not slot or not slot.positions:
+        return None
+    ref_id, col_name = slot.positions[0]
+    if ref_id not in quad_aliases:
+        return None
+
+    return (ref_id, f"{ref_id}.{col_name} {sql_op} "
+                    f"(SELECT term_uuid FROM {term_table} "
+                    f"WHERE {' OR '.join(conds)})")

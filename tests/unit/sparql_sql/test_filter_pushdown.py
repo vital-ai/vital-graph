@@ -220,3 +220,109 @@ class TestPushTextFilters:
         _, sql = bgp.tagged_constraints[0]
         assert "''" in sql  # escaped single quote
         assert "it''s" in sql
+
+
+def _lcase(node):
+    return ExprFunction(name="lcase", args=[node])
+
+
+def _in_expr(var: str, *literals: str) -> ExprFunction:
+    return ExprFunction(
+        name="in",
+        args=[ExprVar(var=var)] + [ExprValue(node=LiteralNode(value=v))
+                                   for v in literals],
+    )
+
+
+class _FakeCtx:
+    """Minimal stand-in for EmitContext — push_filters only reads this flag."""
+
+    def __init__(self, in_correlated_subquery: bool = False):
+        self.in_correlated_subquery = in_correlated_subquery
+
+
+class TestNoPushDownInsideCorrelatedSubquery:
+    """A pushed constraint is an UNCORRELATED `IN (SELECT term_uuid ...)`.
+
+    PostgreSQL will not hoist one of those out of a correlated subquery, so
+    inside an EXISTS body it re-executes per outer row. Pushing `?v IN (...)`
+    into a NOT EXISTS body cost 190x on not_has_any/Choice — 56 ms to 10.6 s —
+    against a plan that was already fast because prepare_exists_subplans had
+    materialised the body's constants to uuids.
+
+    These pin the guard rather than the speed: the timing lives in the sweep,
+    but nothing there fails loudly, and this regression reached a full sweep
+    before anyone noticed.
+    """
+
+    def test_in_filter_pushes_in_the_main_plan(self):
+        bgp = _make_bgp_with_var("x")
+        plan = _make_filter(bgp, _in_expr("x", "CA", "NY"))
+        push_text_filters(plan, SPACE, _FakeCtx(in_correlated_subquery=False))
+
+        assert len(bgp.tagged_constraints) == 1
+        _, sql = bgp.tagged_constraints[0]
+        assert "SELECT term_uuid" in sql
+        assert "'CA'" in sql and "'NY'" in sql
+
+    def test_in_filter_declines_inside_a_correlated_subquery(self):
+        bgp = _make_bgp_with_var("x")
+        plan = _make_filter(bgp, _in_expr("x", "CA", "NY"))
+        push_text_filters(plan, SPACE, _FakeCtx(in_correlated_subquery=True))
+
+        assert bgp.tagged_constraints == []
+        # and the filter is left in place to be evaluated above the join
+        assert plan.filter_exprs and len(plan.filter_exprs) == 1
+
+    def test_text_filter_declines_inside_a_correlated_subquery(self):
+        bgp = _make_bgp_with_var("x")
+        plan = _make_filter(bgp, _contains_expr("x", "hello"))
+        push_text_filters(plan, SPACE, _FakeCtx(in_correlated_subquery=True))
+
+        assert bgp.tagged_constraints == []
+        assert plan.filter_exprs and len(plan.filter_exprs) == 1
+
+
+class TestCaseFoldedTextSearch:
+    """KGQuery emits CONTAINS(LCASE(?v), LCASE("x")), not CONTAINS(?v, "x").
+
+    Matching only the bare-variable shape meant `contains` was never pushed at
+    all, which is why it timed out — not the "no indexable push-down path
+    exists" the issue recorded.
+    """
+
+    def test_matched_fold_pair_pushes_as_ilike(self):
+        bgp = _make_bgp_with_var("x")
+        expr = ExprFunction(name="contains", args=[
+            _lcase(ExprVar(var="x")),
+            _lcase(ExprValue(node=LiteralNode(value="Ca"))),
+        ])
+        plan = _make_filter(bgp, expr)
+        push_text_filters(plan, SPACE, _FakeCtx())
+
+        assert len(bgp.tagged_constraints) == 1
+        _, sql = bgp.tagged_constraints[0]
+        assert "ILIKE '%Ca%'" in sql
+
+    def test_asymmetric_fold_is_declined(self):
+        """LCASE(?v) against an UNFOLDED needle is not case-insensitive.
+
+        ILIKE would over-match, which is a wrong answer rather than a slow one.
+        """
+        bgp = _make_bgp_with_var("x")
+        expr = ExprFunction(name="contains", args=[
+            _lcase(ExprVar(var="x")),
+            ExprValue(node=LiteralNode(value="Ca")),
+        ])
+        plan = _make_filter(bgp, expr)
+        push_text_filters(plan, SPACE, _FakeCtx())
+
+        assert bgp.tagged_constraints == []
+
+    def test_unfolded_contains_still_pushes_case_sensitively(self):
+        bgp = _make_bgp_with_var("x")
+        plan = _make_filter(bgp, _contains_expr("x", "Ca"))
+        push_text_filters(plan, SPACE, _FakeCtx())
+
+        _, sql = bgp.tagged_constraints[0]
+        assert "LIKE '%Ca%'" in sql and "ILIKE" not in sql

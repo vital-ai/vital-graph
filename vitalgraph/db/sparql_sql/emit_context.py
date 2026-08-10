@@ -302,6 +302,15 @@ class EmitContext:
         # variable references (e.g., BIND inside UNION referencing a sibling
         # JOIN variable) and emit a diagnostic warning.
         self.query_all_vars: Optional[frozenset] = None
+        # True while emitting the body of a correlated EXISTS / NOT EXISTS.
+        # Filter push-down must not introduce an *uncorrelated* subquery here:
+        # PostgreSQL does not hoist one out of a correlated subquery, so it
+        # re-executes per outer row. Pushing `?v IN (...)` into a NOT EXISTS
+        # body this way cost 190x on not_has_any/Choice (56 ms -> 10.6 s) —
+        # measured, not theorised. Constants inside these bodies are already
+        # materialised to uuids by generator.prepare_exists_subplans, so a
+        # term-table subquery is strictly worse than what is already there.
+        self.in_correlated_subquery: bool = False
         # Deferred UUID column resolution: when a vg: function references a
         # variable not yet in the TypeRegistry, a placeholder token is emitted
         # and recorded here.  After child emission populates the TypeRegistry,

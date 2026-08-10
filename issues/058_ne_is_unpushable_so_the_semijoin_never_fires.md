@@ -1,6 +1,14 @@
 # `ne` Times Out on All Five Slot Classes Because `!=` Is Not Pushable
 
-## Status: FIXED for 4 of 5 slot classes — 2026-08-10
+## Status: FIXED for 4 of 5 slot classes; Boolean declined — 2026-08-10
+
+Re-measured on the verified three-way sweep (HEAD / change / change+guard):
+Text 228 ms, Double 114 ms, Integer 260 ms, Choice 134 ms, Boolean still
+TIMED OUT. The `!=` push-down is unaffected by the correlated-subquery guard
+added for `issues/070`, because a `ne` criterion's FILTER sits in the main plan,
+not inside an EXISTS body.
+
+
 
     ne/Text     timeout -> 314 ms
     ne/Double   timeout -> 169 ms

@@ -499,14 +499,21 @@ def _walk(node: Optional[PlanV2], needed: Set[str],
                 # how `gt` became uniquely slow (issues/054) — so this defers to
                 # filter_pushdown's own predicate rather than restating it.
                 try:
-                    from .filter_pushdown import _inequality_var
-                    v = _inequality_var(expr)
+                    from .filter_pushdown import (
+                        _inequality_var, _in_var, _text_search_var)
+                    v = (_inequality_var(expr) or _in_var(expr)
+                         or _text_search_var(expr))
                 except Exception:
                     v = None
             if v is not None:
                 pushable.add(v)
             else:
                 kept |= _expr_list_vars([expr])
+        # A variable something ABOVE the filter also wants has to survive the
+        # join regardless of whether the filter is pushed — a semi-join collapses
+        # the right side to its join key, so a projected value could not be
+        # produced from it. `needed` here is exactly what is wanted above.
+        pushable -= needed
         _walk(node.child, needed | kept, distinct_node, marked, aliases,
               pushable_vars | pushable)
         return

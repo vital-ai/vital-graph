@@ -1131,6 +1131,9 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext,
     # the subquery still produces the _var_to_sql diagnostic instead of a
     # silent NULL.
     inner_ctx.query_all_vars = ctx.query_all_vars
+    # Everything emitted below here sits inside a correlated subquery, so filter
+    # push-down must not add an uncorrelated one — see the field's own comment.
+    inner_ctx.in_correlated_subquery = True
     # Share the unresolved-variable record with the parent. This context is
     # built directly rather than via ctx.child(), so it does not inherit the
     # list — without this, a translation gap inside an EXISTS body is recorded
