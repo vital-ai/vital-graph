@@ -154,11 +154,40 @@ of the model. `wordnet_frames` covers the slot-value case above and is the
 fixture any direction-choosing rewrite must be validated against — it is the one
 that would have caught a blanket backward rule.
 
-**Relations remain uncovered.** `wordnet_frames` holds only `Edge_hasKGSlot`
-(570,696), so neither fixture has a relation edge, and relations are the case
-with no safe direction at all — an entity may be source or destination in many.
-A relation-bearing fixture should exist before any direction-choosing rewrite
-ships.
+**Relations are now covered** — `sp_kg_rel`, built 2026-08-10 by
+`scripts/generate_relation_dataset.py` / `load_relation_dataset.sh`. 5,000
+entities, 223,965 triples, and the first fixture anywhere with relation edges
+(16,043 `Edge_hasKGRelation`; the only other instances in existence are 96 in a
+handful of tiny test spaces).
+
+Fan-out measured from the loaded space, per edge type:
+
+| edge type | forward | backward |
+|---|---|---|
+| `Edge_hasEntityKGFrame` | avg 1.00, max 1 | avg 1.00, max 1 |
+| `Edge_hasKGFrame` | avg 1.00, max 1 | avg 1.00, max 1 |
+| `Edge_hasKGSlot` | avg 1.00, max 1 | avg 1.00, max 1 |
+| **`Edge_hasKGRelation`** | **avg 4.24, max 400** | **avg 4.20, max 387** |
+
+Two things this establishes that no existing fixture could:
+
+1. **Relations fan out symmetrically — neither direction is safe.** A rule of the
+   form "traverse in the direction whose fan-out is 1" has no answer here and
+   must fall back to something else.
+2. **The pooled statistic is useless.** Across all edges this space reports
+   forward 1.80 / backward 1.51, which hides both the tree (1/1) and the hub
+   (400/387). Fan-out recorded per space rather than per edge type would produce
+   exactly this misleading number, so `issues/060`'s type column is a
+   prerequisite for the metric and not merely a performance win.
+
+The fixture also carries both frame form types, including assertion frames that
+leave `hasKGFormType` unset (1,250 of 5,000), since unset defaults to assertion
+and a fixture that always states it cannot catch a reader that requires the
+explicit triple. The manifest records every degree distribution so a test can
+assert them rather than recompute them from the data under test.
+
+Still missing: the fixture is not yet registered anywhere the perf suite reads,
+so nothing runs against it automatically.
 
 ## Suggested order
 
