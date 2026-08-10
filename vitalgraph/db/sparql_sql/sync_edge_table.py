@@ -332,24 +332,28 @@ async def edge_table_orphan_rate(conn, space_id: str, sample: int = 200) -> floa
 async def edge_table_untyped_rate(conn, space_id: str) -> float:
     """Fraction of edge rows with no `edge_type_uuid`. EXACT, not sampled.
 
-    Every vital graph object carries a vitaltype, so after a rebuild from the
-    quads nothing should be untyped. A NULL therefore means the row does not
-    correspond to a live edge — which makes this a whole-table orphan detector
-    that costs one index-only count, where `edge_table_orphan_rate` samples 200
-    rows and does an EXISTS join per sample.
+    This is a CAPABILITY signal, not a drift signal: it says those rows will not
+    match a typed traversal. It is NOT an orphan detector, and reading it as one
+    is wrong in the common case.
 
-    It found 20,461 orphaned rows across four spaces the first time it ran,
-    including 20,306 (5.3%) in a production-shaped space — rows whose defining
-    quads had been deleted while the edge row survived, answering traversals
-    with edges to nowhere. Same family as issues/041, opposite direction: that
-    was edges MISSING, this is edges left behind.
+    Three different conditions produce a NULL, and this number cannot tell them
+    apart:
 
-    One false positive to know about: a space whose source data never carried
-    vitaltype at all. `wordnet_exp` has 1,536,485 `type` quads and zero
-    `vitaltype`, so all 570,696 of its edge rows read as untyped while being
-    perfectly live. That is a property of how that space was exported, and it is
-    worth reporting loudly rather than smoothing over — typed traversal there
-    will match nothing.
+      1. **The column has not been backfilled.** `edge_type_uuid` was added by a
+         migration, so every row of a newly-altered table reads NULL until it is
+         populated. This is the usual reason, and it means nothing is wrong.
+      2. **The space carries no vitaltype triples.** `wordnet_exp` has 1,536,485
+         `type` quads and zero `vitaltype`, so all 570,696 of its edge rows read
+         untyped while being perfectly live — a property of how it was exported.
+      3. **The row is orphaned** — its defining quads were deleted and the edge
+         row survived.
+
+    Only (3) is drift, and establishing it needs the referential check that
+    `edge_table_orphan_rate` does, or a rebuild from the quads. Orphans were
+    real when this was first run — 20,461 across four spaces, 20,306 of them
+    (5.3%) in a production-shaped space — but they were confirmed by those rows
+    having no quads at all, and by a rebuild removing exactly that many. The
+    NULL count agreed only because the backfill had already completed there.
 
     Returns 0.0 for a space with no edge rows or no column yet.
     """
