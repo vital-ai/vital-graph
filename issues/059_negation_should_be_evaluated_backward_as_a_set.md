@@ -101,6 +101,51 @@ than an estimate of the finished thing — a shortcut the fixture happened to
 permit, and the kind that makes a measurement look better than the
 implementation will be. Worth stating plainly before anyone plans around it.
 
+## The gate needs DENSITY, not just fan-out (measured 2026-08-10)
+
+The semantically correct backward form was written and measured. It is not the
+`A EXCEPT B` on entities that the hand query used — that is wrong in general,
+because an entity with two frames, one carrying the slot and one not, still
+matches via the second. The correct form filters FRAMES at the constrained end
+and then walks back:
+
+    f2_ok = frames of the right type  EXCEPT  frames that have the slot
+    answer = entities reachable back from f2_ok through the typed path
+
+Correct, and *faster* than the shortcut — filtering at the constrained end makes
+the intermediate set empty, so the walk has nothing to do:
+
+| case | backward | current forward |
+|---|---|---|
+| negation excludes everything (answer empty) | **205-337 ms** | >200 s |
+| negation excludes nothing (answer 100,000) | **22-27 s** | fast — probe finds 25 and stops |
+
+**So fan-out is not a sufficient gate.** It says whether the walk is *safe*; it
+says nothing about whether it is *worth it*. The backward form does work
+proportional to the ANSWER, and the forward probe does work proportional to
+finding one page — so:
+
+* sparse or empty answer -> backward wins by orders of magnitude
+* dense answer -> forward wins, because it stops after 25 rows and backward does
+  the whole traversal
+
+That is exactly why `not_has` / `not_has_any` are already fine forward at
+59-226ms (dense answers) while `not_exists` times out (empty answer). The
+existing behaviour is not an accident, and a rewrite that fires unconditionally
+would regress the four cells `issues/057` just fixed.
+
+### The rule this implies, and it is computable today
+
+Density of the answer is the negation's *complement*, and the negation's
+selectivity is already in `rdf_stats`: `(hasKGSlotType, MQLRating)` is 100,000
+against 100,000 frames, so the negation excludes everything and the answer is
+empty — go backward. A slot type matching few frames excludes few, the answer is
+dense — stay forward.
+
+So the gate is: **backward when the constrained end matches most of the
+population**, forward otherwise, and fan-out as a veto on top for the traversal
+being safe to walk in that direction at all. Both inputs now exist.
+
 ## Cost to implement
 
 Closer to the existing edge-table rewrite than to the paging work: a plan-level
