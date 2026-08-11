@@ -623,8 +623,16 @@ async def generate_sql(
                                         conn_params=conn_params, conn=conn)
 
         # Stage 2 post: Prune dead UNION branches (constants absent from term table)
-        from .prune_union import prune_dead_union_branches
+        from .prune_union import (prune_dead_union_branches,
+                                  query_is_provably_empty)
         plan = prune_dead_union_branches(plan, aliases)
+
+        # Checked AFTER pruning: a constant that survives only inside a branch
+        # just removed is not required, and must not condemn the query.
+        provably_empty = query_is_provably_empty(plan, aliases)
+        if provably_empty:
+            logger.info("Query is provably empty — a required constant is "
+                        "absent from the term table")
 
         # Stage 2a: Load predicate cardinality stats
         if conn is not None or conn_params is not None:
@@ -798,6 +806,15 @@ async def generate_sql(
         # Stage 5: Prepend CTEs — unresolved constants, and term sets hoisted
         # out of filter push-down (issues/070).
         sql_str = prepend_ctes(sql_str, aliases, term_table)
+
+        # Stage 5b: A required constant that is not in the term table makes the
+        # whole query provably empty. Say so, rather than proving it by scanning
+        # (issues/073) — `LIMIT 0` stops the Limit node before it fetches a
+        # first tuple, so the subplan never executes, and wrapping preserves the
+        # column names and types the caller expects. `eq`/DateTime at 100k: 40s+
+        # to return nothing, against ~0 once this fires.
+        if provably_empty:
+            sql_str = f"SELECT * FROM (\n{sql_str}\n) _empty LIMIT 0"
 
         # Extract sparql_vars
         sparql_vars = []

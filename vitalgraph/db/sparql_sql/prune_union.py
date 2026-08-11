@@ -16,7 +16,10 @@ from __future__ import annotations
 import logging
 from typing import Set
 
-from .ir import AliasGenerator, PlanV2, KIND_UNION, KIND_BGP, KIND_JOIN
+from .ir import (AliasGenerator, PlanV2, KIND_UNION, KIND_BGP, KIND_JOIN,
+                 KIND_LEFT_JOIN, KIND_MINUS, KIND_GROUP, KIND_FILTER,
+                 KIND_PROJECT, KIND_SLICE, KIND_ORDER, KIND_DISTINCT,
+                 KIND_REDUCED, KIND_EXTEND)
 
 logger = logging.getLogger(__name__)
 
@@ -132,3 +135,73 @@ def _replace_plan_in_place(target: PlanV2, source: PlanV2) -> None:
             setattr(target, f.name, getattr(source, f.name))
     target.path_meta = source.path_meta
     target.graph_uri = source.graph_uri
+
+
+# ---------------------------------------------------------------------------
+# Provably-empty queries (issues/073)
+# ---------------------------------------------------------------------------
+
+# Descending through these preserves "empty child => empty result".
+#
+# NOT in this set, and each for its own reason:
+#   KIND_UNION      a sibling branch may still match
+#   KIND_MINUS      subtracting nothing leaves the left side intact
+#   KIND_LEFT_JOIN  handled specially — only the LEFT child is required; an
+#                   OPTIONAL that matches nothing still yields its outer row
+#   KIND_GROUP      an aggregate over zero rows still produces a row
+#                   (`SELECT COUNT(*)` is 0, not empty), so emptiness does not
+#                   propagate upward through it
+_EMPTY_PROPAGATES = frozenset({
+    KIND_JOIN, KIND_BGP, KIND_FILTER, KIND_PROJECT, KIND_SLICE, KIND_ORDER,
+    KIND_DISTINCT, KIND_REDUCED, KIND_EXTEND,
+})
+
+
+def query_is_provably_empty(plan: PlanV2, aliases: AliasGenerator) -> bool:
+    """True when a constant that does not exist in the term table is REQUIRED.
+
+    An equality against a term that was never stored matches nothing, so the
+    whole query matches nothing — and that can be known before running it.
+
+    Without this the plan does the opposite of short-circuiting. The constant
+    compiles to a scalar subquery over an empty `_const` CTE, so the comparison
+    is NULL for every row; the planner cannot see that it is constant-false, and
+    under the ordered-scan fence it walks the entire ordering index proving it.
+    Measured on `eq`/DateTime at 100k: 40 s+ for an empty answer, against 0 ms
+    for the same query shape when the constant resolves.
+
+    That makes "search for a value that is not there" the WORST case, when it
+    should be the cheapest — and searching for an absent value is not exotic, it
+    is what a typo or an over-narrow filter produces.
+    """
+    unresolved = _unresolved_const_names(aliases)
+    if not unresolved:
+        return False
+    dead = {f"{_CONST_PREFIX}{col}{_CONST_SUFFIX}" for col in unresolved}
+    return _required_subtree_is_dead(plan, dead)
+
+
+def _node_owns_dead_constant(plan: PlanV2, dead: Set[str]) -> bool:
+    """Dead constant in THIS node's own constraints (not its children's)."""
+    for constraint in plan.constraints:
+        if any(tok in constraint for tok in dead):
+            return True
+    for _tag, constraint in plan.tagged_constraints:
+        if any(tok in constraint for tok in dead):
+            return True
+    return False
+
+
+def _required_subtree_is_dead(plan: PlanV2, dead: Set[str], depth: int = 0) -> bool:
+    if plan is None or depth > 24:
+        return False
+    if _node_owns_dead_constant(plan, dead):
+        return True
+    if plan.kind == KIND_LEFT_JOIN:
+        # Only the left side is required; a dead OPTIONAL just never matches.
+        kids = plan.children or []
+        return bool(kids) and _required_subtree_is_dead(kids[0], dead, depth + 1)
+    if plan.kind not in _EMPTY_PROPAGATES:
+        return False
+    return any(_required_subtree_is_dead(c, dead, depth + 1)
+               for c in (plan.children or []))
