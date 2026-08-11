@@ -73,9 +73,45 @@ before mutating, or it mutates a copy. `_emit_two_phase` has the same hazard
 latent in it — it pushes and can still `return None` — and gets away with it
 only because it runs first and nothing downstream re-reads the gate.
 
-Next attempt should deep-copy the subtree for the trial emission, or split
-`push_filters` into a "what would push" query and a separate apply. Do not
-simply move the push earlier; that is what was measured above.
+### Attempt 2: transactional trial. The mutation problem IS solved. Reverted for
+### a different reason.
+
+Neither the deep copy nor the `push_filters` split was needed. Snapshotting the
+two fields it mutates — each FILTER's `filter_exprs` and each BGP's
+`tagged_constraints` — and restoring them at every decline makes the trial
+transactional, and keeps the emitter's own predicate as the thing deciding what
+pushes (a hand-rolled "would it push?" check would violate the RULE about gates
+restating predicates they do not own).
+
+That worked. Pushing from `plan.child` down to the join lands the ILIKE ON THE
+DRIVER SIDE — verified positionally in the emitted SQL, ILIKE at offset 5748
+against the EXISTS probe at 5770 — and the answers are CORRECT: `'ZZQQXX'`
+returns 0 rows.
+
+**It is the plan that is unusable.** On `sp_lead_synth_10k`:
+
+    contains 'ZZQQXX', selective-driven:  24,883 ms, 0 rows
+      Rows Removed by Join Filter: 199,990,000
+
+A cross product. The driver's own chain — entity -> frame -> slot -> term — is
+walked before the ILIKE filters, so an empty match set costs a full 10,000 x
+20,000 nested loop instead of nothing.
+
+**Which points at the next lead, and it is the one this issue started from.**
+`emit_bgp_anchor` calls `reorder_joins`, which is exactly the code that pins a
+text leaf first — but the pinning demonstrably is not reaching the driver's
+internal order here. Either the pushed constraint arrives too late to be seen
+by the root selection, or its `refs` disqualify it from the `not refs` test in
+`reorder_bgp` (a pushed condition referencing a quad alias is not the bare
+uncorrelated form that test looks for).
+
+That is a contained question with a measurable answer, and it is where to start
+next. The transactional-trial scaffolding is the right shape; it is the driver's
+join order that is wrong.
+
+**Do not re-attempt without measuring both `'CA'` and an absent substring.** All
+three attempts so far returned correct answers for at least one of them while
+being catastrophic or wrong for the other.
 
     has_any/Text     timeout -> 80 ms     fixed, uuid constants
     has_any/Choice   timeout -> 73 ms     fixed, uuid constants
