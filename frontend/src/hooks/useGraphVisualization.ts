@@ -26,8 +26,9 @@ const HALEY_REL_TYPE_DESC = 'http://vital.ai/ontology/haley-ai-kg#hasKGRelationT
 const HALEY_KG_SLOT = 'http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot';
 const HALEY_ENTITY_KG_FRAME = 'http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame';
 const HALEY_DATETIME_SLOT_VALUE = 'http://vital.ai/ontology/haley-ai-kg#hasDateTimeSlotValue';
-const HALEY_FRAME_GRAPH_URI = 'http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI';
 const HALEY_KG_GRAPH_URI = 'http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI';
+const SLOT_ROLE_SRC = 'urn:hasSourceEntity';
+const SLOT_ROLE_DST = 'urn:hasDestinationEntity';
 
 const MAX_VISUALIZATION_ITEMS = 10000;
 
@@ -119,59 +120,54 @@ function buildExpandQuery(entityUri: string, spaceId: string): string {
       }
     `;
   }
+  // Frames link to their slots through Edge_hasKGSlot (frame = edge source,
+  // slot = edge destination); the slot's role is hasKGSlotType and the entity it
+  // points at is hasEntitySlotValue. Walk that both ways so an entity sitting in
+  // either the source or the destination slot expands.
+  const frameBranch = (anchor: 'src' | 'dst') => {
+    const other = anchor === 'src' ? 'dst' : 'src';
+    const anchorRole = anchor === 'src' ? SLOT_ROLE_SRC : SLOT_ROLE_DST;
+    const otherRole = anchor === 'src' ? SLOT_ROLE_DST : SLOT_ROLE_SRC;
+    return `
+      {
+        BIND(<${entityUri}> AS ?${anchor}Entity)
+        ?anchorSlot <${HALEY_SLOT_VALUE}> <${entityUri}> .
+        ?anchorSlot <${HALEY_SLOT_TYPE}> <${anchorRole}> .
+        ?anchorSlotEdge <${VITAL_EDGE_DST}> ?anchorSlot .
+        ?anchorSlotEdge <${VITAL_EDGE_SRC}> ?frame .
+        ?otherSlotEdge <${VITAL_EDGE_SRC}> ?frame .
+        ?otherSlotEdge <${VITAL_EDGE_DST}> ?otherSlot .
+        ?otherSlot <${HALEY_SLOT_TYPE}> <${otherRole}> .
+        ?otherSlot <${HALEY_SLOT_VALUE}> ?${other}Entity .
+        ?frame <${HALEY_FRAME_TYPE_DESC}> ?relationType .
+        <${entityUri}> <${VITAL_NAME}> ?${anchor}Name .
+        ?${other}Entity <${VITAL_NAME}> ?${other}Name .
+      }`;
+  };
   return `
     SELECT ?srcEntity ?srcName ?dstEntity ?dstName ?frame ?relationType WHERE {
-      {
-        BIND(<${entityUri}> AS ?srcEntity)
-        ?mySlot <${HALEY_SLOT_VALUE}> ?srcEntity .
-        ?mySlot <${HALEY_FRAME_GRAPH_URI}> ?frame .
-        ?frame <${HALEY_FRAME_TYPE_DESC}> ?relationType .
-        ?otherSlot <${HALEY_FRAME_GRAPH_URI}> ?frame .
-        ?otherSlot <${HALEY_SLOT_VALUE}> ?dstEntity .
-        FILTER(?otherSlot != ?mySlot)
-        ?srcEntity <${VITAL_NAME}> ?srcName .
-        ?dstEntity <${VITAL_NAME}> ?dstName .
-      }
+      ${frameBranch('src')}
+      UNION
+      ${frameBranch('dst')}
       UNION
       {
         BIND(<${entityUri}> AS ?srcEntity)
-        ?frame <${HALEY_KG_GRAPH_URI}> ?srcEntity .
-        ?frame <${HALEY_FRAME_TYPE_DESC}> ?relationType .
-        ?slot <${HALEY_FRAME_GRAPH_URI}> ?frame .
-        ?slot <${HALEY_SLOT_VALUE}> ?dstEntity .
-        FILTER(?dstEntity != ?srcEntity)
-        ?srcEntity <${VITAL_NAME}> ?srcName .
-        ?dstEntity <${VITAL_NAME}> ?dstName .
-      }
-      UNION
-      {
-        BIND(<${entityUri}> AS ?srcEntity)
-        ?rel <${VITAL_EDGE_SRC}> ?srcEntity .
+        ?rel <${VITAL_EDGE_SRC}> <${entityUri}> .
         ?rel <${VITAL_EDGE_DST}> ?dstEntity .
         ?rel <${HALEY_REL_TYPE_DESC}> ?relationType .
         BIND(?rel AS ?frame)
-        ?srcEntity <${VITAL_NAME}> ?srcName .
+        <${entityUri}> <${VITAL_NAME}> ?srcName .
         ?dstEntity <${VITAL_NAME}> ?dstName .
       }
       UNION
       {
         BIND(<${entityUri}> AS ?dstEntity)
-        ?rel <${VITAL_EDGE_DST}> ?dstEntity .
+        ?rel <${VITAL_EDGE_DST}> <${entityUri}> .
         ?rel <${VITAL_EDGE_SRC}> ?srcEntity .
         ?rel <${HALEY_REL_TYPE_DESC}> ?relationType .
         BIND(?rel AS ?frame)
         ?srcEntity <${VITAL_NAME}> ?srcName .
-        ?dstEntity <${VITAL_NAME}> ?dstName .
-      }
-      UNION
-      {
-        BIND(<${entityUri}> AS ?srcEntity)
-        ?slot <${HALEY_FRAME_GRAPH_URI}> <${entityUri}> .
-        ?slot <${HALEY_SLOT_VALUE}> ?dstEntity .
-        ?slot <${HALEY_SLOT_TYPE}> ?relationType .
-        BIND(?slot AS ?frame)
-        <${entityUri}> <${VITAL_NAME}> ?srcName .
-        ?dstEntity <${VITAL_NAME}> ?dstName .
+        <${entityUri}> <${VITAL_NAME}> ?dstName .
       }
     }
   `;

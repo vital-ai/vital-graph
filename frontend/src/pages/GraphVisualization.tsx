@@ -289,6 +289,10 @@ export default function GraphVisualization() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const selectedNodeIdRef = useRef<string | null>(null);
   const selectedEdgeIdRef = useRef<string | null>(null);
+  // Element the context menu was opened on. cytoscape-context-menus stashes the
+  // cxttap event in its scratchpad and clears it on any subsequent tapstart, so
+  // onClickFunction can fire with an undefined event — we recover the target here.
+  const ctxTargetRef = useRef<any>(null);
 
   // Only URL param used: ?session=<id> to activate a specific session
   const targetSessionParam = searchParams.get('session');
@@ -818,6 +822,14 @@ export default function GraphVisualization() {
     };
     cy.on('select unselect', updateMultiSelection);
 
+    // Resolve the element a context-menu item was invoked on, falling back to
+    // the last cxttap target when the library hands us an undefined event.
+    const ctxTarget = (event: any) => {
+      const target = event?.target ?? ctxTargetRef.current;
+      if (!target || target.removed?.()) return null;
+      return target;
+    };
+
     // Traditional right-click context menus
     const ctxMenu = cy.contextMenus({
       evtType: 'cxttap',
@@ -828,7 +840,9 @@ export default function GraphVisualization() {
           tooltipText: 'Expand this node',
           selector: 'node',
           onClickFunction: (event) => {
-            expandNodeRef.current(event.target.id());
+            const ele = ctxTarget(event);
+            if (!ele) return;
+            expandNodeRef.current(ele.id());
           },
         },
         {
@@ -837,7 +851,9 @@ export default function GraphVisualization() {
           tooltipText: 'Remove this node',
           selector: 'node',
           onClickFunction: (event) => {
-            removeNode(event.target.id());
+            const ele = ctxTarget(event);
+            if (!ele) return;
+            removeNode(ele.id());
             setSelectedNode(null); selectedNodeIdRef.current = null;
             setSelectedEdge(null); selectedEdgeIdRef.current = null;
             setMultiSelection(null);
@@ -849,7 +865,8 @@ export default function GraphVisualization() {
           tooltipText: 'Lock node position',
           selector: 'node',
           onClickFunction: (event) => {
-            const ele = event.target;
+            const ele = ctxTarget(event);
+            if (!ele) return;
             ele.lock();
             setSelectedNode(prev => {
               if (prev && prev.id === ele.id()) {
@@ -866,7 +883,8 @@ export default function GraphVisualization() {
           selector: 'node',
           show: false,
           onClickFunction: (event) => {
-            const ele = event.target;
+            const ele = ctxTarget(event);
+            if (!ele) return;
             ele.unlock();
             setSelectedNode(prev => {
               if (prev && prev.id === ele.id()) {
@@ -882,7 +900,9 @@ export default function GraphVisualization() {
           tooltipText: 'View edge details',
           selector: 'edge',
           onClickFunction: (event) => {
-            const edgeId = event.target.id();
+            const ele = ctxTarget(event);
+            if (!ele) return;
+            const edgeId = ele.id();
             const edge = viewGraphRef.current.cyEdges.get(edgeId);
             if (edge) {
               setSelectedEdge(edge); selectedEdgeIdRef.current = edgeId;
@@ -892,6 +912,11 @@ export default function GraphVisualization() {
           },
         },
       ],
+    });
+
+    // Remember which element the menu is for — see ctxTarget above
+    cy.on('cxttap', 'node, edge', (evt) => {
+      ctxTargetRef.current = evt.target;
     });
 
     // Dynamically show/hide Pin vs Unpin before context menu opens
