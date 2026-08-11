@@ -104,7 +104,8 @@ class MaintenanceJob:
 
     async def run(self) -> Dict:
         """Execute one maintenance cycle. Returns summary dict."""
-        summary: Dict = {"analyze": None, "vacuum": None, "cleanup": False, "vector_reindex": None}
+        summary: Dict = {"analyze": None, "vacuum": None, "cleanup": False,
+                         "vector_reindex": None, "aborted": None}
         start = time.monotonic()
 
         try:
@@ -157,17 +158,31 @@ class MaintenanceJob:
                 summary["cleanup"] = await self._run_cleanup()
 
         except Exception as e:
+            # One `except` covers the whole cycle, so a failure in ANY step
+            # silently skips every step after it. The completion line below then
+            # reports the untouched steps as None/False, which reads exactly
+            # like a cycle that had nothing to do — which is how a per-cycle
+            # InterfaceError went unnoticed. Record it so it cannot.
+            summary["aborted"] = f"{type(e).__name__}: {e}"
             logger.error("MaintenanceJob cycle error: %s", e, exc_info=True)
 
         elapsed = (time.monotonic() - start) * 1000
-        logger.info(
-            "MaintenanceJob cycle complete in %.0fms — analyze=%s vacuum=%s vector_reindex=%s cleanup=%s",
-            elapsed,
-            summary["analyze"],
-            summary["vacuum"],
-            summary["vector_reindex"],
-            summary["cleanup"],
-        )
+        if summary["aborted"]:
+            logger.error(
+                "MaintenanceJob cycle ABORTED after %.0fms (%s) — analyze=%s "
+                "vacuum=%s; every later step was SKIPPED, not clean",
+                elapsed, summary["aborted"], summary["analyze"],
+                summary["vacuum"],
+            )
+        else:
+            logger.info(
+                "MaintenanceJob cycle complete in %.0fms — analyze=%s vacuum=%s vector_reindex=%s cleanup=%s",
+                elapsed,
+                summary["analyze"],
+                summary["vacuum"],
+                summary["vector_reindex"],
+                summary["cleanup"],
+            )
         return summary
 
     # ------------------------------------------------------------------
@@ -521,12 +536,21 @@ class MaintenanceJob:
                 # possibly help, once per cycle, forever, for every ephemeral
                 # inttest_* space in the database. A recurring INFO nobody can
                 # act on is how the ones that matter get skimmed past.
-                has_vitaltype = await conn.fetchval(f"""
-                    SELECT EXISTS (
-                        SELECT 1 FROM {space_id}_rdf_quad q
-                        JOIN {space_id}_term t ON t.term_uuid = q.predicate_uuid
-                        WHERE t.term_text = $1 LIMIT 1)
-                """, VITALTYPE_URI)
+                # A FRESH connection, deliberately. `conn` above belongs to the
+                # `async with` that has already exited, so using it here raised
+                # InterfaceError and — because one `except` wraps the whole
+                # cycle — took edge integrity, frame-entity integrity, stats
+                # prune, vector reindex and cleanup down with it, every cycle.
+                # Not inside the try above either: that one means "this space
+                # has no edge table" and would swallow a real failure here.
+                async with self._pool.acquire() as probe_conn:
+                    has_vitaltype = await probe_conn.fetchval(f"""
+                        SELECT EXISTS (
+                            SELECT 1 FROM {space_id}_rdf_quad q
+                            JOIN {space_id}_term t
+                              ON t.term_uuid = q.predicate_uuid
+                            WHERE t.term_text = $1 LIMIT 1)
+                    """, VITALTYPE_URI)
                 if not has_vitaltype:
                     # Nothing to derive a type from. Permanent and expected for
                     # an export that carries only rdf:type, so it is not news.
