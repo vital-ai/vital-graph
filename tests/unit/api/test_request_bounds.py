@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from starlette.testclient import TestClient
 
 from vitalgraph.api.request_bounds import (
@@ -54,6 +54,57 @@ class TestPolicy:
     def test_writes_are_never_cancelled(self, method, path):
         """The policy decision. Widening this needs an answer for half-commits."""
         assert is_cancellable_read(method, path) is False
+
+
+class TestPostBodySurvives:
+    """A cancellable POST must still receive its body.
+
+    `Request.is_disconnected()` READS FROM THE ASGI RECEIVE CHANNEL. A poll loop
+    running beside the handler consumes the `http.request` message carrying the
+    body, and the handler's `await request.json()` then raises ClientDisconnect.
+
+    This shipped. It broke every query POST in the E2E suite — SPARQL execution,
+    keyword and semantic search, graph-visualization search — while every
+    GET-based page test passed, which is exactly the signature.
+
+    The original tests covered a GET and a POST with NO body, so the one thing
+    the allowlisted endpoints all have — a body — was the one thing untested.
+    """
+
+    def test_allowlisted_post_receives_its_body(self, monkeypatch):
+        monkeypatch.setenv("VITALGRAPH_REQUEST_DEADLINE_S", "20")
+        app = FastAPI()
+        app.add_middleware(RequestBoundsMiddleware)
+
+        @app.post("/api/kgentities/query")
+        async def q(request: Request):
+            return {"got": await request.json()}
+
+        with TestClient(app) as c:
+            r = c.post("/api/kgentities/query", json={"q": "SELECT *"})
+        assert r.status_code == 200
+        assert r.json() == {"got": {"q": "SELECT *"}}
+
+    def test_kgqueries_post_receives_its_body(self, monkeypatch):
+        monkeypatch.setenv("VITALGRAPH_REQUEST_DEADLINE_S", "20")
+        app = FastAPI()
+        app.add_middleware(RequestBoundsMiddleware)
+
+        @app.post("/api/kgqueries")
+        async def q(request: Request):
+            body = await request.json()
+            return {"n": len(body.get("criteria", []))}
+
+        with TestClient(app) as c:
+            r = c.post("/api/kgqueries", json={"criteria": [1, 2, 3]})
+        assert r.status_code == 200 and r.json() == {"n": 3}
+
+    def test_only_bodyless_requests_are_watched_for_disconnect(self):
+        from vitalgraph.api.request_bounds import _can_watch_disconnect
+        assert _can_watch_disconnect("GET") is True
+        assert _can_watch_disconnect("HEAD") is True
+        # A POST carries a body, so polling would eat it — deadline only.
+        assert _can_watch_disconnect("POST") is False
 
 
 def _app(handler_seconds: float):

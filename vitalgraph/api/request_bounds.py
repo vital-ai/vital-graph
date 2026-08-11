@@ -75,6 +75,29 @@ _READ_POST_PATHS = (
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
+
+def _can_watch_disconnect(method: str) -> bool:
+    """Whether polling `is_disconnected()` is safe for this request.
+
+    ONLY for requests with no body. `Request.is_disconnected()` READS FROM THE
+    ASGI RECEIVE CHANNEL, and a poll loop running beside the handler consumes
+    the `http.request` message carrying the body — the handler's `await
+    request.json()` then finds nothing and raises `ClientDisconnect`.
+
+    That took out every query POST in the E2E suite (SPARQL execution, keyword
+    and semantic search, graph-visualization search) while every GET-based page
+    test passed, which is the signature: bodyless requests are unaffected.
+
+    The unit tests missed it because they covered a GET and a POST with NO body.
+    A body is the whole point of the endpoints this middleware was allowed to
+    cancel, and none of them was tested with one.
+
+    The DEADLINE still applies to those requests — `asyncio.wait` on the handler
+    task never touches the receive channel. Only the disconnect watcher is
+    unsafe, so only it is withheld.
+    """
+    return method.upper() in _SAFE_METHODS
+
 # Above the read path's 55s statement_timeout, so a single slow statement
 # surfaces as its own error rather than as an opaque request timeout — the
 # specific fence is the more useful diagnosis. 0 disables.
@@ -119,11 +142,15 @@ class RequestBoundsMiddleware(BaseHTTPMiddleware):
 
         deadline = _request_deadline_s()
         handler = asyncio.ensure_future(call_next(request))
-        watcher = asyncio.ensure_future(self._watch_disconnect(request))
+        # No disconnect watcher for a request that carries a body — polling
+        # would eat it. See _can_watch_disconnect.
+        watcher = (asyncio.ensure_future(self._watch_disconnect(request))
+                   if _can_watch_disconnect(request.method) else None)
+        waiting = {handler} | ({watcher} if watcher else set())
 
         try:
             done, _pending = await asyncio.wait(
-                {handler, watcher},
+                waiting,
                 timeout=deadline if deadline > 0 else None,
                 return_when=asyncio.FIRST_COMPLETED,
             )
@@ -134,7 +161,8 @@ class RequestBoundsMiddleware(BaseHTTPMiddleware):
             # Either the client went away or the deadline passed. Cancel and
             # WAIT for it: returning while the query is still winding down is
             # what leaves the backend running, which is the whole defect.
-            reason = "client disconnected" if watcher in done else "deadline exceeded"
+            disconnected = watcher is not None and watcher in done
+            reason = "client disconnected" if disconnected else "deadline exceeded"
             handler.cancel()
             try:
                 await handler
@@ -143,7 +171,7 @@ class RequestBoundsMiddleware(BaseHTTPMiddleware):
 
             logger.info("request bounded: %s %s — %s",
                         request.method, request.url.path, reason)
-            if watcher in done:
+            if disconnected:
                 # Nobody is listening; the status is for logs and middleware
                 # below us, not for a client.
                 return JSONResponse(status_code=499,
@@ -152,7 +180,7 @@ class RequestBoundsMiddleware(BaseHTTPMiddleware):
                 status_code=504,
                 content={"detail": f"request exceeded {deadline:g}s deadline"})
         finally:
-            if not watcher.done():
+            if watcher is not None and not watcher.done():
                 watcher.cancel()
 
     @staticmethod
