@@ -1,6 +1,27 @@
 # SPARQL UPDATE Mutates Quads Without Maintaining Any Derived Table
 
-## Status: OPEN — identified 2026-08-10 as the source of the orphans in `issues/060`
+## Status: FIXED — 2026-08-10, in `execute_sparql_update`
+
+All four holes are closed, and option (1) below was taken rather than the
+dirty-flag interim:
+
+| case | handling |
+|---|---|
+| concrete subjects (INSERT/DELETE DATA) | `sync_edge_table_after_insert` + `cleanup_orphan_edges_for_subjects`, then `sync_frame_entity_before_delete` + `sync_frame_entity_after_edge_insert` |
+| `CLEAR` / `DROP GRAPH` | names no subjects, so the per-subject hooks never fire — handled by CONTEXT instead, `delete_frame_entity_for_context` then `delete_edges_for_context` |
+| WHERE-bound subjects | could not be enumerated, and the background self-heal is a backfill that only ADDS — now a bounded referential sweep, `cleanup_stale_frame_entity` then `cleanup_orphan_edges`, and only for updates that actually deferred something |
+| `rdf_stats` | `resync_stats_for_predicates` over the predicates the update touched |
+
+Ordering matters in two places and both are deliberate: `frame_entity` is derived
+FROM the edge table, so it is cleaned BEFORE the edges it reads — otherwise a row
+whose edge is about to go looks stale for the wrong reason and the two passes
+disagree about why.
+
+The sync runs in its own transaction inside a try/except, so a sync failure
+rolls back cleanly and leaves the committed quads intact rather than poisoning
+the pooled connection.
+
+## Original status: OPEN — identified 2026-08-10 as the source of the orphans in `issues/060`
 
 The derived traversal tables are supposed to be maintained on write, and mostly
 are. The hooks exist and work:

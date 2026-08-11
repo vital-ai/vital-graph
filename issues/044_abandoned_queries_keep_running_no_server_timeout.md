@@ -1,14 +1,39 @@
 # A Client Giving Up Does Not Stop the Query — The Server-Side Fence Is Per-Statement, Not Per-Request
 
-## Status: PARTLY FIXED — gaps 1, 2 and 5 closed; 3 and 4 remain — 2026-08-10
+## Status: FIXED — all five gaps — 2026-08-10
 
 | gap | state |
 |---|---|
-| 1. fence is per-statement, not per-request | still open, but `047` removed what it was bounding |
+| 1. fence is per-statement, not per-request | **FIXED** — `RequestBoundsMiddleware` deadline, reads only |
 | 2. `asyncio.gather` orphans the sibling | **FIXED** — `_gather_cancelling`, all 5 sites |
 | 3. timers ordered backwards | **improved** — the server fence is now 55s against the client's 60s, so the server surfaces the error first. The per-request bound in (1) is the rest |
-| 4. client disconnect not detected | still open — nothing calls `request.is_disconnected()` |
+| 4. client disconnect not detected | **FIXED** — `RequestBoundsMiddleware` polls and cancels, reads only |
 | 5. fence is client-driven, not DB-enforced | **FIXED** — `SET LOCAL statement_timeout` on the read path |
+
+### Gaps 1 and 4, closed 2026-08-10
+
+Both were the same missing thing — nothing bounded a REQUEST — so
+`vitalgraph/api/request_bounds.py` answers both with one middleware. It runs the
+handler as a task and races it against a disconnect poll and a deadline
+(`VITALGRAPH_REQUEST_DEADLINE_S`, default 120s, 0 disables), cancelling and
+then AWAITING the handler so the query is actually wound down rather than left
+running while the response returns.
+
+120s sits above the read path's 55s `statement_timeout` deliberately: a single
+slow statement should surface as its own error, because the specific fence is
+the more useful diagnosis than an opaque request timeout.
+
+**READS ONLY, and that is the policy decision this needed.** Cancelling a
+disconnected client's WRITE mid-transaction is not obviously right: the client
+may well have intended it, PostgreSQL would roll it back, and the client cannot
+detect that because it is by definition no longer listening — a network hiccup
+becomes silent data loss. Reads have no such ambiguity, so safe methods plus an
+explicit allowlist of read-shaped POSTs (`/kgqueries`, `/kg*/query`) are
+cancellable and everything else runs to completion as before.
+
+The allowlist is taken from the registered routes rather than guessed. The first
+version guessed and was wrong in a way the tests caught: `kgqueries?` means
+"kgquerie" plus an optional "s", which never matches "kgquery".
 
 ### Gap 5, closed 2026-08-10
 

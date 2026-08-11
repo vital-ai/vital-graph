@@ -172,6 +172,15 @@ class VitalGraphAppImpl:
         )
         # Add query metrics middleware (reads collector from app.state during requests)
         self.app.add_middleware(MetricsMiddleware)
+
+        # Bound reads as a whole: cancel when the client hangs up, and on a
+        # deadline. The fences that already exist are per-STATEMENT, and one
+        # KGQuery request runs several, so nothing bounded the request itself
+        # (issues/044 gaps 1 and 4). Writes are deliberately untouched — see the
+        # module docstring for why cancelling a half-committed write is not
+        # obviously right.
+        from ..api.request_bounds import RequestBoundsMiddleware
+        self.app.add_middleware(RequestBoundsMiddleware)
         
         # Add session middleware for authentication
         self.app.add_middleware(

@@ -1,0 +1,108 @@
+"""RequestBoundsMiddleware — issues/044 gaps 1 and 4.
+
+Nothing bounded a REQUEST. The fences that exist are per-STATEMENT (asyncpg's
+command_timeout, the read path's statement_timeout), and one KGQuery request
+runs several, so a request could take an arbitrary multiple of any single fence.
+And uvicorn never cancels the ASGI task when a client hangs up, so a handler
+whose client left ran to completion holding a pool slot and a database backend.
+
+The policy under test is deliberately narrow: cancel READS only. A write may
+have been intended by a client that then hit a network hiccup, and PostgreSQL
+would roll it back on cancel — silent data loss the client cannot detect,
+because it is by definition no longer listening.
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+from fastapi import FastAPI
+from starlette.testclient import TestClient
+
+from vitalgraph.api.request_bounds import (
+    RequestBoundsMiddleware, is_cancellable_read,
+)
+
+
+class TestPolicy:
+    """Which requests may be abandoned. One readable predicate, so test it."""
+
+    @pytest.mark.parametrize("method", ["GET", "HEAD", "OPTIONS", "get"])
+    def test_safe_methods_are_cancellable(self, method):
+        assert is_cancellable_read(method, "/anything") is True
+
+    @pytest.mark.parametrize("path", [
+        "/api/kgqueries",
+        "/api/kgentities/query",
+        "/api/kgrelations/query",
+        "/api/kgframes/query",
+        "/api/sparql/query",
+    ])
+    def test_read_shaped_posts_are_cancellable(self, path):
+        assert is_cancellable_read("POST", path) is True
+
+    @pytest.mark.parametrize("method,path", [
+        ("POST", "/api/spaces"),
+        ("POST", "/api/kgentities"),          # create, not query
+        ("POST", "/api/kgframes"),            # create, not query
+        ("POST", "/api/sparql/update"),
+        ("PUT", "/api/entities/e1"),
+        ("PATCH", "/api/entities/e1"),
+        ("DELETE", "/api/spaces/s1"),
+    ])
+    def test_writes_are_never_cancelled(self, method, path):
+        """The policy decision. Widening this needs an answer for half-commits."""
+        assert is_cancellable_read(method, path) is False
+
+
+def _app(handler_seconds: float):
+    app = FastAPI()
+    app.add_middleware(RequestBoundsMiddleware)
+
+    @app.get("/slow")
+    async def slow():
+        await asyncio.sleep(handler_seconds)
+        return {"ok": True}
+
+    @app.post("/api/spaces")
+    async def write():
+        await asyncio.sleep(handler_seconds)
+        return {"ok": True}
+
+    return app
+
+
+class TestDeadline:
+
+    def test_read_under_the_deadline_succeeds(self, monkeypatch):
+        monkeypatch.setenv("VITALGRAPH_REQUEST_DEADLINE_S", "5")
+        with TestClient(_app(0.01)) as c:
+            r = c.get("/slow")
+        assert r.status_code == 200 and r.json() == {"ok": True}
+
+    def test_read_over_the_deadline_is_bounded(self, monkeypatch):
+        monkeypatch.setenv("VITALGRAPH_REQUEST_DEADLINE_S", "0.2")
+        with TestClient(_app(5)) as c:
+            r = c.get("/slow")
+        assert r.status_code == 504
+        assert "deadline" in r.json()["detail"]
+
+    def test_write_is_not_bounded_by_the_deadline(self, monkeypatch):
+        """A slow write must NOT be cut off — same reason it is not cancelled."""
+        monkeypatch.setenv("VITALGRAPH_REQUEST_DEADLINE_S", "0.2")
+        with TestClient(_app(0.6)) as c:
+            r = c.post("/api/spaces")
+        assert r.status_code == 200
+
+    def test_zero_disables_the_deadline(self, monkeypatch):
+        monkeypatch.setenv("VITALGRAPH_REQUEST_DEADLINE_S", "0")
+        with TestClient(_app(0.3)) as c:
+            r = c.get("/slow")
+        assert r.status_code == 200
+
+    def test_garbage_deadline_falls_back(self, monkeypatch):
+        from vitalgraph.api.request_bounds import (
+            _request_deadline_s, _DEFAULT_REQUEST_DEADLINE_S)
+        monkeypatch.setenv("VITALGRAPH_REQUEST_DEADLINE_S", "two minutes")
+        assert _request_deadline_s() == _DEFAULT_REQUEST_DEADLINE_S
