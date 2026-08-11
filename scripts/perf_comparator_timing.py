@@ -58,22 +58,31 @@ async def _run(conn, g, sql=None):
 
 
 async def _buffers(conn, g):
-    """Total shared buffers touched, from EXPLAIN (ANALYZE, BUFFERS).
+    """Shared buffers touched, from EXPLAIN (ANALYZE, BUFFERS).
 
-    Summed across every node rather than read off the top: the root's line
-    reports only its own, and the interesting cost is usually several levels
-    down in a repeatedly-executed inner scan.
+    The MAXIMUM over nodes, not the sum. EXPLAIN reports each node's buffers
+    CUMULATIVELY — a node's line already includes everything its children
+    touched — so summing multiply-counts by the depth of the tree. The first
+    version of this function summed, and reported `not_exists` at 7,236,171
+    buffers when the true figure is 1,336,741: inflated 5.4x, and the wrong
+    number reached an issue before the mistake was caught.
+
+    The root is cumulative for the whole plan, so max() is it. Caveat worth
+    knowing: a CTE evaluated as its own subtree can be reported outside the
+    root's count, so this is a lower bound for plans with CTEs — which the
+    candidate-driven negation path produces. Better a documented lower bound
+    than a number that grows with plan depth.
     """
     try:
         rows = await _run(conn, g, "EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, COSTS OFF) " + g.sql)
     except asyncio.TimeoutError:
         return None
-    total = 0
+    best = 0
     for r in rows:
         m = _BUF_RE.search(r[0])
         if m:
-            total += int(m.group(1)) + int(m.group(2) or 0)
-    return total
+            best = max(best, int(m.group(1)) + int(m.group(2) or 0))
+    return best
 
 
 async def main():
