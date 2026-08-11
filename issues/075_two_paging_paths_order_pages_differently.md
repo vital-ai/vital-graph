@@ -1,22 +1,41 @@
 # Two Paging Paths Order Their Pages Differently
 
-## Status: OPEN — found 2026-08-10, pre-existing, needs a product decision
+## Status: NOT A BUG — this is decision D1, already made and accepted
 
-A KGQuery entity page comes back in a different ORDER depending on which
-emission path answered it, and both paths ship today:
+Corrected 2026-08-10, same day it was filed. The original text below called this
+an open product question. It is not: `two_phase_kgquery_paging_plan.md` records
 
-    eq/Choice   two-phase          page NOT sorted by entity uri
-    eq/Text     two-phase          page NOT sorted by entity uri
-    WV eq       generic/set-based  page sorted by entity uri
+> **D1 — UUID paging order: ANSWERED, accepted.** Only affects queries with no
+> explicit `sort_criteria` (`kg_query_builder.py:819` replaces the default
+> entirely when sorting is requested). It also aligns KGQuery with the entity
+> fast path, which already pages by `subject_uuid`
+> (`kg_backend_utils.py:121`) — today the two return pages in different orders.
 
-`_emit_two_phase` pages on the anchor's `subject_uuid` — that is the whole
-mechanism, an index walk in uuid order that `LIMIT` can stop early. Entity uuids
-are `uuid5` of the uri, so uuid order is unrelated to uri order. The generic
-path applies the SPARQL `ORDER BY` and sorts by the uri text.
+So uuid paging order is deliberate, its blast radius is bounded to queries that
+asked for no particular sort, and it was chosen partly to make KGQuery agree
+with the entity fast path. The default `ORDER BY ?entity` is what a caller gets
+when they express no preference, not a contract they relied on.
 
-Both return the correct SET. Verified directly: the same criteria through both
-paths gave 848 of 848 identical rows, differing only in order — so this is not a
-missing-rows bug.
+The observation that survives is the smaller half of D1's own note: the GENERIC
+(set-based) path still sorts by uri, so the two KGQuery paths disagree with each
+other. D1 accepted uuid order; nothing has since made the generic path follow
+it. That is a consistency gap to close in the generic path's direction of
+travel, not a defect in two-phase.
+
+**What this changes for `issues/061`.** The driver-selection path measured 48x
+faster under uuid order and slower than the status quo once forced to uri order.
+Given D1, uuid order is the accepted behaviour for exactly the queries that path
+targets — so the idea is viable after all, and the "it is only fast because it
+is wrong" conclusion I reached was itself wrong.
+
+### How this was filed incorrectly
+
+I measured that the two paths disagree, could not find a decision, and wrote it
+up as needing one. The decision was in the planning document I had been editing
+throughout the same session. Grepping the plan for "order" before writing an
+issue would have cost one command.
+
+## Original writeup — kept, but read the status above first
 
 ## Why it matters
 
