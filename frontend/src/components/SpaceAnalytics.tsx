@@ -445,7 +445,14 @@ const SpaceAnalytics: React.FC<Props> = ({ spaceId }) => {
 
       {/* Property Analytics */}
       <Card>
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Property Analytics</h3>
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+          Property Analytics
+          {property_analytics.skipped && (
+            <span className="ml-2 text-xs font-normal text-gray-500 dark:text-gray-400">
+              distributions not computed — {property_analytics.skipped_reason ?? 'space too large'}
+            </span>
+          )}
+        </h3>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {property_analytics.top_predicates.length > 0 && (
             <div>

@@ -445,10 +445,21 @@ class AnalyticsJob:
                 "AnalyticsJob: %s has ~%d quads — skipping expensive property analytics",
                 space_id, quad_estimate,
             )
+            # Same shape as _compute_frame_analytics. The empty lists cannot say
+            # for themselves whether they mean "none found" or "not computed",
+            # and the UI gates its charts on `.length > 0` — so a skip rendered
+            # nothing at all, silently, with no indication why. `skipped` is what
+            # lets a caller tell the two apart.
+            #
+            # distinct_predicate_count is REAL even here: it is an index-only
+            # scan and is computed above the guard, so it is not nulled.
             return {
                 "distinct_predicate_count": distinct_pred_count,
                 "top_predicates": [],
                 "literal_type_distribution": [],
+                "skipped": True,
+                "skipped_reason": f"space has ~{quad_estimate:,} quads",
+                # Retained: older callers may read it. Nothing in this repo does.
                 "skipped_detail": f"space too large (~{quad_estimate} quads)",
             }
 
@@ -487,6 +498,7 @@ class AnalyticsJob:
             "distinct_predicate_count": distinct_pred_count,
             "top_predicates": top_predicates,
             "literal_type_distribution": literal_type_distribution,
+            "skipped": False,
         }
 
     # ------------------------------------------------------------------
