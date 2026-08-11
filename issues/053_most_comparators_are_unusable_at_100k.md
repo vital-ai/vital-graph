@@ -1,50 +1,50 @@
 # Twenty-One Comparator Shapes Time Out at 100k for a 25-Row Page
 
-## Status: 4 cells exceed 1s cold, down from 21 timeouts — 2026-08-10
+## Status: CLOSED — 0 cells slow warm, 0 over the buffer threshold — 2026-08-10
 
-No cell times out. Full sweep, idle cluster, one execution per cell, so these
-are COLD-START numbers (see the measurement note below — most cells run in
-2-40 ms warm).
+Final sweep, `sp_lead_synth_100k`, 25-row page, idle cluster:
 
-    is_empty/Text     53,367 ms   issues/072, nested-loop misplanning. ~5 s with
-                                  enable_nestloop=off; genuinely slow warm too
-    eq/Integer         2,348 ms   cold-start only — 37 ms warm, issues/072
-    not_exists/Text    1,402 ms   cold-start only — 173 ms warm
-    lt/DateTime        1,036 ms
+    0 cells are slow WARM              — no query-cost problems remain
+    0 cells read >500,000 buffers      — machine-independent, cold or warm
+    4 cells are slow COLD ONLY         — first-touch I/O, 23-192 ms warm:
+        eq/Integer      2,430 ms cold  ->   79 ms warm
+        not_exists/Text 1,632 ms cold  ->  192 ms warm
+        eq/Text         1,523 ms cold  ->   23 ms warm
+        lt/DateTime     1,088 ms cold  ->   38 ms warm
 
-Against the start of this effort:
+From twenty-one timeouts. The last cell to close was `is_empty`, 51,753 ms ->
+355 ms, buffers 3,302,262 -> 25,348 (`issues/072`).
 
-    eq/DateTime      TIMED OUT ->     41 ms    issues/073
-    ne/Boolean       TIMED OUT ->    152 ms    issues/058
-    gt/DateTime      TIMED OUT ->     70 ms    gate/emitter drift
-    gte/DateTime     TIMED OUT ->     49 ms    gate/emitter drift
-    contains/Text    TIMED OUT ->    685 ms    emitter never matched LCASE
-    has_any/Text     TIMED OUT ->     80 ms    issues/070
-    has_any/Choice   TIMED OUT ->     73 ms    issues/070
-    lte/DateTime      12,183 ms ->    71 ms    172x
-    lt/DateTime        9,417 ms -> 1,036 ms      9x
-    has_all/Text       2,401 ms ->    22 ms    109x
-    gte/Double           668 ms ->    46 ms
-    eq/Text            1,124 ms ->    88 ms
+## What the twenty-one actually were
 
-### What the twenty-one cells actually were
+Not twenty-one problems. Four causes, and the first accounts for over half:
 
-Not twenty-one problems. Substantially ONE problem with four instances, plus
-three others:
+| cause | cells | issues |
+|---|---|---|
+| the semi-join gate restating a predicate the emitter owns, so the filter pushed but the variable stayed live and paging reverted to a blocking sort | `gt` x2, `ne` x5, `contains`, datetime ranges x4 | `054`, `058` |
+| a required constant absent from the term table, proved by scanning instead of short-circuited | `eq`/DateTime | `073` |
+| no constant at the leaf, so the planner drove the probe backwards | `has_any` x2 | `070` |
+| negation with an unbound object could not reach the candidate-driven path | `is_empty` | `072` |
 
-| cause | cells |
-|---|---|
-| the semi-join gate restating a predicate the emitter owns, so the filter pushed but the variable stayed live and paging reverted to a blocking sort | `gt` x2 (`054`), `ne` x5 (`058`), `contains`, datetime ranges x4 |
-| a required constant absent from the term table, scanned rather than short-circuited | `eq`/DateTime (`073`) |
-| no constant at the leaf, so the planner drove the probe backwards | `has_any` x2 (`070`) |
-| planner cardinality underestimate picking nested loops | `is_empty` (`072`) |
+Every instance of the first group was filed as something else first —
+statistics, an inherent property of `!=`, "no indexable path exists", "cost is
+the match set". That is not sloppy filing, it is what the failure looks like:
+the gate-declines/emitter-accepts direction keeps the ANSWER correct and makes
+cost proportional to the match set, so the data correlates beautifully and the
+plan is never suspected. The rule that prevents it — the gate must CALL the
+emitter's predicate, never restate it — is in
+`two_phase_kgquery_paging_plan.md`, with a test asserting agreement across 56
+operator/operand combinations.
 
-Every one of the first group was filed as something else first — statistics, an
-inherent property of `!=`, "no indexable path exists", "cost is the match set".
-The gate-declines/emitter-accepts direction keeps the ANSWER correct and only
-gets slow in a way that tracks the data, so it reads as a data-shape problem
-every time. The rule and the heuristic are in
-`two_phase_kgquery_paging_plan.md`.
+## Read this list as cold-start, not query cost
+
+`scripts/perf_comparator_timing.py` now reports cold, warm and buffers
+separately, because for most of this issue's life it reported one cold number
+and that number was read as query cost. The gap is 8-63x. Cells in the 1-2 s
+band are cache behaviour; only warm figures and buffer counts describe the
+query. Two rounds of A/B results in this effort were voided by that confusion,
+and one buffer figure was published 5.4x too high from a summing bug in the
+tool added to prevent exactly this (`issues/074`, withdrawn).
 
 ### The datetime range cells are fixed — the gate, not the data
 
