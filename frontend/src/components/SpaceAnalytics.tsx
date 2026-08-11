@@ -56,9 +56,15 @@ interface RelationAnalytics {
 }
 
 interface PropertyAnalytics {
+  // distinct_predicate_count stays REAL even when skipped — it is an index-only
+  // scan, computed above the backend's size guard. The two lists are what go
+  // empty, and an empty list cannot say whether it means "none found" or
+  // "not computed"; `skipped` is what distinguishes them.
   distinct_predicate_count: number;
   top_predicates: PredicateCount[];
   literal_type_distribution: TypeCount[];
+  skipped?: boolean;
+  skipped_reason?: string;
 }
 
 interface AnalyticsData {
