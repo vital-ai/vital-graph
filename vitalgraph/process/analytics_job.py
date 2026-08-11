@@ -16,6 +16,12 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Above this, the frames-without-slots join is skipped. Matches the limit
+# `_compute_property_analytics` already applies to its GROUP BY queries —
+# same job, same cost class, and there was no reason for only one of them
+# to be guarded.
+_FRAME_ANALYTICS_MAX_QUADS = 5_000_000
+
 # Well-known predicates
 _VITALTYPE = 'http://vital.ai/ontology/vital-core#vitaltype'
 _HAS_EDGE_SOURCE = 'http://vital.ai/ontology/vital-core#hasEdgeSource'
@@ -268,6 +274,42 @@ class AnalyticsJob:
         avg_slots_per_frame = round(total_slot_count / max(total_frame_count, 1), 2)
 
         # Frames without slots (frames not appearing as source in Edge_hasKGSlot)
+        #
+        # SIX-TABLE JOIN — the quad table twice plus four term joins, and no
+        # graph filter. It is by far the most expensive thing in this job, and it
+        # had no size guard while `_compute_property_analytics` right below has
+        # one. On sp_lead_synth_100k (50.5M quads) it exceeded asyncpg's
+        # command_timeout and took the WHOLE analytics run for that space down
+        # with it — the cheap distributions above were computed and then thrown
+        # away with the exception.
+        #
+        # It surfaced when that space was registered as a graph (2026-08-10);
+        # before then the job never saw it. So the query was always this
+        # expensive, and the registration only made it reachable.
+        quad_estimate = await conn.fetchval(
+            "SELECT reltuples::bigint FROM pg_class WHERE relname = $1",
+            t_quad,
+        ) or 0
+
+        if quad_estimate > _FRAME_ANALYTICS_MAX_QUADS:
+            logger.info(
+                "AnalyticsJob: %s has ~%d quads — skipping frames-without-slots",
+                space_id, quad_estimate,
+            )
+            return {
+                "total_count": total_frame_count,
+                "type_distribution": frame_type_distribution,
+                "total_slot_count": total_slot_count,
+                "slot_type_distribution": slot_type_distribution,
+                "avg_slots_per_frame": avg_slots_per_frame,
+                # None, NOT 0. `without_slots_count` is derived as
+                # `total_frame_count - frames_with_slots`, so defaulting the
+                # subtrahend to 0 would report EVERY frame as slotless — a wrong
+                # number that looks like a real one, which is the failure mode
+                # this codebase keeps hitting with derived data.
+                "without_slots_count": None,
+            }
+
         frames_with_slots = await conn.fetchval(f"""
             SELECT COUNT(DISTINCT src_term.term_text)
             FROM {t_quad} type_q
