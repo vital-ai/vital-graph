@@ -15,6 +15,7 @@ because it is by definition no longer listening.
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 from fastapi import FastAPI, Request
@@ -43,11 +44,46 @@ class TestPolicy:
     def test_read_shaped_posts_are_cancellable(self, path):
         assert is_cancellable_read("POST", path) is True
 
+    @pytest.mark.parametrize("path", [
+        "/api/graphs/kgqueries",
+        "/api/graphs/kgentities/query",
+        "/api/graphs/kgrelations/query",
+        "/api/graphs/kgframes/query",
+        "/api/graphs/sparql/query",
+    ])
+    def test_real_registered_paths_are_matched(self, path):
+        """The paths ABOVE are shorthand; these are what the server registers.
+
+        Read off the running server's openapi.json, because the prefix is
+        `/api/graphs/` and not the `/api/` these tests had assumed — a
+        difference the shorthand cases cannot catch, since `.search()` matches
+        either way. An earlier version of this allowlist already shipped one
+        wrong pattern (`kgqueries?` matching "kgquerie" + optional "s"), so the
+        patterns get checked against reality, not against their own shorthand.
+        """
+        assert is_cancellable_read("POST", path) is True
+
+    @pytest.mark.parametrize("path", [
+        "/api/graphs/sparql/update",
+        "/api/graphs/sparql/insert",
+        "/api/graphs/sparql/insert-data",
+        "/api/graphs/sparql/delete",
+    ])
+    def test_sparql_write_siblings_are_not_swept_in(self, path):
+        """`/sparql/query` sits beside four writes under the same prefix.
+
+        Anchoring on "sparql" instead of "query" would cancel updates — the one
+        thing the reads-only policy exists to prevent.
+        """
+        assert is_cancellable_read("POST", path) is False
+
     @pytest.mark.parametrize("method,path", [
         ("POST", "/api/spaces"),
         ("POST", "/api/kgentities"),          # create, not query
         ("POST", "/api/kgframes"),            # create, not query
         ("POST", "/api/sparql/update"),
+        ("POST", "/api/files/upload"),          # buffering a file would OOM
+        ("POST", "/api/files/stream/upload"),
         ("PUT", "/api/entities/e1"),
         ("PATCH", "/api/entities/e1"),
         ("DELETE", "/api/spaces/s1"),
@@ -100,12 +136,97 @@ class TestPostBodySurvives:
             r = c.post("/api/kgqueries", json={"criteria": [1, 2, 3]})
         assert r.status_code == 200 and r.json() == {"n": 3}
 
-    def test_only_bodyless_requests_are_watched_for_disconnect(self):
-        from vitalgraph.api.request_bounds import _can_watch_disconnect
-        assert _can_watch_disconnect("GET") is True
-        assert _can_watch_disconnect("HEAD") is True
-        # A POST carries a body, so polling would eat it — deadline only.
-        assert _can_watch_disconnect("POST") is False
+    def test_body_carrying_post_is_watched_and_cancelled_on_disconnect(self):
+        """The two halves of gap 4 have to hold AT ONCE, so assert both here.
+
+        The first attempt polled `is_disconnected()`, which reads the receive
+        channel and so ate the body — watching worked, queries didn't. The fix
+        drains the body up front and replays it, which only counts if the
+        handler still sees it. A passing disconnect assertion beside a body
+        assertion is what says we didn't just trade one failure for the other.
+        """
+        seen_body = {}
+        cancelled = asyncio.Event()
+
+        async def app(scope, receive, send):
+            message = await receive()
+            seen_body["body"] = message.get("body", b"")
+            try:
+                await asyncio.sleep(10)          # a slow query
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        payload = b'{"criteria": [1, 2, 3]}'
+        scope = {"type": "http", "method": "POST", "path": "/api/kgqueries",
+                 "headers": []}
+        inbound = asyncio.Queue()
+        inbound.put_nowait({"type": "http.request", "body": payload,
+                            "more_body": False})
+        inbound.put_nowait({"type": "http.disconnect"})
+
+        async def run():
+            await RequestBoundsMiddleware(app)(
+                scope, inbound.get, lambda m: asyncio.sleep(0))
+
+        started = time.monotonic()
+        asyncio.run(asyncio.wait_for(run(), timeout=5))
+        elapsed = time.monotonic() - started
+
+        assert seen_body["body"] == payload, "drain-and-replay lost the body"
+        assert cancelled.is_set(), "disconnect did not cancel the handler"
+        assert elapsed < 1, f"returned in {elapsed:.1f}s — waited on the sleep"
+
+
+class TestDeadlineBoundsFirstByteNotTransfer:
+    """A download must not be capped by the request deadline.
+
+    File bytes come from object storage — `/files/stream/download` streams from
+    S3 via `stream_download_from_s3` — so the transfer takes as long as the file
+    and the network take. That is not a server-side pathology, and cancelling it
+    is worse than useless: the 200 already went out, so the client receives a
+    TRUNCATED FILE rather than an error it could retry.
+
+    `_LONG_TRANSFER_PATHS` covers the three known download routes, but an
+    exclusion list is the wrong thing to rely on — a new S3-backed route would
+    inherit the cap silently. So the deadline bounds time-to-FIRST-BYTE, and
+    these tests use paths that are NOT excluded, which is exactly what the list
+    would otherwise be hiding.
+    """
+
+    def test_slow_stream_on_a_non_excluded_path_is_delivered_whole(self, monkeypatch):
+        monkeypatch.setenv("VITALGRAPH_REQUEST_DEADLINE_S", "0.4")
+        app = FastAPI()
+        app.add_middleware(RequestBoundsMiddleware)
+
+        @app.get("/api/graphs/kgdocuments/content")   # deliberately NOT excluded
+        async def content():
+            async def gen():
+                for i in range(6):
+                    await asyncio.sleep(0.15)          # 0.9 s — well past 0.4 s
+                    yield f"chunk{i}\n".encode()
+            return StreamingResponse(gen(), media_type="text/plain")
+
+        with TestClient(app) as c:
+            r = c.get("/api/graphs/kgdocuments/content")
+        assert r.status_code == 200
+        assert r.text == "".join(f"chunk{i}\n" for i in range(6)), \
+            "transfer was cut short by the deadline"
+
+    def test_slow_handler_before_first_byte_is_still_bounded(self, monkeypatch):
+        """The other half: TTFB semantics must not defeat the deadline itself."""
+        monkeypatch.setenv("VITALGRAPH_REQUEST_DEADLINE_S", "0.3")
+        app = FastAPI()
+        app.add_middleware(RequestBoundsMiddleware)
+
+        @app.get("/api/spaces")
+        async def slow():
+            await asyncio.sleep(30)                    # a hung query
+            return {"never": True}
+
+        with TestClient(app) as c:
+            r = c.get("/api/spaces")
+        assert r.status_code == 504
 
 
 class TestLongTransfersAreNeverBounded:
@@ -117,10 +238,11 @@ class TestLongTransfersAreNeverBounded:
         GET /files/download         StreamingResponse
         GET /files/stream/download  StreamingResponse
 
-    They happen to survive today because BaseHTTPMiddleware's call_next returns
-    when the response STARTS, so the deadline bounds time-to-first-byte and the
-    body streams on outside it. That is a property of the base class, not a
-    decision — so the exclusion is explicit and these tests pin it.
+    They used to survive by accident: BaseHTTPMiddleware's call_next returned
+    when the response STARTED, so the deadline bounded time-to-first-byte and
+    the body streamed on outside it. The pure-ASGI rewrite inherits no such
+    luck — it would bound the whole transfer — so the exclusion is explicit
+    and these tests pin it.
     """
 
     @pytest.mark.parametrize("path", [

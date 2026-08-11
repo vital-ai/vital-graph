@@ -40,18 +40,25 @@ happens to a half-committed write first.
 
 The deadline is separate and applies to reads only for the same reason.
 
-WHAT THE DEADLINE ACTUALLY BOUNDS: time to the response STARTING, not time to
-transfer it. `BaseHTTPMiddleware.call_next` returns once the handler produces a
-response object; a StreamingResponse then streams its body afterwards, outside
-this middleware's `asyncio.wait`. So a slow QUERY is caught and a slow TRANSFER
-is not. Download and streaming paths are excluded explicitly anyway rather than
-relying on that — see `_LONG_TRANSFER_PATHS`.
+WHAT THE DEADLINE BOUNDS: time to the FIRST BYTE, not the transfer. A slow QUERY
+is what this is for; how long a download takes is set by file size and by object
+storage, and `/files/stream/download` streams from S3 (`stream_download_from_s3`)
+in chunks. Bounding that would cap legitimate transfers, and it would fail badly
+— the 200 has already gone out, so cancelling mid-stream TRUNCATES THE FILE
+instead of raising anything the client can see.
 
-UPLOADS are outside the allowlist and must stay there. The unfinished half of
-gap 4 (see issues/044) would drain and buffer the whole request body to make
-disconnect detection safe for POSTs; doing that to an upload would hold the
-entire file in memory. The allowlist is query endpoints only, and that is a
-constraint on the design, not an accident of it.
+The old `BaseHTTPMiddleware` got this semantic by accident: `call_next` returned
+as soon as the handler produced a response object, so the body streamed on
+outside its `asyncio.wait`. Pure ASGI wraps `send` and would otherwise see the
+transfer through to the last byte, so the two-phase wait in `__call__` makes the
+same semantic explicit. Disconnect still cancels during the transfer, which is
+purely good: it stops pulling bytes from S3 for a client that left.
+
+UPLOADS are outside the allowlist and must stay there. Detecting a disconnect
+for a body-carrying POST means draining and buffering that body first (see the
+class docstring); doing that to an upload would hold the entire file in memory.
+The allowlist is query endpoints only, and that is a constraint on the design,
+not an accident of it.
 """
 
 from __future__ import annotations
@@ -62,8 +69,7 @@ import os
 import re
 from typing import Optional
 
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +87,9 @@ logger = logging.getLogger(__name__)
 _READ_POST_PATHS = (
     re.compile(r"/kgqueries(?:/|$)"),
     re.compile(r"/kg(?:entities|relations|frames|documents)/query(?:/|$)"),
-    # Not currently registered, but a SPARQL SELECT posted in a body is the same
-    # shape and should not have to be rediscovered if one is added.
+    # Registered as POST /api/graphs/sparql/query. Note the sibling write routes
+    # under the same prefix — /sparql/update, /sparql/insert, /sparql/delete —
+    # which this must NOT match, hence anchoring on "query" and not "sparql".
     re.compile(r"/sparql/query(?:/|$)"),
 )
 
@@ -96,12 +103,12 @@ _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 #   GET /files/download         StreamingResponse   (files_endpoint.py:182)
 #   GET /files/stream/download  StreamingResponse   (files_endpoint.py:212)
 #
-# They survive today by ACCIDENT rather than by design: BaseHTTPMiddleware's
-# `call_next` returns when the response STARTS, so the deadline bounds
-# time-to-first-byte and the body streams on outside its scope. Verified — a
-# 0.9 s stream delivers all six chunks under a 0.4 s deadline. That is a
-# property of the base class, not of this middleware, and it should not be what
-# stands between a large export and a 504.
+# The deadline is time-to-first-byte (see `__call__`), so a long transfer is
+# already safe and this list is DEFENCE IN DEPTH, not the thing holding them up.
+# It still earns its place: these paths can be slow BEFORE the first byte too —
+# an export generates a file, and an S3 fetch pays its latency up front — and a
+# 504 there would be just as wrong. Pinned by a test: a 0.9 s stream delivers
+# all six chunks under a 0.4 s deadline.
 _LONG_TRANSFER_PATHS = (
     re.compile(r"/export/download(?:/|$)"),
     re.compile(r"/files/(?:stream/)?download(?:/|$)"),
@@ -109,37 +116,7 @@ _LONG_TRANSFER_PATHS = (
 )
 
 
-def _can_watch_disconnect(method: str) -> bool:
-    """Whether polling `is_disconnected()` is safe for this request.
-
-    ONLY for requests with no body. `Request.is_disconnected()` READS FROM THE
-    ASGI RECEIVE CHANNEL, and a poll loop running beside the handler consumes
-    the `http.request` message carrying the body — the handler's `await
-    request.json()` then finds nothing and raises `ClientDisconnect`.
-
-    That took out every query POST in the E2E suite (SPARQL execution, keyword
-    and semantic search, graph-visualization search) while every GET-based page
-    test passed, which is the signature: bodyless requests are unaffected.
-
-    The unit tests missed it because they covered a GET and a POST with NO body.
-    A body is the whole point of the endpoints this middleware was allowed to
-    cancel, and none of them was tested with one.
-
-    The DEADLINE still applies to those requests — `asyncio.wait` on the handler
-    task never touches the receive channel. Only the disconnect watcher is
-    unsafe, so only it is withheld.
-    """
-    return method.upper() in _SAFE_METHODS
-
-# Above the read path's 55s statement_timeout, so a single slow statement
-# surfaces as its own error rather than as an opaque request timeout — the
-# specific fence is the more useful diagnosis. 0 disables.
 _DEFAULT_REQUEST_DEADLINE_S = 120.0
-
-# How often to ask whether the client is still there. Cheap — it reads a flag
-# uvicorn already maintains — but not free, so not a tight loop.
-_DISCONNECT_POLL_S = 0.5
-
 
 def _request_deadline_s() -> float:
     raw = os.environ.get("VITALGRAPH_REQUEST_DEADLINE_S")
@@ -168,36 +145,129 @@ def is_cancellable_read(method: str, path: str) -> bool:
     return False
 
 
-class RequestBoundsMiddleware(BaseHTTPMiddleware):
-    """Cancel a read when its client disconnects, or when it outlives the deadline."""
+async def _send_json(send, status: int, payload: dict) -> None:
+    body = json.dumps(payload).encode()
+    await send({"type": "http.response.start", "status": status,
+                "headers": [(b"content-type", b"application/json"),
+                            (b"content-length", str(len(body)).encode())]})
+    await send({"type": "http.response.body", "body": body})
 
-    async def dispatch(self, request, call_next):
-        if not is_cancellable_read(request.method, request.url.path):
-            return await call_next(request)
+
+class RequestBoundsMiddleware:
+    """Pure ASGI, deliberately — `BaseHTTPMiddleware` owns the receive wrapper.
+
+    The first version subclassed it and polled `Request.is_disconnected()`
+    beside the handler. That reads the receive channel, so it CONSUMED THE
+    REQUEST BODY and every query POST broke. The stopgap was to watch only
+    bodyless requests, which left gap 4 half delivered: a client hanging up
+    mid-query on `/kgqueries` went unnoticed until the deadline.
+
+    This is the shape that works, and the ORDER is the whole idea:
+
+      1. Drain the body HERE, before the handler starts. Afterwards the only
+         message the client can still send is `http.disconnect`, so watching
+         for one can no longer steal anything.
+      2. Give the handler a `receive` that REPLAYS the buffered body once, then
+         yields whatever the watcher forwards.
+      3. The watcher is the SINGLE owner of the real `receive`. Two callers
+         would race for the same message.
+
+    Buffering is why the allowlist stays query endpoints only — small criteria
+    JSON. `/files/upload` is excluded and tested for; buffering a file here
+    would hold it in memory. Long transfers are excluded too
+    (`_LONG_TRANSFER_PATHS`): the old base class returned at first byte so a
+    stream outran the deadline by accident, and nothing here inherits that.
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        if not is_cancellable_read(scope.get("method", ""), scope.get("path", "")):
+            await self.app(scope, receive, send)
+            return
 
         deadline = _request_deadline_s()
-        handler = asyncio.ensure_future(call_next(request))
-        # No disconnect watcher for a request that carries a body — polling
-        # would eat it. See _can_watch_disconnect.
-        watcher = (asyncio.ensure_future(self._watch_disconnect(request))
-                   if _can_watch_disconnect(request.method) else None)
-        waiting = {handler} | ({watcher} if watcher else set())
+
+        chunks: list = []
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return              # gone before we began; nothing to answer
+            chunks.append(message.get("body", b""))
+            if not message.get("more_body", False):
+                break
+        body = b"".join(chunks)
+
+        forwarded: asyncio.Queue = asyncio.Queue()
+        disconnected = asyncio.Event()
+        responding = asyncio.Event()
+        replayed = False
+
+        async def wrapped_receive():
+            nonlocal replayed
+            if not replayed:
+                replayed = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return await forwarded.get()
+
+        async def watch():
+            while True:
+                message = await receive()
+                await forwarded.put(message)
+                if message["type"] == "http.disconnect":
+                    disconnected.set()
+                    return
+
+        async def wrapped_send(message):
+            if message["type"] == "http.response.start":
+                responding.set()
+            await send(message)
+
+        handler = asyncio.ensure_future(
+            self.app(scope, wrapped_receive, wrapped_send))
+        watcher = asyncio.ensure_future(watch())
+        gone = asyncio.ensure_future(disconnected.wait())
+        first_byte = asyncio.ensure_future(responding.wait())
 
         try:
+            # PHASE 1 — bound TIME TO FIRST BYTE, not the transfer.
+            #
+            # The deadline exists to catch a slow QUERY. Applying it to the
+            # response body would cap how long a DOWNLOAD may take, and file
+            # bytes come from object storage (`stream_download_from_s3`), where
+            # the duration is set by file size and S3 latency — neither of which
+            # is a server-side pathology. Worse, the failure mode is a TRUNCATED
+            # file rather than an error: we would have cancelled mid-stream
+            # after a 200 already went out.
             done, _pending = await asyncio.wait(
-                waiting,
+                {handler, gone, first_byte},
                 timeout=deadline if deadline > 0 else None,
                 return_when=asyncio.FIRST_COMPLETED,
             )
 
-            if handler in done:
-                return handler.result()
+            # PHASE 2 — bytes are flowing, so the deadline has done its job and
+            # the transfer takes as long as it takes. Disconnect still cancels:
+            # if the client hangs up mid-download, stop pulling from S3.
+            if first_byte in done and handler not in done and gone not in done:
+                done, _pending = await asyncio.wait(
+                    {handler, gone}, return_when=asyncio.FIRST_COMPLETED)
 
-            # Either the client went away or the deadline passed. Cancel and
-            # WAIT for it: returning while the query is still winding down is
-            # what leaves the backend running, which is the whole defect.
-            disconnected = watcher is not None and watcher in done
-            reason = "client disconnected" if disconnected else "deadline exceeded"
+            if handler in done:
+                exc = handler.exception()
+                if exc is not None:
+                    raise exc
+                return
+
+            hung_up = gone in done
+            reason = "client disconnected" if hung_up else "deadline exceeded"
+
+            # Cancel AND AWAIT. Returning while the query is still winding down
+            # is the defect this exists to fix; asyncpg turns the cancellation
+            # into a PostgreSQL CancelRequest.
             handler.cancel()
             try:
                 await handler
@@ -205,28 +275,16 @@ class RequestBoundsMiddleware(BaseHTTPMiddleware):
                 pass
 
             logger.info("request bounded: %s %s — %s",
-                        request.method, request.url.path, reason)
-            if disconnected:
-                # Nobody is listening; the status is for logs and middleware
-                # below us, not for a client.
-                return JSONResponse(status_code=499,
-                                    content={"detail": "client disconnected"})
-            return JSONResponse(
-                status_code=504,
-                content={"detail": f"request exceeded {deadline:g}s deadline"})
-        finally:
-            if watcher is not None and not watcher.done():
-                watcher.cancel()
+                        scope.get("method"), scope.get("path"), reason)
 
-    @staticmethod
-    async def _watch_disconnect(request) -> None:
-        """Return once the client has hung up."""
-        while True:
-            try:
-                if await request.is_disconnected():
-                    return
-            except Exception:
-                # A transport that cannot answer is not a reason to kill the
-                # request; fall back to the deadline.
-                return
-            await asyncio.sleep(_DISCONNECT_POLL_S)
+            if not responding.is_set() and not hung_up:
+                # Only worth answering when someone is still listening — and
+                # only when nothing was sent, or we would be appending a 504 to
+                # a response that already started with some other status.
+                await _send_json(
+                    send, 504,
+                    {"detail": f"request exceeded {deadline:g}s deadline"})
+        finally:
+            for task in (watcher, gone, first_byte):
+                if not task.done():
+                    task.cancel()

@@ -1,69 +1,91 @@
 # A Client Giving Up Does Not Stop the Query — The Server-Side Fence Is Per-Statement, Not Per-Request
 
-## Status: FIXED — all five gaps — 2026-08-10
+## Status: FIXED — all five gaps — 2026-08-10 (gap 4 completed 2026-08-11)
 
 | gap | state |
 |---|---|
 | 1. fence is per-statement, not per-request | **FIXED** — `RequestBoundsMiddleware` deadline, reads only |
 | 2. `asyncio.gather` orphans the sibling | **FIXED** — `_gather_cancelling`, all 5 sites |
 | 3. timers ordered backwards | **improved** — the server fence is now 55s against the client's 60s, so the server surfaces the error first. The per-request bound in (1) is the rest |
-| 4. client disconnect not detected | **FIXED** — `RequestBoundsMiddleware` polls and cancels, reads only |
+| 4. client disconnect not detected | **FIXED** — `RequestBoundsMiddleware`, pure ASGI, cancels on disconnect for reads INCLUDING body-carrying query POSTs |
 | 5. fence is client-driven, not DB-enforced | **FIXED** — `SET LOCAL statement_timeout` on the read path |
 
-### Gap 4 is HALF delivered — and the remaining half is a rewrite, not a patch
+### Gap 4 fully delivered 2026-08-11 — the pure-ASGI rewrite
 
-Corrected 2026-08-11. The first version of the watcher polled
-`Request.is_disconnected()`, which READS THE ASGI RECEIVE CHANNEL and consumed
-the `http.request` message carrying the body. Every query POST broke — SPARQL
-execution, keyword and semantic search, graph-visualization search — while every
-GET passed. Local suites could not see it; CI did.
+Previously half delivered. The first watcher polled `Request.is_disconnected()`,
+which READS THE ASGI RECEIVE CHANNEL and consumed the `http.request` message
+carrying the body. Every query POST broke — SPARQL execution, keyword and
+semantic search, graph-visualization search — while every GET passed. Local
+suites could not see it; CI did. The stopgap restricted the watcher to bodyless
+requests, which left exactly the endpoints that matter (`/kgqueries`,
+`/kg*/query`) on the 120s deadline alone.
 
-The watcher is now restricted to bodyless requests (GET/HEAD/OPTIONS). So:
-
-    GET / HEAD / OPTIONS        disconnect-cancelled + deadline
-    /kgqueries, /kg*/query      deadline ONLY
-
-A client that hangs up mid-query on `/kgqueries` is therefore still not detected;
-only the 120 s deadline eventually reclaims the connection and cancels the query.
-
-**Why this is not a small fix.** ASGI only surfaces a disconnect when something
-CALLS `receive()`, and calling it concurrently with a handler that has not yet
-read its body steals that body. The workable shape is:
+`RequestBoundsMiddleware` is now pure ASGI, and the ORDER is the whole idea:
 
 1. drain `receive()` in the middleware until `more_body` is false, buffering the
-   body;
-2. hand the app a replaying `receive` that returns the buffered body once;
-3. only THEN start a watcher on the real `receive`, where the sole remaining
-   message can be `http.disconnect`.
+   body — after which the only message the client can still send is
+   `http.disconnect`, so watching can no longer steal anything;
+2. hand the app a `receive` that REPLAYS the buffered body once, then yields
+   whatever the watcher forwards;
+3. the watcher is the SINGLE owner of the real `receive` — two callers would
+   race for the same message.
 
-That requires dropping `BaseHTTPMiddleware` for a pure-ASGI middleware (the base
-class owns the receive wrapper), and it buffers the whole request body in memory.
+`BaseHTTPMiddleware` had to go because it owns the receive wrapper itself.
 
-**THIS SYSTEM HAS UPLOAD AND DOWNLOAD ENDPOINTS**, so that is a hard constraint
-rather than a caveat:
+**The two non-negotiables held, and neither came for free.** Buffering is why
+the allowlist stays query endpoints only — small criteria JSON:
 
-    POST /files/upload, /files/stream/upload   UploadFile — must NEVER be
-                                               allowlisted; buffering would hold
-                                               the whole file in memory
+    POST /files/upload, /files/stream/upload   UploadFile — NEVER allowlisted;
+                                               buffering would hold the whole
+                                               file in memory
     GET  /export/download                      FileResponse
     GET  /files/download, /files/stream/download   StreamingResponse
 
-The downloads are GETs, so the safe-method rule swept them into the bounded set.
-They survived only because `BaseHTTPMiddleware.call_next` returns when the
-response STARTS — the deadline bounds time-to-first-byte and the body streams on
-outside it. Verified: a 0.9 s stream delivers all six chunks under a 0.4 s
-deadline. That is a property of the base class, not a decision, and a pure-ASGI
-rewrite would not inherit it. They are now excluded EXPLICITLY
-(`_LONG_TRANSFER_PATHS`) and pinned by tests.
+The downloads are GETs, so the safe-method rule swept them in. They had survived
+only because `BaseHTTPMiddleware.call_next` returned when the response STARTED —
+the deadline bounded time-to-first-byte and the body streamed on outside it.
+That was a property of the base class, not a decision, and the rewrite inherits
+no such luck; it would bound the whole transfer. They are excluded EXPLICITLY
+(`_LONG_TRANSFER_PATHS`) and pinned by tests — a 0.9s stream still delivers all
+six chunks under a 0.4s deadline.
 
-So the rewrite carries two non-negotiables: the allowlist stays query-only, and
-long transfers stay excluded — both of which a pure-ASGI version must re-derive
-rather than get for free.
+**The deadline bounds time to the FIRST BYTE, not the transfer.** The rewrite
+initially bounded the whole exchange, which is wrong for this system: file bytes
+come from object storage (`/files/stream/download` →
+`stream_download_from_s3`), so transfer time is set by file size and S3 latency,
+not by any server-side pathology. And the failure mode is the bad kind — the 200
+has already gone out, so cancelling mid-stream hands the client a TRUNCATED FILE
+rather than an error it can retry. Confirmed by running the new test against the
+whole-exchange version: a six-chunk stream arrived with chunks 2-5 missing and a
+200 status.
 
-**Do not attempt it without the body test.** `TestDisconnectDuringBodyRequest`
-now pins both halves — the body survives AND the deadline still cancels — which
-are in tension: the naive way to get one loses the other. Those two tests exist
-because their absence is exactly why the broken version shipped.
+`__call__` therefore waits in two phases — deadline until `http.response.start`,
+then unbounded until the handler finishes. Disconnect still cancels during the
+transfer, which is purely good: it stops pulling from S3 for a client that left.
+
+`_LONG_TRANSFER_PATHS` survives as DEFENCE IN DEPTH rather than as the thing
+holding downloads up, and it still earns its place — those paths can be slow
+BEFORE the first byte too (an export generates a file; an S3 fetch pays latency
+up front), where a 504 would be equally wrong. Relying on the list alone was the
+real problem: a new object-storage-backed route would have inherited the cap
+silently, so the tests deliberately exercise a NON-excluded path.
+
+*Known limitation:* a transfer that stalls midstream is now unbounded, as it was
+under `BaseHTTPMiddleware`. The disconnect watcher reclaims the usual case (the
+client gives up and hangs up); a stalled-but-open connection does not hit a
+fence. Bounding it would mean re-introducing truncation, so this is the
+deliberate trade rather than an oversight.
+
+**Verified against real uvicorn over a real socket**, not just a mock `receive`:
+disconnect delivery for a POST is a server behavior, so the unit test alone
+would not have settled it. A client hanging up mid-query is now detected in
+0.11s, with the body reaching the handler intact and the handler never running
+to completion.
+
+**Do not weaken the body test.** The suite pins both halves — the body survives
+AND disconnect still cancels — which are in tension: the naive way to get one
+loses the other. Those tests exist because their absence is why the broken
+version shipped.
 
 ### Gaps 1 and 4, closed 2026-08-10
 
