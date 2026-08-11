@@ -57,6 +57,30 @@ in the 1-2 s band are cold-start artifacts; only cells that stay slow warm
 
 `issues/053`'s "N cells exceed 1s" counts cold-start. Worth reporting both.
 
+## Rewriting `is_empty` as NOT EXISTS is WORSE — measured 2026-08-10
+
+Tried and reverted. The reasoning was: `is_empty` emits
+`OPTIONAL { ?slot p ?v } FILTER(!BOUND(?v))`, which compiles to a LEFT JOIN with
+an IS NULL filter; `semijoin` refuses to rewrite a LEFT JOIN, so two-phase paging
+declines and the plan blocks. `FILTER NOT EXISTS { ?slot p ?v }` is the same
+question and is the negation family `issues/057` made fast — `not_has` is 72 ms.
+
+The rewrite did exactly what it was supposed to structurally: `needs_ordered_scan`
+flipped to True, the LEFT JOIN disappeared, the semi-join fired. And it went from
+**53 s to over 300 s**.
+
+The flaw: `not_has` is fast because its NOT EXISTS body binds a CONSTANT object
+(`?slot p <value>`), which is what the candidate-driven fold needs.
+`is_empty`'s body binds a VARIABLE (`?slot p ?v`) — that is the `not_exists`
+shape, not the `not_has` shape. And `not_exists` is not actually cheap either: it
+reads **7,236,171 buffers** to return 0 rows, which the sweep only revealed once
+it started reporting buffers. Nesting that at slot level, once per candidate,
+is worse than the blocking LEFT JOIN it replaced.
+
+So "emit the question in the form the pipeline optimises" was right as a
+principle and wrong about which form that is. The negation path is fast for
+constant-object negation, not for negation in general.
+
 ## The estimate
 
 `EXPLAIN ANALYZE` on `is_empty` (55,773 ms, 0 rows):
