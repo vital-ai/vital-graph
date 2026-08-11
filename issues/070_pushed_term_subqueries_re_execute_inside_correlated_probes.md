@@ -208,6 +208,40 @@ the probe pays the same 12.6s degenerate scan if the two forms diverge.
 
 Gated: 39 cells, no regressions.
 
+**CAVEAT, and it qualifies the 53x.** That figure is EXECUTION with the probe
+already cached. Measured end to end for a NOVEL 2-character needle:
+
+    'XQ': gen = 6,026 ms   exec first = 343 ms   then ~210 ms
+
+The estimate has to scan the term table to prove absence, so the first query for
+a short needle still costs seconds. The fix is a real improvement over the
+12,613 ms degenerate index scan — it is not a fix for short infix search.
+
+### Defeating the index is a WORKAROUND, and it does not scale
+
+`(term_text || '')` buys a sequential scan instead of a self-scanning GIN index.
+That is O(term table) — 3,907 ms cold over 10.4M rows here — and the term table
+is the one projected to reach 10x. It will not hold.
+
+What would actually solve it:
+
+* **A bigram index.** `pg_bigm` indexes 2-grams and serves 1-2 character
+  patterns, which is precisely this gap. NOT AVAILABLE on this install —
+  `pg_available_extensions` lists only `pg_trgm` and `btree_gin` — so adopting
+  it is a deployment decision, not a code change.
+* **A minimum needle length at the API.** Three characters is the common rule in
+  search UIs, and it matches what the index can actually serve. Cheapest by far,
+  and it makes the limit explicit to the caller instead of silently costing them
+  seconds.
+* **A materialised 2-gram table**, if short search must be supported without a
+  new extension.
+
+The dense case needs none of this: a short needle that matches a lot never
+reaches the term scan, because the gate reads it as non-selective and the page
+stays candidate-driven with early termination (`contains 'CA'`, 49 ms). Only the
+SPARSE short needle is expensive, and it is expensive because proving absence
+without a usable index means reading everything.
+
 **The lesson worth keeping is about the test value.** `'XQ'` was chosen as "a
 rare substring" and was actually exercising a completely different mechanism —
 below the trigram threshold. It sat in this issue for several revisions as
