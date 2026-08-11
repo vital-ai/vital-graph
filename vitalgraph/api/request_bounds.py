@@ -68,6 +68,10 @@ and silence is expected; for a read, from the first response byte onward, since
 an export generates its file before sending anything. Cancelling either of those
 quiet-but-busy phases would be the silent rollback this module exists to avoid.
 
+A write blocked in `receive` counts as watched even before any chunk arrives:
+wanting client bytes that never come is a silent client, and a busy handler
+cannot look like that because it never reaches the await.
+
 UPLOADS are outside the allowlist and must stay there. Detecting a disconnect
 for a body-carrying POST means draining and buffering that body first (see the
 class docstring); doing that to an upload would hold the entire file in memory.
@@ -231,16 +235,43 @@ class RequestBoundsMiddleware:
             return
 
         deadline = _request_deadline_s()
+        loop = asyncio.get_event_loop()
+
+        # THE DRAIN IS INSIDE THE DEADLINE. It has to be: a client can send
+        # headers and then nothing, and this loop would otherwise wait on a body
+        # that never arrives, holding the connection with no fence running —
+        # the timer below has not started yet. The old BaseHTTPMiddleware had no
+        # such hole, because the handler's own body read happened INSIDE its
+        # `asyncio.wait`; moving the read out here is what opened it.
+        expires = loop.time() + deadline if deadline > 0 else None
 
         chunks: list = []
         while True:
-            message = await receive()
+            try:
+                if expires is None:
+                    message = await receive()
+                else:
+                    message = await asyncio.wait_for(
+                        receive(), timeout=max(0.0, expires - loop.time()))
+            except (asyncio.TimeoutError, TimeoutError):
+                logger.info("request bounded: %s %s — deadline exceeded "
+                            "awaiting request body",
+                            scope.get("method"), scope.get("path"))
+                await _send_json(
+                    send, 504,
+                    {"detail": f"request exceeded {deadline:g}s deadline"})
+                return
             if message["type"] == "http.disconnect":
                 return              # gone before we began; nothing to answer
             chunks.append(message.get("body", b""))
             if not message.get("more_body", False):
                 break
         body = b"".join(chunks)
+
+        # Whatever the drain used is gone from the budget; the rest bounds
+        # time-to-first-byte, so a slow body plus a slow query cannot together
+        # exceed the deadline they are each supposed to be inside.
+        remaining = max(0.0, expires - loop.time()) if expires is not None else 0.0
 
         forwarded: asyncio.Queue = asyncio.Queue()
         disconnected = asyncio.Event()
@@ -285,7 +316,7 @@ class RequestBoundsMiddleware:
             # after a 200 already went out.
             done, _pending = await asyncio.wait(
                 {handler, gone, first_byte},
-                timeout=deadline if deadline > 0 else None,
+                timeout=remaining if expires is not None else None,
                 return_when=asyncio.FIRST_COMPLETED,
             )
 
@@ -364,6 +395,7 @@ class RequestBoundsMiddleware:
         loop = asyncio.get_event_loop()
         is_read = scope.get("method", "").upper() in _SAFE_METHODS
         last = loop.time()
+        awaiting_bytes = False          # blocked in `receive` on a write
         watching = asyncio.Event()      # bytes should be moving right now
         detached = asyncio.Event()      # stop watching for good
 
@@ -375,8 +407,18 @@ class RequestBoundsMiddleware:
         # cancelled by silence, which is the exact failure this must not cause.
 
         async def wrapped_receive():
-            nonlocal last
-            message = await receive()
+            nonlocal last, awaiting_bytes
+            # Being BLOCKED HERE on a write is itself the signal: the handler
+            # wants client bytes and none are coming. That is a silent client,
+            # and it is distinguishable from a busy handler — which never
+            # reaches this await at all. Reads are excluded because a
+            # StreamingResponse parks in `receive` purely to listen for
+            # disconnects, so a download would look permanently blocked.
+            awaiting_bytes = not is_read
+            try:
+                message = await receive()
+            finally:
+                awaiting_bytes = False
             last = loop.time()
             if message["type"] == "http.disconnect":
                 detached.set()          # nothing left to measure
@@ -407,12 +449,16 @@ class RequestBoundsMiddleware:
             tick = min(stall / 4.0, 5.0)
             while not handler.done() and not detached.is_set():
                 await asyncio.sleep(tick)
-                if not watching.is_set() or detached.is_set():
+                if detached.is_set():
+                    continue
+                if not (watching.is_set() or awaiting_bytes):
                     continue
                 if loop.time() - last > stall:
                     logger.warning(
-                        "transfer bounded: %s %s — no progress for %gs",
-                        scope.get("method"), scope.get("path"), stall)
+                        "transfer bounded: %s %s — %s for %gs",
+                        scope.get("method"), scope.get("path"),
+                        "no request body" if awaiting_bytes else "no progress",
+                        stall)
                     handler.cancel()
                     return
 

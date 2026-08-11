@@ -369,6 +369,67 @@ class TestStalledTransfersAreReclaimed:
         assert r.status_code == 200
 
 
+class TestClientThatSendsNothing:
+    """Headers arrive, a body is promised, and then silence.
+
+    Worth its own class because the two paths fail differently and one was
+    self-inflicted. Drain-and-replay moved the body read OUT of the handler and
+    INTO the middleware, ahead of the timer — so the read path waited on a body
+    that never came with no fence running at all. `BaseHTTPMiddleware` never had
+    that hole: the handler's own read sat inside its `asyncio.wait`.
+
+    The write path is the other half. Nothing there is armed until bytes move,
+    so a silent uploader was never watched either. Being BLOCKED IN `receive` is
+    the signal that separates it from a busy handler, which never reaches that
+    await.
+
+    A raw ASGI `receive` that never returns is the only honest way to write
+    this; TestClient always delivers a body.
+    """
+
+    @staticmethod
+    async def _run(path, method, budget, app=None):
+        async def default_app(scope, receive, send):
+            await receive()
+            await send({"type": "http.response.start", "status": 200,
+                        "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        async def silent_receive():
+            await asyncio.sleep(3600)          # the client sends nothing, ever
+
+        sent = []
+
+        async def send(message):
+            sent.append(message)
+
+        scope = {"type": "http", "method": method, "path": path, "headers": []}
+        mw = RequestBoundsMiddleware(app or default_app)
+        await asyncio.wait_for(mw(scope, silent_receive, send), timeout=budget)
+        return [m["status"] for m in sent if "status" in m]
+
+    def test_read_post_with_no_body_hits_the_deadline(self, monkeypatch):
+        monkeypatch.setenv("VITALGRAPH_REQUEST_DEADLINE_S", "0.5")
+        statuses = asyncio.run(
+            self._run("/api/graphs/kgqueries", "POST", budget=5))
+        assert statuses == [504], \
+            "silent client held the connection past the deadline"
+
+    def test_upload_with_no_body_hits_the_stall_watchdog(self, monkeypatch):
+        monkeypatch.setenv("VITALGRAPH_TRANSFER_STALL_S", "0.5")
+        cancelled = asyncio.Event()
+
+        async def upload(scope, receive, send):
+            try:
+                await receive()                # waits on bytes that never come
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        asyncio.run(self._run("/api/files/upload", "POST", budget=5, app=upload))
+        assert cancelled.is_set(), "silent uploader was never reclaimed"
+
+
 class TestLongTransfersAreNeverBounded:
     """Downloads and streams are GETs, and a deadline is wrong for them.
 

@@ -98,6 +98,25 @@ reads `receive` to listen for disconnects, so on a GET the end-of-body message
 arrives immediately. Detaching on it — correct for a write — disarmed the
 watchdog before a download had sent a single byte.
 
+**A client that sends headers and then nothing** is bounded on both paths, and
+the read-path hole was introduced by this very rewrite. Draining the body in the
+middleware moved that read AHEAD OF THE DEADLINE TIMER, so a query POST whose
+body never arrived held the connection with nothing running —
+`BaseHTTPMiddleware` had no such hole, because the handler's own read happened
+inside its `asyncio.wait`. The drain now runs under the deadline, and the
+remaining budget carries into the first-byte phase so the two cannot be spent
+twice.
+
+On the write side nothing was armed until bytes moved, so a silent uploader was
+unwatched. Being BLOCKED IN `receive` is the signal: the handler wants client
+bytes and none are coming, which a busy handler never produces because it never
+reaches that await. Reads are exempt from that rule — a `StreamingResponse`
+parks in `receive` purely to listen for disconnects and would otherwise look
+permanently blocked.
+
+Both hung indefinitely before, confirmed by running the new tests against the
+prior commit.
+
 **Verified against real uvicorn over a real socket**, not just a mock `receive`:
 disconnect delivery for a POST is a server behavior, so the unit test alone
 would not have settled it. A client hanging up mid-query is now detected in
