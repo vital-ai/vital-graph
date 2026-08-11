@@ -111,7 +111,8 @@ def reorder_joins(
 
         fingerprint[alias] = "|".join(sorted(self_parts) + sorted(coref_cols))
 
-        if leaf_cardinality is not None and alias in leaf_cardinality:
+        if leaf_cardinality is not None and alias in leaf_cardinality \
+                and alias != "__range_aliases__":
             cardinality[alias] = leaf_cardinality[alias]
         elif quad_stats or pred_stats:
             if pred_uuid and obj_uuid:
@@ -140,9 +141,28 @@ def reorder_joins(
     # would read it as UNKNOWN and place it last — exactly backwards for the one
     # leaf we know is cheap to enter. Cardinality is consulted only when no such
     # anchor exists.
+    range_aliases = set()
+    if leaf_cardinality:
+        range_aliases = leaf_cardinality.get("__range_aliases__") or set()
+
     if ilike_alias and ilike_alias in alias_to_table:
         first = alias_to_table[ilike_alias]
         logger.debug("Chain root: %s (text-filter anchor)", ilike_alias)
+    elif range_aliases & set(alias_to_table):
+        # A RANGE leaf roots the chain, for the same reason the text anchor does
+        # and ahead of any row count: it is served by a narrow index scan on
+        # num_val / dt_val, so it is cheap to ENTER whatever it matches. Ranking
+        # it by rows loses that — a BROAD range reports millions, some tiny type
+        # leaf wins the root, and the plan stops driving from the index the whole
+        # range push-down rests on. Measured: gte/Integer and lt/Double at 30 s
+        # against 8-23 ms, purely from re-rooting away from the range.
+        #
+        # Several ranges: take the one matching fewest rows, since they are all
+        # equally cheap to enter and that one carries least forward.
+        cands = [a for a in range_aliases if a in alias_to_table]
+        best = min(cands, key=lambda a: (cardinality.get(a, _INF), a))
+        first = alias_to_table[best]
+        logger.debug("Chain root: %s (range anchor)", best)
     elif cardinality:
         # The root is where the scan STARTS, so it decides how much every later
         # join carries. This used to be list position — for a KGQuery, the order

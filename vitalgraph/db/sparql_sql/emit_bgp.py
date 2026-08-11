@@ -245,8 +245,35 @@ def _leaf_cardinality(plan, ctx) -> dict:
         elif col == "object_uuid":
             by_alias.setdefault(alias, {})["o"] = u
 
+    # RANGE leaves bind a predicate and NO constant object, so the pair lookup
+    # above can never find them and the per-predicate fallback below reports the
+    # whole predicate — millions — for a criterion that is actually served by a
+    # narrow index scan on num_val / dt_val.
+    #
+    # Getting this wrong is not theoretical. Ranking ranges by their predicate
+    # total made some other leaf the chain root, the plan stopped driving from
+    # the num_val index the range push-down depends on (issues/040 W2,
+    # issues/056), and SEVEN comparator cells went from 3-14 ms to 30 s
+    # timeouts. `plan.range_leaves` records (alias, col) -> (operator, literal)
+    # and `aliases.range_stats` counts them; both existed and neither was read.
+    range_stats = getattr(aliases, "range_stats", None) or {}
+    range_aliases = set()
+    unmeasured_range = False
+    for (alias, _col), (op, literal) in (
+            getattr(plan, "range_leaves", None) or {}).items():
+        range_aliases.add(alias)
+        p_uuid = by_alias.get(alias, {}).get("p")
+        n = range_stats.get((p_uuid, op, literal)) if p_uuid else None
+        if n is None:
+            unmeasured_range = True
+        else:
+            by_alias.setdefault(alias, {})["range_n"] = n
+
     out: dict = {}
     for alias, parts in by_alias.items():
+        if "range_n" in parts:
+            out[alias] = parts["range_n"]
+            continue
         p_uuid, o_uuid = parts.get("p"), parts.get("o")
         if p_uuid and o_uuid:
             n = quad_stats.get((p_uuid, o_uuid))
@@ -255,10 +282,27 @@ def _leaf_cardinality(plan, ctx) -> dict:
             if n is not None:
                 out[alias] = n
                 continue
+        if alias in range_aliases:
+            # A range whose count is unknown. The per-predicate total would be
+            # wildly wrong for it, so record nothing rather than something
+            # misleading.
+            continue
         if p_uuid:
             n = pred_stats.get(p_uuid)
             if n is not None:
                 out[alias] = n
+
+    # Hand the range aliases up: root choice needs to know WHICH leaves are
+    # index-backed, not just how many rows they match. See reorder_joins.
+    out["__range_aliases__"] = range_aliases
+
+    if unmeasured_range:
+        # One unrankable range is enough to make the whole comparison unsafe:
+        # every other leaf still has a number, so the cheapest of THOSE would win
+        # the root and the range would stop driving. Decline to re-root at all
+        # and leave the plan exactly as it was — the conservative direction is
+        # "do not move away from the known-good state".
+        return {}
     return out
 
 
