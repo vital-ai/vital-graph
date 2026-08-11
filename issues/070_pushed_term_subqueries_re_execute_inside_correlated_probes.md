@@ -47,8 +47,35 @@ measurement, and the most selective one there is), and fixing it in isolation
 produces wrong answers. The comment at that line now says so, because the next
 person to notice it will reach for the same one-line change.
 
-Fixing it properly means teaching the driver to carry pushed filter conditions.
-That is the prerequisite for `issues/061` step 3 driving from text at all.
+### Attempted 2026-08-11: teaching the driver to carry the filter. Reverted.
+
+The obvious fix is the one `_emit_two_phase` already uses — push the filters,
+then VERIFY none survive, then emit. Tried in two forms, both reverted:
+
+1. **Push between each side and its BGP.** Finds nothing: a criterion's FILTER
+   commonly sits ABOVE the join rather than inside an operand, and `contains`
+   is one of those. Still returned 25 rows for `'ZZQQXX'`.
+2. **Push from `plan.child` down to the join** — where two-phase pushes from,
+   and it does land the predicate. But both selective cases went back to
+   TIMEOUT, worse than doing nothing.
+
+**Why (2) backfires is the part worth keeping.** `push_filters` MUTATES the
+plan: it moves expressions into the BGP's `tagged_constraints` and removes them
+from `filter_exprs`. This path runs BEFORE `_emit_two_phase` and may then
+decline — and when it does, it hands two-phase a plan that is no longer the one
+the measurement was taken against. The semi-join gate reaches a different
+decision on the mutated plan, two-phase succeeds where it had declined, and the
+result is the per-candidate probe walk this whole issue is about.
+
+So the constraint is not "the driver cannot carry filters" but: **a path that
+mutates the plan cannot be allowed to decline afterwards.** Either it commits
+before mutating, or it mutates a copy. `_emit_two_phase` has the same hazard
+latent in it — it pushes and can still `return None` — and gets away with it
+only because it runs first and nothing downstream re-reads the gate.
+
+Next attempt should deep-copy the subtree for the trial emission, or split
+`push_filters` into a "what would push" query and a separate apply. Do not
+simply move the push earlier; that is what was measured above.
 
     has_any/Text     timeout -> 80 ms     fixed, uuid constants
     has_any/Choice   timeout -> 73 ms     fixed, uuid constants
