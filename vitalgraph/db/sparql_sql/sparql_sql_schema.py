@@ -88,6 +88,19 @@ NUMERIC_TERM_COLUMN = "num_val"
 DATETIME_TERM_COLUMN = "dt_val"
 
 
+def boolean_datatype_ids() -> str:
+    """Comma-separated datatype_ids for xsd:boolean.
+
+    Same positional derivation as `numeric_datatype_ids`. Unlike those, this
+    backs no generated column: booleans need no typed column because their
+    value set has exactly two members, so the equality set is expressible as a
+    lexical IN over the canonical spellings — and the term table's hash index on
+    `term_text` serves it with two probes.
+    """
+    ids = {uri: i for i, (uri, _n) in enumerate(STANDARD_DATATYPES, start=1)}
+    return str(ids['http://www.w3.org/2001/XMLSchema#boolean'])
+
+
 
 def datetime_datatype_ids() -> str:
     """Comma-separated datatype_ids for xsd:dateTime and xsd:date, in emit order.

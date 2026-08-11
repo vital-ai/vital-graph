@@ -1,6 +1,43 @@
 # `ne` Times Out on All Five Slot Classes Because `!=` Is Not Pushable
 
-## Status: FIXED for 4 of 5 slot classes; Boolean declined — 2026-08-10
+## Status: FIXED, all five slot classes — 2026-08-10
+
+    ne/Text      254 ms
+    ne/Double    108 ms
+    ne/Integer   202 ms
+    ne/Choice    114 ms
+    ne/Boolean   TIMED OUT (>60s) ->  6 ms
+
+Boolean is no longer declined. It needed no `bool_val` column, contrary to what
+an earlier revision of this file said: a boolean's value set has exactly TWO
+members, so the equality set is just both spellings of one of them —
+
+    ?v != true   ->  object_uuid NOT IN (SELECT term_uuid FROM term
+                                         WHERE term_text IN ('true','1')
+                                           AND datatype_id IN (2))
+
+and the term table's HASH index on `term_text` answers that in two probes. The
+datatype guard is what keeps the plain string "true" and the integer 1 out. The
+typed-column reasoning applied to `num_val` and `dt_val` because their value
+sets are unbounded; for booleans it was overkill and I proposed it anyway.
+
+### It also exposed a soundness bug in the other branches
+
+Dispatch was on whether the lexical form PARSES, not on the datatype:
+`_ne_equality_cond` asked `_numeric_literal` first, and that helper only tries
+`float(value)` and ignores the datatype entirely. So:
+
+    "5"                pushed `num_val = 5` — but a plain literal is an
+                       xsd:string in RDF 1.1, so this excluded the INTEGER 5 and
+                       failed to exclude the string "5". Wrong both ways.
+    "1"^^xsd:boolean   pushed `num_val = 1`, conflating true with 1^^integer.
+
+Neither is reachable from KGQuery, which types its literals, but both are
+reachable from SPARQL a caller writes — and `has_any` inherits the same helper.
+Dispatch is now on datatype, with unknown datatypes and unparseable values
+declining. Pinned by `TestEqualityConditionDispatchesOnDatatype`.
+
+## Superseded status: 4 of 5 fixed, Boolean declined
 
 Re-measured on the verified three-way sweep (HEAD / change / change+guard):
 Text 228 ms, Double 114 ms, Integer 260 ms, Choice 134 ms, Boolean still

@@ -5,7 +5,7 @@
 Latest verified sweep (`/tmp/sweep4`, cluster idle, HEAD baseline for comparison):
 
     eq/DateTime          TIMED OUT (>60s)   unique-per-row datetimes, issues/050
-    ne/Boolean           TIMED OUT (>60s)   declined on purpose, needs bool_val
+    ne/Boolean           FIXED -> 6 ms      issues/058, no bool_val needed
     is_empty/Text           56,780 ms       undiagnosed, issues/071
     has_any/Choice          13,108 ms       issues/070
     has_any/Text            12,101 ms       issues/070

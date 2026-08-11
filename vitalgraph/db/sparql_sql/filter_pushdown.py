@@ -605,7 +605,7 @@ def _numeric_var(expr) -> Optional[str]:
 _NE_OPS = {"ne", "notequals", "not_equals", "!="}
 
 
-def _ne_equality_cond(value_node) -> Optional[str]:
+def _ne_equality_cond(value_node)-> Optional[str]:
     """Term-table condition matching values EQUAL to this literal, or None.
 
     The single source of truth for which inequalities are pushable. Both the
@@ -615,8 +615,24 @@ def _ne_equality_cond(value_node) -> Optional[str]:
     the variable is gone and its value compiles to NULL. Not hypothetical — a
     first version matched only the SHAPE and the boolean case raised
     UnresolvedVariableError immediately (issues 023, 027).
+
+    Dispatch is on the DATATYPE, never on whether the lexical form happens to
+    parse. An earlier version asked `_numeric_literal` first, which only tries
+    `float(value)` and ignores the datatype entirely, so two unrelated things
+    took the numeric branch and both were wrong:
+
+        "5"                 a plain literal, i.e. an xsd:string in RDF 1.1,
+                            pushed `num_val = 5` — which excludes the INTEGER 5
+                            and fails to exclude the string "5", wrong in both
+                            directions
+        "1"^^xsd:boolean    pushed `num_val = 1`, conflating true with 1^^integer
+
+    Neither is reachable from KGQuery, which types its literals, but both are
+    reachable from SPARQL a caller writes.
     """
-    from .sparql_sql_schema import NUMERIC_TERM_COLUMN, DATETIME_TERM_COLUMN
+    from .sparql_sql_schema import (NUMERIC_TERM_COLUMN, DATETIME_TERM_COLUMN,
+                                    boolean_datatype_ids)
+    from .emit_bgp import _NUMERIC_DATATYPES
 
     if isinstance(value_node, URINode):
         return f"term_text = '{_esc(value_node.value)}' AND term_type = 'U'"
@@ -625,21 +641,45 @@ def _ne_equality_cond(value_node) -> Optional[str]:
 
     raw = value_node.value or ""
     dt = value_node.datatype or ""
-    num = _numeric_literal(ExprValue(node=value_node))
-    if num is not None:
+
+    if dt == f"{_XSD}boolean":
+        # `"true"` and `"1"` are ONE value in XSD, as are `"false"` and `"0"`,
+        # so matching a single spelling would leave the other wrongly included —
+        # which is why this used to decline and `ne`/Boolean stayed on the
+        # blocking-sort path with a 60s timeout.
+        #
+        # It needs no typed column, unlike num_val and dt_val. A boolean's value
+        # set has exactly two members, so the equality set is just both
+        # spellings of one of them, and the term table's HASH index on term_text
+        # answers that with two probes. The datatype guard is what stops the
+        # plain string "true" and the integer 1 matching.
+        lex = {"true": "'true','1'", "1": "'true','1'",
+               "false": "'false','0'", "0": "'false','0'"}.get(raw.strip().lower())
+        if lex is None:
+            return None            # not a valid boolean lexical form
+        return (f"term_text IN ({lex}) "
+                f"AND datatype_id IN ({boolean_datatype_ids()})")
+
+    if dt in _NUMERIC_DATATYPES:
+        num = _numeric_literal(ExprValue(node=value_node))
+        if num is None:
+            return None            # numeric datatype, unparseable value
         # Numeric equality, so "5.0"^^double and 5^^integer both match and are
         # both correctly excluded — which uuid inequality gets wrong.
         return f"{NUMERIC_TERM_COLUMN} = {num}"
+
     if dt in _DATETIME_DTS and _ISO_RE.match(raw.strip()):
         return (f"{DATETIME_TERM_COLUMN} = "
                 f"vitalgraph_iso_to_utc('{_esc(raw.strip())}')")
+
     if dt in ("", f"{_XSD}string"):
         # A plain literal and an xsd:string literal are one value in RDF 1.1, so
         # match lexically without pinning the datatype id.
         return f"term_text = '{_esc(raw)}' AND term_type = 'L'"
-    # Booleans especially: "true" and "1" are one value and there is no bool_val
-    # column to say so, so lexical matching would leave the other spelling
-    # wrongly included. Decline rather than answer approximately.
+
+    # Anything else — a language-tagged literal, an unrecognised datatype —
+    # decline rather than answer approximately. A wrong answer here is a row
+    # silently included or dropped, not a slow query.
     return None
 
 

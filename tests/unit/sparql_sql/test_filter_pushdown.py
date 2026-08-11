@@ -326,3 +326,70 @@ class TestCaseFoldedTextSearch:
 
         _, sql = bgp.tagged_constraints[0]
         assert "LIKE '%Ca%'" in sql and "ILIKE" not in sql
+
+
+class TestEqualityConditionDispatchesOnDatatype:
+    """`_ne_equality_cond` must key on the DATATYPE, not on parseability.
+
+    An earlier version asked `_numeric_literal` first. That helper only tries
+    `float(value)` and ignores the datatype, so two unrelated literals took the
+    numeric branch and both were wrong:
+
+        "5"               a plain literal is an xsd:string in RDF 1.1, but it
+                          pushed `num_val = 5` — excluding the INTEGER 5 and
+                          failing to exclude the string "5"
+        "1"^^xsd:boolean  pushed `num_val = 1`, conflating true with 1^^integer
+
+    Neither is reachable from KGQuery, which types its literals; both are
+    reachable from SPARQL a caller writes. These are correctness tests, not
+    performance ones — the failure mode is a row silently included or dropped.
+    """
+
+    XSD = "http://www.w3.org/2001/XMLSchema#"
+
+    def _cond(self, value, datatype=None):
+        from vitalgraph.db.sparql_sql.filter_pushdown import _ne_equality_cond
+        return _ne_equality_cond(LiteralNode(value=value, datatype=datatype))
+
+    def test_plain_numeric_looking_literal_is_a_string(self):
+        cond = self._cond("5")
+        assert "num_val" not in cond
+        assert "term_text = '5'" in cond and "term_type = 'L'" in cond
+
+    def test_xsd_string_numeric_looking_literal_is_a_string(self):
+        cond = self._cond("5", self.XSD + "string")
+        assert "num_val" not in cond
+        assert "term_text = '5'" in cond
+
+    def test_typed_integer_is_numeric(self):
+        assert self._cond("5", self.XSD + "integer") == "num_val = 5.0"
+
+    def test_typed_double_matches_the_same_value(self):
+        """5^^integer and 5.0^^double are one value, so one condition."""
+        assert (self._cond("5", self.XSD + "integer")
+                == self._cond("5.0", self.XSD + "double"))
+
+    def test_boolean_one_is_not_numeric_one(self):
+        cond = self._cond("1", self.XSD + "boolean")
+        assert "num_val" not in cond
+        assert "'true','1'" in cond
+
+    def test_both_boolean_spellings_give_one_condition(self):
+        assert (self._cond("true", self.XSD + "boolean")
+                == self._cond("1", self.XSD + "boolean"))
+        assert (self._cond("false", self.XSD + "boolean")
+                == self._cond("0", self.XSD + "boolean"))
+
+    def test_boolean_condition_pins_the_datatype(self):
+        """Without the guard, the STRING "true" and the integer 1 would match."""
+        cond = self._cond("true", self.XSD + "boolean")
+        assert "datatype_id IN (" in cond
+
+    def test_invalid_boolean_lexical_form_declines(self):
+        assert self._cond("maybe", self.XSD + "boolean") is None
+
+    def test_unparseable_numeric_declines(self):
+        assert self._cond("x", self.XSD + "integer") is None
+
+    def test_unknown_datatype_declines(self):
+        assert self._cond("x", "http://example.org/myType") is None
