@@ -1,6 +1,34 @@
 # The Edge Table Has No Type Column, So Every Typed Hop Costs a 24 GB Join
 
-## Status: OPEN, measured 2026-08-10 — 31x on a real query
+## Status: LANDED locally; remaining work is non-local spaces — 2026-08-10
+
+Verified on the local cluster:
+
+* **Column present on every `*_edge` table.** No table lacks it.
+* **Populated wherever the data has types.** `sp_lead_synth_100k` 4,977,000 /
+  4,977,000 and `wordnet_frames` 570,696 / 570,696 — both 100%.
+* **Indexes built** — `idx_*_edge_type_dst` and `idx_*_edge_type_src`.
+* **Consumed** — `emit_backward._walk_select` and `emit_candidate_ctes` emit
+  `e.edge_type_uuid = '...'::uuid` as a column predicate, which is the whole
+  point of the column, and `sync_edge_fanout` uses it for per-edge-type
+  cardinality.
+
+Four tables read 0% typed and NONE of them is drift. Checked rather than
+assumed: `inttest_5afcdedf210d` has **zero `vitaltype` quads** in the space at
+all, so NULL is the correct value for all 10,500 of its edge rows — case (2) in
+`sync_edge_table.edge_table_untyped_rate`, which already documented exactly this
+for `wordnet_exp`. Two more are transient integration-test spaces of 30 rows.
+
+That distinction is the reason `edge_table_untyped_rate` is documented as a
+CAPABILITY signal rather than a drift signal. A 0% reading looks alarming and
+usually means the data carries no types, not that the derived column is stale.
+Establishing drift needs the referential check in `edge_table_orphan_rate`.
+
+**What is left is operational, not code:** spaces outside this cluster need the
+migration (`scripts/migrate_edge_type_column.py`) and a backfill
+(`scripts/rebuild_edge_tables.py`). That is a deploy step, not a change.
+
+## Original status: OPEN, measured 2026-08-10 — 31x on a real query
 
     sp_lead_synth_100k_edge:  edge_uuid, source_node_uuid, dest_node_uuid, context_uuid
 
