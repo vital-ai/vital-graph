@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -36,6 +37,64 @@ _compile_cache = SparqlCompileCache(maxsize=512)
 
 # Deterministic UUID namespace (same as fuseki_postgresql for compatibility)
 _VITALGRAPH_NS = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
+
+# Read-path fence, enforced by PostgreSQL rather than by the client.
+#
+# asyncpg's `command_timeout` already cancels a slow query, but it fires from an
+# event-loop callback: if the loop stalls — `utils/event_loop_monitor.py` exists
+# because that is a live concern — or the worker is killed mid-query, the
+# callback never runs and the query is genuinely unbounded. PostgreSQL will not
+# notice a dead client on a long SELECT until it tries to return rows. A real
+# `statement_timeout` is enforced by the backend regardless of client health.
+# See issues/044 gap 5.
+#
+# Deliberately BELOW asyncpg's 60s command_timeout, which issues/044 gap 3
+# records as being ordered backwards against the client's own 60s per-attempt
+# budget: whoever fires first should be the server, so the client gets a real
+# error to surface instead of abandoning a query that keeps running.
+#
+# READ PATH ONLY. It is applied where SPARQL SELECT executes, not on the pool,
+# so bulk load and index rebuild — which share that pool — are untouched.
+# Bounding those by a read-shaped timeout is a live risk on a large load, not a
+# hypothetical one (issues/044 records COPY already being capped at 60s by
+# command_timeout).
+_READ_STATEMENT_TIMEOUT_MS_DEFAULT = 55_000
+
+
+def _read_statement_timeout_ms() -> int:
+    """Milliseconds for the read-path `statement_timeout`.
+
+    Overridable with `VITALGRAPH_READ_STATEMENT_TIMEOUT_MS` so an operator can
+    raise it for a deliberately long analytical query without a code change. A
+    value of 0 disables the fence, which is what an offline job wants and what a
+    served request never should.
+    """
+    raw = os.environ.get("VITALGRAPH_READ_STATEMENT_TIMEOUT_MS")
+    if raw is None:
+        return _READ_STATEMENT_TIMEOUT_MS_DEFAULT
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        logger.warning("VITALGRAPH_READ_STATEMENT_TIMEOUT_MS=%r is not an "
+                       "integer; using %d", raw, _READ_STATEMENT_TIMEOUT_MS_DEFAULT)
+        return _READ_STATEMENT_TIMEOUT_MS_DEFAULT
+
+
+async def _apply_read_fence(conn) -> None:
+    """Set the read-path `statement_timeout` for the current transaction.
+
+    Must be called inside a transaction: `SET LOCAL` is scoped to it, which is
+    what stops the setting leaking onto a pooled connection and silently
+    fencing whatever runs on it next — including a write.
+
+    Zero means no fence. PostgreSQL spells that `statement_timeout = 0`, which
+    is also what the session already inherits, so this does nothing rather than
+    emitting a statement that would be a no-op.
+    """
+    ms = _read_statement_timeout_ms()
+    if ms > 0:
+        await conn.execute(f"SET LOCAL statement_timeout = '{ms}ms'")
+
 
 def _generate_term_uuid(
     term_text: str, term_type: str,
@@ -1538,10 +1597,15 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     # does not apply here: the EXISTS runs as a SubPlan filter,
                     # with no join relation to correct. See issues/047.
                     async with conn.transaction():
+                        await _apply_read_fence(conn)
                         await conn.execute("SET LOCAL enable_sort = off")
                         rows = await conn.fetch(sql)
                 else:
-                    rows = await conn.fetch(sql)
+                    # Same transaction wrapper purely so `SET LOCAL` scopes to
+                    # this statement and cannot leak onto the pooled connection.
+                    async with conn.transaction():
+                        await _apply_read_fence(conn)
+                        rows = await conn.fetch(sql)
                 t_exec = _time.monotonic()
                 result_rows = [dict(r) for r in rows]
 

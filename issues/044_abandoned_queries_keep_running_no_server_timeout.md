@@ -1,6 +1,34 @@
 # A Client Giving Up Does Not Stop the Query — The Server-Side Fence Is Per-Statement, Not Per-Request
 
-## Status: OPEN — researched 2026-08-07, remeasured 2026-08-08
+## Status: PARTLY FIXED — gaps 1, 2 and 5 closed; 3 and 4 remain — 2026-08-10
+
+| gap | state |
+|---|---|
+| 1. fence is per-statement, not per-request | still open, but `047` removed what it was bounding |
+| 2. `asyncio.gather` orphans the sibling | **FIXED** — `_gather_cancelling`, all 5 sites |
+| 3. timers ordered backwards | **improved** — the server fence is now 55s against the client's 60s, so the server surfaces the error first. The per-request bound in (1) is the rest |
+| 4. client disconnect not detected | still open — nothing calls `request.is_disconnected()` |
+| 5. fence is client-driven, not DB-enforced | **FIXED** — `SET LOCAL statement_timeout` on the read path |
+
+### Gap 5, closed 2026-08-10
+
+`sparql_sql_space_impl._apply_read_fence` sets `SET LOCAL statement_timeout`
+(default 55s, `VITALGRAPH_READ_STATEMENT_TIMEOUT_MS`, 0 disables) inside the
+transaction that runs a SPARQL SELECT. Verified against the local cluster: the
+fence fires with `QueryCanceledError`, `SHOW statement_timeout` is back to `'0'`
+after COMMIT so nothing leaks onto the pooled connection, and 0 genuinely
+disables it.
+
+**Read path only, deliberately.** It is applied where SELECT executes, not on the
+pool, so bulk load and index rebuild — which share that pool — are untouched.
+This issue already records that `command_timeout` caps every COPY phase and
+non-CONCURRENT `CREATE INDEX` at 60s today, which is a live risk on a large
+load; adding a read-shaped fence to those would make it worse, not better.
+
+The non-ordered-scan branch now also runs in a transaction, purely so `SET LOCAL`
+is scoped. That is the only behavioural change to queries that were already fine.
+
+## Original status: OPEN — researched 2026-08-07, remeasured 2026-08-08
 
 The original diagnosis was partly wrong (see the correction below). The
 remeasurement changes the *priorities*, not the findings: since `issues/040`,
