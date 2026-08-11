@@ -1,6 +1,26 @@
 # Nothing Chooses Which Criterion Drives the Query
 
-## Status: CLOSED — the ordering defect is fixed and step 3 has no failing case
+## Status: ordering defect CLOSED; step 3 REOPENED — it has a failing case
+
+**Reopened 2026-08-11, hours after being closed.** It was closed on the grounds
+that no measured shape needed it. `issues/070` is that shape:
+
+    contains 'CA'        45 ms      common substring
+    contains 'ZZQQXX'    TIMEOUT    absent — walks every entity
+
+`_emit_two_phase` always anchors the page on the entity-type BGP and makes every
+criterion a probe. `_try_selective_driven` exists to drive the page from a
+criterion instead, but fires only when two-phase DECLINES. For `contains`
+two-phase succeeds, so the selective side never gets the chance, and a text leaf
+whose match set is empty is discovered one candidate at a time.
+
+This does NOT vindicate the general ranking policy the issue originally proposed,
+and the two reverts still stand against it. What it asks for is narrower and
+already has precedent: `reorder_bgp` pins an index-backed text leaf first for
+JOIN ORDER, with a comment explaining that a trigram-served leaf is cheap to
+enter whatever it matches. The same precedence needs to reach DRIVER choice —
+gated on selectivity, since driving from `'CA'` (2.6M terms) would be worse than
+the probe it replaces.
 
 Re-measured 2026-08-11 on `sp_lead_synth_100k`, every two-criterion permutation
 of three comparator cells, 25-row page, warm median of 3:

@@ -46,16 +46,44 @@ one, unprompted. It never gets the opportunity in the generated SQL, because the
 ILIKE is not a term-set constraint there — it is a filter on a row already
 fetched by `term_pkey`.
 
-**Which makes the original diagnosis in this file right after all**, and my
-correction to it wrong. Every other push-down emits
+### The text anchor already fires. It is pinned in the wrong PLACE.
 
-    q.object_uuid IN (SELECT term_uuid FROM {space}_term WHERE <condition>)
+`reorder_bgp` does exactly what it is supposed to — confirmed by instrumenting
+the generation for `contains 'ZZQQXX'`:
 
-and `contains` is the one comparator that emits no push-down at all. That is
-precisely why the index is unreachable. The fix is to give `contains` the same
-shape and let the planner choose — NOT to force the index, and NOT the
-MATERIALIZED CTE (41x worse; see below — the LIMIT is what makes the common case
-cheap and a CTE barrier discards it).
+    reorder_bgp: Chain root: q16 (text-filter anchor)
+
+and its comment states the reason outright: a LIKE/ILIKE/regex leaf is served by
+the GIN trigram index and must root the chain ahead of any row count.
+
+But that pins the text leaf FIRST WITHIN THE PROBE, and the probe runs once per
+candidate. `_emit_two_phase` unconditionally anchors the PAGE on the entity-type
+BGP, because that is what supplies `subject_uuid` order so `LIMIT` can stop
+early; every criterion is then a probe by construction.
+`_try_selective_driven` — the one path that would drive the page from a
+criterion instead — only runs when two-phase DECLINES, and for `contains` it
+does not decline.
+
+That is also the whole reason the trigram index is unreachable: inside a
+correlated probe the term row is already identified by `term_uuid`, so the ILIKE
+can only ever be a filter on a fetched row. An index lookup requires the text
+leaf to DRIVE.
+
+**So the fix is driver selection, not a push-down.** An earlier revision of this
+line proposed giving `contains` the standard
+`object_uuid IN (SELECT term_uuid FROM {space}_term WHERE ...)` shape. That does
+not work here and the reason is this issue's own premise: PostgreSQL does not
+hoist an uncorrelated subquery out of an enclosing CORRELATED one, so it would
+re-execute per candidate — 1.2 ms x 100,000 candidates for the absent case, still
+a timeout. Not the MATERIALIZED CTE either (41x worse; the LIMIT is what makes
+the common case cheap and a CTE barrier discards it).
+
+What is needed is for an INDEX-BACKED TEXT LEAF to be allowed to drive the page,
+gated on selectivity — the same precedence `reorder_bgp` already applies to join
+order, extended to driver choice. Gated, because the common case must not
+regress: `'CA'` matches 2.6M terms, and driving from that side would be far worse
+than the 45 ms it costs today. The planner makes exactly this call correctly when
+given the choice at the term level.
 
 Any attempt must measure BOTH ends: the selective case it is meant to fix and
 the common `CA` case at 45 ms that it must not regress.
