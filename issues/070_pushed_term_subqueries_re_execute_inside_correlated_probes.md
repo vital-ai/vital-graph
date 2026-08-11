@@ -1,49 +1,75 @@
 # Pushed Term Subqueries Re-Execute Per Row Inside Correlated Probes
 
-## Status: CLOSED 2026-08-11 — `contains` is not in the shape this issue describes
+## Status: `has_any` FIXED; `contains` OPEN and worse than recorded — 2026-08-11
 
     has_any/Text     timeout -> 80 ms     fixed, uuid constants
     has_any/Choice   timeout -> 73 ms     fixed, uuid constants
-    contains/Text    timeout -> 46 ms warm / 4,683 ms cold   NOT a probe problem
+    contains/Text    45 ms COMMON substring / TIMES OUT when selective
 
-**Re-measured 2026-08-11 on `sp_lead_synth_100k` (50.57M quads), 25-row page.**
-The text below says `contains` "pays a trigram probe per candidate". It does
-not, and the plan says so:
+**I closed this earlier today and was wrong.** The closure measured only the
+sweep's fixed value, `contains 'CA'`, saw 45 ms, and concluded there was no
+problem. `CA` matches 2.6M of the term rows in `sp_lead_synth_100k`. Every
+selective substring — the normal case for a user searching — behaves completely
+differently:
 
-    Filter: (term_text ~~* '%CA%'::text)
-    Rows Removed by Filter: 1
+    sp_lead_synth_100k, 25-row page, warm:
+      contains 'CA'        45 ms       common
+      contains 'XQ'        TIMEOUT     >120 s
+      contains 'ZZQQXX'    TIMEOUT     >120 s   absent by construction
 
-The ILIKE is a FILTER on a term row already fetched by `term_pkey` (uuid), one
-row at a time. `idx_..._term_trgm` exists and is **not used** — there is no
-Bitmap Index Scan on it anywhere in the plan. So the per-candidate cost is a
-single-row string test, not a probe, which is why warm is 46 ms.
+The mechanism, from `sp_lead_synth_10k` where the absent case still completes:
 
-What made this true was not a change here but the driver work: the page is
-driven in candidate order and early-terminates at 25 rows, walking 194
-candidates. That is the shape the CTE attempt destroyed (41x worse) by
-discarding the LIMIT — the note below is still worth heeding for that reason.
+                      rows removed by filter   max buffers    time
+      'CA'      common        243                  35,793     2,054 ms
+      'ZZQQXX'  absent     10,000 = EVERY entity  1,360,001   16,090 ms
 
-**Cold is 4,683 ms and belongs elsewhere.** It is the Index Only Scan over
-`rdf_quad_pkey` walking candidates on a cold cache — the general 8-63x cold-start
-gap tracked in `unexplored_performance_surface.md`, not a `contains` defect. Note
-it is 7x the 685 ms recorded here on 2026-08-10; cold numbers on this fixture
-swing with whatever else has touched the cache, which is exactly why the sweep
-rules treat cold as context and warm as the query cost.
+So it is O(entities) whenever matches are rare: the page is driven in candidate
+order and the ILIKE is applied per candidate, so the Limit can only stop early
+if matches are dense. When they are not, it walks the whole space to fill 25
+rows — or to prove there are none. That is the `issues/073` shape exactly:
+absent is the worst case when it should be the best.
 
-    has_any/Text     timeout -> 80 ms     fixed, uuid constants
-    has_any/Choice   timeout -> 73 ms     fixed, uuid constants
-    contains/Text    timeout -> 685 ms    still the subquery form
+## The trigram index exists, is never used, and is the answer
 
-The fix was NOT the CTE this issue proposed (that measured 41x worse, see
-below) and not "compute the set once". It was to give the leaf a CONSTANT the
-planner can drive the probe from: without one it runs the walk backwards,
-enumerating every slot holding the value and walking edges back — 8,660 slots
-and 1,680,086 edge lookups per 194 candidates.
+`idx_{space}_term_trgm` (GIN, `gin_trgm_ops`) is present and appears in NO plan
+for these queries. Measured directly against the term table, PostgreSQL already
+chooses correctly when it is given the choice:
 
-`contains` cannot take that path: `ILIKE '%ca%'` has no enumerable constant set,
-so it keeps the term subquery and pays a trigram probe per candidate. 685 ms
-cold / 22 ms warm, so it is no longer urgent, but it is the one push-down still
-in the shape this issue describes.
+    SELECT term_uuid FROM ..._term WHERE term_text ILIKE '%ZZQQXX%'
+      -> Bitmap Index Scan on ..._term_trgm, 1.255 ms, 9 buffers, 0 rows
+
+    SELECT count(*) FROM ..._term WHERE term_text ILIKE '%CA%'
+      -> Parallel Seq Scan, 1,668 ms, 2.6M rows  (trigram correctly REJECTED)
+
+The planner picks the index for the selective case and rejects it for the common
+one, unprompted. It never gets the opportunity in the generated SQL, because the
+ILIKE is not a term-set constraint there — it is a filter on a row already
+fetched by `term_pkey`.
+
+**Which makes the original diagnosis in this file right after all**, and my
+correction to it wrong. Every other push-down emits
+
+    q.object_uuid IN (SELECT term_uuid FROM {space}_term WHERE <condition>)
+
+and `contains` is the one comparator that emits no push-down at all. That is
+precisely why the index is unreachable. The fix is to give `contains` the same
+shape and let the planner choose — NOT to force the index, and NOT the
+MATERIALIZED CTE (41x worse; see below — the LIMIT is what makes the common case
+cheap and a CTE barrier discards it).
+
+Any attempt must measure BOTH ends: the selective case it is meant to fix and
+the common `CA` case at 45 ms that it must not regress.
+
+## The measurement gap this exposes, which is the more general lesson
+
+`scripts/perf_shape_matrix.py` uses ONE fixed value per cell. For `contains`
+that value is `CA`, which is the least selective substring in the fixture. The
+sweep therefore reports this cell green and cannot see the pathology, at any
+scale, however many times it is run — and `issues/053` closed partly on that
+sweep. A comparator whose cost depends on SELECTIVITY needs at least a common
+and a rare value, or the sweep is measuring one point on a curve and calling it
+the curve. Compare `issues/071`: a cell that is slow but not tracked cannot be
+noticed by looking harder at the list.
 
 ## Superseded status: the guard in place is a mitigation, not the fix
 
