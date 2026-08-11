@@ -1,6 +1,54 @@
 # Pushed Term Subqueries Re-Execute Per Row Inside Correlated Probes
 
-## Status: `has_any` FIXED; `contains` OPEN and worse than recorded — 2026-08-11
+## Status: `has_any` FIXED; `contains` LARGELY FIXED — 2026-08-11
+
+    sp_lead_synth_100k, 25-row page, warm:
+
+                       before        after
+      contains 'CA'      45 ms       48 ms    common — unchanged, as required
+      contains 'XQ'    TIMEOUT   11,151 ms    rare
+      contains 'ZZQQXX' TIMEOUT        1 ms   absent
+
+Gated on `scripts/perf_sweep_diff.py`: 39 cells both arms, NO REGRESSIONS,
+0 cells slow warm, 0 over the buffer threshold. `contains` also left the
+cold-only list (1,156 ms cold -> under the 1s threshold).
+
+**What made the difference was measuring the leaf, not re-planning it.**
+`semijoin.needed_texts` extracts the LIKE-family condition, the generator counts
+it BOUNDED, and `_leaf_rows` reports it — after which the existing semi-join gate
+declines to probe a leaf it can now see is tiny, and the set-based join it falls
+back to answers the empty case immediately. No new plan shape was introduced.
+
+The probe is two-step because the naive one charges most for the answer that
+matters least: counting matching QUADS to a 50,000 cap cost 943 ms of generation
+for `'CA'`. Counting matching TERMS to a 200 cap first is ~1.5 ms — trigram-served
+when selective, and short-circuiting when not, since reaching the cap IS the
+answer. Net generation cost is now ~1.5 ms; the 500-600 ms seen on a first call
+is process warm-up and appears whichever pattern runs first.
+
+**`'XQ'` at 11 s is the remaining half.** It matches few enough to be selective
+but not zero, so the set-based join materialises the match set. Driving the page
+from the text leaf is what would fix it — and that is blocked on a real defect,
+below.
+
+### BLOCKED: the selective-driven path silently drops FILTERs
+
+`_try_selective_driven` drives the page from `emit_bgp_anchor(right_bgp)`, which
+carries the BGP's own constant leaves but NOT a FILTER sitting above the join.
+That is sound for a constant criterion (`WV` binds `object_uuid` inside the BGP)
+and WRONG for a text criterion, which is a pushed filter.
+
+Measured, by letting a zero count through the guard: **`contains 'ZZQQXX'`
+returned 25 rows** for a substring matching nothing. Reverted immediately.
+
+The guard that prevents this is `if not anchor_n or not driver_n` — falsiness,
+so a measured ZERO is treated as unmeasured. That reads like a bug (zero is a
+measurement, and the most selective one there is), and fixing it in isolation
+produces wrong answers. The comment at that line now says so, because the next
+person to notice it will reach for the same one-line change.
+
+Fixing it properly means teaching the driver to carry pushed filter conditions.
+That is the prerequisite for `issues/061` step 3 driving from text at all.
 
     has_any/Text     timeout -> 80 ms     fixed, uuid constants
     has_any/Choice   timeout -> 73 ms     fixed, uuid constants

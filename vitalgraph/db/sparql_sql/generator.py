@@ -452,6 +452,22 @@ _PAIR_COUNT_CAP = 50_000
 _pair_count_cache: Dict[tuple, int] = {}
 
 
+# The text probe answers "is this leaf small?" in TWO steps, cheapest first,
+# because the naive single count charges the most for the answer that matters
+# least. Counting matching QUADS to a 50,000 cap cost 943ms of generation for
+# `contains 'CA'`, and 10,000 still cost 604ms — all of it spent establishing
+# that a common substring is common, which the gate then ignores.
+#
+# Step 1 counts matching TERMS to a tiny cap. That is trigram-served and ~1ms
+# when the pattern is selective, and when it is not, PostgreSQL stops as soon as
+# the cap is reached rather than counting 2.6M rows. Reaching the cap is itself
+# the answer: too many terms to be worth driving from.
+# Step 2 only runs for a pattern that survived, where the term set is small and
+# counting its quads is correspondingly cheap.
+_TEXT_TERM_CAP = 200
+_TEXT_COUNT_CAP = 10_000
+
+
 async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                                    conn_params=None) -> None:
     """Fetch row counts for the plan's leaf pairs that the preload lacks.
@@ -464,6 +480,7 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
     from .semijoin import needed_pairs
     aliases.extra_quad_stats = {}
     aliases.range_stats = {}
+    aliases.text_stats = {}
     # Pairs whose count hit _PAIR_COUNT_CAP, so their recorded value is a lower
     # bound rather than a measurement. See where it is populated below.
     aliases.saturated_pairs = set()
@@ -521,6 +538,7 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
         from .semijoin import needed_ranges
         from .sparql_sql_schema import NUMERIC_TERM_COLUMN
         aliases.range_stats = {}
+        aliases.text_stats = {}
         for p_uuid, op, literal in needed_ranges(plan, aliases):
             ck = (space_id, p_uuid, op, literal)
             if ck in _pair_count_cache:
@@ -537,9 +555,43 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
             _pair_count_cache[ck] = n
             aliases.range_stats[(p_uuid, op, literal)] = n
 
+        # Text leaves: no constant object either, and the count is the whole
+        # question. A substring matching 2.6M terms and one matching none want
+        # opposite plans, and nothing else in this function can tell them apart.
+        # The GIN trigram index serves the selective case in ~1ms; the common
+        # case hits the cap almost immediately. Both ends are cheap, which is
+        # what makes measuring it affordable per query. See issues/070.
+        from .semijoin import needed_texts
+        for p_uuid, cond in needed_texts(plan, aliases):
+            ck = (space_id, p_uuid, cond)
+            if ck in _pair_count_cache:
+                aliases.text_stats[(p_uuid, cond)] = _pair_count_cache[ck]
+                continue
+            trows = await db.execute_query(
+                f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_term "
+                f"WHERE {cond} LIMIT {_TEXT_TERM_CAP}) s",
+                conn=conn, conn_params=conn_params)
+            t_n = trows[0]["n"] if trows else 0
+            if t_n >= _TEXT_TERM_CAP:
+                # Common. Record it as saturated-large so the gate reads it as
+                # "not selective" without a second, expensive count.
+                n = _TEXT_COUNT_CAP
+            else:
+                crows = await db.execute_query(
+                    f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_rdf_quad q "
+                    f"WHERE q.predicate_uuid = '{p_uuid}'::uuid AND q.object_uuid IN "
+                    f"(SELECT term_uuid FROM {space_id}_term WHERE {cond}) "
+                    f"LIMIT {_TEXT_COUNT_CAP}) s",
+                    conn=conn, conn_params=conn_params)
+                n = crows[0]["n"] if crows else 0
+            _pair_count_cache[ck] = n
+            aliases.text_stats[(p_uuid, cond)] = n
+
         logger.debug("semijoin gate: resolved %d/%d pair stats (%d counted), "
-                     "%d range(s)", len(aliases.extra_quad_stats), len(missing),
-                     len(still), len(aliases.range_stats))
+                     "%d range(s), %d text(s)",
+                     len(aliases.extra_quad_stats), len(missing),
+                     len(still), len(aliases.range_stats),
+                     len(aliases.text_stats))
     except Exception as e:
         logger.debug("semijoin gate: pair stats lookup failed: %s", e)
 

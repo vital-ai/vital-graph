@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from .ir import PlanV2, KIND_DISTINCT, KIND_REDUCED, KIND_PROJECT, KIND_ORDER
 from .emit_context import EmitContext
@@ -328,7 +331,8 @@ def _emit_two_phase(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
             f"ORDER BY {r_alias}.{sn}__uuid{suffix}")
 
 
-def _try_selective_driven(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
+def _try_selective_driven(plan: PlanV2, ctx: EmitContext,
+                          text_driven: bool = False) -> Optional[str]:
     """Drive the page from a SELECTIVE criterion instead of the entity anchor.
 
     `issues/061` step 3. `_emit_two_phase` always anchors on the entity-type BGP,
@@ -383,16 +387,20 @@ def _try_selective_driven(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
     from .var_scope import compute_scope
 
     if plan.limit < 0:
-        return None
-    if _has_semijoin(plan.child):
-        return None          # two-phase owns this shape
+        logger.debug("selective-driven declined: no limit"); return None
+    if _has_semijoin(plan.child) and not text_driven:
+        # Two-phase owns this shape — EXCEPT when an index-backed text leaf has
+        # been measured selective. Then two-phase's plan is the pathology: it
+        # anchors the page on the entity type and probes the text per candidate,
+        # so an empty match set is discovered one entity at a time (issues/070).
+        logger.debug("selective-driven declined: semijoin marked and not text-driven"); return None
 
     buried = _find_buried_order(plan.child)
     if len(buried) != 1:
-        return None
+        logger.debug("selective-driven declined: buried order != 1"); return None
     key, _direction = buried[0]
     if not isinstance(key, str):
-        return None
+        logger.debug("selective-driven declined: order key not a str"); return None
 
     node = plan.child
     for _ in range(6):
@@ -400,12 +408,12 @@ def _try_selective_driven(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
             break
         node = node.children[0] if node.children else None
     if node is None or node.kind != KIND_JOIN or len(node.children or []) != 2:
-        return None
+        logger.debug("selective-driven declined: no 2-child JOIN within 6 hops"); return None
 
     left, right = node.children
     shared = compute_scope(left).all_visible & compute_scope(right).all_visible
     if len(shared) != 1:
-        return None
+        logger.debug("selective-driven declined: shared vars != 1"); return None
     shared_var = next(iter(shared))
     if shared_var != key:
         # An explicit sort was requested, so the order key is a sort variable.
@@ -414,24 +422,41 @@ def _try_selective_driven(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
 
     left_bgp, right_bgp = find_bgp(left), find_bgp(right)
     if left_bgp is None or right_bgp is None:
-        return None
+        logger.debug("selective-driven declined: a side has no BGP"); return None
 
     anchor_n = _leaf_rows(left, ctx.aliases)
     driver_n = _leaf_rows(right, ctx.aliases)
     if not anchor_n or not driver_n:
+        logger.debug("selective-driven declined: unmeasured (anchor=%s driver=%s)",
+                     anchor_n, driver_n)
+        # Falsiness here is deliberate and a measured ZERO must keep declining.
+        # Zero IS a measurement — the most selective there is — and letting it
+        # through looks like the obvious improvement. IT RETURNS WRONG ANSWERS:
+        # this path drives from `emit_bgp_anchor(right_bgp)`, which carries the
+        # BGP's own constant leaves but NOT a FILTER sitting above the join. A
+        # constant criterion (`WV`) binds object_uuid inside the BGP, so driving
+        # from it is sound. A text criterion is a pushed FILTER, so driving from
+        # its BGP drops the ILIKE entirely — measured: `contains 'ZZQQXX'`
+        # returned 25 rows for a substring matching nothing.
+        # Fixing this means teaching the driver to carry pushed filter
+        # conditions; until then the guard stays. See issues/070.
         return None          # unmeasured: no opinion, keep the current plan
     if driver_n >= MIN_SELECTIVITY * anchor_n:
+        logger.debug("selective-driven declined: driver %s not selective vs "
+                     "anchor %s", driver_n, anchor_n)
         # The same threshold the semi-join gate uses, read the other way round:
         # it declines to PROBE below this, and this declines to DRIVE above it.
         return None
 
     driver = emit_bgp_anchor(right_bgp, ctx, shared_var)
     if driver is None:
+        logger.debug("selective-driven declined: driver BGP did not emit")
         return None
     col_ref, from_sql, where_conds = driver
 
     anchor_probe = emit_bgp_exists(left_bgp, ctx, (shared_var, col_ref))
     if not anchor_probe:
+        logger.debug("selective-driven declined: anchor probe did not emit")
         return None
 
     info = ctx.types.get(shared_var)
@@ -466,12 +491,53 @@ def _try_selective_driven(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
             f"ON {r_alias}.{sn}__uuid = {t_alias}.term_uuid")
 
 
+def _text_leaf_should_drive(plan: PlanV2, ctx: EmitContext) -> bool:
+    """Is there a text leaf selective enough to drive the page?
+
+    `reorder_bgp` already pins an index-backed text leaf FIRST for join order,
+    on the grounds that a trigram-served leaf is cheap to enter whatever it
+    matches. That pinning stops at the probe, and the probe runs once per
+    candidate — so the rule has to reach DRIVER choice too, which is what this
+    gates (`issues/070`, `issues/061` step 3).
+
+    It is a gate and not a preference on purpose. Driving from `'CA'`, which
+    matches 2.6M terms here, would be far worse than the 45 ms the probe costs;
+    the win is entirely in the selective case, where the probe walks every
+    entity to find nothing. So: measured, and measured SMALL, or stand aside.
+    """
+    from .semijoin import MIN_SELECTIVITY, _leaf_rows
+
+    text_stats = getattr(ctx.aliases, "text_stats", None)
+    if not text_stats:
+        return False
+    smallest = min((n for n in text_stats.values() if n is not None),
+                   default=None)
+    if smallest is None:
+        return False
+
+    anchor_n = _leaf_rows(plan.child, ctx.aliases)
+    if not anchor_n:
+        return False              # unmeasured anchor: no opinion, no change
+    if smallest >= MIN_SELECTIVITY * anchor_n:
+        return False              # dense enough that probing is right
+    ctx.log("slice", f"text leaf measured {smallest} against anchor {anchor_n} "
+                     f"— driving the page from it")
+    return True
+
+
 def emit_slice(plan: PlanV2, ctx: EmitContext) -> str:
     """Emit SQL for a SLICE modifier (LIMIT/OFFSET)."""
     from .emit import emit
     from .emit_expressions import expr_to_sql
 
-    two_phase = _emit_two_phase(plan, ctx)
+    # A measured-selective text leaf drives the page BEFORE two-phase is
+    # considered: two-phase would succeed here, and succeeding is the problem.
+    # If this declines, everything below runs exactly as it did.
+    two_phase = None
+    if _text_leaf_should_drive(plan, ctx):
+        two_phase = _try_selective_driven(plan, ctx, text_driven=True)
+    if two_phase is None:
+        two_phase = _emit_two_phase(plan, ctx)
     if two_phase is None:
         # No good plan from the anchor — issues/061 step 3.
         two_phase = _try_selective_driven(plan, ctx)

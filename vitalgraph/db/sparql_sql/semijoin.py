@@ -129,6 +129,23 @@ def _leaf_rows(node, aliases) -> Optional[int]:
             if p_uuid in preds and n is not None and (best is None or n < best):
                 best = n
 
+    # Text matches, keyed by predicate for the same reason ranges are: the
+    # FILTER sits above the join and the predicate it constrains below it.
+    # Without this a selective substring reads as unmeasured, and unmeasured
+    # means "keep the current plan" — which is the probe-per-candidate walk.
+    text_stats = getattr(aliases, "text_stats", {})
+    if text_stats:
+        preds = set()
+        for bgp in _bgps(node):
+            for (alias, col), term in (bgp.leaf_terms or {}).items():
+                if col == "predicate_uuid":
+                    u = _term_uuid(aliases, *term)
+                    if u:
+                        preds.add(u)
+        for (p_uuid, _cond), n in text_stats.items():
+            if p_uuid in preds and n is not None and (best is None or n < best):
+                best = n
+
     for bgp in _bgps(node):
         by_alias: dict = {}
         for (alias, col), (text, ttype) in (bgp.leaf_terms or {}).items():
@@ -195,6 +212,66 @@ def needed_ranges(plan, aliases) -> set:
                 p_uuid = _term_uuid(aliases, *pred)
                 if p_uuid:
                     out.add((p_uuid, op, lit))
+                    break
+    return out
+
+
+def needed_texts(plan, aliases) -> set:
+    """(predicate_uuid, term_condition) for each LIKE-family text match.
+
+    The same problem `needed_ranges` solves, for the same reason: a text match
+    binds no constant object, so `needed_pairs` sees nothing for it and the leaf
+    reads as UNMEASURED. For a range that meant the gate declined to probe. For
+    a text leaf it means nothing can tell a substring matching 2.6M terms from
+    one matching none — and those two want opposite plans.
+
+    The count this feeds is served by the GIN trigram index, which is the whole
+    point: it is cheap precisely when the answer matters most (`issues/070`).
+
+    LIKE family only. `regex` is deliberately excluded — pg_trgm can serve some
+    regexes, but which ones depends on the pattern, and a count that silently
+    falls back to a sequential scan would cost more than the plan it informs.
+    """
+    from .filter_pushdown import _text_search_operands, _esc, _like_escape
+    from ..jena_sparql.jena_types import ExprFunction
+
+    out = set()
+    for filt in _filters(plan):
+        for expr in (filt.filter_exprs or []):
+            if not isinstance(expr, ExprFunction):
+                continue
+            name = (expr.name or "").lower()
+            if name not in ("contains", "strstarts", "strends"):
+                continue
+            ops = _text_search_operands(expr)
+            if ops is None:
+                continue
+            var, _, literal, ci, _flags = ops
+            if var is None or literal is None:
+                continue
+            # Built exactly as `filter_pushdown` builds it, so the count is over
+            # the set the query will actually match. Diverging here would
+            # estimate one predicate and run another.
+            esc = _esc(_like_escape(literal))
+            like = "ILIKE" if ci else "LIKE"
+            if name == "contains":
+                cond = f"term_text {like} '%{esc}%'"
+            elif name == "strstarts":
+                cond = f"term_text {like} '{esc}%'"
+            else:
+                cond = f"term_text {like} '%{esc}'"
+
+            for bgp in _bgps(plan):
+                slot = bgp.var_slots.get(var)
+                if not slot or not slot.positions:
+                    continue
+                alias, _col = slot.positions[0]
+                pred = (bgp.leaf_terms or {}).get((alias, "predicate_uuid"))
+                if not pred:
+                    continue
+                p_uuid = _term_uuid(aliases, *pred)
+                if p_uuid:
+                    out.add((p_uuid, cond))
                     break
     return out
 
