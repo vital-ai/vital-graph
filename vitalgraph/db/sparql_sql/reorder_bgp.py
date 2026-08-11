@@ -37,6 +37,7 @@ def reorder_joins(
     tagged_constraints: List[Tuple[str, str]],
     quad_stats: Optional[Dict[Tuple[str, str], int]] = None,
     pred_stats: Optional[Dict[str, int]] = None,
+    leaf_cardinality: Optional[Dict[str, float]] = None,
 ) -> Tuple[List[TableRef], Dict[str, List[str]], List[str]]:
     """Reorder quad tables so every JOIN references an already-placed table.
 
@@ -44,6 +45,24 @@ def reorder_joins(
         ordered_tables: list of TableRef in optimised order
         on_map: dict  alias -> [sql conditions] for JOIN ON clauses
         first_conds: list of sql conditions for the first table (WHERE)
+
+    `leaf_cardinality` is alias -> row count, supplied by the caller from
+    `plan.leaf_terms` — the STRUCTURAL record made at collect time. Prefer it.
+
+    Without it this falls back to deriving cardinality by regex-parsing the
+    constraint SQL, which cannot read the shape this pipeline emits: the object
+    branch requires the constant to sit in a constraint referencing no other
+    alias, and a KGQuery emits `q7.subject_uuid = mv0.dest_node_uuid AND
+    q7.predicate_uuid = '...' AND q7.object_uuid = '...'` as ONE string. So
+    `refs` is non-empty, the branch is skipped, and NO leaf gets a pair count —
+    every selectivity decision below then runs on infinity, and the chain root
+    falls through to whatever was listed first. Measured: the same two criteria
+    in opposite order produced the same 20-table join order and differed 8x,
+    purely by which end the scan started from (`issues/061`).
+
+    Connectivity is still read from the SQL, and correctly — the join graph IS
+    the constraint text. Only the cardinality was being recovered from a place
+    that does not reliably hold it.
     """
     if not quad_tables:
         return quad_tables, {}, []
@@ -92,7 +111,9 @@ def reorder_joins(
 
         fingerprint[alias] = "|".join(sorted(self_parts) + sorted(coref_cols))
 
-        if quad_stats or pred_stats:
+        if leaf_cardinality is not None and alias in leaf_cardinality:
+            cardinality[alias] = leaf_cardinality[alias]
+        elif quad_stats or pred_stats:
             if pred_uuid and obj_uuid:
                 card = quad_stats.get((pred_uuid, obj_uuid))
                 if card is not None:
@@ -112,9 +133,25 @@ def reorder_joins(
             ilike_alias = owner
             break
 
+    # A TEXT-FILTER ANCHOR WINS OUTRIGHT, ahead of any row count. That is the
+    # original hardcoded rule and it stays: a LIKE / ILIKE / regex leaf is served
+    # by the GIN trigram index, and its selectivity is not in `quad_stats` at all
+    # because there is no constant object to key on. Ranking it by cardinality
+    # would read it as UNKNOWN and place it last — exactly backwards for the one
+    # leaf we know is cheap to enter. Cardinality is consulted only when no such
+    # anchor exists.
     if ilike_alias and ilike_alias in alias_to_table:
         first = alias_to_table[ilike_alias]
         logger.debug("Chain root: %s (text-filter anchor)", ilike_alias)
+    elif cardinality:
+        # The root is where the scan STARTS, so it decides how much every later
+        # join carries. This used to be list position — for a KGQuery, the order
+        # the CALLER wrote the criteria in. Ties keep list order, so a plan whose
+        # leaves have no known counts is byte-identical to before.
+        cheapest, rows = min(cardinality.items(), key=lambda kv: (kv[1], kv[0]))
+        if rows < _INF and cheapest in alias_to_table:
+            first = alias_to_table[cheapest]
+            logger.debug("Chain root: %s (%s rows, cheapest leaf)", cheapest, rows)
 
     placed_order = [first]
     placed_set = {first.alias}
