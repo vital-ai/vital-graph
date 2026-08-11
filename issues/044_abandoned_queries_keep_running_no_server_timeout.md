@@ -10,6 +10,42 @@
 | 4. client disconnect not detected | **FIXED** — `RequestBoundsMiddleware` polls and cancels, reads only |
 | 5. fence is client-driven, not DB-enforced | **FIXED** — `SET LOCAL statement_timeout` on the read path |
 
+### Gap 4 is HALF delivered — and the remaining half is a rewrite, not a patch
+
+Corrected 2026-08-11. The first version of the watcher polled
+`Request.is_disconnected()`, which READS THE ASGI RECEIVE CHANNEL and consumed
+the `http.request` message carrying the body. Every query POST broke — SPARQL
+execution, keyword and semantic search, graph-visualization search — while every
+GET passed. Local suites could not see it; CI did.
+
+The watcher is now restricted to bodyless requests (GET/HEAD/OPTIONS). So:
+
+    GET / HEAD / OPTIONS        disconnect-cancelled + deadline
+    /kgqueries, /kg*/query      deadline ONLY
+
+A client that hangs up mid-query on `/kgqueries` is therefore still not detected;
+only the 120 s deadline eventually reclaims the connection and cancels the query.
+
+**Why this is not a small fix.** ASGI only surfaces a disconnect when something
+CALLS `receive()`, and calling it concurrently with a handler that has not yet
+read its body steals that body. The workable shape is:
+
+1. drain `receive()` in the middleware until `more_body` is false, buffering the
+   body;
+2. hand the app a replaying `receive` that returns the buffered body once;
+3. only THEN start a watcher on the real `receive`, where the sole remaining
+   message can be `http.disconnect`.
+
+That requires dropping `BaseHTTPMiddleware` for a pure-ASGI middleware (the base
+class owns the receive wrapper), and it buffers the whole request body in memory
+— acceptable for the allowlist, which is small criteria JSON, and NOT acceptable
+if the allowlist ever grows to include an upload.
+
+**Do not attempt it without the body test.** `TestDisconnectDuringBodyRequest`
+now pins both halves — the body survives AND the deadline still cancels — which
+are in tension: the naive way to get one loses the other. Those two tests exist
+because their absence is exactly why the broken version shipped.
+
 ### Gaps 1 and 4, closed 2026-08-10
 
 Both were the same missing thing — nothing bounded a REQUEST — so

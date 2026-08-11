@@ -107,6 +107,47 @@ class TestPostBodySurvives:
         assert _can_watch_disconnect("POST") is False
 
 
+class TestDisconnectDuringBodyRequest:
+    """A POST that carries a body must BOTH keep its body and be cancellable.
+
+    Written BEFORE the implementation, because the previous attempt at gap 4
+    shipped a watcher that ate the body and no test noticed. These two
+    assertions are in tension — the naive way to get one loses the other — so
+    they belong in the same class.
+    """
+
+    def test_body_survives_and_handler_completes(self, monkeypatch):
+        monkeypatch.setenv("VITALGRAPH_REQUEST_DEADLINE_S", "20")
+        app = FastAPI()
+        app.add_middleware(RequestBoundsMiddleware)
+
+        @app.post("/api/kgqueries")
+        async def q(request: Request):
+            body = await request.json()
+            return {"echo": body["q"]}
+
+        with TestClient(app) as c:
+            r = c.post("/api/kgqueries", json={"q": "SELECT * WHERE {?s ?p ?o}"})
+        assert r.status_code == 200
+        assert r.json() == {"echo": "SELECT * WHERE {?s ?p ?o}"}
+
+    def test_body_request_is_still_deadline_bounded(self, monkeypatch):
+        """Cancellation must still reach a body-carrying read."""
+        monkeypatch.setenv("VITALGRAPH_REQUEST_DEADLINE_S", "0.2")
+        app = FastAPI()
+        app.add_middleware(RequestBoundsMiddleware)
+
+        @app.post("/api/kgqueries")
+        async def slow(request: Request):
+            await request.json()
+            await asyncio.sleep(5)
+            return {"ok": True}
+
+        with TestClient(app) as c:
+            r = c.post("/api/kgqueries", json={"q": "x"})
+        assert r.status_code == 504
+
+
 def _app(handler_seconds: float):
     app = FastAPI()
     app.add_middleware(RequestBoundsMiddleware)
