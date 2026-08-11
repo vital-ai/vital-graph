@@ -61,6 +61,17 @@ except SpaceAlreadyExistsError:
     print(f"   space {space_id} already exists — reusing")
 PY
 
+# Register the graph the data is loaded under. ensure_space creates the space
+# and tables; loading quads with a context puts the data IN a graph; neither
+# REGISTERS one. Until this was added every generated fixture had data and no
+# `graph` row, so none was reachable through the API (issues/061).
+python - "$SPACE" "$GRAPH" <<'PY2'
+import asyncio, os, sys
+sys.path.insert(0, os.getcwd())
+from scripts.perf_seed_data import ensure_graph, pg_params  # noqa: E402
+asyncio.run(ensure_graph(sys.argv[1], sys.argv[2], pg_params()))
+PY2
+
 echo "▶ 4/4 bulk load"
 python scripts/load_wordnet_csv.py --space "$SPACE" \
     --quads-csv "$CSV" --terms-csv "${CSV%.csv}_terms.csv"

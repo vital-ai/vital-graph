@@ -261,8 +261,69 @@ async def register_space(space_id: str, params: dict) -> None:
         await conn.close()
 
 
+async def ensure_graph(space_id: str, graph_uri: str, params: dict) -> None:
+    """Register the graph the dataset lives in. Idempotent.
+
+    `ensure_space` creates the space and its tables; loading quads with a
+    `context_uuid` puts the data IN a graph. Neither REGISTERS one, and until
+    2026-08-10 nothing did — every generated fixture on the local cluster had
+    data and no `graph` row, `sp_lead_synth_100k` included at 50,570,000 quads.
+
+    The consequence is not cosmetic. The `graph` table is what makes a graph
+    visible to space listing, graph enumeration and the API paths that validate
+    a graph before querying it, so an unregistered dataset can be queried by
+    generating SQL directly and not through the service at all. That is why
+    `issues/061` records the perf fixtures as unreachable by the perf suite.
+
+    Pass the SAME uri the loader gives `convert_nt_to_csv --graph`. A row whose
+    `graph_uri` does not match the context the quads carry is worse than no row:
+    it registers a graph that resolves to nothing, and queries through it come
+    back empty while looking correctly configured.
+    """
+    from vitalgraph.db.sparql_sql.sparql_sql_space_impl import SparqlSQLSpaceImpl
+
+    impl = SparqlSQLSpaceImpl(
+        postgresql_config={"host": params["host"], "port": params["port"],
+                           "database": params["database"],
+                           "username": params["user"],
+                           "password": params["password"],
+                           "min_pool_size": 1, "max_pool_size": 2},
+        sidecar_config={"url": os.environ.get("VG_TEST_SIDECAR_URL",
+                                              "http://localhost:7071")})
+    await impl.connect()
+    try:
+        existing = await impl._db.execute_query(
+            "SELECT 1 FROM graph WHERE space_id = $1 AND graph_uri = $2",
+            [space_id, graph_uri])
+        if existing:
+            print(f"   graph {graph_uri} already registered")
+            return
+        # create_graph SWALLOWS its errors and returns False. Ignoring that
+        # printed "registered" over a foreign-key violation the first time this
+        # ran — a registry write reporting success on failure, which is the same
+        # shape as every derived-data defect in this codebase. Fail loudly: a
+        # loader that silently produces an unregistered dataset is what created
+        # the eight-space backlog this helper exists to prevent.
+        ok = await impl.create_graph(space_id, graph_uri)
+        if not ok:
+            raise SystemExit(
+                f"❌ failed to register graph {graph_uri} for space {space_id} "
+                f"— is the space registered, and is this the right database? "
+                f"(pg_params defaults to port 5433, the docker test stack)")
+        print(f"   graph {graph_uri} registered")
+    finally:
+        try:
+            await impl.disconnect()
+        except Exception:
+            pass
+
+
 async def ensure_space(space_id: str, params: dict) -> None:
-    """Create the space (registry row + tables) via the space manager."""
+    """Create the space (registry row + tables) via the space manager.
+
+    Does NOT register a graph — see `ensure_graph`, which the loader must call
+    with the URI it loaded the quads under.
+    """
     from vitalgraph.db.sparql_sql.sparql_sql_space_impl import SparqlSQLSpaceImpl
     from vitalgraph.space.space_manager import SpaceManager
 
