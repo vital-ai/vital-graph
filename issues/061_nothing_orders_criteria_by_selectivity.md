@@ -27,9 +27,48 @@ other multi-criteria slowness — `LeadStatus eq + MQLRating gte` went >25 s to
 39 ms once it stopped compounding p99 across hops.) The remaining decline reason
 is undiagnosed.
 
-It is also not the selective/unselective ranking this issue notes already works:
-`WV` alone is 40 ms and correctly declines probing at 848/100,000, below
-`MIN_SELECTIVITY`. Both criteria have to be present.
+### DIAGNOSED — 2026-08-10. Neither existing plan shape can answer it.
+
+The decline is silent, before any log line: `mark_semijoins` never marks the
+join, so `_emit_two_phase` returns at `_has_semijoin=False`. The gate that
+declines is `_selective_enough` — `WV` is 848 of 100,000, i.e. 0.85%, under
+`MIN_SELECTIVITY = 0.05`.
+
+**That gate is correct and must not be relaxed.** Measured both ways:
+
+    WV alone            MIN_SELECTIVITY 0.05    73 ms      set-based, right call
+    WV alone            MIN_SELECTIVITY 0.00    >10 s      forced probe, catastrophic
+    large + selective   MIN_SELECTIVITY 0.05    >10 s
+    large + selective   MIN_SELECTIVITY 0.00    >10 s
+
+The first pair is the 889x this codebase already documents: probing a selective
+criterion costs O(page / selectivity), so the set-based join wins and the gate
+picks it. Relaxing the threshold to fix the third row breaks the first.
+
+The second pair is the finding: **for one selective plus one large criterion,
+BOTH available plans are >10 s.** Probing from the entity anchor is wrong
+because the answer is sparse; the set-based join is wrong because it materialises
+the large criterion. The shape has no good plan in the current repertoire, which
+is why no threshold tuning reaches it.
+
+### What is actually missing
+
+`_emit_two_phase` always anchors on the ENTITY-TYPE bgp, because that is what
+supplies `subject_uuid` order for O(page) paging. Every criterion is then a
+probe. For this shape the right driver is the SELECTIVE CRITERION: find the 848
+entities with `WV`, test each against `LeadStatus`, sort 848 and take 25.
+
+That trades away the ordered scan — the sort is over 848 rows, not 100,000 —
+which is precisely the trade `issues/059`'s candidate-driven path already makes
+for negation, gated on density. This is the same trade for a different reason,
+and it is the concrete form of "which criterion drives" that this issue names.
+
+So step 3 is not "rank criteria and reorder them". It is "allow a criterion
+other than the entity type to be the driver, when it is selective enough that
+sorting its whole match set is cheaper than paging the entity index". The
+ranking is the easy half; the emission path is the work.
+
+`WV` alone at 73 ms is the existence proof that reaching those 848 rows is cheap.
 
 See `two_phase_kgquery_paging_plan.md` for the full measurement table.
 
