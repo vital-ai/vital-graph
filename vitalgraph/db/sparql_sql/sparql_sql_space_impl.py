@@ -1896,17 +1896,18 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                                     conn, space_id, pred_uuids)
 
                         if _has_where_bound_delete(cr.update_ops):
-                            from .sync_edge_table import cleanup_orphan_edges
-                            from .sync_frame_entity_table import (
-                                cleanup_stale_frame_entity)
-                            async with conn.transaction():
-                                # frame_entity is validated against the edge
-                                # table, so clean it BEFORE the edges it reads
-                                # are removed — otherwise a row whose edge is
-                                # about to go looks stale for the wrong reason
-                                # and the two passes disagree about why.
-                                await cleanup_stale_frame_entity(conn, space_id)
-                                await cleanup_orphan_edges(conn, space_id)
+                            from .sync_edge_table import mark_sweep_needed
+                            mark_sweep_needed(space_id)
+
+                        # WHERE-bound deletes name no subjects, so the bounded
+                        # per-subject cleanup above cannot reach them. The
+                        # referential sweep that does is NOT run here: it is
+                        # O(edge table), measured at 181,212 ms over 4.98M rows
+                        # with zero orphans, against a 60 s command_timeout — so
+                        # inline it added up to 60 s to every such update and
+                        # was then cancelled, meaning it never actually cleaned
+                        # anything (issues/079). MaintenanceJob owns it now, on
+                        # a connection that is not answering a user.
                     except Exception as ee:
                         logger.debug("edge sync after SPARQL UPDATE failed (non-critical): %s", ee)
 
@@ -1987,10 +1988,19 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
     # ==================================================================
 
     async def drop_indexes_for_bulk_load(self, space_id: str) -> bool:
+        """Drop secondary indexes ahead of a bulk load.
+
+        CALLER CONTRACT: this leaves the space UNINDEXED and committed. Pairing
+        it with `recreate_indexes_after_bulk_load` is the caller's
+        responsibility, and a failure there is not automatically recoverable —
+        see the note on that method.
+        """
         try:
             async with self._db._pool.acquire() as conn:
                 for stmt in self.schema.drop_space_indexes_sql(space_id):
-                    await conn.execute(stmt)
+                    # timeout=None: index DDL is not a query and the pool's 60s
+                    # command_timeout is a QUERY fence. See recreate() below.
+                    await conn.execute(stmt, timeout=None)
             return True
         except Exception as e:
             logger.error("drop_indexes_for_bulk_load(%s) failed: %s", space_id, e)
@@ -1998,6 +2008,27 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
     async def recreate_indexes_after_bulk_load(self, space_id: str,
                                                 concurrent: bool = True) -> bool:
+        """Rebuild the secondary indexes `drop_indexes_for_bulk_load` removed.
+
+        NO STATEMENT TIMEOUT, deliberately. The pool sets `command_timeout=60`,
+        which is a fence for QUERIES; an index build is not a query and its cost
+        is proportional to the table. Measured on 50,570,000 rows: 21,879 ms
+        plain and 40,983 ms CONCURRENTLY — already 68% of that fence, and
+        `concurrent=True` is the default, so the default path was the one about
+        to cross it (`issues/079`). Under the fence the build is CANCELLED, and
+        because the drops are already committed the space is left unindexed.
+
+        A cancelled `CREATE INDEX CONCURRENTLY` also leaves an INVALID index
+        behind that PostgreSQL will not use, so the failure is not even
+        self-clearing.
+
+        NOT wrapped in a transaction: `CREATE INDEX CONCURRENTLY` cannot run
+        inside one. That is why the contract on `drop_indexes_for_bulk_load`
+        matters — this pair is not atomic and cannot be made so while
+        `concurrent` is true. `bulk_load_with_index_rebuild` is the atomic
+        alternative for the non-concurrent case.
+        """
+        failed = []
         try:
             async with self._db._pool.acquire() as conn:
                 for stmt in self.schema.create_space_indexes_sql(space_id):
@@ -2005,7 +2036,20 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                         stmt = stmt.replace(
                             'CREATE INDEX', 'CREATE INDEX CONCURRENTLY'
                         )
-                    await conn.execute(stmt)
+                    try:
+                        await conn.execute(stmt, timeout=None)
+                    except Exception as one:
+                        # Keep going: one index failing should not cost the rest,
+                        # and the caller needs to know WHICH are missing rather
+                        # than just that something went wrong.
+                        failed.append((stmt, one))
+            if failed:
+                logger.error(
+                    "recreate_indexes(%s): %d of the index builds FAILED — the "
+                    "space is missing indexes and queries against it will be "
+                    "slow until they are rebuilt. First failure: %s",
+                    space_id, len(failed), failed[0][1])
+                return False
             return True
         except Exception as e:
             logger.error("recreate_indexes(%s) failed: %s", space_id, e)

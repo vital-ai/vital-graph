@@ -47,6 +47,11 @@ EDGE_ORPHAN_STALE_PCT = 0.5
 # not a staleness signal — see the note at the log site.
 EDGE_UNTYPED_WARN_PCT = 0.01
 
+# Spaces to sweep for orphans per cycle. Each pass examines a bounded window and
+# costs real time (~12 s per 100k rows), so this trades convergence speed for a
+# predictable cycle length. Unswept spaces are re-queued, not dropped.
+_SWEEP_SPACES_PER_CYCLE = 2
+
 # Cleanup
 CLEANUP_RETENTION_DAYS = 30
 _SECONDS_PER_DAY = 86_400
@@ -494,6 +499,31 @@ class MaintenanceJob:
             edge_table_drift, edge_table_orphan_rate,
             edge_table_untyped_rate, backfill_edge_table,
             cleanup_orphan_edges, VITALTYPE_URI)
+
+        # Spaces whose SPARQL UPDATEs deferred a delete the per-subject hooks
+        # could not reach. This used to run INLINE in the update request, where
+        # it was O(edge table) — 181,212 ms over 4.98M rows with zero orphans
+        # against a 60 s command_timeout, so it never completed and never
+        # cleaned anything (issues/079). Here it is bounded per pass and the
+        # connection is not answering a user.
+        #
+        # Capped per cycle because each pass is real work (~12 s per 100k-row
+        # window). Whatever is not swept this tick is put back, so nothing is
+        # dropped — it just waits for the next one.
+        from ..db.sparql_sql.sync_edge_table import (
+            take_sweep_pending, mark_sweep_needed)
+        pending = take_sweep_pending()
+        for sid in sorted(pending)[:_SWEEP_SPACES_PER_CYCLE]:
+            try:
+                async with self._pool.acquire() as conn:
+                    removed = await cleanup_orphan_edges(conn, sid)
+                if removed:
+                    logger.info("Edge integrity: swept %d orphan(s) from %s "
+                                "after a WHERE-bound delete", removed, sid)
+            except Exception as e:
+                logger.warning("orphan sweep for %s failed: %s", sid, e)
+        for sid in sorted(pending)[_SWEEP_SPACES_PER_CYCLE:]:
+            mark_sweep_needed(sid)
 
         worst_space = None
         worst_drift = 0

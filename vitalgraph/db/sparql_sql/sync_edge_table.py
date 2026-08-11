@@ -156,8 +156,43 @@ async def cleanup_orphan_edges_for_subjects(conn, space_id: str,
     return deleted
 
 
-async def cleanup_orphan_edges(conn, space_id: str, limit: int = 50_000) -> int:
-    """Remove edge rows whose defining quads are gone. Bounded, non-blocking.
+# Rows the sweep may EXAMINE per pass. The old bound was on rows DELETED, which
+# is the wrong quantity: when there is nothing to delete — the healthy case, and
+# the common one — PostgreSQL still had to probe every row to establish that.
+# Measured at 181,212 ms over 4,977,000 rows with zero orphans, against a 60 s
+# command_timeout, so it never finished and the cleanup never happened
+# (issues/079). Bounding the SCAN makes each pass fixed-cost.
+_SWEEP_SCAN_ROWS = 100_000
+
+# Where the next pass starts, per space. In-process and deliberately so: losing
+# it on restart costs one repeated window, and the sweep is convergent — it does
+# not need to be durable to be correct.
+_sweep_cursor: dict = {}
+
+
+# Spaces whose updates deferred a delete the per-subject hooks could not reach.
+# The sweep rotates over every space anyway, so this is a PRIORITY hint, not a
+# queue — losing it costs later cleanup, never correctness. In-process for the
+# same reason the cursor is.
+_sweep_pending: set = set()
+
+
+def mark_sweep_needed(space_id: str) -> None:
+    """Record that a WHERE-bound delete left work the subject hooks cannot do."""
+    _sweep_pending.add(space_id)
+
+
+def take_sweep_pending() -> set:
+    """Drain the pending set. Callers sweep what they get."""
+    pending = set(_sweep_pending)
+    _sweep_pending.clear()
+    return pending
+
+
+async def cleanup_orphan_edges(conn, space_id: str,
+                               limit: int = 50_000,
+                               scan_rows: int = _SWEEP_SCAN_ROWS) -> int:
+    """Remove edge rows whose defining quads are gone. SCAN-bounded, rotating.
 
     The delete-side counterpart to `backfill_edge_table`, and the piece that was
     missing. `cleanup_orphan_edges_for_subjects` needs a subject list, which the
@@ -170,9 +205,16 @@ async def cleanup_orphan_edges(conn, space_id: str, limit: int = 50_000) -> int:
     That is how 20,461 orphans accumulated across four spaces, 5.3% of a
     production-shaped one, each answering traversals with an edge to nowhere.
 
-    Bounded by `limit` and using a plain DELETE, so it takes ROW EXCLUSIVE and
-    does not block edge-rewrite queries — unlike `resync_edge_table`, which
-    TRUNCATEs under ACCESS EXCLUSIVE. Repeated maintenance ticks converge.
+    BOUNDED ON THE SCAN, not on the deletions (issues/079). The previous form
+    put `LIMIT` on the rows to delete, which bounds nothing when there is
+    nothing to delete: proving absence still walks the whole table. Each pass
+    now examines at most `scan_rows` rows, starting after the last ctid the
+    previous pass reached and wrapping at the end, so repeated maintenance ticks
+    cover the table and every pass costs the same.
+
+    Plain DELETE, so ROW EXCLUSIVE only and edge-rewrite queries are not
+    blocked — unlike `resync_edge_table`, which TRUNCATEs under ACCESS
+    EXCLUSIVE.
 
     The context is part of the check for the same reason it is in
     `edge_table_orphan_rate`: a space reloaded under a different graph URI keeps
@@ -181,20 +223,42 @@ async def cleanup_orphan_edges(conn, space_id: str, limit: int = 50_000) -> int:
     """
     t_edge = f"{space_id}_edge"
     t_quad = f"{space_id}_rdf_quad"
-    result = await conn.execute(f"""
-        DELETE FROM {t_edge} WHERE ctid IN (
-            SELECT e.ctid FROM {t_edge} e
-            WHERE NOT EXISTS (
-                SELECT 1 FROM {t_quad} q
-                WHERE q.subject_uuid = e.edge_uuid
-                  AND q.predicate_uuid = $1
-                  AND q.context_uuid = e.context_uuid)
-            LIMIT {int(limit)})
-    """, _EDGE_SRC_UUID)
+    cursor = _sweep_cursor.get(space_id) or "(0,0)"
+
+    # One pass over a bounded window: which of these rows are orphans, and how
+    # far did we get. `ctid > $2` with ORDER BY ctid gives a stable rotation.
+    rows = await conn.fetch(f"""
+        SELECT w.c::text AS ctid,
+               NOT EXISTS (
+                   SELECT 1 FROM {t_quad} q
+                   WHERE q.subject_uuid = w.edge_uuid
+                     AND q.predicate_uuid = $1
+                     AND q.context_uuid = w.context_uuid
+               ) AS orphan
+        FROM (
+            SELECT ctid AS c, edge_uuid, context_uuid
+            FROM {t_edge}
+            WHERE ctid > $2::text::tid
+            ORDER BY ctid
+            LIMIT {int(scan_rows)}
+        ) w
+    """, _EDGE_SRC_UUID, cursor)
+
+    if not rows:
+        _sweep_cursor[space_id] = None          # end of table: wrap next pass
+        return 0
+    _sweep_cursor[space_id] = rows[-1]["ctid"]
+
+    orphan_ctids = [r["ctid"] for r in rows if r["orphan"]][:int(limit)]
+    if not orphan_ctids:
+        return 0
+
+    result = await conn.execute(
+        f"DELETE FROM {t_edge} WHERE ctid = ANY($1::text[]::tid[])", orphan_ctids)
     deleted = int(result.split()[-1]) if result else 0
     if deleted:
-        logger.info("cleanup_orphan_edges(%s): removed %d orphaned row(s)",
-                    space_id, deleted)
+        logger.info("cleanup_orphan_edges(%s): removed %d orphaned row(s) "
+                    "from a %d-row window", space_id, deleted, len(rows))
     return deleted
 
 

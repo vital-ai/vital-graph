@@ -120,10 +120,16 @@ async def bulk_load_with_index_rebuild(
     caller's transaction; index DDL is non-CONCURRENT (fine on an empty/idle
     table) so it commits atomically with the load.
     """
+    # timeout=None on the DDL: the pool's `command_timeout` is a 60s QUERY
+    # fence, and an index build is not a query — 40,983 ms for one index on
+    # 50.5M rows, so a larger space crosses it (`issues/079`). Here a timeout
+    # would roll the whole load back rather than corrupt anything, since this
+    # runs in the caller's transaction, but losing a completed COPY to a fence
+    # that was never meant for DDL is still the wrong outcome.
     for stmt in drop_index_sql:
-        await conn.execute(stmt)
+        await conn.execute(stmt, timeout=None)
     await insert_terms_quads_copy(conn, t, term_args, quad_rows,
                                   terms_direct=terms_direct)
     for stmt in create_index_sql:
-        await conn.execute(stmt)
+        await conn.execute(stmt, timeout=None)
     return len(quad_rows)

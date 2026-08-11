@@ -1,6 +1,16 @@
 # The WHERE-Bound Delete Sweep Cannot Finish — 181s Against a 60s Timeout
 
-## Status: OPEN — measured 2026-08-11 on `sp_lead_synth_100k`
+## Status: FIXED 2026-08-11 — measured on `sp_lead_synth_100k`
+
+    the sweep, 4,977,000 edge rows, zero orphans:
+        before   181,212 ms   cancelled at the 60 s command_timeout, never ran
+        after     ~12,000 ms  per pass, fixed cost, rotating
+
+Correctness re-verified on a throwaway table after the mechanism changed: 12
+orphans removed, 30 live rows kept, second pass a no-op.
+
+Index DDL now runs with `timeout=None` — the pool's 60 s is a QUERY fence and an
+index build is not a query.
 
     cleanup_orphan_edges scan, 4,977,000 edge rows, ZERO orphans:
         Execution Time: 181,212 ms   (3 minutes 1 second)
@@ -49,7 +59,24 @@ does nothing precisely when the sweep is cheapest to skip.
 This is the same shape as `issues/070` and `073`: proving absence costs a full
 scan, and absence is the normal state.
 
-## What to do
+## What was done
+
+* **The sweep left the request path.** `_has_where_bound_delete` now calls
+  `mark_sweep_needed(space_id)` instead of sweeping, and `MaintenanceJob` drains
+  that at the top of `_run_edge_integrity`, capped at
+  `_SWEEP_SPACES_PER_CYCLE = 2` with the remainder re-queued so nothing is
+  dropped. The detection was kept — it is the only thing that knows WHICH
+  spaces deferred work — it just no longer does the work itself.
+* **The bound moved from the deletions to the SCAN.** Each pass examines at
+  most `_SWEEP_SCAN_ROWS = 100_000` rows starting after the last ctid reached,
+  wrapping at the end, so passes are fixed-cost and repeated ticks cover the
+  table. The `LIMIT` on deletions is kept as a second bound.
+* **Failures are visible.** `recreate_indexes_after_bulk_load` no longer stops
+  at the first failure or reports a bare `False`: it attempts every index,
+  counts what failed, and logs that the space is missing indexes and will be
+  slow until they are rebuilt.
+
+## Original recommendations, for reference
 
 * **Do not run an unbounded sweep inline in a request.** It belongs in
   `MaintenanceJob`, which already runs edge integrity on a cadence and has a
