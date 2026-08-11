@@ -1,6 +1,19 @@
 # KGQuery Hardcodes How Entities Attach to Frames
 
-## Status: OPEN — whole datasets are unqueryable, silently
+## Status: OPEN — whole datasets are unqueryable THROUGH KGQUERY, silently
+
+Scope corrected 2026-08-11. An earlier revision of this line said "unqueryable"
+without qualification, which overstates it: **raw SPARQL queries this data
+fine**, because it goes to the quads and carries none of the topology
+assumptions below. `tests/performance/test_wordnet_query_bench.py::
+test_wordnet_frame_union` asserts `rows > 0` for a frame UNION over the very
+space this issue calls unqueryable, and it passes.
+
+That changes the severity but not the defect. The data is reachable and nothing
+is lost; what is missing is the CRITERIA API over it — the path the UI and
+clients use — and its failure mode is still the bad one: zero rows, no error.
+So this is an API-surface gap with a SPARQL workaround, not an inaccessible
+dataset.
 
 **Consolidated with `issues/048` on 2026-08-08.** That issue approached the same
 defect from the connection side and found the missing half. Together they show
@@ -41,6 +54,21 @@ rewrites should exist to serve them.
 relationship. A KG that models the connection any other way cannot be queried
 through KGQuery at all, at any scale, and gets **zero rows with no error** rather
 than a "this criteria shape is not supported" response.
+
+## Why SPARQL is not simply the answer
+
+Worth stating so the workaround is not mistaken for a fix:
+
+* The criteria API is what the frontend and the typed clients call. "Write
+  SPARQL instead" is not available to them without rebuilding what
+  `KGQueryCriteriaBuilder` exists to provide.
+* The optimisation work in `issues/053` (two-phase paging, the semi-join gate,
+  push-down, candidate-driven negation) reaches the SPARQL that KGQuery
+  GENERATES. A hand-written SPARQL query for this topology gets none of it by
+  default, so the workaround is also the slower path.
+* The silence is the real defect either way. A caller who supplies criteria for
+  an unsupported topology cannot distinguish "no matches" from "this shape is
+  not supported", which is what makes it survivable-looking in production.
 
 ## What is hardcoded
 
