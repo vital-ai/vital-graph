@@ -53,6 +53,37 @@ So the ordering asymmetry is not a missing policy. It is a parser that cannot
 read the shape this pipeline actually emits, and every selectivity decision
 downstream of it is made on `_INF`.
 
+### ATTEMPTED AND REVERTED — root-by-cardinality breaks every range comparator
+
+Implemented as described below — `reorder_joins` taking `leaf_cardinality` from
+`plan.leaf_terms` — and it worked for the case it targeted:
+
+    LeadStatus + WV     >20 s -> 142 ms, matching WV + LeadStatus exactly
+
+and broke SEVEN other cells, all of them ranges:
+
+    gt/Double, gt/Integer, gt/DateTime      3-13 ms -> 30 s timeout
+    gte/Double, gte/Integer, gte/DateTime   3-12 ms -> 30 s timeout
+    lt/Double                                 16 ms -> 30 s timeout
+
+Reverted (`62777d7`), and the revert restores all seven to 3-14 ms.
+
+**Why.** A range criterion's leaf binds a predicate and NO constant object, so it
+has no `object_uuid` entry in `leaf_terms` and gets no cardinality. Some other
+leaf then wins the root and the plan stops driving from the `num_val` index the
+whole range push-down depends on (`issues/040` W2, `issues/056`).
+
+This is the same shape as the text-filter anchor, which is special-cased for
+exactly this reason: a leaf that is cheap to ENTER but invisible to `quad_stats`
+because it has no constant object to key on. Ranges need that same protection and
+did not get it. `plan.range_leaves` records `(alias, col) -> (operator, literal)`
+precisely so a consumer can see them, and `aliases.range_stats` holds their
+counts — neither was fed into the cardinality map.
+
+So the fix is not wrong, it is incomplete: the cardinality map must cover range
+leaves before root selection can use it, and the next attempt has to be swept
+before it is committed rather than after.
+
 ### The fix, and why it is not a one-liner
 
 `plan.leaf_terms` records `(alias, column) -> (text, type)` STRUCTURALLY at
