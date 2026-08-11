@@ -99,6 +99,7 @@ def emit_bgp(plan: PlanV2, ctx: EmitContext) -> str:
             quad_tables, plan.tagged_constraints,
             quad_stats=ctx.aliases.quad_stats,
             pred_stats=ctx.aliases.pred_stats,
+            leaf_cardinality=_leaf_cardinality(plan, ctx),
         )
         # When the anchor table has a text-filter (IN SELECT term_uuid),
         # wrap it in a subquery to force PG to evaluate the filter first.
@@ -205,6 +206,62 @@ def emit_bgp(plan: PlanV2, ctx: EmitContext) -> str:
     return sql
 
 
+def _leaf_cardinality(plan, ctx) -> dict:
+    """alias -> row count for each constant leaf, read from the IR.
+
+    `plan.leaf_terms` records `(alias, column) -> (term_text, term_type)` at
+    COLLECT time, when the value is known, precisely so consumers do not have to
+    recover it from generated SQL. `semijoin._leaf_rows` already reads it for the
+    selectivity gate, with a comment saying why: parsing the SQL couples you to
+    its text and fails silently when it differs.
+
+    `reorder_joins` predated that and still regex-parsed. It could not read the
+    KGQuery shape at all — the object constant arrives in a constraint that also
+    references the joined alias, which its parser skips — so no leaf ever got a
+    pair count and the chain root fell through to list position (`issues/061`).
+
+    Counts come from the same three places the gate uses, most specific first:
+    the `(predicate, object)` preload, the on-demand pairs that `rdf_stats`
+    pruning made necessary, then the per-predicate total.
+    """
+    aliases = ctx.aliases
+    consts = getattr(aliases, "constants", None) or {}
+    resolved = getattr(aliases, "resolved_constants", None) or {}
+    quad_stats = getattr(aliases, "quad_stats", None) or {}
+    extra = getattr(aliases, "extra_quad_stats", None) or {}
+    pred_stats = getattr(aliases, "pred_stats", None) or {}
+
+    def _uuid(term):
+        col = consts.get(term)
+        return resolved.get(col) if col else None
+
+    by_alias: dict = {}
+    for (alias, col), term in (getattr(plan, "leaf_terms", None) or {}).items():
+        u = _uuid(term)
+        if not u:
+            continue
+        if col == "predicate_uuid":
+            by_alias.setdefault(alias, {})["p"] = u
+        elif col == "object_uuid":
+            by_alias.setdefault(alias, {})["o"] = u
+
+    out: dict = {}
+    for alias, parts in by_alias.items():
+        p_uuid, o_uuid = parts.get("p"), parts.get("o")
+        if p_uuid and o_uuid:
+            n = quad_stats.get((p_uuid, o_uuid))
+            if n is None:
+                n = extra.get((p_uuid, o_uuid))
+            if n is not None:
+                out[alias] = n
+                continue
+        if p_uuid:
+            n = pred_stats.get(p_uuid)
+            if n is not None:
+                out[alias] = n
+    return out
+
+
 def emit_bgp_exists(plan: PlanV2, ctx: EmitContext,
                     correlation: tuple,
                     extra_conds: Optional[list] = None) -> Optional[str]:
@@ -262,6 +319,7 @@ def emit_bgp_exists(plan: PlanV2, ctx: EmitContext,
         quad_tables, tagged,
         quad_stats=ctx.aliases.quad_stats,
         pred_stats=ctx.aliases.pred_stats,
+        leaf_cardinality=_leaf_cardinality(plan, ctx),
     )
 
     first_t = ordered[0]
@@ -330,7 +388,8 @@ def emit_bgp_anchor(plan: PlanV2, ctx: EmitContext, var: str):
         ordered, on_map, first_conds = reorder_joins(
             quad_tables, plan.tagged_constraints,
             quad_stats=ctx.aliases.quad_stats,
-            pred_stats=ctx.aliases.pred_stats)
+            pred_stats=ctx.aliases.pred_stats,
+            leaf_cardinality=_leaf_cardinality(plan, ctx))
     else:
         ordered, on_map, first_conds = quad_tables, {}, list(plan.constraints)
 
