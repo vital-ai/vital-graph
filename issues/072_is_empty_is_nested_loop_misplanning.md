@@ -101,12 +101,44 @@ Known:
   not close it.
 * Rewriting as NOT EXISTS makes it worse (>300 s) even though the fold fires.
 
-Not known, and the next thing to measure rather than guess:
+### MEASURED: where the per-entity cost goes
 
-* Where the per-entity cost actually goes. `not_exists` and `is_empty` both walk
-  100,000 entities; one costs 2 us per entity and the other 500 us. That ratio
-  is the whole problem and no `EXPLAIN` has been read with the specific question
-  "what does one entity cost in each".
+Nodes executed 100,000 times, from `EXPLAIN (ANALYZE, BUFFERS)` on each:
+
+    not_exists   2 nodes    edge index scan  +  CTE Scan on cand0
+    is_empty     7 nodes    mv2, mv1, q7, q8, mv0, q4, ...  — the entire
+                            entity -> frame -> slot chain, re-walked per entity,
+                            several of them 0.17-0.18 ms each
+
+That is the whole difference. `not_exists` computes the surviving set ONCE into
+a candidate CTE and then does one cheap probe per entity. `is_empty` has no
+candidate set and re-walks the full multi-hop chain 100,000 times.
+
+### Why `is_empty` does not get the candidate CTE
+
+`_try_candidate_driven` is reached (via `_foldable_exists_join`, which matches),
+and declines inside `extract_negated_traversal`:
+
+    edges = [t for t in tables if t.kind == "edge"]
+    if not edges:
+        return None
+
+`not_exists` negates a frame/slot EDGE chain, so its body has edge tables.
+`is_empty` negates a single value quad — `?slot haley:hasTextSlotValue ?val` —
+which has none. The candidate machinery is built for walking back along edges,
+and this negation has nothing to walk back along.
+
+So the fix is not a planner fence and not the NOT EXISTS spelling. It is that
+"slots with no value" should produce a candidate set the same way "entities with
+no such slot" does: one indexed scan over the value predicate gives every slot
+that HAS a value, and the candidates are the entities whose slots are not in it.
+That is a genuinely different traversal shape from the backward edge walk
+`emit_candidate_ctes` builds, and it belongs in that module rather than bolted
+onto the fence.
+
+**This is where the effort should go, and it is not a small change** — the
+candidate path returns different SQL for the same question, and its own docstring
+warns that an approximation there is a wrong answer rather than a slow one.
 
 Three proposals for this cell have now measured worse than the status quo (the
 MATERIALIZED CTE, the NOT EXISTS rewrite, and — for the wider sweep — the
