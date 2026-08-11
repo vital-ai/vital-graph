@@ -50,13 +50,17 @@ import asyncpg  # noqa: E402
 
 DSN = os.environ.get("TDSN",
                      "postgresql://hadfield@localhost:5432/sparql_sql_graph")
-MIN_QUADS = 1_000
-
-# Spaces integration tests create and drop. Registering a graph for one leaves a
-# row pointing at a table that will not exist by morning, which is a worse state
-# than the one being fixed.
-EPHEMERAL_PREFIXES = ("inttest_", "apitest_", "dawg_test", "sp_dedup_test",
-                      "sp_vgeo_e2e", "sp_geo_test")
+# EVERY dataset lives in a graph. No size threshold and no exclusions.
+#
+# An earlier version of this script skipped spaces under 1,000 quads and any
+# name looking like an integration-test fixture, reasoning that a graph row for
+# a space the tests will drop is worse than none. That was the wrong call, and
+# it is not a judgement this tool gets to make: a 20-quad export fixture is a
+# dataset, it lives in a graph, and a rule with exceptions is one nobody can
+# check. The stale-row concern is real but belongs to whatever drops the space —
+# a DROP that leaves a graph row behind is that path's defect, not a reason to
+# leave datasets unregistered here.
+MIN_QUADS = 1
 
 
 async def _spaces_with_quads(conn):
@@ -91,8 +95,6 @@ async def main(apply: bool, register_spaces: bool) -> int:
     to_write, skipped, to_register_space = [], [], []
     for space_id in await _spaces_with_quads(conn):
         if space_id in have:
-            continue
-        if space_id.startswith(EPHEMERAL_PREFIXES):
             continue
         ctxs = await _contexts(conn, space_id)
         total = sum(c["quads"] for c in ctxs)
