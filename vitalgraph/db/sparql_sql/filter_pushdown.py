@@ -746,7 +746,7 @@ _IN_OPS = {"in": "IN", "notin": "NOT IN"}
 
 
 def _in_operands(expr):
-    """(var, sql_op, [equality conds]) for a pushable `?var IN (...)`, else None."""
+    """(var, sql_op, [conds], [value nodes]) for a pushable `?var IN (...)`."""
     if not isinstance(expr, ExprFunction):
         return None
     sql_op = _IN_OPS.get((expr.name or "").lower())
@@ -757,7 +757,7 @@ def _in_operands(expr):
     # value test; leave that for the general emitter.
     if len(args) < 2 or not isinstance(args[0], ExprVar):
         return None
-    conds = []
+    conds, nodes = [], []
     for item in args[1:]:
         if not isinstance(item, ExprValue):
             return None
@@ -765,13 +765,64 @@ def _in_operands(expr):
         if cond is None:
             return None
         conds.append(f"({cond})")
-    return args[0].var, sql_op, conds
+        nodes.append(item.node)
+    return args[0].var, sql_op, conds, nodes
 
 
 def _in_var(expr) -> Optional[str]:
     """Variable of a pushable `?var IN (...)` / `NOT IN (...)`, or None."""
     ops = _in_operands(expr)
     return ops[0] if ops else None
+
+
+def _literal_term_key(node):
+    """(term_text, term_type) when this value is exactly ONE term, else None.
+
+    Only for values whose lexical form IS the value, so value-equality and
+    term-equality coincide: URIs, and plain / xsd:string literals (one value in
+    RDF 1.1). A typed numeric is not one term — `5`, `5.0` and `05` are three
+    terms and one value, which is the whole reason `_ne_equality_cond` compares
+    `num_val` instead of text.
+    """
+    if isinstance(node, URINode):
+        return (node.value, "U")
+    if not isinstance(node, LiteralNode):
+        return None
+    if (node.datatype or "") in ("", f"{_XSD}string") and not getattr(node, "lang", None):
+        return (node.value or "", "L")
+    return None
+
+
+def _in_as_constants(conds_nodes, ctx) -> Optional[str]:
+    """`IN (uuid, uuid)` over resolved constants, or None if not expressible.
+
+    Worth the trouble because the difference is not marginal. As a subquery the
+    leaf has no constant object, so the planner cannot drive the two-phase probe
+    from the correlated candidate — it instead enumerates every slot holding the
+    value and walks the edges back. Measured on has_any/Text: for each of 194
+    candidates it scanned 8,660 slots and did 1,680,086 edge lookups.
+
+        IN (SELECT term_uuid FROM term WHERE term_text = 'CA')   11,679 ms
+        IN ('44a04397-...'::uuid)                                    37 ms
+
+    Registering the constants here means they are resolved by the SECOND
+    materialization pass in `generate_sql`, which exists for this — push-down
+    runs during emit, long after the first pass. If one does not resolve,
+    `substitute_constants` falls back to a scalar subquery over the `_const`
+    CTE, which is correct (a missing term matches nothing) and still small.
+    """
+    aliases = getattr(ctx, "aliases", None)
+    if aliases is None or not hasattr(aliases, "register_constant"):
+        return None
+    keys = [_literal_term_key(n) for n in conds_nodes]
+    if not keys or any(k is None for k in keys):
+        return None
+    from .collect import _CONST_PREFIX, _CONST_SUFFIX
+    toks = []
+    for text, ttype in keys:
+        col = aliases.register_constant(text, ttype)
+        toks.append(f"{_CONST_PREFIX}{col}{_CONST_SUFFIX}")
+    return ", ".join(toks)
 
 
 def _try_in_filter(expr, bgp, term_table: str, quad_aliases: set, ctx):
@@ -782,7 +833,7 @@ def _try_in_filter(expr, bgp, term_table: str, quad_aliases: set, ctx):
     ops = _in_operands(expr)
     if ops is None:
         return None
-    var_name, sql_op, conds = ops
+    var_name, sql_op, conds, nodes = ops
 
     slot = bgp.var_slots.get(var_name)
     if not slot or not slot.positions:
@@ -790,6 +841,13 @@ def _try_in_filter(expr, bgp, term_table: str, quad_aliases: set, ctx):
     ref_id, col_name = slot.positions[0]
     if ref_id not in quad_aliases:
         return None
+
+    # Prefer resolved uuid constants: they give the leaf a constant object, which
+    # is what lets the planner drive the probe from the correlated candidate
+    # instead of enumerating the value side. 11,679 ms -> 37 ms on has_any/Text.
+    consts = _in_as_constants(nodes, ctx)
+    if consts is not None:
+        return (ref_id, f"{ref_id}.{col_name} {sql_op} ({consts})")
 
     return (ref_id, f"{ref_id}.{col_name} {sql_op} "
                     f"{_term_set(ctx, term_table, ' OR '.join(conds))}")

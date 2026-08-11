@@ -235,10 +235,18 @@ def _in_expr(var: str, *literals: str) -> ExprFunction:
 
 
 class _FakeCtx:
-    """Minimal stand-in for EmitContext — push_filters only reads this flag."""
+    """Minimal stand-in for EmitContext.
 
-    def __init__(self, in_correlated_subquery: bool = False):
+    `aliases` defaults to None so the IN push-down cannot register uuid
+    constants and falls back to the term-table subquery — which is what the
+    correlated-subquery tests below want to observe. Pass a real
+    AliasGenerator to exercise the constant path.
+    """
+
+    def __init__(self, in_correlated_subquery: bool = False, aliases=None):
         self.in_correlated_subquery = in_correlated_subquery
+        if aliases is not None:
+            self.aliases = aliases
 
 
 class TestNoPushDownInsideCorrelatedSubquery:
@@ -393,3 +401,63 @@ class TestEqualityConditionDispatchesOnDatatype:
 
     def test_unknown_datatype_declines(self):
         assert self._cond("x", "http://example.org/myType") is None
+
+
+class TestInPushDownPrefersResolvedConstants:
+    """`?v IN (...)` must emit uuid constants where each value is ONE term.
+
+    Not a micro-optimisation. As a term-table subquery the leaf has no constant
+    object, so the planner cannot drive the two-phase probe from the correlated
+    candidate — it enumerates every slot holding the value and walks the edges
+    back instead. Measured on has_any/Text: 194 candidates x 8,660 slots and
+    1,680,086 edge lookups, 11,679 ms against 37 ms with the uuid inlined.
+
+    The constant form is only valid where term-equality and value-equality
+    coincide, which is URIs and plain / xsd:string literals. A typed numeric is
+    several terms for one value, so it must keep the num_val subquery.
+    """
+
+    XSD = "http://www.w3.org/2001/XMLSchema#"
+
+    def _push(self, *nodes):
+        from vitalgraph.db.sparql_sql.filter_pushdown import push_text_filters
+        bgp = _make_bgp_with_var("x")
+        expr = ExprFunction(
+            name="in",
+            args=[ExprVar(var="x")] + [ExprValue(node=n) for n in nodes],
+        )
+        from vitalgraph.db.sparql_sql.ir import AliasGenerator
+        plan = _make_filter(bgp, expr)
+        push_text_filters(plan, SPACE, _FakeCtx(aliases=AliasGenerator()))
+        return bgp.tagged_constraints[0][1] if bgp.tagged_constraints else None
+
+    def test_plain_literals_become_constant_tokens(self):
+        sql = self._push(LiteralNode(value="CA"), LiteralNode(value="NY"))
+        assert "SELECT term_uuid" not in sql
+        assert sql.count("__CONST_") == 2
+
+    def test_uris_become_constant_tokens(self):
+        sql = self._push(URINode(value="urn:a"), URINode(value="urn:b"))
+        assert "SELECT term_uuid" not in sql
+        assert sql.count("__CONST_") == 2
+
+    def test_typed_numerics_keep_the_num_val_subquery(self):
+        """5, 5.0 and 05 are three terms and one value — not expressible as one uuid."""
+        sql = self._push(LiteralNode(value="5", datatype=self.XSD + "integer"),
+                         LiteralNode(value="7", datatype=self.XSD + "integer"))
+        assert "SELECT term_uuid" in sql
+        assert "num_val" in sql
+        assert "__CONST_" not in sql
+
+    def test_a_single_typed_value_disqualifies_the_whole_list(self):
+        """Mixed list: one value that is not one term forces the subquery form."""
+        sql = self._push(LiteralNode(value="CA"),
+                         LiteralNode(value="5", datatype=self.XSD + "integer"))
+        assert "SELECT term_uuid" in sql
+        assert "__CONST_" not in sql
+
+    def test_booleans_keep_the_subquery(self):
+        """"true" and "1" are one value and two terms."""
+        sql = self._push(LiteralNode(value="true", datatype=self.XSD + "boolean"))
+        assert "SELECT term_uuid" in sql
+        assert "__CONST_" not in sql

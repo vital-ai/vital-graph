@@ -775,6 +775,23 @@ async def generate_sql(
         if ctx.unresolved_vars:
             _check_unresolved_vars(ctx.unresolved_vars)
 
+        # Stage 3b: Resolve constants that only EMISSION could register.
+        #
+        # Filter push-down runs inside emit — it cannot know which BGP a filter
+        # belongs to until the plan is being walked — so any constant it
+        # registers arrives after Stage 2. `?v IN ("CA","NY")` is the case that
+        # matters: as a term-table subquery the leaf has no constant object, and
+        # the planner cannot drive the two-phase probe from the correlated
+        # candidate, so it enumerates the value side instead. Measured on
+        # has_any/Text, 11,679 ms against 37 ms once the uuid is a constant.
+        #
+        # Skipping this is not incorrect — substitute_constants falls back to a
+        # scalar subquery over the _const CTE — only slow.
+        if (conn is not None or conn_params is not None) and (
+                len(aliases.resolved_constants) < len(aliases.constants)):
+            await materialize_constants(aliases, term_table,
+                                        conn_params=conn_params, conn=conn)
+
         # Stage 4: Substitute constants
         sql_str = substitute_constants(sql_str, aliases)
 
