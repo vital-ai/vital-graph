@@ -128,17 +128,51 @@ and declines inside `extract_negated_traversal`:
 which has none. The candidate machinery is built for walking back along edges,
 and this negation has nothing to walk back along.
 
-So the fix is not a planner fence and not the NOT EXISTS spelling. It is that
-"slots with no value" should produce a candidate set the same way "entities with
-no such slot" does: one indexed scan over the value predicate gives every slot
-that HAS a value, and the candidates are the entities whose slots are not in it.
-That is a genuinely different traversal shape from the backward edge walk
-`emit_candidate_ctes` builds, and it belongs in that module rather than bolted
-onto the fence.
+So the fix is not a planner fence and not the NOT EXISTS spelling: `is_empty`
+needs a candidate set.
 
-**This is where the effort should go, and it is not a small change** — the
-candidate path returns different SQL for the same question, and its own docstring
-warns that an approximation there is a wrong answer rather than a slow one.
+### CORRECTED — it is the SAME shape, and a smaller change than first written
+
+An earlier revision of this section called it "a genuinely different traversal
+shape" and "not a small change". That was written without reading what
+`emit_candidate_ctes` builds. It builds:
+
+    excl  = the negated pattern's nodes
+    surv  = nodes at the deepest level matching a type constraint  EXCEPT excl
+    bwN   = walk back along edges, applying each landing node's type
+    cand  = the anchor-side set
+
+For `is_empty` the deepest level is the SLOT, `excl` is "slots that have a
+value", and the walk back is slot -> frame -> entity. That is this shape
+unchanged. The only thing that differs is how `excl` is produced: today it is
+`_walk_select(trav, ...)` walking an edge traversal; here it is a single indexed
+scan over the value predicate. `extract_negated_traversal` needs to recognise a
+value-absence body and emit that seed; the rest is reusable as-is.
+
+Also corrected: "candidates are the entities whose slots are not in it" is
+imprecise in a way that matters. Read literally it is UNIVERSAL over an entity's
+slots, which is the wrong question. It is EXISTENTIAL — slots of type T that are
+not in the has-value set, walked back to their entities; an entity qualifies if
+it has SOME such slot. Getting that inverted is exactly the silent wrong answer
+this path is dangerous for.
+
+And the docstring cited was the wrong one. The "an approximation here is a wrong
+answer rather than a slow one" warning is in
+`emit_slice._try_candidate_driven`, not `emit_backward`. `emit_backward`'s own
+docstring said "NOT WIRED" long after `issues/059` wired it — corrected in the
+same change as this note.
+
+### Why this should be a large win, not a marginal one
+
+`emit_backward`'s analysis records that the backward form does work proportional
+to the ANSWER, where the forward probe does work proportional to finding one
+page — which is why `issues/059` gates it on density and why `not_has` /
+`not_has_any` must stay forward.
+
+`is_empty` returns 0 rows. An empty answer makes the candidate set empty, and an
+empty candidate set means nothing is walked and nothing is scanned. That is the
+case the module measured at **205-337 ms against >200 s**. So `is_empty` is not
+a marginal candidate for this path — it is the shape the path exists for.
 
 Three proposals for this cell have now measured worse than the status quo (the
 MATERIALIZED CTE, the NOT EXISTS rewrite, and — for the wider sweep — the

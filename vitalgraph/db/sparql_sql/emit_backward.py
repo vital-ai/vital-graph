@@ -1,9 +1,29 @@
-"""Emit a negated traversal backward, as a set. NOT WIRED — see below.
+"""Emit a negated traversal backward, as a set.
 
-STATUS: written, verified correct, and deliberately NOT connected, because
-placing the set form where it fits made the plan WORSE. Kept because the
-recogniser is the hard part and is right; what is wrong is where the condition
-was put.
+STATUS: WIRED as of `issues/059`. `emit_slice._try_candidate_driven` calls
+`extract_negated_traversal` and `emit_candidate_ctes`, and `not_exists` runs
+through it today — its plan contains the `cand0` CTE and answers in ~200 ms.
+
+This header used to read "NOT WIRED", describing the two failed placements
+below, and stayed that way after the third placement succeeded. It sent a reader
+back to re-derive a solved problem in 2026-08 before anyone noticed the module
+was live. The failure analysis below is still accurate and worth keeping; only
+the status was wrong.
+
+WHAT REACHES IT, AND WHAT DOES NOT. `extract_negated_traversal` requires edge
+tables in the negated body:
+
+    edges = [t for t in tables if t.kind == "edge"]
+    if not edges:
+        return None
+
+`not_exists` negates a frame/slot EDGE chain and qualifies. `is_empty` negates a
+single value quad — `?slot haley:hasTextSlotValue ?val`, no edge — and does not,
+so it falls back to the forward probe and costs 53 s where `not_exists` costs
+200 ms (`issues/072`). Note that this is exactly the case the backward form is
+BEST at: `is_empty`'s answer is empty, and an empty answer is what makes the
+candidate set empty and the walk free. The seed differs, not the shape — `excl`
+would be one indexed scan over the value predicate instead of a walk.
 
 Two placements were tried and measured. Both are CORRECT — a differential test
 against the correlated form returned identical 300-row sets on a case
