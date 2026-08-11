@@ -171,9 +171,49 @@ take the set-based join — beats every alternative tried across four attempts:
 push-down (re-executes per candidate), driver-carries-filter (cross product),
 reordering (already correct), and fences (no effect where it matters).
 
-`'XQ'` at ~11s stays as the honest cost. Improving it means making the set-based
-join cheaper for a small match set, which is a different piece of work from the
-one this issue describes.
+### The `'XQ'` case: 11,151ms -> 210ms. It was never "rare".
+
+Both `'XQ'` and `'ZZQQXX'` match ZERO terms and return zero rows, yet one cost
+11s and the other 1ms. That difference should not exist, and chasing it found
+the cause: `'XQ'` is TWO CHARACTERS.
+
+A needle under 3 characters yields no usable trigram for an INFIX match, and the
+GIN index then degenerates into scanning itself:
+
+    term_text ILIKE '%XQ%'    Bitmap Index Scan, rows=10,467,626, 12,613 ms
+    term_text ILIKE '%XQZ%'   Bitmap Index Scan, rows=0,               0.084 ms
+
+The trigrams for a short string are all PADDED — `show_trgm('XQ')` is
+`{"  x"," xq","xq "}` — and padding only holds at a word boundary. An infix
+match may land mid-word, so none of them can be REQUIRED and nothing is left to
+search the index for. It scans every entry and rechecks.
+
+**This is specific to `contains`.** Anchored patterns keep the padding and stay
+fast at any length, measured on the same 2-character needle:
+
+    'XQ%'   1.0 ms        '%XQ'   0.03 ms        '%XQ%'   12,613 ms
+
+So the fix is to keep a short infix needle away from the index: `(term_text ||
+'')` is not a column the index on `term_text` can serve, so the planner takes a
+sequential scan. Identical answers, and the term subquery drops 12,613 ms ->
+4,041 ms. End to end:
+
+    contains 'CA'        49 ms      unchanged
+    contains 'XQ'       210 ms      was 11,151 ms — 53x
+    contains 'ZZQQXX'     0 ms      unchanged
+
+Applied in `filter_pushdown` (the condition the query runs) AND in
+`needed_texts` (the condition the ESTIMATE runs). The second is not cosmetic:
+the probe pays the same 12.6s degenerate scan if the two forms diverge.
+
+Gated: 39 cells, no regressions.
+
+**The lesson worth keeping is about the test value.** `'XQ'` was chosen as "a
+rare substring" and was actually exercising a completely different mechanism —
+below the trigram threshold. It sat in this issue for several revisions as
+evidence of a cost that had nothing to do with rarity. A selectivity-dependent
+comparator needs values chosen against the INDEX's behaviour, not just against
+how many rows they match.
 
 **Do not re-attempt without measuring both `'CA'` and an absent substring.** All
 three attempts so far returned correct answers for at least one of them while

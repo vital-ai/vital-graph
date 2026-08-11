@@ -303,7 +303,9 @@ def _try_text_filter(
     # changes only where the predicate is evaluated, never what it answers.
     like = "ILIKE" if ci else "LIKE"
     if name == "contains":
-        term_cond = f"term_text {like} '%{like_esc}%'"
+        col = ("term_text" if len(literal_value) >= _MIN_TRIGRAM_NEEDLE
+               else "(term_text || '')")
+        term_cond = f"{col} {like} '%{like_esc}%'"
     elif name == "strstarts":
         term_cond = f"term_text {like} '{like_esc}%'"
     elif name == "strends":
@@ -340,6 +342,22 @@ def _try_text_filter(
 # as `term_text = '5'`, which misses `"5.0"^^xsd:double` — the same lexical-vs-
 # value trap that made uuid inequality unsound in issues/058. Widening the gate
 # to cover `eq` would turn that latent bug into a reachable one.
+# A needle shorter than 3 characters cannot yield a trigram for an INFIX match,
+# and the GIN index then degenerates into scanning itself: `term_text ILIKE
+# '%XQ%'` on a 10.4M-row term table returns 10,467,626 index rows and takes
+# 12,613 ms to find nothing.
+#
+# The trigrams for a short string are all PADDED — show_trgm('XQ') is
+# {"  x"," xq","xq "} — and padding only holds at a word boundary. An infix
+# match may land mid-word, so none of them can be REQUIRED, leaving no usable
+# trigram. That is why this applies to `contains` alone: anchored patterns keep
+# the padding and stay fast at any length ('XQ%' 1.0 ms, '%XQ' 0.03 ms).
+#
+# Concatenating an empty string keeps the answer identical while making the
+# expression something the index on `term_text` cannot serve, so the planner
+# takes a sequential scan instead: 12,613 ms -> 4,041 ms.
+_MIN_TRIGRAM_NEEDLE = 3
+
 _TEXT_SEARCH_OPS = ("contains", "strstarts", "strends", "regex")
 _FOLD_FNS = ("lcase", "ucase")
 

@@ -255,7 +255,14 @@ def needed_texts(plan, aliases) -> set:
             esc = _esc(_like_escape(literal))
             like = "ILIKE" if ci else "LIKE"
             if name == "contains":
-                cond = f"term_text {like} '%{esc}%'"
+                # Same short-needle rule as `filter_pushdown` — see the note
+                # there. It matters twice: the estimate must be over the set the
+                # query will match, AND this probe pays the same 12.6s
+                # degenerate index scan if it gets it wrong.
+                from .filter_pushdown import _MIN_TRIGRAM_NEEDLE
+                col = ("term_text" if len(literal) >= _MIN_TRIGRAM_NEEDLE
+                       else "(term_text || '')")
+                cond = f"{col} {like} '%{esc}%'"
             elif name == "strstarts":
                 cond = f"term_text {like} '{esc}%'"
             else:

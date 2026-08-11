@@ -72,8 +72,8 @@ class TestPatternShape:
     """The SQL must match what `filter_pushdown` emits, anchors included."""
 
     def test_contains_is_wrapped_both_sides(self):
-        out = needed_texts(_plan(_fn("contains", "x", "CA")), _Aliases())
-        assert _conds(out) == ["term_text LIKE '%CA%'"]
+        out = needed_texts(_plan(_fn("contains", "x", "CAT")), _Aliases())
+        assert _conds(out) == ["term_text LIKE '%CAT%'"]
 
     def test_strstarts_anchors_left(self):
         out = needed_texts(_plan(_fn("strstarts", "x", "CA")), _Aliases())
@@ -85,8 +85,39 @@ class TestPatternShape:
 
     def test_case_folded_operands_produce_ilike(self):
         """KGQuery emits CONTAINS(LCASE(?v), LCASE("x")) — the common shape."""
-        out = needed_texts(_plan(_fn("contains", "x", "ca", ci=True)), _Aliases())
-        assert _conds(out) == ["term_text ILIKE '%ca%'"]
+        out = needed_texts(_plan(_fn("contains", "x", "cat", ci=True)), _Aliases())
+        assert _conds(out) == ["term_text ILIKE '%cat%'"]
+
+    @pytest.mark.parametrize("needle", ["X", "XQ"])
+    def test_a_short_needle_is_kept_away_from_the_trigram_index(self, needle):
+        """Under 3 characters there is no usable trigram for an INFIX match.
+
+        show_trgm('XQ') is {"  x"," xq","xq "} — every one of them PADDED, and
+        padding only holds at a word boundary. An infix match may land mid-word,
+        so none can be required, and the GIN index degenerates into scanning
+        itself: 10,467,626 index rows and 12,613ms to find nothing on a 10.4M-row
+        term table. Concatenating '' keeps the answer and takes the index out of
+        the picture. Measured end to end: 11,151ms -> 210ms.
+
+        The estimate must use the SAME form as the query, or this probe pays
+        that 12.6s itself.
+        """
+        out = needed_texts(_plan(_fn("contains", "x", needle)), _Aliases())
+        assert _conds(out) == [f"(term_text || '') LIKE '%{needle}%'"]
+
+    @pytest.mark.parametrize("op,expected", [
+        ("strstarts", "term_text LIKE 'XQ%'"),
+        ("strends",   "term_text LIKE '%XQ'"),
+    ])
+    def test_anchored_patterns_keep_the_index_at_any_length(self, op, expected):
+        """Anchored matches keep the padding, so the trigram stays usable.
+
+        Measured on a 2-character needle: 'XQ%' 1.0ms, '%XQ' 0.03ms, against
+        12,613ms for the infix form. Applying the short-needle rule to these
+        would throw away a working index scan.
+        """
+        out = needed_texts(_plan(_fn(op, "x", "XQ")), _Aliases())
+        assert _conds(out) == [expected]
 
     def test_the_predicate_is_carried(self):
         """The count is over (predicate, matching terms), not terms alone."""
