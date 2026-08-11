@@ -1,6 +1,60 @@
 # Nothing Chooses Which Criterion Drives the Query
 
-## Status: step 3 PARTLY IMPLEMENTED — 2026-08-10
+## Status: the ordering defect is CLOSED — 2026-08-11
+
+This issue's thesis was that nothing chooses which criterion drives, so the
+caller's ordering leaks into the plan. Measured across EVERY permutation of each
+criteria set, alternating arms with the first repetition discarded:
+
+    selective + large     2 orderings   142-142 ms    spread 1.0x
+    selective + range     2 orderings   191-204 ms    spread 1.1x
+    large + range         2 orderings    86- 95 ms    spread 1.1x
+    three criteria        6 orderings   165-307 ms    spread 1.9x
+
+Against >20 s vs 5.6 s for the same two criteria before. Order no longer decides
+the plan.
+
+Correctness checked alongside, not assumed: all six orderings of the
+three-criteria set return **identical 249-row sets**.
+
+### It was fixed by a different mechanism than this issue proposed
+
+The issue asked for criteria-level driver selection — rank the criteria, choose
+one to drive. What actually fixed it is one level down: `collect` merges every
+criterion into ONE right-hand BGP, so "which criterion drives" is really "which
+LEAF roots the scan", and `reorder_joins` was choosing that by LIST POSITION.
+
+Giving it `leaf_cardinality` from `plan.leaf_terms` — the structural record made
+at collect time — makes the cheapest leaf root the chain whatever order the
+caller wrote. The ranking the issue wanted happens, just inside the BGP rather
+than above it.
+
+`emit_slice._try_selective_driven` remains for the separate case where two-phase
+declines entirely and the answer is sparse (`WV + LeadStatus`, 961 -> 119 ms).
+
+### What is left, and it is small
+
+* **1.9x spread across the six three-criteria orderings** (165-307 ms). Both ends
+  are fast and it is well below the 2x flag, but it is not 1.0x — root choice is
+  right and the PLACEMENT after the root is still greedy on connectivity first,
+  cardinality second. Worth a look only if a slow case turns up.
+* **`_PAIR_COUNT_CAP = 50_000` still saturates**, so two genuinely large criteria
+  remain indistinguishable to the ranker. It did not matter here because one leaf
+  was always cheaper, and it will matter when neither is.
+* Steps 1 and 2 (per-predicate retention, saturation recorded distinctly) are
+  done.
+
+### Read this before touching root selection again
+
+It shipped once and broke SEVEN range cells, 3-14 ms to 30 s. A range leaf binds
+a predicate and NO constant object, so it has no pair count and something else
+won the root — and the plan stopped driving from the `num_val` index the range
+push-down rests on. The rule is that an INDEX-BACKED leaf roots the chain
+REGARDLESS of how much it matches: cheap to ENTER is not the same as selective.
+That is what the text-filter anchor always encoded. Precedence: text anchor ->
+range anchor -> cheapest leaf -> list position.
+
+## Superseded status: step 3 PARTLY IMPLEMENTED — 2026-08-10
 
 `emit_slice._try_selective_driven` drives the page from the selective criterion
 instead of the entity anchor. Measured with alternating arms, first rep
