@@ -1,6 +1,39 @@
 # Nothing Chooses Which Criterion Drives the Query
 
-## Status: OPEN — the machinery exists, nothing consumes it at criteria level
+## Status: OPEN — steps 1 and 2 DONE; step 3 has a demonstrated case — 2026-08-10
+
+Steps 1 and 2 of the suggested order below are implemented:
+
+* **per-predicate stats retention** — `STATS_PER_PREDICATE_DEFAULT = 2_000` in
+  `sync_stats_tables`, so a high-cardinality literal can no longer evict every
+  structural predicate;
+* **saturation recorded distinctly** — `aliases.saturated_pairs` marks counts
+  that hit `_PAIR_COUNT_CAP`, so a ranker can tell a lower bound from a
+  measurement instead of treating 50,000 as exact.
+
+**Step 3 now has a failing case, which it did not before.** Measured on
+`sp_lead_synth_100k`, 25-row page, each criterion in its own frame chain:
+
+    LeadStatus eq  +  CompanyStateCode eq "WV"     >25 s, needs_ordered_scan=False
+    CompanyStateCode eq "WV"  +  LeadStatus eq      5,585 ms, 25 rows
+
+The same two criteria. Conjunction is commutative, so that is one question with
+two answers depending on the order the caller wrote them in — which is this
+issue's thesis, demonstrated rather than argued.
+
+It is NOT the fan-out gate: it still times out with
+`MAX_SAFE_PATH_AMPLIFICATION` raised to 10^9. (That gate WAS the cause of the
+other multi-criteria slowness — `LeadStatus eq + MQLRating gte` went >25 s to
+39 ms once it stopped compounding p99 across hops.) The remaining decline reason
+is undiagnosed.
+
+It is also not the selective/unselective ranking this issue notes already works:
+`WV` alone is 40 ms and correctly declines probing at 848/100,000, below
+`MIN_SELECTIVITY`. Both criteria have to be present.
+
+See `two_phase_kgquery_paging_plan.md` for the full measurement table.
+
+## Original status: OPEN — the machinery exists, nothing consumes it at criteria level
 
 PostgreSQL will not make this decision for us, and we already accepted that once:
 `reorder_bgp.reorder_joins` orders joins **within** a BGP using `quad_stats` /
