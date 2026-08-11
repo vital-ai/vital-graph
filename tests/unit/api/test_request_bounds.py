@@ -18,6 +18,7 @@ import asyncio
 
 import pytest
 from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
 from starlette.testclient import TestClient
 
 from vitalgraph.api.request_bounds import (
@@ -105,6 +106,63 @@ class TestPostBodySurvives:
         assert _can_watch_disconnect("HEAD") is True
         # A POST carries a body, so polling would eat it — deadline only.
         assert _can_watch_disconnect("POST") is False
+
+
+class TestLongTransfersAreNeverBounded:
+    """Downloads and streams are GETs, and a deadline is wrong for them.
+
+    The safe-method rule would otherwise sweep them in:
+
+        GET /export/download        FileResponse
+        GET /files/download         StreamingResponse
+        GET /files/stream/download  StreamingResponse
+
+    They happen to survive today because BaseHTTPMiddleware's call_next returns
+    when the response STARTS, so the deadline bounds time-to-first-byte and the
+    body streams on outside it. That is a property of the base class, not a
+    decision — so the exclusion is explicit and these tests pin it.
+    """
+
+    @pytest.mark.parametrize("path", [
+        "/api/export/download",
+        "/api/files/download",
+        "/api/files/stream/download",
+        "/api/files/stream/abc123",
+    ])
+    def test_transfer_paths_are_excluded(self, path):
+        assert is_cancellable_read("GET", path) is False
+
+    def test_ordinary_get_is_still_bounded(self):
+        assert is_cancellable_read("GET", "/api/spaces") is True
+
+    def test_a_slow_stream_is_delivered_whole(self, monkeypatch):
+        """A stream longer than the deadline must not be truncated."""
+        monkeypatch.setenv("VITALGRAPH_REQUEST_DEADLINE_S", "0.4")
+        app = FastAPI()
+        app.add_middleware(RequestBoundsMiddleware)
+
+        @app.get("/api/export/download")
+        async def dl():
+            async def gen():
+                for i in range(6):
+                    await asyncio.sleep(0.15)      # 0.9 s total
+                    yield f"chunk{i}\n".encode()
+            return StreamingResponse(gen(), media_type="text/plain")
+
+        with TestClient(app) as c:
+            r = c.get("/api/export/download")
+        assert r.status_code == 200
+        assert r.text.count("chunk") == 6
+
+    def test_upload_is_not_allowlisted(self):
+        """The unfinished half of gap 4 would buffer whole bodies (issues/044).
+
+        Doing that to an upload would hold the file in memory, so uploads must
+        stay outside the allowlist — a constraint on that design, not an
+        accident of this one.
+        """
+        assert is_cancellable_read("POST", "/api/files/upload") is False
+        assert is_cancellable_read("POST", "/api/files/stream/upload") is False
 
 
 class TestDisconnectDuringBodyRequest:

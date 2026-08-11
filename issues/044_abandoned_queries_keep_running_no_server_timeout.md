@@ -37,9 +37,28 @@ read its body steals that body. The workable shape is:
    message can be `http.disconnect`.
 
 That requires dropping `BaseHTTPMiddleware` for a pure-ASGI middleware (the base
-class owns the receive wrapper), and it buffers the whole request body in memory
-— acceptable for the allowlist, which is small criteria JSON, and NOT acceptable
-if the allowlist ever grows to include an upload.
+class owns the receive wrapper), and it buffers the whole request body in memory.
+
+**THIS SYSTEM HAS UPLOAD AND DOWNLOAD ENDPOINTS**, so that is a hard constraint
+rather than a caveat:
+
+    POST /files/upload, /files/stream/upload   UploadFile — must NEVER be
+                                               allowlisted; buffering would hold
+                                               the whole file in memory
+    GET  /export/download                      FileResponse
+    GET  /files/download, /files/stream/download   StreamingResponse
+
+The downloads are GETs, so the safe-method rule swept them into the bounded set.
+They survived only because `BaseHTTPMiddleware.call_next` returns when the
+response STARTS — the deadline bounds time-to-first-byte and the body streams on
+outside it. Verified: a 0.9 s stream delivers all six chunks under a 0.4 s
+deadline. That is a property of the base class, not a decision, and a pure-ASGI
+rewrite would not inherit it. They are now excluded EXPLICITLY
+(`_LONG_TRANSFER_PATHS`) and pinned by tests.
+
+So the rewrite carries two non-negotiables: the allowlist stays query-only, and
+long transfers stay excluded — both of which a pure-ASGI version must re-derive
+rather than get for free.
 
 **Do not attempt it without the body test.** `TestDisconnectDuringBodyRequest`
 now pins both halves — the body survives AND the deadline still cancels — which

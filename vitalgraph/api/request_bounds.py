@@ -39,6 +39,19 @@ completion as it does today. Anyone widening this should be able to answer what
 happens to a half-committed write first.
 
 The deadline is separate and applies to reads only for the same reason.
+
+WHAT THE DEADLINE ACTUALLY BOUNDS: time to the response STARTING, not time to
+transfer it. `BaseHTTPMiddleware.call_next` returns once the handler produces a
+response object; a StreamingResponse then streams its body afterwards, outside
+this middleware's `asyncio.wait`. So a slow QUERY is caught and a slow TRANSFER
+is not. Download and streaming paths are excluded explicitly anyway rather than
+relying on that — see `_LONG_TRANSFER_PATHS`.
+
+UPLOADS are outside the allowlist and must stay there. The unfinished half of
+gap 4 (see issues/044) would drain and buffer the whole request body to make
+disconnect detection safe for POSTs; doing that to an upload would hold the
+entire file in memory. The allowlist is query endpoints only, and that is a
+constraint on the design, not an accident of it.
 """
 
 from __future__ import annotations
@@ -74,6 +87,26 @@ _READ_POST_PATHS = (
 )
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+# Long-lived transfers, excluded outright. These are GETs, so the safe-method
+# rule would otherwise sweep them in, and a request DEADLINE is the wrong idea
+# for a transfer whose whole job is to take as long as the data needs:
+#
+#   GET /export/download        FileResponse        (export_endpoint.py:170)
+#   GET /files/download         StreamingResponse   (files_endpoint.py:182)
+#   GET /files/stream/download  StreamingResponse   (files_endpoint.py:212)
+#
+# They survive today by ACCIDENT rather than by design: BaseHTTPMiddleware's
+# `call_next` returns when the response STARTS, so the deadline bounds
+# time-to-first-byte and the body streams on outside its scope. Verified — a
+# 0.9 s stream delivers all six chunks under a 0.4 s deadline. That is a
+# property of the base class, not of this middleware, and it should not be what
+# stands between a large export and a 504.
+_LONG_TRANSFER_PATHS = (
+    re.compile(r"/export/download(?:/|$)"),
+    re.compile(r"/files/(?:stream/)?download(?:/|$)"),
+    re.compile(r"/files/stream(?:/|$)"),
+)
 
 
 def _can_watch_disconnect(method: str) -> bool:
@@ -126,6 +159,8 @@ def is_cancellable_read(method: str, path: str) -> bool:
     Split out so it is testable without an ASGI stack, and so the policy is one
     readable predicate rather than a condition buried in the middleware.
     """
+    if any(p.search(path) for p in _LONG_TRANSFER_PATHS):
+        return False          # long-lived transfer — never bound it
     if method.upper() in _SAFE_METHODS:
         return True
     if method.upper() == "POST":
