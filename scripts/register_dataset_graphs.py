@@ -81,14 +81,14 @@ async def _contexts(conn, space_id):
         return []
 
 
-async def main(apply: bool) -> int:
+async def main(apply: bool, register_spaces: bool) -> int:
     conn = await asyncpg.connect(DSN)
     registered = await conn.fetch("SELECT space_id, graph_uri FROM graph")
     have = {r["space_id"] for r in registered}
     known_spaces = {r["space_id"] for r in
                     await conn.fetch("SELECT space_id FROM space")}
 
-    to_write, skipped = [], []
+    to_write, skipped, to_register_space = [], [], []
     for space_id in await _spaces_with_quads(conn):
         if space_id in have:
             continue
@@ -99,9 +99,13 @@ async def main(apply: bool) -> int:
         if total < MIN_QUADS:
             continue
         if space_id not in known_spaces:
-            skipped.append((space_id, total,
-                            "no row in `space` — register the space first"))
-            continue
+            if register_spaces:
+                to_register_space.append(space_id)
+            else:
+                skipped.append((space_id, total,
+                                "no row in `space` — re-run with "
+                                "--register-missing-spaces"))
+                continue
         if len(ctxs) != 1:
             skipped.append((space_id, total,
                             f"{len(ctxs)} contexts; choosing among them is a "
@@ -120,7 +124,22 @@ async def main(apply: bool) -> int:
     for space_id, quads, why in skipped:
         print(f"  SKIP      {space_id:24s} {quads:>12,} quads — {why}")
 
+    for space_id in to_register_space:
+        print(f"  {'REGISTER SPACE' if apply else 'would register space'}  {space_id}")
+
     if apply:
+        for space_id in to_register_space:
+            # Registry row only. The tables already exist — this space was
+            # created by a script that built them and never registered it — so
+            # going through create_space_with_tables would try to build tables
+            # that are already there. Writing the row is the missing half.
+            await conn.execute(
+                "INSERT INTO space (space_id, space_name, space_description,"
+                " update_time) VALUES ($1, $2, $3, $4)"
+                " ON CONFLICT (space_id) DO NOTHING",
+                space_id, space_id,
+                "Registered by register_dataset_graphs — tables pre-existed",
+                datetime.now())
         for space_id, uri, _ in to_write:
             # Same statement create_graph issues. graph_name defaults the way it
             # does there, so a row written here is indistinguishable from one
@@ -141,5 +160,9 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true",
                     help="write the rows (default is report only)")
+    ap.add_argument("--register-missing-spaces", action="store_true",
+                    help="also write a `space` row for a dataset that has "
+                         "tables and quads but was never registered; the graph "
+                         "foreign key requires one")
     a = ap.parse_args()
-    raise SystemExit(asyncio.run(main(a.apply)))
+    raise SystemExit(asyncio.run(main(a.apply, a.register_missing_spaces)))
