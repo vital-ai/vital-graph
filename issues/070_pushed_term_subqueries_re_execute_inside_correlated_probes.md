@@ -1,6 +1,23 @@
 # Pushed Term Subqueries Re-Execute Per Row Inside Correlated Probes
 
-## Status: OPEN — the guard in place is a mitigation, not the fix
+## Status: `has_any` FIXED; `contains` remains — 2026-08-10
+
+    has_any/Text     timeout -> 80 ms     fixed, uuid constants
+    has_any/Choice   timeout -> 73 ms     fixed, uuid constants
+    contains/Text    timeout -> 685 ms    still the subquery form
+
+The fix was NOT the CTE this issue proposed (that measured 41x worse, see
+below) and not "compute the set once". It was to give the leaf a CONSTANT the
+planner can drive the probe from: without one it runs the walk backwards,
+enumerating every slot holding the value and walking edges back — 8,660 slots
+and 1,680,086 edge lookups per 194 candidates.
+
+`contains` cannot take that path: `ILIKE '%ca%'` has no enumerable constant set,
+so it keeps the term subquery and pays a trigram probe per candidate. 685 ms
+cold / 22 ms warm, so it is no longer urgent, but it is the one push-down still
+in the shape this issue describes.
+
+## Superseded status: the guard in place is a mitigation, not the fix
 
 Every push-down in `filter_pushdown` emits the same shape:
 
