@@ -478,7 +478,7 @@ class MaintenanceJob:
         from ..db.sparql_sql.sync_edge_table import (
             edge_table_drift, edge_table_orphan_rate,
             edge_table_untyped_rate, backfill_edge_table,
-            cleanup_orphan_edges)
+            cleanup_orphan_edges, VITALTYPE_URI)
 
         worst_space = None
         worst_drift = 0
@@ -508,21 +508,42 @@ class MaintenanceJob:
                 continue  # space has no edge table (e.g. non-KG) — skip
             if untyped_rate > EDGE_UNTYPED_WARN_PCT:
                 # Reported, never acted on, and deliberately not called drift.
-                # Three conditions produce it and this number cannot separate
-                # them: the column is not backfilled yet (the usual case, and
-                # harmless), the space carries no vitaltype triples at all
-                # (wordnet_exp: 1,536,485 `type` quads, zero `vitaltype`), or
-                # the rows are orphaned. Only the last is a fault, and the
-                # referential probe is what establishes it. Rebuilding on this
-                # signal alone would churn healthy tables.
-                logger.info(
-                    "edge table for %s has %.1f%% rows with no edge_type_uuid, "
-                    "so typed traversals will not match them. Usually means the "
-                    "column is not backfilled; can also mean the space has no "
-                    "vitaltype triples. Not itself evidence of staleness — "
-                    "scripts/rebuild_edge_tables.py --space %s repopulates it "
-                    "(and drops orphans, if there are any).",
-                    space_id, 100.0 * untyped_rate, space_id)
+                # Three conditions produce it and only one is actionable: the
+                # column is not backfilled yet (actionable — a rebuild fixes
+                # it), the space carries no vitaltype triples at all (nothing to
+                # backfill FROM, so the rebuild would be a no-op), or the rows
+                # are orphaned (the referential probe establishes that, not this
+                # number). Rebuilding on this signal alone would churn healthy
+                # tables.
+                #
+                # The first two ARE separable, cheaply, and this used to lump
+                # them together — so it advised a rebuild that could not
+                # possibly help, once per cycle, forever, for every ephemeral
+                # inttest_* space in the database. A recurring INFO nobody can
+                # act on is how the ones that matter get skimmed past.
+                has_vitaltype = await conn.fetchval(f"""
+                    SELECT EXISTS (
+                        SELECT 1 FROM {space_id}_rdf_quad q
+                        JOIN {space_id}_term t ON t.term_uuid = q.predicate_uuid
+                        WHERE t.term_text = $1 LIMIT 1)
+                """, VITALTYPE_URI)
+                if not has_vitaltype:
+                    # Nothing to derive a type from. Permanent and expected for
+                    # an export that carries only rdf:type, so it is not news.
+                    logger.debug(
+                        "edge table for %s is %.1f%% untyped, and the space has "
+                        "no vitaltype triples at all — nothing to backfill from",
+                        space_id, 100.0 * untyped_rate)
+                else:
+                    logger.info(
+                        "edge table for %s has %.1f%% rows with no "
+                        "edge_type_uuid, so typed traversals will not match "
+                        "them, and the space DOES carry vitaltype triples — so "
+                        "the column is unbackfilled rather than underivable. "
+                        "Not itself evidence of staleness; "
+                        "scripts/rebuild_edge_tables.py --space %s repopulates "
+                        "it (and drops orphans, if there are any).",
+                        space_id, 100.0 * untyped_rate, space_id)
             if orphan_rate > EDGE_ORPHAN_STALE_PCT:
                 stale_space = stale_space or (space_id, orphan_rate)
                 continue
