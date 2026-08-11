@@ -97,17 +97,49 @@ A cross product. The driver's own chain — entity -> frame -> slot -> term — 
 walked before the ILIKE filters, so an empty match set costs a full 10,000 x
 20,000 nested loop instead of nothing.
 
-**Which points at the next lead, and it is the one this issue started from.**
-`emit_bgp_anchor` calls `reorder_joins`, which is exactly the code that pins a
-text leaf first — but the pinning demonstrably is not reaching the driver's
-internal order here. Either the pushed constraint arrives too late to be seen
-by the root selection, or its `refs` disqualify it from the `not refs` test in
-`reorder_bgp` (a pushed condition referencing a quad alias is not the bare
-uncorrelated form that test looks for).
+### Attempt 3: the join-order hypothesis was WRONG. The blocker is an estimate.
 
-That is a contained question with a measurable answer, and it is where to start
-next. The transactional-trial scaffolding is the right shape; it is the driver's
-join order that is wrong.
+The suspicion was that `reorder_bgp`'s text anchor never fires for a PUSHED
+condition, because its `not refs` test looks for a bare uncorrelated form.
+Instrumented, and it is simply not so:
+
+    reorder: 10 tables, ilike_alias=q16
+    Chain root: q16 (text-filter anchor)
+
+`refs` counts OTHER QUAD ALIASES in the constraint text, and the pushed
+condition references only the term table, so `not refs` holds. The driver chain
+IS rooted at the text leaf. Root selection was never the problem.
+
+Two more things ruled out by measurement rather than argument:
+
+* **Not the ordered-scan fence.** `enable_sort = off` versus on: 22,851ms vs
+  22,072ms for `'ZZQQXX'`. (Worth noting separately: for `'CA'` in this driven
+  shape the fence costs 513ms against 29ms — a 17x penalty that does not apply
+  to the shipped path, but would if this one ever lands.)
+* **Not a missing index.** The backward walk needs (dest, source) and
+  `idx_{space}_edge_dst_src` already exists in the schema.
+
+**What it actually is:**
+
+    Join Filter: (mv1.source_node_uuid = mv0.dest_node_uuid)
+    Rows Removed by Join Filter: 199,990,000
+    Materialize (cost=1374.52..4638.75 rows=1) (actual rows=10000 loops=20000)
+
+`rows=1` estimated against 10,000 actual — a 10,000x underestimate, so the
+planner believed the nested loop was nearly free and materialised one side
+against the other. The index it needed was available and it did not use it,
+because by its own arithmetic it did not need to.
+
+**So this is the `issues/072` pathology, not an emission defect** — nested-loop
+misplanning from a cardinality underestimate on a chain the planner has no
+correlated statistics for. That reframes the work: no amount of reordering or
+push-down in the emitter fixes a plan the planner costs wrongly. The lever is
+the same one used elsewhere here — take the choice away (a fence, or a shape
+that cannot be planned this way) rather than argue with the estimate.
+
+That also explains why `'XQ'` remains at ~11s on the SHIPPED path: the set-based
+join it now takes is the honest cost of materialising a small-but-nonempty match
+set, and it beats a plan the planner would misprice.
 
 **Do not re-attempt without measuring both `'CA'` and an absent substring.** All
 three attempts so far returned correct answers for at least one of them while
