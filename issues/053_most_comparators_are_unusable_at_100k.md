@@ -1,18 +1,50 @@
 # Twenty-One Comparator Shapes Time Out at 100k for a 25-Row Page
 
-## Status: OPEN — 9 cells exceed 1s, down from 14 — 2026-08-10
+## Status: 4 cells exceed 1s cold, down from 21 timeouts — 2026-08-10
 
-Latest verified sweep (`/tmp/sweep4`, cluster idle, HEAD baseline for comparison):
+No cell times out. Full sweep, idle cluster, one execution per cell, so these
+are COLD-START numbers (see the measurement note below — most cells run in
+2-40 ms warm).
 
-    eq/DateTime          TIMED OUT (>60s)   unique-per-row datetimes, issues/050
-    ne/Boolean           FIXED -> 6 ms      issues/058, no bool_val needed
-    is_empty/Text           56,780 ms       undiagnosed, issues/071
-    has_any/Choice          13,108 ms       issues/070
-    has_any/Text            12,101 ms       issues/070
-    eq/Integer               2,030 ms       undiagnosed, issues/071
-    eq/Text                  1,258 ms       noisy cell — 1,124 / 107 / 1,335 / 1,258
-    lt/DateTime              1,141 ms
-    has_all/Text             1,112 ms
+    is_empty/Text     53,367 ms   issues/072, nested-loop misplanning. ~5 s with
+                                  enable_nestloop=off; genuinely slow warm too
+    eq/Integer         2,348 ms   cold-start only — 37 ms warm, issues/072
+    not_exists/Text    1,402 ms   cold-start only — 173 ms warm
+    lt/DateTime        1,036 ms
+
+Against the start of this effort:
+
+    eq/DateTime      TIMED OUT ->     41 ms    issues/073
+    ne/Boolean       TIMED OUT ->    152 ms    issues/058
+    gt/DateTime      TIMED OUT ->     70 ms    gate/emitter drift
+    gte/DateTime     TIMED OUT ->     49 ms    gate/emitter drift
+    contains/Text    TIMED OUT ->    685 ms    emitter never matched LCASE
+    has_any/Text     TIMED OUT ->     80 ms    issues/070
+    has_any/Choice   TIMED OUT ->     73 ms    issues/070
+    lte/DateTime      12,183 ms ->    71 ms    172x
+    lt/DateTime        9,417 ms -> 1,036 ms      9x
+    has_all/Text       2,401 ms ->    22 ms    109x
+    gte/Double           668 ms ->    46 ms
+    eq/Text            1,124 ms ->    88 ms
+
+### What the twenty-one cells actually were
+
+Not twenty-one problems. Substantially ONE problem with four instances, plus
+three others:
+
+| cause | cells |
+|---|---|
+| the semi-join gate restating a predicate the emitter owns, so the filter pushed but the variable stayed live and paging reverted to a blocking sort | `gt` x2 (`054`), `ne` x5 (`058`), `contains`, datetime ranges x4 |
+| a required constant absent from the term table, scanned rather than short-circuited | `eq`/DateTime (`073`) |
+| no constant at the leaf, so the planner drove the probe backwards | `has_any` x2 (`070`) |
+| planner cardinality underestimate picking nested loops | `is_empty` (`072`) |
+
+Every one of the first group was filed as something else first — statistics, an
+inherent property of `!=`, "no indexable path exists", "cost is the match set".
+The gate-declines/emitter-accepts direction keeps the ANSWER correct and only
+gets slow in a way that tracks the data, so it reads as a data-shape problem
+every time. The rule and the heuristic are in
+`two_phase_kgquery_paging_plan.md`.
 
 ### The datetime range cells are fixed — the gate, not the data
 
