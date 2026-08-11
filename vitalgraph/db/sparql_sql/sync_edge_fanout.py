@@ -150,7 +150,8 @@ MAX_SAFE_HOP_TAIL = 16
 MAX_SAFE_PATH_AMPLIFICATION = 100
 
 
-def assess_traversal(fanout: Dict[tuple, dict], hops, direction: str) -> dict:
+def assess_traversal(fanout: Dict[tuple, dict], hops, direction: str,
+                     path_bound: bool = True) -> dict:
     """Is walking `hops` in `direction` bounded, and by how much?
 
     `hops` is an ordered list of `(edge_type_uuid, relation_type_uuid)`, the
@@ -169,6 +170,19 @@ def assess_traversal(fanout: Dict[tuple, dict], hops, direction: str) -> dict:
     "not measured", and assuming the favourable value for unmeasured data is how
     a rewrite ships looking correct and behaves badly on the shapes nobody
     profiled.
+
+    `path_bound=False` drops the whole-path amplification check and keeps only
+    the per-hop tail. Use it when the consumer SHORT-CIRCUITS — an
+    `EXISTS (SELECT 1 ...)` probe stops at the first matching row, so fan-out
+    changes how quickly a match is found, not how many rows are produced, and
+    compounding it describes work that is never done. Getting this wrong was
+    measured at 640x: a two-criteria KGQuery declined at "path amplification
+    10000 exceeds 100" and fell back to a blocking sort, 25 s against 39 ms.
+
+    The per-hop tail still applies in both modes, and is the check that earns
+    its keep: one hop that genuinely explodes (`worksFor` backward, p99 468)
+    means the probe may scan a great deal before finding its first match, or
+    never find one.
     """
     amplification = 1.0
     worst = None
@@ -190,9 +204,25 @@ def assess_traversal(fanout: Dict[tuple, dict], hops, direction: str) -> dict:
                     "worst_hop": hop,
                     "reason": (f"hop tail {tail} exceeds {MAX_SAFE_HOP_TAIL} "
                                f"— this direction fans out")}
-        amplification *= max(1.0, float(tail))
+        # Compound on the MEAN, not the tail. Multiplying p99 at every hop
+        # assumes they all hit their tail at once, whose probability is the
+        # product of the individual tail probabilities — vanishing over a chain.
+        # Over four hops of tail 10 it reports 10,000 and declines everything.
+        #
+        # Measured cost of getting this wrong: a two-criteria KGQuery
+        # (LeadStatus eq + MQLRating gte) was declined at "path amplification
+        # 10000 exceeds 100" and fell back to a blocking sort — 25 s against
+        # 39 ms once two-phase was allowed to engage. 640x, on an ordinary shape.
+        #
+        # The tail still guards the case it was built for, one hop above: a
+        # single hop that genuinely explodes (`worksFor` backward, p99 468) is
+        # refused outright regardless of what the means multiply to. That is the
+        # asymmetry worth keeping — one bad hop is a real risk, four mediocre
+        # hops all misbehaving together is not.
+        avg = stats.get("avg")
+        amplification *= max(1.0, float(avg if avg is not None else tail))
 
-    if amplification > MAX_SAFE_PATH_AMPLIFICATION:
+    if path_bound and amplification > MAX_SAFE_PATH_AMPLIFICATION:
         return {"safe": False, "amplification": amplification,
                 "worst_hop": worst,
                 "reason": (f"path amplification {amplification:.0f} exceeds "

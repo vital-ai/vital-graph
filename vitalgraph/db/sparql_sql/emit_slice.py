@@ -163,7 +163,12 @@ def _emit_two_phase(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
         if fanout:
             hops = extract_traversal(right_bgp, ctx.aliases)
             if hops:
-                verdict = assess_traversal(fanout, hops, "forward")
+                # path_bound=False: this probe is an EXISTS that stops
+                # at the first match, so whole-path amplification
+                # describes work it never does. The per-hop tail still
+                # applies. See assess_traversal.
+                verdict = assess_traversal(fanout, hops, "forward",
+                                           path_bound=False)
                 if not verdict["safe"]:
                     ctx.log("slice", f"two-phase declined: probe traversal "
                                      f"amplifies forward — {verdict['reason']}")

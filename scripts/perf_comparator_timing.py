@@ -21,7 +21,13 @@ wall time is context, per performance_regression_tracking_plan.md R1/R1.1.
 
     TSPACE  TGRAPH  TDSN  TSIDE      fixture / connection
     TBUDGET                          per-execution timeout, seconds (default 60)
-    TCOLD=0                          skip the cold pass (faster, warm only)
+    TCOLD=0                          skip the cold pass — HALVES THE RUNTIME AND
+                                     THE MEANING. With no first pass to warm the
+                                     cache, the single execution IS the cold one,
+                                     so the "warm" column reports cold numbers
+                                     under a warm heading. Use it only to compare
+                                     TCOLD=0 runs against each other, never
+                                     against a full run.
 """
 import asyncio
 import os
