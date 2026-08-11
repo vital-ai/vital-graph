@@ -229,6 +229,146 @@ class TestDeadlineBoundsFirstByteNotTransfer:
         assert r.status_code == 504
 
 
+class TestStalledTransfersAreReclaimed:
+    """A transfer may be SLOW; it may not be STUCK.
+
+    The deadline deliberately does not apply to uploads and downloads, which
+    left them with no fence at all — a connection that stopped moving bytes
+    held a worker and an S3 stream indefinitely. Duration cannot tell the two
+    apart (a big file over a thin link looks like a hang), but progress can.
+
+    The risk in watching at all is cancelling something that is merely QUIET
+    rather than stuck, so each test below pins one phase where silence is
+    legitimate.
+    """
+
+    def test_a_stalled_download_is_cancelled(self, monkeypatch):
+        monkeypatch.setenv("VITALGRAPH_TRANSFER_STALL_S", "0.3")
+        app = FastAPI()
+        app.add_middleware(RequestBoundsMiddleware)
+        cancelled = asyncio.Event()
+
+        @app.get("/api/files/stream/download")
+        async def dl():
+            async def gen():
+                yield b"chunk0\n"
+                try:
+                    await asyncio.sleep(30)        # S3 wedged mid-stream
+                    yield b"never\n"
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+            return StreamingResponse(gen(), media_type="text/plain")
+
+        with TestClient(app) as c:
+            started = time.monotonic()
+            try:
+                c.get("/api/files/stream/download")
+            except Exception:
+                pass                                # truncated stream, expected
+            elapsed = time.monotonic() - started
+
+        assert cancelled.is_set(), "stalled download was never reclaimed"
+        assert elapsed < 10, f"took {elapsed:.1f}s — waited on the 30s sleep"
+
+    def test_a_slow_but_progressing_download_is_left_alone(self, monkeypatch):
+        """The whole point: slow is fine, so long as bytes keep moving."""
+        monkeypatch.setenv("VITALGRAPH_TRANSFER_STALL_S", "0.5")
+        app = FastAPI()
+        app.add_middleware(RequestBoundsMiddleware)
+
+        @app.get("/api/files/stream/download")
+        async def dl():
+            async def gen():
+                for i in range(8):
+                    await asyncio.sleep(0.2)       # 1.6s total, never 0.5s idle
+                    yield f"chunk{i}\n".encode()
+            return StreamingResponse(gen(), media_type="text/plain")
+
+        with TestClient(app) as c:
+            r = c.get("/api/files/stream/download")
+        assert r.status_code == 200
+        assert r.text == "".join(f"chunk{i}\n" for i in range(8)), \
+            "a progressing transfer was cut short"
+
+    def test_an_upload_committing_after_its_body_is_not_cancelled(self, monkeypatch):
+        """THE SAFETY CASE. Silence after the body is in is not a stall.
+
+        Once the last chunk arrives the handler is writing to S3 and the
+        database, which from outside looks exactly like a wedged connection.
+        Cancelling there is the silent rollback the reads-only policy exists to
+        prevent — so the watchdog must detach at end-of-body, not at
+        end-of-request.
+        """
+        monkeypatch.setenv("VITALGRAPH_TRANSFER_STALL_S", "0.3")
+        app = FastAPI()
+        app.add_middleware(RequestBoundsMiddleware)
+
+        @app.post("/api/files/upload")
+        async def up(request: Request):
+            await request.body()                   # body fully received
+            await asyncio.sleep(1.2)               # 4x the stall, committing
+            return {"committed": True}
+
+        with TestClient(app) as c:
+            r = c.post("/api/files/upload", content=b"x" * 4096)
+        assert r.status_code == 200, "a committing upload was cancelled"
+        assert r.json() == {"committed": True}
+
+    def test_a_slow_write_that_never_reads_a_body_is_not_cancelled(self, monkeypatch):
+        """A write is only watched while an upload is actually in flight.
+
+        Arming the watchdog at request start looks reasonable and is wrong: a
+        handler that never reads a body — or receives it in one message — never
+        refreshes the progress timestamp, so silence alone would cancel it. That
+        is a write killed for being slow, which the reads-only policy forbids
+        outright. Arming waits for a body chunk that says `more_body`.
+        """
+        monkeypatch.setenv("VITALGRAPH_TRANSFER_STALL_S", "0.3")
+        started = time.monotonic()
+        app = FastAPI()
+        app.add_middleware(RequestBoundsMiddleware)
+
+        @app.post("/api/graphs/sparql/update")
+        async def slow_write():
+            await asyncio.sleep(0.9)              # 3x the stall, no body read
+            return {"updated": True}
+
+        with TestClient(app) as c:
+            r = c.post("/api/graphs/sparql/update")
+        assert r.status_code == 200, "a slow write was cancelled by silence"
+        assert time.monotonic() - started > 0.8, "handler did not actually run"
+
+    def test_a_slow_export_before_first_byte_is_not_cancelled(self, monkeypatch):
+        """Generating the file comes before any bytes move; that is not a stall."""
+        monkeypatch.setenv("VITALGRAPH_TRANSFER_STALL_S", "0.3")
+        app = FastAPI()
+        app.add_middleware(RequestBoundsMiddleware)
+
+        @app.get("/api/data/export/download")
+        async def export():
+            await asyncio.sleep(1.0)               # building the export
+            return {"ready": True}
+
+        with TestClient(app) as c:
+            r = c.get("/api/data/export/download")
+        assert r.status_code == 200, "export was cancelled while generating"
+
+    def test_stall_watchdog_can_be_disabled(self, monkeypatch):
+        monkeypatch.setenv("VITALGRAPH_TRANSFER_STALL_S", "0")
+        app = FastAPI()
+        app.add_middleware(RequestBoundsMiddleware)
+
+        @app.get("/api/files/stream/download")
+        async def dl():
+            await asyncio.sleep(0.5)
+            return {"ok": True}
+
+        with TestClient(app) as c:
+            r = c.get("/api/files/stream/download")
+        assert r.status_code == 200
+
+
 class TestLongTransfersAreNeverBounded:
     """Downloads and streams are GETs, and a deadline is wrong for them.
 

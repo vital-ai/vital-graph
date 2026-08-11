@@ -54,6 +54,20 @@ transfer through to the last byte, so the two-phase wait in `__call__` makes the
 same semantic explicit. Disconnect still cancels during the transfer, which is
 purely good: it stops pulling bytes from S3 for a client that left.
 
+SLOW IS FINE, STUCK IS NOT. Exempting transfers from the deadline left them with
+no fence at all, so a connection that stopped moving bytes could hold a worker
+and an S3 stream indefinitely. Duration cannot distinguish the two — a large file
+over a thin link looks like a hang — but PROGRESS can, and both directions move
+in chunks. `_progress_bounded` cancels a transfer that has gone quiet for
+`VITALGRAPH_TRANSFER_STALL_S` (60s, 0 disables) while never capping a
+slow-but-progressing one.
+
+It watches only the phases where bytes SHOULD be moving: for a write, from the
+first chunk until the body is complete, after which the handler is committing
+and silence is expected; for a read, from the first response byte onward, since
+an export generates its file before sending anything. Cancelling either of those
+quiet-but-busy phases would be the silent rollback this module exists to avoid.
+
 UPLOADS are outside the allowlist and must stay there. Detecting a disconnect
 for a body-carrying POST means draining and buffering that body first (see the
 class docstring); doing that to an upload would hold the entire file in memory.
@@ -130,6 +144,28 @@ def _request_deadline_s() -> float:
         return _DEFAULT_REQUEST_DEADLINE_S
 
 
+# A transfer is allowed to be SLOW but not STUCK. Total duration says nothing —
+# a large file over a thin link is indistinguishable from a hang by that measure
+# — but both directions move in chunks (8192 bytes by default, see
+# files_endpoint), so "no bytes at all for this long" separates the two cleanly.
+#
+# 60s is deliberately generous: it is not a performance fence, it is the point
+# past which a connection is not coming back.
+_DEFAULT_TRANSFER_STALL_S = 60.0
+
+
+def _transfer_stall_s() -> float:
+    raw = os.environ.get("VITALGRAPH_TRANSFER_STALL_S")
+    if raw is None:
+        return _DEFAULT_TRANSFER_STALL_S
+    try:
+        return max(0.0, float(raw))          # 0 disables
+    except ValueError:
+        logger.warning("VITALGRAPH_TRANSFER_STALL_S=%r is not a number; using %s",
+                       raw, _DEFAULT_TRANSFER_STALL_S)
+        return _DEFAULT_TRANSFER_STALL_S
+
+
 def is_cancellable_read(method: str, path: str) -> bool:
     """Whether abandoning this request is unambiguously safe.
 
@@ -187,7 +223,11 @@ class RequestBoundsMiddleware:
             await self.app(scope, receive, send)
             return
         if not is_cancellable_read(scope.get("method", ""), scope.get("path", "")):
-            await self.app(scope, receive, send)
+            # Uploads, downloads and writes. No deadline and no buffering, but
+            # not unwatched either — a connection that stops MOVING BYTES is
+            # stuck, and that is visible without capping how long a legitimate
+            # transfer may run. See `_progress_bounded`.
+            await self._progress_bounded(scope, receive, send)
             return
 
         deadline = _request_deadline_s()
@@ -288,3 +328,100 @@ class RequestBoundsMiddleware:
             for task in (watcher, gone, first_byte):
                 if not task.done():
                     task.cancel()
+
+    async def _progress_bounded(self, scope, receive, send) -> None:
+        """Cancel a connection that has stopped moving bytes. No deadline.
+
+        This is what covers uploads and downloads, which the deadline path
+        deliberately will not touch: their duration is set by file size and by
+        object storage, so any total-time bound is either too short for a big
+        file or too long to be worth having.
+
+        WHICH PHASES ARE WATCHED IS THE WHOLE DESIGN. The watchdog runs only
+        while bytes SHOULD be moving:
+
+          upload / write   from the first chunk until the request body is
+                           complete, then it detaches. After that the handler
+                           is committing to S3 and the database, which looks
+                           exactly like a stall from out here — and cancelling
+                           a commit is the silent rollback that the reads-only
+                           policy exists to prevent (see the module docstring).
+
+          download / read  from the first byte of the response onward. NOT
+                           before: an export generates its file first, and an
+                           S3 fetch pays its latency up front, with no bytes
+                           moving through either — which is precisely why these
+                           paths are exempt from the deadline to begin with.
+
+        So a stalled transfer is reclaimed, while slow-but-progressing transfers
+        and busy-but-silent handlers are both left alone.
+        """
+        stall = _transfer_stall_s()
+        if stall <= 0:
+            await self.app(scope, receive, send)
+            return
+
+        loop = asyncio.get_event_loop()
+        is_read = scope.get("method", "").upper() in _SAFE_METHODS
+        last = loop.time()
+        watching = asyncio.Event()      # bytes should be moving right now
+        detached = asyncio.Event()      # stop watching for good
+
+        # NOT armed yet, in either direction. Arming happens when bytes actually
+        # start moving — at the first response byte for a read, and at the first
+        # multi-chunk body message for a write. Arming a write up front would
+        # cancel any slow handler that never reads a body (or reads it in one
+        # message), since nothing would ever refresh the timestamp — a write
+        # cancelled by silence, which is the exact failure this must not cause.
+
+        async def wrapped_receive():
+            nonlocal last
+            message = await receive()
+            last = loop.time()
+            if message["type"] == "http.disconnect":
+                detached.set()          # nothing left to measure
+            elif not is_read and message["type"] == "http.request":
+                # Writes ONLY — a StreamingResponse also reads `receive` to
+                # listen for disconnects, so on a GET the end-of-body message
+                # arrives immediately and would detach the watchdog before the
+                # download had sent a single byte.
+                if message.get("more_body", False):
+                    watching.set()      # a real upload is in flight
+                else:
+                    detached.set()      # body is in; the handler owns it now
+            return message
+
+        async def wrapped_send(message):
+            nonlocal last
+            # Timestamp AFTER the await, not before: when a client stops reading,
+            # TCP backpressure blocks here, and that is the stall we want to see.
+            await send(message)
+            last = loop.time()
+            if is_read and message["type"] == "http.response.start":
+                watching.set()
+
+        handler = asyncio.ensure_future(
+            self.app(scope, wrapped_receive, wrapped_send))
+
+        async def watchdog():
+            tick = min(stall / 4.0, 5.0)
+            while not handler.done() and not detached.is_set():
+                await asyncio.sleep(tick)
+                if not watching.is_set() or detached.is_set():
+                    continue
+                if loop.time() - last > stall:
+                    logger.warning(
+                        "transfer bounded: %s %s — no progress for %gs",
+                        scope.get("method"), scope.get("path"), stall)
+                    handler.cancel()
+                    return
+
+        guard = asyncio.ensure_future(watchdog())
+        try:
+            await handler
+        except asyncio.CancelledError:
+            if not guard.done():        # our own cancellation, not the caller's
+                raise
+        finally:
+            if not guard.done():
+                guard.cancel()

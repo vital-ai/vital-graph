@@ -70,11 +70,33 @@ up front), where a 504 would be equally wrong. Relying on the list alone was the
 real problem: a new object-storage-backed route would have inherited the cap
 silently, so the tests deliberately exercise a NON-excluded path.
 
-*Known limitation:* a transfer that stalls midstream is now unbounded, as it was
-under `BaseHTTPMiddleware`. The disconnect watcher reclaims the usual case (the
-client gives up and hangs up); a stalled-but-open connection does not hit a
-fence. Bounding it would mean re-introducing truncation, so this is the
-deliberate trade rather than an oversight.
+**Stalled transfers are reclaimed by PROGRESS, not by duration.** Exempting
+uploads and downloads from the deadline left them with no fence at all: a
+connection that stopped moving bytes held a worker and an S3 stream
+indefinitely. Total time cannot tell a stuck transfer from a slow one, but both
+directions move in 8192-byte chunks, so "no bytes at all for
+`VITALGRAPH_TRANSFER_STALL_S`" (60s, 0 disables) separates them cleanly.
+
+`_progress_bounded` watches only the phases where bytes should be moving, which
+is the whole design:
+
+    write   from the first chunk until the request body is complete, then it
+            detaches — after that the handler is committing to S3 and the
+            database, which looks identical to a stall from outside, and
+            cancelling it is the silent rollback the reads-only policy forbids
+    read    from the first response byte onward, NOT before — an export
+            generates its file first and an S3 fetch pays latency up front,
+            with no bytes moving through either
+
+Four of the five tests assert something is NOT cancelled (a committing upload, a
+generating export, a slow-but-progressing stream, the disabled case); they pass
+both with and without the watchdog, while the stall test fails without it. That
+is the shape that shows detection was added without adding false cancellations.
+
+One implementation trap, found by a failing test: a `StreamingResponse` also
+reads `receive` to listen for disconnects, so on a GET the end-of-body message
+arrives immediately. Detaching on it — correct for a write — disarmed the
+watchdog before a download had sent a single byte.
 
 **Verified against real uvicorn over a real socket**, not just a mock `receive`:
 disconnect delivery for a POST is a server behavior, so the unit test alone
