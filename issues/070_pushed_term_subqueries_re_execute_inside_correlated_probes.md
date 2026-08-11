@@ -240,11 +240,32 @@ What would actually solve it:
   `contains` only, and nested frame criteria are walked — KGQuery expresses
   depth by nesting, so checking one level would be no check at all.
 
-  Scope, stated plainly: this covers the KGQuery criteria path, which is where
-  the cost was measured. `kgentities_endpoint` has a separate `contains`
-  operator on entity property filters that was NOT measured and is NOT
-  restricted; asserting a limit on an unmeasured path could reject queries that
-  are fine today.
+  Scope: the KGQuery criteria path, which is where the cost was measured.
+
+  **Entity property filters MEASURED 2026-08-11 and deliberately left alone.**
+  `kgentities_endpoint` has its own `contains` operator, and it does not share
+  the problem. It emits `CONTAINS(LCASE(STR(?v)), ...)` — note the `STR()` —
+  while the slot form emits `CONTAINS(LCASE(?v), ...)`. `_unwrap_fold` handles
+  LCASE/UCASE only, so `STR()` leaves an `ExprFunction` where
+  `_text_search_operands` expects a var, and THE PUSH-DOWN NEVER MATCHES.
+  Confirmed on `sp_lead_synth_100k`, 25-row page:
+
+      needle      pushed down   time     rows
+      'CA'        False           92 ms    25
+      'XQ'        False           79 ms     0
+      'ZZQQXX'    False            0 ms     0
+
+  No term subquery means no trigram index, which means neither the degenerate
+  scan nor the workaround applies. The short needle costs 79 ms here against
+  12,613 ms on the pushed path. Restricting it would have rejected queries that
+  are fine — which is why the limit was scoped rather than applied everywhere.
+
+  Worth keeping in view rather than acting on: this path never gets push-down at
+  all, so it also never gets the index when a needle IS selective. At present
+  that costs nothing (0 ms for the absent case, a single hop off the entity).
+  On the term table's projected 10x it may stop being free, and the fix would be
+  to teach `_unwrap_fold` about `STR()` — at which point this path inherits the
+  short-needle problem too, and the API limit would need to widen with it.
 
   The emitter backstop stays for anything that reaches it by another route.
 * **A materialised 2-gram table**, if short search must be supported without a
