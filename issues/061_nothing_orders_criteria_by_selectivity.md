@@ -1,6 +1,25 @@
 # Nothing Chooses Which Criterion Drives the Query
 
-## Status: ordering defect CLOSED; step 3 REOPENED — it has a failing case
+## Status: CLOSED again — the failing case was fixed WITHOUT driver selection
+
+Reopened earlier on 2026-08-11 because `issues/070` looked like the shape step 3
+needed. It was not. That case is now fixed — a short `contains` needle is
+rejected at the API and kept off the trigram index in the emitter — and driving
+the page from the text leaf was measured DIRECTLY and lost:
+
+    contains 'ZZQQXX', driven, 10k     11,690 ms (best fence)
+    contains 'ZZQQXX', shipped, 100k        1 ms
+
+Worse on a fixture ten times smaller, with every fence tried
+(`join_collapse_limit=1`, `enable_nestloop=off`, `enable_material=off`). The
+cross product it produces comes from a 10,000x cardinality underestimate the
+planner has no statistics to avoid — `issues/072`, not an ordering defect.
+
+So step 3 is back to having no failing case, and now with evidence that the
+specific thing it proposes is the wrong answer for the one shape that looked
+like a candidate. Precedence stays text anchor -> range anchor -> cheapest leaf
+-> list position. Reopen only with a measured shape where criterion order still
+changes cost, gated on `perf_sweep_diff.py`.
 
 **Reopened 2026-08-11, hours after being closed.** It was closed on the grounds
 that no measured shape needed it. `issues/070` is that shape:
