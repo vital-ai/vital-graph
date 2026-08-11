@@ -415,8 +415,17 @@ def _try_candidate_driven(plan, ctx, left_bgp, right_bgp, exists_expr,
     stats = getattr(ctx.aliases, "quad_stats", None) or {}
     extra = getattr(ctx.aliases, "extra_quad_stats", None) or {}
     deepest = levels[-1]
-    excluded_n = stats.get((trav.leaf_pred, trav.leaf_obj)) or \
-        extra.get((trav.leaf_pred, trav.leaf_obj))
+    if trav.leaf_obj is None:
+        # An unbound object means "carries this predicate at all", so the count
+        # is per-PREDICATE. `quad_stats` is keyed by (predicate, object) and has
+        # nothing under (predicate, None) — looking there returns a miss, the
+        # gate reads it as "selectivity unknown", and declines every value-absence
+        # body including the one it was extended for (issues/072).
+        excluded_n = (getattr(ctx.aliases, "pred_stats", None) or {}).get(
+            trav.leaf_pred)
+    else:
+        excluded_n = stats.get((trav.leaf_pred, trav.leaf_obj)) or \
+            extra.get((trav.leaf_pred, trav.leaf_obj))
     population_n = stats.get((deepest.dest_pred, deepest.dest_obj)) or \
         extra.get((deepest.dest_pred, deepest.dest_obj))
     if not excluded_n or not population_n:

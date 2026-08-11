@@ -1159,7 +1159,22 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
         return f"FILTER NOT EXISTS {{ {inner_str} }}"
 
     def _build_empty_value_pattern(self, slot_var: str, slot_criterion, value_var: str) -> str:
-        """Build OPTIONAL + FILTER(!BOUND) pattern for a slot that exists but has no value.
+        """The "slot exists but holds no value" pattern, as NOT EXISTS.
+
+        Was `OPTIONAL { ?slot p ?v } FILTER(!BOUND(?v))` — the same question, and
+        equivalent here because the value variable is internal to this pattern
+        and never projected (`SELECT DISTINCT ?entity`).
+
+        Not the same cost. OPTIONAL compiles to a LEFT JOIN with an IS NULL
+        filter, `semijoin` will not rewrite a LEFT JOIN, and the FILTER is not an
+        ExprExists so `_foldable_exists_join` never sees it either — so the
+        candidate-driven negation path was unreachable and the plan fell back to
+        a forward probe over every entity: 53 s and 3.3M buffers for a 25-row
+        page (issues/071, issues/072).
+
+        NOTE this spelling alone is NOT enough, and was measured at >300 s on its
+        own: `extract_negated_traversal` also had to learn the zero-hop,
+        unbound-object body this produces. The two changes only work as a pair.
         
         Args:
             slot_var: Slot variable name
@@ -1175,11 +1190,8 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
         # If slot_class_uri is known, check only that specific value property
         if slot_criterion.slot_class_uri or slot_criterion.slot_type:
             prop = self._get_slot_value_property(slot_criterion.slot_class_uri, slot_criterion.slot_type)
-            return (
-                f"OPTIONAL {{ ?{slot_var} {prop} ?{value_var} . }} "
-                f"FILTER(!BOUND(?{value_var}))"
-            )
-        
+            return f"FILTER NOT EXISTS {{ ?{slot_var} {prop} ?{value_var} . }}"
+
         # No class URI — check all value properties
         all_props = [
             ("haley:hasTextSlotValue", f"{value_var}_text"),
@@ -1190,11 +1202,10 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
             ("haley:hasEntitySlotValue", f"{value_var}_ent"),
             ("haley:hasUriSlotValue", f"{value_var}_uri"),
         ]
-        optionals = " ".join(
-            f"OPTIONAL {{ ?{slot_var} {prop} ?{var} . }}" for prop, var in all_props
+        return " ".join(
+            f"FILTER NOT EXISTS {{ ?{slot_var} {prop} ?{var} . }}"
+            for prop, var in all_props
         )
-        bounds = " && ".join(f"!BOUND(?{var})" for _, var in all_props)
-        return f"{optionals} FILTER({bounds})"
 
     def _build_hierarchical_frame_patterns(self, parent_frame_var: str, frame_criteria_list: List, frame_index_prefix: str, use_edge_pattern: bool = True, depth: int = 0) -> List[str]:
         """Recursively build SPARQL patterns for hierarchical frame structures.

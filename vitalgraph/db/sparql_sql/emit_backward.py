@@ -10,20 +10,30 @@ back to re-derive a solved problem in 2026-08 before anyone noticed the module
 was live. The failure analysis below is still accurate and worth keeping; only
 the status was wrong.
 
-WHAT REACHES IT, AND WHAT DOES NOT. `extract_negated_traversal` requires edge
-tables in the negated body:
+TWO BODY SHAPES REACH IT.
 
-    edges = [t for t in tables if t.kind == "edge"]
-    if not edges:
-        return None
+  * An EDGE CHAIN — `not_exists`. The negation tests a constrained leaf some
+    hops away from the correlated variable, and the walk follows those hops.
+  * ZERO HOPS with an UNBOUND OBJECT — `is_empty`, added 2026-08-10. The body is
+    `?slot <valueProp> ?val`: the correlated variable IS the leaf's subject, and
+    the negation only asks whether the predicate is present at all. `excl` is
+    then one index range scan on (context, predicate) — "slots that hold a
+    value" — and the rest of `emit_candidate_ctes` is reused unchanged, because
+    the SHAPE is the same and only the seed differs.
 
-`not_exists` negates a frame/slot EDGE chain and qualifies. `is_empty` negates a
-single value quad — `?slot haley:hasTextSlotValue ?val`, no edge — and does not,
-so it falls back to the forward probe and costs 53 s where `not_exists` costs
-200 ms (`issues/072`). Note that this is exactly the case the backward form is
-BEST at: `is_empty`'s answer is empty, and an empty answer is what makes the
-candidate set empty and the walk free. The seed differs, not the shape — `excl`
-would be one indexed scan over the value predicate instead of a walk.
+      is_empty/Text   51,753 ms -> 328 ms,  3,302,262 buffers -> 25,351
+
+    That number lands in the 205-337 ms band measured below for an empty answer,
+    which is the point: `is_empty` returns nothing, and an empty answer is
+    exactly what makes the candidate set empty and the walk free.
+
+The KGQuery side had to change with it. `is_empty` emitted
+`OPTIONAL { ?slot p ?v } FILTER(!BOUND(?v))`, which is the same question but
+compiles to a LEFT JOIN with an IS NULL filter — not an `ExprExists`, so
+`_foldable_exists_join` never saw it and this module was unreachable. Switching
+the spelling ALONE measured >300 s, because the body then reached the forward
+probe instead; the recogniser change and the spelling change only work as a
+pair, and neither is a fix on its own.
 
 Two placements were tried and measured. Both are CORRECT — a differential test
 against the correlated form returned identical 300-row sets on a case
@@ -110,6 +120,18 @@ class Traversal:
     `leaf` is the constrained end — the (predicate, object) the negation tests
     for. `hops` are the edge types between that end and the correlated variable,
     ordered from the leaf outwards, which is the direction they will be walked.
+
+    Two degenerate-looking cases are legitimate and both occur:
+
+    * `leaf_obj is None` — the negation tests only that the predicate is PRESENT,
+      whatever its value. `is_empty` is this: "the slot holds no text value at
+      all", not "holds some particular value".
+    * `hops == []` — the correlated variable IS the leaf's subject, so there is
+      nothing to walk. Again `is_empty`: the body is `?slot <pred> ?val` and the
+      outer query correlates on `?slot` directly.
+
+    Neither weakens the set semantics. The walk still produces "the nodes the
+    negation excludes"; with no hops that set is just the leaf subjects.
     """
 
     def __init__(self, leaf_pred: str, leaf_obj: str, hops: List[str],
@@ -127,7 +149,8 @@ class Traversal:
         self.context_uuid = context_uuid
 
     def __repr__(self):
-        return (f"Traversal(leaf=({self.leaf_pred[:8]},{self.leaf_obj[:8]}), "
+        obj = self.leaf_obj[:8] if self.leaf_obj else "*"
+        return (f"Traversal(leaf=({self.leaf_pred[:8]},{obj}), "
                 f"hops={len(self.hops)}, corr={self.correlated_var})")
 
 
@@ -176,6 +199,17 @@ def _walk_select(trav: Traversal, space_id: str, context_uuid: str) -> str:
     t_quad = f"{space_id}_rdf_quad"
     t_edge = f"{space_id}_edge"
 
+    if not trav.hops:
+        # No hops: the correlated node IS the leaf's subject, so the excluded
+        # set is just "subjects carrying this predicate". One index range scan
+        # on (context, predicate) — no edges involved.
+        where = [f"lf.predicate_uuid = '{trav.leaf_pred}'::uuid",
+                 f"lf.context_uuid = '{context_uuid}'::uuid"]
+        if trav.leaf_obj:
+            where.append(f"lf.object_uuid = '{trav.leaf_obj}'::uuid")
+        return (f"SELECT lf.subject_uuid AS n\n    FROM {t_quad} lf"
+                f"\n    WHERE " + "\n      AND ".join(where))
+
     parts = [
         f"SELECT e0.source_node_uuid AS n",
         f"FROM {t_quad} lf",
@@ -192,10 +226,11 @@ def _walk_select(trav: Traversal, space_id: str, context_uuid: str) -> str:
     # correlates on.
     last = len(trav.hops) - 1
     parts[0] = f"SELECT e{last}.source_node_uuid AS n"
-    parts.append(
-        f"WHERE lf.predicate_uuid = '{trav.leaf_pred}'::uuid"
-        f" AND lf.object_uuid = '{trav.leaf_obj}'::uuid"
-        f" AND lf.context_uuid = '{context_uuid}'::uuid")
+    where = [f"lf.predicate_uuid = '{trav.leaf_pred}'::uuid",
+             f"lf.context_uuid = '{context_uuid}'::uuid"]
+    if trav.leaf_obj:
+        where.append(f"lf.object_uuid = '{trav.leaf_obj}'::uuid")
+    parts.append("WHERE " + " AND ".join(where))
 
     return "\n    ".join(parts)
 
@@ -228,7 +263,10 @@ def extract_negated_traversal(plan, aliases) -> Optional[Traversal]:
     tables = getattr(plan, "tables", None) or []
     edges = [t for t in tables if getattr(t, "kind", None) == "edge"]
     if not edges:
-        return None
+        # No edges is not automatically unrecognisable: the correlated node can
+        # BE the constrained subject, with nothing to walk. `is_empty` is that —
+        # `?slot <valueProp> ?val`, correlating on ?slot.
+        return _extract_value_absence(plan, aliases)
 
     consts = _const_map(aliases)
 
@@ -399,6 +437,79 @@ def extract_positive_chain(plan, aliases):
     if len(contexts) != 1:
         return None
     return levels, str(next(iter(contexts)))
+
+
+def _extract_value_absence(plan, aliases) -> Optional[Traversal]:
+    """A zero-hop negation: `?x <pred> ?anything`, correlating on `?x`.
+
+    The body `issues/072` needs. `is_empty` asks whether a slot holds a value at
+    all, so the negated pattern binds a constant PREDICATE and leaves the object
+    a variable, and the outer query correlates on the subject directly. There is
+    no edge to walk back along, which is why the edge-chain recogniser above
+    declines it — and why it then fell back to a forward probe costing 53 s
+    where the set form costs a single index range scan.
+
+    Deliberately strict, because everything this returns is emitted as different
+    SQL for the same question:
+
+    * exactly ONE quad table, so there is nothing else in the body whose meaning
+      would be dropped by reducing it to a set of subjects. TERM tables are
+      allowed alongside it: they are text/type resolution joins on the quad's
+      own columns, present because the body binds a value variable, and they
+      cannot change whether a matching triple EXISTS. Every constraint is still
+      required to reference the quad alias, so a term table carrying a real
+      filter would be rejected;
+    * a constant predicate — without one the excluded set is "every subject",
+      which is never what the caller meant;
+    * the correlated variable bound to that table's `subject_uuid`.
+
+    An object constant is ALLOWED but not required. With one this recognises
+    `?x <pred> <value>` too, which is `not_has`'s body shape. That does not
+    hijack `not_has`: the density gate in `_try_candidate_driven` declines it,
+    because its negation excludes a few hundred of ~100,000 and the forward
+    probe stops sooner. Correctness does not depend on that gate — both forms
+    answer the same question — only the choice of the faster one does.
+    """
+    tables = getattr(plan, "tables", None) or []
+    quads = [t for t in tables if getattr(t, "kind", None) == "quad"]
+    others = [t for t in tables if getattr(t, "kind", None) not in ("quad", "term")]
+    if len(quads) != 1 or others:
+        return None
+    alias = quads[0].alias
+
+    # Nothing may constrain anything but the quad. A term table is only ever a
+    # resolution join here, and if one ever carries a filter this rejects it
+    # rather than silently dropping the filter's meaning.
+    for _owner, sql in (getattr(plan, "tagged_constraints", None) or []):
+        refs = set(re.findall(r"\b(\w+)\.\w+_uuid\b", sql))
+        if refs - {alias}:
+            return None
+
+    consts = _const_map(aliases)
+    pred = obj = ctx_uuid = None
+    for _owner, sql in (getattr(plan, "tagged_constraints", None) or []):
+        m = re.search(rf"{re.escape(alias)}\.predicate_uuid\s*=\s*__CONST_(\w+)__", sql)
+        if m:
+            pred = consts.get(m.group(1))
+        m = re.search(rf"{re.escape(alias)}\.object_uuid\s*=\s*__CONST_(\w+)__", sql)
+        if m:
+            obj = consts.get(m.group(1))
+        m = re.search(rf"{re.escape(alias)}\.context_uuid\s*=\s*__CONST_(\w+)__", sql)
+        if m:
+            ctx_uuid = consts.get(m.group(1))
+    if not pred:
+        return None
+
+    corr = None
+    for var, slot in (getattr(plan, "var_slots", None) or {}).items():
+        for ref_id, col in (getattr(slot, "positions", None) or []):
+            if ref_id == alias and col == "subject_uuid":
+                corr = var
+    if corr is None:
+        return None
+
+    return Traversal(str(pred), str(obj) if obj else None, [], corr,
+                     str(ctx_uuid) if ctx_uuid else None)
 
 
 def emit_candidate_ctes(trav: Traversal, levels, space_id: str,
