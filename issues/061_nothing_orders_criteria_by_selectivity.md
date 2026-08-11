@@ -1,6 +1,92 @@
 # Nothing Chooses Which Criterion Drives the Query
 
-## Status: OPEN — steps 1 and 2 DONE; step 3 has a demonstrated case — 2026-08-10
+## Status: step 3 PARTLY IMPLEMENTED — 2026-08-10
+
+`emit_slice._try_selective_driven` drives the page from the selective criterion
+instead of the entity anchor. Measured with alternating arms, first rep
+discarded:
+
+    WV alone                    35 ms ->  32 ms    no change, no harm
+    WV + LeadStatus            961 ms -> 119 ms    8.1x
+    LeadStatus + WV            >20 s   -> >20 s    NOT fixed
+
+So the ORDER asymmetry this issue is named for is only half addressed: the
+selective-criterion-first ordering is now fast, the other ordering is not.
+
+### DIAGNOSED — `reorder_joins` cannot see pair cardinality at all
+
+The path fires for both orderings, the gate inputs are identical, and the
+emitted join ORDER is identical — the same 20 aliases in the same sequence. The
+only difference is which end the scan starts from, and that is
+`reorder_bgp.reorder_joins`:
+
+    # --- Pick chain root ---
+    first = quad_tables[0]        # whatever is listed first
+    ...
+    if ilike_alias: first = ...   # only a text filter overrides it
+
+**The root is list position.** Cardinality is computed for every alias but used
+only for the greedy placement AFTER the root, behind connectivity. For a KGQuery
+"listed first" is the criterion the CALLER wrote first, which is precisely this
+issue's complaint.
+
+Two fixes were tried and BOTH are no-ops, which is the more useful finding:
+
+* root by cheapest leaf instead of list position;
+* merging `extra_quad_stats` into what `reorder_joins` receives, since
+  `rdf_stats` is pruned and the on-demand loader is the only thing that knows
+  these pairs.
+
+Neither helped, separately or together, because **`cardinality` is empty for
+this shape**. It is derived by REGEX-PARSING the constraint SQL:
+
+    elif f"{alias}.object_uuid = " in sql and not refs:
+
+which requires the object constant to sit in a constraint that references no
+other alias. The KGQuery shape emits combined constraints —
+`q7.subject_uuid = mv0.dest_node_uuid AND q7.predicate_uuid = '...' AND
+q7.object_uuid = '...'` — so `refs = {mv0}`, the branch is skipped, and no leaf
+ever gets a `(predicate, object)` count. Both roots fall through to `mv0`, an
+edge table.
+
+So the ordering asymmetry is not a missing policy. It is a parser that cannot
+read the shape this pipeline actually emits, and every selectivity decision
+downstream of it is made on `_INF`.
+
+### The fix, and why it is not a one-liner
+
+`plan.leaf_terms` records `(alias, column) -> (text, type)` STRUCTURALLY at
+collect time, precisely so consumers do not have to parse SQL back — the
+selectivity gate was moved onto it for this reason, and `_replace_plan_in_place`
+carries a comment about `leaf_terms` being silently dropped once. `reorder_joins`
+predates that and still parses text.
+
+Feeding it `leaf_terms` (and `range_leaves`) instead of regexes would give every
+leaf a real count, at which point root-by-cardinality becomes a two-line change
+that actually fires. That is the work; the root policy alone is not.
+
+Paging is on the entity uuid, which is decision D1 in
+`two_phase_kgquery_paging_plan.md`, accepted and bounded to queries with no
+explicit `sort_criteria`. The `shared_var != key` guard is what enforces that
+boundary: when a sort IS requested the order key is a sort variable, the guard
+declines, and the caller's sort is honoured by normal emission.
+
+Verified the full result sets are identical to the previous plan's — 848 of 848
+and 249 of 249 — so this changes the plan, not the answer.
+
+### Two measurement corrections worth keeping
+
+* A first version sorted the page by term text rather than uuid, on the belief
+  that uuid order was a bug. It is D1, deliberate. The text sort cost the entire
+  win (3,683 ms against a 3,208 ms baseline) because it must materialise the
+  whole match set before it can pick a page — and led to reverting the path
+  altogether on the false conclusion that it was "only fast because it was
+  wrong". See `issues/075`.
+* An early figure of 48x was contaminated: the two arms ran back to back, so the
+  second read a cache the first had warmed. Alternating and discarding the first
+  rep gives 8.1x.
+
+## Superseded status: steps 1 and 2 DONE; step 3 has a demonstrated case
 
 Steps 1 and 2 of the suggested order below are implemented:
 

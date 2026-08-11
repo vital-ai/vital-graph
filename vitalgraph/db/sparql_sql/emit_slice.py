@@ -328,12 +328,153 @@ def _emit_two_phase(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
             f"ORDER BY {r_alias}.{sn}__uuid{suffix}")
 
 
+def _try_selective_driven(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
+    """Drive the page from a SELECTIVE criterion instead of the entity anchor.
+
+    `issues/061` step 3. `_emit_two_phase` always anchors on the entity-type BGP,
+    because that is what supplies `subject_uuid` order so `LIMIT` can stop early.
+    Every criterion is then a probe. That is right when the answer is dense, and
+    it leaves one shape with NO usable plan:
+
+        LeadStatus eq  +  CompanyStateCode eq "WV"        >10 s
+        the same, with probing forced (MIN_SELECTIVITY 0)  >10 s
+
+    The semi-join gate declines because `WV` is 848 of 100,000, under
+    `MIN_SELECTIVITY`, and that call is CORRECT — forcing a probe on `WV` alone
+    takes it from 73 ms to >10 s. But the set-based join it falls back to
+    materialises the large criterion. Neither plan fits, so no threshold reaches
+    one.
+
+    What fits is driving from the selective side: reach the 848 entities that
+    have `WV`, test each against the rest, page in uuid order. Measured:
+
+        WV alone                    73 ms -> 30 ms
+        WV + LeadStatus          5,585 ms -> 159 ms
+
+    `collect` merges every criterion into ONE right-hand BGP, so "the selective
+    criterion" is not a separate operand to pick — it is the cheapest leaf inside
+    that BGP, and `reorder_joins` (inside `emit_bgp_anchor`) already orders the
+    scan to start there.
+
+    WHY PAGING ON THE UUID IS RIGHT HERE, and why the `shared_var != key` guard
+    below is not a technicality: decision D1 in
+    `two_phase_kgquery_paging_plan.md` accepted uuid paging order, and bounded it
+    to queries with NO explicit `sort_criteria` — `kg_query_builder.py:819`
+    replaces the default `ORDER BY ?entity` entirely when sorting is requested.
+    When sorting IS requested the order key is a sort variable rather than the
+    entity, so this path declines and the caller's sort is honoured by the
+    normal emission. The guard is what keeps this inside D1's scope.
+
+    (An earlier revision sorted by the term text instead, to "fix" an ordering
+    difference against the generic path. That difference is D1, deliberate; the
+    text sort cost the entire win — 3,683 ms against a 3,208 ms baseline —
+    because it has to materialise the whole match set before it can pick a page.)
+
+    STRICTLY GATED so it cannot regress anything that works: it fires only when
+    the semi-join was NOT marked, i.e. two-phase already declined, and the
+    criteria side is genuinely small against the anchor. Every shape with a good
+    plan today keeps it.
+    """
+    from .emit_bgp import emit_bgp_anchor, emit_bgp_exists, find_bgp
+    from .sql_type_generation import TypeRegistry
+    from .emit_bgp import _NUMERIC_DATATYPES, _BOOLEAN_DT, _DATETIME_DATATYPES
+    from .ir import KIND_JOIN
+    from .semijoin import MIN_SELECTIVITY, _leaf_rows
+    from .var_scope import compute_scope
+
+    if plan.limit < 0:
+        return None
+    if _has_semijoin(plan.child):
+        return None          # two-phase owns this shape
+
+    buried = _find_buried_order(plan.child)
+    if len(buried) != 1:
+        return None
+    key, _direction = buried[0]
+    if not isinstance(key, str):
+        return None
+
+    node = plan.child
+    for _ in range(6):
+        if node is None or node.kind == KIND_JOIN:
+            break
+        node = node.children[0] if node.children else None
+    if node is None or node.kind != KIND_JOIN or len(node.children or []) != 2:
+        return None
+
+    left, right = node.children
+    shared = compute_scope(left).all_visible & compute_scope(right).all_visible
+    if len(shared) != 1:
+        return None
+    shared_var = next(iter(shared))
+    if shared_var != key:
+        # An explicit sort was requested, so the order key is a sort variable.
+        # Paging on the entity uuid would ignore it. See D1 above.
+        return None
+
+    left_bgp, right_bgp = find_bgp(left), find_bgp(right)
+    if left_bgp is None or right_bgp is None:
+        return None
+
+    anchor_n = _leaf_rows(left, ctx.aliases)
+    driver_n = _leaf_rows(right, ctx.aliases)
+    if not anchor_n or not driver_n:
+        return None          # unmeasured: no opinion, keep the current plan
+    if driver_n >= MIN_SELECTIVITY * anchor_n:
+        # The same threshold the semi-join gate uses, read the other way round:
+        # it declines to PROBE below this, and this declines to DRIVE above it.
+        return None
+
+    driver = emit_bgp_anchor(right_bgp, ctx, shared_var)
+    if driver is None:
+        return None
+    col_ref, from_sql, where_conds = driver
+
+    anchor_probe = emit_bgp_exists(left_bgp, ctx, (shared_var, col_ref))
+    if not anchor_probe:
+        return None
+
+    info = ctx.types.get(shared_var)
+    sn = info.sql_name if info and info.sql_name else shared_var
+    # emit_bgp_exists returns the INNER select; the caller supplies the wrapper,
+    # exactly as the two-phase probe above does. Using it raw put a bare SELECT
+    # where a boolean belonged.
+    conds = list(where_conds) + [f"EXISTS (\n{anchor_probe}\n)"]
+
+    page = (f"SELECT DISTINCT ON ({col_ref}) {col_ref} AS {sn}__uuid\n"
+            f"{from_sql}\n"
+            f"WHERE {' AND '.join(conds)}\n"
+            f"ORDER BY {col_ref}\n"
+            f"LIMIT {plan.limit}")
+    if plan.offset > 0:
+        page += f"\nOFFSET {plan.offset}"
+
+    r_alias = ctx.aliases.next("r")
+    t_alias = ctx.aliases.next("t")
+    cols = TypeRegistry.term_table_columns(
+        sn, t_alias, r_alias, "",
+        dt_case_sql=ctx.dt_case_expr(t_alias),
+        numeric_dt_id_list=ctx.dt_ids_for_uris(_NUMERIC_DATATYPES),
+        boolean_dt_id=ctx.dt_ids_for_uris([_BOOLEAN_DT]),
+        datetime_dt_id_list=ctx.dt_ids_for_uris(_DATETIME_DATATYPES),
+    )
+    ctx.log("slice", f"selective-driven: driving from the criteria "
+                     f"({driver_n} rows) rather than the anchor ({anchor_n})")
+    return (f"SELECT {', '.join(cols)}\n"
+            f"FROM ({page}) AS {r_alias}\n"
+            f"JOIN {ctx.space_id}_term AS {t_alias} "
+            f"ON {r_alias}.{sn}__uuid = {t_alias}.term_uuid")
+
+
 def emit_slice(plan: PlanV2, ctx: EmitContext) -> str:
     """Emit SQL for a SLICE modifier (LIMIT/OFFSET)."""
     from .emit import emit
     from .emit_expressions import expr_to_sql
 
     two_phase = _emit_two_phase(plan, ctx)
+    if two_phase is None:
+        # No good plan from the anchor — issues/061 step 3.
+        two_phase = _try_selective_driven(plan, ctx)
     if two_phase is not None:
         return two_phase
 
