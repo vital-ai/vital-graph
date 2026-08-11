@@ -153,6 +153,17 @@ class KGQueriesEndpoint:
             except Exception:
                 pass
             
+            # Reject a `contains` needle too short for the text index to serve.
+            # It would otherwise cost seconds and look like an ordinary slow
+            # query — see issues/070 and MIN_CONTAINS_LENGTH for the measurement.
+            from ..model.kgentities_model import validate_contains_criteria
+            contains_error = validate_contains_criteria(query_request.criteria)
+            if contains_error:
+                return KGQueryResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message=contains_error,
+                )
+
             # Validate query type
             if query_type not in ["relation", "frame", "entity", "frame_query", "document"]:
                 return KGQueryResponse(

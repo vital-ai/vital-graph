@@ -229,10 +229,24 @@ What would actually solve it:
   patterns, which is precisely this gap. NOT AVAILABLE on this install —
   `pg_available_extensions` lists only `pg_trgm` and `btree_gin` — so adopting
   it is a deployment decision, not a code change.
-* **A minimum needle length at the API.** Three characters is the common rule in
-  search UIs, and it matches what the index can actually serve. Cheapest by far,
-  and it makes the limit explicit to the caller instead of silently costing them
-  seconds.
+* **A minimum needle length at the API — DONE 2026-08-11.**
+  `MIN_CONTAINS_LENGTH = 3` with `validate_contains_criteria`, enforced in
+  `kgquery_endpoint._query_connections` beside the existing `query_type` check.
+  It returns `OperationStatus.INVALID_REQUEST` in the body at HTTP 200, the
+  convention these endpoints already follow for domain outcomes, and the message
+  names `starts_with` / `ends_with` as the indexed alternatives rather than
+  leaving the caller stuck.
+
+  `contains` only, and nested frame criteria are walked — KGQuery expresses
+  depth by nesting, so checking one level would be no check at all.
+
+  Scope, stated plainly: this covers the KGQuery criteria path, which is where
+  the cost was measured. `kgentities_endpoint` has a separate `contains`
+  operator on entity property filters that was NOT measured and is NOT
+  restricted; asserting a limit on an unmeasured path could reject queries that
+  are fine today.
+
+  The emitter backstop stays for anything that reaches it by another route.
 * **A materialised 2-gram table**, if short search must be supported without a
   new extension.
 

@@ -70,6 +70,59 @@ class FrameCriteria(BaseModel):
     frame_criteria: Optional[List['FrameCriteria']] = Field(None, description="Nested frame criteria for hierarchical frame structures (parent→child frames)")
 
 
+# Shortest `contains` needle that a trigram index can actually serve.
+#
+# Under 3 characters there is no usable trigram for an INFIX match: the trigrams
+# of a short string are all PADDED (show_trgm('XQ') is {"  x"," xq","xq "}) and
+# padding only holds at a word boundary, so a mid-word match can require none of
+# them. The GIN index then scans itself — measured at 10,467,626 index rows and
+# 12,613 ms to find nothing on a 10.4M-row term table (`issues/070`).
+#
+# The emitter has a backstop that keeps such a needle away from the index, but
+# that only buys a sequential scan: still seconds, and O(term table) on the
+# table projected to grow 10x. Rejecting the query is the honest answer — it
+# tells the caller the limit instead of silently charging them for it.
+#
+# `contains` ONLY. Anchored matches keep the padding and stay fast at any
+# length: measured on the same 2-character needle, 'XQ%' is 1.0 ms and '%XQ' is
+# 0.03 ms against 12,613 ms for '%XQ%'.
+MIN_CONTAINS_LENGTH = 3
+
+
+def validate_contains_criteria(criteria) -> Optional[str]:
+    """Reject a `contains` needle too short to be served by an index.
+
+    Returns an error message, or None when the criteria are acceptable. Walks
+    nested frame criteria, since that is how KGQuery expresses depth.
+    """
+    def _walk(frames) -> Optional[str]:
+        for frame in (frames or []):
+            for slot in (getattr(frame, "slot_criteria", None) or []):
+                if (getattr(slot, "comparator", None) or "").lower() != "contains":
+                    continue
+                value = getattr(slot, "value", None)
+                if isinstance(value, str) and len(value.strip()) < MIN_CONTAINS_LENGTH:
+                    return (
+                        f"'contains' needs at least {MIN_CONTAINS_LENGTH} "
+                        f"characters; got {value.strip()!r}. A shorter value "
+                        f"cannot use the text index and would scan the whole "
+                        f"term table. Use 'starts_with' or 'ends_with' for a "
+                        f"short prefix or suffix — those stay indexed at any "
+                        f"length."
+                    )
+            nested = _walk(getattr(frame, "frame_criteria", None))
+            if nested:
+                return nested
+        return None
+
+    if criteria is None:
+        return None
+    frames = getattr(criteria, "frame_criteria", None)
+    if frames is None and isinstance(criteria, (list, tuple)):
+        frames = criteria
+    return _walk(frames)
+
+
 # Property registry: maps property URI → datatype for filtering and sorting.
 # Adding a property here makes it available for both sorting and filtering.
 _FILTERABLE_ENTITY_PROPERTIES = {
