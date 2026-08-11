@@ -31,12 +31,19 @@ interface EntityAnalytics {
 }
 
 interface FrameAnalytics {
-  total_count: number;
+  // Nullable because the backend SKIPS frame analytics above ~5M quads: every
+  // query in it is a COUNT(DISTINCT) GROUP BY over the vitaltype predicate, and
+  // on a 50M-quad space that ran 22 s and once timed out the whole job. null
+  // means "not computed"; 0 would mean "none found", and rendering a space with
+  // 1.1M frames as having 0 is worse than rendering nothing.
+  total_count: number | null;
   type_distribution: TypeCount[];
-  total_slot_count: number;
+  total_slot_count: number | null;
   slot_type_distribution: TypeCount[];
-  avg_slots_per_frame: number;
-  without_slots_count: number;
+  avg_slots_per_frame: number | null;
+  without_slots_count: number | null;
+  skipped?: boolean;
+  skipped_reason?: string;
 }
 
 interface RelationAnalytics {
@@ -169,9 +176,15 @@ const donutOptions = (labels: string[]): ApexCharts.ApexOptions => ({
   responsive: [{ breakpoint: 480, options: { chart: { width: 280 }, legend: { position: 'bottom' } } }],
 });
 
-const StatCard: React.FC<{ label: string; value: string | number }> = ({ label, value }) => (
+const StatCard: React.FC<{ label: string; value: string | number | null }> = ({ label, value }) => (
   <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 text-center">
-    <div className="text-2xl font-bold text-gray-900 dark:text-white">{typeof value === 'number' ? value.toLocaleString() : value}</div>
+    {/* null is "not computed" — see FrameAnalytics. An em dash says that; 0
+        would claim the space genuinely has none. */}
+    <div className="text-2xl font-bold text-gray-900 dark:text-white">
+      {value === null || value === undefined
+        ? <span className="text-gray-400 dark:text-gray-500" title="Not computed — space too large">—</span>
+        : typeof value === 'number' ? value.toLocaleString() : value}
+    </div>
     <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">{label}</div>
   </div>
 );
@@ -348,7 +361,14 @@ const SpaceAnalytics: React.FC<Props> = ({ spaceId }) => {
 
       {/* Frame & Slot Analytics */}
       <Card>
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Frame & Slot Analytics</h3>
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+          Frame &amp; Slot Analytics
+          {frame_analytics.skipped && (
+            <span className="ml-2 text-xs font-normal text-gray-500 dark:text-gray-400">
+              not computed — {frame_analytics.skipped_reason ?? 'space too large'}
+            </span>
+          )}
+        </h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
           <StatCard label="Total Slots" value={frame_analytics.total_slot_count} />
           <StatCard label="Avg Slots/Frame" value={frame_analytics.avg_slots_per_frame} />
