@@ -1,6 +1,29 @@
 # Nothing Chooses Which Criterion Drives the Query
 
-## Status: the ordering defect is CLOSED — 2026-08-11
+## Status: CLOSED — the ordering defect is fixed and step 3 has no failing case
+
+Re-measured 2026-08-11 on `sp_lead_synth_100k`, every two-criterion permutation
+of three comparator cells, 25-row page, warm median of 3:
+
+    contains/Text + eq/Boolean    fwd 174ms   rev 176ms   1.0x
+    contains/Text + gte/Double    fwd 242ms   rev 266ms   1.1x
+    eq/Boolean    + gte/Double    fwd  55ms   rev  58ms   1.0x
+
+Identical row counts both ways. Criterion order no longer changes cost, which is
+what this issue was filed about.
+
+**Step 3 — "rank every criterion and choose deliberately" — is deliberately NOT
+being implemented on spec.** It is a generalization with no failing shape to
+validate against, and the specific attempt at it has already been reverted twice:
+root-by-cardinality shipped once and took seven range cells from 3-14ms to 30s,
+because a range leaf binds a predicate and no constant object, so it has no count
+and something else won the root. Cheap to ENTER is not the same as selective.
+
+The precedence in place — text anchor -> range anchor -> cheapest leaf -> list
+position — encodes that lesson. Widening it needs a measured case it gets wrong;
+without one, a ranking rewrite is a change whose only evidence would be that it
+sounds more principled. Reopen with a failing permutation and gate it on
+`scripts/perf_sweep_diff.py`.
 
 This issue's thesis was that nothing chooses which criterion drives, so the
 caller's ordering leaks into the plan. Measured across EVERY permutation of each

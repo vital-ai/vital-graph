@@ -160,7 +160,7 @@ async def _sync_vectors_for_subjects(
         # This used to fire vectorize_text() per subject through a semaphore of
         # _VECTOR_CONCURRENCY, i.e. one HTTP round trip per entity/frame/slot
         # covered by the index — 100 subjects meant 100 requests in 13 waves of
-        # 8.  See issues/038.
+        # 8.  See issues/037.
         embeddings: List[Optional[List[float]]] = [None] * len(to_embed)
         texts = [text for _, text in to_embed]
         try:

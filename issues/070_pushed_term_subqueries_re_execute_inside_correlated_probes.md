@@ -1,6 +1,34 @@
 # Pushed Term Subqueries Re-Execute Per Row Inside Correlated Probes
 
-## Status: `has_any` FIXED; `contains` remains — 2026-08-10
+## Status: CLOSED 2026-08-11 — `contains` is not in the shape this issue describes
+
+    has_any/Text     timeout -> 80 ms     fixed, uuid constants
+    has_any/Choice   timeout -> 73 ms     fixed, uuid constants
+    contains/Text    timeout -> 46 ms warm / 4,683 ms cold   NOT a probe problem
+
+**Re-measured 2026-08-11 on `sp_lead_synth_100k` (50.57M quads), 25-row page.**
+The text below says `contains` "pays a trigram probe per candidate". It does
+not, and the plan says so:
+
+    Filter: (term_text ~~* '%CA%'::text)
+    Rows Removed by Filter: 1
+
+The ILIKE is a FILTER on a term row already fetched by `term_pkey` (uuid), one
+row at a time. `idx_..._term_trgm` exists and is **not used** — there is no
+Bitmap Index Scan on it anywhere in the plan. So the per-candidate cost is a
+single-row string test, not a probe, which is why warm is 46 ms.
+
+What made this true was not a change here but the driver work: the page is
+driven in candidate order and early-terminates at 25 rows, walking 194
+candidates. That is the shape the CTE attempt destroyed (41x worse) by
+discarding the LIMIT — the note below is still worth heeding for that reason.
+
+**Cold is 4,683 ms and belongs elsewhere.** It is the Index Only Scan over
+`rdf_quad_pkey` walking candidates on a cold cache — the general 8-63x cold-start
+gap tracked in `unexplored_performance_surface.md`, not a `contains` defect. Note
+it is 7x the 685 ms recorded here on 2026-08-10; cold numbers on this fixture
+swing with whatever else has touched the cache, which is exactly why the sweep
+rules treat cold as context and warm as the query cost.
 
     has_any/Text     timeout -> 80 ms     fixed, uuid constants
     has_any/Choice   timeout -> 73 ms     fixed, uuid constants

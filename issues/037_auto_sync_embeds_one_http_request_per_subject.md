@@ -1,6 +1,19 @@
 # Auto-Sync Embeds One HTTP Request Per Subject Instead of Batching
 
-## Status: OPEN
+## Status: FIXED 2026-08-11 (shipped in `62cb5dd`, status line lagged)
+
+`auto_sync._sync_index` now embeds the whole set in ONE call —
+`provider.vectorize_texts(texts)`, which chunks internally at the provider's
+batch_size (100 for OpenAI) and returns results in input order, which the upsert
+phase relies on when it zips `embeddings[i]` against `to_embed[i]`.
+
+A batch failure would otherwise lose every subject in the set, so it falls back
+to the previous per-subject path behind `_VECTOR_CONCURRENCY`, preserving the
+old behaviour of isolating one bad text from the rest.
+
+The fix landed 2026-08-10; this line was not updated until 2026-08-11 during a
+status audit. Worth noting because the tracker was consulted in between and
+reported this as outstanding work.
 
 The vector auto-sync write path issues **one embeddings API request per
 subject**, 8 at a time, when the provider already supports batching 100 texts

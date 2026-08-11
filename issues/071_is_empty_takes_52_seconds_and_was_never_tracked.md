@@ -1,6 +1,20 @@
 # `is_empty` Takes 52 Seconds and Was Never Counted
 
-## Status: OPEN — 2026-08-10, `sp_lead_synth_100k`
+## Status: CLOSED 2026-08-11 — both halves
+
+**The query:** fixed via `issues/072` and the candidate-driven negation path in
+`issues/059`. The closing sweep in `issues/053` records
+`is_empty/Text 51,753 ms -> 355 ms`, with buffers 3.3M -> 25k.
+
+**The process point, which was the more valuable half of this issue:**
+`scripts/perf_comparator_timing.py` now derives its verdict from the measurement
+instead of from a hand-maintained table. It groups every swept cell into
+slow-warm, over-buffer-threshold and cold-only, and the closing figure for `053`
+is stated that way — "0 cells slow warm, 0 over the buffer threshold" — rather
+than as a count of remaining known-bad cells.
+
+That is what this issue asked for: a cell that is slow but not timing out can no
+longer be invisible, because nothing is maintained by subtraction any more.
 
     is_empty/KGTextSlot     0 rows    52,374 ms
 
