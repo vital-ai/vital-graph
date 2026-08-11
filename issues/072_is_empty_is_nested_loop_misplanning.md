@@ -81,6 +81,39 @@ So "emit the question in the form the pipeline optimises" was right as a
 principle and wrong about which form that is. The negation path is fast for
 constant-object negation, not for negation in general.
 
+**And the fold was not the reason** — I assumed it declined, and traced it
+instead of leaving the assumption standing: `_foldable_exists_join` MATCHED for
+`is_empty`'s NOT EXISTS form. The fold applied and the query was still 6x worse
+than the OPTIONAL it replaced. So the cost is inside the probe, not in failing
+to reach it, and "make the fold accept this shape" is not the fix.
+
+## What is actually known about `is_empty`, and what is not
+
+Known:
+
+* It returns 0 rows, so the work is O(entities) under ANY plan — absence has to
+  be verified for every entity. `not_exists` does the same O(100,000) in ~200 ms.
+  So O(n) is not the problem; the per-entity constant is.
+* The dominant lever measured so far is the join method: `enable_nestloop = off`
+  takes it 47,514 ms -> 5,310 ms (8.9x), reproducibly, from a `rows=1` estimate
+  against 100,000 actual.
+* Even at 5.3 s it is the slowest cell on the fixture, so the fence alone would
+  not close it.
+* Rewriting as NOT EXISTS makes it worse (>300 s) even though the fold fires.
+
+Not known, and the next thing to measure rather than guess:
+
+* Where the per-entity cost actually goes. `not_exists` and `is_empty` both walk
+  100,000 entities; one costs 2 us per entity and the other 500 us. That ratio
+  is the whole problem and no `EXPLAIN` has been read with the specific question
+  "what does one entity cost in each".
+
+Three proposals for this cell have now measured worse than the status quo (the
+MATERIALIZED CTE, the NOT EXISTS rewrite, and — for the wider sweep — the
+nested-loop attribution that turned out to be cold cache). The pattern is
+proposing a mechanism before measuring where the cost is. The 2 us vs 500 us
+comparison above is the measurement that should have come first.
+
 ## The estimate
 
 `EXPLAIN ANALYZE` on `is_empty` (55,773 ms, 0 rows):
