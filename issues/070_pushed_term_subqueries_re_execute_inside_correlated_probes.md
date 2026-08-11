@@ -137,9 +137,43 @@ push-down in the emitter fixes a plan the planner costs wrongly. The lever is
 the same one used elsewhere here — take the choice away (a fence, or a shape
 that cannot be planned this way) rather than argue with the estimate.
 
-That also explains why `'XQ'` remains at ~11s on the SHIPPED path: the set-based
-join it now takes is the honest cost of materialising a small-but-nonempty match
-set, and it beats a plan the planner would misprice.
+### Attempt 4: fences. Measured, and the conclusion is that the work is DONE.
+
+"Take the choice away rather than argue with the estimate" is the right instinct
+and it was tested on both paths.
+
+**On the shipped path it is not needed — there is no misplanning to fix.**
+`contains 'XQ'`, 100k, each fence on top of the usual `enable_sort = off`:
+
+    baseline                 10,680 ms
+    join_collapse_limit=1    11,391 ms
+    enable_nestloop=off      12,513 ms
+    enable_material=off      10,560 ms
+
+Nothing moves. The ~11s is the honest cost of materialising a small-but-nonempty
+match set, not a mispriced plan. `'CA'` is 50-56 ms in every arm.
+
+**On the driven path they help and it still loses.** `contains 'ZZQQXX'`, 10k:
+
+    baseline                 26,133 ms
+    join_collapse_limit=1    13,203 ms
+    enable_nestloop=off      11,690 ms
+    enable_material=off      11,870 ms
+
+Best case 11,690 ms on the 10k fixture, against **1 ms on 100k** for what is
+already shipped — worse on a fixture ten times smaller. The fences do rescue the
+cross product, and it does not matter: driving from the text leaf is the wrong
+plan for this shape regardless of how it is costed.
+
+**So the remaining half of this issue is closed by measurement, not by code.**
+The shipped implementation — measure the leaf, let the semi-join gate decline,
+take the set-based join — beats every alternative tried across four attempts:
+push-down (re-executes per candidate), driver-carries-filter (cross product),
+reordering (already correct), and fences (no effect where it matters).
+
+`'XQ'` at ~11s stays as the honest cost. Improving it means making the set-based
+join cheaper for a small match set, which is a different piece of work from the
+one this issue describes.
 
 **Do not re-attempt without measuring both `'CA'` and an absent substring.** All
 three attempts so far returned correct answers for at least one of them while
