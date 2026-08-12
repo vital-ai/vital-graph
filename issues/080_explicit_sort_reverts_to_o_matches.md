@@ -381,6 +381,28 @@ It also supports D2 independently: with `ORDER BY ?name` alone the URI column
 comes back UNORDERED, so the system already treats ties as arbitrary when no
 tie-break is named. D2 is consistent with that, not an exception to it.
 
+## N SORT KEYS measured — and D2 should be revisited
+
+Warm, alternated, median of 3, corrected pool. The second key is the entity URI
+text, i.e. the FAITHFUL tie-break:
+
+    1 key   offset 0      309 ms        1 key   offset 5000   305 ms
+    2 keys  offset 0      345 ms        2 keys  offset 5000   356 ms
+
+A second sort key costs ~36 ms (+12%), not a multiple — each key is one more
+term join over the match set, so N grows additively and flatness with depth
+survives.
+
+**Which undercuts D2's premise.** D2 chose the uuid tie-break to avoid resolving
+the entity URI, a cost now measured at 12%. It was decided while a 50x win
+appeared to be at stake; with the real numbers the faithful tie-break is
+affordable, and the 2-key row above IS that faithful version.
+
+D2's other argument still stands on its own — the builder appends `?entity`
+itself, and raw SPARQL leaves ties arbitrary when none is named. But it should
+be re-decided as a SEMANTIC question, not a performance trade, because the
+performance trade has evaporated.
+
 ## DECISION D2 — ties break by entity uuid. Taken 2026-08-11.
 
 Option 2 of the two below, and it is stronger than a compromise: **the caller
