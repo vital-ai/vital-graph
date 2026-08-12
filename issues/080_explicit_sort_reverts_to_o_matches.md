@@ -209,6 +209,28 @@ landing it half-measured would be worse than leaving it. What is de-risked is
 the design and its size: ~33 ms against 17,589 ms is the target, and the fence
 alternative (1.7x) is not worth shipping.
 
+## The paired change was implemented, and it is STILL not enough
+
+Both halves together — builder group placement AND `_emit_two_phase` two-key
+support with the split dedup/order page — did not complete the 100k sorted case
+inside 600 s. Reverted; baseline stands at 50 ms / 16,411 ms.
+
+The causal chain traced in this issue is right at every link, and repairing all
+of it end to end still does not produce a fast sorted page. So the remaining
+cost is not the plumbing. Two candidates, neither yet measured:
+
+* The inner `DISTINCT ON` now runs over the whole match set WITH the term join
+  attached and the criteria EXISTS in its WHERE. The 33 ms figure that motivated
+  this design was a bare `uuid -> term_text` join over 9,220 rows — a different
+  query, and the only one that was measured.
+* The anchor is now a two-BGP join, so `emit_bgp_anchor` may be anchoring on the
+  sort quad rather than the entity-type union, changing which scan drives.
+
+**Measure the inner query standalone before wiring anything again.** If phase 1
+is not tens of milliseconds on its own, the page shape is wrong and no plumbing
+fixes it. Another end-to-end attempt costs ~10 minutes and reports only that
+something is slow.
+
 ## Other options considered, and why they lose
 
 Unlike `078`, there is no obviously correct fix — ordering by a value genuinely
