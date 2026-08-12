@@ -2,6 +2,26 @@
 
 ## Status: NOT A BUG — this is decision D1, already made and accepted
 
+**REOPENED for re-argument 2026-08-11 — the performance basis is void.** D1 was
+accepted as a deliberate trade: uuid paging order in exchange for a page that
+early-terminates. The recorded justification is a timing — "the text sort cost
+the entire win, 3,683 ms against a 3,208 ms baseline" — measured with
+`shared_buffers = 1 GB` on a 64 GB machine. Raising the pool to 16 GB moved a
+comparable query from 16,411 ms to 616 ms with NO code change, so every timing
+of that era is suspect.
+
+This does not make D1 wrong. It removes the evidence D1 was decided on. The
+semantic question — is a page ordered by an opaque uuid acceptable when the
+caller did not ask for an order — should now be answered on its own terms, and
+if the answer is still yes, re-justified with a measurement taken on a correctly
+configured server.
+
+A re-test was attempted and was NOT VALID: replacing the outer ORDER BY gave
+50 ms (uuid) vs 46 ms (URI text), but that only re-orders the 25 rows already
+selected. D1 governs page MEMBERSHIP, set by the ordering inside the page
+subquery. A faithful test has to move the ordering there, which pulls the term
+join into the page — the very cost D1 exists to avoid. Still unmeasured.
+
 Corrected 2026-08-10, same day it was filed. The original text below called this
 an open product question. It is not: `two_phase_kgquery_paging_plan.md` records
 
