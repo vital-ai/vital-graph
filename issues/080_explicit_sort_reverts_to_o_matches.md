@@ -241,6 +241,31 @@ That is inherent to sorting, not an artefact of this emitter. The earlier
 "structural" reading was right; the "it is really 74,000 term lookups"
 correction identified a real secondary cost and mistook it for the primary one.
 
+## CORRECTNESS CHECKED — same rows, different tie-break
+
+    same SET       : True          sort-key sequences identical : True
+    same SEQUENCE  : False         distinct sort keys in page   : 9 of 25
+
+Ordering by the sort key is correct; the divergence is entirely tie-breaking,
+and ties are heavy (9 distinct names across 25 rows).
+
+    current       ORDER BY ASC(?sort_val_0) ?entity  -> ties by URI STRING
+    materialise   ORDER BY sk, uuid                  -> ties by UUID (a hash)
+
+**The same 25 rows came back, and that is luck.** A tie group straddling the
+LIMIT boundary would put DIFFERENT MEMBERS on the page under the two orderings.
+
+Not covered by D1: D1 accepted uuid ordering and bounded itself to queries with
+NO explicit sort. Here the ORDER BY explicitly names `?entity`, so a uuid
+tie-break is a semantic deviation rather than an accepted trade.
+
+Choose deliberately before building:
+
+1. resolve the entity URI text and tie-break on it — one more term join over the
+   match set; measure it, it may erase part of the 50x;
+2. extend D1 to explicitly-sorted queries and document that ties break by uuid —
+   cheaper, but it changes an answer the caller asked for.
+
 ## GATE PASSED — faithful match set, warm, 2026-08-11
 
 The entity-type UNION is now included, so the match set is the real one:
