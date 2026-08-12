@@ -525,6 +525,72 @@ def _text_leaf_should_drive(plan: PlanV2, ctx: EmitContext) -> bool:
     return True
 
 
+def _emit_deep_page(plan, ctx):
+    """A deep page: uuid-only match set, sliced, then text resolved for the page.
+
+    ORDERED BY THE ENTITY UUID, which is the whole point rather than a detail.
+    The generator leaves a deep page's plan unsplit so its match set is built
+    set-based (~38 ms) instead of probed per candidate. That alone made page 201
+    go 16,271 ms -> 326 ms — and BROKE PAGINATION, because the set-based path
+    orders by the entity URI while page 1's ordered scan orders by uuid. Page 2
+    then continued a different total order and silently skipped 25 rows
+    (`issues/075`, decision D1).
+
+    Ordering here by uuid makes both paths agree, which is what makes the speed
+    usable. It extends D1's existing deviation — pages ordered by uuid rather
+    than URI when the caller asked for no particular order — from page 1 to
+    every page, and it should be read as part of that decision, not separately.
+    """
+    from .emit import emit
+    from .sql_type_generation import TypeRegistry
+    from .emit_bgp import _NUMERIC_DATATYPES, _BOOLEAN_DT, _DATETIME_DATATYPES
+
+    buried = _find_buried_order(plan.child)
+    if len(buried) != 1 or not isinstance(buried[0][0], str):
+        return None
+    key = buried[0][0]
+
+    uuid_ctx = ctx.child()
+    uuid_ctx.text_needed_vars = set()          # no term JOINs: uuids only
+    try:
+        match_set = emit(plan.child, uuid_ctx)
+    except Exception as e:
+        logger.debug("deep page declined: child did not emit: %r", e)
+        return None
+    info = uuid_ctx.types.get(key)             # names come from the CHILD registry
+    if not match_set or not info or not info.sql_name:
+        return None
+    csn = info.sql_name
+    if f"{csn}__uuid" not in match_set:
+        logger.debug("deep page declined: %s__uuid absent from the match set", csn)
+        return None
+
+    out = ctx.types.get(key)
+    sn = out.sql_name if out and out.sql_name else key
+    p_a, m_a, t_a = ctx.aliases.next("dp"), ctx.aliases.next("dm"), f"t_{sn}"
+
+    # OFFSET 0 fences the subquery: without it PostgreSQL pulls it up and may
+    # invert the join. A CTE is unavailable — this returns a fragment.
+    page = (f"SELECT DISTINCT {p_a}.{csn}__uuid AS {sn}__uuid\n"
+            f"FROM (\n{match_set}\nOFFSET 0\n) AS {p_a}\n"
+            f"ORDER BY {p_a}.{csn}__uuid\n"
+            f"LIMIT {plan.limit} OFFSET {plan.offset}")
+    cols = TypeRegistry.term_table_columns(
+        sn, t_a, m_a, "",
+        dt_case_sql=ctx.dt_case_expr(t_a),
+        numeric_dt_id_list=ctx.dt_ids_for_uris(_NUMERIC_DATATYPES),
+        boolean_dt_id=ctx.dt_ids_for_uris([_BOOLEAN_DT]),
+        datetime_dt_id_list=ctx.dt_ids_for_uris(_DATETIME_DATATYPES),
+    )
+    ctx.log("slice", f"deep page: uuid-only match set, uuid-ordered, "
+                     f"LIMIT {plan.limit} OFFSET {plan.offset}")
+    return (f"SELECT {', '.join(cols)}\n"
+            f"FROM ({page}) AS {m_a}\n"
+            f"JOIN {ctx.term_table} AS {t_a} "
+            f"ON {m_a}.{sn}__uuid = {t_a}.term_uuid\n"
+            f"ORDER BY {m_a}.{sn}__uuid")
+
+
 def emit_slice(plan: PlanV2, ctx: EmitContext) -> str:
     """Emit SQL for a SLICE modifier (LIMIT/OFFSET)."""
     from .emit import emit
@@ -533,6 +599,13 @@ def emit_slice(plan: PlanV2, ctx: EmitContext) -> str:
     # A measured-selective text leaf drives the page BEFORE two-phase is
     # considered: two-phase would succeed here, and succeeding is the problem.
     # If this declines, everything below runs exactly as it did.
+    # A deep page has no semi-join to drive two-phase (the generator leaves it
+    # unsplit), so this is checked first rather than inside _emit_two_phase.
+    if plan.offset > 0:
+        deep = _emit_deep_page(plan, ctx)
+        if deep is not None:
+            return deep
+
     two_phase = None
     if _text_leaf_should_drive(plan, ctx):
         two_phase = _try_selective_driven(plan, ctx, text_driven=True)
