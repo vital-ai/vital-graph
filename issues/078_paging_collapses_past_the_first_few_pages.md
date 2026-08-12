@@ -1,5 +1,26 @@
 # Paging Collapses Past the First Few Pages — Page 11 Takes 39 Seconds
 
+## UNSORTED PAGE 1: the ordered scan wins 11x — always-materialise is WRONG
+
+8 concurrent clients, 12 s, UNSORTED page 1:
+
+    two-phase ordered scan   121.6 q/s   median  59 ms   p95    97 ms
+    materialise               11.1 q/s   median 669 ms   p95 1,240 ms
+
+The single-query 6x deficit WIDENED to 11x under load: materialise builds the
+whole match set for each of eight clients while the ordered scan stops after 25
+matches. Opposite sign to the sorted result.
+
+**So the hybrid is necessary**, and the rule has three clauses:
+
+    sorted            -> materialise, at any depth
+    unsorted, shallow -> ordered scan
+    unsorted, deep    -> materialise      (313 ms vs 16,271 ms at offset 5000)
+
+The unsorted crossover is between offset 0 and 250 and is UNMEASURED. It must be
+measured under CONCURRENCY: the ordered scan's advantage grew from 6x to 11x
+under load, so a threshold picked from single-query numbers would be too low.
+
 ## CONCURRENCY CHECKED — materialise wins under load (sorted shape)
 
     8 concurrent clients, 12 s per arm, sorted page 1
