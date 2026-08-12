@@ -1,5 +1,34 @@
 # Paging Collapses Past the First Few Pages — Page 11 Takes 39 Seconds
 
+## IMPLEMENTATION ATTEMPT — reverted, and it names where the work belongs
+
+`_emit_materialised_page` in `emit_slice`, hooked on `plan.offset > 0`, building
+the match set from `emit_bgp_anchor(left_bgp)` JOIN `emit_bgp_anchor(right_bgp)`
+behind an `OFFSET 0` fence.
+
+    generation   works, correct shape
+    offset 0     165 ms   unchanged, as intended
+    offset 250   >40,000 ms   against ~310 ms for the hand-written equivalent
+
+Reverted; baseline restored (360/500/687 ms at offsets 100/175/250).
+
+**Why it differs from the hand-written query.** That one took its match set from
+the GENERIC path's uuid layer, already ordered by the generic emitter. This one
+emits the criteria BGP standalone — but in two-phase that BGP is only ever a
+CORRELATED EXISTS probe, and standalone it becomes a full chain scan whose join
+order is chosen without the correlation that normally constrains it.
+
+That is the same mistake as the earlier failures in a new place: the two-phase
+BGPs are shaped for PROBING, and reusing them set-based does not yield the
+set-based plan. First the inner lost its LIMIT; now the right BGP lost its
+correlation.
+
+**Next attempt: do not build the match set from the two-phase BGPs.** The
+generic path already emits the pure-uuid layer measured at ~38 ms. Give THAT a
+uuid-only mode rather than reconstructing it from probe-shaped parts — which
+means the change belongs in the generic join emitter, not in `emit_slice`. Three
+attempts inside `emit_slice` have now failed for variations of one reason.
+
 ## CONCURRENCY CROSSOVER — page 5-6, so "first page only" costs ~4x on page 2
 
 8 concurrent clients, 10 s per arm, unsorted:
