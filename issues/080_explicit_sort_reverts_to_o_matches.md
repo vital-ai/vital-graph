@@ -107,7 +107,25 @@ belongs with the anchor. Placed in bgp[0], `sort_val_0` is bound by the side the
 semi-join KEEPS, the marker fires, two-phase engages, and the ordering work
 (steps 1-5 of the sequence) becomes reachable at all.
 
-So the order of work is: fix the placement in `collect` FIRST, confirm
+**And the placement comes from the BUILDER, not `collect`.** Traced: the sort
+binding is emitted as the last triple of the criteria block —
+
+    { ?entity vitaltype KGEntity } UNION { ... }     -> bgp[0]
+    ... all the criteria triples ...
+    ?entity <vital-core#hasName> ?sort_val_0 .       -> bgp[1], HERE
+
+The UNION forms one BGP and consecutive triples after it form the next, so the
+sort binding is grouped with the criteria purely by adjacency in the generated
+text. `collect` is faithfully reproducing what it was handed.
+
+Moving it earlier is NOT sufficient — consecutive triples still coalesce. It
+needs its own group, `{ ?entity vital-core:hasName ?sort_val_0 . }` right after
+the UNION, so the boundary forces a separate BGP:
+`join(join(union, sort_bgp), criteria)`. That also changes what two-phase sees —
+the anchor side becomes a two-BGP join — so `find_bgp(sj.children[0])` and
+`emit_bgp_anchor` both need checking against it, by instrumentation.
+
+So the order of work is: fix the placement in the BUILDER first, confirm
 `semijoin: marked 1 join(s)` for a sorted plan, and only then do the page shape.
 Note this also invalidates Step 3's assumption, which asserted the sort quad
 lands in the anchor bgp — it does not, today.
