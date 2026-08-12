@@ -49,6 +49,33 @@ error, just a request that takes 39 seconds and then a timeout two pages later.
 The per-request deadline from `issues/044` will now cut it off at 120 s, which
 turns it into a visible failure rather than a hang, but does not make it work.
 
+## MATERIALISE is flat with depth — a candidate fix, measured 2026-08-11
+
+A hand-written materialise shape (`issues/080`): build the uuid match set once
+in a `MATERIALIZED` CTE, then order/offset/limit over that narrow set.
+
+                          materialise    current
+        offset=0             265 ms         45 ms
+        offset=250           278 ms     39,247 ms
+        offset=1000          267 ms      TIMEOUT
+        offset=2475          273 ms      TIMEOUT
+
+Flat. The cost is materialising the match set once; the offset then walks an
+already-built set.
+
+The trade is explicit: ~265 ms flat against 45 ms at page 1, so it is ~6x SLOWER
+for the first page and unboundedly faster after it. A HYBRID — ordered scan
+early, materialise beyond a threshold — is the obvious shape, and the crossover
+is measurable since both plans already exist.
+
+This also revises the note below: that reasoning ("sorted and unsorted behave
+oppositely, so they need separate fixes") was about the CURRENT plans.
+Materialise is a third plan, flat for both, so one change may serve both.
+
+CAVEAT: the uuid layer used omits the entity-type UNION, so the match set is not
+the real one. Indicative only — rebuild it faithfully and re-run before relying
+on any of this.
+
 ## Tested 2026-08-11: it is NOT the ordered-scan fence, and NOT the same bug as 080
 
 The hope was that fixing sorted-page driver selection (`issues/080`) would fix
