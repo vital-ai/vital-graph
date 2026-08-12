@@ -1,6 +1,6 @@
 # An Explicit Sort Reverts Paging to O(matches) — 46ms Becomes 18.6s
 
-## Status: OPEN — cause established, and the fix direction proposed here is DISPROVED
+## Status: OPEN — phase-1 design disproved; the ORDERED-DRIVER direction is untested and likely right
 
 Full plans for review: `planning/planning_performance/sorted_paging_plans.txt`
 (unsorted page, sorted page, and the phase-1 shape that times out).
@@ -240,6 +240,51 @@ the result set, and the unsorted page is fast only because any 25 rows will do.*
 That is inherent to sorting, not an artefact of this emitter. The earlier
 "structural" reading was right; the "it is really 74,000 term lookups"
 correction identified a real secondary cost and mistook it for the primary one.
+
+## CORRECTION to the closing finding: this is the RANGE problem, already solved
+
+"Ordering by a value requires evaluating the criteria for every row" is WRONG,
+and the counter-example is in this codebase already. Range comparators (`gte`,
+`lt`, ...) have the identical shape — a criterion whose match set is large — and
+they were solved by letting an INDEX-BACKED LEAF DRIVE the scan. `reorder_bgp`
+says so at the precedence rule: a range leaf roots the chain because it is
+"cheap to ENTER whatever it matches", served by a narrow index scan on
+`num_val` / `dt_val`.
+
+The same move applies to a sort: **drive the page from the sort key's index IN
+SORT ORDER, probe the criteria per candidate, and stop at 25.** Then the cost is
+O(candidates until 25 pass) — exactly the unsorted page's cost model, with the
+sort key's index supplying the order instead of the uuid index. Nothing has to
+be materialised and nothing has to be sorted.
+
+The phase-1 design failed because it MATERIALISED AND SORTED. That was the wrong
+mechanism, not evidence that the problem is inherent.
+
+### Why the measurement said otherwise: I chose the one sort key that cannot work
+
+    btree (num_val)     ordered scan possible
+    btree (dt_val)      ordered scan possible
+    hash  (term_text)   NO ordered scan
+    gin   (term_text gin_trgm_ops)
+
+`hasName` is TEXT, and `term_text` carries only a HASH index and a trigram GIN —
+neither can produce sorted output. So the one case measured all day is precisely
+the case the ordered-driver approach cannot serve without a new index. A sort on
+a numeric or datetime property is a different story and is feasible with the
+indexes already present.
+
+### What to do, revised
+
+1. **Measure a NUMERIC sort first** (e.g. `MQLRating`, a KGDoubleSlot). If the
+   ordered-driver hypothesis holds anywhere it holds there, and `num_val`
+   already has the btree. This is the cheap decisive test and it should have
+   been the first one.
+2. If it holds, the change is the driver-selection one this codebase has made
+   twice already (text anchor, range anchor) — extend the same precedence to a
+   sort key, rather than inventing a phase-1 shape.
+3. For TEXT sorts, the question becomes whether to add
+   `btree (term_text)`. That is a schema decision with real cost on a 10.4M-row
+   table, and it should be made against a measurement of (1), not before it.
 
 ## What this leaves as the actual options
 
