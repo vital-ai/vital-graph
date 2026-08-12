@@ -1,5 +1,7 @@
 """What a page costs at DEPTH — the dimension no benchmark varied.
 
+Now a REGRESSION GATE for the fix rather than a record of the collapse.
+
 `issues/078`. Every performance test in this repo pages at `offset=0`; the only
 offset literal anywhere in `tests/performance/` was zero. So the whole two-phase
 paging effort — `040`, `047`, `053`, `059`-`061` — was validated on page 1, and
@@ -44,11 +46,16 @@ FIXTURES = SYNTH
 pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
 
-# Page 1 against page 41. Beyond this ratio the plan is not merely linear in
-# offset, it has degenerated — on the 1 GB pool this was a timeout rather than a
-# number. Set well above the ~57x measured on a correct configuration so it
-# gates collapse, not variance.
-DEEP_RATIO_ALARM = 400
+# Page 1 against page 41, and this number now GATES THE FIX rather than the
+# collapse. Before it, offset 1,000 was 2,958 ms against 52 ms — a 57x ratio,
+# and a timeout two pages further on. After it the deep page is flat at
+# ~300 ms, so the ratio is ~7x and is dominated by page 1 being FAST rather than
+# page 41 being slow.
+#
+# 50 sits well above the measured ~7x (leaving room for a noisy laptop and for
+# page 1 getting faster still) and well below the ~57x that a return to
+# O(offset) would produce. Between those two it is unambiguous.
+DEEP_RATIO_ALARM = 50
 
 OFFSETS = [0, 250, 1000]
 

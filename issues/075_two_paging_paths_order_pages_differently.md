@@ -2,6 +2,8 @@
 
 ## Status: NOT A BUG — this is decision D1, already made and accepted
 
+> **PARTLY RESOLVED 2026-08-11.** The unsorted deep-page path now orders by entity UUID, matching page 1, so a single pagination sequence no longer crosses two orderings — verified: page2 == first50[25:], 0 rows missed (`issues/078`). What remains open is the SEMANTIC question this issue was filed on: uuid order is not the URI order `ORDER BY ?entity` asks for, and decision D1's justification for that was measured on a 1 GB buffer pool (`issues/081`). The paths agreeing makes the deviation consistent, not correct.
+
 > **THIS NOW BLOCKS A 50x FIX (`issues/078`).** Skipping semi-join marking for deep pages makes page 201 go 16,271 ms -> 326 ms, flat at any depth. It cannot ship because page 1 and page 2 would come from the two differently-ordered paths this issue describes: measured, iterating page 1 -> page 2 silently SKIPS 25 rows. 'Each path is internally consistent' holds only while one pagination sequence uses a single path.
 
 **REOPENED for re-argument 2026-08-11 — the performance basis is void.** D1 was
