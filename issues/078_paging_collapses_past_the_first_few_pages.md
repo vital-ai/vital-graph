@@ -1,6 +1,23 @@
 # Paging Collapses Past the First Few Pages — Page 11 Takes 39 Seconds
 
-## Direction: ALWAYS materialise, not a hybrid (pending a concurrency check)
+## CONCURRENCY CHECKED — materialise wins under load (sorted shape)
+
+    8 concurrent clients, 12 s per arm, sorted page 1
+      ordered scan (current)    9.6 q/s   median 810 ms   p95 1,283 ms
+      materialise              14.1 q/s   median 564 ms   p95   784 ms
+
+1.47x throughput, lower median and p95. The worry that building the whole match
+set per query would cost throughput is not borne out — plausibly because the
+ordered scan's per-candidate probes serialise on the same pages while the
+materialise pass is a bulk scan that shares them.
+
+STILL UNTESTED, and it is the case the caveat was really about: the UNSORTED
+page 1, where the ordered scan is 54 ms against materialise's 312 ms. That arm
+needs the two-phase SQL's uuid layer, which the extraction used here cannot
+reach. Until it is measured, the hybrid argument survives for unsorted page 1
+only.
+
+## Direction: ALWAYS materialise, not a hybrid (concurrency now checked for sorted)
 
 Flat ~312 ms at every depth is easier to reason about and support than
 54 ms .. 16 s depending on how far the user paged — a p99 that depends on user
