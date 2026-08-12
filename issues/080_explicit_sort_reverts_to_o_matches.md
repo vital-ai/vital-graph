@@ -70,9 +70,17 @@ the sorted case:
               ORDER BY sort_key LIMIT 25          measured ~33 ms
     phase 2   full projection for those 25 uuids  the existing phase 2
 
-**Where it actually declines, CONFIRMED.** Not "the order key is a sort
-variable" — it declines at `emit_slice.py:125`, `if len(buried) != 1`, because
-the builder emits two ORDER BY keys:
+**Where it declines — CORRECTED, having implemented against the wrong answer.**
+It is NOT `emit_slice.py:125` / `len(buried) != 1`; that was inferred from the
+ORDER BY and never instrumented. Instrumented, `_emit_two_phase` returns at
+lines 118-121: for a sorted plan the SEMI-JOIN IS NOT MARKED and there is no
+foldable EXISTS join, so it never looks at the ordering. An implementation
+built on the ORDER BY theory was written, never reached, and reverted.
+
+The open question is therefore why `mark_semijoins` does not mark a plan
+carrying `sort_criteria` when the same plan without one is marked.
+
+What DOES hold about the ordering, verified: the builder emits two keys:
 
     unsorted   ORDER BY ?entity
     sorted     ORDER BY ASC(?sort_val_0) ?entity
