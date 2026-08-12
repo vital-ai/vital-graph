@@ -1,3 +1,260 @@
+# Paging Collapses Past the First Few Pages — Page 11 Takes 39 Seconds
+
+## THE FIX WORKS — AND BREAKS PAGINATION. It is blocked on D1.
+
+Skipping `mark_semijoins` when `plan.offset > 0` is one condition in the
+generator and delivers the predicted curve:
+
+    offset     0      47 ms    unchanged
+    offset   250     303 ms    was   673 ms
+    offset 1,000     298 ms    was 2,958 ms
+    offset 5,000     326 ms    was 16,271 ms     50x, FLAT
+
+Then the row check:
+
+    page1 == first50[:25]          True
+    page2 == first50[25:]          FALSE
+    rows in first50 missed by 1+2  25
+
+**Paging from page 1 to page 2 silently skips 25 rows.** Reverted; continuity
+restored.
+
+Cause: the two plans order the result set differently — `issues/075`, filed as
+NOT A BUG because each path is internally consistent. That holds only while a
+pagination sequence uses ONE of them. At the `offset == 0` boundary a single
+sequence uses both, so each page is a correct page of a DIFFERENT total order.
+
+No page-level check can see this: every page has 25 real matches, no repeats,
+consecutive pages do not overlap. Only comparison against a single-query
+ordering exposes it.
+
+To ship, either use the set-based shape at offset 0 too (consistent, but page 1
+goes 47 ms -> ~300 ms and 121 -> 11 q/s under load), or make both plans agree on
+a total order — which is decision D1, reopened today because its justification
+was measured on a 1 GB pool.
+
+**So this issue and `issues/075` are one piece of work.** The fix is available
+and measured; what blocks it is an ordering decision, not an emitter change.
+
+## THE LAST PIECE MUST MOVE UPSTREAM — checked, not attempted
+
+Attempt 5 left one step: emit the match set with the semi-join unmarked. Checked
+before writing it, and it would return WRONG ANSWERS.
+
+`mark_semijoins` SPLITS the anchor BGP before deciding, and a split is only
+equivalent to the original AS A SEMI-JOIN — it drops the cross-link constraint,
+which the EXISTS correlation replaces. Unmarked splits are reverted inside that
+function; the code records why: a criterion below MIN_SELECTIVITY once kept its
+split as a plain join and returned 0 rows instead of 96.
+
+The revert data is local to `mark_semijoins` and discarded on return, so at emit
+time a marked split has no original to restore. Clearing its hint gives a plain
+join missing a constraint — a correctness bug, not a slow query.
+
+**So the paging strategy must be chosen BEFORE `mark_semijoins`**, while the
+unsplit plan exists: deep page -> set-based join, shallow page -> probe. One
+decision from `plan.offset`, taken in the generator, making the two shapes
+siblings rather than reconstructing one from the other's remains.
+
+That is why five attempts inside `emit_slice` failed — each tried to recover a
+set-based match set from a plan already transformed for probing. The
+transformation is lossy and happens upstream.
+
+Next: a `plan.offset > 0` branch in the generator that skips semi-join marking
+for the match-set emission, keeps the current path at `offset == 0`, gated on
+`test_kgquery_deep_paging.py` and the 39-cell sweep. Expected: page 201 from
+16 s to ~310 ms, flat at any depth.
+
+## ATTEMPT 5 — the shape works and is FLAT; one piece left
+
+Emitting the child with `text_needed_vars` emptied and names taken from the
+CHILD registry (attempt 4's bug) fires correctly:
+
+    offset 250   term joins = 1   EXISTS = 1      uuid-only, as designed
+    offset     0       45 ms
+    offset   250   35,547 ms
+    offset 1,000   40,349 ms
+    offset 5,000   34,910 ms      FLAT with depth — the goal
+
+Flat, and 100x too slow: ~35 s against ~310 ms hand-written.
+
+The cause is attempt 1's trap relocated: the child still carries the SEMI-JOIN
+MARKING, so its match set runs the correlated EXISTS probe per candidate, and
+with no LIMIT that is every candidate. The generic SET-BASED join — the ~38 ms
+one — is emitted only when the semi-join is NOT marked.
+
+    marked    ordered scan + per-candidate probe   cheap ONLY with a LIMIT
+    unmarked  set-based hash join                  ~38 ms, no LIMIT needed
+
+**Last piece: emit the match set with the semi-join unmarked.** Not a one-liner
+— `mark_semijoins` records hints ON THE PLAN, so clearing them for one emission
+mutates shared state, which is exactly what made attempt 2 worse than doing
+nothing. It needs snapshot-and-restore on every exit, or a plan copy.
+
+Everything else from attempt 5 is right and should be kept.
+
+## ATTEMPT 4 — text_needed_vars is not enough; the work is bigger than a patch
+
+Emitting the child plan through a context with `text_needed_vars` emptied looked
+like a uuid-only mode via a tested path. It is not:
+
+    deep page declined: no entity__uuid column in the match set;
+    columns look like 'SELECT DISTINCT * FROM (SELECT p0.v0 AS v0, ...'
+
+1. `ctx.child()` makes a CHILD TYPE REGISTRY, so sql_names differ from the
+   parent's (`v0__uuid`, not `entity__uuid`).
+2. `text_needed_vars` controls the BGP's term joins, but the PROJECT node above
+   re-projects every variable regardless — so the match set still carries every
+   text column. A uuid-only emission needs the PROJECTION restricted, which is a
+   change in the project emitter, not a context flag.
+
+Four attempts, one shape of mistake — reusing an existing emission for a purpose
+it was not built for:
+
+    1. wrap the two-phase inner      inner loses its LIMIT -> probes everything
+    2. carry filters into the driver plan mutated then declined -> worse plan
+    3. compose from the two BGPs     right BGP loses its correlation
+    4. empty text_needed_vars        projection still emits every column
+
+The uuid layer is not a component this emitter exposes; it is an intermediate
+inside `emit_bgp`. The work is a uuid-only emission MODE honoured by the project
+and BGP emitters — a first-class capability with its own tests, not a patch in
+`emit_slice`, where all four attempts died. Worth doing: page 201 goes 16 s ->
+~310 ms.
+
+## IMPLEMENTATION ATTEMPT — reverted, and it names where the work belongs
+
+`_emit_materialised_page` in `emit_slice`, hooked on `plan.offset > 0`, building
+the match set from `emit_bgp_anchor(left_bgp)` JOIN `emit_bgp_anchor(right_bgp)`
+behind an `OFFSET 0` fence.
+
+    generation   works, correct shape
+    offset 0     165 ms   unchanged, as intended
+    offset 250   >40,000 ms   against ~310 ms for the hand-written equivalent
+
+Reverted; baseline restored (360/500/687 ms at offsets 100/175/250).
+
+**Why it differs from the hand-written query.** That one took its match set from
+the GENERIC path's uuid layer, already ordered by the generic emitter. This one
+emits the criteria BGP standalone — but in two-phase that BGP is only ever a
+CORRELATED EXISTS probe, and standalone it becomes a full chain scan whose join
+order is chosen without the correlation that normally constrains it.
+
+That is the same mistake as the earlier failures in a new place: the two-phase
+BGPs are shaped for PROBING, and reusing them set-based does not yield the
+set-based plan. First the inner lost its LIMIT; now the right BGP lost its
+correlation.
+
+**Next attempt: do not build the match set from the two-phase BGPs.** The
+generic path already emits the pure-uuid layer measured at ~38 ms. Give THAT a
+uuid-only mode rather than reconstructing it from probe-shaped parts — which
+means the change belongs in the generic join emitter, not in `emit_slice`. Three
+attempts inside `emit_slice` have now failed for variations of one reason.
+
+## CONCURRENCY CROSSOVER — page 5-6, so "first page only" costs ~4x on page 2
+
+8 concurrent clients, 10 s per arm, unsorted:
+
+    page   offset   ordered scan          materialise         ordered wins
+       1        0   121.6 q/s ( 59 ms)    11.1 q/s (669 ms)     11x
+       2       25    53.6 q/s (136 ms)    13.8 q/s (573 ms)    3.9x
+       3       50    24.4 q/s (329 ms)    12.9 q/s (601 ms)    1.9x
+
+Single-query put ordered ahead 2.4x and 1.4x here; under load it is 3.9x and
+1.9x. Materialise is flat at ~13 q/s at any offset — its virtue and its ceiling.
+The ordered scan falls below that around page 5-6.
+
+So `offset == 0` gives up ~4x throughput on page 2 and ~2x on page 3, on pages
+users actually hit. The alternative, `offset < ~100`, captures them at the price
+of a tuned constant that moves with match-set size — the gate pattern this
+codebase has watched drift four times.
+
+Reading: still take `offset == 0`. Pages 2-3 stay under 600 ms median at eight
+clients, so nothing becomes slow; the throughput given up is bounded, the drift
+risk is not. But it is a product judgement and these are the numbers for it.
+
+## CROSSOVER MEASURED — near offset 90-100, and "first page only" is the rule
+
+    page   offset   ordered scan    materialise flat ~310 ms
+       1        0       52 ms       ordered 6x
+       2       25      128 ms       ordered 2.4x
+       3       50      226 ms       ordered 1.4x
+       5      100      343 ms       CROSSOVER
+      11      250      673 ms       materialise 2.2x
+
+So `offset == 0 -> ordered scan, else materialise` costs page 2 ~180 ms and page
+3 ~85 ms, and pays from page 5. Still the right rule, because:
+
+* `offset == 0` is a property of the query, not an estimate — it cannot drift
+  from the emitter it selects, which is the failure this codebase has hit four
+  times. "offset < 100" is a tuned constant and would.
+* the true crossover is DATA-DEPENDENT: it moves with match-set size, so a
+  constant right for 9,220 rows is wrong for 200.
+* the cost is bounded and small — pages 2-4 at ~310 ms rather than 128-343 ms.
+
+UNMEASURED: offsets 25 and 50 under CONCURRENCY. The ordered scan's page-1
+advantage grew from 6x to 11x under load; if pages 2-3 do the same, this rule
+costs more than the single-query numbers show. One concurrency run decides it.
+
+## UNSORTED PAGE 1: the ordered scan wins 11x — always-materialise is WRONG
+
+8 concurrent clients, 12 s, UNSORTED page 1:
+
+    two-phase ordered scan   121.6 q/s   median  59 ms   p95    97 ms
+    materialise               11.1 q/s   median 669 ms   p95 1,240 ms
+
+The single-query 6x deficit WIDENED to 11x under load: materialise builds the
+whole match set for each of eight clients while the ordered scan stops after 25
+matches. Opposite sign to the sorted result.
+
+**So the hybrid is necessary**, and the rule has three clauses:
+
+    sorted            -> materialise, at any depth
+    unsorted, shallow -> ordered scan
+    unsorted, deep    -> materialise      (313 ms vs 16,271 ms at offset 5000)
+
+The unsorted crossover is between offset 0 and 250 and is UNMEASURED. It must be
+measured under CONCURRENCY: the ordered scan's advantage grew from 6x to 11x
+under load, so a threshold picked from single-query numbers would be too low.
+
+## CONCURRENCY CHECKED — materialise wins under load (sorted shape)
+
+    8 concurrent clients, 12 s per arm, sorted page 1
+      ordered scan (current)    9.6 q/s   median 810 ms   p95 1,283 ms
+      materialise              14.1 q/s   median 564 ms   p95   784 ms
+
+1.47x throughput, lower median and p95. The worry that building the whole match
+set per query would cost throughput is not borne out — plausibly because the
+ordered scan's per-candidate probes serialise on the same pages while the
+materialise pass is a bulk scan that shares them.
+
+STILL UNTESTED, and it is the case the caveat was really about: the UNSORTED
+page 1, where the ordered scan is 54 ms against materialise's 312 ms. That arm
+needs the two-phase SQL's uuid layer, which the extraction used here cannot
+reach. Until it is measured, the hybrid argument survives for unsorted page 1
+only.
+
+## Direction: ALWAYS materialise, not a hybrid (concurrency now checked for sorted)
+
+Flat ~312 ms at every depth is easier to reason about and support than
+54 ms .. 16 s depending on how far the user paged — a p99 that depends on user
+behaviour is not a p99. 312 ms is inside what a UI absorbs.
+
+The maintainability argument is the stronger one: a hybrid needs a THRESHOLD,
+and a threshold is a gate that must agree with the emitter it selects. This repo
+has been bitten by gate/emitter drift four times in one effort and wrote itself
+a rule about it. One plan shape has no gate to drift.
+
+It also enables the cursor cache later (planning §8c): the materialised match set
+is identical for every page of a query, which is exactly what such a cache would
+hold. A hybrid's early pages could not participate.
+
+**Caveat to measure first:** materialise builds the whole match set every query,
+where the ordered scan at page 1 does ~1/25th of it and stops. Single-query that
+is 6x latency; under CONCURRENCY it is throughput and memory, and every number
+here is single-query. Concurrency is this repo's largest blind spot. Measure
+under load before making materialise the only path.
+
 ## Status: FIXED 2026-08-11 — deep pages are flat, and pagination still continuous
 
     offset     0     45 ms    unchanged (ordered scan, page 1)
