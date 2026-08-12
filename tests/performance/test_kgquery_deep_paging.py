@@ -1,6 +1,11 @@
 """What a page costs at DEPTH — the dimension no benchmark varied.
 
-Now a REGRESSION GATE for the fix rather than a record of the collapse.
+A record of the collapse. `078` is REOPENED: the fix that flattened this curve
+was reverted on 2026-08-12 because it returned INCORRECT PAGES — it sliced the
+match set by entity uuid while the query's own `ORDER BY ?entity` orders by URI
+text, so consecutive pages came from two different total orders and rows were
+both skipped and repeated (`issues/083`). The numbers below are the reverted-to
+behaviour and are what this file measures again.
 
 `issues/078`. Every performance test in this repo pages at `offset=0`; the only
 offset literal anywhere in `tests/performance/` was zero. So the whole two-phase
@@ -46,16 +51,16 @@ FIXTURES = SYNTH
 pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
 
-# Page 1 against page 41, and this number now GATES THE FIX rather than the
-# collapse. Before it, offset 1,000 was 2,958 ms against 52 ms — a 57x ratio,
-# and a timeout two pages further on. After it the deep page is flat at
-# ~300 ms, so the ratio is ~7x and is dominated by page 1 being FAST rather than
-# page 41 being slow.
+# Page 1 against page 41. This gates the COLLAPSE, not a fix — the fix was
+# reverted (see the header), so the O(offset) shape is present and expected, and
+# the measured ratio is ~57x.
 #
-# 50 sits well above the measured ~7x (leaving room for a noisy laptop and for
-# page 1 getting faster still) and well below the ~57x that a return to
-# O(offset) would produce. Between those two it is unambiguous.
-DEEP_RATIO_ALARM = 50
+# It was briefly tightened to 50 to lock in the fix. That was wrong twice over:
+# the fix returned incorrect pages, and a threshold below the CURRENT measured
+# value is a permanently red test rather than a regression gate. 400 leaves room
+# above the ~57x for a noisy laptop and a cold pool, while still catching a real
+# worsening of the shape.
+DEEP_RATIO_ALARM = 400
 
 OFFSETS = [0, 250, 1000]
 

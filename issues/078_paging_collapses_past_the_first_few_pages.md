@@ -1,6 +1,40 @@
 # Paging Collapses Past the First Few Pages — Page 11 Takes 39 Seconds
 
-## THE FIX WORKS — AND BREAKS PAGINATION. It is blocked on D1.
+## REOPENED 2026-08-12 — the shipped fix was REVERTED, it returned wrong pages
+
+The fix committed as `9322ed8` was reverted. It was fast (58x at page 201) and
+it was WRONG, in exactly the way an earlier attempt recorded below was wrong —
+the second attempt hid it rather than fixing it.
+
+A minimal 8-entity fixture, pages of 3 and 5:
+
+    limit=100 offset=0    e0 e1 e2 e3 e4 e5 e6 e7      the whole match set
+    limit=5   offset=0    e0 e1 e2 e3 e4               correct
+    limit=5   offset=5    e6 e7 e3      <- e5 MISSING, e3 REPEATED
+    limit=3   offset=3    e2 e4 e6      <- should be e3 e4 e5
+
+Against the pre-fix code the same probe gives `e5 e6 e7` and `e3 e4 e5`.
+
+**Why, and why it cannot be tuned away.** The match set is ordered by `v0` —
+the entity's URI TEXT — because that is what the query's own `ORDER BY ?entity`
+asks for. `_emit_deep_page` sliced it with `ORDER BY dp0.v0__uuid`. Two
+different total orders, so a page boundary in one has no meaning in the other.
+That is not a policy choice like D1: the query REQUESTED an ordering and the
+emitter silently substituted another.
+
+**Why the original verification missed it.** It compared page 2 against a
+single-query ordering taken from the SAME uuid-ordered path, so both sides
+shared the defect. The check that finds it compares pages against the FULL
+result set and asserts they partition it — no row missing, none repeated. That
+is now `tests/integration/test_kgquery_bindings_are_named.py`.
+
+**What survives:** the diagnosis in this issue is unchanged and correct —
+`OFFSET` defeats early termination, the shape is O(offset), and a set-based
+match set is the way out. What is unsolved is producing a deep page in the
+ORDER THE QUERY ASKED FOR without resolving text for the whole match set. D1
+(`issues/075`) is the same question and is still open.
+
+## Earlier attempt: THE FIX WORKS — AND BREAKS PAGINATION. It is blocked on D1.
 
 Skipping `mark_semijoins` when `plan.offset > 0` is one condition in the
 generator and delivers the predicted curve:

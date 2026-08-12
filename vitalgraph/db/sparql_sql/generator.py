@@ -468,16 +468,6 @@ _TEXT_TERM_CAP = 200
 _TEXT_COUNT_CAP = 10_000
 
 
-def _has_deep_page(plan, depth: int = 0) -> bool:
-    """Does this plan page past the first page? See the note at the call site."""
-    from .ir import KIND_SLICE
-    if plan is None or depth > 8:
-        return False
-    if plan.kind == KIND_SLICE and (plan.offset or 0) > 0:
-        return True
-    return any(_has_deep_page(c, depth + 1) for c in (plan.children or []))
-
-
 async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                                    conn_params=None) -> None:
     """Fetch row counts for the plan's leaf pairs that the preload lacks.
@@ -761,20 +751,7 @@ async def generate_sql(
         from .semijoin import mark_semijoins, needed_pairs
         await _load_missing_pair_stats(plan, aliases, space_id,
                                        conn=conn, conn_params=conn_params)
-        # A DEEP page wants the opposite plan, and the choice must be made HERE:
-        # mark_semijoins SPLITS the anchor BGP, and a split is equivalent to the
-        # original only AS a semi-join. The undo list is local to that function,
-        # so by emit time a marked split cannot be reverted (issues/078).
-        #
-        # Marked, the criteria join is a correlated EXISTS probe driven one
-        # candidate at a time — ideal at offset 0 where LIMIT stops it after ~25
-        # probes, and O(offset) beyond, because a deep page must produce every
-        # skipped row at full probe cost.
-        if not _has_deep_page(plan):
-            plan = mark_semijoins(plan, aliases)
-        else:
-            logger.debug("deep page: leaving the plan unsplit so the match set "
-                         "is built set-based (issues/078)")
+        plan = mark_semijoins(plan, aliases)
 
         # Stage 2e: Pre-load vector + FTS index metadata
         vector_index_meta: Dict[str, Dict[str, Any]] = {}
