@@ -1,6 +1,41 @@
 # `MIN`/`MAX` compare RDF terms as text, and `AVG` over a non-numeric term crashes the query
 
-## Status: FIXED (2026-08-04)
+## Status: FIXED (2026-08-04) — and the performance trade MEASURED 2026-08-12
+
+The sort-per-group this fix introduced was carried as an unmeasured risk in
+`scaling_implementation_plan.md` for eight days: *"until it runs we do not know
+whether that needs fixing at all"*. It has now run. **It does not need fixing.**
+
+    sp_lead_synth_100k, one group            MIN     AVG   MIN/AVG
+    Integer      400,000 values              825     365     2.26x
+    Double       437,000 values            1,273     417     3.05x
+    Currency     155,000 values              384     233     1.65x
+    Text       1,050,000 values            2,487       —         —
+
+    4 groups x ~100,000                    2,198   1,293     1.70x
+    400,000 groups x 1 row                 2,385   2,569     0.93x
+
+The overhead is bounded at ~2-3x, and it SHRINKS as groups shrink — at one row
+per group there is nothing to sort and `MIN` is no slower than `AVG`.
+
+**The specific cliff the plan warned about is not there.** It flagged
+`external merge` as "where a constant factor becomes a cliff". Forced by
+lowering `work_mem` until the sort spills:
+
+    64MB    quicksort         876 ms
+    16MB    quicksort         877 ms
+     4MB    external merge    897 ms
+     1MB    external merge    800 ms
+
+Spilling to disk is within noise. The concern was reasonable and is not real.
+
+**`AVG`/`SUM` over non-numeric text return UNBOUND and do not crash**, which is
+this issue's other half still holding — that failure used to kill the whole
+query, not just the aggregate.
+
+Gated by `tests/performance/test_aggregate_growth.py`, which asserts the
+MIN/AVG RATIO rather than timings, because the ratio is the sort-per-group cost
+and it is what a regression in `sparql_order_key` would move.
 
 All four DAWG tests pass and their `XFAIL_SQL_V2_EXEC` entries are removed, so
 `XFAIL_SQL_V2_EXEC` is now empty.
