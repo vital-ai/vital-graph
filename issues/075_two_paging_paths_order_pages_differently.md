@@ -6,6 +6,74 @@
 
 > **THIS NOW BLOCKS A 50x FIX (`issues/078`).** Skipping semi-join marking for deep pages makes page 201 go 16,271 ms -> 326 ms, flat at any depth. It cannot ship because page 1 and page 2 would come from the two differently-ordered paths this issue describes: measured, iterating page 1 -> page 2 silently SKIPS 25 rows. 'Each path is internally consistent' holds only while one pagination sequence uses a single path.
 
+
+## D1 RE-ARGUED ON A FAITHFUL MEASUREMENT — 2026-08-12
+
+This issue recorded the honest test as never taken: it has to move the ordering
+INSIDE the page subquery, which pulls the term join into the page. Taken now, on
+the corrected 16 GB pool, by ordering two-phase's page by the requested key.
+Both columns are warm medians of 3; buffers are the machine-independent half.
+
+    offset      UUID order (today)            REQUESTED URI order
+         0      55 ms      623,874 buf        6,448 ms   14,093,952 buf
+       250     764 ms    9,062,842 buf       33,447 ms  397,914,872 buf
+     1,000   3,157 ms   36,359,970 buf       45,235 ms  397,914,872 buf
+
+**117x on page 1, and 22x the buffers.** The original justification for D1 was
+"3,683 ms against a 3,208 ms baseline" — a 15% difference. That measurement was
+not faithful (it re-ordered the 25 rows already selected). The real cost is two
+orders of magnitude larger, so **D1 stands, and now on evidence rather than
+assertion.**
+
+The mechanism is structural, not tuning. The order key is `term_text`, which
+lives in the term table; the anchor scan produces `subject_uuid`. Ordering on
+the key therefore requires resolving text for EVERY candidate before the first
+row can be returned — the 397,914,872-buffer figure is identical at offset 250
+and 1,000 because both materialise the whole match set. Early termination and
+the requested order are mutually exclusive here.
+
+**And it is not cosmetic.** The first 25 by URI text and the first 25 by uuid
+share **0 of 25** entities. D1 does not reorder a page, it selects a different
+page.
+
+## THE ACTUAL DEFECT IS UPSTREAM — the builder asks for an order it does not want
+
+`kg_query_builder.py:827` sets `order_by = "ORDER BY ?entity"` as the DEFAULT,
+for callers who expressed no sort preference at all. So:
+
+* the SPARQL says "order by ?entity";
+* every fast path ignores that and pages by uuid (D1);
+* nothing downstream can distinguish "the caller asked for URI order" from
+  "the builder filled in a default" — they are the same SPARQL text.
+
+That is the root of every ordering inconsistency in `078`: two emitters read the
+same clause and answer it differently, and neither is wrong given what it was
+told. It also means a RAW SPARQL query with a genuine `ORDER BY ?s` is silently
+given uuid order by the same code, which is a real violation rather than an
+accepted trade.
+
+### The fix this points at, and why it is cheap
+
+Measured: page 1 of the same query with the `ORDER BY` clause REMOVED costs
+**70 ms against 50 ms**. The default clause is not load-bearing for performance —
+it costs 40%, not a cliff.
+
+So:
+
+1. the builder emits NO `ORDER BY` when no sort was requested;
+2. the SQL layer imposes a deterministic paging order — the anchor uuid — for a
+   paged query that requested none. Required regardless: without an ORDER BY,
+   PostgreSQL guarantees no stable order between pages, so pagination is unsafe;
+3. uuid order becomes CORRECT rather than a substitution — SPARQL permits any
+   order when none is requested — and a genuine `ORDER BY ?s` is honoured again;
+4. every path can then agree on uuid, which is the consistency `078` needs. The
+   uuid-ordered deep page that failed as attempt 6 fails only because page 1
+   sometimes comes from a text-ordered path; with all paths on uuid it is
+   correct, and it was 58x.
+
+Observable KGQuery behaviour does not change — those queries already return uuid
+order today. What changes is that the query text stops asking for something else.
+
 **REOPENED for re-argument 2026-08-11 — the performance basis is void.** D1 was
 accepted as a deliberate trade: uuid paging order in exchange for a page that
 early-terminates. The recorded justification is a timing — "the text sort cost
