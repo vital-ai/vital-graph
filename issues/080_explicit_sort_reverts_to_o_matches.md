@@ -241,7 +241,30 @@ That is inherent to sorting, not an artefact of this emitter. The earlier
 "structural" reading was right; the "it is really 74,000 term lookups"
 correction identified a real secondary cost and mistook it for the primary one.
 
-## MEASURED 2026-08-11: it is DRIVER SELECTION, not indexes and not depth
+## COST ATTRIBUTED 2026-08-11 — it is projection volume
+
+From the plan, not from inference:
+
+    Gather (match set, criteria already evaluated)   38 ms   9,220 rows
+    8 x Index Scan term_pkey, 9,220 loops each   ~19,000 ms
+
+**Criteria evaluation is 38 ms; term resolution is ~19 s.** The sorted page is
+expensive because it resolves the FULL PROJECTION for every match — ~74,000
+random heap lookups — not because it evaluates criteria for every match, and not
+because of anything to do with ordering.
+
+`(term_uuid) INCLUDE (term_text)` was built and measured: **no improvement**
+(18,458 ms). `term_table_columns` needs term_type, lang, datatype_id, num_val,
+bool and dt as well, so the heap fetch stays and covering all of them would be
+an index the size of the table.
+
+This RE-OPENS the phase-1 design recorded above as disproved: it attacks exactly
+the dominant term, and the objection against it — that materialising the match
+set is costly — is measured at 38 ms. Why the hand-written probe timed out at
+>200 s is unknown; the next action is an EXPLAIN of that query, not a fourth
+implementation attempt.
+
+## Earlier reading: DRIVER SELECTION, not indexes and not depth
 
     no sort                                              63 ms
     sort hasObjectCreationTime (dt_val HAS a btree)  12,462 ms
