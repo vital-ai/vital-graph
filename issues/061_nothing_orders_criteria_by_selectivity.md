@@ -2,6 +2,8 @@
 
 ## Status: CLOSED again — the failing case was fixed WITHOUT driver selection
 
+> **MEASURED ON A 1 GB BUFFER POOL — see `issues/081`.** At risk: every timing, including the two reverts' 3-14ms -> 30s. `shared_buffers` was 1 GB on a 64 GB machine against queries touching 400,000+ buffers; raising it to 16 GB moved a comparable query 16,411 ms -> 616 ms with no code change. Plan shapes, row counts and buffer counts are unaffected.
+
 Reopened earlier on 2026-08-11 because `issues/070` looked like the shape step 3
 needed. It was not. That case is now fixed — a short `contains` needle is
 rejected at the API and kept off the trigram index in the emitter — and driving

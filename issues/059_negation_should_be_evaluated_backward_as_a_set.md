@@ -2,6 +2,8 @@
 
 ## Status: FIXED 2026-08-10 — `_try_candidate_driven` in `emit_slice`
 
+> **MEASURED ON A 1 GB BUFFER POOL — see `issues/081`.** At risk: the magnitudes; the backward-set direction is plan-shape and stands. `shared_buffers` was 1 GB on a 64 GB machine against queries touching 400,000+ buffers; raising it to 16 GB moved a comparable query 16,411 ms -> 616 ms with no code change. Plan shapes, row counts and buffer counts are unaffected.
+
     not_exists/Text     timeout -> 450 ms
     not_exists/Double   timeout -> 186 ms
 

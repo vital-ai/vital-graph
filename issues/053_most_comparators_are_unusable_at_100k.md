@@ -2,6 +2,8 @@
 
 ## Status: CLOSED — 0 cells slow warm, 0 over the buffer threshold — 2026-08-10
 
+> **MEASURED ON A 1 GB BUFFER POOL — see `issues/081`.** At risk: '0 cells slow warm' and the 4 slow-COLD-only cells; the buffer half stands. `shared_buffers` was 1 GB on a 64 GB machine against queries touching 400,000+ buffers; raising it to 16 GB moved a comparable query 16,411 ms -> 616 ms with no code change. Plan shapes, row counts and buffer counts are unaffected.
+
 Final sweep, `sp_lead_synth_100k`, 25-row page, idle cluster:
 
     0 cells are slow WARM              — no query-cost problems remain

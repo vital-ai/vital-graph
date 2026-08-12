@@ -2,6 +2,8 @@
 
 ## Status: FIXED 2026-08-07 — 24.5-32.3s → 2ms, verified against ground truth
 
+> **MEASURED ON A 1 GB BUFFER POOL — see `issues/081`.** At risk: semi-join magnitudes (24.5-32.3s -> 2ms). `shared_buffers` was 1 GB on a 64 GB machine against queries touching 400,000+ buffers; raising it to 16 GB moved a comparable query 16,411 ms -> 616 ms with no code change. Plan shapes, row counts and buffer counts are unaffected.
+
 `semijoin._split_bgp` / `_split_anchors` partition a single BGP into
 `JOIN(anchor, rest)` around the projected variable, so the rewrite can see a
 boundary that the collect stage did not create. Option (1) below; the builder is

@@ -2,6 +2,8 @@
 
 ## Status: CORRECTED — 2026-08-10. One cell, not five.
 
+> **MEASURED ON A 1 GB BUFFER POOL — see `issues/081`.** At risk: possibly the misestimation ITSELF — effective_cache_size was 4GB, which biases away from index scans. `shared_buffers` was 1 GB on a 64 GB machine against queries touching 400,000+ buffers; raising it to 16 GB moved a comparable query 16,411 ms -> 616 ms with no code change. Plan shapes, row counts and buffer counts are unaffected.
+
     is_empty/Text    47,514 ms -> 5,310 ms    8.9x    REAL
     eq/Integer            37 ms ->    37 ms    ~same
     eq/Double              4 ms ->     4 ms    ~same

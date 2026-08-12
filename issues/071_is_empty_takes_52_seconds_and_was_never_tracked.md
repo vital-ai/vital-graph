@@ -2,6 +2,8 @@
 
 ## Status: CLOSED 2026-08-11 — both halves
 
+> **MEASURED ON A 1 GB BUFFER POOL — see `issues/081`.** At risk: the 52s. `shared_buffers` was 1 GB on a 64 GB machine against queries touching 400,000+ buffers; raising it to 16 GB moved a comparable query 16,411 ms -> 616 ms with no code change. Plan shapes, row counts and buffer counts are unaffected.
+
 **The query:** fixed via `issues/072` and the candidate-driven negation path in
 `issues/059`. The closing sweep in `issues/053` records
 `is_empty/Text 51,753 ms -> 355 ms`, with buffers 3.3M -> 25k.

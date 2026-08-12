@@ -2,6 +2,8 @@
 
 ## Status: FIXED 2026-08-08 (page and capped count)
 
+> **MEASURED ON A 1 GB BUFFER POOL — see `issues/081`.** At risk: the 19/52/174 thresholds, which come from cost estimates effective_cache_size feeds. `shared_buffers` was 1 GB on a 64 GB machine against queries touching 400,000+ buffers; raising it to 16 GB moved a comparable query 16,411 ms -> 616 ms with no code change. Plan shapes, row counts and buffer counts are unaffected.
+
 The two-phase page now fences its own statement. `emit_slice._emit_two_phase`
 sets `ctx.needs_ordered_scan`, which reaches the executor via
 `GenerateResult`, and `execute_sparql_query` runs that statement inside a

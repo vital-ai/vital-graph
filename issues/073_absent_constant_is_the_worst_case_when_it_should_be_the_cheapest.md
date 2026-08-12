@@ -2,6 +2,8 @@
 
 ## Status: FIXED — 2026-08-10
 
+> **MEASURED ON A 1 GB BUFFER POOL — see `issues/081`.** At risk: the absent-constant magnitudes. `shared_buffers` was 1 GB on a 64 GB machine against queries touching 400,000+ buffers; raising it to 16 GB moved a comparable query 16,411 ms -> 616 ms with no code change. Plan shapes, row counts and buffer counts are unaffected.
+
     eq/DateTime, absent value    40,000 ms+ (timeout)  ->  1 ms
     eq/DateTime, present value            1 ms         ->  1 ms  (unchanged)
     eq/Text,     present value           22 ms         -> 22 ms  (unchanged)
