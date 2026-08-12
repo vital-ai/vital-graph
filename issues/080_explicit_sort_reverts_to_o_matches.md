@@ -241,6 +241,33 @@ That is inherent to sorting, not an artefact of this emitter. The earlier
 "structural" reading was right; the "it is really 74,000 term lookups"
 correction identified a real secondary cost and mistook it for the primary one.
 
+## MATERIALISE design TIMED 2026-08-11 — 16,411 ms -> 5,420 ms, indicative
+
+Hand-written from the generated SQL's own pure-uuid layer, as the gate required:
+
+    WITH _const AS (...), m AS MATERIALIZED ( <uuid-only layer> )
+    SELECT m.v2__uuid, t.term_text AS sk
+    FROM m JOIN {space}_term t ON t.term_uuid = m.v8__uuid
+    ORDER BY t.term_text LIMIT 25
+
+    current sorted page   16,411 ms
+    this                   5,420 ms   rows=25
+
+**Caveat: the extracted uuid layer omits the entity-type UNION** (it lives in
+the other join operand), so the match set is not identical to the real query's.
+The figure is indicative of the shape, not a result to quote.
+
+What it settles — and no previous attempt got this far — is that the design is
+not pathological: no timeout, no cross product, no inverted join. `MATERIALIZED`
+holds the barrier so the planner joins FROM the match set instead of driving
+from the term table, and one term join over that set is affordable, which is the
+assumption the whole phase-1 design rests on.
+
+Next: rebuild the uuid layer WITH the entity-type UNION, re-time, then EXPLAIN
+to locate the remaining 5.4 s. If it is the sort over 9,220 rows, datatype
+narrowing (`dt_val` / `num_val`, both btree-backed) is the next lever — and a
+dateTime sort should be measured before a text one.
+
 ## The structure, and the MATERIALISE design it points at
 
 The generated SQL resolves term text INSIDE the join operands:
