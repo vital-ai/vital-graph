@@ -73,6 +73,49 @@ the sorted case:
 `_emit_two_phase` declines the moment the order key is a sort variable. Making
 it instead carry ONE extra term join into the ordered phase is the change.
 
+### The concrete shape, traced 2026-08-11
+
+Today's page is (`emit_slice.py`, end of `_emit_two_phase`):
+
+    SELECT DISTINCT ON (col_ref) col_ref AS {sn}__uuid
+    FROM {from_sql} WHERE {conds} AND EXISTS ({probe})
+    ORDER BY col_ref
+    LIMIT {limit}
+
+The sorted variant cannot simply swap the ORDER BY: `DISTINCT ON (col_ref)`
+REQUIRES `ORDER BY` to lead with `col_ref`. So the dedup and the ordering have to
+be separated —
+
+    SELECT * FROM (
+        SELECT DISTINCT ON (col_ref) col_ref AS {sn}__uuid,
+               {t_sk}.term_text AS __sort_key
+        FROM {from_sql}
+        JOIN {term} AS {t_sk} ON {t_sk}.term_uuid = {sort_col}
+        WHERE {conds} AND EXISTS ({probe})
+        ORDER BY col_ref                      -- required by DISTINCT ON
+    ) d
+    ORDER BY d.__sort_key {direction}
+    LIMIT {limit}
+
+then phase 2 joins the term table for the full projection of those `limit` rows,
+exactly as it does today.
+
+`{sort_col}` is the quad column binding the sort variable. The open question — and
+the first thing to check when picking this up — is whether that column is already
+in `from_sql`: the SPARQL binds `?entity vital:hasName ?sortVar`, so `collect`
+should place that quad in the ANCHOR bgp, in which case the join above is the only
+addition. If it lands elsewhere, phase 1 needs that leaf pulled in first.
+
+Note what this gives up deliberately: phase 1 now MATERIALISES the match set and
+sorts it (9,220 rows, measured 33 ms) instead of early-terminating. That is the
+trade — `ctx.needs_ordered_scan` and the `issues/047` fence exist for the
+unsorted path and should NOT be asserted here, because there is no ordered scan
+to protect.
+
+**Gate before believing any of it:** `tests/performance/test_kgquery_sorted_paging.py`
+records 3x at 10k and 203x at 100k. The 100k ratio is the number that has to move,
+and the 10k one must not regress. Then `scripts/perf_sweep_diff.py`, 39 cells.
+
 **Not implemented here, deliberately.** It is a change to the paging core —
 the code with two prior reverts behind it, gated on the 39-cell sweep — and
 landing it half-measured would be worse than leaving it. What is de-risked is
