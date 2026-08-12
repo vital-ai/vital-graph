@@ -1,5 +1,27 @@
 # Paging Collapses Past the First Few Pages — Page 11 Takes 39 Seconds
 
+## CONCURRENCY CROSSOVER — page 5-6, so "first page only" costs ~4x on page 2
+
+8 concurrent clients, 10 s per arm, unsorted:
+
+    page   offset   ordered scan          materialise         ordered wins
+       1        0   121.6 q/s ( 59 ms)    11.1 q/s (669 ms)     11x
+       2       25    53.6 q/s (136 ms)    13.8 q/s (573 ms)    3.9x
+       3       50    24.4 q/s (329 ms)    12.9 q/s (601 ms)    1.9x
+
+Single-query put ordered ahead 2.4x and 1.4x here; under load it is 3.9x and
+1.9x. Materialise is flat at ~13 q/s at any offset — its virtue and its ceiling.
+The ordered scan falls below that around page 5-6.
+
+So `offset == 0` gives up ~4x throughput on page 2 and ~2x on page 3, on pages
+users actually hit. The alternative, `offset < ~100`, captures them at the price
+of a tuned constant that moves with match-set size — the gate pattern this
+codebase has watched drift four times.
+
+Reading: still take `offset == 0`. Pages 2-3 stay under 600 ms median at eight
+clients, so nothing becomes slow; the throughput given up is bounded, the drift
+risk is not. But it is a product judgement and these are the numbers for it.
+
 ## CROSSOVER MEASURED — near offset 90-100, and "first page only" is the rule
 
     page   offset   ordered scan    materialise flat ~310 ms
