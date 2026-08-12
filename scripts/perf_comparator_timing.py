@@ -91,10 +91,37 @@ async def _buffers(conn, g):
     return best
 
 
+async def server_config(conn) -> str:
+    """The settings a timing here depends on. Printed, not just available.
+
+    Every number this script ever produced was taken with `shared_buffers` at
+    1 GB on a 64 GB machine, and nobody noticed because no output said so. On a
+    fixture whose queries touch 400,000+ buffers that made a sorted page 27x
+    slower than it is on a correct configuration (`issues/081`), and cost four
+    implementation attempts chasing a query-shape explanation for a memory
+    setting. A number without its configuration is not reproducible.
+    """
+    rows = await conn.fetch(
+        "SELECT name, setting, unit FROM pg_settings WHERE name = ANY($1)",
+        ["shared_buffers", "effective_cache_size", "work_mem",
+         "random_page_cost", "max_parallel_workers_per_gather"])
+    parts = []
+    for r in rows:
+        v = int(r["setting"]) if r["setting"].isdigit() else r["setting"]
+        if r["unit"] == "8kB" and isinstance(v, int):
+            v = f"{v * 8 // 1024}MB" if v * 8 < 1024 * 1024 else f"{v * 8 // 1048576}GB"
+        elif r["unit"] == "kB" and isinstance(v, int):
+            v = f"{v // 1024}MB"
+        parts.append(f"{r['name']}={v}")
+    return "  ".join(parts)
+
+
 async def main():
     conn = await asyncpg.connect(DSN, command_timeout=int(BUDGET) + 30)
     slow_warm, heavy, cold_only = [], [], []
 
+    print(f"  server: {await server_config(conn)}")
+    print(f"  fixture: {SP}\n")
     print(f"  {'cell':30s} {'cold':>9s} {'warm':>9s} {'buffers':>12s}  rows")
     for comp, classes in COMPARATORS.items():
         for sc in classes:

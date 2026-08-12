@@ -153,6 +153,31 @@ explanation for a memory setting.
    and plan shapes are unaffected. What changes is how large the wins were, and
    therefore which further work is worth doing.
 
+## The safeguard existed and was half-wired — fixed 2026-08-11
+
+The pytest harness ALREADY stamps the server configuration:
+`perf_record.PG_SETTINGS` lists `shared_buffers`, `effective_cache_size`,
+`work_mem`, `random_page_cost` and more, and `pg_stamp()` reads them. Verified
+working today — it returns `shared_buffers=16GB, effective_cache_size=48GB`.
+
+But the committed baseline (`tests/performance/baselines/main.json`, promoted
+from a 2026-08-06 run) has an EMPTY `env.pg`. So the mechanism is there, the
+data slot is there, and nothing populated it for the run that became the
+baseline. A safeguard that exists and produces nothing is worse than an absent
+one, because its presence implies the check was made.
+
+`scripts/perf_comparator_timing.py` had NO such mechanism at all, and it is the
+tool that produced the sweep numbers this issue is about. **It now prints its
+configuration as the first line of every run:**
+
+    server: effective_cache_size=48GB  max_parallel_workers_per_gather=2
+            random_page_cost=1  shared_buffers=16GB  work_mem=64MB
+    fixture: sp_lead_synth_100k
+
+Remaining: find out why `env.pg` was empty in the promoted baseline and make an
+empty stamp a recorded failure rather than a silent one. Every ad-hoc timing
+script written during this investigation also lacked it — including all of mine.
+
 ## The rule this earns
 
 **Record the server configuration alongside any performance number.** Not one
