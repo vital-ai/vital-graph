@@ -241,6 +241,31 @@ That is inherent to sorting, not an artefact of this emitter. The earlier
 "structural" reading was right; the "it is really 74,000 term lookups"
 correction identified a real secondary cost and mistook it for the primary one.
 
+## BUFFERS: the two shapes do the SAME WORK
+
+    current sorted path      453,180 buffers
+    materialise (sk, uuid)   416,273 buffers    8% fewer
+
+Machine-independent, immune to cache order. **Materialise is not a work
+reduction** — the 2.2x median and the 836 ms minimum below were cache effects.
+
+### And the buffer pool is 1 GB, on a 64 GB machine
+
+    shared_buffers 1 GB   effective_cache_size 4 GB   work_mem 16 MB
+
+A single query here touches 400,000+ buffers (>3 GB) against a 1 GB pool, so
+every wall-clock number in this issue was dominated by eviction. That explains
+the 15x spreads and the order-dependence, and it puts a question mark over every
+timing-based conclusion in this repo's performance work, not just this issue.
+
+`shared_buffers` cannot exceed physical RAM but has huge headroom here (~25% of
+64 GB is the usual start). `effective_cache_size` is ADVISORY — it can be set to
+anything, allocates nothing, and at 4 GB the planner believes far less is cached
+than a real server would have, which biases it away from index scans and is
+plausibly connected to the nested-loop misestimation seen throughout.
+
+**Re-baseline on a representative configuration before continuing.**
+
 ## FIRST SOUND MEASUREMENT — materialise is ~2.2x, alternating arms
 
 `perf_ab.py` discipline — arms alternated per repetition, repetition 0 discarded
