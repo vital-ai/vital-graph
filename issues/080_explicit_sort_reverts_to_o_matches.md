@@ -241,6 +241,29 @@ That is inherent to sorting, not an artefact of this emitter. The earlier
 "structural" reading was right; the "it is really 74,000 term lookups"
 correction identified a real secondary cost and mistook it for the primary one.
 
+## MEASURED 2026-08-11: it is DRIVER SELECTION, not indexes and not depth
+
+    no sort                                              63 ms
+    sort hasObjectCreationTime (dt_val HAS a btree)  12,462 ms
+    sort hasName (no btree)                          16,961 ms
+
+    datetime sort, offset 0                          13,491 ms
+    datetime sort, offset 250                         5,605 ms
+    datetime sort, offset 2475                        2,727 ms
+
+A sort key WITH a btree is 12.5 s — the same order as one without. **The index
+exists and the plan does not use it**, so the blocker is which driver the
+emitter picks, not what is available to it. Adding `btree(term_text)` would buy
+nothing on its own.
+
+And sorted paging does NOT collapse with depth — it gets faster, the opposite of
+`issues/078`. So sorted queries have a PAGE-1 problem, not a deep-page problem,
+and a cursor cache does not address this issue (it still addresses `078`).
+
+The ordered-driver direction below remains the right one; what it needs is for
+the emitter to CHOOSE the sort key's index, which is the same driver-selection
+work as the text and range anchors in `reorder_bgp`.
+
 ## CORRECTION to the closing finding: this is the RANGE problem, already solved
 
 "Ordering by a value requires evaluating the criteria for every row" is WRONG,
