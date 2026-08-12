@@ -1,6 +1,20 @@
 # Paging Collapses Past the First Few Pages — Page 11 Takes 39 Seconds
 
-## Status: OPEN — measured 2026-08-11 on `sp_lead_synth_100k`
+## Status: OPEN — no longer catastrophic after a config fix, but still O(offset)
+
+`shared_buffers` 1 GB -> 16 GB on a 64 GB machine (see `issues/080`), no code
+change:
+
+    offset      before        after
+         0       49 ms        54 ms
+       250   39,247 ms     1,437 ms     27x
+     1,000    TIMEOUT       2,958 ms
+     5,000    TIMEOUT      16,271 ms
+
+Nothing times out any more. But cost still scales with offset — the O(offset)
+shape is real and independent of the pool, which only set the constant. Page 201
+at 16 s is still a bad page, so this issue stands; it is just no longer a
+cliff.
 
 `eq/KGTextSlot`, 25-row page, warm, generated through the real pipeline
 (`build_entity_query_sparql(..., page_size=25, offset=N)`):

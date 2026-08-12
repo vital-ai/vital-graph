@@ -1,6 +1,25 @@
 # An Explicit Sort Reverts Paging to O(matches) — 46ms Becomes 18.6s
 
-## Status: OPEN — phase-1 design disproved; the ORDERED-DRIVER direction is untested and likely right
+## Status: LARGELY A CONFIGURATION ARTIFACT — 616 ms after raising shared_buffers
+
+`shared_buffers` was 1 GB on a 64 GB machine; one query here touches 400,000+
+buffers (>3 GB). Raised to 16 GB (and `effective_cache_size` 4 -> 48 GB, never
+previously tuned), NO CODE CHANGED:
+
+    sorted page, current path, warm    16,411 ms  ->  616 ms      27x
+    materialise (sk, uuid)                     —  ->  453 ms      1.4x
+
+The 404x that opened this issue was a buffer pool too small to hold the working
+set. The materialise redesign buys 1.4x on a correctly configured server, not
+the 50x it appeared to — four implementation attempts and four reverts chasing a
+query-shape explanation for a memory setting.
+
+Buffer counts were identical before and after (453,180 vs 416,261), which is why
+they are the metric to trust.
+
+REMAINING, and now much smaller: whether 1.4x justifies the emitter work; the
+N-key case (unmeasured); and re-baselining everything else measured on the old
+pool.
 
 Full plans for review: `planning/planning_performance/sorted_paging_plans.txt`
 (unsorted page, sorted page, and the phase-1 shape that times out).
