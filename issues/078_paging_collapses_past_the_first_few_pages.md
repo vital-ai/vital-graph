@@ -1,5 +1,26 @@
 # Paging Collapses Past the First Few Pages — Page 11 Takes 39 Seconds
 
+## Direction: ALWAYS materialise, not a hybrid (pending a concurrency check)
+
+Flat ~312 ms at every depth is easier to reason about and support than
+54 ms .. 16 s depending on how far the user paged — a p99 that depends on user
+behaviour is not a p99. 312 ms is inside what a UI absorbs.
+
+The maintainability argument is the stronger one: a hybrid needs a THRESHOLD,
+and a threshold is a gate that must agree with the emitter it selects. This repo
+has been bitten by gate/emitter drift four times in one effort and wrote itself
+a rule about it. One plan shape has no gate to drift.
+
+It also enables the cursor cache later (planning §8c): the materialised match set
+is identical for every page of a query, which is exactly what such a cache would
+hold. A hybrid's early pages could not participate.
+
+**Caveat to measure first:** materialise builds the whole match set every query,
+where the ordered scan at page 1 does ~1/25th of it and stops. Single-query that
+is 6x latency; under CONCURRENCY it is throughput and memory, and every number
+here is single-query. Concurrency is this repo's largest blind spot. Measure
+under load before making materialise the only path.
+
 ## Status: OPEN — and MATERIALISE fixes it. Measured 2026-08-11.
 
 Warm, arms alternated, median of 3, on the corrected 16 GB pool:
