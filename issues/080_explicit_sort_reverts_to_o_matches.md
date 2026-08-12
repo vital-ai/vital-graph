@@ -70,8 +70,20 @@ the sorted case:
               ORDER BY sort_key LIMIT 25          measured ~33 ms
     phase 2   full projection for those 25 uuids  the existing phase 2
 
-`_emit_two_phase` declines the moment the order key is a sort variable. Making
-it instead carry ONE extra term join into the ordered phase is the change.
+**Where it actually declines, CONFIRMED.** Not "the order key is a sort
+variable" — it declines at `emit_slice.py:125`, `if len(buried) != 1`, because
+the builder emits two ORDER BY keys:
+
+    unsorted   ORDER BY ?entity
+    sorted     ORDER BY ASC(?sort_val_0) ?entity
+
+The tie-breaker is `?entity`, the SAME uuid the page already orders by, so a
+sorted page ordering on `(sort_key, uuid)` reproduces the SPARQL semantics
+exactly. There are no ties to break differently and D1 does not need reopening.
+
+The full step-by-step sequence — decline point, anchor variable, sort column,
+page shape, the `needs_ordered_scan` trap, and the gates — is in
+`planning/planning_performance/two_phase_kgquery_paging_plan.md` section 8a.
 
 ### The concrete shape, traced 2026-08-11
 
