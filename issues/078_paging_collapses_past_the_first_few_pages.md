@@ -1,5 +1,34 @@
 # Paging Collapses Past the First Few Pages — Page 11 Takes 39 Seconds
 
+## THE LAST PIECE MUST MOVE UPSTREAM — checked, not attempted
+
+Attempt 5 left one step: emit the match set with the semi-join unmarked. Checked
+before writing it, and it would return WRONG ANSWERS.
+
+`mark_semijoins` SPLITS the anchor BGP before deciding, and a split is only
+equivalent to the original AS A SEMI-JOIN — it drops the cross-link constraint,
+which the EXISTS correlation replaces. Unmarked splits are reverted inside that
+function; the code records why: a criterion below MIN_SELECTIVITY once kept its
+split as a plain join and returned 0 rows instead of 96.
+
+The revert data is local to `mark_semijoins` and discarded on return, so at emit
+time a marked split has no original to restore. Clearing its hint gives a plain
+join missing a constraint — a correctness bug, not a slow query.
+
+**So the paging strategy must be chosen BEFORE `mark_semijoins`**, while the
+unsplit plan exists: deep page -> set-based join, shallow page -> probe. One
+decision from `plan.offset`, taken in the generator, making the two shapes
+siblings rather than reconstructing one from the other's remains.
+
+That is why five attempts inside `emit_slice` failed — each tried to recover a
+set-based match set from a plan already transformed for probing. The
+transformation is lossy and happens upstream.
+
+Next: a `plan.offset > 0` branch in the generator that skips semi-join marking
+for the match-set emission, keeps the current path at `offset == 0`, gated on
+`test_kgquery_deep_paging.py` and the 39-cell sweep. Expected: page 201 from
+16 s to ~310 ms, flat at any depth.
+
 ## ATTEMPT 5 — the shape works and is FLAT; one piece left
 
 Emitting the child with `text_needed_vars` emptied and names taken from the
