@@ -241,6 +241,44 @@ That is inherent to sorting, not an artefact of this emitter. The earlier
 "structural" reading was right; the "it is really 74,000 term lookups"
 correction identified a real secondary cost and mistook it for the primary one.
 
+## The structure, and the MATERIALISE design it points at
+
+The generated SQL resolves term text INSIDE the join operands:
+
+    SELECT DISTINCT ... p0.v0 .. p0.v8              16 columns
+    FROM ( SELECT j0.<8 vars x 8 cols>              ~64 columns
+           FROM (uuid subquery JOIN term t_v0) AS j0
+           JOIN (uuid subquery JOIN term t_v2, t_v8) AS j1 ...
+
+So every variable of every match is fully resolved before the outer DISTINCT /
+ORDER BY / LIMIT sees a row. That is the ~74,000 lookups. It is structural to
+how the projection is assembled, which is why no index or fence moved it.
+
+Underneath is a pure-uuid layer (`q4.subject_uuid AS v1__uuid ... q17.object_uuid
+AS v8__uuid`, quads and edges only) — the materialisable match set, and what the
+38 ms Gather measures.
+
+    WITH m AS MATERIALIZED ( <uuid-only layer> ),
+    ordered AS (
+        SELECT m.v0__uuid, t.term_text AS sk
+        FROM m JOIN {space}_term t ON t.term_uuid = m.v8__uuid
+        WHERE t.datatype_id IN (...)
+        ORDER BY t.term_text LIMIT 25 OFFSET :offset )
+    SELECT <full projection> FROM ordered ...
+
+`MATERIALIZED` is load-bearing: without the barrier PostgreSQL inlines and
+inverts the join, which is exactly how the phase-1 probe ended up driving from
+the whole term table. Note this is the OPPOSITE verdict to `issues/070`, where a
+CTE barrier destroyed early termination — worth understanding before reusing
+either conclusion.
+
+DATATYPE narrows it further: the sort key's `datatype_id` is known from the sort
+criterion, so a dateTime sort filters to ids (9, 7) AND can order on `t.dt_val`,
+a typed column WITH a btree — sidestepping `term_text`, the one sortable column
+with none.
+
+Hand-write, time, EXPLAIN. Only then touch the emitter.
+
 ## Why every phase-1 attempt timed out — ANSWERED, and it was my construction
 
 Phase 1 was built by taking the two-phase INNER query and stripping its `LIMIT`.
