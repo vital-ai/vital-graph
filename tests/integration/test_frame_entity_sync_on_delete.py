@@ -137,15 +137,35 @@ class TestFrameEntitySyncOnDelete:
         Removes the `hasEntitySlotValue` quads that give each frame its source
         entity. Every frame_entity row recording one is invalidated; nothing
         enumerated those subjects, so nothing removed the rows.
+
+        DEFERRED, NOT SYNCHRONOUS — and this half was briefly cleaned by
+        NOTHING. Moving the sweep out of `execute_sparql_update` (`issues/079`,
+        the inline pass was cancelled by the command timeout and cleaned
+        nothing) took the edge sweep to `MaintenanceJob` and dropped the
+        frame_entity sweep entirely: `cleanup_stale_frame_entity` was left with
+        no caller anywhere in the codebase. Asserting the sweep runs AND clears
+        is what makes that visible, because an uncalled function is invisible to
+        every test that only checks end state after a maintenance tick.
         """
+        from vitalgraph.db.sparql_sql.sync_edge_table import take_sweep_pending
+        from vitalgraph.db.sparql_sql.sync_frame_entity_table import (
+            cleanup_stale_frame_entity)
+
         await _seed_relation_frames(space_impl, test_space, 5, "bound")
         assert await _fe_rows(pg_conn, test_space) >= 5
         assert await _stale_fe_rows(pg_conn, test_space) == 0
+        take_sweep_pending()                    # ignore marks from seeding
 
         await space_impl.execute_sparql_update(
             test_space,
             f"DELETE WHERE {{ GRAPH <{GRAPH}> "
             f"{{ ?slot <{HAS_ENTITY_SLOT_VALUE}> ?entity }} }}")
+
+        assert test_space in take_sweep_pending(), (
+            "the WHERE-bound delete did not mark the space for the referential "
+            "sweep, so nothing will ever clean up after it (issues/064)")
+
+        await cleanup_stale_frame_entity(pg_conn, test_space)
 
         stale = await _stale_fe_rows(pg_conn, test_space)
         assert stale == 0, (

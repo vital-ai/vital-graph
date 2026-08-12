@@ -130,14 +130,33 @@ class TestEdgeTableSyncOnDelete:
         only while BOTH defining quads exist, so removing one is enough to
         orphan it — and it is the subtler case, since the edge_uuid still
         resolves and a naive identity check would call it healthy.
+
+        DEFERRED, NOT SYNCHRONOUS. The cleanup used to run inline at the end of
+        the update. It no longer does: it is O(edge table), measured at 181,212
+        ms over 4.98M rows against a 60 s command_timeout, so inline it was
+        cancelled every time and cleaned nothing (`issues/079`). The update now
+        marks the space and `MaintenanceJob` sweeps it. Both halves are asserted
+        here — the mark, and that sweeping actually clears the orphans —
+        because dropping either one is silent: the mark alone cleans nothing,
+        and a sweep nobody asks for never runs.
         """
+        from vitalgraph.db.sparql_sql.sync_edge_table import (
+            take_sweep_pending, cleanup_orphan_edges)
+
         await _seed(space_impl, test_space, 7, "bound")
         assert await _orphan_count(pg_conn, test_space) == 0
+        take_sweep_pending()                    # ignore marks from seeding
 
         await space_impl.execute_sparql_update(
             test_space,
             f"DELETE WHERE {{ GRAPH <{GRAPH}> "
             f"{{ ?e <{HAS_EDGE_SOURCE}> ?s }} }}")
+
+        assert test_space in take_sweep_pending(), (
+            "the WHERE-bound delete did not mark the space for the referential "
+            "sweep, so nothing will ever clean up after it (issues/064)")
+
+        await cleanup_orphan_edges(pg_conn, test_space)
 
         orphans = await _orphan_count(pg_conn, test_space)
         assert orphans == 0, (

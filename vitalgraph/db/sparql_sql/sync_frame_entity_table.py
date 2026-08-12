@@ -186,8 +186,20 @@ async def sync_frame_entity_before_delete(
     return deleted
 
 
+# Rows this sweep may EXAMINE per pass, and where the next pass starts. Same
+# reasoning as the edge sweep in sync_edge_table (issues/079): a LIMIT on rows
+# DELETED bounds nothing in the healthy case, because proving there is nothing
+# to delete still walks the whole table — and the check here is strictly more
+# expensive than the edge one, two correlated NOT EXISTS each joining the edge
+# table to two quads. In-process cursor: losing it on restart costs one repeated
+# window, and the sweep is convergent, so it does not need to be durable.
+_FE_SWEEP_SCAN_ROWS = 50_000
+_fe_sweep_cursor: dict = {}
+
+
 async def cleanup_stale_frame_entity(conn, space_id: str,
-                                     limit: int = 50_000) -> int:
+                                     limit: int = 50_000,
+                                     scan_rows: int = _FE_SWEEP_SCAN_ROWS) -> int:
     """Remove frame_entity rows whose defining slot chain is gone. Bounded.
 
     The delete-side counterpart, and the piece frame_entity never had.
@@ -213,10 +225,10 @@ async def cleanup_stale_frame_entity(conn, space_id: str,
     t_edge = f"{space_id}_edge"
     t_quad = f"{space_id}_rdf_quad"
 
-    result = await conn.execute(f"""
-        DELETE FROM {t_fe} WHERE ctid IN (
-            SELECT fe.ctid FROM {t_fe} fe
-            WHERE NOT EXISTS (
+    cursor = _fe_sweep_cursor.get(space_id) or "(0,0)"
+    rows = await conn.fetch(f"""
+        SELECT fe.ctid::text AS ctid,
+               (NOT EXISTS (
                 SELECT 1
                 FROM {t_edge} emv
                 JOIN {t_quad} st ON st.subject_uuid = emv.dest_node_uuid
@@ -235,13 +247,32 @@ async def cleanup_stale_frame_entity(conn, space_id: str,
                     AND sv.predicate_uuid = $2
                     AND sv.object_uuid = fe.dest_entity_uuid
                 WHERE emv.source_node_uuid = fe.frame_uuid
-                  AND emv.context_uuid = fe.context_uuid)
-            LIMIT {int(limit)})
-    """, st_uuid, sv_uuid, src_uuid, dst_uuid)
+                  AND emv.context_uuid = fe.context_uuid)) AS stale
+        FROM (
+            SELECT ctid, frame_uuid, context_uuid,
+                   source_entity_uuid, dest_entity_uuid
+            FROM {t_fe}
+            WHERE ctid > $5::text::tid
+            ORDER BY ctid
+            LIMIT {int(scan_rows)}
+        ) fe
+    """, st_uuid, sv_uuid, src_uuid, dst_uuid, cursor)
+
+    if not rows:
+        _fe_sweep_cursor[space_id] = None       # end of table: wrap next pass
+        return 0
+    _fe_sweep_cursor[space_id] = rows[-1]["ctid"]
+
+    stale_ctids = [r["ctid"] for r in rows if r["stale"]][:int(limit)]
+    if not stale_ctids:
+        return 0
+
+    result = await conn.execute(
+        f"DELETE FROM {t_fe} WHERE ctid = ANY($1::text[]::tid[])", stale_ctids)
     deleted = int(result.split()[-1]) if result else 0
     if deleted:
-        logger.info("cleanup_stale_frame_entity(%s): removed %d stale row(s)",
-                    space_id, deleted)
+        logger.info("cleanup_stale_frame_entity(%s): removed %d stale row(s) "
+                    "from a %d-row window", space_id, deleted, len(rows))
     return deleted
 
 

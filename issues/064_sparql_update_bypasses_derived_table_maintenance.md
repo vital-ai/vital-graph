@@ -2,6 +2,39 @@
 
 ## Status: FIXED — 2026-08-10, in `execute_sparql_update`
 
+
+## REGRESSION AND RE-FIX 2026-08-12 — the frame_entity half had no caller
+
+Bounding the sweeps for `issues/079` (`d3920b4`) moved the referential cleanup
+out of `execute_sparql_update`, where it was O(edge table), cancelled by the 60 s
+command timeout, and therefore cleaning nothing. The edge half went to
+`MaintenanceJob`. **The frame_entity half went nowhere.**
+`cleanup_stale_frame_entity` was left with no call site anywhere in the
+codebase, so after a WHERE-bound delete its rows were never cleaned — not
+deferred, simply abandoned. Exactly the defect this issue was filed on,
+reintroduced by its own performance fix.
+
+Both integration tests caught it immediately and had been red since that commit;
+they were not run, because the change looked write-path-local and only the unit
+suite was.
+
+Now:
+
+* `cleanup_stale_frame_entity` runs in the `MaintenanceJob` sweep, BEFORE
+  `cleanup_orphan_edges`. The order is load-bearing and was documented in the
+  inline code that got deleted: a frame_entity row is validated against the edge
+  table, so cleaning it after those edges are gone makes it look stale for the
+  wrong reason.
+* It is scan-bounded like the edge sweep, with its own cursor. It had the same
+  flaw the edge sweep did — `LIMIT` on rows DELETED bounds nothing when there is
+  nothing to delete — and its check is strictly more expensive: two correlated
+  `NOT EXISTS`, each joining the edge table to two quads.
+* The contract the tests assert is now the real one: the update MARKS the space,
+  and sweeping CLEARS it. Asserting both is what makes an uncalled sweep
+  visible; a test that only checks the end state after a maintenance tick cannot
+  distinguish "swept" from "never needed sweeping".
+
+
 All four holes are closed, and option (1) below was taken rather than the
 dirty-flag interim:
 

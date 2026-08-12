@@ -513,15 +513,29 @@ class MaintenanceJob:
         from ..db.sparql_sql.sync_edge_table import (
             take_sweep_pending, mark_sweep_needed)
         pending = take_sweep_pending()
+        from ..db.sparql_sql.sync_frame_entity_table import (
+            cleanup_stale_frame_entity)
         for sid in sorted(pending)[:_SWEEP_SPACES_PER_CYCLE]:
             try:
                 async with self._pool.acquire() as conn:
+                    # frame_entity BEFORE edges, and the order is load-bearing:
+                    # a frame_entity row is validated against the edge table, so
+                    # cleaning it after the edges it reads have gone makes it
+                    # look stale for the wrong reason and the two passes
+                    # disagree about why. This ordering came from the inline
+                    # cleanup that used to run in execute_sparql_update; moving
+                    # the sweep here dropped the frame_entity half entirely,
+                    # leaving it called from NOWHERE (issues/064).
+                    stale = await cleanup_stale_frame_entity(conn, sid)
                     removed = await cleanup_orphan_edges(conn, sid)
+                if stale:
+                    logger.info("Frame-entity integrity: swept %d stale row(s) "
+                                "from %s after a WHERE-bound delete", stale, sid)
                 if removed:
                     logger.info("Edge integrity: swept %d orphan(s) from %s "
                                 "after a WHERE-bound delete", removed, sid)
             except Exception as e:
-                logger.warning("orphan sweep for %s failed: %s", sid, e)
+                logger.warning("referential sweep for %s failed: %s", sid, e)
         for sid in sorted(pending)[_SWEEP_SPACES_PER_CYCLE:]:
             mark_sweep_needed(sid)
 
