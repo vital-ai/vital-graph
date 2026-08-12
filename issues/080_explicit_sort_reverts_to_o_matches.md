@@ -77,8 +77,40 @@ lines 118-121: for a sorted plan the SEMI-JOIN IS NOT MARKED and there is no
 foldable EXISTS join, so it never looks at the ordering. An implementation
 built on the ORDER BY theory was written, never reached, and reverted.
 
-The open question is therefore why `mark_semijoins` does not mark a plan
-carrying `sort_criteria` when the same plan without one is marked.
+**ANSWERED, by instrumenting the plan.** The sort binding is placed on the
+WRONG SIDE OF THE JOIN:
+
+    UNSORTED  needed = ['entity']
+              bgp[0] binds ['entity']                     <- anchor
+              bgp[1] binds [frame_0, slot_0_0_0, ...]     <- criteria
+              -> semijoin: marked 1 join(s)
+
+    SORTED    needed = ['entity', 'sort_val_0']
+              bgp[0] binds ['entity']
+              bgp[1] binds [frame_0, ..., 'sort_val_0']   <- HERE
+              -> semijoin: no join rewritten
+
+`collect` puts `?entity vital:hasName ?sort_val_0` in the CRITERIA bgp. A
+semi-join discards that side, and `sort_val_0` is needed above it for the
+ORDER BY — so `mark_semijoins` declines, CORRECTLY. Everything downstream
+follows from that one placement: no semi-join means `_emit_two_phase` returns at
+its first guard, which is why the sorted path gets the generic O(matches)
+emission.
+
+The plan TREES are identical between the two cases — `slice > distinct > project
+> order > join(bgp, bgp)` — so this is not a shape difference. It is which bgp
+owns one triple pattern.
+
+**That makes the fix smaller and earlier than the emit change.**
+`?entity vital:hasName ?sort_val_0` shares only `?entity` with the criteria; it
+belongs with the anchor. Placed in bgp[0], `sort_val_0` is bound by the side the
+semi-join KEEPS, the marker fires, two-phase engages, and the ordering work
+(steps 1-5 of the sequence) becomes reachable at all.
+
+So the order of work is: fix the placement in `collect` FIRST, confirm
+`semijoin: marked 1 join(s)` for a sorted plan, and only then do the page shape.
+Note this also invalidates Step 3's assumption, which asserted the sort quad
+lands in the anchor bgp — it does not, today.
 
 What DOES hold about the ordering, verified: the builder emits two keys:
 
