@@ -125,8 +125,25 @@ the UNION, so the boundary forces a separate BGP:
 the anchor side becomes a two-BGP join — so `find_bgp(sj.children[0])` and
 `emit_bgp_anchor` both need checking against it, by instrumentation.
 
-So the order of work is: fix the placement in the BUILDER first, confirm
-`semijoin: marked 1 join(s)` for a sorted plan, and only then do the page shape.
+**The builder change ALONE is a REGRESSION — measured, then reverted.** Applied
+as described, it does clear the blocker: a sorted plan reports
+`semijoin: marked 1 join(s)` where it previously reported "no join rewritten".
+And the query went from 18,579 ms to TIMEOUT (>200 s).
+
+Because clearing the blocker means `_emit_two_phase` is now ATTEMPTED, still
+declines at `len(buried) != 1` — nothing has taught it the two-key order yet —
+and falls through to the generic emission carrying a plan whose BGP is now split
+and whose join is marked. The generic path emits worse SQL against that shape.
+
+**So this is a PAIR that must land in one commit.** The builder placement is
+necessary and not sufficient; the emit change is sufficient and unreachable
+without it. Either alone leaves the sorted path slower than doing nothing — and
+the builder half is the dangerous one, because `semijoin: marked 1 join(s)` is
+exactly the signal you would read as success.
+
+Order for the next attempt: builder placement, THEN the emit two-key support,
+and only then measure — the intermediate state is expected to be worse and
+proves nothing.
 Note this also invalidates Step 3's assumption, which asserted the sort quad
 lands in the anchor bgp — it does not, today.
 
