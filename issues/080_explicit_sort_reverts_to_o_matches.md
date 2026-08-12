@@ -241,6 +241,33 @@ That is inherent to sorting, not an artefact of this emitter. The earlier
 "structural" reading was right; the "it is really 74,000 term lookups"
 correction identified a real secondary cost and mistook it for the primary one.
 
+## GATE PASSED — faithful match set, warm, 2026-08-11
+
+The entity-type UNION is now included, so the match set is the real one:
+
+                           materialise    current
+    SORTED    offset=0        326 ms       16,411 ms    50x
+    SORTED    offset=2475     331 ms
+    UNSORTED  offset=0        295 ms           45 ms    6.5x SLOWER
+    UNSORTED  offset=250      316 ms       39,247 ms   124x
+    UNSORTED  offset=1000     296 ms        TIMEOUT
+    UNSORTED  offset=2475     311 ms        TIMEOUT
+
+    cold materialise (first touch)  ~5,000 ms
+
+Flat at ~300 ms across a hundred pages, sorted or not. The 5,420 ms and 4,990 ms
+figures recorded earlier were both COLD first runs.
+
+Settled: the shape works, it is flat with depth, it fixes the sorted page
+outright with no trade, and `MATERIALIZED` is the load-bearing part.
+
+Not settled, each needing its own measurement first: the page-1 regression for
+UNSORTED queries (295 ms vs 45 ms — a hybrid is the obvious answer and the
+crossover is unmeasured); the ~5 s cold cost, which matters for a UI that pages
+once; whether the emitter can assemble this at all; and CORRECTNESS — returning
+25 rows in the right order is not the same as returning THE right 25 rows, and
+row-identity against the current path has not been checked.
+
 ## MATERIALISE design TIMED 2026-08-11 — 16,411 ms -> 5,420 ms, indicative
 
 Hand-written from the generated SQL's own pure-uuid layer, as the gate required:
