@@ -1,5 +1,33 @@
 # Paging Collapses Past the First Few Pages — Page 11 Takes 39 Seconds
 
+## ATTEMPT 5 — the shape works and is FLAT; one piece left
+
+Emitting the child with `text_needed_vars` emptied and names taken from the
+CHILD registry (attempt 4's bug) fires correctly:
+
+    offset 250   term joins = 1   EXISTS = 1      uuid-only, as designed
+    offset     0       45 ms
+    offset   250   35,547 ms
+    offset 1,000   40,349 ms
+    offset 5,000   34,910 ms      FLAT with depth — the goal
+
+Flat, and 100x too slow: ~35 s against ~310 ms hand-written.
+
+The cause is attempt 1's trap relocated: the child still carries the SEMI-JOIN
+MARKING, so its match set runs the correlated EXISTS probe per candidate, and
+with no LIMIT that is every candidate. The generic SET-BASED join — the ~38 ms
+one — is emitted only when the semi-join is NOT marked.
+
+    marked    ordered scan + per-candidate probe   cheap ONLY with a LIMIT
+    unmarked  set-based hash join                  ~38 ms, no LIMIT needed
+
+**Last piece: emit the match set with the semi-join unmarked.** Not a one-liner
+— `mark_semijoins` records hints ON THE PLAN, so clearing them for one emission
+mutates shared state, which is exactly what made attempt 2 worse than doing
+nothing. It needs snapshot-and-restore on every exit, or a plan copy.
+
+Everything else from attempt 5 is right and should be kept.
+
 ## ATTEMPT 4 — text_needed_vars is not enough; the work is bigger than a patch
 
 Emitting the child plan through a context with `text_needed_vars` emptied looked
