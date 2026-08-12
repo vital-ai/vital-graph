@@ -130,6 +130,83 @@ async def _open_client(cfg):
     return client
 
 
+# ── KGQuery / SPARQL shapes ──────────────────────────────────────────
+# The criteria paths were entirely absent from this mix, so every concurrency
+# result the driver has produced describes lookups and listings only. They are
+# the expensive shapes and the ones the paging work (`issues/078`, `080`) has
+# been tuning single-threaded — a per-query win can still fall over under
+# concurrency if it trades latency for buffer pressure or connection hold time.
+#
+# `StateSlot = "California"` matches every organization the fixture generates,
+# so the criterion is deliberately UNSELECTIVE: it produces a large match set
+# and therefore exercises the paging path rather than an index point-lookup.
+_STATE_SLOT = "http://vital.ai/ontology/haley-ai-kg#StateSlot"
+_ADDRESS_FRAME = "http://vital.ai/ontology/haley-ai-kg#AddressFrame"
+_ORG_ENTITY = "http://vital.ai/ontology/haley-ai-kg#OrganizationEntity"
+_HAS_NAME = "http://vital.ai/ontology/vital-core#hasName"
+
+# Deep offsets, because page 1 is the only page any benchmark used to touch and
+# it is the page that does NOT show the O(offset) shape.
+_DEEP_OFFSETS = [0, 25, 100, 500, 1000]
+
+
+def _state_criteria():
+    from vitalgraph.model.kgentities_model import FrameCriteria, SlotCriteria
+    return [FrameCriteria(
+        frame_type=_ADDRESS_FRAME,
+        slot_criteria=[SlotCriteria(slot_type=_STATE_SLOT, value="California",
+                                    comparator="eq")])]
+
+
+class EmptyResultError(RuntimeError):
+    """A query came back successful but returned nothing it should have."""
+
+
+def _check_query(resp, offset):
+    """Fail a query response that is 'successful' but returned no work.
+
+    A failing backend is reported by the API as `FOUND` with `total_count=0` and
+    no rows (`issues/082`) — indistinguishable from a genuinely empty match set.
+    Without this check the driver publishes healthy percentiles for queries that
+    never executed, and they look FAST, because failing costs nothing.
+
+    The criterion is deliberately unselective and the fixture always contains
+    matching organizations, so zero total means something is wrong rather than
+    something is absent.
+    """
+    total = getattr(resp, "total_count", None)
+    uris = getattr(resp, "entity_uris", None) or []
+    if total == 0:
+        raise EmptyResultError(
+            "query returned total_count=0 for a criterion the fixture always "
+            "matches — the backend probably failed and reported success "
+            "(issues/082); check the SERVER LOG, not this driver")
+    if total and not uris and offset == 0:
+        raise EmptyResultError(
+            f"query reported total_count={total} but returned no rows at "
+            f"offset 0 — the count and the page disagree")
+    return resp
+
+
+def _kgquery(offset=0, sorted_=False):
+    async def _run(c):
+        from vitalgraph.model.kgentities_model import SortCriteria
+        sorts = ([SortCriteria(sort_type="entity_property", property_uri=_HAS_NAME)]
+                 if sorted_ else None)
+        return _check_query(await c.kgqueries.query_entities(
+            SPACE, GRAPH, entity_type=_ORG_ENTITY,
+            frame_criteria=_state_criteria(), sort_criteria=sorts,
+            page_size=25, offset=offset), offset)
+    return _run
+
+
+async def _sparql_select(c):
+    """A small bounded SELECT — the raw endpoint, not the KGQuery builder."""
+    from vitalgraph.model.sparql_model import SPARQLQueryRequest
+    return await c.sparql.execute_sparql_query(SPACE, SPARQLQueryRequest(
+        query=f"SELECT ?s ?p ?o WHERE {{ GRAPH <{GRAPH}> {{ ?s ?p ?o }} }} LIMIT 25"))
+
+
 def _build_ops(uris, read_only, writes_enabled):
     """Return [(weight, name, async fn(client))]."""
     def pick():
@@ -148,6 +225,15 @@ def _build_ops(uris, read_only, writes_enabled):
          lambda c: c.kgframes.list_kgframes(SPACE, GRAPH, parent_uri=pick(), page_size=20)),
         (5, "list_spaces", lambda c: c.spaces.list_spaces()),
         (5, "list_graphs", lambda c: c.graphs.list_graphs(SPACE)),
+
+        # Query paths. Weighted below the listings because a UI issues more
+        # navigation than search, but high enough that a slow query shows up in
+        # the percentiles rather than being averaged away by cheap lookups.
+        (10, "kgquery_page1", _kgquery(offset=0)),
+        (4, "kgquery_deep_page",
+         lambda c: _kgquery(offset=random.choice(_DEEP_OFFSETS))(c)),
+        (3, "kgquery_sorted", _kgquery(offset=0, sorted_=True)),
+        (3, "sparql_select", _sparql_select),
     ]
     if not read_only and writes_enabled:
         ops.append((5, "update_frame_slot", _make_write(pick)))
