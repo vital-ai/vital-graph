@@ -34,6 +34,60 @@ match set is the way out. What is unsolved is producing a deep page in the
 ORDER THE QUERY ASKED FOR without resolving text for the whole match set. D1
 (`issues/075`) is the same question and is still open.
 
+
+## ATTEMPT 7 — the ordering works, and it exposes that D1 is the real blocker
+
+Built and measured 2026-08-12, then NOT shipped. The design is the one this
+issue and `080` point at: build the match set set-based, resolve **only the
+order key** for it, slice in that order, then resolve the full projection for
+the page alone.
+
+It is fast, and it is flat:
+
+    offset      0      44 ms     (page 1, unchanged — still two-phase)
+    offset     25     307 ms
+    offset    250     323 ms     was    673 ms
+    offset  1,000     383 ms     was  2,958 ms
+    offset  5,000     288 ms     was 16,271 ms      56x
+
+And on an 8-entity fixture every page is correct and in the requested order —
+pages partition the result exactly, at every offset, which is what killed
+attempt 6.
+
+**It still cannot ship, and the reason is D1.** On the 100k fixture the pages
+disagree with page 1:
+
+    page 1 (_emit_two_phase)   sorted by URI text?   NO   -> uuid order
+    single query, 100 rows     sorted by URI text?   NO   -> uuid order
+    pages 2-4 (deep page)      sorted by URI text?   YES  -> requested order
+
+`_emit_two_phase` ignores `ORDER BY ?entity` and orders by uuid, because
+ordering on a real indexed column is what lets its scan terminate early. That is
+decision D1 (`issues/075`), and it is PRE-EXISTING. Attempt 6 ordered deep pages
+by uuid and broke on the 8-entity fixture, where two-phase does not fire and
+page 1 is text-ordered. Attempt 7 orders by text and breaks on 100k, where it
+does. **Neither is universally consistent, because page 1's ordering depends on
+which emitter fires.**
+
+So this is not a paging problem any more. Any pagination sequence that crosses
+those two emitters is broken regardless of what the deep page does, and the only
+reason it has not been visible is that nothing paged deeply enough to cross it.
+
+### The choice, with numbers
+
+1. **Resolve D1.** Make two-phase honour the requested order and everything
+   agrees. The cost is two-phase's early termination, which is what `080`
+   measures — this is the expensive option and the correct one.
+2. **Drop two-phase for these queries** and use the set-based path at every
+   offset. Uniform, correct, ~300 ms FLAT for every page including page 1 —
+   against 44 ms today. A 7x slower first page, which is the page users actually
+   hit, in exchange for correct deep paging.
+3. **Leave it.** Deep paging stays O(offset) and correct; page 1 stays 44 ms.
+   The uuid-vs-text divergence remains latent for anyone who pages deeply.
+
+Currently (3), because 1 and 2 are both decisions about what the product should
+do rather than defects to fix. The measurement stands ready for either.
+
 ## Earlier attempt: THE FIX WORKS — AND BREAKS PAGINATION. It is blocked on D1.
 
 Skipping `mark_semijoins` when `plan.offset > 0` is one condition in the
