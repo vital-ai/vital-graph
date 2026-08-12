@@ -1,11 +1,20 @@
 """What a page costs at DEPTH — the dimension no benchmark varied.
 
-A record of the collapse. `078` is REOPENED: the fix that flattened this curve
-was reverted on 2026-08-12 because it returned INCORRECT PAGES — it sliced the
-match set by entity uuid while the query's own `ORDER BY ?entity` orders by URI
-text, so consecutive pages came from two different total orders and rows were
-both skipped and repeated (`issues/083`). The numbers below are the reverted-to
-behaviour and are what this file measures again.
+FIXED 2026-08-12. The curve this file was written to record is now flat:
+
+    offset      0      51 ms
+    offset    250     277 ms      was    673 ms
+    offset  1,000     291 ms      was  2,958 ms
+    offset  5,000     310 ms      was 16,271 ms       52x
+
+Two earlier attempts were fast and returned WRONG PAGES, because the deep page
+ordered by entity uuid while page 1 ordered by URI text — two total orders, so
+pages neither partitioned the result nor covered it. What made this land was
+fixing the cause rather than the symptom (`issues/075`): the KGQuery builder
+stopped emitting a default `ORDER BY ?entity` for callers who asked for no sort,
+and the SQL layer now imposes a MARKED paging order instead. Every path answers
+a marked order with uuid, so they agree; a real `ORDER BY` is answered as
+written.
 
 `issues/078`. Every performance test in this repo pages at `offset=0`; the only
 offset literal anywhere in `tests/performance/` was zero. So the whole two-phase
@@ -51,16 +60,14 @@ FIXTURES = SYNTH
 pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
 
-# Page 1 against page 41. This gates the COLLAPSE, not a fix — the fix was
-# reverted (see the header), so the O(offset) shape is present and expected, and
-# the measured ratio is ~57x.
+# Page 1 against page 41, now ~6x — and that ratio is page 1 being FAST (51 ms
+# on an ordered scan that stops after 25 rows), not page 41 being slow.
 #
-# It was briefly tightened to 50 to lock in the fix. That was wrong twice over:
-# the fix returned incorrect pages, and a threshold below the CURRENT measured
-# value is a permanently red test rather than a regression gate. 400 leaves room
-# above the ~57x for a noisy laptop and a cold pool, while still catching a real
-# worsening of the shape.
-DEEP_RATIO_ALARM = 400
+# 20 sits above it with room for a noisy laptop, and far below the ~57x an
+# O(offset) regression produces. This threshold has been wrong in both
+# directions before: 400 was too loose to catch anything once flat, and 50 was
+# set to gate a fix that turned out to return incorrect pages.
+DEEP_RATIO_ALARM = 20
 
 OFFSETS = [0, 250, 1000]
 
@@ -98,13 +105,29 @@ async def _sql_at(conn, fx, offset):
     gen = await generate_sql(cr, fx.space, conn=conn)
     if not gen.ok:
         pytest.fail(f"paging SQL failed to generate at offset {offset}: {gen.error}")
-    return gen.sql
+    # The fence travels WITH the SQL, because it is a property of the shape the
+    # generator chose, not of the benchmark. See _warm_ms.
+    return gen.sql, gen.needs_ordered_scan
 
 
-async def _warm_ms(conn, sql):
+async def _warm_ms(conn, sql, needs_ordered_scan=True):
+    """Median of 3 warm runs, fencing ONLY when the generator asked for it.
+
+    `SET LOCAL enable_sort = off` is not a benchmark setting, it is what the
+    executor applies when `needs_ordered_scan` is set (`issues/047`) — a fence
+    for the two-phase shape, whose O(page) property depends on the planner not
+    falling back to a blocking sort.
+
+    Applying it unconditionally measures a query the server would never run.
+    The deep-page shape REQUIRES a sort: fenced, its `Unique` nodes have to take
+    their order from indexes and the plan collapses into nested loops — 75,610 ms
+    for a page that costs 277 ms unfenced. That number was nearly reported as a
+    code regression.
+    """
     async def once():
         async with conn.transaction():
-            await conn.execute("SET LOCAL enable_sort = off")
+            if needs_ordered_scan:
+                await conn.execute("SET LOCAL enable_sort = off")
             t0 = time.perf_counter()
             rows = await conn.fetch(sql)
             return (time.perf_counter() - t0) * 1000.0, len(rows)
@@ -129,8 +152,8 @@ async def test_page_cost_across_offsets(perf_conn, perf_record, fx):
     # comparable to a full page, so they are excluded from the ratio.
     timings, full = {}, {}
     for off in OFFSETS:
-        sql = await _sql_at(perf_conn, fx, off)
-        ms, rows = await _warm_ms(perf_conn, sql)
+        sql, fence = await _sql_at(perf_conn, fx, off)
+        ms, rows = await _warm_ms(perf_conn, sql, fence)
         timings[off] = ms
         assert rows in (0, PAGE_SIZE), (
             f"offset {off} returned {rows} rows — a page should be full or "
@@ -172,8 +195,8 @@ async def test_deeper_pages_are_never_cheaper(perf_conn, perf_record, fx):
 
     ms, offs = [], []
     for off in OFFSETS:
-        sql = await _sql_at(perf_conn, fx, off)
-        t, rows = await _warm_ms(perf_conn, sql)
+        sql, fence = await _sql_at(perf_conn, fx, off)
+        t, rows = await _warm_ms(perf_conn, sql, fence)
         if rows == PAGE_SIZE:            # full pages only, see above
             ms.append(t); offs.append(off)
     if len(ms) < 2:

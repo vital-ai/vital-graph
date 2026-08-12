@@ -28,6 +28,29 @@ def _find_buried_order(plan: PlanV2, depth: int = 0) -> list:
     return []
 
 
+def _buried_order_is_synthesized(plan: PlanV2, depth: int = 0) -> bool:
+    """Was the ORDER `_find_buried_order` will return one WE imposed?
+
+    Only a synthesized order (`collect._collect_slice`, `issues/075`) may be
+    answered by ordering on the entity uuid. It means "the caller asked for no
+    order, so any stable one will do", and uuid is the stable order an index can
+    supply — 117x cheaper than the requested key, because that key lives in the
+    term table and sorting on it means resolving text for every candidate.
+
+    A user's own `ORDER BY ?s` must not be answered that way. It was, before
+    this: the paging emitters ordered by uuid whatever the clause said, and the
+    page returned was not merely reordered but DIFFERENT — 0 of 25 rows in
+    common with the requested ordering.
+    """
+    if plan is None or depth > 4:
+        return False
+    if plan.kind == KIND_ORDER and plan.order_conditions:
+        return bool((plan.hints or {}).get("stable_paging"))
+    if plan.kind in (KIND_DISTINCT, KIND_REDUCED, KIND_PROJECT) and plan.children:
+        return _buried_order_is_synthesized(plan.children[0], depth + 1)
+    return False
+
+
 def _has_semijoin(node, depth: int = 0) -> bool:
     """Is there a semi-join anywhere below? Bounds the two-phase rewrite."""
     if node is None or depth > 6:
@@ -146,6 +169,13 @@ def _emit_two_phase(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
         return None
     key, direction = buried[0]
     if not isinstance(key, str):
+        return None
+    # This shape pages by the entity uuid, so it may only answer an order we
+    # imposed ourselves. A real ORDER BY is left to the ordinary path, which
+    # emits it as written — slower, and the only correct answer to a request.
+    if not _buried_order_is_synthesized(plan.child):
+        ctx.log("slice", "two-phase declined: the ORDER BY was requested by the "
+                         "caller, and this shape would substitute uuid order")
         return None
 
     # Phase 1 must be FLAT: the ORDER BY has to land on a real column of the
@@ -552,10 +582,112 @@ def _text_leaf_should_drive(plan: PlanV2, ctx: EmitContext) -> bool:
     return True
 
 
+def _without_buried_order(node, depth: int = 0):
+    """The same plan with the buried ORDER node removed.
+
+    The deep page slices the match set with its OWN `ORDER BY`, so ordering the
+    match set first is work thrown away — and worse than wasted: the executor
+    fences these statements with `enable_sort = off` (`issues/047`) so the
+    ordered scan cannot degrade into a blocking sort, and under that fence an
+    ORDER BY over the whole match set has no good plan at all. Measured with it
+    left in: 75 SECONDS for a page that costs ~330 ms without it.
+    """
+    import dataclasses
+    if node is None or depth > 4:
+        return node
+    if node.kind == KIND_ORDER:
+        return node.children[0] if node.children else node
+    if node.kind in (KIND_DISTINCT, KIND_REDUCED, KIND_PROJECT) and node.children:
+        inner = _without_buried_order(node.children[0], depth + 1)
+        if inner is node.children[0]:
+            return node
+        return dataclasses.replace(node, children=[inner])
+    return node
+
+
+def _emit_deep_page(plan, ctx):
+    """A deep page: build the match set once, slice it by uuid, resolve text.
+
+    `issues/078`. `OFFSET` defeats the early termination two-phase is built
+    around — the ordered scan must produce and discard N rows, each paying the
+    criteria probe — so the cost is O(offset): 16,271 ms at page 201. Building
+    the match set as a SET instead is flat, and the generator enables it by
+    leaving a deep page's plan unsplit.
+
+    ONLY for a SYNTHESIZED order, and that restriction is what makes it correct
+    rather than merely fast. Two earlier attempts shipped or nearly shipped this
+    and both returned broken pages, because the deep page and page 1 ordered
+    differently — one by uuid, one by URI text — so a pagination sequence
+    crossed two total orders and rows were skipped and repeated. Since
+    `issues/075`, an order this layer imposed is answered by uuid EVERYWHERE:
+    two-phase, the generic path, and here. One order, so pages compose.
+
+    Returns None when the shape does not qualify, and the caller emits normally.
+    """
+    from .emit import emit
+    from .sql_type_generation import TypeRegistry
+    from .emit_bgp import _NUMERIC_DATATYPES, _BOOLEAN_DT, _DATETIME_DATATYPES
+
+    buried = _find_buried_order(plan.child)
+    if len(buried) != 1 or not isinstance(buried[0][0], str):
+        return None
+    if not _buried_order_is_synthesized(plan.child):
+        return None                            # a real ORDER BY: not ours to reorder
+    key = buried[0][0]
+
+    uuid_ctx = ctx.child()
+    uuid_ctx.text_needed_vars = set()          # no term JOINs: uuids only
+    try:
+        match_set = emit(_without_buried_order(plan.child), uuid_ctx)
+    except Exception as e:
+        logger.debug("deep page declined: child did not emit: %r", e)
+        return None
+    info = uuid_ctx.types.get(key)             # names come from the CHILD registry
+    if not match_set or not info or not info.sql_name:
+        return None
+    csn = info.sql_name
+    if f"{csn}__uuid" not in match_set:
+        logger.debug("deep page declined: %s__uuid absent from the match set", csn)
+        return None
+
+    out = ctx.types.get(key)
+    sn = out.sql_name if out and out.sql_name else key
+    p_a, m_a, t_a = ctx.aliases.next("dp"), ctx.aliases.next("dm"), f"t_{sn}"
+
+    # OFFSET 0 fences the subquery: without it PostgreSQL pulls it up and may
+    # invert the join. A CTE is unavailable — this returns a fragment.
+    page = (f"SELECT DISTINCT {p_a}.{csn}__uuid AS {sn}__uuid\n"
+            f"FROM (\n{match_set}\nOFFSET 0\n) AS {p_a}\n"
+            f"ORDER BY {p_a}.{csn}__uuid\n"
+            f"LIMIT {plan.limit} OFFSET {plan.offset}")
+    cols = TypeRegistry.term_table_columns(
+        sn, t_a, m_a, "",
+        dt_case_sql=ctx.dt_case_expr(t_a),
+        numeric_dt_id_list=ctx.dt_ids_for_uris(_NUMERIC_DATATYPES),
+        boolean_dt_id=ctx.dt_ids_for_uris([_BOOLEAN_DT]),
+        datetime_dt_id_list=ctx.dt_ids_for_uris(_DATETIME_DATATYPES),
+    )
+    _register_projection(ctx, key, sn, m_a, t_a)
+    ctx.log("slice", f"deep page: set-based match set, uuid-ordered, "
+                     f"LIMIT {plan.limit} OFFSET {plan.offset}")
+    return (f"SELECT {', '.join(cols)}\n"
+            f"FROM ({page}) AS {m_a}\n"
+            f"JOIN {ctx.term_table} AS {t_a} "
+            f"ON {m_a}.{sn}__uuid = {t_a}.term_uuid\n"
+            f"ORDER BY {m_a}.{sn}__uuid")
+
+
 def emit_slice(plan: PlanV2, ctx: EmitContext) -> str:
     """Emit SQL for a SLICE modifier (LIMIT/OFFSET)."""
     from .emit import emit
     from .emit_expressions import expr_to_sql
+
+    # A deep page has no semi-join to drive two-phase (the generator leaves it
+    # unsplit), so this is checked first rather than inside _emit_two_phase.
+    if plan.offset > 0:
+        deep = _emit_deep_page(plan, ctx)
+        if deep is not None:
+            return deep
 
     # A measured-selective text leaf drives the page BEFORE two-phase is
     # considered: two-phase would succeed here, and succeeding is the problem.

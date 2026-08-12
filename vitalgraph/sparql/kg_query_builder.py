@@ -824,7 +824,18 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
         # Build sort bindings if sort_criteria provided
         sort_extra_where = ""
         select_extra = ""
-        order_by = "ORDER BY ?entity"
+        # NO default ORDER BY when the caller requested no sort. They get a
+        # stable paging order imposed by the SQL layer instead — which is what
+        # they were already getting, because every fast path ignored this clause
+        # and paged by entity uuid anyway (decision D1, `issues/075`).
+        #
+        # Emitting it was actively harmful. "ORDER BY ?entity because the caller
+        # asked" and "ORDER BY ?entity because the builder filled one in" were
+        # the same SPARQL text, so nothing downstream could tell them apart: a
+        # real request was answered by substitution, and a raw SPARQL
+        # `ORDER BY ?s` got the same treatment. Measured, the substitution is
+        # 117x cheaper AND selects a different page — 0 of 25 rows in common.
+        order_by = ""
         group_by = ""
         use_distinct = True
         if criteria.sort_criteria:
@@ -1977,7 +1988,7 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
         # Same query assembly as build_entity_query_sparql
         sort_extra_where = ""
         select_extra = ""
-        order_by = "ORDER BY ?entity"
+        order_by = ""          # see build_entity_query_sparql — issues/075
         group_by = ""
         use_distinct = True
 

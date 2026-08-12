@@ -23,13 +23,25 @@ def emit_order(plan: PlanV2, ctx: EmitContext) -> str:
     if not plan.order_conditions:
         return child_sql
 
+    # An order this layer SYNTHESIZED for stable paging (`collect._collect_slice`,
+    # `issues/075`) is ordered by the variable's UUID, not its text. Any stable
+    # order satisfies it, and uuid is the one the paging emitters can produce
+    # from an index without resolving text for the whole match set.
+    #
+    # This is what makes the paths agree. Ordering by text here while
+    # `_emit_two_phase` ordered by uuid gave two total orders for one query, so
+    # a pagination sequence crossing them skipped and repeated rows
+    # (`issues/078`). A user's own ORDER BY has no such hint and is emitted on
+    # the text column, as written.
+    stable = bool((plan.hints or {}).get("stable_paging"))
+
     o_alias = ctx.aliases.next("o")
     ob_parts = []
     for key, direction in plan.order_conditions:
         if isinstance(key, str):
             info = ctx.types.get(key)
             sn = info.sql_name if info else key
-            col = f"{o_alias}.{sn}"
+            col = f"{o_alias}.{sn}__uuid" if stable else f"{o_alias}.{sn}"
         else:
             col = _scoped_expr(key, plan, ctx)
             if not col:

@@ -1,6 +1,31 @@
 # Paging Collapses Past the First Few Pages — Page 11 Takes 39 Seconds
 
-## REOPENED 2026-08-12 — the shipped fix was REVERTED, it returned wrong pages
+## FIXED 2026-08-12 (attempt 9) — by fixing the cause, not the symptom
+
+    offset      0      51 ms
+    offset    250     277 ms      was    673 ms
+    offset  1,000     291 ms      was  2,958 ms
+    offset  5,000     310 ms      was 16,271 ms      52x, FLAT
+
+Attempts 6-8 all failed on ORDERING, not on speed, and the cause was upstream:
+the builder emitted a default `ORDER BY ?entity` that every fast path ignored,
+so two emitters answered the same clause differently. `issues/075` fixes that —
+no default clause, a MARKED paging order imposed by the SQL layer, and uuid
+order everywhere for a marked order. With one order, the uuid-sliced deep page
+composes with page 1 and pages partition the result exactly.
+
+Verified: four pages of 25 reproduce a single 100-row query's ordering exactly,
+0 duplicates, 0 missing; pages at 5,000/5,025 disjoint and full. Sweep unchanged
+(0 cells slow warm, identical buffers per cell).
+
+**A measurement trap worth keeping.** The bench applied `enable_sort = off`
+unconditionally. That fence belongs to the two-phase shape (`needs_ordered_scan`,
+`issues/047`); the deep page requires a sort, and under the fence its `Unique`
+nodes must take order from indexes — 75,610 ms for a page that costs 277 ms
+unfenced. The generator already flagged this correctly per query; only the
+harness did not, and it nearly went in as a code regression.
+
+## Superseded: REOPENED 2026-08-12 — the shipped fix was REVERTED
 
 The fix committed as `9322ed8` was reverted. It was fast (58x at page 201) and
 it was WRONG, in exactly the way an earlier attempt recorded below was wrong —

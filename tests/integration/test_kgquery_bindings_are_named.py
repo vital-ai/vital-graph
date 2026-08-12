@@ -143,3 +143,44 @@ async def test_pages_agree_with_the_whole_result_set(
         f"paging lost or invented rows: "
         f"missing={sorted(set(all_uris) - set(paged))} "
         f"extra={sorted(set(paged) - set(all_uris))}")
+
+
+async def test_a_requested_order_is_answered_as_written(
+        test_space, sparql_update, sparql_execute):
+    """A user's own ORDER BY must not be answered with uuid order.
+
+    `issues/075`. The paging emitters page by entity uuid because it is
+    index-backed and lets the scan stop early — 117x cheaper than ordering on
+    the requested key, which lives in the term table. That substitution is
+    legitimate only for the order this layer IMPOSES on an unordered paged
+    query, where any stable order is correct.
+
+    It was being applied to every ORDER BY, including one written by hand, and
+    the result is not a reordered page but a DIFFERENT page — 0 of 25 rows in
+    common at scale. So this asserts the requested order is actually delivered,
+    which is the half that cannot be inferred from timings.
+    """
+    await sparql_update(_kg_insert(), test_space)
+
+    sparql = f"""
+        SELECT ?entity WHERE {{
+            ?entity <{KG}hasKGEntityType> <{ENTITY_TYPE}> .
+        }} ORDER BY ?entity LIMIT 5
+    """
+    rows = [b["entity"]["value"] for b in await sparql_execute(sparql, test_space)]
+    assert rows, "the ordered query returned nothing"
+    assert rows == sorted(rows), (
+        f"ORDER BY ?entity was not honoured — got {rows}. A paging shape "
+        f"substituted uuid order for the order the caller asked for "
+        f"(issues/075).")
+
+    # DESC too: a substituted uuid order can accidentally look ascending on a
+    # small fixture, but it cannot also look descending.
+    desc = f"""
+        SELECT ?entity WHERE {{
+            ?entity <{KG}hasKGEntityType> <{ENTITY_TYPE}> .
+        }} ORDER BY DESC(?entity) LIMIT 5
+    """
+    drows = [b["entity"]["value"] for b in await sparql_execute(desc, test_space)]
+    assert drows == sorted(drows, reverse=True), (
+        f"ORDER BY DESC(?entity) was not honoured — got {drows}")

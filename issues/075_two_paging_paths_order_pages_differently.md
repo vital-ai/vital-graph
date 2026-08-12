@@ -1,6 +1,23 @@
 # Two Paging Paths Order Their Pages Differently
 
-## Status: NOT A BUG — this is decision D1, already made and accepted
+## Status: RESOLVED 2026-08-12 — D1 kept, and the substitution made honest
+
+D1's ordering is unchanged and now measured (117x, below). What changed is that
+it is no longer a SUBSTITUTION:
+
+* the builder emits no `ORDER BY` when the caller requested no sort;
+* `collect._collect_slice` imposes one and MARKS it `stable_paging`;
+* every emitter answers a marked order with the entity uuid — two-phase, the
+  generic path, and the deep page — so they agree, which is what `issues/078`
+  needed;
+* an unmarked `ORDER BY` is answered as written. Two-phase declines it rather
+  than substituting, which closes a real violation: a hand-written
+  `ORDER BY ?s` was being given uuid order, and that is a different page, not a
+  reordered one.
+
+Gates: 1779 unit; 196 integration incl. a new test that a requested order is
+delivered ASC and DESC; comparator sweep 0 cells slow warm with buffer counts
+IDENTICAL to baseline on every cell, i.e. identical plans.
 
 > **PARTLY RESOLVED 2026-08-11.** The unsorted deep-page path now orders by entity UUID, matching page 1, so a single pagination sequence no longer crosses two orderings — verified: page2 == first50[25:], 0 rows missed (`issues/078`). What remains open is the SEMANTIC question this issue was filed on: uuid order is not the URI order `ORDER BY ?entity` asks for, and decision D1's justification for that was measured on a 1 GB buffer pool (`issues/081`). The paths agreeing makes the deviation consistent, not correct.
 

@@ -378,10 +378,61 @@ def _collect_project(op: OpProject, space_id: str, aliases: AliasGenerator,
                   children=[inner])
 
 
+def _anchor_var_for_paging(node, depth: int = 0):
+    """The single variable a paged result can be ordered by, or None.
+
+    Only a single-variable projection qualifies. With more than one there is no
+    obviously right key, and guessing one would be inventing an ordering the
+    caller might notice.
+    """
+    if node is None or depth > 6:
+        return None
+    if node.kind == KIND_PROJECT and node.project_vars:
+        vars_ = [v for v in node.project_vars if v != "*"]
+        return vars_[0] if len(vars_) == 1 else None
+    for c in (node.children or []):
+        found = _anchor_var_for_paging(c, depth + 1)
+        if found is not None:
+            return found
+    return None
+
+
+def _has_order(node, depth: int = 0) -> bool:
+    if node is None or depth > 6:
+        return False
+    if node.kind == KIND_ORDER and node.order_conditions:
+        return True
+    return any(_has_order(c, depth + 1) for c in (node.children or []))
+
+
 @collect.register(OpSlice)
 def _collect_slice(op: OpSlice, space_id: str, aliases: AliasGenerator,
                    graph_uri: str = None) -> PlanV2:
     inner = collect(op.sub_op, space_id, aliases, graph_uri)
+
+    # A paged query with NO requested order needs one anyway: without an
+    # ORDER BY, PostgreSQL guarantees nothing about the order between two
+    # executions, so page 2 is not meaningfully "the next 25" of page 1. That
+    # is unsafe regardless of which emitter runs.
+    #
+    # So one is imposed here, and MARKED as imposed. The mark is the point: a
+    # synthesized order means "any stable order will do", which lets the paging
+    # emitters use the entity uuid — index-backed, so the scan terminates early
+    # (measured 117x cheaper than ordering on the requested key, `issues/075`).
+    # A user's own ORDER BY carries no mark and must be answered as written.
+    #
+    # SPARQL permits this: with no ORDER BY the solution sequence is unordered,
+    # so any order is a correct one. What is NOT permitted is substituting a
+    # different order for one the caller asked for, which is what emitting a
+    # default `ORDER BY ?entity` upstream had turned into (`issues/075`).
+    if not _has_order(inner):
+        anchor = _anchor_var_for_paging(inner)
+        if anchor is not None:
+            inner = PlanV2(kind=KIND_ORDER,
+                           order_conditions=[(anchor, "ASC")],
+                           hints={"stable_paging": True},
+                           children=[inner])
+
     return PlanV2(
         kind=KIND_SLICE,
         limit=op.length if op.length >= 0 else -1,
