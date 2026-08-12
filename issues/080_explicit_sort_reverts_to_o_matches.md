@@ -1,6 +1,9 @@
 # An Explicit Sort Reverts Paging to O(matches) — 46ms Becomes 18.6s
 
-## Status: OPEN — measured 2026-08-11 on `sp_lead_synth_100k`
+## Status: OPEN — cause established, and the fix direction proposed here is DISPROVED
+
+Full plans for review: `planning/planning_performance/sorted_paging_plans.txt`
+(unsorted page, sorted page, and the phase-1 shape that times out).
 
 `eq/KGTextSlot`, 25-row page, warm, same criteria throughout:
 
@@ -208,6 +211,47 @@ the code with two prior reverts behind it, gated on the 39-cell sweep — and
 landing it half-measured would be worse than leaving it. What is de-risked is
 the design and its size: ~33 ms against 17,589 ms is the target, and the fence
 alternative (1.7x) is not worth shipping.
+
+## CLOSING FINDING: the fix direction in this issue is WRONG. Measured 2026-08-11.
+
+The phase-1 shape was measured standalone, which is what should have been done
+before any of it was built:
+
+    1. unsorted page (two-phase, current)      2,999 ms
+    2. sorted page (generic path, current)    21,249 ms
+    3. phase-1 shape: DISTINCT ON over the
+       match set + term join, then order       TIMEOUT (>200 s)
+
+**Phase 1 is slower than the thing it was meant to replace.** So no amount of
+plumbing — the builder placement, the two-key order, the split page — could ever
+have produced a fast sorted page. Four attempts failed for one reason, and it
+was visible in a single 200-second measurement nobody took.
+
+**Why, and this vindicates the FIRST diagnosis over the correction.** The 33 ms
+figure came from a bare `uuid -> term_text` join over an ALREADY-MATERIALISED
+9,220-row set. Real phase 1 has to produce that set, and producing it means
+dropping the `LIMIT` — which is precisely what makes the unsorted page cheap.
+With `LIMIT 25` the `Unique` stops after ~25 criteria probes. Without it, every
+match is enumerated and every one pays the `EXISTS` probe.
+
+So the cost is NOT term resolution, and it is not a mis-planned join tower
+either. **Ordering by a value requires evaluating the criteria for every row in
+the result set, and the unsorted page is fast only because any 25 rows will do.**
+That is inherent to sorting, not an artefact of this emitter. The earlier
+"structural" reading was right; the "it is really 74,000 term lookups"
+correction identified a real secondary cost and mistook it for the primary one.
+
+## What this leaves as the actual options
+
+* **Accept it, deliberately.** 16-21 s is inside the 120 s request deadline. It
+  degrades rather than fails, and it is a decision the product can make.
+* **Make the criteria evaluation cheap in bulk**, not per candidate. The probe
+  is what costs; a set-based criteria evaluation would change the multiplier for
+  every match. This is a much larger piece of work than paging.
+* **Restrict what is sortable.** A sort on a property the anchor already carries
+  needs no criteria re-evaluation. `hasName` is not one today.
+
+Do NOT reopen the phase-1 design without first re-running measurement 3 above.
 
 ## The paired change was implemented, and it is STILL not enough
 
