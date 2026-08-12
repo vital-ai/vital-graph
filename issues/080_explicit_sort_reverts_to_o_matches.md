@@ -241,6 +241,35 @@ That is inherent to sorting, not an artefact of this emitter. The earlier
 "structural" reading was right; the "it is really 74,000 term lookups"
 correction identified a real secondary cost and mistook it for the primary one.
 
+## RETRACTION — the 50x was measured without a tie-break
+
+    ORDER BY sk                        ~300 ms    <- what the 50x was based on
+    ORDER BY sk, uuid       (D2)     17,629 ms
+    ORDER BY sk, entity URI          22,215 ms
+    ORDER BY sk, URI @ offset 2475   17,540 ms
+    current sorted path              16,411 ms
+
+**With a deterministic tie-break the materialise shape is NOT faster** — 17.6 s
+against 16.4 s. The ~300 ms figures describe `ORDER BY sk` alone, which is not a
+usable page: without a tie-break the order among equal sort keys is arbitrary
+and page 2 cannot continue from page 1.
+
+Every "50x", "flat at ~300 ms" and "gate passed" claim below rests on that query.
+
+Still holds: flatness with depth (17,540 ms at offset 2475 vs 17,629 ms at 0),
+which matters for `issues/078` where the current path times out by page 41 — but
+17.5 s is a poor page in absolute terms. And the structural attribution
+(criteria 38 ms, resolution ~19 s) is unaffected, having come from the plan
+rather than these timings.
+
+Killed: the sorted-page win. `080` is not solved by this shape as measured.
+
+How it happened: the tie-break was dropped when the experiment was simplified to
+isolate sort cost, the favourable number was quoted four times, and the
+correctness check that FOUND the missing tie-break was recorded as a semantic
+question (D2) without re-running the timings. **When a correctness fix changes
+the query, re-measure.**
+
 ## The SPARQL endpoint has the same problem — VERIFIED 2026-08-11
 
 Raw SPARQL, no KGQuery criteria, LIMIT 10 on `sp_lead_synth_100k`:
