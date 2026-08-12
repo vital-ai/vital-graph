@@ -1,5 +1,28 @@
 # Paging Collapses Past the First Few Pages — Page 11 Takes 39 Seconds
 
+## CROSSOVER MEASURED — near offset 90-100, and "first page only" is the rule
+
+    page   offset   ordered scan    materialise flat ~310 ms
+       1        0       52 ms       ordered 6x
+       2       25      128 ms       ordered 2.4x
+       3       50      226 ms       ordered 1.4x
+       5      100      343 ms       CROSSOVER
+      11      250      673 ms       materialise 2.2x
+
+So `offset == 0 -> ordered scan, else materialise` costs page 2 ~180 ms and page
+3 ~85 ms, and pays from page 5. Still the right rule, because:
+
+* `offset == 0` is a property of the query, not an estimate — it cannot drift
+  from the emitter it selects, which is the failure this codebase has hit four
+  times. "offset < 100" is a tuned constant and would.
+* the true crossover is DATA-DEPENDENT: it moves with match-set size, so a
+  constant right for 9,220 rows is wrong for 200.
+* the cost is bounded and small — pages 2-4 at ~310 ms rather than 128-343 ms.
+
+UNMEASURED: offsets 25 and 50 under CONCURRENCY. The ordered scan's page-1
+advantage grew from 6x to 11x under load; if pages 2-3 do the same, this rule
+costs more than the single-query numbers show. One concurrency run decides it.
+
 ## UNSORTED PAGE 1: the ordered scan wins 11x — always-materialise is WRONG
 
 8 concurrent clients, 12 s, UNSORTED page 1:
