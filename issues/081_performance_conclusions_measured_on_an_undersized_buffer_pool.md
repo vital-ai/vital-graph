@@ -88,10 +88,40 @@ The misestimations it was built to work around were real, they were in plan
 shapes the fixes eliminated, and a correctly configured planner still chooses
 the same plans for the queries that fit.
 
-**What remains open:** `059`'s 305x and 4,761x underestimates are on EDGE
-TRAVERSAL joins, a different shape from `is_empty`, and were not re-checked here.
-Cross-table join statistics genuinely do not exist in PostgreSQL, so those are
-unlikely to be configuration — but they are unmeasured on the new pool.
+**RESOLVED 2026-08-12 — the edge-traversal underestimates are not a
+configuration artifact, and cannot be.** Row estimates come from statistics;
+`shared_buffers` and `effective_cache_size` feed COST. Confirmed by holding the
+query fixed and sweeping the setting across a 192x range:
+
+    effective_cache_size    est rows      plan shape      top cost
+    48GB                    identical     identical          4,151
+    4GB                     identical     identical          4,876
+    256MB                   identical     identical          4,953
+
+Only cost moves. So no cache setting can change a cardinality estimate, and the
+worry that `059`'s figures might be a configuration effect is unfounded by
+construction as well as by measurement.
+
+**The underestimates are still real, and much smaller than recorded.** Worst
+join-node ratios on the current plans, 100k fixture:
+
+    eq/KGTextSlot          est 194     actual 7,161     36.9x
+    gte/KGIntegerSlot      est  46     actual 1,412     30.7x
+    not_has/KGTextSlot     est  31     actual   273      8.8x
+    not_exists/KGTextSlot  est 52,326  actual 100,000    1.9x
+
+Up to ~37x, not 305x or 4,761x — and, exactly as with `072`, the recorded
+magnitudes belonged to plan shapes the fixes replaced, so they cannot be
+re-tested as written without reverting those fixes. The queries are now fast
+DESPITE the underestimates, because `reorder_joins`, `edge_fanout` and the
+semi-join gate make the join-order decision instead of the planner.
+
+**A citation problem worth recording.** The figures "305x and 4,761x" are
+attributed to `issues/059` in `issues/061` (twice) and propagated into two
+planning documents. **`issues/059` contains neither number.** They have been
+used to justify app-side planning work ever since. The conclusion they support
+is sound and is now independently measured, but the specific figures have no
+traceable source — treat them as unsourced rather than as evidence.
 
 ## Original triage criterion (superseded by the above)
 
