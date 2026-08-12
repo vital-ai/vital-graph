@@ -40,7 +40,46 @@ never been executed by a benchmark.
 Same shape as `issues/078` (every test at `offset=0`) and `issues/070` (one
 fixed needle per cell): a parameter held constant across every measurement.
 
-## What might actually help
+## The fix, DESIGN VALIDATED 2026-08-11 — and my first diagnosis was wrong
+
+I first called this structural: "ordering by a value requires knowing the
+value". That is true and it is not where the 18.6 s goes.
+
+The full plan is a tower of EIGHT nested loops above the match set, each
+estimated `rows=1` against `rows=9220` actual, accumulating 19 ms -> 23,176 ms.
+They are resolving TERM TEXT FOR EVERY PROJECTED COLUMN of every match — roughly
+74,000 random lookups into a 10.4M-row term table. The sort does not cost that;
+it EXPOSES it, because without a sort two-phase pages 25 uuids and only 25 rows
+ever reach those joins.
+
+Two measurements settle the direction:
+
+    enable_nestloop=off, +enable_material=off   17,589 ms -> 10,425 ms   1.7x
+    resolving ONE column (the sort key) for the
+      9,220-row match set, ORDER BY, LIMIT 25                    33 ms
+
+So the misestimate is real but secondary — fixing the join method alone leaves
+10 s, because the work itself is 74,000 lookups. The answer is to stop doing
+them: resolve the SORT KEY for the match set, take 25, and resolve everything
+else for those 25.
+
+That is exactly the two-phase pattern this codebase already uses, extended to
+the sorted case:
+
+    phase 1   (entity_uuid, sort_key_text) for all matches
+              ORDER BY sort_key LIMIT 25          measured ~33 ms
+    phase 2   full projection for those 25 uuids  the existing phase 2
+
+`_emit_two_phase` declines the moment the order key is a sort variable. Making
+it instead carry ONE extra term join into the ordered phase is the change.
+
+**Not implemented here, deliberately.** It is a change to the paging core —
+the code with two prior reverts behind it, gated on the 39-cell sweep — and
+landing it half-measured would be worse than leaving it. What is de-risked is
+the design and its size: ~33 ms against 17,589 ms is the target, and the fence
+alternative (1.7x) is not worth shipping.
+
+## Other options considered, and why they lose
 
 Unlike `078`, there is no obviously correct fix — ordering by a value genuinely
 requires knowing the value:
