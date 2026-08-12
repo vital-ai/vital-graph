@@ -241,6 +241,30 @@ That is inherent to sorting, not an artefact of this emitter. The earlier
 "structural" reading was right; the "it is really 74,000 term lookups"
 correction identified a real secondary cost and mistook it for the primary one.
 
+## DECISION D2 — ties break by entity uuid. Taken 2026-08-11.
+
+Option 2 of the two below, and it is stronger than a compromise: **the caller
+never asked for URI ordering.** `sort_criteria` names only the sort property and
+the builder APPENDS `?entity` itself as a stabiliser —
+
+    no sort_criteria      ORDER BY ?entity
+    sort_criteria set     ORDER BY ASC(?sort_val_0) ?entity   <- builder-added
+
+so D2 changes the builder's own tie-break, not a request. The sort-key order
+remains exact.
+
+Preserved: correctness with respect to what was asked; deterministic, stable
+paging; and the same tie-break as D1 already uses for unsorted pages, so the two
+paths stop differing.
+
+Cost: a tie group straddling a page boundary yields a different subset than a
+URI-ordered reading. Ties are not rare — 9 distinct names across 25 rows.
+
+Scope: the tie-break within EQUAL sort keys only. If a caller names `?entity` as
+a sort key themselves, that is a request and must be honoured.
+
+TODO: document this at the endpoint next to `sort_criteria`, not only here.
+
 ## CORRECTNESS CHECKED — same rows, different tie-break
 
     same SET       : True          sort-key sequences identical : True
