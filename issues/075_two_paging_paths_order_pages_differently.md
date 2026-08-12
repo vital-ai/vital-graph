@@ -2,6 +2,8 @@
 
 ## Status: NOT A BUG — this is decision D1, already made and accepted
 
+> **THIS NOW BLOCKS A 50x FIX (`issues/078`).** Skipping semi-join marking for deep pages makes page 201 go 16,271 ms -> 326 ms, flat at any depth. It cannot ship because page 1 and page 2 would come from the two differently-ordered paths this issue describes: measured, iterating page 1 -> page 2 silently SKIPS 25 rows. 'Each path is internally consistent' holds only while one pagination sequence uses a single path.
+
 **REOPENED for re-argument 2026-08-11 — the performance basis is void.** D1 was
 accepted as a deliberate trade: uuid paging order in exchange for a page that
 early-terminates. The recorded justification is a timing — "the text sort cost

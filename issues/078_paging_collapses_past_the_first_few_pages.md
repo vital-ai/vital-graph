@@ -1,5 +1,41 @@
 # Paging Collapses Past the First Few Pages — Page 11 Takes 39 Seconds
 
+## THE FIX WORKS — AND BREAKS PAGINATION. It is blocked on D1.
+
+Skipping `mark_semijoins` when `plan.offset > 0` is one condition in the
+generator and delivers the predicted curve:
+
+    offset     0      47 ms    unchanged
+    offset   250     303 ms    was   673 ms
+    offset 1,000     298 ms    was 2,958 ms
+    offset 5,000     326 ms    was 16,271 ms     50x, FLAT
+
+Then the row check:
+
+    page1 == first50[:25]          True
+    page2 == first50[25:]          FALSE
+    rows in first50 missed by 1+2  25
+
+**Paging from page 1 to page 2 silently skips 25 rows.** Reverted; continuity
+restored.
+
+Cause: the two plans order the result set differently — `issues/075`, filed as
+NOT A BUG because each path is internally consistent. That holds only while a
+pagination sequence uses ONE of them. At the `offset == 0` boundary a single
+sequence uses both, so each page is a correct page of a DIFFERENT total order.
+
+No page-level check can see this: every page has 25 real matches, no repeats,
+consecutive pages do not overlap. Only comparison against a single-query
+ordering exposes it.
+
+To ship, either use the set-based shape at offset 0 too (consistent, but page 1
+goes 47 ms -> ~300 ms and 121 -> 11 q/s under load), or make both plans agree on
+a total order — which is decision D1, reopened today because its justification
+was measured on a 1 GB pool.
+
+**So this issue and `issues/075` are one piece of work.** The fix is available
+and measured; what blocks it is an ordering decision, not an emitter change.
+
 ## THE LAST PIECE MUST MOVE UPSTREAM — checked, not attempted
 
 Attempt 5 left one step: emit the match set with the semi-join unmarked. Checked
