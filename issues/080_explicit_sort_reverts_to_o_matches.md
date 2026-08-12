@@ -241,6 +241,33 @@ That is inherent to sorting, not an artefact of this emitter. The earlier
 "structural" reading was right; the "it is really 74,000 term lookups"
 correction identified a real secondary cost and mistook it for the primary one.
 
+## Why every phase-1 attempt timed out — ANSWERED, and it was my construction
+
+Phase 1 was built by taking the two-phase INNER query and stripping its `LIMIT`.
+That inner is an ordered scan with a PER-ROW EXISTS PROBE — cheap only because
+`LIMIT` stops it after ~25 probes. Without the LIMIT it probes every row:
+
+    Index Only Scan on rdf_quad_pkey ... Filter: EXISTS(SubPlan 1)
+    cost 9,592,042
+
+The GENERIC sorted path computes the same logical match set SET-BASED (parallel
+hash join under a Gather) in 38 ms. Two plans for one set; all four attempts
+reused the wrong one.
+
+The probe's own plan is worth noting too: given `ORDER BY term_text LIMIT 25`
+PostgreSQL DID try the ordered driver — Gather Merge over the whole term table
+in text order — and lost because the join back to the match set has only a Join
+Filter, no index. The ordered-driver idea fails on the return path, not on the
+idea.
+
+**The design that follows:** phase 1 = the generic set-based match set (~38 ms)
++ ONE term join for the sort key + sort + LIMIT 25; phase 2 = the existing
+full-projection resolve, for 25 rows. That is the generic path with its
+projection-over-every-match replaced, NOT the two-phase inner without a LIMIT.
+
+Hand-write and time that query before touching the emitter. If it is not ~1-3 s
+the design is wrong again and nothing should be built.
+
 ## COST ATTRIBUTED 2026-08-11 — it is projection volume
 
 From the plan, not from inference:
