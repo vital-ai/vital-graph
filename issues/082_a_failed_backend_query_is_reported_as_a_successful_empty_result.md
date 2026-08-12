@@ -1,6 +1,26 @@
 # A Failed Backend Query Is Reported As A Successful Empty Result
 
-## Status: OPEN — found 2026-08-12
+## Status: FIXED 2026-08-12
+
+    dead backend, before    HTTP 200  status=FOUND  total_count=0  uris=[]
+    dead backend, after     HTTP 500  "[Errno 8] nodename nor servname ..."
+
+    genuine miss, before    status=FOUND   (enum defines FOUND as ">= 1")
+    genuine miss, after     status=EMPTY   success=True
+
+All 28 call sites now go through `_checked_query`, which raises
+`BackendQueryError` when the backend reports its own failure. Routing them
+through one wrapper rather than adding 28 checks is deliberate: the bug was a
+MISSING check, and a missed site is silent and looks exactly like an empty match
+set. A unit test asserts no raw `execute_sparql_query` remains in the endpoint.
+
+**A fourth thing was wrong, found only by checking end to end.** With the
+endpoint returning `EMPTY` correctly, the client still reported `FOUND` — every
+`from_raw` copied the payload and dropped `status` and `message`, so the typed
+response fell back to its default. A status the caller never receives is not a
+status. Fixed in all four converters.
+
+`query_quads` now raises instead of returning the failure's empty list.
 
 `execute_sparql_query` already reports its own failures. On any exception it
 returns

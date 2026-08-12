@@ -1791,6 +1791,13 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         ``[{'s': {'type': 'uri', 'value': '...'}, ...}, ...]``.
         """
         result = await self.execute_sparql_query(space_id, sparql_query)
+        # A failure here returns bindings=[] with success=False. Returning that
+        # empty list unqualified is what let an outage read as "no triples"
+        # (`issues/082`) — the caller gets a list either way and cannot tell.
+        if isinstance(result, dict) and result.get('success') is False:
+            raise RuntimeError(
+                f"query_quads({space_id}) failed: "
+                f"{result.get('error') or 'backend reported failure'}")
         return result.get('results', {}).get('bindings', [])
 
     async def execute_sparql_update(self, space_id: str, update: str,

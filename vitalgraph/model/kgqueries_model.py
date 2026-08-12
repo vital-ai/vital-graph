@@ -168,6 +168,8 @@ class FrameQueryResponse(BasePaginatedResponse):
     @classmethod
     def from_raw(cls, raw: 'KGQueryResponse') -> 'FrameQueryResponse':
         return cls(
+            status=raw.status,
+            message=raw.message,
             results=raw.frame_results or [],
             total_count=raw.total_count,
             page_size=raw.page_size,
@@ -187,6 +189,8 @@ class KGEntityQueryResponse(BasePaginatedResponse):
     @classmethod
     def from_raw(cls, raw: 'KGQueryResponse') -> 'KGEntityQueryResponse':
         return cls(
+            status=raw.status,
+            message=raw.message,
             entity_uris=raw.entity_uris or [],
             entity_graphs=raw.entity_graphs,
             total_count=raw.total_count,
@@ -202,6 +206,8 @@ class RelationQueryResponse(BasePaginatedResponse):
     @classmethod
     def from_raw(cls, raw: 'KGQueryResponse') -> 'RelationQueryResponse':
         return cls(
+            status=raw.status,
+            message=raw.message,
             connections=raw.relation_connections or [],
             total_count=raw.total_count,
             page_size=raw.page_size,
@@ -229,6 +235,8 @@ class DocumentQueryResponse(BasePaginatedResponse):
     @classmethod
     def from_raw(cls, raw: 'KGQueryResponse') -> 'DocumentQueryResponse':
         return cls(
+            status=raw.status,
+            message=raw.message,
             document_uris=raw.document_uris or [],
             document_results=raw.document_results,
             total_count=raw.total_count,
