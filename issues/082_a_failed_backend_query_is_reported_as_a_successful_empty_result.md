@@ -73,6 +73,12 @@ API, and an investigation is sent looking for a data or code explanation for it.
 
 ## Fix
 
+**The fix is small: check the flag at each call site, return a distinct status
+for a backend fault, use `EMPTY` for a genuine miss, and audit `query_quads`,
+which drops the flag too. Highest leverage per line in the list, because it is
+the bug that hides other bugs.**
+
+
 1. Check `success` at every `execute_sparql_query` call site in
    `kgquery_endpoint.py` and propagate the failure as a distinct status rather
    than an empty page. A backend fault is a server-level error, not a domain
