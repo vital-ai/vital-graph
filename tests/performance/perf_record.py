@@ -170,6 +170,21 @@ class PerfRun:
 
     def write(self) -> None:
         self.env["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+        # A run with no server configuration is not comparable to anything, and
+        # SILENTLY producing one is worse than not trying: the empty `pg` slot
+        # reads as "checked, nothing notable". The committed baseline
+        # (promoted 2026-08-06) has exactly that, and every timing taken under
+        # it was on shared_buffers=1GB against a fixture needing >3GB — which
+        # made a sorted page 27x slower than it is on a correct configuration
+        # and was not noticed for weeks (issues/081).
+        if not self.env.get("pg"):
+            self.env["pg_stamp_missing"] = (
+                "no server settings recorded — timings in this run are NOT "
+                "comparable across machines or configurations. See issues/081.")
+            print("\n  WARNING: perf run recorded NO PostgreSQL settings. "
+                  "Timings are not comparable. See issues/081.\n")
+
         doc = {
             "schema": 1,
             "env": self.env,
