@@ -241,6 +241,28 @@ That is inherent to sorting, not an artefact of this emitter. The earlier
 "structural" reading was right; the "it is really 74,000 term lookups"
 correction identified a real secondary cost and mistook it for the primary one.
 
+## The SPARQL endpoint has the same problem — VERIFIED 2026-08-11
+
+Raw SPARQL, no KGQuery criteria, LIMIT 10 on `sp_lead_synth_100k`:
+
+    ORDER BY ?name              name asc, URI UNORDERED        4,018 ms
+    ORDER BY ?name ?s           name asc, URI asc                429 ms
+    ORDER BY ?t ?name ?s        all three keys asc            13,970 ms
+    ORDER BY ?s                 URI asc                        3,366 ms
+    ORDER BY DESC(?name) ?s     executes                         544 ms
+
+Multi-variable ORDER BY, URI ordering and mixed ASC/DESC all work — nothing
+declines or errors.
+
+**But the cost is the same**, and these have no criteria at all. So this issue is
+NOT specific to KGQuery: a fix living only in the KGQuery builder would leave the
+SPARQL endpoint exactly as slow. That argues for the emitter as the home for the
+materialise work.
+
+It also supports D2 independently: with `ORDER BY ?name` alone the URI column
+comes back UNORDERED, so the system already treats ties as arbitrary when no
+tie-break is named. D2 is consistent with that, not an exception to it.
+
 ## DECISION D2 — ties break by entity uuid. Taken 2026-08-11.
 
 Option 2 of the two below, and it is stronger than a compromise: **the caller
