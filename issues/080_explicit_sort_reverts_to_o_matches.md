@@ -241,6 +241,30 @@ That is inherent to sorting, not an artefact of this emitter. The earlier
 "structural" reading was right; the "it is really 74,000 term lookups"
 correction identified a real secondary cost and mistook it for the primary one.
 
+## MEASUREMENT INVALID — the materialise timings are cache-order artifacts
+
+Same variants, two runs, different order:
+
+    run 1   ORDER BY sk      ~300 ms     ORDER BY sk, uuid   17,629 ms
+    run 2   ORDER BY sk     9,082 ms     ORDER BY sk, uuid      328 ms
+                                         + phase-2 reorder      346 ms
+
+The numbers swapped. What predicts the timing is which case ran FIRST — it pays
+the cold materialise and everything after is ~300 ms.
+
+**So the 50x claim and its retraction are BOTH unsound.** The relative cost of
+`ORDER BY sk` versus `ORDER BY sk, uuid` is unknown. Everything timing-based in
+the sections below — the ~300 ms figures, flat-with-depth, the comparison
+against the current path — needs re-measuring with alternating arms.
+
+What survives: measurements taken from PLAN OUTPUT rather than wall clock —
+criteria 38 ms versus resolution ~19 s — since those are node timings within one
+execution.
+
+Use `scripts/perf_ab.py` or `test_kgquery_sorted_paging.py` (warm-up + median of
+three). Do not hand-roll another sequential timing loop: that produced all three
+voided rounds in this effort.
+
 ## RETRACTION — the 50x was measured without a tie-break
 
     ORDER BY sk                        ~300 ms    <- what the 50x was based on
