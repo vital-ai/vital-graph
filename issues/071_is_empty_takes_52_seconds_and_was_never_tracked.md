@@ -2,7 +2,9 @@
 
 ## Status: CLOSED 2026-08-11 — both halves
 
-> **MEASURED ON A 1 GB BUFFER POOL — see `issues/081`.** At risk: the 52s. `shared_buffers` was 1 GB on a 64 GB machine against queries touching 400,000+ buffers; raising it to 16 GB moved a comparable query 16,411 ms -> 616 ms with no code change. Plan shapes, row counts and buffer counts are unaffected.
+> **Buffer-pool review — see `issues/081`. LIKELY UNAFFECTED.** The re-run on a 16 GB pool left these warm timings unchanged; these queries read tens of thousands of buffers and fit in the old 1 GB pool. Original note follows.
+>
+> _(superseded)_ At risk: the 52s. `shared_buffers` was 1 GB on a 64 GB machine against queries touching 400,000+ buffers; raising it to 16 GB moved a comparable query 16,411 ms -> 616 ms with no code change. Plan shapes, row counts and buffer counts are unaffected.
 
 **The query:** fixed via `issues/072` and the candidate-driven negation path in
 `issues/059`. The closing sweep in `issues/053` records

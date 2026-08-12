@@ -17,7 +17,51 @@ Raised to 16 GB / 48 GB. **No code changed.** Measured immediately after:
 Buffer COUNTS were identical before and after (453,180 vs 416,261), which is the
 whole point: the work never changed, only whether the pages were resident.
 
-## The triage criterion
+## SHARPENED CRITERION — measured 2026-08-11, and it NARROWS the list a lot
+
+The comparator sweep was re-run on the corrected pool and compared cell by cell:
+
+    total WARM      1,444 ms ->  1,745 ms     0.83x   (slightly WORSE — noise)
+    total COLD     15,802 ms ->  7,757 ms     2.04x
+    total BUFFERS   1,597,396 -> 1,597,348    1.00x   (identical)
+    perf_sweep_diff: no regressions across 39 cells
+
+**The sweep cells were never affected**, and the reason is arithmetic: a 1 GB
+pool holds 131,072 pages, and the sweep's largest cell reads **82,724 buffers**.
+Every comparator query fit in the pool. The sorted page reads **453,180**
+buffers — 3.5x the entire pool — which is why that one was destroyed and these
+were not.
+
+    A measurement is at risk IF AND ONLY IF the query's buffer count
+    approaches or exceeds the buffer pool.
+
+    1 GB pool  = 131,072 buffers
+    sweep cells = 4,350 .. 82,724 buffers    -> FIT, unaffected
+    sorted page = 453,180 buffers            -> 3.5x the pool, destroyed
+    deep paging = grows with offset          -> crosses the line as it deepens
+
+That is checkable from data already recorded, because the sweep prints buffer
+counts per cell. **The triage below was written before this was measured and is
+too broad.** Corrections:
+
+* **`053` and the comparator issues (`045`, `058`, `059`, `061`, `071`, `073`)
+  are NOT at risk.** Their queries read tens of thousands of buffers, fit
+  comfortably in the old pool, and the re-run confirms their warm timings are
+  unchanged. The banners added to those issues overstate the risk.
+* **`078` and `080` ARE at risk and were re-measured in full.** Both read far
+  more than the pool.
+* **`047`, `072`** remain worth re-checking, but for a different reason:
+  `effective_cache_size` (4 GB, never tuned) feeds COST ESTIMATES regardless of
+  how many buffers a query touches, so plan CHOICE could shift even for queries
+  that fit.
+* **The 8-63x cold/warm gap stands as a real phenomenon**, though it halved:
+  15,802 ms -> 7,757 ms across the sweep. Cold is still cold; the pool made it
+  cheaper, not absent.
+
+The original criterion — "at risk if it rests on a timing" — was the right
+instinct and the wrong threshold. Buffer count against pool size is the test.
+
+## Original triage criterion (superseded by the above)
 
 A conclusion is at risk if it rests on a **wall-clock timing**. It is safe if it
 rests on a **buffer count**, a **row count**, or a **plan shape** — none of which

@@ -2,7 +2,9 @@
 
 ## Status: FIXED — 2026-08-10
 
-> **MEASURED ON A 1 GB BUFFER POOL — see `issues/081`.** At risk: the absent-constant magnitudes. `shared_buffers` was 1 GB on a 64 GB machine against queries touching 400,000+ buffers; raising it to 16 GB moved a comparable query 16,411 ms -> 616 ms with no code change. Plan shapes, row counts and buffer counts are unaffected.
+> **Buffer-pool review — see `issues/081`. LIKELY UNAFFECTED.** The re-run on a 16 GB pool left these warm timings unchanged; these queries read tens of thousands of buffers and fit in the old 1 GB pool. Original note follows.
+>
+> _(superseded)_ At risk: the absent-constant magnitudes. `shared_buffers` was 1 GB on a 64 GB machine against queries touching 400,000+ buffers; raising it to 16 GB moved a comparable query 16,411 ms -> 616 ms with no code change. Plan shapes, row counts and buffer counts are unaffected.
 
     eq/DateTime, absent value    40,000 ms+ (timeout)  ->  1 ms
     eq/DateTime, present value            1 ms         ->  1 ms  (unchanged)
