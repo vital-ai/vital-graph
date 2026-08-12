@@ -2,6 +2,8 @@
 
 ## Status: CORRECTED — 2026-08-10. One cell, not five.
 
+> **Buffer-pool review (`issues/081`) — NOT a configuration artifact.** Raising `effective_cache_size` 4 GB -> 48 GB left these plans and their buffer counts identical (is_empty 25,341 both), so plan choice did not shift. On the current code the estimates are accurate (est 107,377 vs actual 100,000) because the fix here replaced the pathological shape — so this issue is not re-testable as written, and its account of the OLD shape stands.
+
 > **MEASURED ON A 1 GB BUFFER POOL — see `issues/081`.** At risk: possibly the misestimation ITSELF — effective_cache_size was 4GB, which biases away from index scans. `shared_buffers` was 1 GB on a 64 GB machine against queries touching 400,000+ buffers; raising it to 16 GB moved a comparable query 16,411 ms -> 616 ms with no code change. Plan shapes, row counts and buffer counts are unaffected.
 
     is_empty/Text    47,514 ms -> 5,310 ms    8.9x    REAL

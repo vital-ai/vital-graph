@@ -61,6 +61,38 @@ too broad.** Corrections:
 The original criterion — "at risk if it rests on a timing" — was the right
 instinct and the wrong threshold. Buffer count against pool size is the test.
 
+## `072` CHECKED — not a configuration artifact, and not re-testable as written
+
+    is_empty/KGTextSlot   warm 339 ms -> 320 ms    buffers 25,341 -> 25,341
+    gte/KGDoubleSlot      warm  21 ms ->  21 ms    buffers 24,710 -> 24,710
+    gte/KGIntegerSlot     warm  10 ms ->  11 ms    buffers 12,147 -> 12,147
+
+Identical buffer counts mean identical plans, so raising `effective_cache_size`
+from 4 GB to 48 GB **did not change plan choice** for these cells. The worry that
+`072`'s misestimation might be a configuration effect is not supported.
+
+And on the CURRENT code the estimates are accurate:
+
+    Index Only Scan ... est=107,377  actual=100,000     1x off
+    Gather Merge    ... est=103,500  actual=100,000     1x off
+
+The `rows=1` against 100,000 that `072` documents belonged to the OLD plan
+shape, which the fix (the candidate-driven negation path from `059`) replaced.
+The query is now set-based, and set-based plans estimate well here. So `072`
+cannot be re-tested as written without reverting its own fix, and there is
+little to learn from doing so.
+
+**What this settles:** the app-side planning work — the semi-join gate,
+`reorder_joins`, `edge_fanout` — is not undermined by the configuration finding.
+The misestimations it was built to work around were real, they were in plan
+shapes the fixes eliminated, and a correctly configured planner still chooses
+the same plans for the queries that fit.
+
+**What remains open:** `059`'s 305x and 4,761x underestimates are on EDGE
+TRAVERSAL joins, a different shape from `is_empty`, and were not re-checked here.
+Cross-table join statistics genuinely do not exist in PostgreSQL, so those are
+unlikely to be configuration — but they are unmeasured on the new pool.
+
 ## Original triage criterion (superseded by the above)
 
 A conclusion is at risk if it rests on a **wall-clock timing**. It is safe if it
