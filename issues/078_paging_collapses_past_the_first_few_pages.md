@@ -1,5 +1,34 @@
 # Paging Collapses Past the First Few Pages — Page 11 Takes 39 Seconds
 
+## ATTEMPT 4 — text_needed_vars is not enough; the work is bigger than a patch
+
+Emitting the child plan through a context with `text_needed_vars` emptied looked
+like a uuid-only mode via a tested path. It is not:
+
+    deep page declined: no entity__uuid column in the match set;
+    columns look like 'SELECT DISTINCT * FROM (SELECT p0.v0 AS v0, ...'
+
+1. `ctx.child()` makes a CHILD TYPE REGISTRY, so sql_names differ from the
+   parent's (`v0__uuid`, not `entity__uuid`).
+2. `text_needed_vars` controls the BGP's term joins, but the PROJECT node above
+   re-projects every variable regardless — so the match set still carries every
+   text column. A uuid-only emission needs the PROJECTION restricted, which is a
+   change in the project emitter, not a context flag.
+
+Four attempts, one shape of mistake — reusing an existing emission for a purpose
+it was not built for:
+
+    1. wrap the two-phase inner      inner loses its LIMIT -> probes everything
+    2. carry filters into the driver plan mutated then declined -> worse plan
+    3. compose from the two BGPs     right BGP loses its correlation
+    4. empty text_needed_vars        projection still emits every column
+
+The uuid layer is not a component this emitter exposes; it is an intermediate
+inside `emit_bgp`. The work is a uuid-only emission MODE honoured by the project
+and BGP emitters — a first-class capability with its own tests, not a patch in
+`emit_slice`, where all four attempts died. Worth doing: page 201 goes 16 s ->
+~310 ms.
+
 ## IMPLEMENTATION ATTEMPT — reverted, and it names where the work belongs
 
 `_emit_materialised_page` in `emit_slice`, hooked on `plan.offset > 0`, building
