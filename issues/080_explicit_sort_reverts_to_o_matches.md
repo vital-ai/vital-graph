@@ -241,6 +241,27 @@ That is inherent to sorting, not an artefact of this emitter. The earlier
 "structural" reading was right; the "it is really 74,000 term lookups"
 correction identified a real secondary cost and mistook it for the primary one.
 
+## FIRST SOUND MEASUREMENT — materialise is ~2.2x, alternating arms
+
+`perf_ab.py` discipline — arms alternated per repetition, repetition 0 discarded
+in both, 4 reps:
+
+    current sorted path      median 16,764 ms   min  8,357   max 23,313
+    materialise (sk, uuid)   median  7,777 ms   min    836   max 13,093
+
+**~2.2x faster on the median, tie-break included.** This supersedes the ~300 ms
+figures, the 50x and the retraction — all three came from sequential loops.
+
+Modest, but note the minimum: materialise reaches 836 ms; the current path never
+went below 8.4 s in any repetition. Only one of the two shapes is CAPABLE of a
+fast page, which is the case for continuing with it.
+
+Open problem: variance. 836 -> 13,093 ms for one query, and 8,357 -> 23,313 ms
+for the other. Likely the arms evicting each other from shared_buffers —
+alternating fixes ordering bias but introduces contention. Next measurement
+should be BUFFER COUNTS rather than wall clock: machine-independent, and the
+comparator sweep already prefers them for this reason.
+
 ## MEASUREMENT INVALID — the materialise timings are cache-order artifacts
 
 Same variants, two runs, different order:
