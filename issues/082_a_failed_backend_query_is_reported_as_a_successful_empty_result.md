@@ -97,7 +97,7 @@ the bug that hides other bugs.**
    adding the query operations; the driver would otherwise have been the tool
    least able to detect the condition it is most affected by.
 
-## A second shape the guard immediately surfaced — NOT yet attributed
+## A second shape the guard surfaced — ATTRIBUTED AND FIXED, `issues/083`
 
 First driver run with the guard in place, against the dev container on `:8001`:
 
@@ -110,13 +110,12 @@ The unsorted first page reports `total_count=13` and returns **no rows**, while
 the same query sorted returns all 13. So the count and the page disagree, which
 is the second condition the guard checks.
 
-**This is unattributed and must not be read as a current defect.** That
-container runs an image built 2026-08-11 12:39 UTC, which predates the `078`
-paging work. On current code the same criteria compiled and executed directly
-against the same database return 13 rows for both the sorted and unsorted
-shapes — so the generator is not producing an empty page today. Confirming the
-end-to-end behaviour needs a correctly configured current server, which is
-blocked by the sidecar hostname above.
+**Resolved: it was a real, current defect.** Written up here as unattributed
+because the only server that could run the query was a stale image. Once a
+current server was rebuilt it reproduced immediately, and the cause was
+`var_map` coming back empty for the two-phase shape, so every row was converted
+to a binding with no keys — correct SQL, correct rows, nothing named. Fixed in
+`issues/083`.
 
 What the run does establish: the ops exercise the paths, and the guard converts
 a silent anomaly into a visible failure rate. Before it, this run would have
