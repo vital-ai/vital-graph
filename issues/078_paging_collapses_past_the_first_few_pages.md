@@ -49,6 +49,35 @@ error, just a request that takes 39 seconds and then a timeout two pages later.
 The per-request deadline from `issues/044` will now cut it off at 120 s, which
 turns it into a visible failure rather than a hang, but does not make it work.
 
+## Tested 2026-08-11: it is NOT the ordered-scan fence, and NOT the same bug as 080
+
+The hope was that fixing sorted-page driver selection (`issues/080`) would fix
+this too. Two measurements say otherwise.
+
+The mechanism that made it plausible: two-phase sets `ctx.needs_ordered_scan`
+and the executor fences the statement (`issues/047`) so page 1 keeps its
+early-terminating scan. At depth that fence might forbid the better plan.
+Measured, with and without it:
+
+     page  offset   fence ON (today)   fence OFF
+        1       0          3,168 ms        54 ms
+       11     250         36,433 ms    35,720 ms
+       41    1000           TIMEOUT      TIMEOUT
+      100    2475           TIMEOUT      TIMEOUT
+
+Within 2% at page 11, both timing out beyond. (Caveat: fence-ON ran first at
+each offset so fence-OFF had the warmer cache — the page-1 pair is not
+comparable. The page-11 near-equality holds despite that advantage.)
+
+And the two paths behave in OPPOSITE directions with depth:
+
+    sorted (080)     13,491 ms -> 5,605 ms -> 2,727 ms   FASTER
+    unsorted (078)      49 ms -> 39,247 ms -> timeout    SLOWER
+
+Opposite signs is not what one shared mechanism looks like. This issue should
+keep its own fix — a cursor cache converting sequential OFFSET paging into an
+internal seek (planning §8d, E4) — rather than waiting on `080`.
+
 ## What to do
 
 1. `EXPLAIN (ANALYZE, BUFFERS)` at offsets 0 / 25 / 250 / 1000 and find where
