@@ -88,6 +88,59 @@ reason it has not been visible is that nothing paged deeply enough to cross it.
 Currently (3), because 1 and 2 are both decisions about what the product should
 do rather than defects to fix. The measurement stands ready for either.
 
+
+## ATTEMPT 8 — option 1 BUILT AND MEASURED. It is not viable, and here is why
+
+Implemented "one emitter for every page": the generator leaves any PAGED plan
+unsplit (`_is_paged`, before `mark_semijoins`), and a single set-based emitter
+produces every page ordered by the requested key.
+
+**The paging half worked perfectly.** On the 100k fixture, four pages of 25
+reproduce a single 100-row query's ordering EXACTLY — no duplicates, nothing
+missing, far pages at 5,000/5,025 disjoint and correctly ordered — and the curve
+is flat:
+
+    offset      0     291 ms      was     52 ms      page 1 6.6x SLOWER
+    offset    250     299 ms      was    673 ms
+    offset  1,000     298 ms      was  2,958 ms
+    offset  5,000     325 ms      was 16,271 ms      50x
+
+**And the comparator sweep collapsed.** 27 of 39 cells slow WARM, against the
+zero `053` closed with:
+
+    lt/KGDoubleSlot          29,377 ms warm     4,340,568 buffers
+    not_exists/KGTextSlot    10,728 ms warm
+    not_has_any/KGTextSlot    5,997 ms warm     7,692,839 buffers
+
+`081` records this sweep's cells at 4,350..82,724 buffers. These are 1.2M..7.7M
+— 50-90x more. Buffers do not move with machine or load, so no baseline re-run
+is needed to read that. Reverting restores `lt/KGDoubleSlot` to **8 ms**.
+
+**The cause is exactly what was traded away.** `mark_semijoins` is what makes a
+comparator criterion cheap — `045` measured that rewrite at 24.5-32.3 s -> 2 ms.
+Disabling it for every paged query disables it for essentially every KGQuery,
+and the set-based match set it forces is affordable only for the entity-type
+anchored shape the lead fixture uses. **The ~300 ms figure quoted for option 1
+was measured on that ONE query shape and does not generalise.**
+
+### What this rules out, and what it leaves
+
+Option 1 as specified — uniform set-based paging — is dead. Not tunable: the
+semi-join rewrite and the set-based match set are alternatives, and the sweep
+needs the former while flat deep paging needs the latter.
+
+What survives is a narrower version worth measuring, because **consistency only
+requires one emitter per QUERY, not one globally**:
+
+* choose per query — set-based for all its pages when its match set is cheap to
+  build, two-phase for all its pages otherwise;
+* both are internally consistent, so pagination never crosses two orders;
+* the ordering still differs BETWEEN queries, which is D1 and unchanged.
+
+The cost model to gate on already exists in this file's neighbourhood
+(`_text_leaf_should_drive`, `assess_traversal`, leaf cardinality). That is the
+next thing to try, and it is strictly more work than either option as framed.
+
 ## Earlier attempt: THE FIX WORKS — AND BREAKS PAGINATION. It is blocked on D1.
 
 Skipping `mark_semijoins` when `plan.offset > 0` is one condition in the
