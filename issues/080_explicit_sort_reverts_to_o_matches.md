@@ -1,6 +1,47 @@
 # An Explicit Sort Reverts Paging to O(matches) — 46ms Becomes 18.6s
 
-## Status: LARGELY A CONFIGURATION ARTIFACT — 616 ms after raising shared_buffers
+## Status: CLOSED 2026-08-12 — flat with depth, and within ~1.5x of its floor
+
+The two open questions are answered, and neither justifies the emitter work.
+
+**DEPTH — the dimension this issue never varied, and the one that destroyed the
+unsorted path.** A sorted page costs the same at any offset:
+
+    offset      0     466 ms
+    offset    250     447 ms
+    offset  1,000     451 ms
+    offset  5,000     549 ms
+
+No O(offset) collapse, and structurally so: an arbitrary sort key cannot be
+supplied by an index over the criteria, so the match set is materialised and
+sorted whatever the offset. Paying that cost up front is exactly what makes
+depth free. The unsorted path was fast at page 1 *because* it early-terminated,
+and that is why it collapsed at depth (`issues/078`). Sorted never had the win,
+so it never had the loss.
+
+**THE AVAILABLE WIN IS ~1.25x, not the restructure this issue proposed.**
+Measured by resolving ONLY the sort key's text for the match set — the phase-1
+shape the fix was to be built around:
+
+    current, full projection resolved      446 ms
+    sort key text only                     356 ms      1.25x
+
+And the floor is not much below that: the same criteria's match set, built
+set-based for an unsorted deep page, costs ~280 ms on its own. **The cost is the
+match set, not the paging.** Two-phase's trick does not apply — it works by
+never materialising the match set, which a sort forbids.
+
+So the earlier estimate stands and is now explained: materialise buys 1.4x
+(453 ms vs 616 ms), resolving one column buys 1.25x, and both are chasing the
+~166 ms that sits above a ~280 ms floor. Against a new paging emitter — the
+component this session broke three times and reverted twice — that is not a
+trade worth making.
+
+`tests/performance/test_kgquery_sorted_paging.py` now covers depth and gates the
+flatness, so a future change that makes a sorted page early-terminate (and
+therefore collapse at depth) is caught.
+
+## Superseded: LARGELY A CONFIGURATION ARTIFACT — 616 ms after raising shared_buffers
 
 `shared_buffers` was 1 GB on a 64 GB machine; one query here touches 400,000+
 buffers (>3 GB). Raised to 16 GB (and `effective_cache_size` 4 -> 48 GB, never

@@ -75,7 +75,7 @@ NAME_PROP = "http://vital.ai/ontology/vital-core#hasName"
 SORT_RATIO_ALARM = 1000
 
 
-async def _sorted_sql(conn, frame_criteria, fx, sorts):
+async def _sorted_sql(conn, frame_criteria, fx, sorts, offset=0):
     """`_criteria_to_sql`, but with sort_criteria attached."""
     from .test_kgquery_generated_sql_plans import _to_builder_frame
     from vitalgraph.sparql.kg_query_builder import (
@@ -89,7 +89,7 @@ async def _sorted_sql(conn, frame_criteria, fx, sorts):
         frame_criteria=[_to_builder_frame(f) for f in frame_criteria],
         sort_criteria=sorts, use_edge_pattern=True)
     sparql = KGQueryCriteriaBuilder().build_entity_query_sparql(
-        ec, fx.graph, PAGE_SIZE, 0)
+        ec, fx.graph, PAGE_SIZE, offset)
 
     client = AsyncSidecarClient(SIDECAR_URL)
     try:
@@ -106,14 +106,23 @@ async def _sorted_sql(conn, frame_criteria, fx, sorts):
     gen = await generate_sql(cr, fx.space, conn=conn)
     if not gen.ok:
         pytest.fail(f"sorted KGQuery failed to generate: {gen.error}")
-    return gen.sql
+    # The fence travels with the SQL — see _warm_ms.
+    return gen.sql, gen.needs_ordered_scan
 
 
-async def _warm_ms(conn, sql) -> float:
-    """Median of 3 warm runs, honouring the executor's ordered-scan fence."""
+async def _warm_ms(conn, sql, needs_ordered_scan=True) -> float:
+    """Median of 3 warm runs, fencing ONLY when the generator asked for it.
+
+    `enable_sort = off` is the executor's fence for shapes whose O(page) cost
+    depends on an ordered early-terminating scan (`issues/047`), and applying it
+    to a shape that REQUIRES a sort measures a query the server never runs — the
+    deep-page shape read 75,610 ms fenced against 277 ms unfenced. A sorted page
+    is by definition such a shape.
+    """
     async def once():
         async with conn.transaction():
-            await conn.execute("SET LOCAL enable_sort = off")
+            if needs_ordered_scan:
+                await conn.execute("SET LOCAL enable_sort = off")
             t0 = time.perf_counter()
             rows = await conn.fetch(sql)
             return (time.perf_counter() - t0) * 1000.0, len(rows)
@@ -147,12 +156,12 @@ async def test_entity_property_sort_against_its_unsorted_twin(
 
     criteria = _eq_criteria()
     unsorted_sql = await _criteria_to_sql(perf_conn, criteria, fx)
-    sorted_sql = await _sorted_sql(
+    sorted_sql, sorted_fence = await _sorted_sql(
         perf_conn, criteria, fx,
         [SortCriteria(sort_type="entity_property", property_uri=NAME_PROP)])
 
     unsorted_ms, unsorted_rows = await _warm_ms(perf_conn, unsorted_sql)
-    sorted_ms, sorted_rows = await _warm_ms(perf_conn, sorted_sql)
+    sorted_ms, sorted_rows = await _warm_ms(perf_conn, sorted_sql, sorted_fence)
     ratio = sorted_ms / unsorted_ms if unsorted_ms else 0.0
 
     perf_record(kind="sql", dataset=fx.space,
@@ -189,11 +198,12 @@ async def test_a_sorted_page_is_actually_ordered(perf_conn, perf_record, fx):
 
     from vitalgraph.sparql.kg_query_builder import SortCriteria
 
-    sql = await _sorted_sql(
+    sql, fence = await _sorted_sql(
         perf_conn, _eq_criteria(), fx,
         [SortCriteria(sort_type="entity_property", property_uri=NAME_PROP)])
     async with perf_conn.transaction():
-        await perf_conn.execute("SET LOCAL enable_sort = off")
+        if fence:
+            await perf_conn.execute("SET LOCAL enable_sort = off")
         rows = await perf_conn.fetch(sql)
 
     names = [r[k] for r in rows for k in r.keys()
@@ -202,3 +212,59 @@ async def test_a_sorted_page_is_actually_ordered(perf_conn, perf_record, fx):
         pytest.skip("could not identify the sort column in the projection")
     ordered = [n for n in names if n is not None]
     assert ordered == sorted(ordered), "the sorted page came back out of order"
+
+
+SORT_DEPTH_ALARM = 5
+
+SORT_OFFSETS = [0, 250, 1000]
+
+
+@pytest.mark.bench("query.kgquery.sorted_paging.depth")
+@pytest.mark.parametrize("fx", FIXTURES, ids=[f.label for f in FIXTURES])
+async def test_a_sorted_page_costs_the_same_at_any_depth(perf_conn, perf_record, fx):
+    """Depth — the dimension `issues/080` never varied, and the answer is FLAT.
+
+    Worth pinning because the unsorted path collapsed here (O(offset), 16,271 ms
+    at page 201, `issues/078`) and the sorted path plausibly could have. It does
+    not, and for a structural reason: an arbitrary sort key cannot be supplied by
+    an index over the criteria, so the match set is materialised and sorted
+    whatever the offset. Paying that up front is what makes depth free.
+
+    Measured on 100k: 466 / 447 / 451 / 549 ms at offsets 0 / 250 / 1,000 / 5,000.
+
+    So the remaining cost is the match set itself, not the paging — and the
+    unsorted deep page builds the same one for ~280 ms. That is what caps the
+    available win, and why this issue does not justify a new emitter.
+    """
+    reason = await require_usable(perf_conn, fx)
+    if reason:
+        pytest.skip(reason)
+
+    from vitalgraph.sparql.kg_query_builder import SortCriteria
+
+    timings, full = {}, {}
+    for off in SORT_OFFSETS:
+        sql, fence = await _sorted_sql(
+            perf_conn, _eq_criteria(), fx,
+            [SortCriteria(sort_type="entity_property", property_uri=NAME_PROP)],
+            offset=off)
+        ms, rows = await _warm_ms(perf_conn, sql, fence)
+        timings[off] = ms
+        if rows == PAGE_SIZE:
+            full[off] = ms
+
+    if len(full) < 2:
+        pytest.skip(f"{fx.label}: match set too small for a depth curve")
+    deepest = max(full)
+    ratio = full[deepest] / full[0] if full.get(0) else 0.0
+    perf_record(kind="sql", dataset=fx.space,
+                metrics={f"sorted_ms_offset_{o}": round(timings[o], 1)
+                         for o in SORT_OFFSETS} | {"sorted_depth_ratio": round(ratio, 1)},
+                notes="sorted page cost across offsets — issues/080")
+
+    assert ratio < SORT_DEPTH_ALARM, (
+        f"sorted page at offset {deepest} is {ratio:.1f}x page 1 "
+        f"({full[deepest]:.0f}ms vs {full[0]:.0f}ms) — a sorted page should cost "
+        f"the same at any depth, because the match set is materialised either "
+        f"way. Growth here means the plan started early-terminating and paging "
+        f"reverted to O(offset), which is issues/078 in the sorted path.")
