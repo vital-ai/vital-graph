@@ -1,6 +1,27 @@
 # Paging Collapses Past the First Few Pages — Page 11 Takes 39 Seconds
 
-## Status: OPEN — no longer catastrophic after a config fix, but still O(offset)
+## Status: OPEN — and MATERIALISE fixes it. Measured 2026-08-11.
+
+Warm, arms alternated, median of 3, on the corrected 16 GB pool:
+
+                     materialise      current path
+    offset     0        312 ms            54 ms      current wins 6x
+    offset   250        321 ms         1,437 ms      materialise 4.5x
+    offset  1000        309 ms         2,958 ms      materialise 9.6x
+    offset  5000        313 ms        16,271 ms      materialise 52x
+
+Materialise is FLAT — 296-438 ms across every offset — because its cost is
+building the match set once. The current path is unbeatable at page 1 and
+O(offset) after it.
+
+**Neither dominates, so the answer is a HYBRID**: ordered scan for early pages,
+materialise past a threshold, crossover somewhere between offset 0 and 250. Both
+plans already exist; the work is choosing between them.
+
+This is where the materialise work from `issues/080` belongs. `080` itself turned
+out to be a configuration artifact (616 ms after the pool fix, materialise only
+1.4x), but THIS issue is a real plan problem that the config improved without
+solving.
 
 `shared_buffers` 1 GB -> 16 GB on a 64 GB machine (see `issues/080`), no code
 change:
