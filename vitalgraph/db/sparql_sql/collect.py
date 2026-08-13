@@ -235,6 +235,17 @@ def _collect_minus(op: OpMinus, space_id: str, aliases: AliasGenerator,
 @collect.register(OpTable)
 def _collect_table(op: OpTable, space_id: str, aliases: AliasGenerator,
                    graph_uri: str = None) -> PlanV2:
+    # Register every constant the VALUES block names, so the FIRST
+    # materialization pass resolves it to a term uuid. Registering here rather
+    # than at emit time is what lets `emit_table` know whether each one
+    # actually exists: a URI absent from the term table must match nothing, and
+    # emitting a NULL uuid for it would make it match everything (`issues/087`).
+    for row in (op.rows or []):
+        for val in row.values():
+            if isinstance(val, URINode):
+                aliases.register_constant(val.value, "U")
+            elif isinstance(val, LiteralNode):
+                aliases.register_constant(val.value, "L")
     return PlanV2(
         kind=KIND_TABLE,
         values_vars=list(op.vars),

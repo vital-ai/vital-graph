@@ -1,6 +1,51 @@
 # `VALUES` With URI Constants Is Not Materialized — 0.3 ms Becomes 21,790 ms
 
-## Status: OPEN — diagnosed 2026-08-13
+## Status: FIXED 2026-08-13
+
+    VALUES ?s { <uri> }        21,789.8 ms  ->    0.2 ms
+    VALUES, 2 URIs              6,240.5 ms  ->    0.4 ms
+    VALUES, 20 URIs            57,591.3 ms  ->    4.0 ms
+    <uri> ?p ?o (control)            0.3 ms       0.2 ms
+
+Parity with the control, and cost now follows the LIST rather than the space.
+
+**Three changes, and all three are required** — the first two alone left it at
+19,603 ms, which is how each was found:
+
+1. **`collect._collect_table` registers the constants**, so the FIRST
+   materialization pass resolves them. Registering at emit time would work for
+   the uuid but would not let emit know whether each URI actually EXISTS, which
+   change 3 depends on.
+2. **`emit_table` emits the resolved uuid** instead of `NULL::uuid`, and claims
+   term identity only when every row of the block resolved.
+3. **`emit_join` drops its `IS NULL` compatibility guards for an INNER join**
+   when both sides always bind the variable. Without this the condition is
+   `(a IS NULL OR b IS NULL OR a = b)`, which PostgreSQL cannot hash or merge —
+   it was still a nested loop over the whole graph at 6,240 ms even with correct
+   uuids on both sides.
+
+`ColumnInfo.uuid_materialized` carries the evidence. It is deliberately separate
+from `from_triple`: that flag also drives OPTIONAL/MINUS boundness reasoning,
+and widening it is what made MINUS a silent no-op (issue 026).
+
+**The correctness case that constrains the design.** A URI absent from the term
+table resolves to a NULL uuid, and NULL reads as "unbound" — which under SPARQL
+join semantics is compatible with EVERYTHING. So the fast path is claimed only
+when every value resolved; a list containing an absent URI keeps the old text
+join. Verified: an absent URI returns 0 rows, and a mixed present/absent list
+returns exactly what the present URI alone returns.
+
+**Gates.** 616 conformance passed (the suite that would catch a join-semantics
+error); 1811 unit; 196 integration; comparator sweep 0 cells slow warm with
+buffer counts IDENTICAL to the pre-change baseline on every sampled cell, i.e.
+identical plans. New bench `tests/performance/test_values_clause.py` gates the
+ratio against an equivalent literal-subject query, plus the absent-URI and
+mixed-list correctness cases.
+
+`issues/086` is fixed as a consequence: its slot-count query goes 3,436 ms ->
+0.2 ms, and a frame with slots reports 8, matching the UI.
+
+## Original status: OPEN — diagnosed 2026-08-13
 
 Found while diagnosing `issues/086` (the entity page). It is not an entity-page
 problem. **Every SPARQL `VALUES` clause naming a URI degenerates into a full

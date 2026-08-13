@@ -196,15 +196,41 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
                     # every bit as bound. What matters is that nothing in the
                     # subtree can leave a variable unbound — no OPTIONAL, no
                     # UNION branch that omits it, no VALUES carrying UNDEF.
-                    return (info is not None and info.from_triple
-                            and _all_required(child))
+                    #
+                    # `uuid_materialized` counts alongside `from_triple`: a
+                    # VALUES block only sets it when EVERY row bound the
+                    # variable to a constant that resolved, so there is no
+                    # UNDEF to protect against (`issues/087`).
+                    if info is None:
+                        return False
+                    if info.uuid_materialized:
+                        # Per-VARIABLE evidence, which is stronger than the
+                        # per-NODE rule in `_all_required`. That rule rejects
+                        # every VALUES table because one MIGHT carry UNDEF;
+                        # this flag is set only when every row of this block
+                        # bound THIS variable to a constant that resolved, so
+                        # for this variable there is no UNDEF to protect
+                        # against. Other variables of the same block are
+                        # judged independently.
+                        return True
+                    return info.from_triple and _all_required(child)
 
                 plain_left_join = (is_left and not right_is_table
                                    and not left_is_table)
+                # An INNER join may drop the guards on the same evidence. SPARQL
+                # joins compatible mappings; when both sides always bind the
+                # variable, compatible means equal, and the guards only stop
+                # PostgreSQL recognising an equijoin. Measured on a two-URI
+                # VALUES: 6,219 ms with them, 4.6 ms without, same rows.
+                #
+                # LEFT joins keep the existing, narrower rule — an unmatched
+                # left row must still survive with NULLs.
+                inner_join = not is_left
+                may_drop = plain_left_join or inner_join
                 disjuncts = []
-                if not (plain_left_join and _always_bound(left_child, left_info)):
+                if not (may_drop and _always_bound(left_child, left_info)):
                     disjuncts.append(f"{l_null_col} IS NULL")
-                if not (plain_left_join and _always_bound(right_child, right_info)):
+                if not (may_drop and _always_bound(right_child, right_info)):
                     disjuncts.append(f"{r_null_col} IS NULL")
                 if disjuncts:
                     cond = "(" + " OR ".join(disjuncts + [cond]) + ")"

@@ -118,6 +118,13 @@ class ColumnInfo:
     # Whether this variable came from a triple pattern (has term table)
     # vs being computed (BIND, aggregate)
     from_triple: bool = False
+    # A synthesized value whose ``__uuid`` is nonetheless a REAL term reference,
+    # because every one of its constants was resolved against the term table.
+    # Only VALUES sets this, and only when EVERY row resolved — see
+    # `emit_table` and `issues/087`. Kept separate from `from_triple` on
+    # purpose: that flag also drives OPTIONAL/MINUS boundness reasoning, and
+    # widening it there is what made MINUS a silent no-op (issue 026).
+    uuid_materialized: bool = False
     # Whether this binding may be NULL (from OPTIONAL/UNION)
     partial: bool = False
     # Which typed lane holds this variable's primary value.
@@ -155,7 +162,8 @@ class ColumnInfo:
     def simple_output(sparql_name: str, sql_name: str,
                       from_triple: bool = False,
                       typed_lane: Optional[str] = None,
-                      text_materialized: bool = True) -> 'ColumnInfo':
+                      text_materialized: bool = True,
+                      uuid_materialized: bool = False) -> 'ColumnInfo':
         """Create a ColumnInfo with standard output column names.
 
         All companion columns derive from the opaque *sql_name*
@@ -174,20 +182,26 @@ class ColumnInfo:
             from_triple=from_triple,
             typed_lane=typed_lane,
             text_materialized=text_materialized,
+            uuid_materialized=uuid_materialized,
         )
 
     def has_term_identity(self) -> bool:
         """Whether this variable can be compared by term UUID.
 
-        True only when the value came from a triple pattern, so its ``__uuid``
-        is a real term-table reference. Values synthesized by BIND, VALUES or
-        an aggregate carry a literal ``NULL::uuid`` there — reading that NULL
+        True when the value came from a triple pattern, so its ``__uuid`` is a
+        real term-table reference — or when it was synthesized but every
+        constant behind it RESOLVED, which is `uuid_materialized`. Values from
+        BIND or an aggregate carry a literal ``NULL::uuid``; reading that NULL
         as "unbound" is what made MINUS a silent no-op (issue 026).
+
+        A VALUES block only claims this when all of its rows resolved. A URI
+        that is absent from the term table must match NOTHING, and a NULL uuid
+        would be read as unbound and therefore match EVERYTHING (`issues/087`).
 
         Ask this rather than testing a ``__uuid`` column for NULL: the column
         cannot distinguish "no term identity" from "unbound".
         """
-        return bool(self.from_triple and self.uuid_col)
+        return bool((self.from_triple or self.uuid_materialized) and self.uuid_col)
 
     def has_companions(self) -> bool:
         """Whether this var has companion columns available."""

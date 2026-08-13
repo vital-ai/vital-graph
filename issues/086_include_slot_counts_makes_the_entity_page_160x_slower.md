@@ -1,6 +1,12 @@
 # `include_slot_counts` Makes the Entity Detail Page 160x Slower
 
-## Status: OPEN — ROOT CAUSE FOUND 2026-08-13, and it is not local to this page
+## Status: FIXED 2026-08-13 via `issues/087`
+
+The slot-count query goes **3,436 ms -> 0.2 ms**, and a frame with slots reports
+8, matching the UI's "8/8 shown". The cause was never local to this page: see
+`087`. The endpoint and UI need no change.
+
+## Superseded: ROOT CAUSE FOUND — not local to this page
 
 **The cause is `issues/087`: `VALUES` with URI constants is never materialized to
 term UUIDs, so it degenerates into a full scan with a text comparison.** This
