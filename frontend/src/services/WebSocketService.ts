@@ -40,6 +40,34 @@ export interface IWebSocketService {
 export class WebSocketServiceImpl implements IWebSocketService {
   ws: WebSocket | null = null;
   private token: string | null = null;
+
+  /**
+   * The token to (re)connect with — CURRENT, not the one captured at first
+   * connect.
+   *
+   * Reconnect paths used to replay `this.token`, which is set once when
+   * `connect()` is first called and never updated. Once it expired, every
+   * automatic reconnect and every periodic 5-minute reconnect presented the
+   * same dead token, so the server logged a matched pair per attempt:
+   *
+   *     JWT token validation failed: Token has expired
+   *     Authentication failed for WebSocket from ...
+   *
+   * 92 of each in one session's log. `send()` already did the right thing by
+   * asking AuthService each time; only the connect path did not.
+   *
+   * `getAccessToken()` also triggers a refresh when the token is within a
+   * minute of expiry — but does NOT await it, so the very next attempt may
+   * still carry the old token. That is fine and is the point: the retry is on
+   * exponential backoff, so by the following attempt the refresh has landed and
+   * the connection succeeds. Recovery takes an attempt or two instead of never.
+   *
+   * Falls back to the captured token only when AuthService has none, so a
+   * caller that connected with an explicit token still behaves as before.
+   */
+  private currentToken(): string | null {
+    return authService.getAccessToken() ?? this.token;
+  }
   url: string;
   private reconnectAttempts = 0;
   private reconnectDelay = 1000; // Start with 1 second
@@ -106,9 +134,10 @@ export class WebSocketServiceImpl implements IWebSocketService {
         
         // Short delay before reconnecting
         setTimeout(() => {
-          if (this.token) {
+          const token = this.currentToken();
+          if (token) {
             console.log('🔄 Reconnecting WebSocket after periodic disconnect...');
-            this.connect(this.token).catch(err => {
+            this.connect(token).catch(err => {
               console.error('❌ Error during periodic reconnect:', err);
             });
           } else {
@@ -401,10 +430,11 @@ export class WebSocketServiceImpl implements IWebSocketService {
     this._manualReconnectInProgress = false;
     
     // Then reconnect if we have a token
-    if (this.token) {
+    const manualToken = this.currentToken();
+    if (manualToken) {
       console.log('🔄 Reconnecting after manual periodic disconnect...');
       try {
-        await this.connect(this.token);
+        await this.connect(manualToken);
         console.log('✅ Manual reconnect successful');
       } catch (err) {
         console.error('❌ Error during manual reconnect:', err);
@@ -534,9 +564,10 @@ export class WebSocketServiceImpl implements IWebSocketService {
     console.log(`⏰ Scheduling reconnection attempt ${this.reconnectAttempts} in ${Math.round(finalDelay)}ms`);
 
     this.reconnectTimer = window.setTimeout(async () => {
-      if (this.shouldReconnect && this.token && !this._manualReconnectInProgress) {
+      const retryToken = this.currentToken();
+      if (this.shouldReconnect && retryToken && !this._manualReconnectInProgress) {
         console.log(`🔄 Reconnection attempt ${this.reconnectAttempts}`);
-        const success = await this.connect(this.token);
+        const success = await this.connect(retryToken);
         
         if (!success) {
           console.log('❌ Reconnection failed, will try again');
