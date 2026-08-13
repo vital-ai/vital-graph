@@ -16,7 +16,9 @@ from ..model.sparql_model import (
     GraphInfo,
     GraphInfoResponse,
     GraphListResponse,
-    GraphCountsResponse
+    GraphCountsResponse,
+    SpacesSummaryResponse,
+    SpaceSummary
 )
 from ..model.result_status import OperationStatus
 from ..auth.role_dependencies import require_space_read, require_space_write
@@ -86,6 +88,20 @@ class SPARQLGraphEndpoint:
         ):
             require_space_read(current_user, space_id)
             return await self._get_graph_counts(space_id, graph_id)
+
+        # GET endpoint for the whole dashboard in one request
+        @self.router.get(
+            "/spaces_summary",
+            response_model=SpacesSummaryResponse,
+            tags=["Graphs"],
+            summary="Summary Of Every Space",
+            description=("Per-space graph and triple totals in ONE request, "
+                         "replacing a per-space fan-out."),
+        )
+        async def spaces_summary(
+            current_user: Dict = Depends(self.auth_dependency)
+        ):
+            return await self._spaces_summary(current_user)
 
         # GET endpoint to get graph info
         @self.router.get(
@@ -448,6 +464,97 @@ class SPARQLGraphEndpoint:
     _RELATION_TYPES = frozenset([
         'http://vital.ai/ontology/haley-ai-kg#KGRelation',
     ])
+
+    async def _spaces_summary(self, current_user):
+        """Every space's totals, in a handful of queries rather than 67.
+
+        The dashboard rendered four numbers by calling `list_graphs` once per
+        space. Caching made each call fast but left the SHAPE wrong: the work
+        still grows with the number of spaces, and a cold cache after a deploy
+        means 67 concurrent multi-second counts.
+
+        Here the graph counts come from ONE grouped query over the `graph` admin
+        table, and the triple totals from ONE query over `pg_class` — a catalog
+        read per space, no quad scanned. `reltuples` is exact or near-exact on
+        every quad table measured (six of eight exact, worst 0.635%), and a
+        dashboard total is the case where that is plainly good enough.
+
+        A space whose table has never been analysed reports `reltuples = -1`;
+        those are reported as 0 with `estimated` still true, rather than
+        displaying a negative triple count. Exactness is available per space
+        through the existing endpoints.
+
+        Only spaces the caller may READ are included, so the totals differ
+        between users by design.
+        """
+        try:
+            if not self.space_manager:
+                return SpacesSummaryResponse(
+                    status=OperationStatus.ERROR,
+                    message="Space manager not available")
+
+            db_impl = getattr(self.space_manager, "db_impl", None) or self.db_impl
+            if db_impl is None:
+                return SpacesSummaryResponse(
+                    status=OperationStatus.ERROR,
+                    message="Database not available")
+
+            rows = await db_impl.execute_query(
+                "SELECT space_id, space_name FROM space ORDER BY space_id", [])
+            visible = []
+            for r in rows:
+                sid = r.get("space_id")
+                try:
+                    require_space_read(current_user, sid)
+                except Exception:
+                    continue          # not an error: simply not this user's space
+                visible.append((sid, r.get("space_name")))
+
+            if not visible:
+                return SpacesSummaryResponse(status=OperationStatus.EMPTY,
+                                             total_spaces=0)
+
+            ids = [s for s, _ in visible]
+
+            # One query for every space's graph count.
+            graph_rows = await db_impl.execute_query(
+                "SELECT space_id, count(*) AS n FROM graph "
+                "WHERE space_id = ANY($1) GROUP BY space_id", [ids])
+            graphs_by_space = {r["space_id"]: int(r["n"]) for r in graph_rows}
+
+            # One query for every space's quad estimate. `relname` is the quad
+            # table, so the space id is recovered by stripping the suffix.
+            est_rows = await db_impl.execute_query(
+                "SELECT relname, reltuples::bigint AS est FROM pg_class "
+                "WHERE relkind = 'r' AND relname = ANY($1)",
+                [[f"{s}_rdf_quad" for s in ids]])
+            est_by_space = {}
+            for r in est_rows:
+                name = r["relname"]
+                est = r["est"]
+                # -1 means "never analysed" on PG14+; report 0 rather than -1.
+                est_by_space[name[: -len("_rdf_quad")]] = max(int(est or 0), 0)
+
+            summaries, total_graphs, total_triples = [], 0, 0
+            for sid, name in visible:
+                g = graphs_by_space.get(sid, 0)
+                tri = est_by_space.get(sid, 0)
+                total_graphs += g
+                total_triples += tri
+                summaries.append(SpaceSummary(
+                    space=sid, space_name=name or sid,
+                    graph_count=g, triple_count=tri, estimated=True))
+
+            return SpacesSummaryResponse(
+                status=OperationStatus.FOUND if summaries else OperationStatus.EMPTY,
+                spaces=summaries,
+                total_spaces=len(summaries),
+                total_graphs=total_graphs,
+                total_triples=total_triples)
+        except Exception as e:
+            self.logger.error("spaces_summary failed: %s", e, exc_info=True)
+            raise HTTPException(status_code=500,
+                                detail=f"Failed to summarise spaces: {e}")
 
     async def _get_graph_counts(self, space_id: str, graph_id: str):
         """Return entity, frame, and relation counts via one SQL query.

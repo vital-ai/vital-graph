@@ -70,6 +70,21 @@ export class ApiService {
     return vgClient.graphs.list(spaceId) as any;
   }
 
+  /**
+   * Per-space totals for the whole dashboard in ONE request.
+   *
+   * Replaces calling `getGraphs()` once per space, which on 67 spaces meant 67
+   * concurrent multi-second counts to render four numbers. `triple_count` is a
+   * catalog estimate — accurate to well under 1%, which is what a dashboard
+   * total needs.
+   */
+  async getSpacesSummary(): Promise<{
+    spaces: Array<{ space: string; space_name?: string | null; graph_count: number; triple_count: number; estimated: boolean }>;
+    total_spaces: number; total_graphs: number; total_triples: number;
+  }> {
+    return vgClient.graphs.getSpacesSummary() as any;
+  }
+
   async getGraphCounts(spaceId: string, graphId: string): Promise<{ entity_count: number; frame_count: number; relation_count: number }> {
     return vgClient.graphs.getCounts(spaceId, graphId) as any;
   }

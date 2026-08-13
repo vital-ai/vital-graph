@@ -265,6 +265,33 @@ export interface GraphClearResponse extends VitalGraphResponse {
   triples_removed: number;
 }
 
+export interface SpaceSummary {
+  space: string;
+  space_name?: string | null;
+  graph_count: number;
+  triple_count: number;
+  /**
+   * True when `triple_count` is a catalog ESTIMATE rather than an exact count.
+   * Accurate to well under 1% and vastly cheaper — do not compare it for
+   * equality.
+   */
+  estimated: boolean;
+}
+
+/**
+ * Every space's totals in ONE request.
+ *
+ * Replaces a per-space fan-out: the dashboard called `list_graphs` once per
+ * space, which on 67 spaces was ~20 s of concurrent multi-second counts to
+ * render four numbers.
+ */
+export interface SpacesSummaryResponse extends VitalGraphResponse {
+  spaces: SpaceSummary[];
+  total_spaces: number;
+  total_graphs: number;
+  total_triples: number;
+}
+
 export interface GraphCountsResponse extends VitalGraphResponse {
   entity_count: number;
   frame_count: number;

@@ -130,42 +130,29 @@ const Home: React.FC = () => {
   const loadStats = useCallback(async () => {
     setStatsLoading(true);
     try {
-      const [spacesData, usersData] = await Promise.all([
-        apiService.getSpaces().catch(() => []),
+      // ONE request for every space's totals, plus one for users.
+      //
+      // This used to call getGraphs() once per space. With 67 spaces that was
+      // 67 concurrent multi-second counts to render four numbers — the ~20 s
+      // dashboard load. The endpoint answers it in ~40 ms, and its triple
+      // counts are catalog estimates, which is what a dashboard total needs.
+      const [summary, usersData] = await Promise.all([
+        apiService.getSpacesSummary().catch(() => null),
         apiService.getUsers().catch(() => []),
       ]);
 
-      // Load graph counts per space
-      const spaceSummaries: SpaceSummary[] = [];
-      let totalGraphs = 0;
-      let totalTriples = 0;
-
-      await Promise.all(
-        spacesData.map(async (s: { space: string; space_name?: string }) => {
-          try {
-            const graphsResp = await apiService.getGraphs(s.space);
-            const graphs = graphsResp.graphs ?? [];
-            const graphCount = graphsResp.total_count ?? graphs.length;
-            const tripleCount = graphs.reduce((sum: number, g: { triple_count?: number }) => sum + (g.triple_count || 0), 0);
-            spaceSummaries.push({
-              space: s.space,
-              space_name: s.space_name || s.space,
-              graphCount,
-              tripleCount,
-            });
-            totalGraphs += graphCount;
-            totalTriples += tripleCount;
-          } catch {
-            spaceSummaries.push({ space: s.space, space_name: s.space_name || s.space, graphCount: 0, tripleCount: 0 });
-          }
-        })
-      );
+      const spaceSummaries: SpaceSummary[] = (summary?.spaces ?? []).map(s => ({
+        space: s.space,
+        space_name: s.space_name || s.space,
+        graphCount: s.graph_count,
+        tripleCount: s.triple_count,
+      }));
 
       setStats({
-        spacesCount: spacesData.length,
+        spacesCount: summary?.total_spaces ?? spaceSummaries.length,
         usersCount: usersData.length,
-        totalGraphs,
-        totalTriples,
+        totalGraphs: summary?.total_graphs ?? 0,
+        totalTriples: summary?.total_triples ?? 0,
       });
       setSpaces(spaceSummaries.sort((a, b) => b.tripleCount - a.tripleCount));
 

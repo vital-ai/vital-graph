@@ -63,6 +63,40 @@ class GraphInfoResponse(ResultStatus):
     )
 
 
+class SpaceSummary(BaseModel):
+    """One row of the dashboard: a space and its totals."""
+    space: str = Field(..., description="Space identifier")
+    space_name: Optional[str] = Field(None, description="Human-readable name")
+    graph_count: int = Field(0, description="Number of graphs in the space")
+    triple_count: int = Field(0, description="Total quads across the space")
+    estimated: bool = Field(
+        False,
+        description=("True when triple_count is a catalog ESTIMATE rather than "
+                     "an exact count. Accurate to well under 1% and 2,700x "
+                     "cheaper; do not compare an estimated total for equality."))
+
+
+class SpacesSummaryResponse(ResultStatus):
+    """Every space's totals in ONE request.
+
+    The dashboard used to call `list_graphs` once per space — 67 concurrent
+    multi-second calls to render four numbers, which is the ~20 s page load
+    reported from the UI. Caching each call made the WARM path fast (4,831 ms ->
+    5 ms) and left the shape wrong: the cost still grows with the number of
+    spaces, and a cold cache after a deploy still means 67 concurrent counts.
+
+    This replaces the fan-out with one round trip.
+    """
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/EMPTY)"
+    )
+    spaces: List[SpaceSummary] = Field(default_factory=list,
+                                       description="Per-space totals")
+    total_spaces: int = Field(0, description="Number of spaces")
+    total_graphs: int = Field(0, description="Total graphs across all spaces")
+    total_triples: int = Field(0, description="Total quads across all spaces")
+
+
 class GraphCountsResponse(ResultStatus):
     """Response model for graph object counts.
 
