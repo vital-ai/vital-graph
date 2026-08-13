@@ -100,13 +100,18 @@ class TestNoDuplicateFrame:
         out = KGFramesEndpoint._dedupe_by_uri(objs)
         assert [getattr(o, "URI") for o in out] == [FRAME, "urn:slot:a", "urn:slot:b"]
 
-    def test_the_frame_stays_first(self):
-        """Clients treat the leading subject as the object they asked for, so
-        order is part of the contract, not a detail of the dedupe."""
+    def test_input_order_is_preserved(self):
+        """Stable output, so the payload is easy to read and diff.
+
+        Deliberately NOT a statement that consumers may rely on position: this
+        response is a set of graph objects and each is identified by its URI. A
+        detail view selects the object it asked for by URI, so the frame being
+        first is incidental.
+        """
         from vitalgraph.endpoint.kgframes_endpoint import KGFramesEndpoint
         out = KGFramesEndpoint._dedupe_by_uri(
-            [self._obj(FRAME), self._obj("urn:slot:a"), self._obj(FRAME)])
-        assert getattr(out[0], "URI") == FRAME
+            [self._obj("urn:slot:a"), self._obj(FRAME), self._obj("urn:slot:a")])
+        assert [getattr(o, "URI") for o in out] == ["urn:slot:a", FRAME]
 
     def test_an_object_without_a_uri_is_kept(self):
         """Losing data to a defensive filter is worse than a duplicate."""

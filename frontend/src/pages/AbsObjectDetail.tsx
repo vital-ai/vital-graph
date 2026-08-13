@@ -139,21 +139,30 @@ export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
   };
 
   const convertQuadsToObject = (quads: Quad[]): T => {
-    // Keep only the quads OF the object being viewed. Some endpoints return a
-    // whole subgraph in `results` — kgframes with include_frame_graph returns
-    // the frame plus its slot edges and slots, which the Slot Summary needs —
-    // and everything below assumes one subject: it takes quads[0].s as the URI,
-    // pushes every quad as a property, and lets the LAST rdf:type win. Merging
-    // five objects that way showed a KGFrame as "Edge / Edge_hasKGSlot" with 32
-    // properties.
+    // Keep only the quads OF the object being viewed, identified by URI. Some
+    // endpoints return a whole subgraph in `results` — kgframes with
+    // include_frame_graph returns the frame plus its slot edges and slots,
+    // which the Slot Summary needs — while everything below assumes ONE
+    // subject: it names the object from a quad's subject, pushes every quad as
+    // a property, and lets the LAST rdf:type win. Merging five subjects that
+    // way showed a KGFrame as "Edge / Edge_hasKGSlot" with 32 properties.
     //
-    // Falls back to the raw list if nothing matches, so a URI that differs only
-    // in encoding renders the old way rather than an empty page.
+    // Position in the payload means nothing here. A detail page knows which URI
+    // it was asked for, so it selects by that; the response is free to return
+    // the subgraph in any order.
+    //
+    // If the requested URI is absent — an encoding mismatch, say — fall back to
+    // whichever subject appears first and show THAT object whole. The one thing
+    // never to do is fall back to the unfiltered list, which reinstates the
+    // merge this exists to prevent.
     const wantedUri = objectId ? stripBrackets(decodeURIComponent(objectId)) : null;
     const ownQuads = wantedUri
       ? quads.filter(q => stripBrackets(q.s) === wantedUri)
-      : quads;
-    const use = ownQuads.length > 0 ? ownQuads : quads;
+      : [];
+    const fallbackSubject = stripBrackets(quads[0].s);
+    const use = ownQuads.length > 0
+      ? ownQuads
+      : quads.filter(q => stripBrackets(q.s) === fallbackSubject);
 
     const subjectUri = stripBrackets(use[0].s);
 

@@ -950,11 +950,13 @@ class KGFramesEndpoint:
     
     @staticmethod
     def _dedupe_by_uri(objects: List[Any]) -> List[Any]:
-        """First occurrence of each URI wins, order preserved.
+        """First occurrence of each URI wins, input order preserved.
 
-        Order matters as much as the deduplication: the frame must stay FIRST,
-        because clients reading this payload treat the leading subject as the
-        object they asked for.
+        Order is preserved because a stable payload is easier to read and diff,
+        NOT because anything may depend on it. This response is a set of graph
+        objects; a consumer wanting a particular one selects it by URI, which is
+        the identity it has. A frame-details view that rendered whichever object
+        happened to come first would be wrong the moment the query changed shape.
 
         An object with no readable URI is kept as-is rather than dropped —
         losing data to a defensive filter is worse than a duplicate.
