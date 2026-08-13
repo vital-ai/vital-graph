@@ -205,3 +205,86 @@ def _required_subtree_is_dead(plan: PlanV2, dead: Set[str], depth: int = 0) -> b
         return False
     return any(_required_subtree_is_dead(c, dead, depth + 1)
                for c in (plan.children or []))
+
+
+# ---------------------------------------------------------------------------
+# Tautological NOT EXISTS
+# ---------------------------------------------------------------------------
+
+def fold_dead_not_exists(plan: PlanV2, depth: int = 0) -> int:
+    """Drop every ``FILTER NOT EXISTS`` whose body can never match.
+
+    An EXISTS body that REQUIRES a term absent from the term table matches
+    nothing for any outer row, so ``NOT EXISTS`` over it is a tautology and the
+    filter is pure cost. Left in, it is expensive cost: the absent constant
+    compiles to a scalar subquery over an empty `_const` CTE, so every
+    comparison is NULL and the planner cannot fold it — it builds the correlated
+    anti-join and evaluates it per candidate row.
+
+    Measured on the frames list of a 1.1M-frame graph, where the "Assertion"
+    tab asks for frames having NEITHER `hasKGFormType` NOR `hasFrameGraphURI`
+    and neither predicate exists in that space at all:
+
+        anchor + re-anchor                          0.4 ms
+        anchor + re-anchor + 2 dead NOT EXISTS  4,506.1 ms
+
+    Returns the number of filter expressions removed.
+
+    Only a TOP-LEVEL conjunct is folded — an `ExprExists` that IS one of
+    `filter_exprs`. One buried inside a larger boolean (`FILTER(?x || NOT
+    EXISTS {...})`) would need the expression tree rewritten to TRUE and is
+    left alone; it is correct, merely unoptimised.
+
+    A non-negated `EXISTS` over a dead body is constant-FALSE, which makes the
+    whole enclosing pattern empty. That is a larger rewrite than dropping a
+    conjunct and is deliberately NOT done here; `query_is_provably_empty`
+    covers the outer-constant form of the same idea.
+    """
+    from vitalgraph.db.jena_sparql.jena_types import ExprExists
+
+    if plan is None or depth > 24:
+        return 0
+
+    removed = 0
+    if plan.kind == KIND_FILTER and plan.filter_exprs:
+        keep = []
+        for expr in plan.filter_exprs:
+            if (isinstance(expr, ExprExists) and expr.negated
+                    and _exists_body_is_dead(expr)):
+                removed += 1
+                continue
+            keep.append(expr)
+        if removed:
+            plan.filter_exprs = keep
+            logger.debug("folded %d tautological NOT EXISTS", removed)
+            if not keep and plan.children:
+                # Nothing left to filter on: become the child, so the node does
+                # not linger as an identity wrapper the emitters must carry.
+                _replace_plan_in_place(plan, plan.children[0])
+
+    for child in (plan.children or []):
+        removed += fold_dead_not_exists(child, depth + 1)
+    return removed
+
+
+def _exists_body_is_dead(expr) -> bool:
+    """True when this EXISTS body requires a constant that is not in the term
+    table.
+
+    Reads the body's OWN AliasGenerator: `prepare_exists_subplans` gives each
+    body its own, because its constants are its own. Using the outer one here
+    would compare column names from different namespaces and could call a live
+    body dead — the one error this must never make.
+
+    Returns False when the body was never prepared, which is the pre-existing
+    fallback path (emit collects it inline) and carries no resolution info.
+    """
+    sub = getattr(expr, "prepared_plan", None)
+    sub_aliases = getattr(expr, "prepared_aliases", None)
+    if sub is None or sub_aliases is None:
+        return False
+    unresolved = _unresolved_const_names(sub_aliases)
+    if not unresolved:
+        return False
+    dead = {f"{_CONST_PREFIX}{col}{_CONST_SUFFIX}" for col in unresolved}
+    return _required_subtree_is_dead(sub, dead)

@@ -33,18 +33,37 @@ NAME_PROP = "http://vital.ai/ontology/vital-core#hasName"
 
 
 class TestNoSort:
-    """No sort_by → anchor ordering, which is still a total order."""
+    """No sort_by → no ORDER BY, so the SQL pipeline can order on the UUID.
 
-    def test_defaults_to_anchor_order(self):
+    Emitting `ORDER BY ?anchor` here sorted by the anchor's URI TEXT, which
+    lives in the term table — so the backend resolved every candidate URI and
+    sorted the lot before LIMIT threw the sort away. On a 1.1M-frame graph that
+    default WAS the page load: 5,571 ms against 611 ms without it.
+
+    Paging is still stable. An unordered SLICE gets a synthesized
+    `ORDER BY <anchor>__uuid`, a total order over a column already in hand.
+    """
+
+    def test_emits_no_order_by(self):
         patterns, projection, order = KGSparqlUtils.build_sort_clauses("?frame", None)
         assert patterns == ""
         assert projection == ""
-        assert order == "ORDER BY ?frame"
+        assert order == "", (
+            "an unrequested sort must not be invented — ordering by URI text "
+            "costs a full resolve-and-sort of every candidate row")
 
     def test_accepts_bare_anchor_name(self):
         """Anchor may be given with or without the leading '?'."""
         _, _, order = KGSparqlUtils.build_sort_clauses("frame", None)
-        assert order == "ORDER BY ?frame"
+        assert order == ""
+
+    def test_an_explicit_sort_still_tiebreaks_on_the_anchor(self):
+        """Dropping the DEFAULT order must not drop the tiebreak that makes a
+        REQUESTED order total — without it, subjects sharing a sort value have
+        no defined relative order and pages can repeat or skip them."""
+        _, _, order = KGSparqlUtils.build_sort_clauses("?frame", NAME_PROP)
+        assert "ORDER BY" in order
+        assert "?frame" in order, order
 
 
 class TestSequenceSort:

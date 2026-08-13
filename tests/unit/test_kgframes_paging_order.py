@@ -1,9 +1,21 @@
-"""Unit tests: every paged KGFrames query carries an ORDER BY.
+"""Unit tests: every paged KGFrames query is stably ordered.
 
 A LIMIT/OFFSET over an unordered result set is not stable — SQL gives no
 ordering guarantee without an ORDER BY, so successive pages may repeat or
 skip subjects.  These tests assert on the generated SPARQL text, so they need
 no database and no server.
+
+Where that order comes from depends on whether one was ASKED for:
+
+  * an explicit `sort_by` is compiled into the SPARQL here, with the anchor as
+    a tiebreak so the order is total;
+  * with no `sort_by` the SPARQL carries no ORDER BY at all, and the SQL
+    pipeline synthesizes `ORDER BY <anchor>__uuid` for the unordered SLICE.
+
+The second case used to emit `ORDER BY ?anchor`, which sorts on the anchor's
+URI TEXT and so made the backend resolve and sort every candidate before LIMIT
+discarded all but a page: 5,571 ms versus 611 ms on a 1.1M-frame graph. Both
+paths give a total order; only one of them charges for it.
 
 Step 1 of planning/planning_sequence/frame_slot_sequence_sort_paging_plan.md.
 """
@@ -104,13 +116,28 @@ class TestOrderByNotAlongsideDistinct:
         )
         self._assert_distinct_is_subselected(sparql)
 
-    def test_unsorted_frame_list_subselects_the_distinct(self, endpoint):
-        """Same shape with no sort_by, so the two paths cannot diverge."""
+    def test_unsorted_frame_list_emits_no_order_by(self, endpoint):
+        """With no sort_by there must be NO ORDER BY in the SPARQL.
+
+        `ORDER BY ?frame` orders by the anchor's URI text, which forces the
+        backend to resolve every candidate's URI and sort them all before LIMIT
+        can throw the sort away — 5,571 ms against 611 ms on a 1.1M-frame graph,
+        for an order the caller never asked for and the UI explicitly disables.
+
+        Paging stays stable: an unordered SLICE gets a synthesized
+        `ORDER BY <anchor>__uuid` from the SQL pipeline, which is a total order
+        over a column already in hand. Asserted end-to-end in the frames paging
+        integration coverage rather than here, since it is a property of the
+        generated SQL, not of this string.
+        """
         sparql = endpoint._build_list_frames_query(
             backend=None, space_id="sp", graph_id="g", search=None,
             page_size=10, offset=0,
         )
-        self._assert_distinct_is_subselected(sparql)
+        assert "SELECT DISTINCT" in sparql, sparql
+        assert "ORDER BY" not in sparql, (
+            "an unsorted list must not invent an ORDER BY — sorting by URI text "
+            f"is what made this page take seconds:\n{sparql}")
 
     def test_sorted_frame_slots_subselects_the_distinct(self, endpoint):
         sparql = endpoint._build_get_frame_slots_query(
@@ -140,8 +167,10 @@ class TestListFramesOrdering:
         params.update(kw)
         return endpoint._build_list_frames_query(**params)
 
-    def test_default_ordering_present(self, endpoint):
-        _assert_ordered_before_limit(self._build(endpoint))
+    def test_default_emits_no_order_by(self, endpoint):
+        """No sort asked for, so none is invented — see the module docstring.
+        Stability comes from the pipeline's synthesized UUID order instead."""
+        assert "ORDER BY" not in self._build(endpoint)
 
     def test_sort_by_ordering_present(self, endpoint):
         """An explicit sort_by still emits ORDER BY ahead of LIMIT."""

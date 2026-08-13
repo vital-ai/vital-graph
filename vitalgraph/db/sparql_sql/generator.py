@@ -732,6 +732,15 @@ async def generate_sql(
             graph_lock_uri=graph_lock_uri,
             edge_table_ready=edge_ready, frame_entity_ready=frame_entity_ready)
 
+        # Stage 2a.3b: A prepared EXISTS body now knows which of ITS constants
+        # resolved, so a NOT EXISTS that can never match is knowable here and
+        # nowhere earlier. Must run after preparation and before emit.
+        from .prune_union import fold_dead_not_exists
+        folded = fold_dead_not_exists(plan)
+        if folded:
+            logger.info("Folded %d tautological NOT EXISTS — the body requires "
+                        "a term absent from this space", folded)
+
         # Stage 2a.4: Edge fan-out, for the traversal-direction gate in
         # emit_slice. Loaded like the other statistics rather than queried at
         # emit time, because emit is synchronous.

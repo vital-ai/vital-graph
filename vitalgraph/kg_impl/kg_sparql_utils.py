@@ -227,7 +227,25 @@ class KGSparqlUtils:
         """
         anchor = anchor_var.lstrip("?")
         if not sort_by:
-            return "", "", f"ORDER BY ?{anchor}"
+            # No sort was asked for, so DO NOT invent one. `ORDER BY ?anchor`
+            # orders by the anchor's URI TEXT, and text lives in the term table
+            # — so the backend must resolve every candidate's URI and sort the
+            # lot before LIMIT can discard all but a page of it. On the frames
+            # list of a 1.1M-frame graph that ordering WAS the page load:
+            #
+            #     ORDER BY ?frame     5,571 ms
+            #     no ORDER BY           611 ms
+            #
+            # Omitting it does not make paging unstable. The SQL pipeline
+            # synthesizes its own order for an unordered SLICE and marks it
+            # `stable_paging`, which emits `ORDER BY <anchor>__uuid` — a total
+            # order over a column already in hand, needing no term JOIN.
+            # Verified on that graph: ten consecutive pages partition the
+            # result set with no overlap, and a given page is repeatable.
+            #
+            # A caller that genuinely needs URI-ordered output must ask for it;
+            # it is not free and was never free.
+            return "", "", ""
 
         direction = "DESC" if str(sort_order).lower() == "desc" else "ASC"
         val_var = f"{var_prefix}_val"
