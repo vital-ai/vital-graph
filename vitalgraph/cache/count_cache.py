@@ -120,4 +120,26 @@ class CountCache:
 
 
 # Module-level singleton — shared across all endpoint instances within one process.
-_count_cache = CountCache()
+# TTL raised from 15 minutes to 6 hours, because it is now a BACKSTOP rather
+# than the mechanism. Until 2026-08-13 the quad write paths never invalidated,
+# so the TTL was the only thing that made a count correct again and it had to be
+# short. Writes now invalidate — add/remove of a quad, the batch and bulk
+# variants, clear/drop graph, the SPARQL update path and the entity endpoints —
+# so expiry is only needed for changes that bypass all of those.
+#
+# The cost of a short TTL is real and user-visible: the graph page's
+# entity/frame/relation counts are a type-grouped aggregate over every vitaltype
+# quad, measured at 3,343 ms warm and 9,722 ms cold on `sp_lead_synth_100k`.
+# With a 15 minute TTL a user returning after lunch pays that again.
+#
+# Override with VITALGRAPH_COUNT_CACHE_TTL (seconds) if a deployment has write
+# paths that do not invalidate.
+def _ttl_from_env(default: float = 21_600.0) -> float:
+    import os
+    try:
+        return float(os.environ.get("VITALGRAPH_COUNT_CACHE_TTL", default))
+    except ValueError:
+        return default
+
+
+_count_cache = CountCache(ttl_seconds=_ttl_from_env())

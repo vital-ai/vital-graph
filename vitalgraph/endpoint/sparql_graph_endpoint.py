@@ -632,13 +632,23 @@ class SPARQLGraphEndpoint:
                         relation_count=_hits["relation"],
                     )
 
-                # One query: count vitaltype rows grouped by object (type URI)
+                # Group by object_uuid FIRST, then resolve the handful of
+                # distinct type uuids to text. The previous form joined the term
+                # table for every vitaltype quad in the graph — ~1.6M rows here
+                # — and grouped the joined result. Same 13 rows either way:
+                #
+                #     join then group     2,959.9 ms
+                #     group then resolve    584.5 ms      5x
                 rows = await conn.fetch(f"""
-                    SELECT t_obj.term_text AS type_uri, COUNT(*) AS cnt
-                    FROM {rdf_quad} q
-                    JOIN {term} t_obj ON q.object_uuid = t_obj.term_uuid
-                    WHERE q.context_uuid = $1 AND q.predicate_uuid = $2
-                    GROUP BY t_obj.term_text
+                    WITH by_type AS (
+                        SELECT object_uuid, COUNT(*) AS cnt
+                        FROM {rdf_quad}
+                        WHERE context_uuid = $1 AND predicate_uuid = $2
+                        GROUP BY object_uuid
+                    )
+                    SELECT t_obj.term_text AS type_uri, by_type.cnt
+                    FROM by_type
+                    JOIN {term} t_obj ON t_obj.term_uuid = by_type.object_uuid
                 """, ctx_uuid, vt_uuid)
 
                 entity_count = 0

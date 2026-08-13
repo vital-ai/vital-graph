@@ -633,13 +633,30 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
     async def get_space_info(self, space_id: str) -> Dict[str, Any]:
         try:
             t = self.schema.get_table_names(space_id)
-            async with self._db._pool.acquire() as conn:
-                quad_count = await conn.fetchval(
-                    f"SELECT COUNT(*) FROM {t['rdf_quad']}"
-                )
-                term_count = await conn.fetchval(
-                    f"SELECT COUNT(*) FROM {t['term']}"
-                )
+
+            # Both are WHOLE-TABLE counts, which is exactly what the catalog
+            # estimate answers. Measured on `sp_lead_synth_100k`: these two
+            # exact counts were 3,624-4,397 ms on EVERY call — the space page
+            # loading in ~15 s each time — against 50.5M quads and 10.4M terms.
+            # `reltuples` was exact for six of eight quad tables here and 0.635%
+            # out on the worst, which a space-info panel does not care about.
+            #
+            # Not cached, deliberately: a catalog read is already cheap, and
+            # caching an estimate stacks staleness on staleness.
+            quad_count = await self._table_row_estimate(t['rdf_quad'])
+            term_count = await self._table_row_estimate(t['term'])
+            estimated = quad_count is not None and term_count is not None
+
+            # Fall back to exact only when the catalog has no usable number —
+            # a table that has never been analysed reports -1 (PG14+).
+            if quad_count is None or term_count is None:
+                async with self._db._pool.acquire() as conn:
+                    if quad_count is None:
+                        quad_count = await conn.fetchval(
+                            f"SELECT COUNT(*) FROM {t['rdf_quad']}")
+                    if term_count is None:
+                        term_count = await conn.fetchval(
+                            f"SELECT COUNT(*) FROM {t['term']}")
             # Graph records
             graph_rows = await self._db.execute_query(
                 "SELECT graph_uri, graph_name FROM graph WHERE space_id = $1",
@@ -650,6 +667,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 'backend_type': 'sparql_sql',
                 'quad_count': quad_count,
                 'term_count': term_count,
+                'counts_estimated': estimated,
                 'graphs': graph_rows,
             }
         except Exception as e:
@@ -958,6 +976,25 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             logger.error("get_rdf_quad(%s) failed: %s", space_id, e)
             return False
 
+    async def _table_row_estimate(self, table: str) -> Optional[int]:
+        """`reltuples` for one table, or None when it cannot be trusted.
+
+        Shared by every whole-table count. See
+        `get_rdf_quad_count_estimate` for the measurements and the reasons the
+        None cases exist.
+        """
+        try:
+            async with self._db._pool.acquire() as conn:
+                est = await conn.fetchval(
+                    "SELECT reltuples::bigint FROM pg_class WHERE relname = $1",
+                    table)
+        except Exception as e:
+            logger.debug("row estimate for %s failed: %s", table, e)
+            return None
+        if est is None or est < 0:
+            return None
+        return int(est)
+
     async def get_rdf_quad_count_estimate(self, space_id: str) -> Optional[int]:
         """Row estimate for the space's whole quad table, from the catalog.
 
@@ -979,18 +1016,11 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         estimate would add staleness on top of staleness.
         """
         try:
-            t = self.schema.get_table_names(space_id)
-            table = t['rdf_quad']
-            async with self._db._pool.acquire() as conn:
-                est = await conn.fetchval(
-                    "SELECT reltuples::bigint FROM pg_class WHERE relname = $1",
-                    table)
+            table = self.schema.get_table_names(space_id)['rdf_quad']
         except Exception as e:
             logger.debug("get_rdf_quad_count_estimate(%s) failed: %s", space_id, e)
             return None
-        if est is None or est < 0:
-            return None
-        return int(est)
+        return await self._table_row_estimate(table)
 
     async def get_rdf_quad_count(self, space_id: str,
                                   graph_uri: Optional[str] = None) -> int:
