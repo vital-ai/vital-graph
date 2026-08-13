@@ -948,6 +948,31 @@ class KGFramesEndpoint:
             self.logger.error(f"Error listing KGFrames: {e}")
             raise HTTPException(status_code=500, detail=f"Error listing KGFrames: {e}")
     
+    @staticmethod
+    def _dedupe_by_uri(objects: List[Any]) -> List[Any]:
+        """First occurrence of each URI wins, order preserved.
+
+        Order matters as much as the deduplication: the frame must stay FIRST,
+        because clients reading this payload treat the leading subject as the
+        object they asked for.
+
+        An object with no readable URI is kept as-is rather than dropped —
+        losing data to a defensive filter is worse than a duplicate.
+        """
+        seen = set()
+        out = []
+        for o in objects:
+            uri = getattr(o, "URI", None)
+            key = str(uri) if uri else None
+            if key is None:
+                out.append(o)
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(o)
+        return out
+
     async def _get_frame_by_uri(self, space_id: str, graph_id: str, uri: str, include_frame_graph: bool, current_user: Dict) -> QuadResultsResponse:
         """Get single frame by URI with optional complete graph."""
         try:
@@ -990,6 +1015,13 @@ class KGFramesEndpoint:
                 elif frame_graph and hasattr(frame_graph, 'graph') and frame_graph.graph:
                     # Legacy path: frame_graph.graph contains GraphObjects directly
                     all_objects.extend(frame_graph.graph)
+                # The frame is in BOTH lists — `frames` from the lookup above and
+                # the frame graph, which includes the frame by design — so every
+                # one of its quads would be emitted twice. This was invisible
+                # while the frame graph returned None for a frame with no
+                # attribute-linked slots; it appears the moment the graph
+                # actually contains something.
+                all_objects = self._dedupe_by_uri(all_objects)
             
             quads = await asyncio.to_thread(graphobjects_to_quad_list, all_objects, graph_id)
             return QuadResultsResponse(

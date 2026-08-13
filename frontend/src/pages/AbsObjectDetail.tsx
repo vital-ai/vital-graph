@@ -139,12 +139,28 @@ export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
   };
 
   const convertQuadsToObject = (quads: Quad[]): T => {
-    const subjectUri = stripBrackets(quads[0].s);
+    // Keep only the quads OF the object being viewed. Some endpoints return a
+    // whole subgraph in `results` — kgframes with include_frame_graph returns
+    // the frame plus its slot edges and slots, which the Slot Summary needs —
+    // and everything below assumes one subject: it takes quads[0].s as the URI,
+    // pushes every quad as a property, and lets the LAST rdf:type win. Merging
+    // five objects that way showed a KGFrame as "Edge / Edge_hasKGSlot" with 32
+    // properties.
+    //
+    // Falls back to the raw list if nothing matches, so a URI that differs only
+    // in encoding renders the old way rather than an empty page.
+    const wantedUri = objectId ? stripBrackets(decodeURIComponent(objectId)) : null;
+    const ownQuads = wantedUri
+      ? quads.filter(q => stripBrackets(q.s) === wantedUri)
+      : quads;
+    const use = ownQuads.length > 0 ? ownQuads : quads;
+
+    const subjectUri = stripBrackets(use[0].s);
 
     const properties: Array<{predicate: string; object: string; object_type: 'uri' | 'literal'}> = [];
     let rdfType = 'Unknown';
 
-    for (const quad of quads) {
+    for (const quad of use) {
       const { value, type } = parseObjectTerm(quad.o);
       const pred = stripBrackets(quad.p);
 

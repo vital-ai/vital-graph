@@ -74,3 +74,44 @@ def test_subjects_are_deduplicated(query):
     """A subject can be reached by more than one branch once a space carries
     both linkages — 6 of 79 do."""
     assert "SELECT DISTINCT ?subject" in query
+
+
+class TestNoDuplicateFrame:
+    """The frame is in BOTH the lookup result and the frame graph.
+
+    `_get_frame_by_uri` concatenates `frames` with `frame_graph.graph_objects`,
+    and the frame graph includes the frame by design — so without a dedupe every
+    quad of the frame is emitted twice. The UI showed the frame's 5 properties
+    twice over.
+
+    This was invisible while the frame graph returned None for a frame whose
+    slots were unreachable; it appeared the moment the graph had contents.
+    """
+
+    def _obj(self, uri):
+        class _O:
+            URI = uri
+        return _O()
+
+    def test_the_frame_appears_once(self):
+        from vitalgraph.endpoint.kgframes_endpoint import KGFramesEndpoint
+        frame = self._obj(FRAME)
+        objs = [frame, self._obj(FRAME), self._obj("urn:slot:a"), self._obj("urn:slot:b")]
+        out = KGFramesEndpoint._dedupe_by_uri(objs)
+        assert [getattr(o, "URI") for o in out] == [FRAME, "urn:slot:a", "urn:slot:b"]
+
+    def test_the_frame_stays_first(self):
+        """Clients treat the leading subject as the object they asked for, so
+        order is part of the contract, not a detail of the dedupe."""
+        from vitalgraph.endpoint.kgframes_endpoint import KGFramesEndpoint
+        out = KGFramesEndpoint._dedupe_by_uri(
+            [self._obj(FRAME), self._obj("urn:slot:a"), self._obj(FRAME)])
+        assert getattr(out[0], "URI") == FRAME
+
+    def test_an_object_without_a_uri_is_kept(self):
+        """Losing data to a defensive filter is worse than a duplicate."""
+        from vitalgraph.endpoint.kgframes_endpoint import KGFramesEndpoint
+        class _NoUri:
+            pass
+        out = KGFramesEndpoint._dedupe_by_uri([_NoUri(), _NoUri()])
+        assert len(out) == 2
