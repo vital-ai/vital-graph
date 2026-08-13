@@ -1,6 +1,38 @@
 # Read-After-Write Concurrency Test Failed Once, Not Reproducible
 
-## Status: OPEN — observed TWICE on 2026-08-13, still unattributed
+## Status: ATTRIBUTED AND FIXED 2026-08-13 — connection exhaustion, not a race
+
+**It was never a race.** The segmentation worker opened a DEDICATED LISTEN
+connection PER SPACE. On a database with 86 spaces that is 90 idle connections
+holding `LISTEN "{space}_seg_jobs"`, against `max_connections = 100`:
+
+    connections before   101   (over the limit)
+    LISTEN connections    90
+    after the fix         25   with 3 LISTEN connections, 85 channels
+
+Everything else was starved. That is why the failures were intermittent and
+concentrated in concurrency tests — they need several connections at once, and
+whether they got them depended on what else was running.
+
+The third occurrence is what made it findable: capturing the failure NAMES (as
+this issue said to) showed `TestPoolBehavior::test_many_concurrent_queries` and
+`test_read_after_write_concurrency` failing together with
+
+    Failed to connect sparql_sql PostgreSQL: sorry, too many clients already
+
+which is not a symptom any race would produce.
+
+**The fix**: one LISTEN connection per DATABASE rather than per space. A single
+PostgreSQL connection holds any number of LISTENs; nothing required one each.
+Verified: 85 channels on one shared connection, and two consecutive full
+integration runs at 201 passed.
+
+**Why it hid for two days**: the first two occurrences were dismissed as
+flakiness because the failing tests were not recorded, and the surviving
+evidence — "1 failed, 195 passed" — is equally consistent with a race. The
+lesson stands and is now proven: capture the names.
+
+## Original: OPEN — observed TWICE on 2026-08-13, still unattributed
 
 **Second occurrence, same day.** A full integration run reported `2 failed, 197
 passed`; the three runs immediately after were `199 passed` each. **The failing

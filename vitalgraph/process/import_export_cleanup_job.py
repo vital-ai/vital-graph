@@ -75,7 +75,7 @@ class ImportExportCleanupJob:
             await conn.execute(
                 """
                 DELETE FROM import_export_job
-                WHERE job_id = ANY($1::text[])
+                WHERE job_id = ANY($1::uuid[])
                 """,
                 job_ids,
             )

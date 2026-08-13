@@ -54,7 +54,10 @@ class SegmentationWorker:
         self._running = False
         self._semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
         self._wake_event = asyncio.Event()
-        self._listen_conns: list = []  # dedicated LISTEN connections
+        self._listen_conns: list = []  # (connection, channel) pairs
+        # One LISTEN connection per DATABASE, not per space — see
+        # _get_listen_connection.
+        self._listen_conn_by_dsn: Dict[tuple, object] = {}
 
         # Health / diagnostic state (exposed via get_health())
         self._started_at: Optional[str] = None
@@ -154,17 +157,26 @@ class SegmentationWorker:
                 )
 
     async def _teardown_listeners(self) -> None:
-        """Remove listeners and close dedicated connections."""
+        """Remove every listener, THEN close each connection once.
+
+        Two phases because connections are now shared across spaces: closing
+        inside the per-channel loop would shut the connection on the first
+        channel and leave every later `remove_listener` failing against a
+        closed connection.
+        """
         for conn, channel in self._listen_conns:
             try:
                 await conn.remove_listener(channel, self._on_notify)
             except Exception:
                 pass
+        self._listen_conns.clear()
+
+        for conn in self._listen_conn_by_dsn.values():
             try:
                 await conn.close()
             except Exception:
                 pass
-        self._listen_conns.clear()
+        self._listen_conn_by_dsn.clear()
 
     def _on_notify(self, conn, pid, channel, payload) -> None:
         """asyncpg notification callback — sets the wake event."""
@@ -172,10 +184,24 @@ class SegmentationWorker:
         self._wake_event.set()
 
     async def _get_listen_connection(self, space_id: str):
-        """Acquire a *dedicated* raw asyncpg connection for LISTEN.
+        """A long-lived raw connection to LISTEN on, SHARED across spaces.
 
-        LISTEN requires a long-lived connection that is NOT returned to
-        the pool, so we create a standalone one.
+        LISTEN needs a connection that is never returned to the pool, but it
+        does NOT need one per channel: a single PostgreSQL connection can hold
+        any number of LISTENs. Opening one per space made the worker's
+        connection use grow linearly with the number of spaces, and on a
+        database with 86 spaces it consumed 90 of `max_connections = 100`:
+
+            90 idle connections, each holding one LISTEN "{space}_seg_jobs"
+
+        That starved everything else — "sorry, too many clients already" in the
+        server log, the backfill task unable to set up its own listener, and
+        intermittent integration failures that looked like a concurrency race
+        for two days (`issues/085`).
+
+        Connections are keyed by DSN rather than shared globally, because two
+        spaces may in principle live in different databases; in practice that
+        yields one connection.
         """
         try:
             space_record = await self._space_manager.get_space_or_load(space_id)
@@ -201,8 +227,16 @@ class SegmentationWorker:
             if dsn is None and hasattr(pool, '_connect_kwargs'):
                 dsn = pool._connect_kwargs
             if dsn and isinstance(dsn, dict):
+                key = (dsn.get('host'), dsn.get('port'), dsn.get('database'),
+                       dsn.get('user'))
+                existing = self._listen_conn_by_dsn.get(key)
+                if existing is not None and not existing.is_closed():
+                    return existing
                 conn = await asyncpg.connect(**dsn)
-                logger.info("LISTEN: dedicated connection created for space %s", space_id)
+                self._listen_conn_by_dsn[key] = conn
+                logger.info("LISTEN: shared connection opened for %s (space %s); "
+                            "further spaces on this database reuse it",
+                            key[2], space_id)
                 return conn
             logger.warning("LISTEN: could not extract DSN from pool for space %s", space_id)
             return None
