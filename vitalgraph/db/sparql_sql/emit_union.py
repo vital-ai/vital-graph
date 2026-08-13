@@ -83,8 +83,28 @@ def emit_union(plan: PlanV2, ctx: EmitContext) -> str:
         # text column only carries a value when every contributing branch
         # materialised it.
         tm = all(i.text_materialized for i in (l_info, r_info) if i)
+        # Term identity propagates on exactly the same terms as text does, and
+        # for the same reason: the merged column is only as good as every branch
+        # feeding it. Without this a UNION's output NEVER claimed term identity
+        # — `simple_output` defaults from_triple and uuid_materialized to False
+        # — so `emit_join` fell through to comparing the sides as TEXT:
+        #
+        #     ON CAST(j0.v0 AS TEXT) = CAST(j1.v3 AS TEXT)
+        #
+        # even though the branches had carried real term UUIDs the whole way up.
+        # That cost 1.2x on a 570,696-row join (2,172 -> 1,816 ms, same rows),
+        # and it is the landmine that made withholding text for a counted
+        # variable return 0: text NULL on both sides, so the join matched
+        # nothing (issues/088).
+        #
+        # A branch that does not bind the variable contributes no ColumnInfo and
+        # is skipped by `if i`; its rows carry a NULL uuid, which is genuinely
+        # unbound here rather than "no term identity", so the distinction
+        # `has_term_identity` exists to preserve (issues/026, 087) is intact.
+        ti = all(i.has_term_identity() for i in (l_info, r_info) if i)
         ctx.types.register(ColumnInfo.simple_output(
-            v, out_names[v], typed_lane=lane, text_materialized=tm))
+            v, out_names[v], typed_lane=lane, text_materialized=tm,
+            uuid_materialized=ti))
 
     sql = (
         f"SELECT {', '.join(outer_cols)}\n"

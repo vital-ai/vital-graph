@@ -63,6 +63,7 @@ from ..kg_impl.kgframe_query_impl import KGFrameQueryProcessor
 
 # Import backend utilities
 from ..kg_impl.kg_backend_utils import create_backend_adapter
+from ..cache.count_cache import _count_cache
 from ..auth.role_dependencies import require_space_read, require_space_write
 
 
@@ -908,8 +909,30 @@ class KGFramesEndpoint:
                 created_after=created_after, created_before=created_before,
                 modified_after=modified_after, modified_before=modified_before,
             )
-            count_results = await backend.execute_sparql_query(space_id, count_query)
-            total_count = self._extract_count_from_results(count_results)
+            # This count is GRAPH-scoped and re-run on every page load and every
+            # page change. On a 1.1M-frame graph the Assertion filter puts it at
+            # ~2.9 s, which was the whole remaining cost of that tab. The entity-
+            # scoped count is 0.1 ms, and timing THAT one is how this was audited
+            # as "fine" and left uncached while kgentities/kgquery/graphs all use
+            # the cache.
+            #
+            # Keyed by the query hash, so each filter combination is its own
+            # entry — an Assertion count and an unfiltered count are different
+            # questions about the same graph. Invalidation needs no work here:
+            # the write paths already call invalidate_graph/invalidate_space.
+            count_hash = _count_cache.query_hash(count_query)
+            total_count = _count_cache.get(space_id, graph_id, count_hash)
+            if total_count is None:
+                count_results = await backend.execute_sparql_query(space_id, count_query)
+                total_count = self._extract_count_from_results(count_results)
+                # A failed count returns 0, and a cached 0 is indistinguishable
+                # from a genuinely empty graph — issues/082 on a page whose job
+                # is to report size. Only cache a count that came from a query
+                # that actually ran.
+                if count_results is not None and not (
+                        isinstance(count_results, dict)
+                        and count_results.get("success") is False):
+                    _count_cache.put(space_id, graph_id, count_hash, total_count)
             quads = await asyncio.to_thread(graphobjects_to_quad_list, frames or [], graph_id)
             return QuadResponse(
                 status=OperationStatus.FOUND if frames else OperationStatus.EMPTY,

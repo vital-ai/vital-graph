@@ -3,8 +3,7 @@
 ## Status: PARTIALLY FIXED 2026-08-13 — fast when the predicate is absent, still 9.7 s when it is not
 
 The frames "Assertion" tab took **13.4 seconds** on a 1.1M-frame graph. It is now
-**1.9–2.3 s**. (It measured 0.55–0.9 s before fix 3 below was reverted for
-returning 0 on any COUNT over a UNION; the count is the remaining cost.) But the fix only reaches the case where the predicates are
+**0.76 s cold, 0.03 s warm**. But the fix only reaches the case where the predicates are
 missing from the space entirely, and **22 of 79 spaces on this database do have
 them**. In those spaces the same shape is still measured at 9.7 s.
 
@@ -52,11 +51,34 @@ End to end over HTTP, `sp_lead_synth_100k`, 1.1M frames:
 
 | | before | after |
 |---|---|---|
-| Assertions tab, cold | 13,366 ms | 2,333 ms |
-| Assertions tab, warm | 11,466 ms | 1,883 ms |
+| Assertions tab, cold | 13,366 ms | 756 ms |
+| Assertions tab, warm | 11,466 ms | 29 ms |
 | Aspects tab | 84 ms | 44 ms |
 
-## Fix 3 was reverted — it returned 0 for any COUNT over a UNION
+## Fix 3 was reverted, the real cause found, and then RE-APPLIED
+
+**Resolved 2026-08-13.** The account below is what happened first and why; the
+underlying defect is now fixed in `emit_union` and fix 3 is back in place, with
+`tests/integration/test_count_over_union.py` guarding it.
+
+A UNION's output column never claimed term identity — `ColumnInfo.simple_output`
+defaults `from_triple` and `uuid_materialized` to False — so `emit_join` fell
+through to comparing the sides as TEXT even though the branches carried real
+term UUIDs. That was true independently of fix 3 and cost 1.2x on every such
+join (2,172 -> 1,816 ms on 570,696 rows). `emit_union` now propagates term
+identity from its branches on the same terms it already propagated
+`text_materialized`, so the join compares UUIDs and no longer depends on text
+existing.
+
+Two more counts were added on top: the frames count now goes through
+`_count_cache` like `kgentities`/`kgquery`/`graphs` already did.
+
+    Assertions tab, cold   2,333 ms -> 756 ms
+    Assertions tab, warm   1,883 ms ->  29 ms
+
+### The original account
+
+
 
 `var_scope` was taught to skip text resolution for a variable that is only ever
 COUNTed, because COUNT aggregates the UUID column. That is true of the

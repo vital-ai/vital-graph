@@ -370,6 +370,21 @@ def _collect_all_bgp_vars(plan: PlanV2, result: Set[str]) -> None:
         _collect_all_bgp_vars(child, result)
 
 
+def _counts_a_bare_var(agg_expr) -> bool:
+    """True for ``COUNT(?v)`` / ``COUNT(DISTINCT ?v)`` over a plain variable.
+
+    These aggregate a UUID column rather than text, so the counted variable
+    needs no term JOIN. Everything else — COUNT of a compound expression,
+    COUNT(*), and every non-COUNT aggregate (MIN/MAX/SUM/AVG/GROUP_CONCAT/
+    SAMPLE) — reads a value column and is excluded.
+    """
+    if not isinstance(agg_expr, ExprAggregator):
+        return False
+    if (agg_expr.name or "COUNT").upper() != "COUNT":
+        return False
+    return isinstance(agg_expr.expr, ExprVar)
+
+
 def _collect_referenced_vars(plan: PlanV2, refs: Set[str]) -> None:
     """Collect all variables referenced by any modifier in the plan tree."""
     kind = plan.kind
@@ -403,6 +418,26 @@ def _collect_referenced_vars(plan: PlanV2, refs: Set[str]) -> None:
         if plan.aggregates:
             for agg_var, agg_expr in plan.aggregates.items():
                 refs.add(agg_var)
+                if _counts_a_bare_var(agg_expr):
+                    # COUNT(?v) / COUNT(DISTINCT ?v) aggregates the UUID column
+                    # (emit_group._qualify_agg_inner), so the term JOIN that
+                    # resolves ?v's TEXT is pure cost: 2,180 ms against 542 ms
+                    # counting the frames of a 1.1M-frame graph.
+                    #
+                    # This was tried once before and REVERTED, because it made
+                    # every COUNT over a UNION return 0. The cause was not here:
+                    # a UNION's output column never claimed term identity, so
+                    # emit_join compared the sides as TEXT, and withholding text
+                    # left both sides NULL. emit_union now propagates term
+                    # identity from its branches, so the join compares UUIDs and
+                    # does not depend on text existing. tests/integration/
+                    # test_count_over_union.py is the guard; it fails without
+                    # that fix.
+                    #
+                    # Only a BARE variable qualifies. COUNT(expr) may evaluate
+                    # text, and COUNT(*) / COUNT(DISTINCT *) is handled below —
+                    # it builds a ROW() over the child's columns and needs them.
+                    continue
                 extracted = vars_in_expr(agg_expr)
                 if extracted:
                     refs.update(extracted)
