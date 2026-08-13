@@ -24,13 +24,13 @@ WITH constants AS (
          vitalgraph1__wordnet_frames__term_unlogged t8,
          vitalgraph1__wordnet_frames__term_unlogged t9
     WHERE t1.term_text = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
-      AND t2.term_text = 'http://vital.ai/ontology/vital-core#KGEntity'
+      AND t2.term_text = 'http://vital.ai/ontology/haley-ai-kg#KGEntity'
       AND t3.term_text = 'http://vital.ai/ontology/vital-core#hasName'
-      AND t4.term_text = 'http://vital.ai/ontology/vital-core#hasDescription'
-      AND t5.term_text = 'http://vital.ai/ontology/vital-core#hasEntitySlotValue'
-      AND t6.term_text = 'http://vital.ai/ontology/vital-core#hasSlotType'
-      AND t7.term_text = 'http://vital.ai/ontology/vital-core#hasSourceEntity'
-      AND t8.term_text = 'http://vital.ai/ontology/vital-core#hasDestinationEntity'
+      AND t4.term_text = 'http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription'
+      AND t5.term_text = 'http://vital.ai/ontology/haley-ai-kg#hasEntitySlotValue'
+      AND t6.term_text = 'http://vital.ai/ontology/haley-ai-kg#hasKGSlotType'
+      AND t7.term_text = 'urn:hasSourceEntity'
+      AND t8.term_text = 'urn:hasDestinationEntity'
       AND t9.term_text = 'urn:wordnet_frames'
 ),
 -- Test 1: Check if happy_entities CTE works

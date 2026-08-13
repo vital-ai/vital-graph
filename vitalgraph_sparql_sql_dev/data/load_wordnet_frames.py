@@ -66,7 +66,26 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-DEFAULT_DSN = "host=localhost port=5432 dbname=sparql_sql_graph user=postgres"
+def _default_dsn() -> str:
+    """The DSN from the shared env-aware resolver, not a second hardcoded copy.
+
+    This literal used to name `fuseki_sql_graph`, a database this project does
+    not use and which holds none of these tables — so the default sent every
+    query to the wrong place. `db.get_connection_params` already reads
+    PGHOST/PGDATABASE and falls back to the LOCAL_DB_* values in .env, so
+    deriving from it means the name cannot drift again.
+
+    Falls back to the literal when db.py is not importable, since this script
+    is also run standalone.
+    """
+    try:
+        from vitalgraph_sparql_sql_dev import db
+        return db.get_connection_string()
+    except Exception:
+        return "host=localhost port=5432 dbname=sparql_sql_graph user=postgres"
+
+
+DEFAULT_DSN = _default_dsn()
 DEFAULT_GRAPH_URI = "urn:wordnet_frames"
 DEFAULT_DATASET = "primary"
 
