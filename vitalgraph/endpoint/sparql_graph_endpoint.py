@@ -22,6 +22,7 @@ from ..model.sparql_model import (
 )
 from ..model.result_status import OperationStatus
 from ..auth.role_dependencies import require_space_read, require_space_write
+from ..cache.count_cache import _count_cache
 
 
 class SPARQLGraphEndpoint:
@@ -616,7 +617,6 @@ class SPARQLGraphEndpoint:
                 # alternative — packing three counts into one — would silently
                 # truncate any graph with more than ~2M frames. Three keys cost
                 # nothing and cannot be wrong.
-                from ...cache.count_cache import _count_cache
                 _keys = {
                     name: _count_cache.query_hash(
                         f"graph_counts::{space_id}::{graph_id}::{name}")
