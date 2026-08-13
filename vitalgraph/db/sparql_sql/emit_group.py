@@ -385,15 +385,7 @@ def _qualify_agg_inner(inner_expr, agg_expr: ExprAggregator,
         # Use UUID column for triple-sourced vars: UUID is non-null iff
         # the variable is bound, same as text.  This is robust when term
         # JOINs are deferred past GROUP BY (text column would be NULL).
-        #
-        # The second clause is the interlock for the matching decision in
-        # var_scope._counts_a_bare_var, which declines to request text for a
-        # variable only ever counted. If text was withheld, the text column is
-        # NULL on every row and counting it would silently return 0 — so
-        # whenever text is absent, count the UUID regardless of from_triple.
-        text_withheld = (ctx.text_needed_vars is not None
-                         and var not in ctx.text_needed_vars)
-        if info.from_triple or text_withheld:
+        if info.from_triple:
             return f"{src_alias}.{info.sql_name}__uuid"
         return f"{src_alias}.{info.sql_name}"
 

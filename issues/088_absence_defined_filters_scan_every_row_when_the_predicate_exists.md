@@ -3,7 +3,8 @@
 ## Status: PARTIALLY FIXED 2026-08-13 — fast when the predicate is absent, still 9.7 s when it is not
 
 The frames "Assertion" tab took **13.4 seconds** on a 1.1M-frame graph. It is now
-**0.55–0.9 s**. But the fix only reaches the case where the predicates are
+**1.9–2.3 s**. (It measured 0.55–0.9 s before fix 3 below was reverted for
+returning 0 on any COUNT over a UNION; the count is the remaining cost.) But the fix only reaches the case where the predicates are
 missing from the space entirely, and **22 of 79 spaces on this database do have
 them**. In those spaces the same shape is still measured at 9.7 s.
 
@@ -41,8 +42,8 @@ given page is repeatable.
     ORDER BY ?frame     5,571 ms
     no ORDER BY           611 ms
 
-**3. `COUNT(?v)` no longer requests text for `?v`** (`var_scope`). COUNT
-aggregates the UUID column, so the term JOIN resolving the text was pure cost.
+**3. `COUNT(?v)` no longer requests text for `?v`** — **REVERTED the same day,
+it was wrong.** See below.
 
     count with the term JOIN   2,180 ms
     without it                   542 ms
@@ -51,9 +52,46 @@ End to end over HTTP, `sp_lead_synth_100k`, 1.1M frames:
 
 | | before | after |
 |---|---|---|
-| Assertions tab, cold | 13,366 ms | 909 ms |
-| Assertions tab, warm | 11,466 ms | 548 ms |
+| Assertions tab, cold | 13,366 ms | 2,333 ms |
+| Assertions tab, warm | 11,466 ms | 1,883 ms |
 | Aspects tab | 84 ms | 44 ms |
+
+## Fix 3 was reverted — it returned 0 for any COUNT over a UNION
+
+`var_scope` was taught to skip text resolution for a variable that is only ever
+COUNTed, because COUNT aggregates the UUID column. That is true of the
+aggregate and false of the JOIN feeding it. `emit_join` compares the sides on
+their TEXT columns:
+
+    ON CAST(j0.v0 AS TEXT) = CAST(j1.v3 AS TEXT)
+
+With text withheld both sides are NULL, `NULL = NULL` never holds, the join
+matches nothing, and the count is 0. An interlock was added in `emit_group` so
+the aggregate reads the UUID column when text is absent — it covered the
+aggregate and missed the join predicate entirely, which is the narrower mistake
+inside the wrong one.
+
+Found while fixing the frames slot panel: the same pattern returned 4 rows as
+`SELECT DISTINCT ?slot` and 0 as `COUNT(DISTINCT ?slot)`. Confirmed against
+`e4e4536~1` — pre-change 3, post-change 0 — so it was this change and not a
+pre-existing defect.
+
+The cost of reverting is real and worth naming: the assertion count goes back
+from 542 ms to 2,877 ms. It is still far better than the 5,965 ms it started at,
+because the `NOT EXISTS` fold does the heavy lifting and is unaffected. A count
+that is fast and silently zero is not a faster count.
+
+**Why no test caught it.** A count over a plain BGP was correct throughout; only
+a count over a UNION broke, and nothing exercised that. There is now
+`tests/integration/test_count_over_union.py`, verified to FAIL against the
+reverted code (2 of 3 cases) and pass with it.
+
+**If this is attempted again**, the variable must be proven not to be a join
+key, or `emit_join` must compare UUIDs when text is unavailable. Joining on
+UUID is arguably better anyway — it is narrower and already what COUNT and the
+synthesized paging order use — but it is a change to the core join emitter and
+wants its own differential test rather than being smuggled in as an
+optimisation.
 
 ## What is NOT fixed
 

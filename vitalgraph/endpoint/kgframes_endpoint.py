@@ -1878,88 +1878,111 @@ class KGFramesEndpoint:
         }}
         """
     
+    # Slot subclasses that carry a literal value. These reach their frame through
+    # hasFrameGraphURI. KGEntitySlot is deliberately NOT here — it carries an
+    # ENTITY and reaches its frame through an Edge_hasKGSlot edge instead, which
+    # is why it needs its own branch below.
+    _ATTRIBUTE_SLOT_CLASSES = (
+        "KGTextSlot", "KGIntegerSlot", "KGDateTimeSlot",
+        "KGBooleanSlot", "KGDoubleSlot",
+    )
+
+    def _build_slot_match_pattern(self, frame_uri: Optional[str]) -> str:
+        """SPARQL matching a frame's slots under EITHER linkage.
+
+        The model has two frame families and a space may contain both, so this
+        cannot choose one (79 spaces: 21 attribute-only, 8 connection-only, 6
+        with both):
+
+          attribute  entity -> frame -> slot -> LITERAL, slot joined to its
+                     frame by `hasFrameGraphURI`;
+          connection entity -> frame -> slot -> ENTITY, the frame joined to its
+                     slots by an `Edge_hasKGSlot` edge (frame is the edge
+                     SOURCE, slot the DESTINATION) and the slot's role carried
+                     in `hasKGSlotType`.
+
+        Only the attribute half was implemented, so the frames UI reported "No
+        slots found" for connection frames that plainly had them — and did so
+        silently, because a pattern anchored on an absent predicate matches
+        nothing rather than failing. It missed twice over: `hasFrameGraphURI`
+        has zero rows in such a space, and KGEntitySlot was absent from the
+        subclass list, so repairing the linkage alone would still have returned
+        nothing.
+
+        DISTINCT at the call site is what keeps a slot appearing once when a
+        space uses both linkages.
+        """
+        haley = self.haley_prefix
+        vital = self.vital_prefix
+        subclasses = " UNION ".join(
+            f"{{ ?slot a <{haley}{c}> . }}" for c in self._ATTRIBUTE_SLOT_CLASSES
+        )
+        attribute_scope = (
+            f"\n                  ?slot <{haley}hasFrameGraphURI> <{frame_uri}> ."
+            if frame_uri else ""
+        )
+        attribute = (
+            f"{{ ?slot <{haley}hasFrameGraphURI> ?_frameGraphURI .\n"
+            f"                  {subclasses}{attribute_scope} }}"
+        )
+
+        if frame_uri:
+            # Anchored on the frame, so the edge is what scopes it.
+            connection = (
+                f"{{ ?slot a <{haley}KGEntitySlot> .\n"
+                f"                  ?_slotEdge <{vital}hasEdgeDestination> ?slot .\n"
+                f"                  ?_slotEdge <{vital}hasEdgeSource> <{frame_uri}> . }}"
+            )
+        else:
+            # Listing every slot in the graph: the type alone identifies them,
+            # and joining the edge would only add cost.
+            connection = f"{{ ?slot a <{haley}KGEntitySlot> . }}"
+
+        return f"{attribute}\n                UNION\n                {connection}"
+
     def _build_list_slots_query(self, backend, space_id: str, graph_id: str, frame_uri: Optional[str], page_size: int, offset: int,
                                 sort_by: Optional[str] = None, sort_order: str = "asc") -> str:
-        """Build SPARQL query for listing slot subjects by finding objects with hasFrameGraphURI property."""
+        """Build SPARQL for listing a frame's slots, under either linkage."""
         # Get the proper space-specific graph URI
         if hasattr(backend, '_get_space_graph_uri'):
             full_graph_uri = backend._get_space_graph_uri(space_id, graph_id)
         else:
             full_graph_uri = graph_id
 
-        frame_filter = ""
-        if frame_uri:
-            frame_filter = f"""
-            ?slot haley:hasFrameGraphURI <{frame_uri}> .
-            """
-
         return f"""
         PREFIX haley: <{self.haley_prefix}>
         PREFIX vital: <{self.vital_prefix}>
 
-        SELECT DISTINCT ?slot WHERE {{{{
-            GRAPH <{full_graph_uri}> {{{{
-                # Find objects that have hasFrameGraphURI property (these are slot objects)
-                ?slot haley:hasFrameGraphURI ?hasFrameGraphURI .
-                # Match all concrete slot subclasses
-                {{
-                    ?slot a haley:KGTextSlot .
-                }} UNION {{
-                    ?slot a haley:KGIntegerSlot .
-                }} UNION {{
-                    ?slot a haley:KGDateTimeSlot .
-                }} UNION {{
-                    ?slot a haley:KGBooleanSlot .
-                }} UNION {{
-                    ?slot a haley:KGDoubleSlot .
-                }}
-                {frame_filter}
-            }}}}
-        }}}}
+        SELECT DISTINCT ?slot WHERE {{
+            GRAPH <{full_graph_uri}> {{
+                {self._build_slot_match_pattern(frame_uri)}
+            }}
+        }}
         ORDER BY ?slot
         LIMIT {page_size}
         OFFSET {offset}
         """
 
     def _build_count_slots_query(self, backend, space_id: str, graph_id: str, frame_uri: Optional[str]) -> str:
-        """Build SPARQL count query for slots by finding objects with hasFrameGraphURI property."""
+        """Count a frame's slots. Must use the SAME pattern as the list query —
+        a count from one linkage beside a list from both reads as data loss."""
         # Get the proper space-specific graph URI
         if hasattr(backend, '_get_space_graph_uri'):
             full_graph_uri = backend._get_space_graph_uri(space_id, graph_id)
         else:
             full_graph_uri = graph_id
-            
-        frame_filter = ""
-        if frame_uri:
-            frame_filter = f"""
-            ?slot haley:hasFrameGraphURI <{frame_uri}> .
-            """
-            
+
         return f"""
         PREFIX haley: <{self.haley_prefix}>
         PREFIX vital: <{self.vital_prefix}>
-        
+
         SELECT (COUNT(DISTINCT ?slot) as ?count) WHERE {{
             GRAPH <{full_graph_uri}> {{
-                # Find objects that have hasFrameGraphURI property (these are slot objects)
-                ?slot haley:hasFrameGraphURI ?hasFrameGraphURI .
-                # Match all concrete slot subclasses
-                {{
-                    ?slot a haley:KGTextSlot .
-                }} UNION {{
-                    ?slot a haley:KGIntegerSlot .
-                }} UNION {{
-                    ?slot a haley:KGDateTimeSlot .
-                }} UNION {{
-                    ?slot a haley:KGBooleanSlot .
-                }} UNION {{
-                    ?slot a haley:KGDoubleSlot .
-                }}
-                {frame_filter}
+                {self._build_slot_match_pattern(frame_uri)}
             }}
         }}
         """
-    
+
     def _build_get_frame_query(self, graph_id: str, frame_uri: str, include_frame_graph: bool = False) -> str:
         """Build SPARQL query for getting frame subjects by subject URI."""
         if include_frame_graph:

@@ -17,6 +17,92 @@ reference query and its supporting work live. All entity-to-frame topologies are
 supported by design, and the edge-traversal tables were defined for exactly this
 shape; the finding is a broken rewrite, not an abandoned representation.
 
+## UPDATE 2026-08-13 — the table is complete and correct; nothing uses it
+
+`frame_entity` is not a half-built idea. On `wordnet_frames`:
+
+    rows                              285,348   exactly one per KGFrame
+    with BOTH source and dest         285,348   100%
+    indexes            fe_frame, fe_src_frame, fe_dst_frame, fe_ctx, pkey
+
+    lookup by frame, resolved           0.34 ms
+    same answer by quad traversal       1.91 ms
+
+Spot-checked against a real frame (`...1716488391362_692038076`,
+Edge_WordnetHypernym): the table returns `norethynodrel -> progestin,
+progestogen`, identical to what the six-table slot traversal returns. It is
+indexed for traversal in BOTH directions, so it serves `entity -> frame -> slot`
+and `slot -> entity` equally.
+
+**The model this represents.** A connection frame IS the relationship between
+two entities — the frame/slot structure is how that relationship is spelled out
+in quads, and `(frame, source_entity, dest_entity)` is what it reduces to. That
+is the same move the edge table made, and the edge table is measured in this
+issue at 8x on the O(matches) path. `frame_entity` is that idea one level up,
+collapsing 6 tables (2 edge + 2 slot_type + 2 slot_value) into 1.
+
+So the gap is not the representation and not the data. The rewrite declines
+whenever a constraint lands on the slot node, which is most of the time, and the
+finished answer goes unread.
+
+### A user-visible consequence, found today
+
+The frames UI shows "No slots found for this frame" for frames that demonstrably
+have slots. `_build_list_slots_query` in `kgframes_endpoint.py` implements only
+the ATTRIBUTE half of the model and fails twice over on connection data:
+
+* it joins slots to frames through `hasKGraphDescription`'s sibling
+  `hasFrameGraphURI`, which has **0 term rows** in `wordnet_frames`;
+* its subclass UNION enumerates `KGTextSlot`, `KGIntegerSlot`, `KGDateTimeSlot`,
+  `KGBooleanSlot`, `KGDoubleSlot` — and omits `KGEntitySlot`, which is what this
+  data has. Fixing the linkage alone would still return nothing.
+
+This is not a wordnet quirk. Across 79 spaces:
+
+    hasFrameGraphURI (attribute linkage)   21 spaces
+    KGEntitySlot     (connection slots)     8 spaces
+    both                                    6 spaces
+
+So the two families coexist inside single spaces, and the slot endpoint has to
+serve both rather than choose. Being defined by an absent predicate, the failure
+is silent — "no slots" is indistinguishable from a frame that has none.
+
+### Corrections to what this issue said
+
+* **`Edge_hasKGRelation` is no longer "zero instances everywhere".** 11 of 79
+  spaces carry the term — but they are all `graph_viz_*`, `*_test` and
+  `kgquery_perf` fixtures. wordnet still has none, so the path remains untested
+  against real data and the substance of the finding stands.
+* **The 27,155 ms unrewritten page is stale.** It predates the whole 2026-08
+  performance run. A connection-path query on the same space measured 66-101 ms
+  today, though that was the graph-expand shape rather than the canonical frame
+  query, so it does not refute the number — it means nobody should plan against
+  it before re-measuring.
+* **The MV variant is now dead everywhere, not merely dormant.**
+  `wordnet_exp_edge_mv` and `wordnet_exp_frame_entity_mv` lived in the
+  `fuseki_sql_graph` database — which this project does not use — and were
+  dropped with the `wordnet_exp` space on 2026-08-13. `jena_sql_frame_entity_mv.py`
+  gates on `pg_matviews` and is imported only from within
+  `vitalgraph_sparql_sql_dev`; nothing in the shipped `vitalgraph/` package
+  references it. The shipped path is `rewrite_frame_entity_table` against the
+  TABLE, and it is confirmed still not firing: SQL generated for the expand
+  query contains no `frame_entity` reference, only `_edge`.
+* **`frame_entity` is populated in 1 space of 79** now that `wordnet_exp` is
+  removed. It is empty by construction for attribute frames, so it can
+  accelerate the connection path but cannot be the only path.
+
+### Where that leaves the work
+
+Unchanged and still the goal: make the rewrite handle slot-level constraints, by
+proving them redundant or by carrying a slot column. Until then the table is
+inert.
+
+Deliberately NOT done: having the endpoint read `frame_entity` directly. It
+would be fast and small, and it would hardcode a derived table into an endpoint
+and inherit the staleness problem in `issues/041`. The SPARQL path is being
+fixed instead, so the speed arrives through the rewrite where every caller gets
+it.
+
 ### The bug
 
 `rewrite_frame_entity_table` collapses six tables (2 edge + 2 slot_type + 2
