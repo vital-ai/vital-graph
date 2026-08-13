@@ -1,6 +1,36 @@
 # `include_slot_counts` Makes the Entity Detail Page 160x Slower
 
-## Status: OPEN — measured 2026-08-13
+## Status: OPEN — ROOT CAUSE FOUND 2026-08-13, and it is not local to this page
+
+**The cause is `issues/087`: `VALUES` with URI constants is never materialized to
+term UUIDs, so it degenerates into a full scan with a text comparison.** This
+page's 160x is that defect seen through one endpoint. Fixing it here alone would
+leave the same cost in KGQuery entity-URI filtering, connection and relation
+queries, document management, segment deletion, and `DESCRIBE` — 18 files build
+a `VALUES` clause.
+
+`EXPLAIN ANALYZE` on the slot-count query, with real frame URIs:
+
+    Parallel Seq Scan on sp_lead_synth_100k_term t_v2   (10.4M-row term table)
+    Parallel Seq Scan on sp_lead_synth_100k_edge  mv0   (full edge table)
+    Join Filter: (mv0.source_node_uuid IS NULL)
+                 OR ('urn:acme:lead:...frame:leadstatusframe:0'::text
+                     = t_v2.term_text)
+    Rows Removed by Join Filter: 1,292,333
+    Buffers: shared hit=325,953
+
+That confirms the hypothesis recorded below and refutes nothing else in it: the
+`VALUES ?frame` restriction is applied as a post-join text filter, so the work is
+proportional to the term and edge tables rather than to the two frames asked
+about. The query returns 0 rows — correctly, both top frames are parents with no
+direct slots — and still reads 325,953 buffers to say so.
+
+**What that changes about the fix.** The three directions below are still valid
+as mitigations, but the real fix is `087`. In particular, "bound the count query
+by the frames asked for" is not an endpoint change: it is making `VALUES` reach
+`materialize_constants` like every other constant already does.
+
+## Original status: OPEN — measured 2026-08-13
 
 Reported from the UI as an entity page that "loads very slowly in two phases".
 Reproduced and attributed.
@@ -59,8 +89,8 @@ grouped query for the whole page, not one per frame, so that is not it:
 edge-table rewrite. Measured both forms — 3,806 ms and 3,613 ms, and
 `{space}_edge` appears in the generated SQL either way. The rewrite fires.
 
-**Supported, not proven:** the `VALUES ?frame` restriction is not bounding the
-scan. In that same test the query matched **0 rows and still took 3.7 s**, which
+**Supported, and now CONFIRMED by the plan above:** the `VALUES ?frame`
+restriction is not bounding the scan. In that same test the query matched **0 rows and still took 3.7 s**, which
 is the signature of work proportional to all `Edge_hasKGSlot` edges in the space
 (~1M+ here) rather than to the two frames asked about. A grouped aggregate whose
 input is not restricted by the `VALUES` join would behave exactly like this.
