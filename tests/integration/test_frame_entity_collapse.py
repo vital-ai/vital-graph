@@ -1,0 +1,404 @@
+"""The 6-table frame traversal that `frame_entity` exists to collapse.
+
+`rewrite_frame_entity_table` replaces six quad tables
+
+    2 edge         frame --hasEdgeSource/hasEdgeDestination--> slot
+    2 slot_type    slot --hasKGSlotType--> <urn:hasSourceEntity> / <...Destination>
+    2 slot_value   slot --hasEntitySlotValue--> entity
+
+with one row of `{space}_frame_entity(frame_uuid, source_entity_uuid,
+dest_entity_uuid, context_uuid)`. That is the shape a CRITERIA query has: one
+that filters across many frames by what sits at each end, rather than fetching
+one known frame's slots.
+
+`issues/048` is the standing record. Two things there make this worth pinning
+down with tests rather than prose:
+
+  * the rewrite once emitted SQL PostgreSQL rejected outright — `missing
+    FROM-clause entry for table "mv0"` — because it collapsed the six tables
+    while a constraint still referenced a collapsed alias;
+  * the guard added for that makes the rewrite DECLINE on any slot-node
+    constraint, and `frame_entity` holds a slot no column, so the canonical
+    query (which says `?sourceSlot a KGEntitySlot`) is exactly the case that
+    declines. The table is therefore correct, populated, and unread.
+
+So these tests assert the CONTRACT rather than which branch is taken: whichever
+way the rewrite goes, the answer must be the same and the SQL must run. That way
+they keep passing when the rewrite is taught to handle slot constraints — the
+open work in 048 — and fail if it starts collapsing something it should not.
+
+The fixture is deliberately tiny and built here rather than borrowed from a
+development space: `frame_entity` is populated in one space of 79, so a test
+that depended on finding one would silently skip.
+"""
+
+from __future__ import annotations
+
+import uuid
+
+import pytest
+import pytest_asyncio
+from rdflib import URIRef
+
+from .conftest import skip_no_infra, TEST_SPACE_PREFIX, SIDECAR_URL
+
+pytestmark = [
+    pytest.mark.integration,
+    skip_no_infra,
+    pytest.mark.asyncio(loop_scope="session"),
+]
+
+HALEY = "http://vital.ai/ontology/haley-ai-kg#"
+VITAL = "http://vital.ai/ontology/vital-core#"
+RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+EX = "http://example.org/fe/"
+
+SRC_ROLE = "urn:hasSourceEntity"
+DST_ROLE = "urn:hasDestinationEntity"
+
+# Three frames, so a criteria query has something to filter ACROSS. Frame 0 and
+# 1 share a source entity; frame 2 is disjoint. That makes "frames whose source
+# is e0" a question with a non-trivial answer — 2 of 3 — rather than all or one.
+FRAMES = [
+    ("f0", "e0", "e1"),
+    ("f1", "e0", "e2"),
+    ("f2", "e3", "e4"),
+]
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
+async def collapse_space(make_space):
+    return await make_space(f"{TEST_SPACE_PREFIX}fe_{uuid.uuid4().hex[:8]}")
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
+async def seeded(collapse_space, space_impl):
+    """Build the connection shape: entity -> frame -> slot -> entity."""
+    graph = URIRef(f"urn:{collapse_space}")
+    backend = (space_impl.get_db_space_impl()
+               if hasattr(space_impl, "get_db_space_impl") else space_impl)
+
+    def U(x):
+        return URIRef(x)
+
+    quads = []
+
+    def add(s, p, o):
+        quads.append((U(s), U(p), U(o), graph))
+
+    entities = {e for _f, s, d in FRAMES for e in (s, d)}
+    for e in sorted(entities):
+        add(f"{EX}{e}", RDF_TYPE, f"{HALEY}KGEntity")
+        add(f"{EX}{e}", f"{VITAL}vitaltype", f"{HALEY}KGEntity")
+
+    for fname, src, dst in FRAMES:
+        frame = f"{EX}{fname}"
+        add(frame, RDF_TYPE, f"{HALEY}KGFrame")
+        add(frame, f"{VITAL}vitaltype", f"{HALEY}KGFrame")
+        for role, ent, tag in ((SRC_ROLE, src, "s"), (DST_ROLE, dst, "d")):
+            slot = f"{EX}{fname}_slot_{tag}"
+            edge = f"{EX}{fname}_edge_{tag}"
+            add(slot, RDF_TYPE, f"{HALEY}KGEntitySlot")
+            add(slot, f"{VITAL}vitaltype", f"{HALEY}KGEntitySlot")
+            add(slot, f"{HALEY}hasKGSlotType", role)
+            add(slot, f"{HALEY}hasEntitySlotValue", f"{EX}{ent}")
+            add(edge, RDF_TYPE, f"{HALEY}Edge_hasKGSlot")
+            add(edge, f"{VITAL}vitaltype", f"{HALEY}Edge_hasKGSlot")
+            add(edge, f"{VITAL}hasEdgeSource", frame)
+            add(edge, f"{VITAL}hasEdgeDestination", slot)
+
+    await backend.add_rdf_quads_batch(collapse_space, quads)
+    return collapse_space, str(graph)
+
+
+# ---------------------------------------------------------------------------
+# The criteria query: filter ACROSS frames by what sits at each end
+# ---------------------------------------------------------------------------
+
+def _criteria_query(graph: str, source_entity: str, *, slot_typed: bool) -> str:
+    """The 6-table traversal.
+
+    `slot_typed` adds `?sourceSlot a KGEntitySlot` — a constraint on the SLOT
+    node. `frame_entity` has no slot column, so this is the constraint that
+    cannot be remapped after the collapse and the one the rewrite declines on.
+    The canonical query in the reference SPARQL has it.
+    """
+    src_type = f"?sourceSlot a <{HALEY}KGEntitySlot> ." if slot_typed else ""
+    dst_type = f"?destSlot a <{HALEY}KGEntitySlot> ." if slot_typed else ""
+    return f"""
+    SELECT DISTINCT ?frame ?destEntity WHERE {{ GRAPH <{graph}> {{
+        ?frame a <{HALEY}KGFrame> .
+
+        ?sourceEdge <{VITAL}hasEdgeSource> ?frame .
+        ?sourceEdge <{VITAL}hasEdgeDestination> ?sourceSlot .
+        {src_type}
+        ?sourceSlot <{HALEY}hasKGSlotType> <{SRC_ROLE}> .
+        ?sourceSlot <{HALEY}hasEntitySlotValue> <{source_entity}> .
+
+        ?destEdge <{VITAL}hasEdgeSource> ?frame .
+        ?destEdge <{VITAL}hasEdgeDestination> ?destSlot .
+        {dst_type}
+        ?destSlot <{HALEY}hasKGSlotType> <{DST_ROLE}> .
+        ?destSlot <{HALEY}hasEntitySlotValue> ?destEntity .
+    }} }}"""
+
+
+async def _sql_for(conn, space_id: str, sparql: str) -> str:
+    from vitalgraph.db.jena_sparql.jena_ast_mapper import map_compile_response
+    from vitalgraph.db.jena_sparql.jena_sidecar_client import AsyncSidecarClient
+    from vitalgraph.db.sparql_sql.generator import generate_sql
+
+    client = AsyncSidecarClient(SIDECAR_URL)
+    try:
+        raw = await client.compile(sparql)
+    finally:
+        close = getattr(client, "aclose", None) or getattr(client, "close", None)
+        if close:
+            res = close()
+            if hasattr(res, "__await__"):
+                await res
+    cr = map_compile_response(raw)
+    assert cr.ok, f"SPARQL failed to compile: {cr.error}\n{sparql}"
+    return (await generate_sql(cr, space_id, conn=conn)).sql
+
+
+def _disable_rewrite(monkeypatch):
+    """Turn the frame_entity rewrite off for one query.
+
+    Patch the DEFINING module, not `generator`: `generate_sql` imports the
+    function inside the function body, so the name is looked up in
+    `rewrite_frame_entity_table` at call time and a patch on the generator's
+    namespace has no effect. Doing that produced a differential test that
+    compared the rewritten plan against itself and passed — which is why every
+    caller of this asserts the SQL really changed.
+    """
+    import vitalgraph.db.sparql_sql.rewrite_frame_entity_table as mod
+    monkeypatch.setattr(mod, "rewrite_frame_entity_table",
+                        lambda plan, aliases, space_id: plan)
+
+
+async def _rows(conn, space_id, sparql):
+    sql = await _sql_for(conn, space_id, sparql)
+    return sql, await conn.fetch(sql)
+
+
+def _pairs(rows):
+    """(frame, destEntity) as comparable text, whatever the column names."""
+    out = set()
+    for r in rows:
+        vals = [str(v) for v in r.values() if isinstance(v, str) and v.startswith(EX)]
+        if len(vals) >= 2:
+            out.add((vals[0], vals[1]))
+    return out
+
+
+class TestTheCollapseShape:
+    """What the query must ANSWER, independent of which plan is chosen."""
+
+    @pytest.mark.parametrize("slot_typed", [False, True],
+                             ids=["no-slot-constraint", "slot-typed"])
+    async def test_the_criteria_query_is_correct(self, seeded, pg_conn, slot_typed):
+        """Two of three frames have e0 as their source; the third must not
+        appear, and each must bring its own destination.
+
+        Asserted for both shapes because they take different paths through the
+        rewrite — one is collapsible, the other declines — and a rewrite is only
+        worth having if both give the same answer.
+        """
+        space_id, graph = seeded
+        _sql, rows = await _rows(
+            pg_conn, space_id, _criteria_query(graph, f"{EX}e0", slot_typed=slot_typed))
+        pairs = _pairs(rows)
+
+        assert len(pairs) == 2, f"expected frames f0 and f1, got {sorted(pairs)}"
+        assert {p[0] for p in pairs} == {f"{EX}f0", f"{EX}f1"}
+        assert {p[1] for p in pairs} == {f"{EX}e1", f"{EX}e2"}, (
+            "each frame must carry its OWN destination — mixing them is the "
+            "failure a collapse gets wrong by joining on the frame alone")
+
+    async def test_a_source_with_one_frame_returns_one(self, seeded, pg_conn):
+        """Guards against a collapse that drops the source constraint and
+        returns every frame — which still looks plausible on a fixture where
+        most frames match."""
+        space_id, graph = seeded
+        _sql, rows = await _rows(
+            pg_conn, space_id, _criteria_query(graph, f"{EX}e3", slot_typed=False))
+        pairs = _pairs(rows)
+        assert pairs == {(f"{EX}f2", f"{EX}e4")}, sorted(pairs)
+
+    async def test_an_absent_source_returns_nothing(self, seeded, pg_conn):
+        space_id, graph = seeded
+        _sql, rows = await _rows(
+            pg_conn, space_id, _criteria_query(graph, f"{EX}nope", slot_typed=False))
+        assert _pairs(rows) == set()
+
+
+class TestTheRewriteContract:
+    """`issues/048`: fire correctly, or decline leaving no trace."""
+
+    @pytest.mark.parametrize("slot_typed", [False, True],
+                             ids=["no-slot-constraint", "slot-typed"])
+    async def test_the_sql_runs(self, seeded, pg_conn, slot_typed):
+        """The original defect was invalid SQL — `missing FROM-clause entry for
+        table "mv0"` — from collapsing the six tables while a constraint still
+        named a collapsed alias. A half-applied rewrite is worse than none, so
+        this asserts the statement PLANS as well as returning rows."""
+        space_id, graph = seeded
+        sql = await _sql_for(
+            pg_conn, space_id, _criteria_query(graph, f"{EX}e0", slot_typed=slot_typed))
+        await pg_conn.execute(f"EXPLAIN {sql}")
+
+    async def test_rewrite_on_and_off_agree(self, seeded, pg_conn, monkeypatch):
+        """The differential. Whether the rewrite fires must not change the
+        answer — that is the whole basis for having it.
+
+        Driven by disabling the pass, so this compares the two plans of the SAME
+        query rather than two queries believed equivalent.
+        """
+        space_id, graph = seeded
+        sparql = _criteria_query(graph, f"{EX}e0", slot_typed=False)
+
+        _sql_on, rows_on = await _rows(pg_conn, space_id, sparql)
+
+        _disable_rewrite(monkeypatch)
+        sql_off, rows_off = await _rows(pg_conn, space_id, sparql)
+        assert "frame_entity" not in sql_off, "the rewrite was not disabled"
+
+        assert _pairs(rows_on) == _pairs(rows_off), (
+            "the frame_entity rewrite changed the answer")
+
+    async def test_a_slot_constraint_is_not_silently_dropped(self, seeded, pg_conn):
+        """`frame_entity` has no slot column, so a slot-node constraint cannot
+        be carried through a collapse. It must be honoured by declining — never
+        discarded to make the collapse possible.
+
+        Asserted through behaviour: constrain the slot to a type NOTHING has. If
+        the constraint survives, the answer is empty; if a collapse dropped it,
+        rows come back and the query silently ignored what it was asked.
+        """
+        space_id, graph = seeded
+        sparql = f"""
+        SELECT DISTINCT ?frame WHERE {{ GRAPH <{graph}> {{
+            ?frame a <{HALEY}KGFrame> .
+            ?sourceEdge <{VITAL}hasEdgeSource> ?frame .
+            ?sourceEdge <{VITAL}hasEdgeDestination> ?sourceSlot .
+            ?sourceSlot a <{HALEY}KGTextSlot> .
+            ?sourceSlot <{HALEY}hasKGSlotType> <{SRC_ROLE}> .
+            ?sourceSlot <{HALEY}hasEntitySlotValue> <{EX}e0> .
+        }} }}"""
+        _sql, rows = await _rows(pg_conn, space_id, sparql)
+        assert len(rows) == 0, (
+            "the slots here are KGEntitySlot, so constraining them to "
+            "KGTextSlot must match nothing; rows mean the constraint was lost")
+
+
+class TestWhetherTheTableIsUsed:
+    """Records the CURRENT state so a change is visible, without asserting it
+    must stay that way — making the rewrite fire on this shape is open work."""
+
+    async def test_report_frame_entity_usage(self, seeded, pg_conn):
+        space_id, graph = seeded
+        used = {}
+        for label, typed in (("plain", False), ("slot-typed", True)):
+            sql = await _sql_for(pg_conn, space_id,
+                                 _criteria_query(graph, f"{EX}e0", slot_typed=typed))
+            used[label] = "frame_entity" in sql
+
+        rows = await pg_conn.fetch(
+            f"SELECT count(*) AS n FROM {space_id}_frame_entity")
+        populated = rows[0]["n"] if rows else 0
+
+        print(f"\nframe_entity rows: {populated}")
+        print(f"rewrite reaches frame_entity — plain: {used['plain']}, "
+              f"slot-typed: {used['slot-typed']}")
+
+        assert not used["slot-typed"], (
+            "the rewrite collapsed a query carrying a slot-node constraint. "
+            "That is either the open work in issues/048 finally done — in which "
+            "case delete this assertion — or the guard has regressed and the "
+            "'missing FROM-clause entry' defect is back. The behavioural tests "
+            "above tell you which.")
+
+
+def _both_ends_variable_query(graph: str) -> str:
+    """The same 6 tables, but with BOTH slot values left as variables.
+
+    This is the shape the detector actually accepts. It matters because the
+    difference from `_criteria_query` is one term — whether the source entity is
+    a variable or a constant — and that term decides whether the collapse
+    happens at all.
+    """
+    return f"""
+    SELECT DISTINCT ?frame ?srcEntity ?destEntity WHERE {{ GRAPH <{graph}> {{
+        ?frame a <{HALEY}KGFrame> .
+
+        ?sourceEdge <{VITAL}hasEdgeSource> ?frame .
+        ?sourceEdge <{VITAL}hasEdgeDestination> ?sourceSlot .
+        ?sourceSlot <{HALEY}hasKGSlotType> <{SRC_ROLE}> .
+        ?sourceSlot <{HALEY}hasEntitySlotValue> ?srcEntity .
+
+        ?destEdge <{VITAL}hasEdgeSource> ?frame .
+        ?destEdge <{VITAL}hasEdgeDestination> ?destSlot .
+        ?destSlot <{HALEY}hasKGSlotType> <{DST_ROLE}> .
+        ?destSlot <{HALEY}hasEntitySlotValue> ?destEntity .
+    }} }}"""
+
+
+class TestTheCollapseActuallyHappening:
+    """The rewrite DOES fire — on a narrower shape than 048 suggests.
+
+    It requires both slot values to be VARIABLES. `_find_slot_groups` reads the
+    entity from `quad_object_var`, so a slot value pinned to a constant yields
+    no entity variable, the group is skipped, and the frame ends up with only
+    one of its two groups — logged as "no frame variable carries BOTH a source
+    and a dest group".
+    """
+
+    async def test_it_fires_when_both_ends_are_variables(self, seeded, pg_conn):
+        space_id, graph = seeded
+        sql = await _sql_for(pg_conn, space_id, _both_ends_variable_query(graph))
+        assert "frame_entity" in sql, (
+            "the 6-table pattern with both ends free is the case the rewrite "
+            "was built for; if it stopped firing here the table is entirely "
+            "dead rather than merely under-used")
+
+    async def test_collapsing_gives_the_same_answer(self, seeded, pg_conn, monkeypatch):
+        """The differential on the shape that actually collapses — the one that
+        matters, since this is the plan the rewrite substitutes."""
+        space_id, graph = seeded
+        sparql = _both_ends_variable_query(graph)
+
+        sql_on, rows_on = await _rows(pg_conn, space_id, sparql)
+        assert "frame_entity" in sql_on
+
+        _disable_rewrite(monkeypatch)
+        sql_off, rows_off = await _rows(pg_conn, space_id, sparql)
+        assert "frame_entity" not in sql_off, "the rewrite was not disabled"
+
+        def triples(rows):
+            return {tuple(sorted(str(v) for v in r.values()
+                                 if isinstance(v, str) and v.startswith(EX)))
+                    for r in rows}
+
+        assert triples(rows_on) == triples(rows_off), (
+            "collapsing 6 tables into frame_entity changed the answer")
+        assert len(rows_on) == len(FRAMES), (
+            f"every frame has a source and a dest, so all {len(FRAMES)} must "
+            f"appear; got {len(rows_on)}")
+
+    async def test_pinning_one_end_to_a_constant_prevents_the_collapse(
+            self, seeded, pg_conn):
+        """Records the limitation, because it is the shape a real criteria query
+        has — "frames whose source is X" — and it is exactly the one that does
+        NOT collapse.
+
+        Not asserted as desirable. If the detector learns to treat a constant
+        end as a filter on the collapsed row, this flips, and the differential
+        tests above are what will say whether the new plan is correct.
+        """
+        space_id, graph = seeded
+        sql = await _sql_for(
+            pg_conn, space_id, _criteria_query(graph, f"{EX}e0", slot_typed=False))
+        assert "frame_entity" not in sql, (
+            "the constant-ended criteria query now collapses — good, but "
+            "update this test and confirm the differential still holds")

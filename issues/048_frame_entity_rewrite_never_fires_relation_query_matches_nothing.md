@@ -45,6 +45,47 @@ So the gap is not the representation and not the data. The rewrite declines
 whenever a constraint lands on the slot node, which is most of the time, and the
 finished answer goes unread.
 
+### It DOES fire — on a narrower shape than this issue implies
+
+Covered now by `tests/integration/test_frame_entity_collapse.py`, on a purpose-
+built 3-frame fixture rather than a development space.
+
+The collapse happens when **both slot values are variables**:
+
+    ?sourceSlot hasEntitySlotValue ?srcEntity      collapses
+    ?sourceSlot hasEntitySlotValue <someEntity>    does NOT
+
+`_find_slot_groups` reads the entity from `quad_object_var`, so a slot value
+pinned to a CONSTANT yields no entity variable, that group is skipped, and the
+frame is left holding one group instead of two — logged as "1 slot group(s) but
+no frame variable carries BOTH a source and a dest group".
+
+**That is a sharper limitation than the slot-constraint decline this issue was
+written about**, because pinning one end is what a real criteria query does:
+"frames whose source is X" is the question users ask. The unpinned form —
+"every frame with a source and a dest" — is a scan, and the shape least in need
+of acceleration. So the rewrite currently fires on the query that needs it least
+and declines on the ones that need it most.
+
+Two decline paths, then, and they should not be conflated:
+
+    slot-node constraint      declines (no slot column) — what this issue says
+    constant-valued slot end  never detected as a group — the bigger one
+
+### Correction: the table is NOT 6x on the frame-detail shape
+
+Earlier in this issue the case for `frame_entity` rested on 0.34 ms against
+1.91 ms. That compared it to a hand-written RAW QUAD traversal, which is not
+what the pipeline emits. Measured against the SQL actually generated for a
+frame's slots — where the EDGE table rewrite fires and does the join reduction:
+
+    generated query (edge table)   0.22 ms
+    frame_entity direct lookup     0.16 ms
+
+So for "fetch one frame's slots" the edge table has already taken the win and
+`frame_entity` adds nothing measurable. The argument for finishing this work
+rests on CRITERIA queries filtering across many frames, not on the detail page.
+
 ### A user-visible consequence, found today
 
 The frames UI shows "No slots found for this frame" for frames that demonstrably
