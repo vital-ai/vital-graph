@@ -69,7 +69,7 @@ SELECT
     t8.term_uuid as uuid_value,
     t8.term_text as uri_value
 FROM vitalgraph1__wordnet_frames__term_unlogged t8
-WHERE t8.term_text = 'http://vital.ai/graph/kgwordnetframes'
+WHERE t8.term_text = 'urn:wordnet_frames'
 
 UNION ALL
 

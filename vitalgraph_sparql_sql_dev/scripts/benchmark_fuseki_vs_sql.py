@@ -296,8 +296,8 @@ def main():
                         help="Fuseki server URL (default: http://localhost:3030)")
     parser.add_argument("--fuseki-dataset", default="wordnet-frames",
                         help="Fuseki dataset name (default: wordnet-frames)")
-    parser.add_argument("--pg-space", default="wordnet_exp",
-                        help="PostgreSQL space ID (default: wordnet_exp)")
+    parser.add_argument("--pg-space", default="wordnet_frames",
+                        help="PostgreSQL space ID (default: wordnet_frames)")
     parser.add_argument("-q", "--query", default=None,
                         help="Run only queries matching these prefixes (comma-separated)")
     parser.add_argument("--backend", default="both", choices=["both", "fuseki", "pg"],

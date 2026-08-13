@@ -37,7 +37,7 @@ WITH constants AS (
       AND t5.term_text = 'http://vital.ai/ontology/haley-ai-kg#hasKGSlotType'
       AND t6.term_text = 'http://vital.ai/ontology/vital-core#hasEdgeSource'
       AND t7.term_text = 'http://vital.ai/ontology/vital-core#hasEdgeDestination'
-      AND t8.term_text = 'http://vital.ai/graph/kgwordnetframes'
+      AND t8.term_text = 'urn:wordnet_frames'
       AND t9.term_text = 'urn:hasSourceEntity'
       AND t10.term_text = 'urn:hasDestinationEntity'
 ),

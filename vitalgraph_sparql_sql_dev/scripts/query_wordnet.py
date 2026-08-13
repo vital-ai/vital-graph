@@ -5,11 +5,11 @@ via the SPARQL-to-SQL pipeline and log the generated SQL for optimization analys
 
 Requires:
   - Jena sidecar running at localhost:7070
-  - PostgreSQL with WordNet data in wordnet_exp_* tables
+  - PostgreSQL with WordNet data in wordnet_frames_* tables
 
 Usage:
     python -m vitalgraph_sparql_sql.scripts.query_wordnet
-    python vitalgraph_sparql_sql/scripts/query_wordnet.py [--space wordnet_exp] [-v]
+    python vitalgraph_sparql_sql/scripts/query_wordnet.py [--space wordnet_frames] [-v]
 """
 
 import argparse
@@ -48,7 +48,7 @@ HALEY_SLOT_TYPE = "http://vital.ai/ontology/haley-ai-kg#hasKGSlotType"
 HALEY_SLOT_VALUE = "http://vital.ai/ontology/haley-ai-kg#hasEntitySlotValue"
 HALEY_KG_DESC = "http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription"
 HALEY_KG_ID = "http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier"
-WORDNET_GRAPH = "http://vital.ai/graph/kgwordnetframes"
+WORDNET_GRAPH = "urn:wordnet_frames"
 
 # ---------------------------------------------------------------------------
 # Query definitions
@@ -877,7 +877,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Query WordNet KGFrames data via SPARQL→SQL pipeline"
     )
-    parser.add_argument("--space", default="wordnet_exp",
+    parser.add_argument("--space", default="wordnet_frames",
                         help="PostgreSQL space ID (table prefix)")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="Show more result rows and full SQL/EXPLAIN")

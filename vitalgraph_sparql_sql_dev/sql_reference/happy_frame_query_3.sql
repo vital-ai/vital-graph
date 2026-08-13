@@ -52,7 +52,7 @@ WITH constants AS (
         ) AS has_edge_destination_uuid,
         (SELECT term_uuid 
          FROM vitalgraph1__wordnet_frames__term_unlogged 
-         WHERE term_text = 'http://vital.ai/graph/kgwordnetframes' 
+         WHERE term_text = 'urn:wordnet_frames' 
          LIMIT 1
         ) AS graph_uuid,
         (SELECT term_uuid 

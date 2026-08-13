@@ -7,7 +7,7 @@ WITH constants AS (
         (SELECT term_uuid FROM vitalgraph1__wordnet_frames__term_unlogged WHERE term_text = 'http://vital.ai/ontology/haley-ai-kg#hasKGSlotType' LIMIT 1) AS has_slot_type_uuid,
         (SELECT term_uuid FROM vitalgraph1__wordnet_frames__term_unlogged WHERE term_text = 'http://vital.ai/ontology/vital-core#hasEdgeSource' LIMIT 1) AS has_edge_source_uuid,
         (SELECT term_uuid FROM vitalgraph1__wordnet_frames__term_unlogged WHERE term_text = 'http://vital.ai/ontology/vital-core#hasEdgeDestination' LIMIT 1) AS has_edge_destination_uuid,
-        (SELECT term_uuid FROM vitalgraph1__wordnet_frames__term_unlogged WHERE term_text = 'http://vital.ai/graph/kgwordnetframes' LIMIT 1) AS graph_uuid,
+        (SELECT term_uuid FROM vitalgraph1__wordnet_frames__term_unlogged WHERE term_text = 'urn:wordnet_frames' LIMIT 1) AS graph_uuid,
         (SELECT term_uuid FROM vitalgraph1__wordnet_frames__term_unlogged WHERE term_text = 'urn:hasSourceEntity' LIMIT 1) AS has_source_entity_uuid,
         (SELECT term_uuid FROM vitalgraph1__wordnet_frames__term_unlogged WHERE term_text = 'urn:hasDestinationEntity' LIMIT 1) AS has_destination_entity_uuid
 ),

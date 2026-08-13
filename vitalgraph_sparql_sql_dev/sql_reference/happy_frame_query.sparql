@@ -14,7 +14,7 @@ CONSTRUCT {
   _:bnode1 <urn:hasDestinationSlotEntity> ?destinationSlotEntity .
 }
 WHERE {
-  GRAPH <http://vital.ai/graph/kgwordnetframes> {
+  GRAPH <urn:wordnet_frames> {
     SELECT ?entity ?frame ?sourceSlot ?destinationSlot ?sourceSlotEntity ?destinationSlotEntity WHERE {
       {
         ?sourceSlotEntity a haley-ai-kg:KGEntity .

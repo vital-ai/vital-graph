@@ -40,7 +40,7 @@ HALEY_KG_DESC = "http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription"
 HALEY_SLOT_TYPE = "http://vital.ai/ontology/haley-ai-kg#hasKGSlotType"
 HALEY_SLOT_VALUE = "http://vital.ai/ontology/haley-ai-kg#hasEntitySlotValue"
 
-SPACE_ID = "wordnet_exp"
+SPACE_ID = "wordnet_frames"
 
 logger = logging.getLogger(__name__)
 

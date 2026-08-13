@@ -1,9 +1,9 @@
--- Happy Frame Query — Updated for wordnet_exp tables
+-- Happy Frame Query — Updated for wordnet_frames tables
 -- Uses trigram index (gin_trgm_ops) for text search instead of plainto_tsquery.
 -- Uses edge_mv and frame_entity_mv materialized views.
--- All UUIDs resolved from wordnet_exp_term.
+-- All UUIDs resolved from wordnet_frames_term.
 --
--- Predicate UUIDs (wordnet_exp):
+-- Predicate UUIDs (wordnet_frames):
 -- hasKGraphDescription:  1e7843d3-ac11-5ba9-9d19-92274c1e48a6
 -- hasEntitySlotValue:    87a0a946-3150-5b4a-852f-84ce8e37e29f
 -- hasKGSlotType:         e263c804-e3b0-5bdf-968c-82e536f5effe
@@ -24,11 +24,11 @@ WITH
 -- Step 1: Find entities whose description contains "happy" (trigram ILIKE)
 happy_entities AS (
     SELECT DISTINCT q1.subject_uuid AS entity_uuid
-    FROM wordnet_exp_rdf_quad q1
+    FROM wordnet_frames_rdf_quad q1
     WHERE q1.predicate_uuid = '1e7843d3-ac11-5ba9-9d19-92274c1e48a6'::uuid  -- hasKGraphDescription
       AND q1.object_uuid IN (
           SELECT t.term_uuid
-          FROM wordnet_exp_term t
+          FROM wordnet_frames_term t
           WHERE t.term_text ILIKE '%happy%'
       )
 ),
@@ -43,8 +43,8 @@ slot_data AS (
             WHEN q2.object_uuid = 'd1daebbc-ca1e-5ff6-baad-bd88487575d9'::uuid THEN 'dest'
         END AS slot_type,
         1 AS is_matching_entity
-    FROM wordnet_exp_rdf_quad q1
-    JOIN wordnet_exp_rdf_quad q2
+    FROM wordnet_frames_rdf_quad q1
+    JOIN wordnet_frames_rdf_quad q2
         ON q2.subject_uuid = q1.subject_uuid
     JOIN happy_entities he
         ON he.entity_uuid = q1.object_uuid
@@ -60,7 +60,7 @@ edge_structure AS (
     SELECT
         source_node_uuid AS frame_uuid,
         dest_node_uuid   AS slot_uuid
-    FROM wordnet_exp_edge_mv
+    FROM wordnet_frames_edge_mv
 ),
 -- Step 4: Aggregate slots per frame using conditional aggregation
 -- Pivots source/dest slots+entities into columns per frame

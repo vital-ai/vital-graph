@@ -108,7 +108,7 @@ class FrameSQLBenchmark:
             self.connection = None
             logger.info("Disconnected from database")
     
-    def diagnose_database_terms(self, space_id: str = "wordnet_exp"):
+    def diagnose_database_terms(self, space_id: str = "wordnet_frames"):
         """Diagnose what terms exist in the database."""
         if not self.connection:
             raise RuntimeError("Not connected to database")
@@ -158,7 +158,7 @@ class FrameSQLBenchmark:
                     (SELECT term_uuid FROM {term_table} WHERE term_text = 'http://vital.ai/ontology/haley-ai-kg#hasKGSlotType' LIMIT 1) AS has_slot_type_uuid,
                     (SELECT term_uuid FROM {term_table} WHERE term_text = 'http://vital.ai/ontology/vital-core#hasEdgeSource' LIMIT 1) AS has_edge_source_uuid,
                     (SELECT term_uuid FROM {term_table} WHERE term_text = 'http://vital.ai/ontology/vital-core#hasEdgeDestination' LIMIT 1) AS has_edge_destination_uuid,
-                    (SELECT term_uuid FROM {term_table} WHERE term_text = 'http://vital.ai/graph/kgwordnetframes' LIMIT 1) AS graph_uuid,
+                    (SELECT term_uuid FROM {term_table} WHERE term_text = 'urn:wordnet_frames' LIMIT 1) AS graph_uuid,
                     (SELECT term_uuid FROM {term_table} WHERE term_text = 'urn:hasSourceEntity' LIMIT 1) AS has_source_entity_uuid,
                     (SELECT term_uuid FROM {term_table} WHERE term_text = 'urn:hasDestinationEntity' LIMIT 1) AS has_destination_entity_uuid
             )
@@ -213,7 +213,7 @@ class FrameSQLBenchmark:
                                 (SELECT term_uuid FROM {term_table} WHERE term_text = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type' LIMIT 1) AS rdf_type_uuid,
                                 (SELECT term_uuid FROM {term_table} WHERE term_text = 'http://vital.ai/ontology/haley-ai-kg#KGEntity' LIMIT 1) AS kg_entity_uuid,
                                 (SELECT term_uuid FROM {term_table} WHERE term_text = 'http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription' LIMIT 1) AS has_description_uuid,
-                                (SELECT term_uuid FROM {term_table} WHERE term_text = 'http://vital.ai/graph/kgwordnetframes' LIMIT 1) AS graph_uuid
+                                (SELECT term_uuid FROM {term_table} WHERE term_text = 'urn:wordnet_frames' LIMIT 1) AS graph_uuid
                         ),
                         happy_entities AS (
                             SELECT q1.subject_uuid as entity_uuid
@@ -402,7 +402,7 @@ class FrameSQLBenchmark:
             except:
                 pass
     
-    def fetch_constants(self, space_id: str = "wordnet_exp"):
+    def fetch_constants(self, space_id: str = "wordnet_frames"):
         """Fetch the constants needed for the frame query."""
         if not self.connection:
             raise RuntimeError("Not connected to database")
@@ -422,7 +422,7 @@ class FrameSQLBenchmark:
             'http://vital.ai/ontology/haley-ai-kg#hasKGSlotType',
             'http://vital.ai/ontology/vital-core#hasEdgeSource',
             'http://vital.ai/ontology/vital-core#hasEdgeDestination',
-            'http://vital.ai/graph/kgwordnetframes',
+            'urn:wordnet_frames',
             'urn:hasSourceEntity',
             'urn:hasDestinationEntity'
         )
@@ -458,7 +458,7 @@ class FrameSQLBenchmark:
                 constants_map['has_edge_source_uuid'] = uuid
             elif text == 'http://vital.ai/ontology/vital-core#hasEdgeDestination':
                 constants_map['has_edge_destination_uuid'] = uuid
-            elif text == 'http://vital.ai/graph/kgwordnetframes':
+            elif text == 'urn:wordnet_frames':
                 constants_map['graph_uuid'] = uuid
             elif text == 'urn:hasSourceEntity':
                 constants_map['has_source_entity_uuid'] = uuid
@@ -469,7 +469,7 @@ class FrameSQLBenchmark:
         logger.info(f"Found {len(constants_map)} constants")
         return constants_map
     
-    def build_frame_query(self, space_id: str = "wordnet_exp"):
+    def build_frame_query(self, space_id: str = "wordnet_frames"):
         """Build the frame query using the optimized structure with hard-coded constants."""
         if not self.constants:
             raise RuntimeError("Constants not loaded")
@@ -481,28 +481,28 @@ class FrameSQLBenchmark:
         frame_sql_orig = """
         WITH constants AS (
     SELECT 
-        (SELECT term_uuid FROM wordnet_exp_term WHERE term_text = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type' LIMIT 1) AS rdf_type_uuid,
-        (SELECT term_uuid FROM wordnet_exp_term WHERE term_text = 'http://vital.ai/ontology/haley-ai-kg#KGEntity' LIMIT 1) AS kg_entity_uuid,
-        (SELECT term_uuid FROM wordnet_exp_term WHERE term_text = 'http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription' LIMIT 1) AS has_description_uuid,
-        (SELECT term_uuid FROM wordnet_exp_term WHERE term_text = 'http://vital.ai/ontology/haley-ai-kg#hasEntitySlotValue' LIMIT 1) AS has_entity_slot_value_uuid,
-        (SELECT term_uuid FROM wordnet_exp_term WHERE term_text = 'http://vital.ai/ontology/haley-ai-kg#hasKGSlotType' LIMIT 1) AS has_slot_type_uuid,
-        (SELECT term_uuid FROM wordnet_exp_term WHERE term_text = 'http://vital.ai/ontology/vital-core#hasEdgeSource' LIMIT 1) AS has_edge_source_uuid,
-        (SELECT term_uuid FROM wordnet_exp_term WHERE term_text = 'http://vital.ai/ontology/vital-core#hasEdgeDestination' LIMIT 1) AS has_edge_destination_uuid,
-        (SELECT term_uuid FROM wordnet_exp_term WHERE term_text = 'http://vital.ai/graph/kgwordnetframes' LIMIT 1) AS graph_uuid,
-        (SELECT term_uuid FROM wordnet_exp_term WHERE term_text = 'urn:hasSourceEntity' LIMIT 1) AS has_source_entity_uuid,
-        (SELECT term_uuid FROM wordnet_exp_term WHERE term_text = 'urn:hasDestinationEntity' LIMIT 1) AS has_destination_entity_uuid
+        (SELECT term_uuid FROM wordnet_frames_term WHERE term_text = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type' LIMIT 1) AS rdf_type_uuid,
+        (SELECT term_uuid FROM wordnet_frames_term WHERE term_text = 'http://vital.ai/ontology/haley-ai-kg#KGEntity' LIMIT 1) AS kg_entity_uuid,
+        (SELECT term_uuid FROM wordnet_frames_term WHERE term_text = 'http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription' LIMIT 1) AS has_description_uuid,
+        (SELECT term_uuid FROM wordnet_frames_term WHERE term_text = 'http://vital.ai/ontology/haley-ai-kg#hasEntitySlotValue' LIMIT 1) AS has_entity_slot_value_uuid,
+        (SELECT term_uuid FROM wordnet_frames_term WHERE term_text = 'http://vital.ai/ontology/haley-ai-kg#hasKGSlotType' LIMIT 1) AS has_slot_type_uuid,
+        (SELECT term_uuid FROM wordnet_frames_term WHERE term_text = 'http://vital.ai/ontology/vital-core#hasEdgeSource' LIMIT 1) AS has_edge_source_uuid,
+        (SELECT term_uuid FROM wordnet_frames_term WHERE term_text = 'http://vital.ai/ontology/vital-core#hasEdgeDestination' LIMIT 1) AS has_edge_destination_uuid,
+        (SELECT term_uuid FROM wordnet_frames_term WHERE term_text = 'urn:wordnet_frames' LIMIT 1) AS graph_uuid,
+        (SELECT term_uuid FROM wordnet_frames_term WHERE term_text = 'urn:hasSourceEntity' LIMIT 1) AS has_source_entity_uuid,
+        (SELECT term_uuid FROM wordnet_frames_term WHERE term_text = 'urn:hasDestinationEntity' LIMIT 1) AS has_destination_entity_uuid
 ),
 happy_entities AS (
     SELECT q1.subject_uuid as entity_uuid
     FROM constants
-    JOIN wordnet_exp_term obj
+    JOIN wordnet_frames_term obj
         ON obj.term_text ILIKE '%happy%'
         AND obj.term_type = 'L'
-    JOIN wordnet_exp_rdf_quad q1 
+    JOIN wordnet_frames_rdf_quad q1 
         ON q1.object_uuid = obj.term_uuid
         AND q1.predicate_uuid = constants.has_description_uuid
         AND q1.context_uuid = constants.graph_uuid
-    JOIN wordnet_exp_rdf_quad q2
+    JOIN wordnet_frames_rdf_quad q2
         ON q2.subject_uuid = q1.subject_uuid
         AND q2.predicate_uuid = constants.rdf_type_uuid
         AND q2.object_uuid = constants.kg_entity_uuid
@@ -518,37 +518,37 @@ SELECT
     fc2.entity_uuid as destinationSlotEntity
 FROM constants
 -- Get source slots with happy entities
-JOIN wordnet_exp_rdf_quad ev1
+JOIN wordnet_frames_rdf_quad ev1
     ON ev1.predicate_uuid = constants.has_entity_slot_value_uuid
     AND ev1.context_uuid = constants.graph_uuid
     AND EXISTS (SELECT 1 FROM happy_entities WHERE entity_uuid = ev1.object_uuid)
-JOIN wordnet_exp_rdf_quad st1
+JOIN wordnet_frames_rdf_quad st1
     ON st1.subject_uuid = ev1.subject_uuid
     AND st1.predicate_uuid = constants.has_slot_type_uuid
     AND st1.object_uuid = constants.has_source_entity_uuid
     AND st1.context_uuid = constants.graph_uuid
-JOIN wordnet_exp_rdf_quad ed1
+JOIN wordnet_frames_rdf_quad ed1
     ON ed1.object_uuid = ev1.subject_uuid
     AND ed1.predicate_uuid = constants.has_edge_destination_uuid
     AND ed1.context_uuid = constants.graph_uuid
-JOIN wordnet_exp_rdf_quad es1
+JOIN wordnet_frames_rdf_quad es1
     ON es1.subject_uuid = ed1.subject_uuid
     AND es1.predicate_uuid = constants.has_edge_source_uuid
     AND es1.context_uuid = constants.graph_uuid
 -- Get corresponding destination slot for same frame
-JOIN wordnet_exp_rdf_quad ev2
+JOIN wordnet_frames_rdf_quad ev2
     ON ev2.predicate_uuid = constants.has_entity_slot_value_uuid
     AND ev2.context_uuid = constants.graph_uuid
-JOIN wordnet_exp_rdf_quad st2
+JOIN wordnet_frames_rdf_quad st2
     ON st2.subject_uuid = ev2.subject_uuid
     AND st2.predicate_uuid = constants.has_slot_type_uuid
     AND st2.object_uuid = constants.has_destination_entity_uuid
     AND st2.context_uuid = constants.graph_uuid
-JOIN wordnet_exp_rdf_quad ed2
+JOIN wordnet_frames_rdf_quad ed2
     ON ed2.object_uuid = ev2.subject_uuid
     AND ed2.predicate_uuid = constants.has_edge_destination_uuid
     AND ed2.context_uuid = constants.graph_uuid
-JOIN wordnet_exp_rdf_quad es2
+JOIN wordnet_frames_rdf_quad es2
     ON es2.subject_uuid = ed2.subject_uuid
     AND es2.predicate_uuid = constants.has_edge_source_uuid
     AND es2.object_uuid = es1.object_uuid  -- Same frame
@@ -578,37 +578,37 @@ SELECT
     fc2.entity_uuid as destinationSlotEntity
 FROM constants
 -- Get destination slots with happy entities
-JOIN wordnet_exp_rdf_quad ev2
+JOIN wordnet_frames_rdf_quad ev2
     ON ev2.predicate_uuid = constants.has_entity_slot_value_uuid
     AND ev2.context_uuid = constants.graph_uuid
     AND EXISTS (SELECT 1 FROM happy_entities WHERE entity_uuid = ev2.object_uuid)
-JOIN wordnet_exp_rdf_quad st2
+JOIN wordnet_frames_rdf_quad st2
     ON st2.subject_uuid = ev2.subject_uuid
     AND st2.predicate_uuid = constants.has_slot_type_uuid
     AND st2.object_uuid = constants.has_destination_entity_uuid
     AND st2.context_uuid = constants.graph_uuid
-JOIN wordnet_exp_rdf_quad ed2
+JOIN wordnet_frames_rdf_quad ed2
     ON ed2.object_uuid = ev2.subject_uuid
     AND ed2.predicate_uuid = constants.has_edge_destination_uuid
     AND ed2.context_uuid = constants.graph_uuid
-JOIN wordnet_exp_rdf_quad es2
+JOIN wordnet_frames_rdf_quad es2
     ON es2.subject_uuid = ed2.subject_uuid
     AND es2.predicate_uuid = constants.has_edge_source_uuid
     AND es2.context_uuid = constants.graph_uuid
 -- Get corresponding source slot for same frame
-JOIN wordnet_exp_rdf_quad ev1
+JOIN wordnet_frames_rdf_quad ev1
     ON ev1.predicate_uuid = constants.has_entity_slot_value_uuid
     AND ev1.context_uuid = constants.graph_uuid
-JOIN wordnet_exp_rdf_quad st1
+JOIN wordnet_frames_rdf_quad st1
     ON st1.subject_uuid = ev1.subject_uuid
     AND st1.predicate_uuid = constants.has_slot_type_uuid
     AND st1.object_uuid = constants.has_source_entity_uuid
     AND st1.context_uuid = constants.graph_uuid
-JOIN wordnet_exp_rdf_quad ed1
+JOIN wordnet_frames_rdf_quad ed1
     ON ed1.object_uuid = ev1.subject_uuid
     AND ed1.predicate_uuid = constants.has_edge_destination_uuid
     AND ed1.context_uuid = constants.graph_uuid
-JOIN wordnet_exp_rdf_quad es1
+JOIN wordnet_frames_rdf_quad es1
     ON es1.subject_uuid = ed1.subject_uuid
     AND es1.predicate_uuid = constants.has_edge_source_uuid
     AND es1.object_uuid = es2.object_uuid  -- Same frame
@@ -774,7 +774,7 @@ LIMIT 10 OFFSET 0
         return frame_sql_orig
     
 
-    async def execute_frame_query(self, space_id: str = "wordnet_exp"):
+    async def execute_frame_query(self, space_id: str = "wordnet_frames"):
         """Execute the frame query once and return timing and results."""
         frame_sql = self.build_frame_query(space_id)
         
@@ -798,7 +798,7 @@ LIMIT 10 OFFSET 0
             'results': results
         }
     
-    async def analyze_table_structure(self, conn, space_id: str = "wordnet_exp"):
+    async def analyze_table_structure(self, conn, space_id: str = "wordnet_frames"):
         """Analyze table structure and indexes for the frame query."""
         term_table = f"{space_id}_term"
         quad_table = f"{space_id}_rdf_quad"
@@ -856,9 +856,9 @@ LIMIT 10 OFFSET 0
             
         # Check for critical term table custom indexes
         critical_term_indexes = [
-            'wordnet_exp_term_term_text_idx',
-            'wordnet_exp_term_term_text_idx1',
-            'wordnet_exp_term_term_text_idx2'
+            'wordnet_frames_term_term_text_idx',
+            'wordnet_frames_term_term_text_idx1',
+            'wordnet_frames_term_term_text_idx2'
         ]
         
         print(f"\n=== Critical Term Index Check ===")
@@ -889,12 +889,12 @@ LIMIT 10 OFFSET 0
             
         # Check for specific custom indexes that are critical for performance
         critical_indexes = [
-            'wordnet_exp_rdf_quad_context_uuid_idx',
-            'wordnet_exp_rdf_quad_subject_uuid_idx',
-            'wordnet_exp_rdf_quad_predicate_uuid_idx',
-            'wordnet_exp_rdf_quad_object_uuid_idx',
-            'wordnet_exp_rdf_quad_context_uuid_predicate_uuid_idx',
-            'wordnet_exp_rdf_quad_subject_uuid_predicate_uuid_idx'
+            'wordnet_frames_rdf_quad_context_uuid_idx',
+            'wordnet_frames_rdf_quad_subject_uuid_idx',
+            'wordnet_frames_rdf_quad_predicate_uuid_idx',
+            'wordnet_frames_rdf_quad_object_uuid_idx',
+            'wordnet_frames_rdf_quad_context_uuid_predicate_uuid_idx',
+            'wordnet_frames_rdf_quad_subject_uuid_predicate_uuid_idx'
         ]
         
         print(f"\n=== Critical Custom Index Check ===")
@@ -930,7 +930,7 @@ LIMIT 10 OFFSET 0
             'stats': stats
         }
 
-    async def analyze_frame_query(self, conn, space_id: str = "wordnet_exp"):
+    async def analyze_frame_query(self, conn, space_id: str = "wordnet_frames"):
         """Analyze the frame query execution plan."""
         frame_sql = self.build_frame_query(space_id)
         explain_sql = f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {frame_sql}"
@@ -1161,7 +1161,7 @@ LIMIT 10 OFFSET 0
         
         logger.info("="*60)
 
-    async def benchmark_frame_query(self, space_id: str = "wordnet_exp", iterations: int = 10):
+    async def benchmark_frame_query(self, space_id: str = "wordnet_frames", iterations: int = 10):
         """Benchmark the frame query with multiple iterations."""
         logger.info(f"Benchmarking frame query with {iterations} iterations...")
         
@@ -1255,7 +1255,7 @@ def main():
         # Phase 2: Execute hardcoded-UUID variant
         # (Skip CTE variant — it hangs due to planner unable to push constants into JOINs)
         logger.info("\nBuilding hardcoded-UUID variant...")
-        space_id = "wordnet_exp"
+        space_id = "wordnet_frames"
         term_table = f"{space_id}_term"
         quad_table = f"{space_id}_rdf_quad"
 

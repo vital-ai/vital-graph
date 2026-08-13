@@ -18,7 +18,7 @@ WITH constants AS (
         
         -- Graph context
         (SELECT term_uuid FROM vitalgraph1__wordnet_frames__term_unlogged 
-         WHERE term_text = 'http://vital.ai/graph/kgwordnetframes' LIMIT 1) AS graph_uuid
+         WHERE term_text = 'urn:wordnet_frames' LIMIT 1) AS graph_uuid
 ),
 
 -- Find entities with "happy" in their description

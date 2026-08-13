@@ -31,7 +31,7 @@ WITH constants AS (
       AND t6.term_text = 'http://vital.ai/ontology/vital-core#hasSlotType'
       AND t7.term_text = 'http://vital.ai/ontology/vital-core#hasSourceEntity'
       AND t8.term_text = 'http://vital.ai/ontology/vital-core#hasDestinationEntity'
-      AND t9.term_text = 'http://vital.ai/graph/kgwordnetframes'
+      AND t9.term_text = 'urn:wordnet_frames'
 ),
 -- Find entities with "happy" in their description (same as before)
 happy_entities AS MATERIALIZED (

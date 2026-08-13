@@ -41,8 +41,8 @@ class HappyFrameSQLTest:
         self.sql_file_path = os.path.join(
             os.path.dirname(__file__), '..', '..', 'sql_scripts', 'happy_frame_query_4.sql'
         )
-        self.term_table = 'wordnet_exp_term'
-        self.quad_table = 'wordnet_exp_rdf_quad'
+        self.term_table = 'wordnet_frames_term'
+        self.quad_table = 'wordnet_frames_rdf_quad'
         
     def _load_config(self):
         """Load database configuration from YAML file."""
@@ -101,14 +101,14 @@ class HappyFrameSQLTest:
             logger.info("Disconnected from database")
     
     def load_sql_query(self):
-        """Load the inline SQL query (wordnet_exp compatible, no FTS dependency)."""
+        """Load the inline SQL query (wordnet_frames compatible, no FTS dependency)."""
         return f"""
         WITH constants AS (
             SELECT
                 (SELECT term_uuid FROM {self.term_table} WHERE term_text = 'http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription' LIMIT 1) AS has_description_uuid,
                 (SELECT term_uuid FROM {self.term_table} WHERE term_text = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type' LIMIT 1) AS rdf_type_uuid,
                 (SELECT term_uuid FROM {self.term_table} WHERE term_text = 'http://vital.ai/ontology/haley-ai-kg#KGEntity' LIMIT 1) AS kg_entity_uuid,
-                (SELECT term_uuid FROM {self.term_table} WHERE term_text = 'http://vital.ai/graph/kgwordnetframes' LIMIT 1) AS graph_uuid
+                (SELECT term_uuid FROM {self.term_table} WHERE term_text = 'urn:wordnet_frames' LIMIT 1) AS graph_uuid
         )
         SELECT t_uri.term_text AS entity_uri, t_desc.term_text AS description
         FROM constants

@@ -3,7 +3,7 @@
 load_wordnet_frames.py — Bulk-load KGFrames WordNet N-Triples into PostgreSQL.
 
 Standalone loader for vitalgraph_sparql_sql experiments.
-Populates *_term and *_rdf_quad tables (default: wordnet_exp_*).
+Populates *_term and *_rdf_quad tables (default: wordnet_frames_*).
 
 Steps
 -----
@@ -67,11 +67,43 @@ def _project_root() -> Path:
 
 
 DEFAULT_DSN = "host=localhost port=5432 dbname=fuseki_sql_graph user=postgres"
-DEFAULT_GRAPH_URI = "http://vital.ai/graph/kgwordnetframes"
+DEFAULT_GRAPH_URI = "urn:wordnet_frames"
 DEFAULT_DATASET = "primary"
+
+# These used to be wordnet_exp_*, an experimental copy that was safe to
+# truncate. They now name the REAL wordnet_frames space — 8.9M quads that
+# nothing else reproduces — so `--force`, which TRUNCATEs both tables, would
+# destroy live data on a bare `python load_wordnet_frames.py --force`.
+# _check_force_target refuses exactly that; pass the tables explicitly to
+# confirm you mean them.
+DEFAULT_TERM_TABLE = "wordnet_frames_term"
+DEFAULT_QUAD_TABLE = "wordnet_frames_rdf_quad"
 DEFAULT_DATA_FILE = str(_project_root() / "test_data" / "kgframe-wordnet-0.0.1.nt")
 
 logger = logging.getLogger("load_wordnet_frames")
+
+
+def _check_force_target(args, argv=None):
+    """Refuse `--force` when it would truncate the default (live) tables.
+
+    `--force` runs TRUNCATE on both tables. While these defaulted to the
+    throwaway wordnet_exp_* copy that was an inconvenience; pointed at
+    wordnet_frames_* it is 8.9M quads that no other space reproduces, gone
+    without a prompt. Naming the tables explicitly is the confirmation.
+    """
+    import sys
+    argv = sys.argv[1:] if argv is None else argv
+    if not args.force:
+        return
+    named = any(a.split("=", 1)[0] in ("--term-table", "--quad-table") for a in argv)
+    if named:
+        return
+    raise SystemExit(
+        f"refusing --force against the default tables "
+        f"({args.term_table}, {args.quad_table}): these are the live "
+        f"wordnet_frames space, and --force TRUNCATEs them.\n"
+        f"If you mean it, name them explicitly:\n"
+        f"    --term-table {args.term_table} --quad-table {args.quad_table}")
 
 
 # ---------------------------------------------------------------------------
@@ -84,8 +116,9 @@ def parse_args(argv=None):
     p.add_argument("--dsn", default=DEFAULT_DSN, help="psycopg connection string")
     p.add_argument("--data-file", default=DEFAULT_DATA_FILE, help="Path to .nt file")
     p.add_argument("--graph-uri", default=DEFAULT_GRAPH_URI)
-    p.add_argument("--term-table", default="wordnet_exp_term")
-    p.add_argument("--quad-table", default="wordnet_exp_rdf_quad")
+    # No defaults, deliberately — see _check_force_target below.
+    p.add_argument("--term-table", default=DEFAULT_TERM_TABLE)
+    p.add_argument("--quad-table", default=DEFAULT_QUAD_TABLE)
     p.add_argument("--dataset", default=DEFAULT_DATASET)
     p.add_argument("--force", action="store_true", help="Truncate tables before loading")
     p.add_argument("--skip-indexes", action="store_true", help="Skip index drop/recreate")
@@ -267,6 +300,7 @@ def copy_quads(
 # ---------------------------------------------------------------------------
 def main(argv=None):
     args = parse_args(argv)
+    _check_force_target(args, argv)
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,

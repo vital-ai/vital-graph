@@ -100,7 +100,7 @@ class HappyFrameSQLOptimizedTest:
         SELECT 
             'rdf_type_uuid' as constant_name,
             t1.term_uuid as uuid_value
-        FROM wordnet_exp_term t1
+        FROM wordnet_frames_term t1
         WHERE t1.term_text = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
         
         UNION ALL
@@ -108,7 +108,7 @@ class HappyFrameSQLOptimizedTest:
         SELECT 
             'kg_entity_uuid' as constant_name,
             t2.term_uuid as uuid_value
-        FROM wordnet_exp_term t2
+        FROM wordnet_frames_term t2
         WHERE t2.term_text = 'http://vital.ai/ontology/haley-ai-kg#KGEntity'
         
         UNION ALL
@@ -116,7 +116,7 @@ class HappyFrameSQLOptimizedTest:
         SELECT 
             'has_description_uuid' as constant_name,
             t3.term_uuid as uuid_value
-        FROM wordnet_exp_term t3
+        FROM wordnet_frames_term t3
         WHERE t3.term_text = 'http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription'
         
         UNION ALL
@@ -124,7 +124,7 @@ class HappyFrameSQLOptimizedTest:
         SELECT 
             'has_entity_slot_value_uuid' as constant_name,
             t4.term_uuid as uuid_value
-        FROM wordnet_exp_term t4
+        FROM wordnet_frames_term t4
         WHERE t4.term_text = 'http://vital.ai/ontology/haley-ai-kg#hasEntitySlotValue'
         
         UNION ALL
@@ -132,7 +132,7 @@ class HappyFrameSQLOptimizedTest:
         SELECT 
             'has_slot_type_uuid' as constant_name,
             t5.term_uuid as uuid_value
-        FROM wordnet_exp_term t5
+        FROM wordnet_frames_term t5
         WHERE t5.term_text = 'http://vital.ai/ontology/haley-ai-kg#hasKGSlotType'
         
         UNION ALL
@@ -140,7 +140,7 @@ class HappyFrameSQLOptimizedTest:
         SELECT 
             'has_source_entity_uuid' as constant_name,
             t9.term_uuid as uuid_value
-        FROM wordnet_exp_term t9
+        FROM wordnet_frames_term t9
         WHERE t9.term_text = 'urn:hasSourceEntity'
         
         UNION ALL
@@ -148,7 +148,7 @@ class HappyFrameSQLOptimizedTest:
         SELECT 
             'has_destination_entity_uuid' as constant_name,
             t10.term_uuid as uuid_value
-        FROM wordnet_exp_term t10
+        FROM wordnet_frames_term t10
         WHERE t10.term_text = 'urn:hasDestinationEntity'
         
         ORDER BY constant_name;
@@ -182,11 +182,11 @@ class HappyFrameSQLOptimizedTest:
         -- Happy entities with "happy" in description
         happy_entities AS (
             SELECT DISTINCT q1.subject_uuid as entity_uuid
-            FROM wordnet_exp_rdf_quad q1
+            FROM wordnet_frames_rdf_quad q1
             WHERE q1.predicate_uuid = '{constants['has_description_uuid']}'::uuid
               AND q1.object_uuid IN (
                   SELECT t.term_uuid 
-                  FROM wordnet_exp_term t
+                  FROM wordnet_frames_term t
                   WHERE t.term_text ILIKE '%happy%' AND t.term_type = 'L'
               )
         ),
@@ -200,8 +200,8 @@ class HappyFrameSQLOptimizedTest:
                      ELSE NULL END as slot_type,
                 -- All entities match by definition (due to INNER JOIN)
                 1 as is_matching_entity
-            FROM wordnet_exp_rdf_quad q1
-            JOIN wordnet_exp_rdf_quad q2 ON q2.subject_uuid = q1.subject_uuid
+            FROM wordnet_frames_rdf_quad q1
+            JOIN wordnet_frames_rdf_quad q2 ON q2.subject_uuid = q1.subject_uuid
             JOIN happy_entities he ON he.entity_uuid = q1.object_uuid  -- INNER JOIN = early filter!
             WHERE q1.predicate_uuid = '{constants['has_entity_slot_value_uuid']}'::uuid
               AND q2.predicate_uuid = '{constants['has_slot_type_uuid']}'::uuid
@@ -213,11 +213,11 @@ class HappyFrameSQLOptimizedTest:
             SELECT
                 es.object_uuid as frame_uuid,
                 ed.object_uuid as slot_uuid
-            FROM wordnet_exp_rdf_quad es
-            JOIN wordnet_exp_rdf_quad ed
+            FROM wordnet_frames_rdf_quad es
+            JOIN wordnet_frames_rdf_quad ed
                 ON ed.subject_uuid = es.subject_uuid
-            WHERE es.predicate_uuid = (SELECT term_uuid FROM wordnet_exp_term WHERE term_text = 'http://vital.ai/ontology/vital-core#hasEdgeSource' LIMIT 1)
-              AND ed.predicate_uuid = (SELECT term_uuid FROM wordnet_exp_term WHERE term_text = 'http://vital.ai/ontology/vital-core#hasEdgeDestination' LIMIT 1)
+            WHERE es.predicate_uuid = (SELECT term_uuid FROM wordnet_frames_term WHERE term_text = 'http://vital.ai/ontology/vital-core#hasEdgeSource' LIMIT 1)
+              AND ed.predicate_uuid = (SELECT term_uuid FROM wordnet_frames_term WHERE term_text = 'http://vital.ai/ontology/vital-core#hasEdgeDestination' LIMIT 1)
         ),
         -- Efficient aggregation like query 16
         frame_aggregated AS (
@@ -295,7 +295,7 @@ class HappyFrameSQLOptimizedTest:
         uuid_list = "', '".join(all_uuids)
         batch_query = f"""
         SELECT term_uuid::text, term_text
-        FROM wordnet_exp_term
+        FROM wordnet_frames_term
         WHERE term_uuid::text IN ('{uuid_list}')
         """
         

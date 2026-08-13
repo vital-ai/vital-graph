@@ -10,7 +10,7 @@ For each query level (frame, edge, slot, full traversal), this script:
 
 Requires:
   - Jena sidecar running at localhost:7070
-  - PostgreSQL with WordNet data in wordnet_exp_* tables
+  - PostgreSQL with WordNet data in wordnet_frames_* tables
 
 Usage:
     python vitalgraph_sparql_sql/scripts/compare_sparql_vs_handwritten.py
@@ -46,7 +46,7 @@ HALEY_SLOT_TYPE = "http://vital.ai/ontology/haley-ai-kg#hasKGSlotType"
 HALEY_SLOT_VALUE = "http://vital.ai/ontology/haley-ai-kg#hasEntitySlotValue"
 HALEY_KG_DESC = "http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription"
 
-SPACE_ID = "wordnet_exp"
+SPACE_ID = "wordnet_frames"
 TERM_TABLE = f"{SPACE_ID}_term"
 QUAD_TABLE = f"{SPACE_ID}_rdf_quad"
 
@@ -493,7 +493,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Compare SPARQL-generated SQL vs hand-written SQL"
     )
-    parser.add_argument("--space", default="wordnet_exp")
+    parser.add_argument("--space", default="wordnet_frames")
     parser.add_argument("--log-level", default="WARNING",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args()
