@@ -230,16 +230,37 @@ class _SparqlSQLGraphsAdapter:
 
     async def list_graphs(self, space_id: str) -> List[Dict[str, Any]]:
         rows = await self._impl.list_graphs(space_id)
+
+        # A space with exactly ONE graph can take the catalog estimate: every
+        # quad in the table belongs to that graph, so the table-level
+        # `reltuples` IS the graph's count. 1.7 ms against 4,591 ms, and exact
+        # or near-exact on every quad table measured here.
+        #
+        # This is only sound because of the "exactly one" test. With two graphs
+        # the table total says nothing about either of them, and there is no
+        # per-context estimate in the catalog — those keep the cached exact
+        # count.
+        #
+        # The estimate is used for DISPLAY. `list_graphs` and `get_graph` are
+        # its only callers and both feed the UI; nothing verifies a load against
+        # it. If that changes, the caller should ask for the exact count.
+        single_graph_estimate = None
+        if len(rows) == 1:
+            single_graph_estimate = await self._impl.get_rdf_quad_count_estimate(space_id)
+
         # Normalise to the dict shape the endpoint expects
         graphs = []
         for r in rows:
             graph_uri = r.get('graph_uri')
             triple_count = 0
             if graph_uri:
-                try:
-                    triple_count = await self._impl.get_rdf_quad_count(space_id, graph_uri)
-                except Exception:
-                    pass
+                if single_graph_estimate is not None:
+                    triple_count = single_graph_estimate
+                else:
+                    try:
+                        triple_count = await self._impl.get_rdf_quad_count(space_id, graph_uri)
+                    except Exception:
+                        pass
             graphs.append({
                 'graph_uri': graph_uri,
                 'graph_name': r.get('graph_name'),
@@ -935,6 +956,40 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             logger.error("get_rdf_quad(%s) failed: %s", space_id, e)
             return False
 
+    async def get_rdf_quad_count_estimate(self, space_id: str) -> Optional[int]:
+        """Row estimate for the space's whole quad table, from the catalog.
+
+        `pg_class.reltuples` is what the planner uses, maintained by ANALYZE,
+        VACUUM and autovacuum. It is a catalog lookup: 1.7 ms against 4,591 ms
+        for `COUNT(*)` over 50.5M rows — 2,700x — and on this database it was
+        EXACT for six of eight quad tables, 0.0001% out on a seventh, and 0.635%
+        out on the one with recent deletes.
+
+        Returns None when there is no usable estimate, which the caller must
+        treat as "do the real count":
+
+        * PostgreSQL 14+ stores **-1** for a table that has never been analysed,
+          and one table here is in that state. Returning -1 as a triple count
+          would display minus one triple;
+        * a table absent from `pg_class` (dropped mid-flight) has no row at all.
+
+        Deliberately NOT cached. It is already a catalog read, and caching an
+        estimate would add staleness on top of staleness.
+        """
+        try:
+            t = self.schema.get_table_names(space_id)
+            table = t['rdf_quad']
+            async with self._db._pool.acquire() as conn:
+                est = await conn.fetchval(
+                    "SELECT reltuples::bigint FROM pg_class WHERE relname = $1",
+                    table)
+        except Exception as e:
+            logger.debug("get_rdf_quad_count_estimate(%s) failed: %s", space_id, e)
+            return None
+        if est is None or est < 0:
+            return None
+        return int(est)
+
     async def get_rdf_quad_count(self, space_id: str,
                                   graph_uri: Optional[str] = None) -> int:
         """Exact quad count, CACHED — it is an unavoidable full count.
@@ -959,6 +1014,14 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         of bug as `issues/082`.
         """
         from ...cache.count_cache import _count_cache
+
+        # Space-wide: the catalog estimate answers this directly and costs a
+        # lookup. Only for the WHOLE table — there is no per-context estimate,
+        # so a graph-scoped count still does the real work.
+        if graph_uri is None:
+            est = await self.get_rdf_quad_count_estimate(space_id)
+            if est is not None:
+                return est
 
         cache_graph = graph_uri or "__whole_space__"
         cache_key = _count_cache.query_hash(f"rdf_quad_count::{space_id}::{cache_graph}")

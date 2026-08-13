@@ -125,3 +125,112 @@ async def test_a_failed_count_is_not_cached_as_zero():
     assert _count_cache.get("failspace", "urn:g", key) is None, (
         "a failed count was cached as 0 — an outage now looks like an empty "
         "graph for the life of the entry")
+
+
+# ---------------------------------------------------------------------------
+# reltuples estimates. Cheap (1.7ms vs 4,591ms) and near-exact — six of eight
+# quad tables measured EXACT, one 0.0001% out, one 0.635% out after deletes.
+# Used only where it is SOUND: the whole table, and a space with exactly one
+# graph, where the table total IS that graph's count.
+# ---------------------------------------------------------------------------
+
+class _EstConn:
+    """Answers the catalog lookup and a real COUNT(*) with DIFFERENT values.
+
+    They must differ, or a test cannot tell which path ran — the first version
+    of this returned one value for both and "proved" nothing.
+    """
+
+    def __init__(self, value, count_value=4_242):
+        self._value = value
+        self._count_value = count_value
+
+    async def fetchval(self, sql, *args):
+        if "pg_class" in sql:
+            return self._value
+        return self._count_value
+
+
+class _EstPool:
+    def __init__(self, value, count_value=4_242):
+        self._value = value
+        self._count_value = count_value
+
+    def acquire(self):
+        value, cv = self._value, self._count_value
+
+        class _Ctx:
+            async def __aenter__(self):
+                return _EstConn(value, cv)
+
+            async def __aexit__(self, *a):
+                return False
+        return _Ctx()
+
+
+def _impl_with(value):
+    from vitalgraph.db.sparql_sql.sparql_sql_space_impl import SparqlSQLSpaceImpl
+    impl = SparqlSQLSpaceImpl.__new__(SparqlSQLSpaceImpl)
+
+    class _Schema:
+        @staticmethod
+        def get_table_names(space_id):
+            return {"rdf_quad": f"{space_id}_rdf_quad"}
+
+    class _DB:
+        _pool = _EstPool(value)
+
+    impl.schema = _Schema()
+    impl.db_impl = _DB()
+    return impl
+
+
+async def test_an_estimate_is_returned_when_available():
+    assert await _impl_with(50_570_040).get_rdf_quad_count_estimate("sp") == 50_570_040
+
+
+async def test_a_never_analyzed_table_returns_none_not_minus_one():
+    """PostgreSQL 14+ stores -1 for "never analysed", and one table on this
+    database is in that state. Returning it would display MINUS ONE triple;
+    None tells the caller to do the real count."""
+    assert await _impl_with(-1).get_rdf_quad_count_estimate("sp") is None
+
+
+async def test_a_missing_table_returns_none():
+    assert await _impl_with(None).get_rdf_quad_count_estimate("sp") is None
+
+
+async def test_a_failure_returns_none_rather_than_zero():
+    """Zero would be indistinguishable from an empty space, and would then be
+    displayed as the triple count."""
+    class _Boom:
+        def acquire(self):
+            raise RuntimeError("pool down")
+
+    impl = _impl_with(1)
+    impl.db_impl._pool = _Boom()
+    assert await impl.get_rdf_quad_count_estimate("sp") is None
+
+
+async def test_the_space_wide_count_uses_the_estimate():
+    """`get_rdf_quad_count(space)` with no graph must not run COUNT(*) when an
+    estimate exists — that is the 4,591 ms this avoids."""
+    impl = _impl_with(12_345)
+    assert await impl.get_rdf_quad_count("sp") == 12_345
+
+
+async def test_a_graph_scoped_count_never_uses_the_estimate():
+    """There is no per-context estimate in the catalog. A table total says
+    nothing about one graph of a multi-graph space, so this path must fall
+    through to the real (cached) count rather than returning the table total.
+    """
+    from vitalgraph.cache.count_cache import _count_cache
+
+    impl = _impl_with(999_999)          # the table estimate
+    _count_cache.invalidate_graph("sp", "urn:g")
+    got = await impl.get_rdf_quad_count("sp", "urn:g")
+    assert got == 4_242, (
+        f"expected the real COUNT(*) (4,242), got {got}")
+    assert got != 999_999, (
+        "a graph-scoped count returned the whole-TABLE estimate — in a "
+        "multi-graph space that reports another graph's rows as this one's")
