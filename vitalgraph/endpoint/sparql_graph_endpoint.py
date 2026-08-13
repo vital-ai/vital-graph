@@ -495,6 +495,36 @@ class SPARQLGraphEndpoint:
                 if vt_uuid is None:
                     return GraphCountsResponse(status=OperationStatus.FOUND)
 
+                # CACHED: this is an aggregate over every vitaltype quad in the
+                # graph, measured at 3,343 ms, and it is on the space and graph
+                # pages that the UI reports as ~20 s loads. The count itself is
+                # honest work — grouping 50M rows is what it costs — so the fix
+                # is not to make it faster but to stop repeating it.
+                #
+                # The cache and its invalidation already existed and were simply
+                # not used here; a write to the graph clears it immediately, and
+                # the TTL bounds staleness. Three counts share one entry because
+                # they come from one query.
+                # One entry per count. The cache stores integers, so the
+                # alternative — packing three counts into one — would silently
+                # truncate any graph with more than ~2M frames. Three keys cost
+                # nothing and cannot be wrong.
+                from ...cache.count_cache import _count_cache
+                _keys = {
+                    name: _count_cache.query_hash(
+                        f"graph_counts::{space_id}::{graph_id}::{name}")
+                    for name in ("entity", "frame", "relation")
+                }
+                _hits = {name: _count_cache.get(space_id, graph_id, k)
+                         for name, k in _keys.items()}
+                if all(v is not None for v in _hits.values()):
+                    return GraphCountsResponse(
+                        status=OperationStatus.FOUND,
+                        entity_count=_hits["entity"],
+                        frame_count=_hits["frame"],
+                        relation_count=_hits["relation"],
+                    )
+
                 # One query: count vitaltype rows grouped by object (type URI)
                 rows = await conn.fetch(f"""
                     SELECT t_obj.term_text AS type_uri, COUNT(*) AS cnt
@@ -516,6 +546,11 @@ class SPARQLGraphEndpoint:
                         frame_count += cnt
                     elif uri in self._RELATION_TYPES:
                         relation_count += cnt
+
+                for _name, _val in (("entity", entity_count),
+                                    ("frame", frame_count),
+                                    ("relation", relation_count)):
+                    _count_cache.put(space_id, graph_id, _keys[_name], _val)
 
                 return GraphCountsResponse(
                     status=OperationStatus.FOUND,

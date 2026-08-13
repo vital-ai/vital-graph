@@ -937,21 +937,55 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
     async def get_rdf_quad_count(self, space_id: str,
                                   graph_uri: Optional[str] = None) -> int:
+        """Exact quad count, CACHED — it is an unavoidable full count.
+
+        `COUNT(*)` over a graph is O(the graph): measured 4,591 ms for the 50.5M
+        quads of `sp_lead_synth_100k`. That is not a bad query, it is what an
+        exact count costs, and no index removes it.
+
+        It matters because this is on the DASHBOARD path. `list_graphs` calls it
+        once per graph and the dashboard calls `list_graphs` once per space —
+        67 of them, concurrently, which is the ~20 s page load reported from the
+        UI.
+
+        So it is cached rather than optimised. The cache already exists and its
+        invalidation is already wired into every write path
+        (`vitalgraphapp_impl` calls `invalidate_graph` / `invalidate_space`); it
+        simply was not used here. A stale total on a dashboard is acceptable;
+        the 15 minute TTL bounds it, and a write to the graph clears it at once.
+
+        NOT cached on failure. A count that errored and cached as 0 is
+        indistinguishable from a genuinely empty graph, which is the same class
+        of bug as `issues/082`.
+        """
+        from ...cache.count_cache import _count_cache
+
+        cache_graph = graph_uri or "__whole_space__"
+        cache_key = _count_cache.query_hash(f"rdf_quad_count::{space_id}::{cache_graph}")
+        cached = _count_cache.get(space_id, cache_graph, cache_key)
+        if cached is not None:
+            return cached
+
         try:
             t = self.schema.get_table_names(space_id)
             async with self._db._pool.acquire() as conn:
                 if graph_uri:
                     g_uuid = _generate_term_uuid(graph_uri, 'U')
-                    return await conn.fetchval(
+                    count = await conn.fetchval(
                         f"SELECT COUNT(*) FROM {t['rdf_quad']} "
                         f"WHERE context_uuid = $1", g_uuid,
                     )
-                return await conn.fetchval(
-                    f"SELECT COUNT(*) FROM {t['rdf_quad']}"
-                )
+                else:
+                    count = await conn.fetchval(
+                        f"SELECT COUNT(*) FROM {t['rdf_quad']}"
+                    )
         except Exception as e:
             logger.error("get_rdf_quad_count(%s) failed: %s", space_id, e)
             return 0
+
+        count = int(count or 0)
+        _count_cache.put(space_id, cache_graph, cache_key, count)
+        return count
 
     async def add_rdf_quads_batch(self, space_id: str,
                                    quads: List[Tuple[Identifier, Identifier, Identifier, Identifier]],
