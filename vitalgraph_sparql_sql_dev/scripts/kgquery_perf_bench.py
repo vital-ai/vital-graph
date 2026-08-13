@@ -11,9 +11,9 @@ Requires:
   2. Jena sidecar running (default http://localhost:7070)
 
 Usage:
-    python vitalgraph_sparql_sql/scripts/kgquery_perf_bench.py
-    python vitalgraph_sparql_sql/scripts/kgquery_perf_bench.py --query R4
-    python vitalgraph_sparql_sql/scripts/kgquery_perf_bench.py --query all --explain
+    python vitalgraph_sparql_sql_dev/scripts/kgquery_perf_bench.py
+    python vitalgraph_sparql_sql_dev/scripts/kgquery_perf_bench.py --query R4
+    python vitalgraph_sparql_sql_dev/scripts/kgquery_perf_bench.py --query all --explain
 """
 
 import argparse
@@ -32,8 +32,8 @@ from vitalgraph.db.sparql_sql.generator import generate_sql as v2_generate, warm
 from vitalgraph.db.sparql_sql.sparql_sql_space_impl import SparqlSQLSpaceImpl
 from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
 from vitalgraph.db.sparql_sql import db_provider
-from vitalgraph_sparql_sql import db
-from vitalgraph_sparql_sql.db import DevDbImpl
+from vitalgraph_sparql_sql_dev import db
+from vitalgraph_sparql_sql_dev.db import DevDbImpl
 
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 logger = logging.getLogger(__name__)
@@ -361,7 +361,7 @@ async def _run_query_pipeline(label: str, sparql: str,
 
 async def _fresh_setup(run_analyze: bool = False):
     """Drop, recreate, and reload space. Optionally run ANALYZE. Returns quad count."""
-    from vitalgraph_sparql_sql.scripts.kgquery_perf_setup import (
+    from vitalgraph_sparql_sql_dev.scripts.kgquery_perf_setup import (
         build_all_objects, objects_to_quads, GRAPH_URI,
     )
     from vitalgraph.db.sparql_sql import db_provider

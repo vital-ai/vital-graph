@@ -9,8 +9,8 @@ entities named "happy", then pretty-prints the relationships as:
     happy ---Hypernym---> feeling
 
 Usage:
-    python vitalgraph_sparql_sql/scripts/happy_words.py
-    python -m vitalgraph_sparql_sql.scripts.happy_words [--limit 50]
+    python vitalgraph_sparql_sql_dev/scripts/happy_words.py
+    python -m vitalgraph_sparql_sql_dev.scripts.happy_words [--limit 50]
 """
 
 import argparse
@@ -21,7 +21,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from vitalgraph_sparql_sql.jena_sparql_orchestrator import SparqlOrchestrator
+from vitalgraph_sparql_sql_dev.jena_sparql_orchestrator import SparqlOrchestrator
 
 # ---------------------------------------------------------------------------
 # Ontology constants
@@ -115,7 +115,7 @@ def run(limit: int = 50, verbose: bool = False, query: str = "all"):
     print()
 
     # Warm the connection pool before timing
-    from vitalgraph_sparql_sql import db
+    from vitalgraph_sparql_sql_dev import db
     with db.get_connection() as _:
         pass
 
@@ -324,7 +324,7 @@ def run(limit: int = 50, verbose: bool = False, query: str = "all"):
 
         # EXPLAIN ANALYZE
         if sql_only_result.ok and sql_only_result.sql:
-            from vitalgraph_sparql_sql import db as _db
+            from vitalgraph_sparql_sql_dev import db as _db
             try:
                 explain_rows = _db.execute_query(f"EXPLAIN ANALYZE {sql_only_result.sql}")
                 print()
@@ -356,7 +356,7 @@ def run(limit: int = 50, verbose: bool = False, query: str = "all"):
         t0 = time.monotonic()
         name_map: dict = {}
 
-        from vitalgraph_sparql_sql import db
+        from vitalgraph_sparql_sql_dev import db
         space = SPACE_ID
         quad_tbl = f"{space}_rdf_quad"
         term_tbl = f"{space}_term"

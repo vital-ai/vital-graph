@@ -49,7 +49,7 @@ class HappyFrameSQLOptimizedTest:
             return {
                 'host': db_config.get('host', 'localhost'),
                 'port': db_config.get('port', 5432),
-                'database': db_config.get('database', 'fuseki_sql_graph'),
+                'database': db_config.get('database', 'sparql_sql_graph'),
                 'user': db_config.get('user', 'postgres'),
                 'password': db_config.get('password', '')
             }
@@ -59,7 +59,7 @@ class HappyFrameSQLOptimizedTest:
             return {
                 'host': 'localhost',
                 'port': 5432,
-                'database': 'fuseki_sql_graph',
+                'database': 'sparql_sql_graph',
                 'user': 'postgres',
                 'password': ''
             }

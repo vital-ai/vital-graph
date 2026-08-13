@@ -9,21 +9,21 @@ Supports three engines:
 
 Usage:
     # Phase 1: pyoxigraph baseline
-    python -m vitalgraph_sparql_sql.dawg_test_impl.dawg_test_runner
-    python -m vitalgraph_sparql_sql.dawg_test_impl.dawg_test_runner --category bind
+    python -m vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_test_runner
+    python -m vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_test_runner --category bind
 
     # Phase 2: SQL pipeline comparison (v1)
-    python -m vitalgraph_sparql_sql.dawg_test_impl.dawg_test_runner --engine sql
-    python -m vitalgraph_sparql_sql.dawg_test_impl.dawg_test_runner --engine sql --category bind
+    python -m vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_test_runner --engine sql
+    python -m vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_test_runner --engine sql --category bind
 
     # Phase 3: v2 SQL pipeline
-    python -m vitalgraph_sparql_sql.dawg_test_impl.dawg_test_runner --engine sql_v2
-    python -m vitalgraph_sparql_sql.dawg_test_impl.dawg_test_runner --engine sql_v2 --category bind
+    python -m vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_test_runner --engine sql_v2
+    python -m vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_test_runner --engine sql_v2 --category bind
 
     # Common options
-    python -m vitalgraph_sparql_sql.dawg_test_impl.dawg_test_runner --test bind01
-    python -m vitalgraph_sparql_sql.dawg_test_impl.dawg_test_runner --failures-only
-    python -m vitalgraph_sparql_sql.dawg_test_impl.dawg_test_runner --report results/report.json
+    python -m vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_test_runner --test bind01
+    python -m vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_test_runner --failures-only
+    python -m vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_test_runner --report results/report.json
 """
 
 from __future__ import annotations
@@ -112,7 +112,7 @@ def _project_root() -> Path:
 
 def _dawg_root() -> Path:
     """Return the path to the DAWG test suite."""
-    return _project_root() / "vitalgraph_sparql_sql" / "dawg_tests"
+    return _project_root() / "vitalgraph_sparql_sql_dev" / "dawg_tests"
 
 
 def _jena_arq_root() -> Path:

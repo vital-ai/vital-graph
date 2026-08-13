@@ -13,7 +13,7 @@ Requires:
   - PostgreSQL with WordNet data in wordnet_frames_* tables
 
 Usage:
-    python vitalgraph_sparql_sql/scripts/compare_sparql_vs_handwritten.py
+    python vitalgraph_sparql_sql_dev/scripts/compare_sparql_vs_handwritten.py
 """
 
 import argparse
@@ -25,8 +25,8 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from vitalgraph_sparql_sql.jena_sparql_orchestrator import SparqlOrchestrator
-from vitalgraph_sparql_sql import db
+from vitalgraph_sparql_sql_dev.jena_sparql_orchestrator import SparqlOrchestrator
+from vitalgraph_sparql_sql_dev import db
 
 logger = logging.getLogger("compare_sql")
 

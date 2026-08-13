@@ -8,8 +8,8 @@ Requires:
   - PostgreSQL with WordNet data in wordnet_frames_* tables
 
 Usage:
-    python -m vitalgraph_sparql_sql.scripts.query_wordnet
-    python vitalgraph_sparql_sql/scripts/query_wordnet.py [--space wordnet_frames] [-v]
+    python -m vitalgraph_sparql_sql_dev.scripts.query_wordnet
+    python vitalgraph_sparql_sql_dev/scripts/query_wordnet.py [--space wordnet_frames] [-v]
 """
 
 import argparse
@@ -23,7 +23,7 @@ import time
 # Ensure project root is on path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from vitalgraph_sparql_sql.jena_sparql_orchestrator import SparqlOrchestrator
+from vitalgraph_sparql_sql_dev.jena_sparql_orchestrator import SparqlOrchestrator
 
 logger = logging.getLogger("query_wordnet")
 
@@ -771,7 +771,7 @@ async def run_queries(space_id: str, verbose: bool = False, selected: str = None
     """
     Execute queries via the async SparqlOrchestrator and report timings.
     """
-    from vitalgraph_sparql_sql import db
+    from vitalgraph_sparql_sql_dev import db
 
     passed = 0
     failed = 0

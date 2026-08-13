@@ -294,7 +294,7 @@ def parse_args():
         description="Integration test for MaintenanceJob thread-offload fix")
     p.add_argument("--db-host", default="localhost")
     p.add_argument("--db-port", type=int, default=5432)
-    p.add_argument("--db-name", default="fuseki_sql_graph")
+    p.add_argument("--db-name", default="sparql_sql_graph")
     p.add_argument("--db-user", default="postgres")
     p.add_argument("--db-password", default="")
     return p.parse_args()

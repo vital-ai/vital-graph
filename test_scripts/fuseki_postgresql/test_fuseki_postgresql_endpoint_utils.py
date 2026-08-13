@@ -49,7 +49,7 @@ class FusekiPostgreSQLEndpointTester:
         self.postgresql_config = postgresql_config or {
             "host": "localhost",
             "port": 5432,
-            "database": "fuseki_sql_graph",
+            "database": "sparql_sql_graph",
             "username": "postgres",
             "password": ""
         }

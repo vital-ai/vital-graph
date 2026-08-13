@@ -2,7 +2,7 @@
 """
 load_wordnet_frames.py — Bulk-load KGFrames WordNet N-Triples into PostgreSQL.
 
-Standalone loader for vitalgraph_sparql_sql experiments.
+Standalone loader for vitalgraph_sparql_sql_dev experiments.
 Populates *_term and *_rdf_quad tables (default: wordnet_frames_*).
 
 Steps
@@ -19,9 +19,9 @@ Steps
 
 Usage
 -----
-    python -m vitalgraph_sparql_sql.data.load_wordnet_frames
-    python vitalgraph_sparql_sql/data/load_wordnet_frames.py [options]
-    python vitalgraph_sparql_sql/data/load_wordnet_frames.py --help
+    python -m vitalgraph_sparql_sql_dev.data.load_wordnet_frames
+    python vitalgraph_sparql_sql_dev/data/load_wordnet_frames.py [options]
+    python vitalgraph_sparql_sql_dev/data/load_wordnet_frames.py --help
 """
 
 import argparse
@@ -66,7 +66,7 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-DEFAULT_DSN = "host=localhost port=5432 dbname=fuseki_sql_graph user=postgres"
+DEFAULT_DSN = "host=localhost port=5432 dbname=sparql_sql_graph user=postgres"
 DEFAULT_GRAPH_URI = "urn:wordnet_frames"
 DEFAULT_DATASET = "primary"
 

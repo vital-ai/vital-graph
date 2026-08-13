@@ -6,8 +6,8 @@ Uses REGEX with case-insensitive flag ("i") per SPARQL standard, and the v2
 SQL generation pipeline with MV rewrites + FILTER push-down.
 
 Usage:
-    python vitalgraph_sparql_sql/scripts/happy_words_v2.py
-    python -m vitalgraph_sparql_sql.scripts.happy_words_v2 [--limit 50]
+    python vitalgraph_sparql_sql_dev/scripts/happy_words_v2.py
+    python -m vitalgraph_sparql_sql_dev.scripts.happy_words_v2 [--limit 50]
 """
 
 import argparse
@@ -23,8 +23,8 @@ from vitalgraph.db.jena_sparql.jena_sidecar_client import SidecarClient
 from vitalgraph.db.jena_sparql.jena_ast_mapper import map_compile_response
 from vitalgraph.db.sparql_sql.generator import generate_sql as v2_generate, warm_stats_cache
 from vitalgraph.db.sparql_sql import db_provider
-from vitalgraph_sparql_sql import db
-from vitalgraph_sparql_sql.db import DevDbImpl
+from vitalgraph_sparql_sql_dev import db
+from vitalgraph_sparql_sql_dev.db import DevDbImpl
 
 # ---------------------------------------------------------------------------
 # Ontology constants

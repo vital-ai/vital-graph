@@ -6,8 +6,8 @@ Executes the multi-criteria SPARQL query (MQL=true + MQLRating>=65 + CompanyStat
 via the v2 SPARQL-to-SQL pipeline, outputs the generated SQL and EXPLAIN ANALYZE.
 
 Usage:
-    python vitalgraph_sparql_sql/scripts/lead_multi_criteria_v2.py
-    python -m vitalgraph_sparql_sql.scripts.lead_multi_criteria_v2
+    python vitalgraph_sparql_sql_dev/scripts/lead_multi_criteria_v2.py
+    python -m vitalgraph_sparql_sql_dev.scripts.lead_multi_criteria_v2
 """
 
 import asyncio
@@ -23,8 +23,8 @@ from vitalgraph.db.jena_sparql.jena_sidecar_client import SidecarClient
 from vitalgraph.db.jena_sparql.jena_ast_mapper import map_compile_response
 from vitalgraph.db.sparql_sql.generator import generate_sql as v2_generate, warm_stats_cache
 from vitalgraph.db.sparql_sql import db_provider
-from vitalgraph_sparql_sql import db
-from vitalgraph_sparql_sql.db import DevDbImpl
+from vitalgraph_sparql_sql_dev import db
+from vitalgraph_sparql_sql_dev.db import DevDbImpl
 
 SPACE_ID = "sp_sql_lead_dataset"
 

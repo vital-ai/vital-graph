@@ -8,7 +8,7 @@ VitalSigns objects to triples via to_triples(), then bulk-inserts
 as quads.  No REST API or VitalGraph server needed.
 
 Usage:
-    python vitalgraph_sparql_sql/scripts/kgquery_perf_setup.py [--reset]
+    python vitalgraph_sparql_sql_dev/scripts/kgquery_perf_setup.py [--reset]
 """
 
 import argparse
@@ -25,7 +25,7 @@ from rdflib import URIRef
 
 from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
 from vitalgraph.db.sparql_sql.sparql_sql_space_impl import SparqlSQLSpaceImpl
-from vitalgraph_sparql_sql import db
+from vitalgraph_sparql_sql_dev import db
 
 # Import the SAME data definitions and creators used by test_sparql_sql_kgqueries.py
 from vitalgraph_client_test.multi_kgentity.case_create_organizations import (

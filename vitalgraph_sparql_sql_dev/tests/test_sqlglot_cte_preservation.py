@@ -8,7 +8,7 @@ merge_subqueries, eliminate_ctes, and the full optimize() pipeline do NOT
 dissolve MATERIALIZED CTEs.
 
 Usage:
-    python vitalgraph_sparql_sql/tests/test_sqlglot_cte_preservation.py
+    python vitalgraph_sparql_sql_dev/tests/test_sqlglot_cte_preservation.py
 """
 
 import sys

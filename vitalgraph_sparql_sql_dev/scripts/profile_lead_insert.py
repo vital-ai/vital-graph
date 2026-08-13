@@ -12,9 +12,9 @@ Measures: RDFLib parse, add_rdf_quads_batch, total wall-clock.
 Also reports PostgreSQL transaction/WAL settings.
 
 Usage:
-    python vitalgraph_sparql_sql/scripts/profile_lead_insert.py
-    python vitalgraph_sparql_sql/scripts/profile_lead_insert.py --raw
-    python vitalgraph_sparql_sql/scripts/profile_lead_insert.py --transactional
+    python vitalgraph_sparql_sql_dev/scripts/profile_lead_insert.py
+    python vitalgraph_sparql_sql_dev/scripts/profile_lead_insert.py --raw
+    python vitalgraph_sparql_sql_dev/scripts/profile_lead_insert.py --transactional
 """
 
 import argparse

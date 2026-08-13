@@ -6,11 +6,11 @@ for WordNet KGFrames queries.
 Runs the same SPARQL queries against both backends and reports timing.
 
 Usage:
-    python vitalgraph_sparql_sql/scripts/benchmark_fuseki_vs_sql.py
-    python vitalgraph_sparql_sql/scripts/benchmark_fuseki_vs_sql.py -q 5c
-    python vitalgraph_sparql_sql/scripts/benchmark_fuseki_vs_sql.py --backend fuseki
-    python vitalgraph_sparql_sql/scripts/benchmark_fuseki_vs_sql.py --backend pg
-    python vitalgraph_sparql_sql/scripts/benchmark_fuseki_vs_sql.py --fuseki-timeout 60
+    python vitalgraph_sparql_sql_dev/scripts/benchmark_fuseki_vs_sql.py
+    python vitalgraph_sparql_sql_dev/scripts/benchmark_fuseki_vs_sql.py -q 5c
+    python vitalgraph_sparql_sql_dev/scripts/benchmark_fuseki_vs_sql.py --backend fuseki
+    python vitalgraph_sparql_sql_dev/scripts/benchmark_fuseki_vs_sql.py --backend pg
+    python vitalgraph_sparql_sql_dev/scripts/benchmark_fuseki_vs_sql.py --fuseki-timeout 60
 """
 
 import argparse
@@ -26,7 +26,7 @@ import requests
 project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
 
-from vitalgraph_sparql_sql.jena_sparql_orchestrator import SparqlOrchestrator
+from vitalgraph_sparql_sql_dev.jena_sparql_orchestrator import SparqlOrchestrator
 
 logger = logging.getLogger(__name__)
 

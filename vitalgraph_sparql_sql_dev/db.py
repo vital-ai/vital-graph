@@ -46,7 +46,7 @@ def _asyncpg_connect_kwargs(params: Optional[Dict[str, Any]] = None) -> Dict[str
     return {
         "host": p.get("host", "localhost"),
         "port": int(p.get("port", 5432)),
-        "database": p.get("dbname", p.get("database", "fuseki_sql_graph")),
+        "database": p.get("dbname", p.get("database", "sparql_sql_graph")),
         "user": p.get("user", p.get("username", "postgres")),
         "password": p.get("password", ""),
     }
@@ -170,8 +170,8 @@ class DevDbImpl(DbImplInterface):
     (e.g. FusekiPostgreSQLDbImpl) instead.
 
     Usage:
-        from vitalgraph_sparql_sql.db import DevDbImpl
-        from vitalgraph_sparql_sql.sparql_sql import db_provider
+        from vitalgraph_sparql_sql_dev.db import DevDbImpl
+        from vitalgraph_sparql_sql_dev.sparql_sql import db_provider
 
         dev_impl = DevDbImpl()
         await dev_impl.connect()

@@ -2,11 +2,11 @@
 """Debug tool for v2 SPARQL-to-SQL pipeline.
 
 Usage:
-    python -m vitalgraph_sparql_sql.sparql_sql.debug_sparql "SELECT ?s WHERE { ?s ?p ?o }"
-    python -m vitalgraph_sparql_sql.sparql_sql.debug_sparql --file path/to/query.rq
-    python -m vitalgraph_sparql_sql.sparql_sql.debug_sparql --file query.rq --plan   # plan tree only
-    python -m vitalgraph_sparql_sql.sparql_sql.debug_sparql --file query.rq --sql    # SQL only
-    python -m vitalgraph_sparql_sql.sparql_sql.debug_sparql --file query.rq --sidecar  # raw sidecar JSON
+    python -m vitalgraph_sparql_sql_dev.sparql_sql.debug_sparql "SELECT ?s WHERE { ?s ?p ?o }"
+    python -m vitalgraph_sparql_sql_dev.sparql_sql.debug_sparql --file path/to/query.rq
+    python -m vitalgraph_sparql_sql_dev.sparql_sql.debug_sparql --file query.rq --plan   # plan tree only
+    python -m vitalgraph_sparql_sql_dev.sparql_sql.debug_sparql --file query.rq --sql    # SQL only
+    python -m vitalgraph_sparql_sql_dev.sparql_sql.debug_sparql --file query.rq --sidecar  # raw sidecar JSON
 """
 
 import argparse

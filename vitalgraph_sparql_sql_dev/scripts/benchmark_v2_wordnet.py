@@ -10,10 +10,10 @@ Measures four execution modes:
   D. Prepared stmt   (psycopg3 prepare=True on cached SQL)
 
 Usage:
-    python -m vitalgraph_sparql_sql.scripts.benchmark_v2_wordnet
-    python -m vitalgraph_sparql_sql.scripts.benchmark_v2_wordnet --runs 10
-    python -m vitalgraph_sparql_sql.scripts.benchmark_v2_wordnet --query F1
-    python -m vitalgraph_sparql_sql.scripts.benchmark_v2_wordnet --explain
+    python -m vitalgraph_sparql_sql_dev.scripts.benchmark_v2_wordnet
+    python -m vitalgraph_sparql_sql_dev.scripts.benchmark_v2_wordnet --runs 10
+    python -m vitalgraph_sparql_sql_dev.scripts.benchmark_v2_wordnet --query F1
+    python -m vitalgraph_sparql_sql_dev.scripts.benchmark_v2_wordnet --explain
 """
 
 import argparse
@@ -28,10 +28,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from vitalgraph_sparql_sql.jena_sidecar_client import SidecarClient
-from vitalgraph_sparql_sql.jena_ast_mapper import map_compile_response
-from vitalgraph_sparql_sql.sparql_sql.generator import generate_sql
-from vitalgraph_sparql_sql import db
+from vitalgraph_sparql_sql_dev.jena_sidecar_client import SidecarClient
+from vitalgraph_sparql_sql_dev.jena_ast_mapper import map_compile_response
+from vitalgraph_sparql_sql_dev.sparql_sql.generator import generate_sql
+from vitalgraph_sparql_sql_dev import db
 
 logger = logging.getLogger(__name__)
 
