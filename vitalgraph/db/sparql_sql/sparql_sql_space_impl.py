@@ -913,6 +913,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     await sync_edge_table_after_insert(conn, space_id, [s_uuid])
                     from .sync_frame_entity_table import sync_frame_entity_after_edge_insert
                     await sync_frame_entity_after_edge_insert(conn, space_id, [s_uuid])
+            self._invalidate_counts_for_quads(space_id, [quad])
             return True
         except Exception as e:
             logger.error("add_rdf_quad(%s) failed: %s", space_id, e)
@@ -932,6 +933,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     f"AND object_uuid = $3 AND context_uuid = $4",
                     s_uuid, p_uuid, o_uuid, g_uuid,
                 )
+            self._invalidate_counts_for_quads(space_id, [(s, p, o, g)])
             return True
         except Exception as e:
             logger.error("remove_rdf_quad(%s) failed: %s", space_id, e)
@@ -1023,11 +1025,20 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             if est is not None:
                 return est
 
-        cache_graph = graph_uri or "__whole_space__"
-        cache_key = _count_cache.query_hash(f"rdf_quad_count::{space_id}::{cache_graph}")
-        cached = _count_cache.get(space_id, cache_graph, cache_key)
-        if cached is not None:
-            return cached
+        # Only a GRAPH-scoped count is cached, and that is deliberate.
+        # Invalidation is per (space, graph): `invalidate_graph` clears keys
+        # whose graph matches, so an entry stored under a synthetic
+        # "whole space" graph id would survive every write and go stale until
+        # the TTL. The whole-space case is answered by the catalog estimate
+        # above anyway; this fall-through only runs when the table has never
+        # been analysed, which is rare and correct to compute each time.
+        cache_key = None
+        if graph_uri is not None:
+            cache_key = _count_cache.query_hash(
+                f"rdf_quad_count::{space_id}::{graph_uri}")
+            cached = _count_cache.get(space_id, graph_uri, cache_key)
+            if cached is not None:
+                return cached
 
         try:
             t = self.schema.get_table_names(space_id)
@@ -1047,8 +1058,39 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             return 0
 
         count = int(count or 0)
-        _count_cache.put(space_id, cache_graph, cache_key, count)
+        if cache_key is not None:
+            _count_cache.put(space_id, graph_uri, cache_key, count)
         return count
+
+    @staticmethod
+    def _invalidate_counts_for_quads(space_id: str, quads) -> None:
+        """Clear cached counts for every graph these quads touched.
+
+        The counts behind the dashboard and the space pages are cached because
+        an exact `COUNT(*)` over a graph is O(the graph). That is only sound if
+        a write clears them: a stale count after an INSERT under-reports, and
+        after a DELETE it reads as data that is still present.
+
+        `clear_graph` and `drop_graph` already did this; the BATCH quad paths —
+        which are how bulk load, import and the entity endpoints actually write
+        — did not, so a cached count survived every ordinary write. Caught by
+        `tests/integration/test_count_cache_invalidation.py`, which asserts
+        against the real write path rather than calling `invalidate_graph`
+        directly.
+
+        Best effort: a cache failure must never fail a write that has already
+        committed.
+        """
+        try:
+            from ...cache.count_cache import _count_cache
+            contexts = set()
+            for q in quads or ():
+                if len(q) >= 4 and q[3] is not None:
+                    contexts.add(str(q[3]))
+            for ctx in contexts:
+                _count_cache.invalidate_graph(space_id, ctx)
+        except Exception as e:      # pragma: no cover - defensive
+            logger.debug("count cache invalidation skipped for %s: %s", space_id, e)
 
     async def add_rdf_quads_batch(self, space_id: str,
                                    quads: List[Tuple[Identifier, Identifier, Identifier, Identifier]],
@@ -1115,6 +1157,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     async with conn.transaction():
                         await _do(conn)
 
+            self._invalidate_counts_for_quads(space_id, quads)
             return inserted
         except Exception as e:
             logger.error("add_rdf_quads_batch(%s) failed: %s", space_id, e)
@@ -1306,6 +1349,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             # Track row changes for auto-ANALYZE (outside transaction)
             from .auto_analyze import record_changes, maybe_analyze
             record_changes(space_id, count)
+            self._invalidate_counts_for_quads(space_id, quads)
             async with self._db._pool.acquire() as conn:
                 await maybe_analyze(conn, space_id, pg_config=self.postgresql_config)
             return count
@@ -1414,6 +1458,12 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             # Track row changes for auto-ANALYZE (outside transaction)
             from .auto_analyze import record_changes, maybe_analyze
             record_changes(space_id, deleted)
+            # This method deletes within ONE graph and has no quad list.
+            try:
+                from ...cache.count_cache import _count_cache
+                _count_cache.invalidate_graph(space_id, str(graph_id))
+            except Exception as _e:      # pragma: no cover - defensive
+                logger.debug("count cache invalidation skipped: %s", _e)
             async with self._db._pool.acquire() as conn:
                 await maybe_analyze(conn, space_id, pg_config=self.postgresql_config)
             return deleted
@@ -1509,6 +1559,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             # Track row changes for auto-ANALYZE (outside transaction)
             from .auto_analyze import record_changes, maybe_analyze
             record_changes(space_id, count)
+            self._invalidate_counts_for_quads(space_id, quads)
             async with self._db._pool.acquire() as conn:
                 await maybe_analyze(conn, space_id, pg_config=self.postgresql_config)
             return count
@@ -1551,6 +1602,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     )
                     if 'DELETE 1' in result:
                         removed += 1
+            self._invalidate_counts_for_quads(space_id, quads)
             return removed
         except Exception as e:
             logger.error("remove_rdf_quads_batch(%s) failed: %s", space_id, e)
