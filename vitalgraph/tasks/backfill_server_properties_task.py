@@ -28,6 +28,7 @@ import os
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
+from vitalgraph.tasks import backfill_state
 from vitalgraph.kg_impl.kg_server_properties import (
     backfill_entity_server_properties_sql,
     discover_graphs_sql,
@@ -112,6 +113,13 @@ class BackfillServerPropertiesTask:
         # Nudge event — set by nudge() or NOTIFY listener
         self._nudge_event = asyncio.Event()
 
+        # A nudge means "data arrived", and it OVERRIDES completion markers for
+        # the next full cycle. Not optional: `pg_stat_user_tables` lags commits,
+        # so a marker checked immediately after a nudge can still read as
+        # unchanged. Trusting the caller here removes that race entirely, and
+        # costs one cycle of the scans the markers exist to avoid.
+        self._force_full_check = True
+
         # Dedicated LISTEN connection for out-of-process nudges
         self._listen_conn = None
 
@@ -146,6 +154,7 @@ class BackfillServerPropertiesTask:
         Calling multiple times before the task wakes is harmless — the
         event is level-triggered.
         """
+        self._force_full_check = True
         self._nudge_event.set()
 
     def start(self) -> None:
@@ -274,6 +283,11 @@ class BackfillServerPropertiesTask:
                         break
                     sleep_time = 0  # proceed immediately after wake
                 cycle_had_work = False
+                # A full cycle has now run; if it was forced by a nudge, that
+                # obligation is discharged and later cycles may use markers
+                # again. A nudge arriving mid-cycle re-arms this, so the worst
+                # case is one extra forced cycle, never a skipped one.
+                self._force_full_check = False
             else:
                 # Mid-cycle — short delay between targets
                 sleep_time = self.active_interval if did_work else 0.1
@@ -331,6 +345,20 @@ class BackfillServerPropertiesTask:
         idx = self._cursor.index
         total = len(self._cursor.targets)
 
+        # A graph already marked complete, whose space has had no inserts since,
+        # needs no scan at all. Proving it idle costs 2,593 ms on the 100k
+        # fixture (`backfill_state`), and that is the cost this skips.
+        if not self._force_full_check:
+            try:
+                if await backfill_state.is_complete(self.pool, space_id, graph_id):
+                    logger.debug("Backfill [%d/%d]: %s/%s — complete, skipped",
+                                 idx, total, space_id, graph_id)
+                    return False
+            except Exception as e:
+                # Never let the optimisation break the thing it optimises.
+                logger.debug("Backfill: completion check failed for %s/%s: %s",
+                             space_id, graph_id, e)
+
         try:
             result = await backfill_entity_server_properties_sql(
                 self.pool, space_id, graph_id,
@@ -349,6 +377,9 @@ class BackfillServerPropertiesTask:
                     "Backfill [%d/%d]: %s/%s — nothing to patch",
                     idx, total, space_id, graph_id,
                 )
+                # Nothing missing: record it, with the activity counter that
+                # was true at this moment, so the next cycle can skip the scan.
+                await backfill_state.mark_complete(self.pool, space_id, graph_id)
                 return False
         except Exception as e:
             logger.error("Backfill [%d/%d] failed for %s/%s: %s", idx, total, space_id, graph_id, e)

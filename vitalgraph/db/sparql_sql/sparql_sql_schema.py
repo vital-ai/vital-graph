@@ -364,6 +364,16 @@ class SparqlSQLSchema:
                 created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             )
         '''),
+        ("backfill_state", '''
+            CREATE TABLE IF NOT EXISTS backfill_state (
+                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
+                graph_uri TEXT NOT NULL,
+                completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                quad_inserts BIGINT,
+                stats_reset TIMESTAMPTZ,
+                PRIMARY KEY (space_id, graph_uri)
+            )
+        '''),
         ("space_analytics", '''
             CREATE TABLE IF NOT EXISTS space_analytics (
                 id SERIAL PRIMARY KEY,
