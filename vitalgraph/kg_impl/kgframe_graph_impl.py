@@ -200,34 +200,59 @@ class KGFrameGraphProcessor:
             return False
     
     def _build_frame_graph_query(self, frame_uri: str, graph_id: str) -> str:
-        """
-        Build SPARQL query for complete frame graph.
-        
-        Uses frameGraphURI to find all objects belonging to this frame's graph.
-        
+        """Build SPARQL finding every subject in this frame's graph.
+
+        A frame reaches its slots by one of two linkages, and a space may use
+        both, so this cannot pick a side:
+
+          attribute   the slot carries `hasFrameGraphURI` naming its frame;
+          connection  an `Edge_hasKGSlot` edge runs FROM the frame (source) TO
+                      the slot (destination).
+
+        Only the attribute form was implemented, though the method contract
+        above it has always promised "All immediate connected slots, All
+        Edge_hasKGSlot relationships". On a connection frame the query returned
+        the frame alone, `get_frame_graph` saw a single object and returned
+        None as "frame only", and the UI's Slot Summary reported "No slots found
+        for this frame" for a frame with two of them. Silent, because a pattern
+        anchored on an absent predicate matches nothing rather than failing.
+
+        The EDGES are returned as well as the slots, deliberately. The client
+        identifies a slot by the edge that links it — it pairs
+        `isEdgeHasKGSlot(o) && o.edgeSource === frameId` with the slot at
+        `edgeDestination` — so slots without their edges would still render
+        nothing.
+
         Args:
             frame_uri: Frame URI
             graph_id: Graph identifier
-            
+
         Returns:
             SPARQL SELECT query to find all subjects in frame graph
         """
         query = f"""
         PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
         PREFIX vital: <http://vital.ai/ontology/vital-core#>
-        
+
         SELECT DISTINCT ?subject WHERE {{
             GRAPH <{graph_id}> {{
-                # Get the frame itself
+                # The frame itself
                 {{ <{frame_uri}> ?p ?o . BIND(<{frame_uri}> AS ?subject) }}
                 UNION
-                # Get all objects that have hasFrameGraphURI pointing to this frame
+                # Attribute linkage: objects naming this frame
                 {{ ?subject haley:hasFrameGraphURI <{frame_uri}> . }}
+                UNION
+                # Connection linkage: the edges out of this frame
+                {{ ?subject vital:hasEdgeSource <{frame_uri}> . }}
+                UNION
+                # Connection linkage: the slots those edges point at
+                {{ ?_slotEdge vital:hasEdgeSource <{frame_uri}> .
+                   ?_slotEdge vital:hasEdgeDestination ?subject . }}
             }}
         }}
         """
         return query
-    
+
     def _build_frame_graph_delete_query(self, frame_uri: str, graph_id: str) -> str:
         """
         Build SPARQL DELETE query for complete frame graph.
