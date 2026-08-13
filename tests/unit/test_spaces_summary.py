@@ -211,3 +211,36 @@ async def test_graph_counts_runs_and_caches():
     assert conn.count_queries == ran, (
         "the second call re-ran the aggregate — the cache is not being used, "
         "which is the 3,343 ms this exists to avoid")
+
+
+# ---------------------------------------------------------------------------
+# Orphaned spaces: a `space` row whose tables are gone. Integration runs leave
+# these behind when teardown does not complete — 9 of them on this database.
+# They must stay VISIBLE to an operator and be skipped by background work,
+# which otherwise fails once per orphan per cycle, forever.
+# ---------------------------------------------------------------------------
+
+def test_orphans_are_listed_but_not_active():
+    from vitalgraph.space.space_manager import SpaceManager
+
+    sm = SpaceManager.__new__(SpaceManager)
+    sm._spaces = {"good": object(), "orphan": object()}
+    sm._orphaned_spaces = {"orphan"}
+    sm.logger = logging.getLogger(__name__)
+
+    assert sm.list_active_spaces() == ["good"], (
+        "background work must skip an orphan; querying one fails every cycle")
+    assert set(sm.list_spaces()) == {"good", "orphan"}, (
+        "an orphan must remain visible — an operator cannot clean up what the "
+        "listing hides, and the space row is deliberately NOT auto-deleted")
+    assert sm.is_orphaned("orphan") and not sm.is_orphaned("good")
+
+
+def test_no_orphans_means_active_equals_all():
+    from vitalgraph.space.space_manager import SpaceManager
+
+    sm = SpaceManager.__new__(SpaceManager)
+    sm._spaces = {"a": object(), "b": object()}
+    sm._orphaned_spaces = set()
+    sm.logger = logging.getLogger(__name__)
+    assert set(sm.list_active_spaces()) == {"a", "b"}

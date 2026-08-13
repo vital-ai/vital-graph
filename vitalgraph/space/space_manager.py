@@ -70,6 +70,10 @@ class SpaceManager:
         self.db_impl = db_impl
         self.space_backend = space_backend
         self._spaces: Dict[str, SpaceRecord] = {}
+        # Spaces with a database record but no backing tables. Kept visible in
+        # `list_spaces` (an operator needs to see them to clean them up) and
+        # excluded from `list_active_spaces`, which is what background work uses.
+        self._orphaned_spaces: set = set()
         self._initialized = False
         self.signal_manager = None
         self._refresh_task: Optional[asyncio.Task] = None
@@ -142,6 +146,15 @@ class SpaceManager:
                         
                         # Check for orphaned spaces (database record but no backend storage)
                         if not await space_impl.exists():
+                            # Recorded, not just logged. Background jobs iterate
+                            # spaces every cycle, and an orphan makes each of
+                            # them fail: 9 orphaned `inttest_*` spaces produced 9
+                            # "v2 SQL generation failed", 9 "Failed to discover
+                            # graphs" and 9 "space tables not found" per pass,
+                            # forever. The space row STAYS — spaces are
+                            # explicitly managed and it is not for a data path
+                            # to delete one — but work can skip it.
+                            self._orphaned_spaces.add(space_id)
                             self.logger.warning(f"⚠️ ORPHANED SPACE DETECTED: Space '{space_id}' has database record but no backend storage!")
                         else:
                             self.logger.debug(f"✅ Space '{space_id}' loaded successfully")
@@ -527,6 +540,19 @@ class SpaceManager:
         
         return space_record
     
+    def list_active_spaces(self) -> List[str]:
+        """Space ids that actually have backing storage.
+
+        Use this for BACKGROUND WORK. `list_spaces` includes orphans — records
+        whose tables are gone — because an operator needs to see them; a
+        periodic job that queries them just fails once per orphan per cycle.
+        """
+        return [s for s in self._spaces.keys() if s not in self._orphaned_spaces]
+
+    def is_orphaned(self, space_id: str) -> bool:
+        """True when the space has a database record but no backing tables."""
+        return space_id in self._orphaned_spaces
+
     def list_spaces(self) -> List[str]:
         """
         List all space_ids currently managed.

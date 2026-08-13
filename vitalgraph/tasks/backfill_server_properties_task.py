@@ -305,7 +305,11 @@ class BackfillServerPropertiesTask:
     async def _refresh_targets(self) -> List[Tuple[str, str]]:
         """Discover all (space_id, graph_id) pairs with KGEntity data."""
         targets: List[Tuple[str, str]] = []
-        spaces = self.space_manager.list_spaces()
+        # Active only: an orphaned space (record without tables) fails graph
+        # discovery once per cycle, forever.
+        spaces = (self.space_manager.list_active_spaces()
+                  if hasattr(self.space_manager, "list_active_spaces")
+                  else self.space_manager.list_spaces())
         if self.exclude_spaces:
             skipped = [s for s in spaces if s in self.exclude_spaces]
             if skipped:

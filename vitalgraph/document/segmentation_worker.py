@@ -429,6 +429,10 @@ class SegmentationWorker:
     def _get_active_space_ids(self):
         """Get list of currently active space IDs."""
         try:
+            # Prefer the listing that excludes orphans — records whose tables
+            # are gone. Setting up LISTEN for one fails every cycle.
+            if hasattr(self._space_manager, 'list_active_spaces'):
+                return self._space_manager.list_active_spaces()
             if hasattr(self._space_manager, 'get_active_space_ids'):
                 return self._space_manager.get_active_space_ids()
             if hasattr(self._space_manager, '_spaces'):

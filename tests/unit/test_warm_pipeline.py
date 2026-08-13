@@ -163,3 +163,37 @@ async def test_a_bad_max_spaces_value_does_not_crash_startup(monkeypatch):
     b = _Backend()
     summary = await warm_query_pipeline(_Manager({"s": _Record(b)}))
     assert summary["warmed"] == 1        # falls back to "all", does not raise
+
+
+async def test_a_backend_reporting_failure_counts_as_skipped():
+    """`execute_sparql_query` reports failure by FLAG, not by raising.
+
+    Without checking it, the warm-up counted a space whose tables are gone as
+    warmed — the startup log said "85 space(s), 0 skipped" while 9 of them had
+    failed SQL generation. An untrue summary is worse than a missing one, and it
+    is the same mistake as `issues/082`.
+    """
+    class _Failing:
+        async def execute_sparql_query(self, space_id, sparql, **kw):
+            return {"results": {"bindings": []}, "success": False,
+                    "error": 'relation "x_term" does not exist'}
+
+    ms = await warm_space(_Failing(), "gone", "urn:g")
+    assert ms is None, "a reported failure must not be counted as a warm-up"
+
+
+async def test_orphaned_spaces_are_not_warmed():
+    """The manager's active listing excludes records whose tables are gone."""
+    b_good, b_orphan = _Backend(), _Backend()
+
+    class _Mgr(_Manager):
+        def list_active_spaces(self):
+            return ["good"]
+
+    mgr = _Mgr({"good": _Record(b_good), "orphan": _Record(b_orphan)})
+    summary = await warm_query_pipeline(mgr)
+
+    assert summary["warmed"] == 1
+    assert b_orphan.queries == [], (
+        "an orphaned space was warmed — it cannot be, and each attempt logs a "
+        "SQL-generation error on every startup")

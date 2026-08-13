@@ -506,7 +506,26 @@ class AnalyticsJob:
     # ------------------------------------------------------------------
 
     async def _list_spaces(self) -> List[str]:
-        """List all space_ids from the space admin table."""
+        """Space ids that have backing storage.
+
+        Excludes ORPHANS — rows in `space` whose tables no longer exist, which
+        integration runs leave behind when teardown does not complete. Computing
+        analytics for one fails every cycle ("space tables not found"), and
+        there were 9 of them here. The row itself is left alone: spaces are
+        explicitly managed and removing one is an operator's decision, not a
+        background job's.
+
+        Filtered in the same query rather than by probing each space, so this
+        stays one round trip.
+        """
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch("SELECT space_id FROM space ORDER BY space_id")
+            rows = await conn.fetch(
+                """
+                SELECT s.space_id FROM space s
+                WHERE EXISTS (
+                    SELECT 1 FROM pg_tables t
+                    WHERE t.schemaname = 'public'
+                      AND t.tablename = s.space_id || '_rdf_quad')
+                ORDER BY s.space_id
+                """)
         return [row["space_id"] for row in rows]

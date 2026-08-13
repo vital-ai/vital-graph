@@ -65,9 +65,17 @@ async def warm_space(backend, space_id: str, graph_uri: str) -> float | None:
     sparql = _WARM_SPARQL.format(graph=graph_uri)
     t0 = time.perf_counter()
     try:
-        await asyncio.wait_for(
+        result = await asyncio.wait_for(
             backend.execute_sparql_query(space_id, sparql),
             timeout=_PER_SPACE_TIMEOUT_S)
+        # `execute_sparql_query` reports failure by FLAG, not by raising
+        # (`issues/082`), so a space whose tables are gone would otherwise be
+        # counted as warmed. Reporting 85 warmed and 0 skipped while 9 of them
+        # failed is exactly the kind of untrue summary that issue is about.
+        if isinstance(result, dict) and result.get("success") is False:
+            logger.debug("Query warm-up for %s skipped: %s",
+                         space_id, result.get("error"))
+            return None
     except asyncio.TimeoutError:
         logger.warning("Query warm-up for %s timed out after %.0fs",
                        space_id, _PER_SPACE_TIMEOUT_S)
@@ -116,9 +124,14 @@ async def warm_query_pipeline(space_manager, max_spaces: int = 0) -> dict:
         return summary
     max_spaces = max_spaces or warm_max_spaces()
     try:
-        space_ids = (space_manager.get_active_space_ids()
-                     if hasattr(space_manager, "get_active_space_ids")
-                     else list(getattr(space_manager, "_spaces", {}).keys()))
+        # Orphaned spaces — a record whose tables are gone — cannot be warmed
+        # and produce a SQL-generation error apiece on every startup.
+        if hasattr(space_manager, "list_active_spaces"):
+            space_ids = space_manager.list_active_spaces()
+        elif hasattr(space_manager, "get_active_space_ids"):
+            space_ids = space_manager.get_active_space_ids()
+        else:
+            space_ids = list(getattr(space_manager, "_spaces", {}).keys())
     except Exception as e:
         logger.warning("Query warm-up: could not enumerate spaces: %s", e)
         return summary
