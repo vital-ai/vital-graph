@@ -111,6 +111,7 @@ class VitalGraphAppImpl:
         # Segmentation background worker
         self._segmentation_worker: Optional[Any] = None
         self._segmentation_worker_task: Optional[Any] = None
+        self._warm_pipeline_task: Optional[Any] = None
         
         # Import/export job manager (created in startup_event after pool is available)
         self.import_export_manager = None
@@ -798,6 +799,37 @@ class VitalGraphAppImpl:
                         # Warming is an optimisation — never block startup on it.
                         self.logger.warning(f"Embedding model warm-up skipped: {e}")
 
+                    # Warm the SPARQL->SQL pipeline. Measured: the first query
+                    # in a process costs 2,065 ms against 76 ms warm, and the
+                    # dominant term is SQL GENERATION (1,190 ms vs 5 ms) — the
+                    # generator's module-global term/datatype/statistics caches
+                    # are empty, its imports are function-local, and the
+                    # per-space rdf_stats table is read cold. None of that is
+                    # PostgreSQL: emptying the buffer pool entirely costs 25%.
+                    #
+                    # In the BACKGROUND, unlike the embedding warm-up above: it
+                    # touches every space and can take tens of seconds, and a
+                    # slow or unreachable space must not hold up readiness.
+                    try:
+                        if self.space_manager:
+                            import asyncio as _asyncio
+                            from vitalgraph.db.sparql_sql.warm_pipeline import (
+                                warm_query_pipeline)
+
+                            async def _warm():
+                                s = await warm_query_pipeline(self.space_manager)
+                                self.logger.info(
+                                    "Query pipeline warm-up: %d space(s) in %.0fms "
+                                    "(first %.0fms — the one that absorbs the "
+                                    "process-global cost), %d skipped",
+                                    s["warmed"], s["total_ms"],
+                                    s["first_ms"] or 0, s["skipped"])
+
+                            self._warm_pipeline_task = _asyncio.create_task(_warm())
+                    except Exception as e:
+                        # An optimisation. Never block or fail startup on it.
+                        self.logger.warning(f"Query pipeline warm-up skipped: {e}")
+
                     # Start segmentation background worker
                     try:
                         if self.space_manager:
@@ -870,6 +902,11 @@ class VitalGraphAppImpl:
                         self.logger.info("✅ Process scheduler stopped")
                     except Exception as e:
                         self.logger.warning(f"Error stopping process scheduler: {e}")
+
+                # Cancel the pipeline warm-up if it is still running. It is a
+                # pure optimisation, so shutdown never waits for it.
+                if self._warm_pipeline_task and not self._warm_pipeline_task.done():
+                    self._warm_pipeline_task.cancel()
 
                 # Stop segmentation worker
                 if self._segmentation_worker:
