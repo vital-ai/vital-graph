@@ -31,6 +31,12 @@ SLOT_TYPE_URI = "http://vital.ai/ontology/haley-ai-kg#hasKGSlotType"
 SLOT_VALUE_URI = "http://vital.ai/ontology/haley-ai-kg#hasEntitySlotValue"
 SOURCE_ENTITY_URI = "urn:hasSourceEntity"
 DEST_ENTITY_URI = "urn:hasDestinationEntity"
+# The frame's own type. `frame_entity.frame_type_uuid` carries it, so a hop
+# constrained by it needs no join back to rdf_quad — the trade `edge_type_uuid`
+# makes (issues/060). VITALTYPE rather than rdf:type: single-valued by design so
+# the column is well-defined, matches the edge column, and is what the product
+# queries with (`kgframes_endpoint` emits vital-core:vitaltype).
+VITALTYPE_URI = "http://vital.ai/ontology/vital-core#vitaltype"
 
 _PRED_RE = re.compile(r"(\w+)\.predicate_uuid\s*=\s*__CONST_(c_\d+)__")
 _OBJ_RE = re.compile(r"(\w+)\.object_uuid\s*=\s*__CONST_(c_\d+)__")
@@ -46,6 +52,34 @@ class _SlotGroup(NamedTuple):
     slot_var: str       # SPARQL variable for the slot node
     entity_var: str     # SPARQL variable for the entity
     frame_var: str      # SPARQL variable for the frame
+
+
+def _type_quads_for(plan, frame_var, quad_predicate, quad_obj_const,
+                    table_by_alias):
+    """Quad tables holding `<frame_var> vitaltype <constant>`.
+
+    A VARIABLE object is skipped rather than absorbed. `?f vitaltype ?t` binds
+    the type to something the query may read elsewhere, and the column could
+    supply it — but whether that survives is decided by the position rewrite
+    below, and requiring a constant keeps this to the case with no such
+    question.
+    """
+    slot = (plan.var_slots or {}).get(frame_var)
+    if not slot:
+        return []
+    out = []
+    for ref_id, col in (slot.positions or []):
+        if col != "subject_uuid":
+            continue
+        tbl = table_by_alias.get(ref_id)
+        if not tbl or tbl.kind != "quad":
+            continue
+        if quad_predicate.get(ref_id) != VITALTYPE_URI:
+            continue
+        if not quad_obj_const.get(ref_id):
+            continue
+        out.append(ref_id)
+    return out
 
 
 def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
@@ -76,6 +110,7 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
     # --- Step 2: Classify quad tables by predicate and object URIs ---
     quad_predicate: Dict[str, str] = {}
     quad_obj_const: Dict[str, str] = {}
+    quad_obj_token: Dict[str, str] = {}
 
     for _owner, sql in plan.tagged_constraints:
         m = _PRED_RE.search(sql)
@@ -84,6 +119,7 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
         m = _OBJ_RE.search(sql)
         if m:
             quad_obj_const[m.group(1)] = const_to_uri.get(m.group(2), "")
+            quad_obj_token[m.group(1)] = f"__CONST_{m.group(2)}__"
 
     # --- Step 3: Build edge table variable bindings ---
     table_by_alias: Dict[str, TableRef] = {t.alias: t for t in plan.tables}
@@ -210,6 +246,10 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
 
     # --- Step 8: Replace each pair with a frame_entity table ---
     removed_aliases: Set[str] = set()
+    # Aliases whose OWN constraints are replaced wholesale by an absorbed type
+    # predicate, rather than remapped conjunct by conjunct.
+    type_quad_owned: Set[str] = set()
+    absorbed_type: List[Tuple[str, str]] = []
     new_fe_tables: List[TableRef] = []
     alias_map: Dict[str, Tuple[str, Dict[str, Optional[str]]]] = {}
 
@@ -260,6 +300,33 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
             "object_uuid": "dest_entity_uuid",
             "context_uuid": "context_uuid",
         })
+
+        # A `<frame> vitaltype <Type>` triple collapses in too: the column holds
+        # exactly that, so the quad table is redundant. Measured on
+        # wordnet_frames at depth 3 this probe was 79% of ALL buffers
+        # (2,006,247 of 2,543,685), run once per output row.
+        #
+        # Handled explicitly rather than through `alias_map` alone. The generic
+        # remap leaves a column mapped to None UNTOUCHED in the constraint text,
+        # so `q0.predicate_uuid` survived, the leftover check saw a removed
+        # alias still referenced, and the whole rewrite declined — silently
+        # correct and no faster. The predicate conjunct is what IDENTIFIES the
+        # triple as a vitaltype, and the column already encodes that, so it is
+        # dropped rather than remapped.
+        for tq in _type_quads_for(plan, src_g.frame_var, quad_predicate,
+                                  quad_obj_const, table_by_alias):
+            removed_aliases.add(tq)
+            type_quad_owned.add(tq)
+            alias_map[tq] = (fe_alias, {
+                "subject_uuid": "frame_uuid",
+                "predicate_uuid": None,
+                "object_uuid": "frame_type_uuid",
+                "context_uuid": "context_uuid",
+            })
+            tok = quad_obj_token.get(tq)
+            if tok:
+                absorbed_type.append(
+                    (fe_alias, f"{fe_alias}.frame_type_uuid = {tok}"))
 
     # --- Rewrite tables ---
     new_tables: List[TableRef] = []
@@ -324,6 +391,11 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
     seen_ctx: Set[str] = set()
 
     for owner, sql in plan.tagged_constraints:
+        if owner in type_quad_owned:
+            # Its subject tie and its type value are both now columns of the
+            # frame_entity row, and its predicate identified a triple that no
+            # longer exists as a table. Nothing here survives remapping.
+            continue
         if owner in removed_aliases:
             # Preserve context constraints — remap to fe table (deduplicated)
             if ".context_uuid" in sql:
@@ -407,6 +479,11 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
     # declines on the very constraint the rewrite just created correctly.
     def _refs(sql: str, alias: str) -> bool:
         return re.search(rf"(?<![A-Za-z0-9_]){re.escape(alias)}\.", sql) is not None
+
+    for owner, sql in absorbed_type:
+        if sql not in new_constraints:
+            new_tagged.append((owner, sql))
+            new_constraints.append(sql)
 
     leftover = sorted(
         a for a in removed_aliases
