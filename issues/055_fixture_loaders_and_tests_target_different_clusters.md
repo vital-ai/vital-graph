@@ -1,6 +1,27 @@
 # 055 — fixture loaders and the tests that use them target different clusters
 
-**Status:** loader split-brain fixed; the seed/test port disagreement is still there by design and is the part that needs a decision.
+## Status: OPEN — the port disagreement is still there, and it bit again 2026-08-14
+
+Loader split-brain fixed; the seed/test port disagreement remains by design and
+is the part that needs a decision.
+
+**It recurred while loading a new fixture on 2026-08-14.**
+`scripts/load_wordnet_csv.py` still defaults to port 5433 (the container), so
+loading a space created on the HOST cluster failed with
+
+    psycopg.errors.UndefinedTable: relation "sp_graph_synth_10k_rdf_quad" does not exist
+
+after the space had been created successfully on 5432. The failure was loud, so
+nothing was corrupted — but it is the benign half of the hazard the loader's own
+docstring warns about. The other half is a space of the SAME NAME existing in
+both clusters, where the load silently truncates and repopulates the wrong one.
+
+Workaround in use: `VG_TEST_PG_PORT=5432 VG_TEST_PG_USER=postgres
+VG_TEST_PG_PASSWORD= python scripts/load_wordnet_csv.py ...`, recorded in
+`tests/performance/graph_fixtures.py` so the next person does not rediscover it.
+
+That this needed rediscovering, and a workaround written into a fixture module,
+is the argument for making the decision rather than continuing to document it.
 
 ## Symptom
 

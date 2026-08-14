@@ -69,51 +69,28 @@ that one.
 
 ## Problem 2 — a criterion that SHRINKS the answer makes it far slower
 
-**Price: 150x to 5,700x, and it grows with depth.** This is the one that matters
-most in practice, because a traversal without a criterion is a crawl, not a
-query. Filed in detail as `issues/090`.
+**Price: 150x to 5,700x, and it grows with depth.** The one that matters most in
+practice: a traversal without a criterion is a crawl, not a query.
 
-On `wordnet_frames`, restricting each hop to hypernyms — the only criterion that
-space can express:
+    wordnet, depth 3, hops restricted to hypernyms   0.7 ms  ->  4,043.3 ms
+    (returning ONE row where the open walk returns 32)
 
-    depth   unfiltered   frame type = hypernym   rows
-    1          0.2 ms                  0.2 ms       1
-    2          0.2 ms                  0.3 ms       1
-    3          0.7 ms              4,043.3 ms       1
+    graph_synth_10k, depth 3, one criterion per hop
+      none 0.9 ms / 63 rows, versus 147-859 ms across integer, double,
+      dateTime, string-IN, boolean and uri criteria — every datatype, same
+      direction, the one returning ZERO rows costing 776 ms
 
-Four seconds to return ONE row where the open walk returns 32 in 0.7 ms.
-
-On `sp_graph_synth_10k`, which was built to vary the criterion datatype, a
-3-hop walk with one criterion per hop:
-
-    criterion                        depth 3     rows
-    none                              0.9 ms       63
-    hasScore >= 50 (integer)        859.1 ms        4
-    hasWeight >= 0.5 (double)       776.3 ms        0
-    hasOccurredAt >= (dateTime)     332.8 ms        6
-    hasCategory IN (...) (string)   525.2 ms       27
-    hasActive = true (boolean)      716.8 ms       12
-    hasKGFrameType = (uri)          147.3 ms        1
-
-Every datatype, same direction. The one returning ZERO rows takes 776 ms to say
-so.
-
-**This is NOT the rewrite declining.** The collapse happens in every row above —
-3 `frame_entity` joins at depth 3, one per hop. The six tables per hop have
+**This is NOT the rewrite declining.** The collapse happens in every case — 3
+`frame_entity` joins at depth 3, one per hop. The six tables per hop have
 already become one; what costs is how the per-hop criterion is joined onto the
-collapsed rows.
+collapsed rows. That is why it is a separate line of work from Problem 1, and
+why fixing the decline will not touch it.
 
-**Unmeasured, and the place to start:** every number here is wall-clock with no
-`EXPLAIN` behind it. Three candidates worth separating —
-
-* whether the criterion join is driven per collapsed row rather than set-based,
-  which would explain why it grows with depth;
-* whether the criterion's selectivity is visible to the planner at all. A filter
-  believed non-selective is applied last, after the traversal has been expanded
-  — which fits the symptom exactly: cost tracks the UNFILTERED walk regardless
-  of how few rows survive;
-* whether the literal comparison lands in the typed lane or falls back to text,
-  since `hasWeight >= 0.5` returning nothing still costs 776 ms.
+**Full measurements, per-datatype table, and the three hypotheses to separate
+first are in `issues/090`** — kept there rather than duplicated here, since
+keeping two copies of the same numbers in step is how they stop being in step.
+The headline above is enough to rank the work; 090 is what to read before
+starting it.
 
 ## Problem 3 — a constant-valued slot end is not recognised as a group
 
