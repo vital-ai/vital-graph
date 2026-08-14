@@ -192,6 +192,25 @@ performance does not depend on the planner's estimates being right. That is what
 makes the two directions below complements rather than alternatives: the
 statistics work is what tells us WHEN to emit the hop-wise shape.
 
+### Not every criterion family is measured — found 2026-08-14
+
+The shape decision asks how selective the per-hop criterion is. For two of the
+three criterion families in the fixture, nothing can answer:
+
+    criterion              needed_ranges   needed_texts   estimate
+    score >= 50 (integer)              1              0   collected
+    occurred >= (dateTime)             0              0   NONE
+    category IN (string)               0              0   NONE
+
+`needed_ranges` surfaces the numeric range and not the temporal one, and
+`needed_texts` does not recognise `IN` at all. So the decision reports
+"criterion selectivity unknown" and declines — safe, and for the wrong reason.
+
+The cost of the gap is a missed win rather than a regression: the dateTime case
+is one where hop-wise measured 31x BETTER, and it is being declined because
+nothing measured it. The value histograms already hold a `dt` lane, so the
+missing piece is surfacing these criteria for measurement, not estimating them.
+
 ### Where that leaves it
 
 Hop-wise materialisation is the strongest candidate, but it needs to be CHOSEN

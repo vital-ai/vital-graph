@@ -820,16 +820,6 @@ async def generate_sql(
         from .var_scope import compute_text_needed_vars
         text_needed = compute_text_needed_vars(plan)
 
-        # Stage 2c.1: Traversal chains. Detection only — this changes no SQL.
-        # It records what a multi-hop walk looks like so a later pass can order
-        # or reshape it; today it exists to be observable against real queries
-        # before anything acts on it (planning_performance/traversal_chain_plan.md).
-        try:
-            from .traversal_chain import describe_chains
-            describe_chains(plan)
-        except Exception as exc:
-            logger.debug("traversal chain detection skipped: %s", exc)
-
         # Stage 2d: Vector/geo optimization hints (pure, no I/O)
         from .vg_optimize import vg_optimize
         plan = vg_optimize(plan)
@@ -850,6 +840,39 @@ async def generate_sql(
         # skipped row at full probe cost.
         if not _has_deep_page(plan):
             plan = mark_semijoins(plan, aliases)
+
+        # Stage 2d.2: Traversal chains and the shape decision.
+        # AFTER _load_missing_pair_stats: the decision reads range_stats,
+        # which that populates. Placed before it, every query reported
+        # "criterion selectivity unknown" and the gate never saw a number. Detection only — this changes no SQL.
+        # It records what a multi-hop walk looks like so a later pass can order
+        # or reshape it; today it exists to be observable against real queries
+        # before anything acts on it (planning_performance/traversal_chain_plan.md).
+        try:
+            from .traversal_chain import describe_chains
+            from .traversal_decision import decide_for_plan
+            _chains = describe_chains(plan)
+            if _chains:
+                # The most selective per-hop criterion the query carries, from
+                # the range stats already gathered. Several criteria means the
+                # narrowest is what a hop-wise walk would exploit.
+                # Both families: a range criterion (score >= 50) lands in
+                # range_stats, an IN or a substring (category IN (...)) in
+                # text_stats. Reading only ranges made every text criterion
+                # report "selectivity unknown" — which declines, correctly, but
+                # for a reason that says nothing to whoever is diagnosing it.
+                _crit = _pred = None
+                _measured = list((getattr(aliases, "range_stats", None) or {}).items())
+                _measured += [((k[0], None, None), v) for k, v in
+                              (getattr(aliases, "text_stats", None) or {}).items()]
+                for (p_uuid, _op, _lit), n in _measured:
+                    total = (getattr(aliases, "pred_stats", None) or {}).get(p_uuid)
+                    if total and (_crit is None or n / total < _crit / _pred):
+                        _crit, _pred = n, total
+                decide_for_plan(_chains, _crit, _pred)
+        except Exception as exc:
+            logger.debug("traversal chain detection skipped: %s", exc)
+
         else:
             logger.debug("deep page: leaving the plan unsplit so the match set "
                          "is built set-based (issues/078)")
