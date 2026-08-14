@@ -1,0 +1,515 @@
+#!/usr/bin/env python
+"""Generate a synthetic TRAVERSAL fixture: mixed nodes, mixed edges, real criteria.
+
+The existing pair of fixtures each cover one thing and neither covers traversal:
+
+    wordnet_frames    connection frames, but the ONLY criterion expressible is
+                      the traversal type — every slot is a KGEntitySlot and
+                      there is not one literal value in the space
+    lead_synth        literal slots and rich comparators, but the frames are
+                      ATTRIBUTE frames: entity -> frame -> literal. There is
+                      nothing to traverse; no frame connects two entities
+
+So the shape a graph store exists for — follow edges between entities, several
+hops, keeping only the hops that satisfy a criterion — has no fixture at all.
+Measurements on wordnet can only vary the traversal TYPE, which is why
+`issues/048` has numbers for type-filtered walks and none for value-filtered
+ones.
+
+This fixture is both at once: entities connected BY frames carrying criteria of
+every comparator-relevant datatype, plus KG relations as a second, structurally
+different traversal, at 10k and 100k like the other pair.
+
+WHAT IT CONTAINS
+
+  entities        several kinds, so a query can select a subset by type
+  connection      entity -> frame -> 2 slots -> 2 entities. The traversal edge,
+    frames        and where the criteria live
+  KG relations    entity -> entity directly, via Edge_hasKGRelation. The other
+                  traversal shape, deliberately NOT frame-mediated, so a query
+                  crossing both is possible and so the two can be compared
+  criteria        on every connection frame and every relation:
+                    integer   score       uniform [0, 100)
+                    double    weight      uniform [0, 1)
+                    dateTime  occurred    uniform over a 3-year window
+                    string    label       one of 50, for equality and CONTAINS
+                    category  category    one of 8, weighted — the IN / VALUES case
+                    boolean   active      Bernoulli(0.5)
+
+GROUND TRUTH IS COMPUTED, NOT ASSUMED
+
+The manifest records what the generator actually produced, not what the
+distributions imply: criterion counts are tallied while writing, and the
+traversal answers are produced by walking the finished graph in Python.
+
+That matters more here than in a value-only fixture. A traversal assertion is
+"from this entity, at depth 3, following only hops with score >= 50, you reach
+exactly these". Nobody can eyeball whether that is right, and a query that
+silently returns a subset looks like a correct answer — which is precisely the
+failure this fixture exists to catch. So the expected sets are derived from the
+same edge list the N-Triples are written from, by a BFS that shares no code with
+the SQL pipeline under test.
+
+TOPOLOGY, and why it is not a lattice
+
+Successors are drawn per entity from a seeded RNG rather than by a stride rule.
+A modular rule (i -> i+1, i+k) makes depth-N reachability trivially predictable
+and, worse, correlates position with criteria, so a filtered walk degenerates
+into a contiguous scan and measures the wrong thing. Random successors with a
+fixed fan-out keep the reachable set small and irregular, which is what a real
+knowledge graph looks like.
+
+Cycles are permitted. Real graphs have them, a traversal that mishandles one
+loops or double-counts, and the BFS records the correct answer either way.
+
+USAGE
+
+    python scripts/generate_graph_dataset.py --entities 10000 \\
+        --out internal_data/graph_synth_10k
+
+    python scripts/convert_nt_to_csv.py internal_data/graph_synth_10k/*.nt \\
+        --out test_data/graph_synth_10k.csv --graph urn:sp_graph_synth_10k \\
+        --dataset graph_synth
+
+    python scripts/load_wordnet_csv.py --space sp_graph_synth_10k \\
+        --quads-csv test_data/graph_synth_10k.csv \\
+        --terms-csv test_data/graph_synth_10k_terms.csv
+
+Output is N-Triples shards for the same reason as the lead generator: the
+.nt -> slim CSV -> COPY path exists and is validated, and duplicating the
+uuid5/datatype-id logic here would be a second place for it to drift.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import random
+import sys
+import time
+from collections import deque
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Vocabulary
+# ---------------------------------------------------------------------------
+
+HALEY = "http://vital.ai/ontology/haley-ai-kg#"
+VITAL = "http://vital.ai/ontology/vital-core#"
+RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+XSD = "http://www.w3.org/2001/XMLSchema#"
+
+BASE = "urn:graphsyn"
+
+SRC_ROLE = "urn:hasSourceEntity"
+DST_ROLE = "urn:hasDestinationEntity"
+
+# Entity kinds. A traversal query can restrict endpoints by kind, which is a
+# different axis from the criteria on the edges themselves.
+ENTITY_KINDS = ["Person", "Organization", "Product", "Topic", "Place"]
+
+# Frame types — the wordnet-style criterion, kept so the two fixtures ask the
+# same question in the same way.
+FRAME_TYPES = ["Mentions", "WorksWith", "DerivedFrom", "LocatedIn"]
+
+# Relation types for the non-frame traversal.
+RELATION_TYPES = ["Knows", "Owns", "Supersedes"]
+
+# The IN / VALUES case: skewed on purpose. A uniform categorical makes every
+# `IN (...)` roughly the same size, which hides whether selectivity is being
+# used at all.
+CATEGORIES = [
+    ("alpha", 32), ("beta", 24), ("gamma", 16), ("delta", 12),
+    ("epsilon", 8), ("zeta", 4), ("eta", 3), ("theta", 1),
+]
+
+LABELS = [f"label-{i:02d}" for i in range(50)]
+
+DATE_START = datetime(2023, 1, 1, tzinfo=timezone.utc)
+DATE_DAYS = 3 * 365
+
+# Thresholds the manifest reports actual counts for, so a bench can sweep
+# selectivity and assert against a number rather than an observation.
+SCORE_THRESHOLDS = [0, 25, 50, 75, 90, 99]
+WEIGHT_THRESHOLDS = [0.0, 0.25, 0.5, 0.75, 0.9, 0.99]
+
+# Depths the traversal ground truth is computed for. 3 is where the join count
+# and the cost both start to matter (issues/048).
+TRAVERSAL_DEPTHS = [1, 2, 3]
+
+# How many start entities to record answers for. Enough that a bench can pick
+# one with a non-trivial reachable set; few enough to keep the manifest small.
+N_SAMPLE_STARTS = 12
+
+
+def _uri(*parts) -> str:
+    return f"{BASE}:" + ":".join(str(p) for p in parts)
+
+
+def _t(s: str, p: str, o: str) -> str:
+    return f"<{s}> <{p}> <{o}> .\n"
+
+
+def _lit(s: str, p: str, value, dtype: str) -> str:
+    v = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'<{s}> <{p}> "{v}"^^<{dtype}> .\n'
+
+
+def _weighted(rng: random.Random, pairs):
+    total = sum(w for _v, w in pairs)
+    r = rng.uniform(0, total)
+    upto = 0.0
+    for v, w in pairs:
+        upto += w
+        if r <= upto:
+            return v
+    return pairs[-1][0]
+
+
+class Criteria:
+    """The criterion values carried by one edge, whatever kind of edge it is.
+
+    Held as an object rather than emitted inline so the same values feed BOTH
+    the N-Triples and the ground-truth walk. Generating them twice from the same
+    seed would work until someone changed the draw order in one place only.
+    """
+
+    __slots__ = ("score", "weight", "occurred", "label", "category", "active")
+
+    def __init__(self, rng: random.Random):
+        self.score = rng.randrange(0, 100)
+        self.weight = round(rng.random(), 6)
+        self.occurred = DATE_START + timedelta(
+            days=rng.randrange(0, DATE_DAYS),
+            seconds=rng.randrange(0, 86400))
+        self.label = rng.choice(LABELS)
+        self.category = _weighted(rng, CATEGORIES)
+        self.active = rng.random() < 0.5
+
+    def triples(self, subject: str) -> str:
+        return (
+            _lit(subject, f"{HALEY}hasScore", self.score, f"{XSD}integer")
+            + _lit(subject, f"{HALEY}hasWeight", self.weight, f"{XSD}double")
+            + _lit(subject, f"{HALEY}hasOccurredAt",
+                   self.occurred.strftime("%Y-%m-%dT%H:%M:%S+00:00"),
+                   f"{XSD}dateTime")
+            + _lit(subject, f"{HALEY}hasLabel", self.label, f"{XSD}string")
+            + _lit(subject, f"{HALEY}hasCategory", self.category, f"{XSD}string")
+            + _lit(subject, f"{HALEY}hasActive",
+                   "true" if self.active else "false", f"{XSD}boolean")
+        )
+
+
+def build_topology(n_entities: int, fanout: int = 4,
+                   relation_fanout: int = 2, seed: int = 0):
+    """Choose every edge before writing anything.
+
+    The edge lists are the single source of truth: the N-Triples are rendered
+    from them and the expected traversal answers are walked over them. Deciding
+    edges while streaming output would make the two derivable only by replaying
+    the RNG in the same order, which is exactly the coupling that rots.
+    """
+    rng = random.Random(seed)
+
+    frame_edges = []      # (src_idx, dst_idx, Criteria, frame_type)
+    relation_edges = []   # (src_idx, dst_idx, Criteria, relation_type)
+
+    for i in range(n_entities):
+        for _ in range(fanout):
+            dst = rng.randrange(0, n_entities)
+            if dst == i:
+                dst = (dst + 1) % n_entities
+            frame_edges.append(
+                (i, dst, Criteria(rng), rng.choice(FRAME_TYPES)))
+        for _ in range(relation_fanout):
+            dst = rng.randrange(0, n_entities)
+            if dst == i:
+                dst = (dst + 1) % n_entities
+            relation_edges.append(
+                (i, dst, Criteria(rng), rng.choice(RELATION_TYPES)))
+
+    return frame_edges, relation_edges
+
+
+def _adjacency(edges, predicate=None):
+    adj = {}
+    for src, dst, crit, kind in edges:
+        if predicate and not predicate(crit, kind):
+            continue
+        adj.setdefault(src, set()).add(dst)
+    return adj
+
+
+def _reachable(adj, start: int, depth: int) -> set:
+    """Entities EXACTLY `depth` hops away, following `adj`.
+
+    Exactly, not at-most: a traversal query with N hops written out returns the
+    far end of an N-hop path, and a walk that quietly admits shorter paths is a
+    real defect this fixture should catch rather than encode.
+    """
+    frontier = {start}
+    for _ in range(depth):
+        nxt = set()
+        for node in frontier:
+            nxt |= adj.get(node, set())
+        frontier = nxt
+        if not frontier:
+            break
+    return frontier
+
+
+def compute_ground_truth(frame_edges, relation_edges, n_entities, seed):
+    """Walk the finished edge lists and record the answers a query must give."""
+    rng = random.Random(seed + 1)
+
+    frame_adj = _adjacency(frame_edges)
+    rel_adj = _adjacency(relation_edges)
+    # One filtered view per criterion family, so a bench can assert a FILTERED
+    # traversal rather than only an open one.
+    frame_adj_score50 = _adjacency(
+        frame_edges, lambda c, _k: c.score >= 50)
+    frame_adj_cat_ab = _adjacency(
+        frame_edges, lambda c, _k: c.category in ("alpha", "beta"))
+    frame_adj_type0 = _adjacency(
+        frame_edges, lambda _c, k: k == FRAME_TYPES[0])
+    frame_adj_recent = _adjacency(
+        frame_edges,
+        lambda c, _k: c.occurred >= DATE_START + timedelta(days=DATE_DAYS // 2))
+
+    # Sample starts are CHOSEN, not drawn uniformly. With a filter admitting
+    # roughly half the hops, a uniformly-drawn start usually has an empty
+    # reachable set by depth 3, and a fixture whose expected answers are mostly
+    # `[]` cannot distinguish a working traversal from one that returns nothing
+    # — the exact failure this is built to catch.
+    #
+    # So: prefer starts that still reach something at the deepest depth UNDER
+    # THE MOST SELECTIVE filter, and fall back to any start if too few qualify.
+    # The bias is toward the interesting corner of the graph, not toward any
+    # particular answer, and the recorded answers are still whatever the walk
+    # produced.
+    deepest = max(TRAVERSAL_DEPTHS)
+    candidates = list(range(n_entities))
+    rng.shuffle(candidates)
+    useful, plain = [], []
+    for c in candidates:
+        if len(useful) >= N_SAMPLE_STARTS and len(plain) >= 2:
+            break
+        if _reachable(frame_adj_score50, c, deepest):
+            if len(useful) < N_SAMPLE_STARTS - 2:
+                useful.append(c)
+        elif len(plain) < 2:
+            plain.append(c)          # keep a couple of dead ends on purpose
+    starts = sorted(set(useful + plain))
+    if len(starts) < min(N_SAMPLE_STARTS, n_entities):
+        extra = [c for c in candidates if c not in starts]
+        starts = sorted(set(starts + extra[:N_SAMPLE_STARTS - len(starts)]))
+
+    def walk(adj):
+        return {
+            str(s): {str(d): sorted(_reachable(adj, s, d))
+                     for d in TRAVERSAL_DEPTHS}
+            for s in starts
+        }
+
+    return {
+        "sample_starts": starts,
+        "frame_traversal": walk(frame_adj),
+        "frame_traversal_score_gte_50": walk(frame_adj_score50),
+        "frame_traversal_category_in_alpha_beta": walk(frame_adj_cat_ab),
+        "frame_traversal_type_is_" + FRAME_TYPES[0]: walk(frame_adj_type0),
+        "frame_traversal_occurred_second_half": walk(frame_adj_recent),
+        "relation_traversal": walk(rel_adj),
+    }
+
+
+def tally(edges):
+    """Actual counts, tallied from what was generated."""
+    n = len(edges)
+    out = {
+        "count": n,
+        "score_gte": {str(t): sum(1 for _s, _d, c, _k in edges if c.score >= t)
+                      for t in SCORE_THRESHOLDS},
+        "weight_gte": {str(t): sum(1 for _s, _d, c, _k in edges if c.weight >= t)
+                       for t in WEIGHT_THRESHOLDS},
+        "active_true": sum(1 for _s, _d, c, _k in edges if c.active),
+        "category_eq": {},
+        "label_eq": {},
+        "kind_eq": {},
+        "occurred_second_half": sum(
+            1 for _s, _d, c, _k in edges
+            if c.occurred >= DATE_START + timedelta(days=DATE_DAYS // 2)),
+    }
+    for name, _w in CATEGORIES:
+        out["category_eq"][name] = sum(
+            1 for _s, _d, c, _k in edges if c.category == name)
+    for lb in LABELS[:5]:
+        out["label_eq"][lb] = sum(1 for _s, _d, c, _k in edges if c.label == lb)
+    for _s, _d, _c, k in edges:
+        out["kind_eq"][k] = out["kind_eq"].get(k, 0) + 1
+    return out
+
+
+def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
+             seed: int, shard_entities: int) -> dict:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for old in out_dir.glob("graph_syn_*.nt"):
+        old.unlink()
+
+    t0 = time.time()
+    frame_edges, relation_edges = build_topology(
+        n_entities, fanout, relation_fanout, seed)
+
+    rng = random.Random(seed + 2)
+    entity_kind = [rng.choice(ENTITY_KINDS) for _ in range(n_entities)]
+
+    n_triples = 0
+    shard_idx = 0
+    fh = None
+
+    def ent(i):
+        return _uri("entity", i)
+
+    try:
+        for i in range(n_entities):
+            if i % shard_entities == 0:
+                if fh:
+                    fh.close()
+                shard_idx += 1
+                fh = open(out_dir / f"graph_syn_{shard_idx:04d}.nt", "w",
+                          encoding="utf-8")
+
+            e = ent(i)
+            kind = entity_kind[i]
+            buf = [
+                _t(e, RDF_TYPE, f"{HALEY}KGEntity"),
+                _t(e, f"{VITAL}vitaltype", f"{HALEY}KGEntity"),
+                _t(e, f"{VITAL}URIProp", e),
+                _t(e, f"{HALEY}hasKGEntityType", f"{BASE}:kind:{kind}"),
+                _lit(e, f"{VITAL}hasName", f"entity {i} ({kind})", f"{XSD}string"),
+                _lit(e, f"{HALEY}hasKGraphDescription",
+                     f"synthetic {kind} number {i}", f"{XSD}string"),
+            ]
+            fh.write("".join(buf))
+            n_triples += len(buf)
+
+        # Connection frames: the frame-mediated traversal edge.
+        for fi, (src, dst, crit, ftype) in enumerate(frame_edges):
+            if fh is None:
+                break
+            frame = _uri("frame", fi)
+            s_slot, d_slot = _uri("slot", fi, "s"), _uri("slot", fi, "d")
+            s_edge, d_edge = _uri("edge", fi, "s"), _uri("edge", fi, "d")
+            buf = [
+                _t(frame, RDF_TYPE, f"{HALEY}KGFrame"),
+                _t(frame, f"{VITAL}vitaltype", f"{HALEY}KGFrame"),
+                _t(frame, f"{VITAL}URIProp", frame),
+                _t(frame, f"{HALEY}hasKGFrameType", f"{BASE}:frametype:{ftype}"),
+                _lit(frame, f"{HALEY}hasKGFrameTypeDescription", ftype, f"{XSD}string"),
+                crit.triples(frame),
+            ]
+            for slot, edge, role, target in (
+                    (s_slot, s_edge, SRC_ROLE, ent(src)),
+                    (d_slot, d_edge, DST_ROLE, ent(dst))):
+                buf += [
+                    _t(slot, RDF_TYPE, f"{HALEY}KGEntitySlot"),
+                    _t(slot, f"{VITAL}vitaltype", f"{HALEY}KGEntitySlot"),
+                    _t(slot, f"{VITAL}URIProp", slot),
+                    _t(slot, f"{HALEY}hasKGSlotType", role),
+                    _t(slot, f"{HALEY}hasEntitySlotValue", target),
+                    _t(edge, RDF_TYPE, f"{HALEY}Edge_hasKGSlot"),
+                    _t(edge, f"{VITAL}vitaltype", f"{HALEY}Edge_hasKGSlot"),
+                    _t(edge, f"{VITAL}URIProp", edge),
+                    _t(edge, f"{VITAL}hasEdgeSource", frame),
+                    _t(edge, f"{VITAL}hasEdgeDestination", slot),
+                ]
+            block = "".join(buf)
+            fh.write(block)
+            n_triples += block.count("\n")
+
+        # KG relations: entity -> entity directly, no frame in between.
+        for ri, (src, dst, crit, rtype) in enumerate(relation_edges):
+            rel = _uri("relation", ri)
+            buf = [
+                _t(rel, RDF_TYPE, f"{HALEY}Edge_hasKGRelation"),
+                _t(rel, f"{VITAL}vitaltype", f"{HALEY}Edge_hasKGRelation"),
+                _t(rel, f"{VITAL}URIProp", rel),
+                _t(rel, f"{HALEY}hasKGRelationType", f"{BASE}:reltype:{rtype}"),
+                _lit(rel, f"{HALEY}hasKGRelationTypeDescription", rtype, f"{XSD}string"),
+                _t(rel, f"{VITAL}hasEdgeSource", ent(src)),
+                _t(rel, f"{VITAL}hasEdgeDestination", ent(dst)),
+                crit.triples(rel),
+            ]
+            block = "".join(buf)
+            fh.write(block)
+            n_triples += block.count("\n")
+    finally:
+        if fh:
+            fh.close()
+
+    manifest = {
+        "n_entities": n_entities,
+        "n_frames": len(frame_edges),
+        "n_relations": len(relation_edges),
+        "n_triples": n_triples,
+        "triples_per_entity": round(n_triples / max(n_entities, 1), 1),
+        "seed": seed,
+        "fanout": fanout,
+        "relation_fanout": relation_fanout,
+        "entity_kinds": ENTITY_KINDS,
+        "frame_types": FRAME_TYPES,
+        "relation_types": RELATION_TYPES,
+        "categories": [c for c, _w in CATEGORIES],
+        "criteria_predicates": {
+            "score": f"{HALEY}hasScore (xsd:integer, uniform [0,100))",
+            "weight": f"{HALEY}hasWeight (xsd:double, uniform [0,1))",
+            "occurred": f"{HALEY}hasOccurredAt (xsd:dateTime, 3-year window)",
+            "label": f"{HALEY}hasLabel (xsd:string, 50 values)",
+            "category": f"{HALEY}hasCategory (xsd:string, 8 weighted values)",
+            "active": f"{HALEY}hasActive (xsd:boolean, p=0.5)",
+        },
+        "actual_matches": {
+            "frames": tally(frame_edges),
+            "relations": tally(relation_edges),
+        },
+        "traversal": compute_ground_truth(
+            frame_edges, relation_edges, n_entities, seed),
+    }
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+
+    dt = time.time() - t0
+    print(f"✅ {n_entities:,} entities, {len(frame_edges):,} frames, "
+          f"{len(relation_edges):,} relations")
+    print(f"   {n_triples:,} triples ({manifest['triples_per_entity']} per entity) "
+          f"in {shard_idx} shard(s), {dt:.1f}s")
+    print(f"📄 manifest: {out_dir / 'manifest.json'}")
+    print("   score >= : " + ", ".join(
+        f"{k}->{v:,}" for k, v in manifest["actual_matches"]["frames"]["score_gte"].items()))
+    print("   category : " + ", ".join(
+        f"{k}->{v:,}" for k, v in manifest["actual_matches"]["frames"]["category_eq"].items()))
+    return manifest
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description=__doc__.split("\n")[0],
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--entities", type=int, default=10000)
+    ap.add_argument("--fanout", type=int, default=4,
+                    help="connection frames out of each entity. 4 keeps a "
+                         "FILTERED walk alive to depth 3: at ~50%% selectivity "
+                         "a fan-out of 2 collapses to nothing by depth 2")
+    ap.add_argument("--relation-fanout", type=int, default=2,
+                    help="KG relations out of each entity")
+    ap.add_argument("--seed", type=int, default=20260814)
+    ap.add_argument("--shard-entities", type=int, default=5000)
+    ap.add_argument("--out", required=True)
+    args = ap.parse_args()
+
+    generate(Path(args.out), args.entities, args.fanout,
+             args.relation_fanout, args.seed, args.shard_entities)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
