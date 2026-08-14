@@ -71,18 +71,21 @@ from .traversal_chain import TraversalChain
 
 logger = logging.getLogger(__name__)
 
-# The emitter's own minimum, and it is NOT the decision's MIN_DEPTH.
+# Depth 1 QUALIFIES, matching `traversal_decision.MIN_DEPTH`.
 #
-# `traversal_decision.MIN_DEPTH` is 1 because a depth-1 walk measured 26.8 ms
-# flat against 0.2 ms hop-wise. That win comes from fencing the criterion behind
-# the pinned scan — but at depth 1 there is only one hop, so this emitter has no
-# lateral to place and would produce the SAME SQL it was asked to replace.
-# Emitting it unchanged and reporting "hop-wise" would be a lie in the logs.
+# It did not, briefly, and the reason it did not is worth keeping: when a hop
+# emitted its link and criteria as one join, a depth-1 chain had no lateral to
+# place and would have produced the SAME SQL it was asked to replace. Fencing
+# each hop's criteria behind its link — forced by the boolean regression above —
+# gave depth 1 a structure of its own, and it is the biggest win measured:
 #
-# So depth 1 stays on the flat path here, and the structure that would win it
-# (fencing a single hop's criterion tables behind its link table) is a separate
-# change that has not been measured through this emitter.
-MIN_EMIT_DEPTH = 2
+#     depth 1, hasActive = true, sparse start   158 ms -> 0.4 ms   417x
+#     depth 1, score >= 50,      sparse start    31 ms -> 0.2 ms   153x
+#     depth 1, hasActive = true, dense start     72 ms -> 3.0 ms    24x
+#
+# which is the same mechanism the whole module is for: one hop still has a
+# pinned constant that ought to drive, and without the fence it does not.
+MIN_EMIT_DEPTH = 1
 
 # `identifier.` — a lexical scan for qualified column references, intersected
 # with the aliases we actually emitted. Deliberately not the substring test
@@ -95,17 +98,29 @@ _QUALIFIER_RE = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\s*\.")
 class HopGroup:
     """One hop's tables and the constraints that belong to it.
 
-    `tables` is link-first. The link is what carries the walk, and putting it
-    first is what the measured plan did — PostgreSQL drove from `femv0` because
-    the pin sits on it and the estimate there is real.
+    `tables` is link-first, and the link is emitted ALONE in the hop's FROM with
+    every other table of the hop inside a fenced lateral beneath it.
+
+    Listing the link first is not enough, which cost a 55x regression to learn.
+    Inside a hop PostgreSQL still reorders freely, and on a boolean criterion it
+    did: it drove from `hasActive = true` (13,198 rows) and applied the pinned
+    entity as a FILTER on the inner side, 3.4M buffers, the exact pathology this
+    module exists to remove. The same query with `score >= 50` happened to pick
+    the link — so the flat form was not wrong here, it was LUCKY, and the luck
+    ran out on a different criterion.
+
+    A lateral is what makes the dependency one-way. The link is the only table in
+    the outer FROM, so nothing can be joined ahead of it.
     """
     index: int
     link_alias: str
     tables: List[TableRef] = field(default_factory=list)
     # alias -> conditions to hang on that table's JOIN ON
     on_map: Dict[str, List[str]] = field(default_factory=dict)
-    # conditions belonging to the link itself, emitted as this hop's WHERE
+    # conditions belonging to the link itself — this hop's outer WHERE
     where: List[str] = field(default_factory=list)
+    # conditions on the FIRST non-link table, which has no JOIN ON to hang on
+    crit_where: List[str] = field(default_factory=list)
 
 
 def _refs(sql: str, known: set) -> set:
@@ -230,10 +245,17 @@ def _place(groups: List[HopGroup], tagged, known: set,
     for sql, rs in parsed:
         hop = max(hop_of[a] for a in rs)
         g = groups[hop]
+        order = [t.alias for t in g.tables]
         mine = [a for a in rs if hop_of[a] == hop]
-        last = max(mine, key=lambda a: [t.alias for t in g.tables].index(a))
+        last = max(mine, key=order.index)
         if last == g.link_alias:
             g.where.append(sql)
+        elif last == order[1]:
+            # The first non-link table opens the criterion lateral's FROM, so it
+            # has no JOIN ON to hang on. Its conditions become that lateral's
+            # WHERE — including the one tying it back to the link, which is a
+            # correlated reference and exactly what makes the lateral lateral.
+            g.crit_where.append(sql)
         else:
             g.on_map.setdefault(last, []).append(sql)
     return True
@@ -265,10 +287,21 @@ def emit_hop_wise(plan: PlanV2, chain: TraversalChain,
     if not groups:
         return None
 
+    # Nothing to fence and nothing to sequence. A single hop carrying only its
+    # link emits exactly the SQL it was asked to replace, so returning it would
+    # cost a wasted rewrite and, worse, log "hop-wise" for a plan that is not.
+    if len(groups) == 1 and len(groups[0].tables) == 1:
+        logger.debug("hop-wise declined: one hop with no criterion tables, "
+                     "the emitted SQL would be identical")
+        return None
+
     hop_of = {t.alias: g.index for g in groups for t in g.tables}
 
-    # var -> (hop, sql expression) for the hop that binds it.
-    bindings: Dict[int, List[Tuple[str, str]]] = {g.index: [] for g in groups}
+    # Variables split by where they bind: on the hop's LINK, or on one of its
+    # criterion tables. The two sit in different scopes once the criteria are
+    # fenced, so the projection has to know which.
+    link_binds: Dict[int, List[Tuple[str, str]]] = {g.index: [] for g in groups}
+    crit_binds: Dict[int, List[Tuple[str, str]]] = {g.index: [] for g in groups}
     for var, slot in (plan.var_slots or {}).items():
         if not slot.positions:
             continue
@@ -278,25 +311,57 @@ def emit_hop_wise(plan: PlanV2, chain: TraversalChain,
             logger.debug("hop-wise declined: variable %s binds on %s, which is "
                          "in no hop", var, alias)
             return None
-        bindings[hop].append((f"{sql_names[var]}__uuid", f"{alias}.{col}"))
+        target = link_binds if alias == groups[hop].link_alias else crit_binds
+        target[hop].append((f"{sql_names[var]}__uuid", f"{alias}.{col}"))
 
-    def _body(i: int) -> str:
-        """Hop `i`, with hops after it nested inside."""
-        g = groups[i]
-        cols = [f"{expr} AS {name}" for name, expr in bindings[g.index]]
-        # Everything deeper is re-projected by name from the nested lateral.
+    def _deeper(i: int) -> List[Tuple[str, str]]:
+        """Everything bound at hop i's criteria or below — re-projected by name."""
+        out = list(crit_binds[i])
         for j in range(i + 1, len(groups)):
-            cols += [f"hop{i + 1}.{name}" for name, _ in bindings[j]]
-        if not cols:
-            cols = ["1 AS _dummy"]
+            out += link_binds[j] + crit_binds[j]
+        return out
 
-        parts = [f"SELECT {', '.join(cols)}",
-                 f"FROM {g.tables[0].table_name} AS {g.tables[0].alias}"]
-        for t in g.tables[1:]:
+    def _criteria(i: int) -> str:
+        """Hop i's non-link tables, with hop i+1 nested inside them.
+
+        Deeper hops nest HERE rather than beside the criteria so that a
+        constraint belonging to a later hop can still reference hop i's
+        criterion aliases — they stay in lexical scope all the way down.
+        """
+        g = groups[i]
+        cols = [f"{expr} AS {name}" for name, expr in crit_binds[i]]
+        for j in range(i + 1, len(groups)):
+            cols += [f"hop{i + 1}.{n}" for n, _ in link_binds[j] + crit_binds[j]]
+        parts = [f"SELECT {', '.join(cols) if cols else '1 AS _dummy'}",
+                 f"FROM {g.tables[1].table_name} AS {g.tables[1].alias}"]
+        for t in g.tables[2:]:
             conds = g.on_map.get(t.alias)
             parts.append(f"JOIN {t.table_name} AS {t.alias} ON "
                          + (" AND ".join(conds) if conds else "TRUE"))
         if i + 1 < len(groups):
+            parts.append(f"CROSS JOIN LATERAL (\n{_body(i + 1)}\n) AS hop{i + 1}")
+        if g.crit_where:
+            parts.append("WHERE " + " AND ".join(g.crit_where))
+        parts.append("OFFSET 0")
+        return "\n".join(parts)
+
+    def _body(i: int) -> str:
+        """Hop `i`: the link alone, everything else fenced beneath it."""
+        g = groups[i]
+        cols = [f"{expr} AS {name}" for name, expr in link_binds[i]]
+        has_crit = len(g.tables) > 1
+        if has_crit:
+            cols += [f"crit{i}.{n}" for n, _ in _deeper(i)]
+        else:
+            for j in range(i + 1, len(groups)):
+                cols += [f"hop{i + 1}.{n}"
+                         for n, _ in link_binds[j] + crit_binds[j]]
+
+        parts = [f"SELECT {', '.join(cols) if cols else '1 AS _dummy'}",
+                 f"FROM {g.tables[0].table_name} AS {g.tables[0].alias}"]
+        if has_crit:
+            parts.append(f"CROSS JOIN LATERAL (\n{_criteria(i)}\n) AS crit{i}")
+        elif i + 1 < len(groups):
             parts.append(f"CROSS JOIN LATERAL (\n{_body(i + 1)}\n) AS hop{i + 1}")
         if g.where:
             parts.append("WHERE " + " AND ".join(g.where))

@@ -420,9 +420,50 @@ Worth naming plainly: that regression passed every test, because the answers
 were correct. It was caught only by benchmarking a second fixture with a
 different shape.
 
-**Still declined, deliberately**: depth 1 (no lateral to place — the depth-1 win
-needs a different structure, see `traversal_chain_plan.md`), tail-only pins
-(a reverse walk, unmeasured), and anything that will not partition into a line.
+### Each hop's criteria must be FENCED behind its link — 2026-08-14
+
+The first version listed the link table first in each hop's FROM and let the
+rest of the hop join normally. That is not enough, and a boolean criterion
+proved it: `hasActive = true` at depth 2 measured **47 ms flat against 2,599 ms
+hop-wise, a 55x regression**. The plan shows why:
+
+    Nested Loop (rows=13,198)                 <- drove from the CRITERION
+      Index Scan term (term_text = 'true')       1 row
+      Index Scan quad_po q9                      13,198 rows
+    Index Scan fe_frame femv0 (loops=13,198)
+      Filter: source_entity_uuid = '<pin>'    <- the pin, applied LAST
+
+3.4M buffers — inside hop 0, the exact pathology the module exists to remove.
+PostgreSQL reorders freely within a hop, and `score >= 50` on the identical
+shape happened to pick the link. So the first version was not right, it was
+LUCKY, and the luck ran out on a different criterion.
+
+The fix is structural: each hop emits its LINK ALONE in the FROM, with its
+criterion tables in a fenced lateral beneath it. A lateral makes the dependency
+one-way, so nothing can be joined ahead of the link. After it, on the same
+queries:
+
+    criterion   depth   sparse start          dense start
+    hasActive       1   158 ms -> 0.4 ms      72 ms -> 3.0 ms
+    hasActive       2   112 ms -> 0.6 ms      65 ms -> 8.6 ms
+    hasActive       3   TIMEOUT -> 5 ms       TIMEOUT -> 16 ms
+    score >= 50     1    31 ms -> 0.2 ms      34 ms -> 1.7 ms
+    score >= 50     2    55 ms -> 0.4 ms      56 ms -> 2.0 ms
+    score >= 50     3    60 ms -> 5.1 ms      59 ms -> 5.3 ms
+    category IN     3    42 ms -> 3.3 ms     114 ms -> 43 ms
+
+No case is slower. The 55x loss became a 7.6x win, and the flat form now TIMES
+OUT at 120 s on the depth-3 boolean walk that hop-wise answers in 16 ms.
+
+**Depth 1 qualifies because of this.** It was declined while a hop was one flat
+join, since there was no lateral to place and the SQL would have been identical.
+Fencing gave one hop a structure of its own, and it is the largest win measured
+— 417x. Same mechanism throughout: a pinned constant that ought to drive, and
+does not without the fence.
+
+**Still declined, deliberately**: tail-only pins (a reverse walk, unmeasured),
+a single hop carrying no criterion at all (the SQL would be identical), and
+anything that will not partition into a line.
 
 ## Related
 

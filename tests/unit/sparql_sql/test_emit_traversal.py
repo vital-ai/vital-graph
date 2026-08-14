@@ -108,7 +108,7 @@ class TestPartitioning:
         query returning a superset."""
         plan = _plan(3)
         groups = partition_hops(plan, _chain(3), plan.tables)
-        emitted = [c for g in groups for c in g.where]
+        emitted = [c for g in groups for c in g.where + g.crit_where]
         emitted += [c for g in groups for conds in g.on_map.values() for c in conds]
         assert sorted(emitted) == sorted(s for _o, s in plan.tagged_constraints)
 
@@ -142,14 +142,6 @@ class TestItDeclines:
         plan = _plan(2)
         assert partition_hops(plan, _chain(4), plan.tables) is None
 
-    def test_depth_one(self):
-        """One hop has no lateral to place, so hop-wise would emit the SAME SQL
-        it was asked to replace. `traversal_decision.MIN_DEPTH` is 1 for a
-        different structure that is not this one."""
-        plan = _plan(1)
-        assert emit_hop_wise(plan, _chain(1), plan.tables, _names(plan)) is None
-        assert MIN_EMIT_DEPTH == 2
-
     def test_a_tail_only_pin(self):
         """Driving from a tail pin means walking the chain backwards, which is a
         different emission and is unmeasured. The decision reports tail pins as
@@ -161,6 +153,37 @@ class TestItDeclines:
         assert got is None
 
 
+class TestDepthOne:
+    """Depth 1 qualifies, and did not until the criteria were fenced.
+
+    With a hop emitted as one join there was no lateral to place at depth 1, so
+    hop-wise would have produced the SAME SQL it replaced. Once each hop's
+    criteria sit behind its link, one hop has a structure of its own — and it is
+    the biggest win measured: 158 ms -> 0.4 ms on a boolean criterion, 31 ms ->
+    0.2 ms on a numeric one. Same mechanism as every other depth: a pinned
+    constant that ought to drive, and does not without the fence.
+    """
+
+    def test_it_emits(self):
+        plan = _plan(1)
+        sql = emit_hop_wise(plan, _chain(1), plan.tables, _names(plan))
+        assert sql is not None
+        assert MIN_EMIT_DEPTH == 1
+
+    def test_the_criteria_are_fenced_behind_the_link(self):
+        plan = _plan(1)
+        sql = emit_hop_wise(plan, _chain(1), plan.tables, _names(plan))
+        assert sql.count("CROSS JOIN LATERAL") == 1
+        assert "OFFSET 0" in sql
+        assert sql.index("AS femv0") < sql.index("CROSS JOIN LATERAL")
+
+    def test_a_lone_link_with_no_criteria_is_not_worth_emitting(self):
+        """Nothing to fence and nothing to sequence — it would be the same SQL,
+        and reporting it as hop-wise would be false in the logs."""
+        plan = _plan(1, criteria=False)
+        assert emit_hop_wise(plan, _chain(1), plan.tables, _names(plan)) is None
+
+
 class TestEmittedShape:
 
     def test_hops_nest_rather_than_sequence(self):
@@ -170,18 +193,44 @@ class TestEmittedShape:
         alias in scope and the constraint is emitted verbatim."""
         plan = _plan(3)
         sql = emit_hop_wise(plan, _chain(3), plan.tables, _names(plan))
-        assert sql.count("CROSS JOIN LATERAL") == 2
         # nested: hop2's opening paren comes before hop1's closing alias
         assert sql.index(") AS hop2") < sql.index(") AS hop1")
         assert "femv2.source_entity_uuid = femv1.dest_entity_uuid" in sql
 
-    def test_every_hop_below_the_first_is_fenced(self):
-        """Unfenced, PostgreSQL flattens the lateral back into the join and
-        re-picks the order this exists to override — 16.1 ms against 0.2 ms at
-        depth 3."""
+    def test_the_link_is_alone_in_its_hop_s_FROM(self):
+        """The 55x regression. Listing the link first is not enough — inside a
+        hop PostgreSQL reorders freely, and on a boolean criterion it drove from
+        `hasActive = true` (13,198 rows) and applied the pinned entity as a
+        FILTER on the inner side: 3.4M buffers. `score >= 50` on the same shape
+        happened to pick the link, so the old form was lucky rather than right.
+
+        A lateral makes the dependency one-way. Nothing may be joined to the
+        link before its lateral opens."""
         plan = _plan(3)
         sql = emit_hop_wise(plan, _chain(3), plan.tables, _names(plan))
-        assert sql.count("OFFSET 0") == 2
+        for i in range(3):
+            after = sql[sql.index(f"AS femv{i}") + 1:]
+            nxt = after[:after.index("\n", after.index("\n") + 1)]
+            assert "JOIN" not in nxt.split("CROSS JOIN LATERAL")[0], (
+                f"something is joined to femv{i} ahead of its lateral")
+
+    def test_criteria_and_hops_are_each_fenced(self):
+        """Unfenced, PostgreSQL flattens the lateral back into the join and
+        re-picks the order this exists to override — 16.1 ms against 0.2 ms at
+        depth 3. One fence per criterion group and one per hop below the first:
+        2*depth - 1 at depth 3."""
+        plan = _plan(3)
+        sql = emit_hop_wise(plan, _chain(3), plan.tables, _names(plan))
+        assert sql.count("CROSS JOIN LATERAL") == 5
+        assert sql.count("OFFSET 0") == 5
+
+    def test_a_hop_with_no_criterion_tables_still_emits(self):
+        """Not every hop carries a criterion; the chain must not break on one
+        that does not."""
+        plan = _plan(2, criteria=False)
+        sql = emit_hop_wise(plan, _chain(2), plan.tables, _names(plan))
+        assert sql is not None and "femv1" in sql
+        assert "crit0" not in sql
 
     def test_variables_bound_deeper_are_projected_all_the_way_up(self):
         """A variable bound in the innermost hop has to surface as a column of
