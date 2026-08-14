@@ -989,6 +989,17 @@ async def generate_sql(
                 # reads are loaded at 2d.1, and before emit at stage 3.
                 aliases.traversal_decision = decide_for_plan(
                     _chains, _crit, _pred)
+                # Whether rows may be deduplicated BETWEEN hops. Decided here
+                # rather than in `emit_bgp` because the question is what the
+                # operators ABOVE the traversal do with path multiplicity, and
+                # emit_bgp only sees the BGP.
+                try:
+                    from .emit_traversal import dedup_feasible
+                    aliases.dedup_final_vars = dedup_feasible(
+                        plan, _chains[0], text_needed)
+                except Exception as exc:
+                    logger.debug("dedup feasibility skipped: %s", exc)
+                    aliases.dedup_final_vars = None
         except Exception as exc:
             logger.debug("traversal chain detection skipped: %s", exc)
 

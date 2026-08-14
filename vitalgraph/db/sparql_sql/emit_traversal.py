@@ -375,3 +375,262 @@ def emit_hop_wise(plan: PlanV2, chain: TraversalChain,
     logger.info("traversal: emitting %d hops hop-wise (%s), tables per hop %s",
                 len(groups), chain.kind, [len(g.tables) for g in groups])
     return sql
+
+
+# ---------------------------------------------------------------------------
+# Set-based emission: deduplicate between hops
+# ---------------------------------------------------------------------------
+#
+# The hop-wise form above still carries one row per PATH. On a wide walk that is
+# almost all redundant: `wordnet_frames` depth 3 materialises 501,538 rows to
+# produce 3,108 answers, because the distinct entity count per hop is only
+# 671 -> 583 -> 3,108 and the rest is the same entities reached different ways.
+#
+# Deduplicating between hops collapses that. Measured on that query, answer sets
+# verified IDENTICAL rather than merely the same size:
+#
+#     hop-wise, one row per path        2,129 ms
+#     deduplicated between hops            61 ms      35x
+#
+# WHY THIS IS A SEPARATE EMISSION AND NOT A FLAG
+#
+# It changes the shape from nested laterals to a chain of CTEs, each holding a
+# SET of entities. That is the form `traversal_chain_plan.md` rejected for the
+# general case, because moving each hop into its own scope means a constraint
+# referencing an earlier hop's alias has to be rewritten. It is available here
+# only because the precondition below rules those constraints out.
+#
+# WHEN IT IS WRONG
+#
+# Deduplicating destroys path multiplicity, and multiplicity is sometimes the
+# answer. `SELECT ?e3` without DISTINCT returns one row per path — 501,538 of
+# them — and this would return 3,108. `COUNT(*)` would change. Projecting an
+# intermediate variable would too. So the precondition is not a heuristic; it is
+# the correctness argument, and `dedup_feasible` refuses everything it cannot
+# prove.
+
+_TRANSPARENT_ABOVE_BGP = None      # filled in lazily to avoid a circular import
+
+
+def _expr_vars(expr, out, depth=0):
+    """Every variable an expression mentions, walked structurally."""
+    from vitalgraph.db.jena_sparql.jena_types import ExprFunction, ExprVar
+    if expr is None or depth > 16:
+        return out
+    if isinstance(expr, ExprVar):
+        out.add(expr.var)
+    for a in (getattr(expr, "args", None) or []):
+        _expr_vars(a, out, depth + 1)
+    return out
+
+
+def _path_to_bgp(node, depth=0):
+    """The chain of nodes from `node` down to a single BGP, or None.
+
+    None when there is more than one BGP, or none, or the chain is deeper than
+    a traversal query plausibly is. Several BGPs mean something joins to this
+    one, and then rows this drops may be rows that join.
+    """
+    from .ir import KIND_BGP
+    if node is None or depth > 8:
+        return None
+    if node.kind == KIND_BGP:
+        return [node]
+    kids = list(node.children or [])
+    if len(kids) != 1:
+        return None
+    below = _path_to_bgp(kids[0], depth + 1)
+    return None if below is None else [node] + below
+
+
+def dedup_feasible(root, chain, text_needed_vars):
+    """Can this plan's rows be deduplicated between hops without changing it?
+
+    Returns the set of variables the final hop binds when yes, None when no.
+
+    Computed from the ROOT of the plan, not from the BGP, because the question
+    is what the operators ABOVE the traversal do with path multiplicity — and
+    `emit_bgp` cannot see them.
+
+    Every condition here is a correctness condition:
+
+    * **A DISTINCT must be present.** Without one the multiplicity IS the
+      result: `SELECT ?e3` returns a row per path.
+    * **Only PROJECT / DISTINCT / SLICE / FILTER may sit above.** GROUP or an
+      aggregate counts rows and ORDER may sort by an intermediate variable;
+      both read something dedup destroys. A FILTER is row-wise and cannot
+      observe multiplicity, so it is allowed — but only when every variable it
+      mentions SURVIVES, since a filter over a nulled intermediate column would
+      silently drop everything. In practice the filter above a traversal is the
+      pin itself, `FILTER(?e0 = <start>)`.
+    * **The projection must be a subset of the final hop's variables**, since
+      those are the only ones that survive.
+    * **Nothing else may need TEXT.** Intermediate variables are emitted NULL,
+      and `_wrap_with_terms` joins the term table on `__uuid` with an INNER
+      join, so a NULL there would silently DROP rows rather than leave a column
+      empty. The pinned head is exempt: it is a constant, so it is carried
+      through rather than nulled.
+    """
+    from .ir import KIND_PROJECT, KIND_DISTINCT, KIND_SLICE, KIND_BGP
+
+    if chain is None or chain.depth < 2 or not chain.pinned_head:
+        return None
+    path = _path_to_bgp(root)
+    if path is None:
+        return None
+    bgp = path[-1]
+    above = path[:-1]
+
+    if not any(n.kind == KIND_DISTINCT for n in above):
+        logger.debug("dedup declined: no DISTINCT above the traversal, so path "
+                     "multiplicity is part of the answer")
+        return None
+    from .ir import KIND_FILTER
+    _ok_kinds = (KIND_PROJECT, KIND_DISTINCT, KIND_SLICE, KIND_FILTER)
+    if any(n.kind not in _ok_kinds for n in above):
+        logger.debug("dedup declined: %s above the traversal may read path "
+                     "multiplicity",
+                     [n.kind for n in above if n.kind not in _ok_kinds])
+        return None
+
+    quad_tables = [tb for tb in (bgp.tables or [])
+                   if tb.kind in ("quad", "edge", "frame_entity")]
+    groups = partition_hops(bgp, chain, quad_tables)
+    if not groups:
+        return None
+    last, first = groups[-1], groups[0]
+    last_aliases = {t.alias for t in last.tables}
+
+    final_vars, head_var = set(), None
+    for var, slot in (bgp.var_slots or {}).items():
+        if not slot.positions:
+            continue
+        alias, col = slot.positions[0]
+        if alias in last_aliases:
+            final_vars.add(var)
+        if alias == first.link_alias and col == chain.links[0].source_col:
+            head_var = var
+
+    projected = set()
+    for n in above:
+        if n.kind == KIND_PROJECT and n.project_vars:
+            projected |= set(n.project_vars)
+    if not projected or not projected <= final_vars:
+        logger.debug("dedup declined: projection %s is not confined to the "
+                     "final hop %s", sorted(projected), sorted(final_vars))
+        return None
+
+    allowed = final_vars | ({head_var} if head_var else set())
+
+    # A filter above the traversal is fine only if everything it reads survives.
+    filtered = set()
+    for n in above:
+        if n.kind == KIND_FILTER:
+            for e in (n.filter_exprs or []):
+                _expr_vars(e, filtered)
+    if not filtered <= allowed:
+        logger.debug("dedup declined: filter above the traversal reads %s, "
+                     "which dedup discards", sorted(filtered - allowed))
+        return None
+
+    if text_needed_vars is not None and not set(text_needed_vars) <= allowed:
+        logger.debug("dedup declined: %s need text but do not survive dedup",
+                     sorted(set(text_needed_vars) - allowed))
+        return None
+    return final_vars
+
+
+def emit_dedup_chain(plan: PlanV2, chain: TraversalChain,
+                     quad_tables: Sequence[TableRef],
+                     sql_names: Dict[str, str],
+                     final_vars: set) -> Optional[str]:
+    """The inner BGP query as a chain of deduplicating CTEs, or None.
+
+    One CTE per hop, each holding the SET of entities reachable at that depth.
+    Every hop's input is therefore distinct entities rather than distinct paths,
+    which is where the 35x comes from — the wordnet depth-3 walk goes from
+    501,538 rows to 671 -> 583 -> 3,108.
+
+    `final_vars` comes from `dedup_feasible`, which has already proved that
+    nothing above this BGP can observe what dedup discards.
+
+    Variables from earlier hops are emitted NULL. They are unreachable by
+    construction here — a set of entities does not remember which frame it came
+    through — and `dedup_feasible` has established that none of them needs text,
+    which is what would turn a NULL `__uuid` into a dropped row at the inner
+    term JOIN above.
+    """
+    groups = partition_hops(plan, chain, quad_tables)
+    if not groups:
+        return None
+    if any(len(g.tables) > 1 and not (g.on_map or g.crit_where) for g in groups):
+        return None
+
+    links = {g.link_alias for g in groups}
+    head = groups[0]
+    head_src = chain.links[0].source_col
+
+    # Only the chain condition may cross a hop boundary. Anything else would
+    # reference an alias that this shape puts in another CTE's scope, and
+    # rewriting it is exactly what the nested-lateral form exists to avoid.
+    for i, g in enumerate(groups):
+        allowed = {t.alias for t in g.tables}
+        if i:
+            allowed.add(groups[i - 1].link_alias)
+        for sql in list(g.where) + list(g.crit_where) + \
+                [c for cs in g.on_map.values() for c in cs]:
+            if not _refs(sql, links | {t.alias for gg in groups for t in gg.tables}) <= allowed:
+                logger.debug("dedup declined: a constraint in hop %d crosses "
+                             "more than the chain link", i)
+                return None
+
+    ctes = []
+    for i, g in enumerate(groups):
+        link = chain.links[i]
+        parts = [f"SELECT DISTINCT {g.link_alias}.{link.dest_col} AS e"]
+        if i == 0:
+            # The pinned head is a constant, so carrying it costs no extra rows
+            # and keeps a text-needed head variable resolvable.
+            parts[0] += f", {g.link_alias}.{head_src} AS head"
+            parts.append(f"FROM {g.tables[0].table_name} AS {g.link_alias}")
+        else:
+            # Every CTE re-projects `head`, so the previous one already carries
+            # it — no second reference to d0, which would alias it twice.
+            parts[0] += f", d{i - 1}.head AS head"
+            parts.append(f"FROM d{i - 1}")
+            parts.append(f"JOIN {g.tables[0].table_name} AS {g.link_alias} "
+                         f"ON {g.link_alias}.{link.source_col} = d{i - 1}.e")
+        for j, t in enumerate(g.tables[1:]):
+            # `crit_where` belongs to the FIRST non-link table only; it is where
+            # that table's conditions go when it opens a lateral in the hop-wise
+            # form. Here it opens a JOIN instead, so it becomes that JOIN's ON.
+            conds = g.on_map.get(t.alias) or (g.crit_where if j == 0 else [])
+            parts.append(f"JOIN {t.table_name} AS {t.alias} ON "
+                         + (" AND ".join(conds) if conds else "TRUE"))
+        # The chain condition is now expressed by the join to the previous CTE.
+        where = [c for c in g.where
+                 if not (i and f"{groups[i-1].link_alias}." in c)]
+        if where:
+            parts.append("WHERE " + " AND ".join(where))
+        ctes.append(f"d{i} AS MATERIALIZED (\n" + "\n".join(parts) + "\n)")
+
+    last = len(groups) - 1
+    cols = []
+    for var, slot in (plan.var_slots or {}).items():
+        sn = sql_names[var]
+        if not slot.positions:
+            continue
+        alias, col = slot.positions[0]
+        if var in final_vars and alias == groups[last].link_alias \
+                and col == chain.links[last].dest_col:
+            cols.append(f"d{last}.e AS {sn}__uuid")
+        elif alias == head.link_alias and col == head_src:
+            cols.append(f"d{last}.head AS {sn}__uuid")
+        else:
+            cols.append(f"NULL::uuid AS {sn}__uuid")
+
+    sql = ("WITH " + ",\n".join(ctes) + "\n"
+           f"SELECT {', '.join(cols) if cols else '1 AS _dummy'} FROM d{last}")
+    logger.info("traversal: emitting %d hops SET-BASED (dedup between hops), "
+                "final vars %s", len(groups), sorted(final_vars))
+    return sql

@@ -46,6 +46,11 @@ def _plan(depth=3, criteria=True):
     recoverable by walking the constraint graph rather than by adjacency.
     """
     tables, tagged, slots = [], [], {}
+    # The head is a VARIABLE pinned by a FILTER, which is how the pipeline
+    # actually emits `FILTER(?e0 = <start>)`. Without it here the pin's own
+    # filter looks like a filter on an intermediate variable.
+    slots["e0"] = VarSlot(name="e0",
+                          positions=[("femv0", "source_entity_uuid")])
     for i in range(depth):
         tables.append(_fe(i))
         tagged.append((f"femv{i}", f"femv{i}.context_uuid = {CTX}"))
@@ -254,3 +259,123 @@ class TestRefExtraction:
     def test_unknown_qualifiers_are_ignored(self):
         """Table names and subquery aliases appear in constraint SQL too."""
         assert _refs("q1.o IN (SELECT t.term_uuid FROM s_term t)", {"q1"}) == {"q1"}
+
+
+class TestDedupPrecondition:
+    """`dedup_feasible` is a CORRECTNESS gate, not an optimisation heuristic.
+
+    Deduplicating between hops destroys path multiplicity, and multiplicity is
+    sometimes the answer: `SELECT ?e3` without DISTINCT returns one row per
+    path — 501,538 of them on the wordnet depth-3 walk — where dedup returns
+    3,108. So every refusal here is the difference between a right and a wrong
+    answer, which is why they are tested one at a time rather than through the
+    emitted SQL.
+    """
+
+    @staticmethod
+    def _tree(*kinds, depth=3, project=("e3",), filters=None):
+        """A plan: the given modifier kinds stacked above a depth-N traversal."""
+        from vitalgraph.db.sparql_sql.ir import (
+            KIND_PROJECT, KIND_DISTINCT, KIND_SLICE, KIND_FILTER, KIND_ORDER,
+            KIND_GROUP)
+        node = _plan(depth)
+        for k in reversed(kinds):
+            parent = PlanV2(kind=k, children=[node])
+            if k == KIND_PROJECT:
+                parent.project_vars = list(project)
+            if k == KIND_FILTER:
+                parent.filter_exprs = list(filters or [])
+            node = parent
+        return node
+
+    def _feasible(self, tree, text=None, depth=3):
+        from vitalgraph.db.sparql_sql.emit_traversal import dedup_feasible
+        return dedup_feasible(tree, _chain(depth), text)
+
+    def test_project_distinct_over_a_traversal_is_allowed(self):
+        from vitalgraph.db.sparql_sql.ir import KIND_PROJECT, KIND_DISTINCT
+        got = self._feasible(self._tree(KIND_DISTINCT, KIND_PROJECT))
+        assert got is not None and "e3" in got
+
+    def test_without_DISTINCT_it_refuses(self):
+        """`SELECT ?e3` returns a row per path. Deduplicating would answer a
+        different question, and it is the one refusal that cannot be recovered
+        from downstream."""
+        from vitalgraph.db.sparql_sql.ir import KIND_PROJECT
+        assert self._feasible(self._tree(KIND_PROJECT)) is None
+
+    def test_an_aggregate_refuses(self):
+        """COUNT(*) over the paths is a count OF the multiplicity."""
+        from vitalgraph.db.sparql_sql.ir import (KIND_PROJECT, KIND_DISTINCT,
+                                                 KIND_GROUP)
+        assert self._feasible(
+            self._tree(KIND_DISTINCT, KIND_GROUP, KIND_PROJECT)) is None
+
+    def test_an_order_by_refuses(self):
+        """ORDER BY may sort on a variable dedup nulls."""
+        from vitalgraph.db.sparql_sql.ir import (KIND_PROJECT, KIND_DISTINCT,
+                                                 KIND_ORDER)
+        assert self._feasible(
+            self._tree(KIND_DISTINCT, KIND_ORDER, KIND_PROJECT)) is None
+
+    def test_projecting_an_intermediate_variable_refuses(self):
+        """`?e1` does not survive a set of depth-3 entities."""
+        from vitalgraph.db.sparql_sql.ir import KIND_PROJECT, KIND_DISTINCT
+        assert self._feasible(
+            self._tree(KIND_DISTINCT, KIND_PROJECT, project=("e1",))) is None
+
+    def test_projecting_a_criterion_variable_refuses(self):
+        from vitalgraph.db.sparql_sql.ir import KIND_PROJECT, KIND_DISTINCT
+        assert self._feasible(
+            self._tree(KIND_DISTINCT, KIND_PROJECT, project=("c0",))) is None
+
+    def test_the_pin_filter_is_allowed(self):
+        """The filter above a traversal is normally the pin itself. A filter is
+        row-wise, so it cannot observe multiplicity — what matters is that the
+        variable it reads survives, and the pinned head is carried through."""
+        from vitalgraph.db.sparql_sql.ir import (KIND_PROJECT, KIND_DISTINCT,
+                                                 KIND_FILTER)
+        from vitalgraph.db.jena_sparql.jena_types import (
+            ExprFunction, ExprValue, ExprVar, URINode)
+        pin = ExprFunction(name="eq", args=[
+            ExprVar(var="e0"), ExprValue(node=URINode(value="urn:start"))])
+        got = self._feasible(self._tree(KIND_DISTINCT, KIND_PROJECT, KIND_FILTER,
+                                        filters=[pin]))
+        assert got is not None, "the pin must not disqualify its own traversal"
+
+    def test_a_filter_on_an_intermediate_variable_refuses(self):
+        """That column is NULL after dedup, so the filter would drop every row
+        rather than fail visibly."""
+        from vitalgraph.db.sparql_sql.ir import (KIND_PROJECT, KIND_DISTINCT,
+                                                 KIND_FILTER)
+        from vitalgraph.db.jena_sparql.jena_types import (
+            ExprFunction, ExprValue, ExprVar, LiteralNode)
+        f = ExprFunction(name="gt", args=[
+            ExprVar(var="c1"), ExprValue(node=LiteralNode(value="5", datatype=None))])
+        assert self._feasible(
+            self._tree(KIND_DISTINCT, KIND_PROJECT, KIND_FILTER, filters=[f])) is None
+
+    def test_text_on_an_intermediate_variable_refuses(self):
+        """`_wrap_with_terms` joins the term table on `__uuid` with an INNER
+        join. Dedup emits NULL there for anything that does not survive, so a
+        text-needed intermediate would silently drop every row."""
+        from vitalgraph.db.sparql_sql.ir import KIND_PROJECT, KIND_DISTINCT
+        tree = self._tree(KIND_DISTINCT, KIND_PROJECT)
+        assert self._feasible(tree, text={"e3", "c1"}) is None
+        assert self._feasible(tree, text={"e3"}) is not None
+
+    def test_depth_one_refuses(self):
+        """One hop has no multiplicity between hops to collapse; the outer
+        DISTINCT already does that work."""
+        from vitalgraph.db.sparql_sql.ir import KIND_PROJECT, KIND_DISTINCT
+        assert self._feasible(
+            self._tree(KIND_DISTINCT, KIND_PROJECT, depth=1), depth=1) is None
+
+    def test_two_bgps_refuse(self):
+        """A second BGP means something joins to this one, and a row dedup
+        drops may be a row that joins."""
+        from vitalgraph.db.sparql_sql.ir import KIND_PROJECT, KIND_DISTINCT, KIND_JOIN
+        tree = self._tree(KIND_DISTINCT, KIND_PROJECT)
+        joined = PlanV2(kind=KIND_JOIN, children=[_plan(3), _plan(2)])
+        tree.children[0].children = [joined]
+        assert self._feasible(tree) is None

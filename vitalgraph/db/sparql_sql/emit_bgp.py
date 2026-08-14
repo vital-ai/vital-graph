@@ -166,10 +166,34 @@ def _try_hop_wise(plan: PlanV2, ctx: EmitContext, quad_tables,
     the statistics it reads are already loaded.
     """
     decision = getattr(ctx.aliases, "traversal_decision", None)
-    if decision is None or not decision.hop_wise or decision.chain is None:
+    if decision is None or decision.chain is None:
         return None
     try:
-        from .emit_traversal import emit_hop_wise
+        from .emit_traversal import emit_hop_wise, emit_dedup_chain
+
+        # The SET-BASED form is tried FIRST and is NOT subject to the criterion
+        # gate, which guards a different risk.
+        #
+        # That gate declines an unfiltered walk because the path-wise form fans
+        # out. Deduplicating between hops removes the fan-out by construction —
+        # each hop's input is a set of entities, not a set of paths — so the
+        # mechanism the gate protects against cannot occur. Gating it on "has a
+        # measured criterion" would withhold the optimisation from exactly the
+        # queries it helps most: measured on graph_synth_100k from a hub start,
+        # unfiltered depth 3 went 2,555 ms -> 98 ms, 26x, and depth 2 1.6x.
+        # Nothing measured is slower.
+        #
+        # Its own precondition (`dedup_feasible`) is a correctness proof rather
+        # than a cost estimate, so it does not need a second one.
+        final_vars = getattr(ctx.aliases, "dedup_final_vars", None)
+        if final_vars:
+            sql = emit_dedup_chain(plan, decision.chain, quad_tables,
+                                   sql_names, final_vars)
+            if sql is not None:
+                return sql
+
+        if not decision.hop_wise:
+            return None
         return emit_hop_wise(plan, decision.chain, quad_tables, sql_names)
     except Exception as exc:
         logger.warning("hop-wise emission failed, using the flat join: %s", exc)
