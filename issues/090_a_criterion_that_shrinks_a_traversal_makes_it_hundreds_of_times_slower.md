@@ -79,6 +79,8 @@ wall-clock with no `EXPLAIN` behind it. The candidates worth separating are
 
 ## Related
 
-- `issues/048` — the frame_entity collapse itself, which is working here
+- `issues/048` — the parent plan. This is Problem 2 of the three priced there;
+  the collapse itself is working, and Problem 1 (the slot-type decline) is a
+  separate cause with its own price
 - `issues/072` — nested-loop misplanning, the same family of symptom
 - `planning/planning_performance/unexplored_performance_surface.md`
