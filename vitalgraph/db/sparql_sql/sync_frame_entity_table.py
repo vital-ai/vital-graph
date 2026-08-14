@@ -94,9 +94,39 @@ async def sync_frame_entity_after_edge_insert(
 
     from .sync_edge_table import chunk_uuids
 
+    # Force a CUSTOM plan for the statement below.
+    #
+    # PostgreSQL plans a prepared statement per-parameter for its first five
+    # executions, then decides whether a GENERIC plan is competitive. For this
+    # query it decides wrongly, and by an enormous margin — measured on
+    # wordnet_frames, syncing five touched frames:
+    #
+    #     plan_cache_mode=auto           [4, 1, 2, 1, 1, 10186, 8094, 8885, 8581] ms
+    #     plan_cache_mode=force_custom   [1, 1, 1, 1, 1,     1,    1,    1,    1] ms
+    #
+    # Runs one to five are a millisecond; run six onwards is EIGHT SECONDS, and
+    # it stays there — a prepared statement lives as long as the connection, so
+    # a pooled connection degrades permanently after its fifth write.
+    #
+    # The parameter is an array of touched uuids, and the right plan depends
+    # entirely on how many there are, which is exactly the case a generic plan
+    # cannot serve. Rewriting the OR-subquery as a UNION was tried and only
+    # moved 5.5 s to 4.0 s: the generic plan is bad for the whole shape, not
+    # just that clause.
+    #
+    # SET LOCAL reverts at the end of the caller's transaction. Outside one it
+    # would warn and do nothing, so the statement is wrapped when needed.
+    async def _forced(sql, *args):
+        if conn.is_in_transaction():
+            await conn.execute("SET LOCAL plan_cache_mode = force_custom_plan")
+            return await conn.execute(sql, *args)
+        async with conn.transaction():
+            await conn.execute("SET LOCAL plan_cache_mode = force_custom_plan")
+            return await conn.execute(sql, *args)
+
     inserted = 0
     for chunk in chunk_uuids(touched_uuids):
-        result = await conn.execute(f"""
+        result = await _forced(f"""
             INSERT INTO {t_fe} (frame_uuid, source_entity_uuid, dest_entity_uuid,
                                 context_uuid, frame_type_uuid)
             SELECT
