@@ -54,7 +54,6 @@ extension open instead of baking entity-to-entity into the representation.
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -68,9 +67,6 @@ _TRAVERSAL_KINDS: Dict[str, Tuple[str, str]] = {
     "frame_entity": ("source_entity_uuid", "dest_entity_uuid"),
     "edge": ("source_node_uuid", "dest_node_uuid"),
 }
-
-_CONST_RE = re.compile(r"__CONST_(\w+)__|'([0-9a-fA-F-]{36})'::uuid")
-
 
 @dataclass
 class ChainLink:
@@ -120,20 +116,13 @@ def _traversal_tables(bgp: PlanV2) -> Dict[str, ChainLink]:
     return out
 
 
-def _constraints(bgp: PlanV2) -> List[str]:
-    return list(bgp.constraints or []) + [sql for _tag, sql in
-                                          (bgp.tagged_constraints or [])]
-
-
 def _pinned_vars(plan: PlanV2, out: set, depth: int = 0) -> set:
     """Variables an equality FILTER binds to a constant, anywhere in the plan.
 
-    Read from the PARSED QUERY rather than from constraint text, because the
-    text does not have it yet: `push_filters` runs during emit, so at detection
-    time the BGP carries the chain's join conditions and not the pin. Reading
-    `FILTER(?e0 = <uri>)` directly also means detection does not depend on
-    whether the push-down fired — which is the sort of coupling that makes a
-    pass work until an unrelated optimisation declines.
+    Read from the PARSED QUERY. `push_filters` runs during emit, so at detection
+    time the BGP carries the chain's join conditions and not the pin; reading
+    the filter expression also means detection does not depend on whether the
+    push-down fired.
     """
     from vitalgraph.db.jena_sparql.jena_types import (
         ExprFunction, ExprValue, ExprVar)
@@ -155,13 +144,7 @@ def _pinned_vars(plan: PlanV2, out: set, depth: int = 0) -> set:
 
 def find_chains(plan: PlanV2, depth: int = 0,
                 pinned: Optional[set] = None) -> List[TraversalChain]:
-    """Every traversal chain reachable from `plan`, longest first.
-
-    Links are followed through the JOIN CONDITION, never through adjacency in
-    the table list: two `frame_entity` references that share no variable are not
-    a hop sequence, and pairing them by position would invent a chain the query
-    does not contain.
-    """
+    """Every traversal chain reachable from `plan`, longest first."""
     if plan is None or depth > 24:
         return []
     if pinned is None:
@@ -178,50 +161,65 @@ def find_chains(plan: PlanV2, depth: int = 0,
 
 
 def _chains_in_bgp(bgp: PlanV2, pinned_vars: set) -> List[TraversalChain]:
+    """Link the hops in one BGP using the plan's STRUCTURE.
+
+    Everything here reads `var_slots` and `leaf_terms` — the records collect()
+    makes — and nothing parses emitted SQL. Two hops are consecutive when THE
+    SAME VARIABLE sits at one's destination and the next one's source, which is
+    what "the walk continues" means; a variable is what the SPARQL actually
+    said, whereas the constraint string is one rendering of it.
+
+    Matching constraint text was the first implementation and it is the mistake
+    `reorder_joins` documents at length: its cardinality lookup regex-parsed
+    constraint SQL, could not read the shape this pipeline emits, and left every
+    selectivity decision running on infinity — two criteria in opposite order
+    gave the same join order and differed 8x (`issues/061`). Text matching here
+    would break on a spacing change, on the operands being emitted in the other
+    order, or on a hop whose join is expressed through a third table.
+    """
     links = _traversal_tables(bgp)
-    if len(links) < 1:
+    if not links:
         return []
 
-    conds = _constraints(bgp)
-
-    # successor[a] = b  when  b.source == a.dest, i.e. hop b follows hop a.
-    successor: Dict[str, str] = {}
-    predecessor: Dict[str, str] = {}
-    for a in links.values():
-        for b in links.values():
-            if a.ref_id == b.ref_id:
-                continue
-            wanted = (f"{b.ref_id}.{b.source_col} = {a.ref_id}.{a.dest_col}",
-                      f"{a.ref_id}.{a.dest_col} = {b.ref_id}.{b.source_col}")
-            if any(w in c for c in conds for w in wanted):
-                successor[a.ref_id] = b.ref_id
-                predecessor[b.ref_id] = a.ref_id
-
-    # (ref_id, column) -> variable, so a chain end can be matched against the
-    # variables the query pins. The rewrite records both positions of a shared
-    # variable, e.g. e1 -> [(femv0, dest), (femv1, source)], which is also what
-    # makes the successor links findable.
+    # (ref_id, column) -> variable, from the structural record.
     col_var: Dict[Tuple[str, str], str] = {}
     for var, slot in (bgp.var_slots or {}).items():
         for ref_id, col in (getattr(slot, "positions", None) or []):
             col_var[(ref_id, col)] = var
 
-    def _pinned(ref_id: str, col: str) -> bool:
-        """Is this end of the chain fixed to one value?
+    # A variable at hop A's destination and hop B's source means B follows A.
+    # Built from the variable's own position list rather than by pairing tables.
+    source_of: Dict[str, str] = {}      # var -> ref_id whose SOURCE it is
+    dest_of: Dict[str, str] = {}        # var -> ref_id whose DEST it is
+    for ref_id, link in links.items():
+        v_src = col_var.get((ref_id, link.source_col))
+        v_dst = col_var.get((ref_id, link.dest_col))
+        if v_src is not None:
+            source_of[v_src] = ref_id
+        if v_dst is not None:
+            dest_of[v_dst] = ref_id
 
-        Either because a FILTER pins the variable sitting there, or because the
-        constant is already in the constraint — a query written with the term
-        inline rather than as a FILTER. Both mean the chain can be driven from a
-        single row instead of the whole relation.
+    successor: Dict[str, str] = {}
+    predecessor: Dict[str, str] = {}
+    for var, a_ref in dest_of.items():
+        b_ref = source_of.get(var)
+        if b_ref is not None and b_ref != a_ref:
+            successor[a_ref] = b_ref
+            predecessor[b_ref] = a_ref
+
+    leaf_terms = getattr(bgp, "leaf_terms", None) or {}
+
+    def _pinned(ref_id: str, col: str) -> bool:
+        """Is this end fixed to one value?
+
+        Either a FILTER pins the variable sitting there, or collect() recorded a
+        constant term at that column — a query written with the term inline
+        rather than as a FILTER. `leaf_terms` is that record; reading it means
+        no assumption about how the constant is rendered in SQL.
         """
         if col_var.get((ref_id, col)) in pinned_vars:
             return True
-        needle = f"{ref_id}.{col} = "
-        for c in conds:
-            i = c.find(needle)
-            if i >= 0 and _CONST_RE.search(c[i + len(needle):i + len(needle) + 60]):
-                return True
-        return False
+        return (ref_id, col) in leaf_terms
 
     chains: List[TraversalChain] = []
     seen: set = set()
@@ -240,8 +238,8 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set) -> List[TraversalChain]:
                 pinned_head=_pinned(ordered[0].ref_id, ordered[0].source_col),
                 pinned_tail=_pinned(ordered[-1].ref_id, ordered[-1].dest_col)))
 
-    # A cycle has no head, so nothing above reaches it. Emit each remaining
-    # link as its own single-hop chain rather than dropping it silently.
+    # A cycle has no head, so the walk above never starts on it. Emit each
+    # remaining link rather than dropping it silently.
     for ref_id, link in links.items():
         if ref_id not in seen:
             seen.add(ref_id)

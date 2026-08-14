@@ -48,11 +48,15 @@ def _chain_bgp(kind_cols, n_hops, prefix, pin_inline=False):
         if i:
             constraints.append(
                 f"{prefix}{i}.{src} = {prefix}{i-1}.{dst}")
+    bgp = PlanV2(kind=KIND_BGP, tables=tables, constraints=constraints,
+                 var_slots=slots)
     if pin_inline:
-        constraints.append(
-            f"{prefix}0.{src} = '11111111-2222-3333-4444-555555555555'::uuid")
-    return PlanV2(kind=KIND_BGP, tables=tables, constraints=constraints,
-                  var_slots=slots)
+        # As collect() records it: a constant term bound at that column. NOT as
+        # a constraint string — detection reads the structural record, so a test
+        # that fakes the SQL text would pass against a text-matching
+        # implementation and prove nothing about this one.
+        bgp.leaf_terms[(f"{prefix}0", src)] = ("urn:x:1", "U")
+    return bgp
 
 
 def _pinned_filter(child, var="e0"):
@@ -155,9 +159,15 @@ class TestTraversal:
         """A chain that loops has no head, so the head-first walk never starts.
         Reporting nothing would be a silent miss — the failure mode this whole
         pass exists to avoid."""
+        # A real cycle, expressed structurally: the variable at femv1's
+        # destination is the SAME one at femv0's source, so every link has a
+        # predecessor and the head-first walk has nowhere to start. Appending a
+        # constraint string instead would leave a plain 2-chain and the test
+        # would pass without ever exercising this.
         bgp = _chain_bgp(FE, 2, "femv")
-        bgp.constraints.append(
-            "femv0.source_entity_uuid = femv1.dest_entity_uuid")
+        bgp.var_slots["e0"].positions.append(("femv1", "dest_entity_uuid"))
+        del bgp.var_slots["e2"]
         chains = find_chains(bgp)
         assert chains, "a cyclic chain reported nothing at all"
-        assert sum(c.depth for c in chains) >= 2
+        assert sum(c.depth for c in chains) == 2, (
+            f"both links must be accounted for, got {[str(c) for c in chains]}")
