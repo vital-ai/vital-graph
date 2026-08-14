@@ -60,17 +60,53 @@ pinned to a CONSTANT yields no entity variable, that group is skipped, and the
 frame is left holding one group instead of two — logged as "1 slot group(s) but
 no frame variable carries BOTH a source and a dest group".
 
-**That is a sharper limitation than the slot-constraint decline this issue was
-written about**, because pinning one end is what a real criteria query does:
-"frames whose source is X" is the question users ask. The unpinned form —
-"every frame with a source and a dest" — is a scan, and the shape least in need
-of acceleration. So the rewrite currently fires on the query that needs it least
-and declines on the ones that need it most.
+**That claim was overstated and is retracted** (see the measurements below).
+Pinning by constant costs the collapse of the PINNED hop only, and that hop is
+the cheapest one — it is bound to a single entity. Every later hop still
+collapses, and the time difference is not measurable: at depth 3, 0.6 ms pinned
+by FILTER against 0.6 ms pinned in the triple. The slot-constraint decline is
+the expensive one after all.
 
 Two decline paths, then, and they should not be conflated:
 
     slot-node constraint      declines (no slot column) — what this issue says
     constant-valued slot end  never detected as a group — the bigger one
+
+## The table IS delivering, and the remaining gap is now priced
+
+Measured on `wordnet_frames` (285,348 frames), following a hypernym chain from
+one entity, rewrite toggled around the same query. Identical rows throughout.
+
+    depth   rewrite ON      rewrite OFF      rows
+    1          0.1 ms           0.3 ms          1
+    2          0.2 ms       2,658.8 ms          6
+    3          0.4 ms      15,571.0 ms         32
+
+**Four orders of magnitude at depth 3, and the gap widens with depth** — which
+is the property that matters, because multi-hop traversal is the thing a graph
+store exists to do. This answers the question the issue kept deferring: the
+table is not inert, and the join reduction is not theoretical.
+
+### What still declines, and what it costs
+
+Adding `?slot a KGEntitySlot` — which the canonical query carries, and which is
+semantically redundant, since a slot reached through `hasEntitySlotValue` IS one
+— makes the rewrite decline completely (0 frame_entity joins):
+
+    depth   untyped     with `a KGEntitySlot`     rows
+    2        0.3 ms              3,733.0 ms          6
+    3        0.6 ms             17,261.1 ms         32
+
+So the remaining work has a price now: **~28,000x at depth 3**, for teaching the
+rewrite that a slot-type constraint is satisfied by construction once the group
+has matched. That is a far stronger case than "the table is unused".
+
+Ranked by what it buys:
+
+1. **Prove slot-type constraints redundant** and stop declining on them. Worth
+   17.3 s -> 0.6 ms on the canonical shape at depth 3.
+2. Treat a constant-valued slot end as a filter on the collapsed row. Correct
+   and tidy, worth ~nothing measurable — the pinned hop is already cheap.
 
 ### Multi-hop DOES collapse, per hop — measured at depth 3
 
