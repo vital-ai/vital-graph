@@ -65,6 +65,24 @@ FRAMES = [
     ("f2", "e3", "e4"),
 ]
 
+# A hypernym-style chain, which is what a synset traversal walks:
+#
+#     c0 --h0--> c1 --h1--> c2 --h2--> c3
+#                  \--h1b--> b1
+#
+# The branch at c1 is the point. Depth 2 from c0 must return BOTH c2 and b1, and
+# depth 3 must return ONLY c3 — b1 is a dead end, so a traversal that quietly
+# carries short paths forward, or that joins hops on the frame rather than on
+# the shared entity, gives itself away here. A straight line would not catch it.
+CHAIN = [
+    ("h0", "c0", "c1"),
+    ("h1", "c1", "c2"),
+    ("h1b", "c1", "b1"),
+    ("h2", "c2", "c3"),
+]
+
+ALL_FRAMES = FRAMES + CHAIN
+
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def collapse_space(make_space):
@@ -86,12 +104,12 @@ async def seeded(collapse_space, space_impl):
     def add(s, p, o):
         quads.append((U(s), U(p), U(o), graph))
 
-    entities = {e for _f, s, d in FRAMES for e in (s, d)}
+    entities = {e for _f, s, d in ALL_FRAMES for e in (s, d)}
     for e in sorted(entities):
         add(f"{EX}{e}", RDF_TYPE, f"{HALEY}KGEntity")
         add(f"{EX}{e}", f"{VITAL}vitaltype", f"{HALEY}KGEntity")
 
-    for fname, src, dst in FRAMES:
+    for fname, src, dst in ALL_FRAMES:
         frame = f"{EX}{fname}"
         add(frame, RDF_TYPE, f"{HALEY}KGFrame")
         add(frame, f"{VITAL}vitaltype", f"{HALEY}KGFrame")
@@ -382,9 +400,9 @@ class TestTheCollapseActuallyHappening:
 
         assert triples(rows_on) == triples(rows_off), (
             "collapsing 6 tables into frame_entity changed the answer")
-        assert len(rows_on) == len(FRAMES), (
-            f"every frame has a source and a dest, so all {len(FRAMES)} must "
-            f"appear; got {len(rows_on)}")
+        assert len(rows_on) == len(ALL_FRAMES), (
+            f"every frame has a source and a dest, so all {len(ALL_FRAMES)} "
+            f"must appear; got {len(rows_on)}")
 
     async def test_pinning_one_end_to_a_constant_prevents_the_collapse(
             self, seeded, pg_conn):
@@ -402,3 +420,135 @@ class TestTheCollapseActuallyHappening:
         assert "frame_entity" not in sql, (
             "the constant-ended criteria query now collapses — good, but "
             "update this test and confirm the differential still holds")
+
+
+# ---------------------------------------------------------------------------
+# Multi-hop: the synset traversal shape
+# ---------------------------------------------------------------------------
+
+def _hop(n: int, from_var: str, to_var: str) -> str:
+    """One entity -> frame -> entity hop, as its own 6 tables.
+
+    Both slot values stay VARIABLES, because that is what the group detector
+    requires; a hop with a constant end is not recognised as a group at all.
+    The start entity is pinned by FILTER instead, which constrains the same
+    thing without turning the slot value into a constant.
+    """
+    return f"""
+        ?f{n} a <{HALEY}KGFrame> .
+        ?se{n} <{VITAL}hasEdgeSource> ?f{n} .
+        ?se{n} <{VITAL}hasEdgeDestination> ?ss{n} .
+        ?ss{n} <{HALEY}hasKGSlotType> <{SRC_ROLE}> .
+        ?ss{n} <{HALEY}hasEntitySlotValue> {from_var} .
+        ?de{n} <{VITAL}hasEdgeSource> ?f{n} .
+        ?de{n} <{VITAL}hasEdgeDestination> ?ds{n} .
+        ?ds{n} <{HALEY}hasKGSlotType> <{DST_ROLE}> .
+        ?ds{n} <{HALEY}hasEntitySlotValue> {to_var} ."""
+
+
+def _chain_query(graph: str, start: str, depth: int) -> str:
+    """Follow `depth` frames from `start`, projecting the far end.
+
+    Each hop is an independent 6-table group sharing only the entity variable
+    with its neighbour — so a depth-3 traversal is 18 quad tables, and a
+    complete collapse is three frame_entity rows.
+    """
+    hops = "".join(_hop(i + 1, f"?ent{i}", f"?ent{i + 1}") for i in range(depth))
+    return f"""
+    SELECT DISTINCT ?ent{depth} WHERE {{ GRAPH <{graph}> {{
+        {hops}
+        FILTER(?ent0 = <{start}>)
+    }} }}"""
+
+
+def _reached(rows):
+    return {str(v) for r in rows for v in r.values()
+            if isinstance(v, str) and v.startswith(EX)}
+
+
+class TestMultiHopTraversal:
+    """Depth 2 and 3, the shape a synset walk has.
+
+    `issues/048` counts joins by depth — 6 quad joins at depth 1, 8 at depth 2 —
+    so depth is the axis the whole argument for this table sits on, and it had
+    no coverage at any depth.
+    """
+
+    async def test_depth_1(self, seeded, pg_conn):
+        space_id, graph = seeded
+        _sql, rows = await _rows(pg_conn, space_id, _chain_query(graph, f"{EX}c0", 1))
+        assert _reached(rows) == {f"{EX}c1"}
+
+    async def test_depth_2_follows_the_branch(self, seeded, pg_conn):
+        """c1 has TWO outgoing frames, so depth 2 reaches both. A traversal that
+        joined hops on the frame rather than the shared entity would return one,
+        or the cross product."""
+        space_id, graph = seeded
+        _sql, rows = await _rows(pg_conn, space_id, _chain_query(graph, f"{EX}c0", 2))
+        assert _reached(rows) == {f"{EX}c2", f"{EX}b1"}
+
+    async def test_depth_3_excludes_the_dead_end(self, seeded, pg_conn):
+        """Only c2 continues; b1 is a dead end. Returning b1 here would mean the
+        traversal carried a SHORT path forward and reported it at full depth —
+        the error that looks like a plausible answer."""
+        space_id, graph = seeded
+        _sql, rows = await _rows(pg_conn, space_id, _chain_query(graph, f"{EX}c0", 3))
+        assert _reached(rows) == {f"{EX}c3"}
+
+    async def test_depth_3_from_a_dead_end_is_empty(self, seeded, pg_conn):
+        space_id, graph = seeded
+        _sql, rows = await _rows(pg_conn, space_id, _chain_query(graph, f"{EX}b1", 3))
+        assert _reached(rows) == set()
+
+    @pytest.mark.parametrize("depth", [1, 2, 3])
+    async def test_every_hop_collapses(self, seeded, pg_conn, depth):
+        """The saving is PER HOP — that is the claim in 048's join table — so a
+        depth-3 traversal should reach frame_entity three times, not once.
+
+        A single reference would mean only the first hop collapsed and the rest
+        stayed as raw quad joins, which is the failure that still looks like a
+        working optimisation.
+        """
+        space_id, graph = seeded
+        sql = await _sql_for(pg_conn, space_id, _chain_query(graph, f"{EX}c0", depth))
+        joins = sql.count(f"{space_id}_frame_entity")
+        assert joins == depth, (
+            f"depth {depth} collapsed {joins} hop(s); each hop is its own "
+            f"6-table group and each should become one frame_entity join")
+
+    @pytest.mark.parametrize("depth", [2, 3])
+    async def test_collapsed_and_uncollapsed_agree(self, seeded, pg_conn,
+                                                   monkeypatch, depth):
+        """The differential at depth. Multi-hop is where a collapse can go wrong
+        without looking wrong: the joins between hops are what it rewrites, and
+        a hop joined on the wrong column still returns plausible entities."""
+        space_id, graph = seeded
+        sparql = _chain_query(graph, f"{EX}c0", depth)
+
+        sql_on, rows_on = await _rows(pg_conn, space_id, sparql)
+        assert f"{space_id}_frame_entity" in sql_on
+
+        _disable_rewrite(monkeypatch)
+        sql_off, rows_off = await _rows(pg_conn, space_id, sparql)
+        assert f"{space_id}_frame_entity" not in sql_off, "rewrite not disabled"
+
+        assert _reached(rows_on) == _reached(rows_off), (
+            f"depth {depth}: collapsing changed which entities are reachable")
+
+    async def test_the_collapse_removes_joins(self, seeded, pg_conn, monkeypatch):
+        """Record the reduction rather than assume it: 6 quad tables per hop
+        against one frame_entity row."""
+        space_id, graph = seeded
+        sparql = _chain_query(graph, f"{EX}c0", 3)
+
+        sql_on = await _sql_for(pg_conn, space_id, sparql)
+        _disable_rewrite(monkeypatch)
+        sql_off = await _sql_for(pg_conn, space_id, sparql)
+
+        quad_on = sql_on.count(f"{space_id}_rdf_quad")
+        quad_off = sql_off.count(f"{space_id}_rdf_quad")
+        print(f"\ndepth 3 — rdf_quad references: {quad_off} -> {quad_on}, "
+              f"frame_entity joins: {sql_on.count(f'{space_id}_frame_entity')}")
+        assert quad_on < quad_off, (
+            f"the collapse did not reduce quad-table joins ({quad_off} -> "
+            f"{quad_on}); it is meant to replace 6 tables per hop with 1")

@@ -72,6 +72,30 @@ Two decline paths, then, and they should not be conflated:
     slot-node constraint      declines (no slot column) — what this issue says
     constant-valued slot end  never detected as a group — the bigger one
 
+### Multi-hop DOES collapse, per hop — measured at depth 3
+
+The join table further down this issue predicts the saving is per hop. That is
+now tested rather than predicted. A depth-3 traversal — the shape a synset walk
+has, `c0 -> c1 -> c2 -> c3` through three frames —
+
+    rdf_quad references   15  ->  3
+    frame_entity joins            3
+
+Each hop is an independent 6-table group sharing only the entity variable with
+its neighbour, and each collapses on its own. The three surviving quad
+references are the `?frame a KGFrame` anchors, one per hop.
+
+So the mechanism works, and works at depth, whenever the hops are expressed with
+variable slot values. Correctness is asserted alongside it: depth 2 from a node
+whose successor branches returns BOTH successors, depth 3 returns only the
+branch that continues (a dead end must not be carried forward and reported at
+full depth), and collapsed and uncollapsed plans agree at depths 2 and 3.
+
+This narrows what is actually left. The rewrite is not broken and not inert —
+it is unreachable from the query shapes the product issues, because those pin an
+entity. Teaching `_find_slot_groups` to treat a constant-valued slot end as a
+filter on the collapsed row is the change that would connect the two.
+
 ### Correction: the table is NOT 6x on the frame-detail shape
 
 Earlier in this issue the case for `frame_entity` rested on 0.34 ms against
