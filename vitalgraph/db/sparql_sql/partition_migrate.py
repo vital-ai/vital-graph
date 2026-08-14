@@ -35,30 +35,34 @@ def _bare(name: str) -> str:
 
 
 def _new_core_ddl(t: Dict[str, str], n: int):
-    """DDL to build the three partitioned core tables under a `_new` suffix."""
+    """DDL to build the three partitioned core tables under a `_new` suffix.
+
+    Columns come from `LIKE <live table>` rather than being spelled out here.
+    Restating them is what broke this: `edge` gained `edge_type_uuid`, the copy
+    here kept four columns, and `INSERT INTO edge_new SELECT * FROM edge` failed
+    with "INSERT has more expressions than target columns".
+
+    The failure was the lucky case. `rdf_quad`'s backfill NAMES its columns, so
+    the same drift there would not raise — it would silently migrate a space and
+    drop the new column's data. `LIKE` removes both, because a hand-maintained
+    second copy of a schema only ever drifts in one direction.
+
+    Only the PRIMARY KEY is stated, because it is genuinely different: `LIKE`
+    without INCLUDING INDEXES does not copy constraints, which is what lets
+    rdf_quad take the slim 4-column key it is migrating TO.
+    """
     q, e, f = _bare(t["rdf_quad"]), _bare(t["edge"]), _bare(t["frame_entity"])
     stmts = [
         f"""CREATE TABLE {q}_new (
-                subject_uuid   UUID NOT NULL,
-                predicate_uuid UUID NOT NULL,
-                object_uuid    UUID NOT NULL,
-                context_uuid   UUID NOT NULL,
-                quad_uuid      UUID NOT NULL DEFAULT uuidv7(),
-                dataset        VARCHAR(50) NOT NULL DEFAULT 'primary',
+                LIKE {q} INCLUDING DEFAULTS,
                 PRIMARY KEY (subject_uuid, predicate_uuid, object_uuid, context_uuid)
             ) PARTITION BY HASH (context_uuid)""",
         f"""CREATE TABLE {e}_new (
-                edge_uuid        UUID NOT NULL,
-                source_node_uuid UUID NOT NULL,
-                dest_node_uuid   UUID NOT NULL,
-                context_uuid     UUID NOT NULL,
+                LIKE {e} INCLUDING DEFAULTS,
                 PRIMARY KEY (edge_uuid, context_uuid)
             ) PARTITION BY HASH (context_uuid)""",
         f"""CREATE TABLE {f}_new (
-                frame_uuid         UUID NOT NULL,
-                source_entity_uuid UUID,
-                dest_entity_uuid   UUID,
-                context_uuid       UUID NOT NULL,
+                LIKE {f} INCLUDING DEFAULTS,
                 PRIMARY KEY (frame_uuid, context_uuid)
             ) PARTITION BY HASH (context_uuid)""",
     ]
@@ -94,12 +98,13 @@ async def migrate_space_to_partitioned(conn, space_id: str,
     for stmt in _new_core_ddl(t, n_partitions):
         await conn.execute(stmt)
 
-    # 2. backfill (rdf_quad dedups against the new slim PK)
+    # 2. backfill (rdf_quad dedups against the new slim PK).
+    # `SELECT *` is correct here BECAUSE the target was built with LIKE, so the
+    # columns match in name, type and order by construction. Naming them was the
+    # more dangerous form: it silently drops any column the list has not been
+    # updated for.
     await conn.execute(
-        f"INSERT INTO {q}_new "
-        f"(subject_uuid, predicate_uuid, object_uuid, context_uuid, quad_uuid, dataset) "
-        f"SELECT subject_uuid, predicate_uuid, object_uuid, context_uuid, quad_uuid, dataset "
-        f"FROM {q} ON CONFLICT DO NOTHING")
+        f"INSERT INTO {q}_new SELECT * FROM {q} ON CONFLICT DO NOTHING")
     await conn.execute(f"INSERT INTO {e}_new SELECT * FROM {e} ON CONFLICT DO NOTHING")
     await conn.execute(f"INSERT INTO {f}_new SELECT * FROM {f} ON CONFLICT DO NOTHING")
     new_quads = await conn.fetchval(f"SELECT count(*) FROM {q}_new")

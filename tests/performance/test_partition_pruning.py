@@ -229,6 +229,80 @@ async def test_migrate_nonpartitioned_space_preserves_data(pg18_pool, make_pg18_
     assert len(scanned) == 1                                 # prunes post-migration
 
 
+async def test_migrate_preserves_every_core_column_and_its_data(
+        pg18_pool, make_pg18_space):
+    """The migration must not change what a core table HOLDS.
+
+    This is the property that broke. `_new_core_ddl` restated the three core
+    schemas by hand; `edge` later gained `edge_type_uuid` and the copy did not,
+    so the backfill failed with "INSERT has more expressions than target
+    columns". That was the LUCKY direction — rdf_quad's backfill named its
+    columns, so identical drift there would have raised nothing and migrated the
+    space with the new column's data dropped.
+
+    The existing migration test only inserts quads, so both core tables are
+    empty in it and it caught the edge case only because a column-count mismatch
+    fails at parse time rather than on a row. This one puts a row in each table
+    with every column populated, and compares the column sets across the swap.
+    """
+    from vitalgraph.db.sparql_sql.partition_migrate import (
+        migrate_space_to_partitioned)
+
+    sid = await make_pg18_space(partition_quads=0)
+    t = SparqlSQLSchema.get_table_names(sid)
+
+    async def columns(conn, table):
+        return [r["column_name"] for r in await conn.fetch(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = $1 ORDER BY ordinal_position", table)]
+
+    async with pg18_pool.acquire() as conn:
+        g = uuid.uuid4()
+        await conn.execute(
+            f"INSERT INTO {t['rdf_quad']} "
+            f"(subject_uuid, predicate_uuid, object_uuid, context_uuid) "
+            f"VALUES ($1, $2, $3, $4)",
+            uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), g)
+
+        # Populate EVERY column, so a dropped one shows up as lost data rather
+        # than as a column that happened to be NULL either way.
+        edge_cols = await columns(conn, f"{sid}_edge")
+        edge_vals = [uuid.uuid4() for _ in edge_cols]
+        edge_vals[edge_cols.index("context_uuid")] = g
+        await conn.execute(
+            f"INSERT INTO {sid}_edge ({', '.join(edge_cols)}) VALUES "
+            f"({', '.join('$' + str(i + 1) for i in range(len(edge_cols)))})",
+            *edge_vals)
+
+        fe_cols = await columns(conn, f"{sid}_frame_entity")
+        fe_vals = [uuid.uuid4() for _ in fe_cols]
+        fe_vals[fe_cols.index("context_uuid")] = g
+        await conn.execute(
+            f"INSERT INTO {sid}_frame_entity ({', '.join(fe_cols)}) VALUES "
+            f"({', '.join('$' + str(i + 1) for i in range(len(fe_cols)))})",
+            *fe_vals)
+
+        before = {c: await columns(conn, f"{sid}_{c}")
+                  for c in ("rdf_quad", "edge", "frame_entity")}
+
+        async with conn.transaction():
+            await migrate_space_to_partitioned(conn, sid, n_partitions=4)
+
+        after = {c: await columns(conn, f"{sid}_{c}")
+                 for c in ("rdf_quad", "edge", "frame_entity")}
+        edge_after = await conn.fetchrow(f"SELECT * FROM {sid}_edge")
+        fe_after = await conn.fetchrow(f"SELECT * FROM {sid}_frame_entity")
+
+    assert before == after, (
+        "migration changed a core table's columns — a hand-maintained copy of "
+        "the schema has drifted from the real one")
+    assert edge_after is not None, "the edge row did not survive migration"
+    assert [edge_after[c] for c in edge_cols] == edge_vals, (
+        "an edge column's value was lost across the migration")
+    assert fe_after is not None, "the frame_entity row did not survive migration"
+    assert [fe_after[c] for c in fe_cols] == fe_vals
+
+
 async def test_quad_uuid_is_time_ordered_uuidv7(pg18_pool, part_space):
     sid = part_space
     t = SparqlSQLSchema.get_table_names(sid)
