@@ -478,6 +478,49 @@ def _has_deep_page(plan, depth: int = 0) -> bool:
     return any(_has_deep_page(c, depth + 1) for c in (plan.children or []))
 
 
+# Value histograms, per space. Read once and reused: they are small (a few
+# hundred rows) and change only when the auxiliary tables are resynced.
+_value_stats_cache: Dict[str, Dict] = {}
+
+
+def invalidate_value_stats_cache(space_id: Optional[str] = None) -> None:
+    if space_id is None:
+        _value_stats_cache.clear()
+    else:
+        _value_stats_cache.pop(space_id, None)
+
+
+async def _load_value_stats_cached(space_id: str, conn=None, conn_params=None):
+    if space_id in _value_stats_cache:
+        return _value_stats_cache[space_id]
+    stats = {}
+    if conn is not None:
+        try:
+            from .sync_value_stats import load_value_stats
+            stats = await load_value_stats(conn, space_id)
+        except Exception as exc:
+            logger.debug("value stats unavailable for %s: %s", space_id, exc)
+    _value_stats_cache[space_id] = stats
+    return stats
+
+
+def _estimate_from_histogram(vstats, p_uuid: str, op: str, literal):
+    """Range estimate from the value histograms, or None if not answerable.
+
+    None is "no information", never zero — a caller reading a missing estimate
+    as small is the defect this whole path exists to avoid.
+    """
+    if not vstats:
+        return None
+    from .sync_value_stats import estimate_range, NUM, DT
+    try:
+        value = float(literal)
+        lane = NUM
+    except (TypeError, ValueError):
+        return None      # dateTime literals arrive as text; NUM lane only here
+    return estimate_range(vstats, p_uuid, lane, op, value)
+
+
 async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                                    conn_params=None) -> None:
     """Fetch row counts for the plan's leaf pairs that the preload lacks.
@@ -497,51 +540,55 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
     if conn is None and conn_params is None:
         return
     try:
+        from . import db_provider as db
         pairs = needed_pairs(plan, aliases)
         missing = [pr for pr in pairs if pr not in (aliases.quad_stats or {})]
-        if not missing:
-            return
-        from . import db_provider as db
-        values = ", ".join(f"('{p}'::uuid, '{o}'::uuid)" for p, o in missing)
-        rows = await db.execute_query(
-            f"SELECT predicate_uuid::text, object_uuid::text, row_count "
-            f"FROM {space_id}_rdf_stats "
-            f"WHERE (predicate_uuid, object_uuid) IN ({values})",
-            conn=conn, conn_params=conn_params)
-        aliases.extra_quad_stats = {
-            (r["predicate_uuid"], r["object_uuid"]): r["row_count"] for r in rows
-        }
-
-        # rdf_stats does not hold every pair either — the anchor's
-        # (vitaltype, KGEntity) is absent from it on a space where it matches
-        # 10,000 rows. For what is left, count directly but BOUNDED: the gate
-        # only needs to know whether a pair is large, not how large, so a
-        # capped count answers it at fixed cost. Cached per process because
-        # these move slowly and the alternative is paying it per query.
-        still = [pr for pr in missing if pr not in aliases.extra_quad_stats]
-        for p_uuid, o_uuid in still:
-            ck = (space_id, p_uuid, o_uuid)
-            if ck in _pair_count_cache:
-                aliases.extra_quad_stats[(p_uuid, o_uuid)] = _pair_count_cache[ck]
-                continue
-            crows = await db.execute_query(
-                f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_rdf_quad "
-                f"WHERE predicate_uuid = '{p_uuid}'::uuid "
-                f"AND object_uuid = '{o_uuid}'::uuid "
-                f"LIMIT {_PAIR_COUNT_CAP}) s",
+        # NOT an early return. Range and text selectivity are independent of
+        # whether the PAIR counts happen to be cached, and returning here
+        # skipped both — measured on a filtered 3-hop traversal: 3 pairs needed,
+        # 0 missing, so the one range criterion the query depends on was never
+        # counted and the join order was chosen without it (issues/090).
+        if missing:
+            values = ", ".join(f"('{p}'::uuid, '{o}'::uuid)" for p, o in missing)
+            rows = await db.execute_query(
+                f"SELECT predicate_uuid::text, object_uuid::text, row_count "
+                f"FROM {space_id}_rdf_stats "
+                f"WHERE (predicate_uuid, object_uuid) IN ({values})",
                 conn=conn, conn_params=conn_params)
-            n = crows[0]["n"] if crows else 0
-            _pair_count_cache[ck] = n
-            aliases.extra_quad_stats[(p_uuid, o_uuid)] = n
-            # A count that hit the cap is a LOWER BOUND, not a measurement.
-            # The gate only asks "is this large?", for which they are the same
-            # thing — but ranking two criteria against each other is not, and
-            # both drivers in the query at issues/059 report exactly 50,000
-            # against an actual 100,000 each. Recorded so a caller that ranks
-            # can tell the two apart instead of silently treating a saturated
-            # bound as exact (issues/061).
-            if n >= _PAIR_COUNT_CAP:
-                aliases.saturated_pairs.add((p_uuid, o_uuid))
+            aliases.extra_quad_stats = {
+                (r["predicate_uuid"], r["object_uuid"]): r["row_count"] for r in rows
+            }
+
+            # rdf_stats does not hold every pair either — the anchor's
+            # (vitaltype, KGEntity) is absent from it on a space where it matches
+            # 10,000 rows. For what is left, count directly but BOUNDED: the gate
+            # only needs to know whether a pair is large, not how large, so a
+            # capped count answers it at fixed cost. Cached per process because
+            # these move slowly and the alternative is paying it per query.
+            still = [pr for pr in missing if pr not in aliases.extra_quad_stats]
+            for p_uuid, o_uuid in still:
+                ck = (space_id, p_uuid, o_uuid)
+                if ck in _pair_count_cache:
+                    aliases.extra_quad_stats[(p_uuid, o_uuid)] = _pair_count_cache[ck]
+                    continue
+                crows = await db.execute_query(
+                    f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_rdf_quad "
+                    f"WHERE predicate_uuid = '{p_uuid}'::uuid "
+                    f"AND object_uuid = '{o_uuid}'::uuid "
+                    f"LIMIT {_PAIR_COUNT_CAP}) s",
+                    conn=conn, conn_params=conn_params)
+                n = crows[0]["n"] if crows else 0
+                _pair_count_cache[ck] = n
+                aliases.extra_quad_stats[(p_uuid, o_uuid)] = n
+                # A count that hit the cap is a LOWER BOUND, not a measurement.
+                # The gate only asks "is this large?", for which they are the same
+                # thing — but ranking two criteria against each other is not, and
+                # both drivers in the query at issues/059 report exactly 50,000
+                # against an actual 100,000 each. Recorded so a caller that ranks
+                # can tell the two apart instead of silently treating a saturated
+                # bound as exact (issues/061).
+                if n >= _PAIR_COUNT_CAP:
+                    aliases.saturated_pairs.add((p_uuid, o_uuid))
 
         # Range leaves: no constant object, so count through the same bounded
         # form. The num_val index makes this an index scan.
@@ -549,10 +596,22 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
         from .sparql_sql_schema import NUMERIC_TERM_COLUMN
         aliases.range_stats = {}
         aliases.text_stats = {}
+        vstats = await _load_value_stats_cached(
+            space_id, conn=conn, conn_params=conn_params)
         for p_uuid, op, literal in needed_ranges(plan, aliases):
             ck = (space_id, p_uuid, op, literal)
             if ck in _pair_count_cache:
                 aliases.range_stats[(p_uuid, op, literal)] = _pair_count_cache[ck]
+                continue
+            # Histogram first: it answers without a round trip, and it does not
+            # SATURATE. The counted form below stops at _PAIR_COUNT_CAP, so on a
+            # large space every wide range reports the same capped number and
+            # two criteria that differ by orders of magnitude become
+            # indistinguishable (issues/061). Measured within 2% of exact on the
+            # traversal fixture's integer and dateTime criteria.
+            est = _estimate_from_histogram(vstats, p_uuid, op, literal)
+            if est is not None:
+                aliases.range_stats[(p_uuid, op, literal)] = est
                 continue
             crows = await db.execute_query(
                 f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_rdf_quad q "
