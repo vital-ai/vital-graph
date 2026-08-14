@@ -1,0 +1,228 @@
+"""Equi-depth value histograms, for estimating RANGE criteria.
+
+`rdf_stats` answers "how many quads have predicate P and object O" exactly, and
+that is enough for equality against a small value set. It cannot answer a RANGE
+over a large one, because it is a frequent-value list capped per predicate:
+
+    predicate    distinct objects   in rdf_stats   coverage
+    score                     100            100     100.0%
+    category                    8              8     100.0%
+    occurred               68,502            196       0.3%
+    weight                 64,525          2,000       3.1%
+
+Summing it for `occurred >= 2024-07-01` estimated 244 rows where the answer was
+53,455 — a 99.5% error, and in the direction that matters, since a criterion
+believed tiny gets applied last, after the traversal has expanded (issues/090).
+
+WHY EQUI-DEPTH
+
+Bucket boundaries are drawn at quantiles, so every bucket holds the same number
+of rows and only the boundaries need storing. The selectivity of `val >= X` is
+then (buckets wholly above X) / (bucket count), plus a linear interpolation
+inside the bucket that straddles X. Equi-WIDTH would need the counts stored and
+would degrade exactly where these values are worst — a lognormal score or an
+exponential timestamp puts most rows in a few narrow buckets.
+
+Bounded by construction: `buckets` rows per (predicate, lane), a few hundred per
+space, against one row per distinct value for a complete histogram.
+
+WHAT IT DOES NOT DO
+
+It estimates the number of QUADS matching a value predicate. It says nothing
+about how those quads join to anything else — the join cardinality through
+nested subqueries is a separate problem, and extended statistics on the
+correlated quad columns moved that estimate from 1 to 2 (issues/090). This is
+the input to a decision the GENERATOR makes, not something PostgreSQL can be
+told.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Dict, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+# Buckets per (predicate, lane). 32 puts the interpolation error inside a
+# bucket at ~3% of the predicate's rows, which is far below the error that
+# changes a plan choice, and keeps the table small enough to load whole.
+DEFAULT_BUCKETS = 32
+
+# Above this many rows for one predicate, sample rather than sort everything.
+# The boundaries of an equi-depth histogram are stable under sampling long
+# before the exact values are.
+SAMPLE_THRESHOLD = 2_000_000
+SAMPLE_ROWS = 200_000
+
+NUM = "num"
+DT = "dt"
+
+
+async def resync_value_stats(conn, space_id: str,
+                             buckets: int = DEFAULT_BUCKETS) -> Dict[str, int]:
+    """Rebuild the value histograms for every predicate that has values.
+
+    Returns {"num_predicates": n, "dt_predicates": n, "rows": n}.
+    """
+    vstats = f"{space_id}_rdf_value_stats"
+    quad = f"{space_id}_rdf_quad"
+    term = f"{space_id}_term"
+
+    await conn.execute(f"TRUNCATE {vstats}")
+
+    written = 0
+    counts = {NUM: 0, DT: 0}
+
+    for lane, col in ((NUM, "num_val"), (DT, "dt_val")):
+        # Which predicates carry values in this lane, and how many. Done first
+        # so a predicate with three numeric rows does not get 32 buckets.
+        preds = await conn.fetch(f"""
+            SELECT q.predicate_uuid, count(*) AS n
+            FROM {quad} q
+            JOIN {term} t ON t.term_uuid = q.object_uuid
+            WHERE t.{col} IS NOT NULL
+            GROUP BY 1
+            HAVING count(*) >= $1
+        """, buckets)
+
+        for row in preds:
+            pred, total = row["predicate_uuid"], row["n"]
+            nb = min(buckets, max(2, total // 2))
+
+            src = f"""
+                SELECT t.{col} AS v
+                FROM {quad} q
+                JOIN {term} t ON t.term_uuid = q.object_uuid
+                WHERE q.predicate_uuid = $1 AND t.{col} IS NOT NULL
+            """
+            if total > SAMPLE_THRESHOLD:
+                # ORDER BY random() would sort the whole set, which is the cost
+                # being avoided. A modulo on the uuid text is deterministic,
+                # index-free and uncorrelated with the value.
+                frac = max(1, total // SAMPLE_ROWS)
+                src += f" AND ('x' || substr(q.object_uuid::text, 1, 8))::bit(32)::bigint % {frac} = 0"
+
+            # nb+1 boundaries: the nb quantile starts AND the maximum. Without
+            # the top boundary the last bucket is open-ended and a value inside
+            # it cannot be interpolated — `score >= 90` estimated 1 row against
+            # 1,547, because nothing was above the highest stored boundary and
+            # the tail collapsed to a single bucket.
+            fracs = [i / nb for i in range(nb)] + [1.0]
+            bounds = await conn.fetchval(
+                f"SELECT percentile_disc($2::float8[]) WITHIN GROUP (ORDER BY v) "
+                f"FROM ({src}) s", pred, fracs)
+            if not bounds:
+                continue
+
+            rows = [(pred, lane, i, b, total) for i, b in enumerate(bounds)]
+            if lane == NUM:
+                await conn.executemany(
+                    f"INSERT INTO {vstats} (predicate_uuid, lane, bucket, "
+                    f"lower_num, total_rows) VALUES ($1,$2,$3,$4,$5) "
+                    f"ON CONFLICT DO NOTHING", rows)
+            else:
+                await conn.executemany(
+                    f"INSERT INTO {vstats} (predicate_uuid, lane, bucket, "
+                    f"lower_dt, total_rows) VALUES ($1,$2,$3,$4,$5) "
+                    f"ON CONFLICT DO NOTHING", rows)
+            written += len(rows)
+            counts[lane] += 1
+
+    logger.info("resync_value_stats(%s): %d numeric, %d temporal predicates, "
+                "%d rows", space_id, counts[NUM], counts[DT], written)
+    return {"num_predicates": counts[NUM], "dt_predicates": counts[DT],
+            "rows": written}
+
+
+async def load_value_stats(conn, space_id: str) -> Dict[Tuple[str, str], dict]:
+    """Read the histograms into memory, keyed by (predicate_uuid, lane).
+
+    Shaped for the generator: one dict, loaded once, read many times while
+    planning. Missing table is not an error — a space whose auxiliary tables
+    predate this returns nothing and every caller falls back to no estimate,
+    which is the behaviour before this existed.
+    """
+    try:
+        rows = await conn.fetch(
+            f"SELECT predicate_uuid::text AS p, lane, bucket, lower_num, "
+            f"lower_dt, total_rows FROM {space_id}_rdf_value_stats "
+            f"ORDER BY predicate_uuid, lane, bucket")
+    except Exception as exc:
+        logger.debug("value stats unavailable for %s: %s", space_id, exc)
+        return {}
+
+    out: Dict[Tuple[str, str], dict] = {}
+    for r in rows:
+        key = (r["p"], r["lane"])
+        entry = out.setdefault(key, {"bounds": [], "total": r["total_rows"]})
+        entry["bounds"].append(r["lower_num"] if r["lane"] == NUM else r["lower_dt"])
+    return out
+
+
+def estimate_range(stats: Dict[Tuple[str, str], dict], predicate_uuid: str,
+                   lane: str, op: str, value) -> Optional[int]:
+    """Estimated number of quads with this predicate whose value satisfies op.
+
+    Returns None when there is nothing to go on. **None means "unknown", never
+    "zero"** — a caller treating a missing estimate as small would reproduce the
+    defect this exists to fix, where a criterion believed tiny is applied after
+    the traversal has already expanded.
+
+    Boundaries are `nb + 1` quantiles spanning min..max, so bucket i covers
+    [b[i], b[i+1]) and holds 1/nb of the rows. A value inside a bucket is
+    interpolated linearly across it; counting whole buckets instead put
+    `score >= 90` at 1 row where the answer was 1,547, since the entire tail sat
+    inside the final bucket.
+
+    `op` is one of >=, >, <=, <, =.
+    """
+    entry = stats.get((predicate_uuid, lane))
+    if not entry or len(entry["bounds"]) < 2 or value is None:
+        return None
+
+    bounds = [b for b in entry["bounds"] if b is not None]
+    if len(bounds) < 2:
+        return None
+    total = entry["total"]
+    nb = len(bounds) - 1                      # buckets, not boundaries
+
+    def _span(lo, hi):
+        """hi - lo as a float, for numbers and for timestamps alike."""
+        try:
+            d = hi - lo
+        except TypeError:
+            return None
+        return d.total_seconds() if hasattr(d, "total_seconds") else float(d)
+
+    try:
+        if value <= bounds[0]:
+            frac_below = 0.0
+        elif value >= bounds[-1]:
+            frac_below = 1.0
+        else:
+            i = 0
+            while i < nb and value >= bounds[i + 1]:
+                i += 1
+            width = _span(bounds[i], bounds[i + 1])
+            inside = _span(bounds[i], value)
+            if width is None or inside is None:
+                return None
+            # Each bucket holds 1/nb of the rows; position within it is linear.
+            within = (inside / width) if width else 0.0
+            frac_below = (i + within) / nb
+    except TypeError:
+        return None                            # value not comparable to bounds
+
+    if op in (">=", ">"):
+        frac = 1.0 - frac_below
+    elif op in ("<=", "<"):
+        frac = frac_below
+    elif op == "=":
+        frac = 1.0 / nb
+    else:
+        return None
+
+    # Never report zero. The boundaries are quantiles, so beyond the last one
+    # there are still rows, and a zero estimate is exactly what makes a filter
+    # get applied last.
+    return max(1, int(round(frac * total)))

@@ -25,6 +25,7 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
     from .sync_edge_table import resync_edge_table
     from .sync_frame_entity_table import resync_frame_entity_table
     from .sync_stats_tables import resync_stats_tables
+    from .sync_value_stats import resync_value_stats
     from .generator import invalidate_stats_cache
     from .sparql_sql_schema import SparqlSQLSchema
 
@@ -38,6 +39,16 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
 
     # 3. Stats tables
     stats = await resync_stats_tables(conn, space_id)
+    # Value histograms: rdf_stats answers equality on a small value set,
+    # this answers ranges over a large one (issues/090).
+    try:
+        vstats = await resync_value_stats(conn, space_id)
+    except Exception as exc:
+        # A space whose tables predate this must still resync everything
+        # else; a missing histogram degrades an estimate, it does not
+        # break a query.
+        logger.warning('value stats resync skipped for %s: %s', space_id, exc)
+        vstats = {'rows': 0}
 
     # 3b. Edge fan-out. After the edge table, which it reads, and recomputed in
     # full because fan-out is a structural property that moves slowly — making
@@ -113,6 +124,7 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
     result = {
         'edge_rows': edge_count,
         'frame_entity_rows': fe_count,
+        'value_stats_rows': vstats.get('rows', 0),
         'pred_stats_rows': stats['pred_stats'],
         'quad_stats_rows': stats['quad_stats'],
         'edge_fanout_rows': fanout_rows,

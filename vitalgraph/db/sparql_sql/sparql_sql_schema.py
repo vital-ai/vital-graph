@@ -538,6 +538,7 @@ class SparqlSQLSchema:
             'datatype': f'{space_id}_datatype',
             'rdf_pred_stats': f'{space_id}_rdf_pred_stats',
             'rdf_stats': f'{space_id}_rdf_stats',
+            'rdf_value_stats': f'{space_id}_rdf_value_stats',
             'edge': f'{space_id}_edge',
             'edge_fanout': f'{space_id}_edge_fanout',
             'frame_entity': f'{space_id}_frame_entity',
@@ -669,6 +670,32 @@ class SparqlSQLSchema:
                 PRIMARY KEY (predicate_uuid, object_uuid)
             )
         ''')
+
+        # 5b. Value quantiles, for RANGE selectivity on high-cardinality values.
+        #
+        # rdf_stats is a frequent-value list capped per predicate, so it answers
+        # equality on a small value set exactly and a range over a large one not
+        # at all. Measured coverage: score 100/100 distinct objects and category
+        # 8/8, against occurred 196/68,502 and weight 2,000/64,525 — so
+        # `occurred >= X` estimated 244 where the answer was 53,455.
+        #
+        # This is an EQUI-DEPTH histogram: bucket i holds the same number of
+        # rows as every other, so only the boundaries need storing and the
+        # selectivity of a range is (buckets above the value) / (buckets), with
+        # interpolation inside the straddled bucket. Bounded by construction —
+        # a few hundred rows per space, not one row per distinct value.
+        stmts.append(f"""
+            CREATE TABLE IF NOT EXISTS {t['rdf_value_stats']} (
+                predicate_uuid UUID    NOT NULL,
+                lane           TEXT    NOT NULL,
+                bucket         INT     NOT NULL,
+                lower_num      DOUBLE PRECISION,
+                lower_dt       TIMESTAMP,
+                total_rows     BIGINT  NOT NULL DEFAULT 0,
+                updated_time   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (predicate_uuid, lane, bucket)
+            )
+        """)
 
         # 6. Edge table (maintained by app-level sync; replaces edge MV).
         # Co-partitioned by HASH(context_uuid) with rdf_quad so edge-rewrite
