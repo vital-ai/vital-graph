@@ -249,13 +249,13 @@ is the most dangerous wrong answer available.
 
 **IN over terms.** The cheapest of the three and the last to work. Every value
 is one term, so `rdf_stats` already holds the counts keyed by
-(predicate, object) — `category IN ('alpha','beta')` is 21,852 + 16,516 = 38,368
+(predicate, object) — `category IN ('alpha','beta')` is 21,491 + 16,043 = 37,534
 exactly. It was invisible because an IN's constants are registered during
 PUSH-DOWN, at emit time, long after the gate runs, so nothing could resolve them
 to uuids. Two attempts failed before that was clear: resolving the uuids up
 front (they do not exist yet) and reading the preloaded pair stats (the preload
 keeps the 10,000 LEAST COMMON pairs, and an IN value is usually a common one —
-alpha alone has 21,852). It now resolves and sums in one query against
+alpha alone has 21,491). It now resolves and sums in one query against
 `rdf_stats`, and reports nothing at all if that table lacks a row for any value,
 because a partial sum is an undercount rather than an estimate.
 
@@ -271,16 +271,24 @@ traversal fixture, which carries all six:
     integer  >=                  range stat
     double   >=                  range stat
     dateTime >=                  range stat
-    string   IN                  in/eq stat   38,368  exact
-    uri      IN                  in/eq stat   23,719
+    string   IN     category IN (alpha,beta)   37,534  exact
+    string   =      category = alpha           21,491  exact
+    boolean  =      active = true              13,198  exact
+    uri      IN     tag IN (external,archived) 36,434
+    uri      =      tag = external             18,225
     string   CONTAINS            text stat
-    string   = (FILTER)          in/eq stat   21,852  exact
-    uri      = (FILTER)          in/eq stat   11,823
-    boolean  = (FILTER)          NOT measured
     string / boolean / uri INLINE in the triple
                                  constant pair, already counted
 
-The audit found one coherent gap and one deliberate exclusion.
+Numbers are against the CURRENT `graph_synth_10k`, re-verified 2026-08-14 —
+"exact" means the summed `rdf_stats` estimate equals a `count(*)` over the
+quads. An earlier version of this table carried 38,368 / 21,852 / 23,719 /
+11,823 from before the fixture was regenerated; those no longer describe any
+data, which is the hazard of recording a count without the query beside it, so
+each row now names the criterion it came from.
+
+The audit found one coherent gap and one exclusion that looked
+deliberate and turned out to be wrong.
 
 **Equality as a FILTER was unmeasured for every datatype** — string, boolean and
 uri alike — while the same constant written INLINE in the triple was counted as
@@ -289,12 +297,35 @@ an ordinary leaf pair. That mattered more after the equality push-down landed
 time while nothing measured it at gate time. An equality is an IN of one value,
 so it now reuses that path.
 
-**Boolean as a FILTER stays unmeasured, deliberately.** `true` and `1` are two
-terms and one value, the same reason typed numerics are excluded from term-count
-summing — a sum over terms would answer a different question. The range path
-does not cover booleans either, so the only measured boolean form is the inline
-one. Worth revisiting only with a value-normalising lookup, not by relaxing
-`_literal_term_key`.
+**Boolean as a FILTER: the exclusion was wrong, fixed 2026-08-14.** It was
+originally left out on the reasoning that `true` and `1` are two terms and one
+value, the same reason typed numerics are excluded. Revisited on the question
+"wouldn't a distribution of booleans be helpful in the stats?" — and it would,
+because that reasoning applies to the wrong gate:
+
+    _literal_term_key   governs PUSH-DOWN. Must still refuse a boolean: a
+                        constraint emitted on one lexical form silently DROPS
+                        rows written as the other. Unchanged.
+    _stat_keys (new)    governs COUNTING. Sums both forms, which is EXACT —
+                        there are only two, unlike a numeric where the set of
+                        equal forms is unbounded.
+
+Measured on the traversal fixture: `hasActive` is 13,198 true against 53,648
+false — 19.7%, a genuinely selective criterion that was reading as "selectivity
+unknown". `rdf_stats` already held both counts; the pipeline was querying for
+them and discarding the answer. End-to-end through the generator the estimate is
+13,198, matching the quad count exactly.
+
+The datatype is constrained in the lookup, and that is not decoration: `'1'` and
+`'0'` exist in the same space as xsd:INTEGER terms (`hasScore` holds 203 rows of
+integer 1), so matching on lexical form alone would sum boolean-true with
+integer-one for any predicate holding both. No predicate in this fixture does,
+so the guard is currently inert — it is there because the generic schema permits
+a mixed-type predicate and nothing prevents one.
+
+Numerics stay excluded from the equality path for the reason booleans no longer
+are: `5`, `5.0` and `05` are three forms and the set is unbounded, so there is
+nothing finite to sum. The range path owns them.
 
 **Multi-valued predicates: MEASURED 2026-08-14.** The fixture generator now
 emits `hasTag`, a uri-valued criterion carrying one to four values per edge, so

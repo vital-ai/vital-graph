@@ -233,13 +233,55 @@ def needed_ranges(plan, aliases) -> set:
     return out
 
 
+# Lexical forms that mean the same boolean. `true`/`1` are two TERMS and one
+# VALUE, which is why `_literal_term_key` refuses a boolean outright: a
+# push-down matching one form would silently drop rows written as the other.
+#
+# For STATISTICS that reasoning inverts — both forms can simply be summed, and
+# the result is exact. Refusing meant discarding a count `rdf_stats` already
+# holds: on the traversal fixture `hasActive` is 13,198 true against 53,648
+# false, a 19.7% criterion, reported as "selectivity unknown".
+#
+# The datatype is NOT optional here. `'1'` and `'0'` also exist in that space as
+# xsd:INTEGER terms, so matching lexical form alone would sum boolean-true with
+# integer-1.
+_XSD_BOOLEAN = "http://www.w3.org/2001/XMLSchema#boolean"
+_BOOLEAN_FORMS = {"true": ("true", "1"), "1": ("true", "1"),
+                  "false": ("false", "0"), "0": ("false", "0")}
+
+
+def _stat_keys(node):
+    """Every term equal to this value, as (text, term_type, datatype_uri).
+
+    `datatype_uri` empty means "do not constrain the datatype", which is what
+    the URI and plain-literal cases have always done.
+
+    Distinct from `_literal_term_key`, deliberately: that one governs PUSH-DOWN,
+    where emitting a constraint over one of several equal terms is wrong. This
+    governs COUNTING, where summing them is right.
+    """
+    from .filter_pushdown import _literal_term_key
+    from ..jena_sparql.jena_types import LiteralNode
+
+    if isinstance(node, LiteralNode) and (node.datatype or "") == _XSD_BOOLEAN:
+        forms = _BOOLEAN_FORMS.get((node.value or "").strip().lower())
+        if not forms:
+            return None
+        return [(f, "L", _XSD_BOOLEAN) for f in forms]
+
+    key = _literal_term_key(node)
+    if key is None:
+        return None
+    return [(key[0], key[1], "")]
+
+
 def needed_ins(plan, aliases) -> set:
     """(predicate_uuid, ((term_text, term_type), ...)) for each `?var IN (...)`.
 
     The third criterion family, and the cheapest to answer: every value is one
     TERM, so the counts are already in `rdf_stats` keyed by (predicate, object)
     and the selectivity is their sum. Measured on the traversal fixture,
-    `category IN ('alpha','beta')` is 21,852 + 16,516 = 38,368, which is the
+    `category IN ('alpha','beta')` is 21,491 + 16,043 = 37,534, which is the
     exact answer.
 
     It was invisible only because the IN's constants are registered during
@@ -250,8 +292,7 @@ def needed_ins(plan, aliases) -> set:
     terms and one value, so summing term counts would not answer the question
     asked.
     """
-    from .filter_pushdown import (_in_operands, _literal_term_key,
-                                  _equality_operands)
+    from .filter_pushdown import _in_operands, _equality_operands
     from ..jena_sparql.jena_types import ExprFunction
 
     out = set()
@@ -272,15 +313,14 @@ def needed_ins(plan, aliases) -> set:
                 if eq is None:
                     continue
                 var_name, nodes = eq[0], [eq[1]]
-            # `_literal_term_key` accepts URIs and plain / xsd:string literals
-            # only. A typed numeric is several terms and one value ("5", "5.0",
-            # "05"), so summing term counts would answer a different question,
-            # and the same holds for xsd:boolean, where "true" and "1" are two
-            # terms. Those are declined here and covered by the range path or
-            # inline as a leaf constant.
-            keys = [_literal_term_key(n) for n in nodes]
-            if not keys or any(k is None for k in keys):
+            # Every term equal to each value. A typed NUMERIC is still
+            # declined — "5", "5.0" and "05" are three terms and one value, and
+            # the range path owns that — but a boolean expands to both of its
+            # lexical forms and is summed, which is exact.
+            per_value = [_stat_keys(n) for n in nodes]
+            if not per_value or any(k is None for k in per_value):
                 continue
+            keys = [k for forms in per_value for k in forms]
             # The VALUES, not their uuids. An IN's constants are registered
             # during push-down, at emit time, so nothing here can resolve them
             # yet — asking for the uuid returned None and every IN was reported

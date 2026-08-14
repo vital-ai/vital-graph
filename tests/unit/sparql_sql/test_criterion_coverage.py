@@ -7,17 +7,31 @@ families were silently in that state until 2026-08-14.
 
 Audited against the traversal fixture, which carries all six datatypes:
 
-    integer  >=            range stat
-    double   >=            range stat
-    dateTime >=            range stat
-    string   IN            in/eq stat   38,368  exact
-    uri      IN            in/eq stat   23,719
-    string   CONTAINS      text stat
-    string   = (FILTER)    in/eq stat   21,852  exact
-    uri      = (FILTER)    in/eq stat   11,823
-    boolean  = (FILTER)    NOT measured -- deliberate, see below
+    integer  >=   range stat
+    double   >=   range stat
+    dateTime >=   range stat
+    string   IN   category IN (alpha,beta)    37,534  exact
+    string   =    category = alpha            21,491  exact
+    boolean  =    active = true               13,198  exact
+    uri      IN   tag IN (external,archived)  36,434
+    uri      =    tag = external              18,225
+    string   CONTAINS  text stat
     string / boolean / uri written INLINE in the triple
-                           constant pair -- already counted by needed_pairs
+                  constant pair -- already counted by needed_pairs
+
+Counts are against the current graph_synth_10k and each names its criterion; an
+earlier table gave bare numbers from a superseded generation of the fixture.
+
+There are TWO gates, and conflating them is what left booleans unmeasured:
+
+    _literal_term_key   governs PUSH-DOWN. Refuses anything whose value has
+                        several lexical forms, because emitting a constraint on
+                        one form would silently DROP rows written as the other.
+    _stat_keys          governs COUNTING. Accepts the same value and sums every
+                        form, which is exact.
+
+A boolean is right on one side of that line and wrong on the other. It was
+declined by both until 2026-08-14, discarding a count `rdf_stats` already held.
 
 These tests pin the recogniser, not the counts: whether a criterion is SEEN is
 what decides if a gate runs blind, and it is invisible in results.
@@ -31,6 +45,7 @@ from vitalgraph.db.jena_sparql.jena_types import (
     ExprFunction, ExprValue, ExprVar, LiteralNode, URINode)
 from vitalgraph.db.sparql_sql.filter_pushdown import (
     _equality_operands, _in_operands, _literal_term_key)
+from vitalgraph.db.sparql_sql.semijoin import _stat_keys
 
 pytestmark = pytest.mark.unit
 
@@ -72,9 +87,10 @@ class TestWhatCountsAsOneTerm:
             LiteralNode(value="5", datatype=f"{XSD}integer")) is None
 
     def test_a_boolean_is_not_one_term(self):
-        """`true` and `1` are both true and are two terms — the same reason
-        numerics are excluded. Deliberate, and the inline form is still counted
-        as a constant pair, so booleans are not entirely unmeasured."""
+        """`true` and `1` are both true and are two terms, so PUSH-DOWN must
+        still refuse it — a constraint on one form drops rows in the other.
+
+        Counting it is a different question; see `TestBooleansAreCounted`."""
         assert _literal_term_key(
             LiteralNode(value="true", datatype=f"{XSD}boolean")) is None
 
@@ -152,9 +168,52 @@ class TestKnownLimits:
         # precisely why the check belongs against real data.
         assert _literal_term_key(_uri()) is not None
 
-    def test_boolean_filter_equality_is_declined(self):
-        """Not an oversight: `true` and `1` are two terms and one value. The
-        inline form is counted as a constant pair, so a boolean criterion is
-        only unmeasured when written as a FILTER."""
-        assert _literal_term_key(
-            LiteralNode(value="true", datatype=f"{XSD}boolean")) is None
+    def test_a_numeric_is_still_unmeasured_as_an_equality(self):
+        """The exclusion booleans just escaped, still standing where it belongs.
+        `5`, `5.0` and `05` are three terms, and unlike a boolean the set of
+        forms is unbounded, so there is nothing finite to sum. The RANGE path
+        covers numerics; `= 5` written as a FILTER is not estimated."""
+        assert _stat_keys(LiteralNode(value="5", datatype=f"{XSD}integer")) is None
+
+
+class TestBooleansAreCounted:
+    """Measured on graph_synth_10k: `hasActive` is 13,198 true against 53,648
+    false — 19.7%, a genuinely selective criterion that read as "selectivity
+    unknown" because the counting path reused the push-down gate.
+
+    The estimate is exact, and rdf_stats already held it. Verified end to end
+    against the generator: in_stats reported 13,198, matching the quad count.
+    """
+
+    @pytest.mark.parametrize("value", ["true", "false"])
+    def test_both_lexical_forms_are_summed(self, value):
+        keys = _stat_keys(LiteralNode(value=value, datatype=f"{XSD}boolean"))
+        assert keys is not None
+        assert {k[0] for k in keys} == ({"true", "1"} if value == "true"
+                                        else {"false", "0"})
+
+    def test_the_datatype_is_constrained(self):
+        """Not decoration. `'1'` and `'0'` exist in the same space as xsd:INTEGER
+        terms (`hasScore` has 203 rows of integer 1), so matching lexical form
+        alone would sum boolean-true with integer-one on any predicate holding
+        both. The generic schema permits that; nothing forbids it per predicate.
+        """
+        keys = _stat_keys(LiteralNode(value="true", datatype=f"{XSD}boolean"))
+        assert all(k[2] == f"{XSD}boolean" for k in keys)
+
+    def test_a_uri_does_not_constrain_the_datatype(self):
+        """URIs and plain literals keep the unconstrained form they have always
+        had — adding a datatype condition there would be a behaviour change to
+        a path measured exact (string IN at 37,534)."""
+        assert _stat_keys(_uri()) == [("urn:graphsyn:frametype:Mentions", "U", "")]
+        assert _stat_keys(_plain()) == [("alpha", "L", "")]
+
+    def test_a_nonsense_boolean_is_declined(self):
+        """`"maybe"^^xsd:boolean` is ill-typed. Guessing a form for it would
+        invent an estimate."""
+        assert _stat_keys(LiteralNode(value="maybe",
+                                      datatype=f"{XSD}boolean")) is None
+
+    def test_case_and_whitespace_do_not_defeat_it(self):
+        assert _stat_keys(LiteralNode(value=" TRUE ",
+                                      datatype=f"{XSD}boolean")) is not None

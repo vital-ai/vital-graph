@@ -672,17 +672,32 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
         aliases.in_stats = {}
         for p_uuid, values in needed_ins(plan, aliases):
             ck = (space_id, p_uuid, values)
+            # Distinct VALUES, not keys. A boolean contributes both of its
+            # lexical forms and is the only key carrying a datatype, so it
+            # counts once; everything else is one key per value.
+            n_typed = sum(1 for v in values if v[2])
+            n_values = n_typed // 2 + (len(values) - n_typed)
             if ck in _pair_count_cache:
                 aliases.in_stats[(p_uuid, values)] = _pair_count_cache[ck]
                 continue
             # Resolve the values and sum their counts in ONE query. rdf_stats is
             # keyed by (predicate, object) and already holds these exactly —
-            # category IN ('alpha','beta') is 21,852 + 16,516 = 38,368 — so this
+            # category IN ('alpha','beta') is 21,491 + 16,043 = 37,534 — so this
             # reads a stored answer rather than counting quads.
             #
             # The values cannot be resolved to uuids beforehand: an IN's
             # constants are registered during push-down, long after this runs.
-            pairs = ", ".join(f"('{_esc(text)}', '{ttype}')" for text, ttype in values)
+            # One disjunct per equal term. A datatype is constrained only when
+            # the value demands it: `'1'` exists as an xsd:INTEGER term as well
+            # as a boolean lexical form, so matching text alone would sum
+            # boolean-true with integer-one.
+            disjuncts = []
+            for text, ttype, dtype in values:
+                cond = f"(t.term_text = '{_esc(text)}' AND t.term_type = '{ttype}'"
+                if dtype:
+                    cond += (f" AND t.datatype_id = (SELECT datatype_id FROM "
+                             f"{space_id}_datatype WHERE datatype_uri = '{_esc(dtype)}')")
+                disjuncts.append(cond + ")")
             try:
                 rows = await db.execute_query(
                     f"SELECT count(*) AS n_terms, "
@@ -690,18 +705,23 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                     f"FROM {space_id}_term t "
                     f"JOIN {space_id}_rdf_stats s ON s.object_uuid = t.term_uuid "
                     f" AND s.predicate_uuid = '{p_uuid}'::uuid "
-                    f"WHERE (t.term_text, t.term_type) IN ({pairs})",
+                    f"WHERE {' OR '.join(disjuncts)}",
                     conn=conn, conn_params=conn_params)
             except Exception as exc:
                 logger.debug("IN selectivity lookup failed: %s", exc)
                 continue
             if not rows:
                 continue
-            # rdf_stats is a capped frequent-value list. If it does not hold a
-            # row for every value the sum is an UNDERCOUNT, not an estimate, and
-            # reporting it would make a broad criterion look selective — the
-            # direction that gets a filter applied last.
-            if rows[0]["n_terms"] != len(values):
+            # rdf_stats is a capped frequent-value list, so a missing row makes
+            # the sum an UNDERCOUNT rather than an estimate — and an undercount
+            # makes a broad criterion look selective, the direction that gets a
+            # filter applied last.
+            #
+            # "Every value accounted for" is not "every KEY matched": a boolean
+            # contributes two lexical forms and real data normally holds one, so
+            # requiring both would decline every boolean. At least one term per
+            # VALUE is the right test.
+            if rows[0]["n_terms"] < n_values:
                 continue
             n = rows[0]["total"]
             _pair_count_cache[ck] = n
