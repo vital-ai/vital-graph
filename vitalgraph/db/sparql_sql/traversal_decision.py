@@ -32,6 +32,23 @@ So selectivity is NOT a gate here. It stays in the reason string because it is
 worth seeing, and because ranking two chains may want it later, but nothing is
 declined for being insufficiently selective.
 
+THE CRITERION REQUIREMENT IS UNDER REVIEW — 2026-08-14
+
+It was added because an unfiltered depth-3 walk on `wordnet_frames` measured
+865 ms flat against 2,044 ms hop-wise. Re-measured with INTERLEAVED runs
+(alternating plans, 7-9 repetitions, medians rather than min-of-2), that
+reverses: 3,158 ms flat against 2,129 ms hop-wise, and the same reversal appears
+on `graph_synth_100k` (2,452 against 1,918). The flat plan's median on the
+wordnet query ranged 822 ms to 3,158 ms across one session with that space
+untouched, while hop-wise held 1,989-2,129 ms with a quarter of the variance.
+
+So the evidence for this gate is currently contradicted, and the gate is
+DECLINING queries hop-wise would win. It stays until the comparison has been
+repeated on a quiet machine across sessions — this area has produced four
+measurements that reversed on closer inspection, and removing a safety gate on
+the fifth would be the same mistake. See
+`planning_performance/stats_table_freshness_plan.md`.
+
 WHAT IS STILL REQUIRED
 
 A pinned end, and a MEASURED criterion.
