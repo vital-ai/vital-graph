@@ -126,6 +126,15 @@ CATEGORIES = [
 
 LABELS = [f"label-{i:02d}" for i in range(50)]
 
+# A MULTI-VALUED criterion: an edge carries one to several tags. Everything else
+# here is single-valued, which makes a whole class of question untestable —
+# `rdf_stats` counts QUADS, so on a multi-valued predicate a subject with two
+# matching values is counted twice and an `IN` sum exceeds the number of
+# matching SUBJECTS. With every predicate single-valued the two are identical
+# and the difference cannot be observed.
+TAGS = ["urgent", "review", "archived", "external", "draft", "verified"]
+TAG_COUNT_WEIGHTS = [(1, 55), (2, 30), (3, 12), (4, 3)]
+
 DATE_START = datetime(2023, 1, 1, tzinfo=timezone.utc)
 DATE_DAYS = 3 * 365
 
@@ -175,7 +184,8 @@ class Criteria:
     seed would work until someone changed the draw order in one place only.
     """
 
-    __slots__ = ("score", "weight", "occurred", "label", "category", "active")
+    __slots__ = ("score", "weight", "occurred", "label", "category", "active",
+                 "tags")
 
     def __init__(self, rng: random.Random):
         # Values are SKEWED, deliberately. Uniform values make a planner's job
@@ -217,6 +227,11 @@ class Criteria:
         # boolean useless as a filter.
         self.active = rng.random() < 0.2
 
+        # One to four tags, skewed toward one. Distinct values per edge, so the
+        # quad count and the subject count genuinely differ.
+        n_tags = _weighted(rng, TAG_COUNT_WEIGHTS)
+        self.tags = sorted(rng.sample(TAGS, n_tags))
+
     def triples(self, subject: str) -> str:
         return (
             _lit(subject, f"{HALEY}hasScore", self.score, f"{XSD}integer")
@@ -228,6 +243,8 @@ class Criteria:
             + _lit(subject, f"{HALEY}hasCategory", self.category, f"{XSD}string")
             + _lit(subject, f"{HALEY}hasActive",
                    "true" if self.active else "false", f"{XSD}boolean")
+            + "".join(_t(subject, f"{HALEY}hasTag", f"{BASE}:tag:{tag}")
+                      for tag in self.tags)
         )
 
 
@@ -549,6 +566,26 @@ def tally(edges):
             1 for _s, _d, c, _k in edges if c.category == name)
     for lb in LABELS[:5]:
         out["label_eq"][lb] = sum(1 for _s, _d, c, _k in edges if c.label == lb)
+
+    # The multi-valued one, counted BOTH ways on purpose. `rdf_stats` answers
+    # in quads; a query asking "which frames" wants subjects. A test comparing
+    # an estimate against the wrong one of these would look correct.
+    out["tag_quads"] = {}
+    out["tag_subjects"] = {}
+    for tag in TAGS:
+        out["tag_quads"][tag] = sum(1 for _s, _d, c, _k in edges if tag in c.tags)
+        out["tag_subjects"][tag] = out["tag_quads"][tag]   # one edge = one subject
+    # An IN over two tags: a subject carrying BOTH is one subject and two quads.
+    pair = (TAGS[0], TAGS[1])
+    out["tag_in_pair"] = {
+        "tags": list(pair),
+        "quads": sum(len([g for g in pair if g in c.tags])
+                     for _s, _d, c, _k in edges),
+        "subjects": sum(1 for _s, _d, c, _k in edges
+                        if any(g in c.tags for g in pair)),
+    }
+    out["avg_tags_per_edge"] = round(
+        sum(len(c.tags) for _s, _d, c, _k in edges) / max(len(edges), 1), 2)
     for _s, _d, _c, k in edges:
         out["kind_eq"][k] = out["kind_eq"].get(k, 0) + 1
     return out
@@ -670,7 +707,8 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
             "occurred": f"{HALEY}hasOccurredAt (xsd:dateTime, 3-year window)",
             "label": f"{HALEY}hasLabel (xsd:string, 50 values)",
             "category": f"{HALEY}hasCategory (xsd:string, 8 weighted values)",
-            "active": f"{HALEY}hasActive (xsd:boolean, p=0.5)",
+            "active": f"{HALEY}hasActive (xsd:boolean, p=0.2)",
+            "tag": f"{HALEY}hasTag (uri, MULTI-VALUED, 1-4 of 6)",
         },
         "actual_matches": {
             "frames": tally(frame_edges),

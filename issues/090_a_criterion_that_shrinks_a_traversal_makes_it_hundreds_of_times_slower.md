@@ -296,14 +296,24 @@ does not cover booleans either, so the only measured boolean form is the inline
 one. Worth revisiting only with a value-normalising lookup, not by relaxing
 `_literal_term_key`.
 
-**Multi-valued predicates are UNTESTED, not verified.** `rdf_stats.row_count`
-counts QUADS, so on a predicate with several values per subject an IN sum
-exceeds the number of matching SUBJECTS. Every criterion predicate in the
-traversal fixture is single-valued — quads equal distinct subjects, ratio 1.00 —
-so nothing here exercises it. The error direction is "looks less selective than
-it is", which is conservative for choosing a plan and wrong for ranking two
-criteria against each other. A multi-valued criterion in the generator would
-close this.
+**Multi-valued predicates: MEASURED 2026-08-14.** The fixture generator now
+emits `hasTag`, a uri-valued criterion carrying one to four values per edge, so
+the case is observable rather than argued about:
+
+    hasTag                  108,867 quads over 66,846 subjects   ratio 1.63
+    IN (urgent, review)     estimate 36,266
+                            actual quads 36,266   (exact)
+                            actual subjects 32,487
+                            overcount 3,779       (12%)
+
+So the estimate is EXACTLY the quad count — it is a stored sum, not an
+approximation — and overcounts matching subjects by 12% on this data. The error
+direction is "looks less selective than it is": conservative for choosing a plan
+shape, wrong for ranking two criteria against each other. That is now a measured
+property with a test asserting both halves, rather than a caveat.
+
+Nothing needs fixing unless a caller starts asking "how many frames match",
+which is a different question from the one the gates ask.
 
 ### Where that leaves it
 

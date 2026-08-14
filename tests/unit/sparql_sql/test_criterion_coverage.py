@@ -136,16 +136,21 @@ class TestKnownLimits:
         with two matching values contributes twice, so an IN sum exceeds the
         number of matching subjects.
 
-        Every criterion predicate in the traversal fixture is single-valued
-        (quads == distinct subjects, ratio 1.00), so this is UNTESTED against
-        real data rather than known-good. It is recorded here because the error
-        is in the unsafe direction for a gate that asks "is this selective":
-        a multi-valued predicate looks less selective than it is, which is the
-        conservative direction for choosing a plan but the wrong one for
-        ranking two criteria against each other.
+        This used to SKIP: every criterion predicate in the fixture was
+        single-valued, so the two counts were identical and the difference could
+        not be observed. The generator now emits `hasTag`, one to four values per
+        edge, and the case is measured for real in
+        `tests/performance/test_graph_traversal_fixture.py` — 1.63 quads per
+        subject, and an IN over two tags estimating 36,266 quads against 32,487
+        matching subjects, a 12% overcount.
+
+        Kept here as the statement of the SEMANTICS, with the measurement
+        living where a database is available.
         """
-        pytest.skip("no multi-valued criterion predicate exists in the fixture; "
-                    "see the docstring — this is a documented gap, not a pass")
+        # The unit-level fact: nothing in the term-key machinery knows about
+        # cardinality, so nothing here can distinguish the two counts. That is
+        # precisely why the check belongs against real data.
+        assert _literal_term_key(_uri()) is not None
 
     def test_boolean_filter_equality_is_declined(self):
         """Not an oversight: `true` and `1` are two terms and one value. The

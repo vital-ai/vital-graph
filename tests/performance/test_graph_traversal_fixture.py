@@ -156,3 +156,73 @@ async def test_the_collapse_applies_per_hop(perf_conn):
         assert sql.count(f"{fx.space}_frame_entity") == depth, (
             f"depth {depth} collapsed "
             f"{sql.count(f'{fx.space}_frame_entity')} hop(s)")
+
+
+# ---------------------------------------------------------------------------
+# The multi-valued criterion
+# ---------------------------------------------------------------------------
+
+async def test_a_multi_valued_criterion_estimates_quads_not_subjects(perf_conn):
+    """`rdf_stats.row_count` counts QUADS, so an `IN` sum over a multi-valued
+    predicate exceeds the number of matching SUBJECTS.
+
+    Every other criterion predicate in this fixture is single-valued, where the
+    two are identical and the difference cannot be observed — which is why
+    `hasTag` exists. It carries one to four values per edge, so the gap is real
+    and measurable rather than argued about.
+
+    Asserted in the direction that matters: the estimate must equal the quad
+    count exactly (it is a stored sum, not an approximation) AND must be shown
+    to differ from the subject count, so nobody later mistakes it for a count of
+    matching frames. The error direction is "looks less selective than it is",
+    which is conservative for choosing a plan shape and wrong for ranking two
+    criteria against each other.
+    """
+    from .graph_fixtures import TAG
+    fx = SMALL
+    await _require(perf_conn, fx)
+    S = fx.space
+
+    tag_pred = await perf_conn.fetchval(
+        f"SELECT term_uuid FROM {S}_term WHERE term_text = $1", TAG)
+    if tag_pred is None:
+        pytest.skip("fixture predates the multi-valued tag criterion; regenerate")
+
+    quads = await perf_conn.fetchval(
+        f"SELECT count(*) FROM {S}_rdf_quad WHERE predicate_uuid = $1", tag_pred)
+    subjects = await perf_conn.fetchval(
+        f"SELECT count(DISTINCT subject_uuid) FROM {S}_rdf_quad "
+        f"WHERE predicate_uuid = $1", tag_pred)
+    assert quads > subjects, (
+        f"hasTag is not multi-valued in this fixture ({quads} quads over "
+        f"{subjects} subjects) — the case this test exists for is not present")
+
+    pair = [fx.tag_uri("urgent"), fx.tag_uri("review")]
+    in_quads = await perf_conn.fetchval(
+        f"SELECT count(*) FROM {S}_rdf_quad q JOIN {S}_term t "
+        f"ON t.term_uuid = q.object_uuid "
+        f"WHERE q.predicate_uuid = $1 AND t.term_text = ANY($2::text[])",
+        tag_pred, pair)
+    in_subjects = await perf_conn.fetchval(
+        f"SELECT count(DISTINCT q.subject_uuid) FROM {S}_rdf_quad q "
+        f"JOIN {S}_term t ON t.term_uuid = q.object_uuid "
+        f"WHERE q.predicate_uuid = $1 AND t.term_text = ANY($2::text[])",
+        tag_pred, pair)
+
+    # What the estimator would report: the stored per-(predicate, object) sum.
+    estimate = await perf_conn.fetchval(
+        f"SELECT COALESCE(sum(s.row_count), 0)::bigint FROM {S}_term t "
+        f"JOIN {S}_rdf_stats s ON s.object_uuid = t.term_uuid "
+        f" AND s.predicate_uuid = $1 "
+        f"WHERE t.term_text = ANY($2::text[])", tag_pred, pair)
+
+    assert estimate == in_quads, (
+        f"the estimate ({estimate}) should be the exact QUAD count "
+        f"({in_quads}) — it is a stored sum, not an approximation")
+    assert in_quads > in_subjects, (
+        "the chosen tags never co-occur on one subject, so this asserts "
+        "nothing; pick a pair that does")
+    assert estimate > in_subjects, (
+        f"estimate {estimate} vs {in_subjects} matching subjects: the "
+        f"overcount is the documented behaviour, and it being ABSENT would "
+        f"mean the counting semantics changed")

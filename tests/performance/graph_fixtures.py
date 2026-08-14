@@ -72,6 +72,7 @@ OCCURRED = f"{HALEY}hasOccurredAt"  # xsd:dateTime
 LABEL = f"{HALEY}hasLabel"          # xsd:string
 CATEGORY = f"{HALEY}hasCategory"    # xsd:string, weighted — the IN case
 ACTIVE = f"{HALEY}hasActive"        # xsd:boolean
+TAG = f"{HALEY}hasTag"              # uri, MULTI-VALUED (1-4 per edge)
 
 
 class GraphFixture:
@@ -104,6 +105,9 @@ class GraphFixture:
 
     def entity_uri(self, index: int) -> str:
         return f"{BASE}:entity:{index}"
+
+    def tag_uri(self, tag: str) -> str:
+        return f"{BASE}:tag:{tag}"
 
     def sample_starts(self) -> list:
         return self.manifest()["traversal"]["sample_starts"]
