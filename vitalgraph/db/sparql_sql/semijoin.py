@@ -170,7 +170,14 @@ def _leaf_rows(node, aliases) -> Optional[int]:
 
 
 def needed_ranges(plan, aliases) -> set:
-    """(predicate_uuid, operator, literal) for each numeric range in the plan.
+    """(predicate_uuid, operator, literal) for each RANGE in the plan.
+
+    Numeric and TEMPORAL both. `_try_numeric_filter` records either kind into
+    `range_leaves`, and `emit_bgp` looks the count up by that exact
+    `(predicate, op, literal)` key — so surfacing only the numeric ones left
+    every dateTime range unmeasured, which `emit_bgp` treats as
+    "comparison unsafe" and which left the traversal decision with no estimate
+    for a criterion where hop-wise measured 37x better (`issues/090`).
 
     Read from the FILTER nodes directly, NOT from what `filter_pushdown`
     records: that runs during emission, long after this gate has decided. A
@@ -178,7 +185,8 @@ def needed_ranges(plan, aliases) -> set:
     nothing for it — and left unestimated the gate declines to probe, which is
     the wrong answer for exactly the queries a range makes broad.
     """
-    from .filter_pushdown import _NUMERIC_OPS, _numeric_literal, _FLIPPED
+    from .filter_pushdown import (_NUMERIC_OPS, _numeric_literal,
+                                  _datetime_literal, _FLIPPED)
     from ..jena_sparql.jena_types import ExprVar, ExprFunction
 
     out = set()
@@ -190,10 +198,19 @@ def needed_ranges(plan, aliases) -> set:
             if op is None or len(expr.args or []) != 2:
                 continue
             left, right = expr.args
+            # Rendered exactly as `_try_numeric_filter` renders it, numeric
+            # first then temporal, because the count is looked up by this
+            # literal and a differently-formatted one silently misses.
             if isinstance(left, ExprVar):
-                var, lit = left.var, _numeric_literal(right)
+                var = left.var
+                lit = _numeric_literal(right)
+                if lit is None:
+                    lit = _datetime_literal(right)
             elif isinstance(right, ExprVar):
-                var, lit = right.var, _numeric_literal(left)
+                var = right.var
+                lit = _numeric_literal(left)
+                if lit is None:
+                    lit = _datetime_literal(left)
                 op = _FLIPPED[op]
             else:
                 continue
@@ -212,6 +229,58 @@ def needed_ranges(plan, aliases) -> set:
                 p_uuid = _term_uuid(aliases, *pred)
                 if p_uuid:
                     out.add((p_uuid, op, lit))
+                    break
+    return out
+
+
+def needed_ins(plan, aliases) -> set:
+    """(predicate_uuid, ((term_text, term_type), ...)) for each `?var IN (...)`.
+
+    The third criterion family, and the cheapest to answer: every value is one
+    TERM, so the counts are already in `rdf_stats` keyed by (predicate, object)
+    and the selectivity is their sum. Measured on the traversal fixture,
+    `category IN ('alpha','beta')` is 21,852 + 16,516 = 38,368, which is the
+    exact answer.
+
+    It was invisible only because the IN's constants are registered during
+    push-down, at emit time, long after this gate runs — so `needed_pairs` sees
+    nothing for it and the leaf reads as UNMEASURED, the same way a range did.
+
+    Single-term values only (`_literal_term_key`): a typed numeric is several
+    terms and one value, so summing term counts would not answer the question
+    asked.
+    """
+    from .filter_pushdown import _in_operands, _literal_term_key
+    from ..jena_sparql.jena_types import ExprFunction
+
+    out = set()
+    for filt in _filters(plan):
+        for expr in (filt.filter_exprs or []):
+            if not isinstance(expr, ExprFunction):
+                continue
+            ops = _in_operands(expr)
+            if ops is None:
+                continue
+            var_name, _sql_op, _conds, nodes = ops
+            keys = [_literal_term_key(n) for n in nodes]
+            if not keys or any(k is None for k in keys):
+                continue
+            # The VALUES, not their uuids. An IN's constants are registered
+            # during push-down, at emit time, so nothing here can resolve them
+            # yet — asking for the uuid returned None and every IN was reported
+            # unmeasured. The caller resolves and sums in one query instead.
+            values = tuple(sorted(keys))
+            for bgp in _bgps(plan):
+                slot = bgp.var_slots.get(var_name)
+                if not slot or not slot.positions:
+                    continue
+                alias, _col = slot.positions[0]
+                pred = (bgp.leaf_terms or {}).get((alias, "predicate_uuid"))
+                if not pred:
+                    continue
+                p_uuid = _term_uuid(aliases, *pred)
+                if p_uuid:
+                    out.add((p_uuid, values))
                     break
     return out
 

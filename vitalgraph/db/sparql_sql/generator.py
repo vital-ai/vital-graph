@@ -504,21 +504,49 @@ async def _load_value_stats_cached(space_id: str, conn=None, conn_params=None):
     return stats
 
 
+def _is_datetime_literal(literal) -> bool:
+    """A range literal that is a timestamp rather than a number.
+
+    `_numeric_literal` renders a float, `_datetime_literal` the ISO lexical
+    form, so the two are distinguishable by whether the text parses as a float.
+    """
+    try:
+        float(literal)
+        return False
+    except (TypeError, ValueError):
+        return True
+
+
 def _estimate_from_histogram(vstats, p_uuid: str, op: str, literal):
     """Range estimate from the value histograms, or None if not answerable.
 
     None is "no information", never zero — a caller reading a missing estimate
     as small is the defect this whole path exists to avoid.
+
+    Both lanes. The temporal one was previously refused outright, so a dateTime
+    range fell through to the counted form and, before `needed_ranges` surfaced
+    it at all, was never measured by either.
     """
     if not vstats:
         return None
     from .sync_value_stats import estimate_range, NUM, DT
+    if _is_datetime_literal(literal):
+        from datetime import datetime
+        try:
+            # The histogram stores naive UTC timestamps; normalise the literal
+            # the same way rather than comparing an aware value to a naive one,
+            # which raises and would silently become "no estimate".
+            value = datetime.fromisoformat(str(literal).replace("Z", "+00:00"))
+            if value.tzinfo is not None:
+                value = value.astimezone(tz=None).replace(tzinfo=None)
+        except (TypeError, ValueError):
+            return None
+        return estimate_range(vstats, p_uuid, DT, op, value)
     try:
         value = float(literal)
-        lane = NUM
     except (TypeError, ValueError):
-        return None      # dateTime literals arrive as text; NUM lane only here
-    return estimate_range(vstats, p_uuid, lane, op, value)
+        return None
+    return estimate_range(vstats, p_uuid, NUM, op, value)
 
 
 async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
@@ -613,16 +641,71 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
             if est is not None:
                 aliases.range_stats[(p_uuid, op, literal)] = est
                 continue
+            # A temporal range must be counted against the DATETIME column and
+            # normalised through the same parser the push-down uses, or the
+            # count is of a different question than the query asks. Comparing a
+            # timestamp literal to num_val simply matches nothing, which reads
+            # as "perfectly selective" — the most dangerous wrong answer here.
+            if _is_datetime_literal(literal):
+                from .sparql_sql_schema import DATETIME_TERM_COLUMN
+                col_sql = DATETIME_TERM_COLUMN
+                val_sql = f"vitalgraph_iso_to_utc('{literal}')"
+            else:
+                col_sql = NUMERIC_TERM_COLUMN
+                val_sql = str(literal)
             crows = await db.execute_query(
                 f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_rdf_quad q "
                 f"WHERE q.predicate_uuid = '{p_uuid}'::uuid AND q.object_uuid IN "
                 f"(SELECT term_uuid FROM {space_id}_term "
-                f" WHERE {NUMERIC_TERM_COLUMN} {op} {literal}) "
+                f" WHERE {col_sql} {op} {val_sql}) "
                 f"LIMIT {_PAIR_COUNT_CAP}) s",
                 conn=conn, conn_params=conn_params)
             n = crows[0]["n"] if crows else 0
             _pair_count_cache[ck] = n
             aliases.range_stats[(p_uuid, op, literal)] = n
+
+        # IN leaves: every value is a term, so the answer is already in
+        # rdf_stats keyed by (predicate, object) and needs no query at all.
+        # Invisible until now only because the IN's constants are registered
+        # during push-down, after this gate runs.
+        from .semijoin import needed_ins
+        aliases.in_stats = {}
+        for p_uuid, values in needed_ins(plan, aliases):
+            ck = (space_id, p_uuid, values)
+            if ck in _pair_count_cache:
+                aliases.in_stats[(p_uuid, values)] = _pair_count_cache[ck]
+                continue
+            # Resolve the values and sum their counts in ONE query. rdf_stats is
+            # keyed by (predicate, object) and already holds these exactly —
+            # category IN ('alpha','beta') is 21,852 + 16,516 = 38,368 — so this
+            # reads a stored answer rather than counting quads.
+            #
+            # The values cannot be resolved to uuids beforehand: an IN's
+            # constants are registered during push-down, long after this runs.
+            pairs = ", ".join(f"('{_esc(text)}', '{ttype}')" for text, ttype in values)
+            try:
+                rows = await db.execute_query(
+                    f"SELECT count(*) AS n_terms, "
+                    f"       COALESCE(sum(s.row_count), 0)::bigint AS total "
+                    f"FROM {space_id}_term t "
+                    f"JOIN {space_id}_rdf_stats s ON s.object_uuid = t.term_uuid "
+                    f" AND s.predicate_uuid = '{p_uuid}'::uuid "
+                    f"WHERE (t.term_text, t.term_type) IN ({pairs})",
+                    conn=conn, conn_params=conn_params)
+            except Exception as exc:
+                logger.debug("IN selectivity lookup failed: %s", exc)
+                continue
+            if not rows:
+                continue
+            # rdf_stats is a capped frequent-value list. If it does not hold a
+            # row for every value the sum is an UNDERCOUNT, not an estimate, and
+            # reporting it would make a broad criterion look selective — the
+            # direction that gets a filter applied last.
+            if rows[0]["n_terms"] != len(values):
+                continue
+            n = rows[0]["total"]
+            _pair_count_cache[ck] = n
+            aliases.in_stats[(p_uuid, values)] = n
 
         # Text leaves: no constant object either, and the count is the whole
         # question. A substring matching 2.6M terms and one matching none want
@@ -865,6 +948,8 @@ async def generate_sql(
                 _measured = list((getattr(aliases, "range_stats", None) or {}).items())
                 _measured += [((k[0], None, None), v) for k, v in
                               (getattr(aliases, "text_stats", None) or {}).items()]
+                _measured += [((k[0], None, None), v) for k, v in
+                              (getattr(aliases, "in_stats", None) or {}).items()]
                 for (p_uuid, _op, _lit), n in _measured:
                     total = (getattr(aliases, "pred_stats", None) or {}).get(p_uuid)
                     if total and (_crit is None or n / total < _crit / _pred):

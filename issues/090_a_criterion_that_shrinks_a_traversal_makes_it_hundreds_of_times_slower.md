@@ -227,24 +227,40 @@ comparison has to be written the way the generator writes it, or it measures the
 benchmark. Three of the day's conclusions in this issue came from hand-written
 SQL, and this is the one that was wrong.
 
-### Not every criterion family is measured — found 2026-08-14
+### All three criterion families are measured now — 2026-08-14
 
-The shape decision asks how selective the per-hop criterion is. For two of the
-three criterion families in the fixture, nothing can answer:
+Two of the three were invisible to every selectivity gate, each for its own
+reason, and all three now report:
 
-    criterion              needed_ranges   needed_texts   estimate
-    score >= 50 (integer)              1              0   collected
-    occurred >= (dateTime)             0              0   NONE
-    category IN (string)               0              0   NONE
+    family                 was              now
+    numeric range          collected        unchanged
+    temporal range         NEVER measured   0.03% error (53,438 vs 53,455)
+    IN over terms          NEVER measured   EXACT (38,368)
 
-`needed_ranges` surfaces the numeric range and not the temporal one, and
-`needed_texts` does not recognise `IN` at all. So the decision reports
-"criterion selectivity unknown" and declines — safe, and for the wrong reason.
+**Temporal ranges.** `_try_numeric_filter` handles a dateTime and records it in
+`range_leaves`, but `needed_ranges` only tried `_numeric_literal`, so the count
+was never requested. `emit_bgp` looks the value up by that exact
+`(predicate, op, literal)` key, so an unsurfaced range read as UNMEASURED —
+which it explicitly treats as "comparison unsafe" for join ordering. Surfacing
+it required rendering the literal exactly as the push-down renders it, and
+counting it against `dt_val` through the same normalisation: comparing a
+timestamp to `num_val` matches nothing, which reads as *perfectly selective* and
+is the most dangerous wrong answer available.
 
-The cost of the gap is a missed win rather than a regression: the dateTime case
-is one where hop-wise measured 31x BETTER, and it is being declined because
-nothing measured it. The value histograms already hold a `dt` lane, so the
-missing piece is surfacing these criteria for measurement, not estimating them.
+**IN over terms.** The cheapest of the three and the last to work. Every value
+is one term, so `rdf_stats` already holds the counts keyed by
+(predicate, object) — `category IN ('alpha','beta')` is 21,852 + 16,516 = 38,368
+exactly. It was invisible because an IN's constants are registered during
+PUSH-DOWN, at emit time, long after the gate runs, so nothing could resolve them
+to uuids. Two attempts failed before that was clear: resolving the uuids up
+front (they do not exist yet) and reading the preloaded pair stats (the preload
+keeps the 10,000 LEAST COMMON pairs, and an IN value is usually a common one —
+alpha alone has 21,852). It now resolves and sums in one query against
+`rdf_stats`, and reports nothing at all if that table lacks a row for any value,
+because a partial sum is an undercount rather than an estimate.
+
+This benefits the semi-join gate and join ordering as much as the traversal
+decision — an unmeasured range or IN was making both run blind.
 
 ### Where that leaves it
 
