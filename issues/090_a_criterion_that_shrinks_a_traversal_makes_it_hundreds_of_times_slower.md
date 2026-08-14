@@ -64,6 +64,94 @@ answers share no code with the pipeline under test.
 `tests/performance/test_graph_traversal_fixture.py` checks the two against each
 other — 14 cases, currently agreeing.
 
+## Investigated 2026-08-14 — cause found, two fixes eliminated, one candidate
+
+### The cause: every row estimate is 1
+
+`EXPLAIN ANALYZE` on the depth-3 walk with `score >= 50`:
+
+    est=1   actual=133,042   Nested Loop
+    est=1   actual= 22,758   Nested Loop
+    est=1   actual=      0   Index Scan ..._term   loops=133,042
+
+**Every node estimates one row.** The planner therefore chooses a nested loop at
+every join, and the traversal expands to 133,042 intermediate rows to produce a
+ONE-row answer. The unfiltered walk over the same data produces 212 and takes
+1.7 ms.
+
+The estimates collapse because a quad scan filters on `predicate_uuid AND
+object_uuid AND context_uuid` — heavily correlated columns that PostgreSQL
+multiplies as if independent, giving a product below 1 that clamps. This is the
+same root cause as the nurture-slot timeouts.
+
+So the answer to "why does a filter make it slower" is: it does not make the
+WALK slower, it changes which plan is chosen, and every available plan is being
+chosen on garbage cardinality.
+
+### Eliminated: extended statistics (2x, not enough)
+
+`CREATE STATISTICS (ndistinct, dependencies, mcv)` on the three correlated quad
+columns, then ANALYZE: 467 ms -> 241 ms, and the estimate at the 133,042-row
+node moved from 1 to **2**. The correlation is not the whole story — the
+underestimate is in the JOIN cardinality through nested subqueries, which
+extended statistics on a base table cannot reach. Dropped again; the fixture is
+in its as-loaded state.
+
+### Eliminated: materialising the term subquery
+
+A value criterion compiles to
+`q9.object_uuid IN (SELECT term_uuid FROM ..._term WHERE num_val >= 50.0)`,
+which looks exactly like the correlated re-execution of `issues/070`. Forcing it
+into a `MATERIALIZED` CTE made it **worse** — 250 ms -> 340 ms. PostgreSQL was
+already handling that subquery; it is not being re-executed per row.
+
+### Eliminated: forcing the written join order
+
+`join_collapse_limit = 1`, so the planner keeps the order the generator emits:
+235 ms -> **1,417 ms**. The written order is not the good order either, so
+"emit the joins in traversal order and stop the planner reordering them" is not
+a fix on its own.
+
+### Candidate: evaluate hop by hop, materialising each
+
+One CTE per hop, each filtered before the next expands, so the intermediate
+never exceeds the reachable set:
+
+    criterion            sel    depth   generated     hop-CTE
+    score >= 50          15%        3     717.4 ms      0.9 ms      791x
+    occurred >= mid     ~all        3   2,056.7 ms      2.7 ms      763x
+    category IN (a,b)    81%        2       1.8 ms    340.2 ms      0.005x
+    category IN (a,b)    81%        3   1,623.0 ms    667.4 ms      2x
+
+Identical answers in every row, matching the manifest.
+
+**This is not a universal win and must not be applied blindly.** On the
+least-selective criterion the generated plan is 1.8 ms at depth 2 and the CTE
+form is 340 ms — the classic materialise-versus-pipeline trade, where
+materialising a set that barely narrows costs more than streaming it.
+
+Note also what the generated column shows: 1.8 ms at depth 2 and 1,623 ms at
+depth 3 for the SAME criterion. That erratic behaviour is the signature of plan
+instability from unusable estimates rather than of a systematically bad plan
+shape, and it is why "make the estimates right" and "choose the shape
+explicitly" are different fixes.
+
+### Where that leaves it
+
+Hop-wise materialisation is the strongest candidate, but it needs to be CHOSEN
+rather than always applied, which means a cost model — and the estimates that
+cost model would consult are the thing that is broken. Two directions worth
+weighing:
+
+1. **Make the traversal shape explicit in the generator** and pick it on
+   criterion selectivity, which the term table can answer directly rather than
+   through the planner's correlated guess.
+2. **Fix the estimates** so the planner reaches the good plan itself. Broader
+   value — every query benefits, not just traversals — and no risk of choosing
+   the materialised shape when streaming is right. Extended statistics were not
+   sufficient; the next thing to try is whether the emitted SQL can be shaped so
+   estimates survive the subquery nesting at all.
+
 ## What to look at first
 
 Unmeasured, and the obvious next step: the PLAN. Every number above is
