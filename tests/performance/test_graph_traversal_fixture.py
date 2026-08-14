@@ -337,3 +337,99 @@ async def test_a_type_that_matches_nothing_returns_nothing(perf_conn):
     assert got == set(), (
         f"a vitaltype that matches no frame returned {len(got)} entities — the "
         f"type filter was LOST in the rewrite, not absorbed")
+
+
+async def _ordered_entities(conn, fx, sparql):
+    """Projected entity URIs in the order the query returned them."""
+    from vitalgraph.db.jena_sparql.jena_ast_mapper import map_compile_response
+    from vitalgraph.db.jena_sparql.jena_sidecar_client import AsyncSidecarClient
+    from vitalgraph.db.sparql_sql.generator import generate_sql
+    from .test_kgquery_growth_curve import SIDECAR_URL
+
+    client = AsyncSidecarClient(SIDECAR_URL)
+    try:
+        raw = await client.compile(sparql)
+    finally:
+        close = getattr(client, "aclose", None) or getattr(client, "close", None)
+        if close:
+            res = close()
+            if hasattr(res, "__await__"):
+                await res
+    cr = map_compile_response(raw)
+    assert cr.ok, f"SPARQL failed to compile: {cr.error}"
+    gen = await generate_sql(cr, fx.space, conn=conn)
+    out = []
+    for r in await conn.fetch(gen.sql):
+        for v in r.values():
+            if isinstance(v, str) and v.startswith("urn:graphsyn:entity:"):
+                out.append(v)
+                break
+    return out, gen.sql
+
+
+@pytest.mark.parametrize("limit,offset", [(25, None), (25, 25), (10, 100)])
+async def test_a_paged_traversal_returns_the_same_rows_either_way(
+        perf_conn, limit, offset):
+    """A page must not depend on which emission shape produced it.
+
+    This is where the set-based emission was silently switched off. `LIMIT`
+    introduces an ORDER node, `dedup_feasible` refused ORDER outright, and every
+    paged traversal fell back to the path-wise form — 1,554 ms for `LIMIT 25`
+    against 78.9 ms for the same walk unlimited, so asking for 25 rows cost 20x
+    more than asking for all 4,249.
+
+    Compares dedup against the flat path for the IDENTICAL query, which is a
+    real differential. An earlier version of this test compared the page against
+    an explicit `ORDER BY ?e3` over the whole walk and failed — because the sort
+    `LIMIT` injects need not match one written by hand, so that baseline was
+    wrong rather than the emission.
+    """
+    import vitalgraph.db.sparql_sql.emit_traversal as ET
+
+    fx = SMALL
+    await _require(perf_conn, fx)
+    walks = fx.manifest()["traversal"]["frame_traversal"]
+    hub = max(fx.sample_starts(), key=lambda s: len(walks[str(s)]["3"]))
+    q = (chain_query(fx, hub, 3).rstrip() + f"\n    LIMIT {limit}"
+         + (f"\n    OFFSET {offset}" if offset else ""))
+
+    with_dedup, sql = await _ordered_entities(perf_conn, fx, q)
+    assert "MATERIALIZED" in sql, (
+        "a paged traversal did not take the set-based path — ORDER is being "
+        "refused again, which costs 20x")
+
+    real = ET.emit_dedup_chain
+    ET.emit_dedup_chain = lambda *a, **k: None
+    try:
+        without, _ = await _ordered_entities(perf_conn, fx, q)
+    finally:
+        ET.emit_dedup_chain = real
+
+    assert with_dedup == without, (
+        f"LIMIT {limit} OFFSET {offset} returned different rows with and "
+        f"without the set-based emission")
+
+
+async def test_pages_partition_the_traversal(perf_conn):
+    """Consecutive pages cover the walk exactly once, with no gap or overlap.
+
+    The check that does not depend on knowing the sort order. Two pages of 25
+    must equal one page of 50 — if the injected ORDER is unstable, or an OFFSET
+    is applied at the wrong point in the plan, this is what notices.
+    """
+    fx = SMALL
+    await _require(perf_conn, fx)
+    walks = fx.manifest()["traversal"]["frame_traversal"]
+    hub = max(fx.sample_starts(), key=lambda s: len(walks[str(s)]["3"]))
+    base = chain_query(fx, hub, 3).rstrip()
+
+    p1, _ = await _ordered_entities(perf_conn, fx, base + "\n    LIMIT 25")
+    p2, _ = await _ordered_entities(
+        perf_conn, fx, base + "\n    LIMIT 25\n    OFFSET 25")
+    both, _ = await _ordered_entities(perf_conn, fx, base + "\n    LIMIT 50")
+
+    assert len(p1) == 25 and len(p2) == 25
+    assert p1 + p2 == both, (
+        "two pages of 25 do not equal one page of 50 — the pages overlap, "
+        "leave a gap, or the ordering is unstable across queries")
+    assert not (set(p1) & set(p2)), "pages overlap"

@@ -273,7 +273,7 @@ class TestDedupPrecondition:
     """
 
     @staticmethod
-    def _tree(*kinds, depth=3, project=("e3",), filters=None):
+    def _tree(*kinds, depth=3, project=("e3",), filters=None, order=None):
         """A plan: the given modifier kinds stacked above a depth-N traversal."""
         from vitalgraph.db.sparql_sql.ir import (
             KIND_PROJECT, KIND_DISTINCT, KIND_SLICE, KIND_FILTER, KIND_ORDER,
@@ -285,6 +285,8 @@ class TestDedupPrecondition:
                 parent.project_vars = list(project)
             if k == KIND_FILTER:
                 parent.filter_exprs = list(filters or [])
+            if k == KIND_ORDER:
+                parent.order_conditions = list(order or [])
             node = parent
         return node
 
@@ -311,12 +313,37 @@ class TestDedupPrecondition:
         assert self._feasible(
             self._tree(KIND_DISTINCT, KIND_GROUP, KIND_PROJECT)) is None
 
-    def test_an_order_by_refuses(self):
-        """ORDER BY may sort on a variable dedup nulls."""
+    def test_an_order_by_a_surviving_variable_is_allowed(self):
+        """`LIMIT` introduces an ORDER sorting by the projected variable, so
+        refusing ORDER outright refused every PAGED traversal — measured at
+        1,554 ms for `LIMIT 25` against 78.9 ms for the same walk unlimited.
+
+        An ORDER re-arranges rows; it cannot observe how many paths produced
+        one. What matters is only that its sort keys survive."""
+        from vitalgraph.db.sparql_sql.ir import (KIND_PROJECT, KIND_DISTINCT,
+                                                 KIND_ORDER)
+        got = self._feasible(self._tree(KIND_DISTINCT, KIND_ORDER, KIND_PROJECT,
+                                        order=[("e3", "ASC")]))
+        assert got is not None and "e3" in got
+
+    def test_an_order_by_a_discarded_variable_refuses(self):
+        """Sorting on a column dedup nulls would order the answer by nothing."""
         from vitalgraph.db.sparql_sql.ir import (KIND_PROJECT, KIND_DISTINCT,
                                                  KIND_ORDER)
         assert self._feasible(
-            self._tree(KIND_DISTINCT, KIND_ORDER, KIND_PROJECT)) is None
+            self._tree(KIND_DISTINCT, KIND_ORDER, KIND_PROJECT,
+                       order=[("c1", "ASC")])) is None
+
+    def test_an_order_by_an_expression_is_walked(self):
+        """A sort key arrives as a bare name OR an expression; both must be
+        read, or an expression over a discarded variable slips through."""
+        from vitalgraph.db.sparql_sql.ir import (KIND_PROJECT, KIND_DISTINCT,
+                                                 KIND_ORDER)
+        from vitalgraph.db.jena_sparql.jena_types import ExprFunction, ExprVar
+        key = ExprFunction(name="lcase", args=[ExprVar(var="c1")])
+        assert self._feasible(
+            self._tree(KIND_DISTINCT, KIND_ORDER, KIND_PROJECT,
+                       order=[(key, "ASC")])) is None
 
     def test_projecting_an_intermediate_variable_refuses(self):
         """`?e1` does not survive a set of depth-3 entities."""

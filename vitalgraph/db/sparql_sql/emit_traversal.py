@@ -456,13 +456,18 @@ def dedup_feasible(root, chain, text_needed_vars):
 
     * **A DISTINCT must be present.** Without one the multiplicity IS the
       result: `SELECT ?e3` returns a row per path.
-    * **Only PROJECT / DISTINCT / SLICE / FILTER may sit above.** GROUP or an
-      aggregate counts rows and ORDER may sort by an intermediate variable;
-      both read something dedup destroys. A FILTER is row-wise and cannot
-      observe multiplicity, so it is allowed — but only when every variable it
-      mentions SURVIVES, since a filter over a nulled intermediate column would
-      silently drop everything. In practice the filter above a traversal is the
-      pin itself, `FILTER(?e0 = <start>)`.
+    * **Only PROJECT / DISTINCT / SLICE / FILTER / ORDER may sit above.** GROUP
+      or an aggregate counts rows, which IS the multiplicity. A FILTER is
+      row-wise and an ORDER re-arranges rows; neither can observe how many paths
+      produced a row. Both are allowed only when every variable they mention
+      SURVIVES — a predicate or a sort key over a nulled intermediate column
+      would silently drop or mis-order everything.
+
+      ORDER matters more than it looks: `LIMIT` introduces one, sorting by the
+      projected variable. Refusing ORDER outright therefore refused every PAGED
+      traversal, and measured on graph_synth_100k depth 3 that made `LIMIT 25`
+      cost 1,554 ms against 78.9 ms for the same walk unlimited — asking for 25
+      rows cost 20x more than asking for all 4,249.
     * **The projection must be a subset of the final hop's variables**, since
       those are the only ones that survive.
     * **Nothing else may need TEXT.** Intermediate variables are emitted NULL,
@@ -485,8 +490,9 @@ def dedup_feasible(root, chain, text_needed_vars):
         logger.debug("dedup declined: no DISTINCT above the traversal, so path "
                      "multiplicity is part of the answer")
         return None
-    from .ir import KIND_FILTER
-    _ok_kinds = (KIND_PROJECT, KIND_DISTINCT, KIND_SLICE, KIND_FILTER)
+    from .ir import KIND_FILTER, KIND_ORDER
+    _ok_kinds = (KIND_PROJECT, KIND_DISTINCT, KIND_SLICE, KIND_FILTER,
+                 KIND_ORDER)
     if any(n.kind not in _ok_kinds for n in above):
         logger.debug("dedup declined: %s above the traversal may read path "
                      "multiplicity",
@@ -522,15 +528,24 @@ def dedup_feasible(root, chain, text_needed_vars):
 
     allowed = final_vars | ({head_var} if head_var else set())
 
-    # A filter above the traversal is fine only if everything it reads survives.
-    filtered = set()
+    # A filter or a sort above the traversal is fine only if everything it
+    # reads survives. An order key arrives either as a bare variable name or as
+    # an expression, so both forms are walked.
+    read_above = set()
     for n in above:
         if n.kind == KIND_FILTER:
             for e in (n.filter_exprs or []):
-                _expr_vars(e, filtered)
-    if not filtered <= allowed:
-        logger.debug("dedup declined: filter above the traversal reads %s, "
-                     "which dedup discards", sorted(filtered - allowed))
+                _expr_vars(e, read_above)
+        elif n.kind == KIND_ORDER:
+            for key, _dir in (n.order_conditions or []):
+                if isinstance(key, str):
+                    read_above.add(key)
+                else:
+                    _expr_vars(key, read_above)
+    if not read_above <= allowed:
+        logger.debug("dedup declined: a filter or sort above the traversal "
+                     "reads %s, which dedup discards",
+                     sorted(read_above - allowed))
         return None
 
     if text_needed_vars is not None and not set(text_needed_vars) <= allowed:
