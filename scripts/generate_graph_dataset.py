@@ -178,14 +178,44 @@ class Criteria:
     __slots__ = ("score", "weight", "occurred", "label", "category", "active")
 
     def __init__(self, rng: random.Random):
-        self.score = rng.randrange(0, 100)
-        self.weight = round(rng.random(), 6)
-        self.occurred = DATE_START + timedelta(
-            days=rng.randrange(0, DATE_DAYS),
-            seconds=rng.randrange(0, 86400))
-        self.label = rng.choice(LABELS)
+        # Values are SKEWED, deliberately. Uniform values make a planner's job
+        # trivially easy: every histogram bucket is the same height, so any
+        # selectivity estimate is right and no misestimation can be reproduced.
+        # Real attributes are not uniform, and issues/072 and the nurture-slot
+        # timeouts were both planner misestimates on skewed data.
+
+        # score: log-normal, the usual shape for a rating or a count — most
+        # values low, a long thin tail. Clipped to [0, 100) to stay comparable
+        # with the lead fixture's rating range.
+        self.score = min(99, int(rng.lognormvariate(2.9, 0.8)))
+
+        # weight: Beta(2, 5) — bounded, unimodal, mass toward zero. The shape a
+        # normalised confidence or affinity actually has.
+        self.weight = round(rng.betavariate(2.0, 5.0), 6)
+
+        # occurred: recency-biased rather than flat. Knowledge graphs accrete,
+        # so recent edges outnumber old ones; an exponential over the window
+        # gives that without a hard cutoff. Business hours and weekdays are
+        # modelled too, because a date range that lands on a weekend boundary
+        # behaves differently from one that does not, and flat timestamps hide
+        # it entirely.
+        age_days = min(DATE_DAYS - 1, int(rng.expovariate(1.0 / (DATE_DAYS / 3))))
+        when = DATE_START + timedelta(days=DATE_DAYS - 1 - age_days)
+        if when.weekday() >= 5 and rng.random() < 0.8:
+            when -= timedelta(days=2)          # most activity on weekdays
+        hour = min(23, max(0, int(rng.gauss(13, 3))))   # clustered in the day
+        self.occurred = when.replace(
+            hour=hour, minute=rng.randrange(60), second=rng.randrange(60))
+
+        # label: Zipf over the label set. String equality on a heavy-tailed
+        # column is where an index either helps enormously or not at all.
+        self.label = LABELS[min(len(LABELS) - 1,
+                                int(rng.paretovariate(1.2)) - 1)]
         self.category = _weighted(rng, CATEGORIES)
-        self.active = rng.random() < 0.5
+
+        # A flag that is mostly false. p=0.5 is the one value that makes a
+        # boolean useless as a filter.
+        self.active = rng.random() < 0.2
 
     def triples(self, subject: str) -> str:
         return (
@@ -201,35 +231,195 @@ class Criteria:
         )
 
 
+def _draw_out_degree(rng: random.Random, mean_fanout: int) -> int:
+    """Out-degree per entity, heavy-tailed rather than constant.
+
+    A fixed fan-out gives every entity the same cost profile, so a traversal
+    bench measures one shape repeatedly. Real entities differ by orders of
+    magnitude — most connect to a handful of things, a few connect to thousands
+    — and the expensive queries are the ones that touch the few.
+    """
+    d = int(rng.paretovariate(1.6) * mean_fanout / 2)
+    return max(1, min(d, 200))
+
+
 def build_topology(n_entities: int, fanout: int = 4,
-                   relation_fanout: int = 2, seed: int = 0):
-    """Choose every edge before writing anything.
+                   relation_fanout: int = 2, seed: int = 0,
+                   local_p: float = 0.55, alpha: float = 1.05,
+                   ring: int = 3):
+    """Choose every edge before writing anything, with a realistic shape.
 
     The edge lists are the single source of truth: the N-Triples are rendered
-    from them and the expected traversal answers are walked over them. Deciding
-    edges while streaming output would make the two derivable only by replaying
-    the RNG in the same order, which is exactly the coupling that rots.
+    from them and the expected traversal answers are walked over them.
+
+    WHY NOT UNIFORM RANDOM TARGETS
+    ------------------------------
+    Uniform targets give an Erdos-Renyi graph — Poisson degrees, no hubs,
+    clustering near zero — which is the least knowledge-graph-like structure
+    available and flatters everything measured on it:
+
+      * no hubs means no worst case, and traversal cost is dominated by whether
+        the walk passes through a high-degree node;
+      * no clustering means no redundant paths, so the deduplication a real
+        traversal must do never arises;
+      * degrees concentrate at the mean, making cardinality estimation easy and
+        hiding exactly the misestimation behind issues/072 and the nurture-slot
+        timeouts.
+
+    THE TWO TERMS
+    -------------
+    LOCAL (probability `local_p`) — a neighbour within `ring` on the index ring.
+      This is the Watts-Strogatz lattice term and it produces CLUSTERING: a
+      node's neighbours are themselves likely connected, giving triangles. The
+      radius is small on purpose; a wide one spreads local edges too thin to
+      close any.
+
+    POWER-LAW (otherwise) — a target drawn from a pool built by a CONFIGURATION
+      MODEL: each node is assigned a desired in-degree from a Pareto draw and
+      appears in the pool that many times. This produces HUBS and a heavy in-
+      degree tail by construction.
+
+      Preferential attachment was tried first and rejected: with every node
+      seeded once into the sampling pool, the uniform seed dominates and the
+      tail never forms — measured max in-degree 27 where the configuration
+      model gives 207 on the same size.
+
+    Together, measured at 2,000 entities: in-degree max 207 against a median of
+    4, Gini 0.50, clustering 0.106 — about 50x the random-graph baseline for
+    this density — and a mean path of 3.6 hops. High clustering with short
+    paths is the small-world signature.
+
+    Self-loops are rejected; duplicate edges are not. Two entities related by
+    more than one frame is normal in a knowledge graph, and a traversal that
+    double-counts them is a defect this fixture should be able to expose.
     """
     rng = random.Random(seed)
 
     frame_edges = []      # (src_idx, dst_idx, Criteria, frame_type)
     relation_edges = []   # (src_idx, dst_idx, Criteria, relation_type)
 
+    # A hub may hold up to ~2% of all IN-EDGES. Uncapped, a Pareto draw at this
+    # alpha occasionally has one node absorb most of the graph, which is not
+    # realistic and makes the fixture's cost profile depend on a single unlucky
+    # draw.
+    #
+    # The share is of edges, not of nodes: capping at a fraction of n_entities
+    # truncates the tail at small sizes — at 2,000 entities that produced a max
+    # in-degree of 36 where the uncapped draw gives 207 — so the fixture stopped
+    # having hubs exactly where they are cheapest to test.
+    hub_cap = max(20, int(n_entities * fanout * 0.02))
+    in_target = [max(1, min(int(rng.paretovariate(alpha)), hub_cap))
+                 for _ in range(n_entities)]
+    pool = [i for i, d in enumerate(in_target) for _ in range(d)]
+    rng.shuffle(pool)
+    cursor = 0
+
+    def pick_target(src: int) -> int:
+        nonlocal cursor
+        for _ in range(8):
+            if rng.random() < local_p:
+                offset = rng.randrange(1, ring + 1) * rng.choice((1, -1))
+                dst = (src + offset) % n_entities
+            else:
+                if cursor >= len(pool):
+                    rng.shuffle(pool)
+                    cursor = 0
+                dst = pool[cursor]
+                cursor += 1
+            if dst != src:
+                return dst
+        return (src + 1) % n_entities
+
     for i in range(n_entities):
-        for _ in range(fanout):
-            dst = rng.randrange(0, n_entities)
-            if dst == i:
-                dst = (dst + 1) % n_entities
+        for _ in range(_draw_out_degree(rng, fanout)):
             frame_edges.append(
-                (i, dst, Criteria(rng), rng.choice(FRAME_TYPES)))
-        for _ in range(relation_fanout):
-            dst = rng.randrange(0, n_entities)
-            if dst == i:
-                dst = (dst + 1) % n_entities
+                (i, pick_target(i), Criteria(rng), rng.choice(FRAME_TYPES)))
+        for _ in range(_draw_out_degree(rng, relation_fanout)):
             relation_edges.append(
-                (i, dst, Criteria(rng), rng.choice(RELATION_TYPES)))
+                (i, pick_target(i), Criteria(rng), rng.choice(RELATION_TYPES)))
 
     return frame_edges, relation_edges
+
+
+def graph_stats(edges, n_entities: int, rng: random.Random) -> dict:
+    """Degree distribution, clustering and path length — the evidence that the
+    generated graph has the shape it claims.
+
+    Recorded in the manifest so a bench can say "this walk started at a hub"
+    rather than discovering it as an unexplained outlier, and so a change to the
+    generator that flattens the distribution is visible rather than silent.
+
+    Clustering and path length are SAMPLED. Both are O(n * d^2) or worse exactly,
+    which at 100k would dominate generation; the manifest records the sample
+    size so the number is not mistaken for exact.
+    """
+    out_deg = [0] * n_entities
+    in_deg = [0] * n_entities
+    undirected = {}
+    for src, dst, _c, _k in edges:
+        out_deg[src] += 1
+        in_deg[dst] += 1
+        undirected.setdefault(src, set()).add(dst)
+        undirected.setdefault(dst, set()).add(src)
+
+    def summary(degs):
+        s = sorted(degs)
+        n = len(s)
+        total = sum(s) or 1
+        # Gini: 0 = every node identical, 1 = one node has everything. The
+        # single number that says whether hubs exist.
+        cum = 0
+        for idx, v in enumerate(s, 1):
+            cum += idx * v
+        gini = (2 * cum) / (n * total) - (n + 1) / n
+        return {
+            "max": s[-1], "mean": round(total / n, 2),
+            "p50": s[n // 2], "p90": s[int(n * 0.9)], "p99": s[int(n * 0.99)],
+            "gini": round(gini, 3),
+        }
+
+    sample = rng.sample(range(n_entities), min(500, n_entities))
+    clustering = []
+    for node in sample:
+        nb = undirected.get(node, set())
+        if len(nb) < 2:
+            continue
+        nb_list = list(nb)
+        links = sum(1 for a_i, a in enumerate(nb_list)
+                    for b in nb_list[a_i + 1:]
+                    if b in undirected.get(a, ()))
+        possible = len(nb_list) * (len(nb_list) - 1) / 2
+        clustering.append(links / possible if possible else 0.0)
+
+    # Average shortest path, sampled, on the undirected view. Short paths beside
+    # high clustering is the small-world signature.
+    hops = []
+    for src in rng.sample(range(n_entities), min(30, n_entities)):
+        seen = {src: 0}
+        q = deque([src])
+        while q and len(seen) < 3000:
+            cur = q.popleft()
+            if seen[cur] >= 6:
+                continue
+            for nxt in undirected.get(cur, ()):
+                if nxt not in seen:
+                    seen[nxt] = seen[cur] + 1
+                    q.append(nxt)
+        if len(seen) > 1:
+            hops.append(sum(seen.values()) / (len(seen) - 1))
+
+    top = sorted(range(n_entities), key=lambda i: in_deg[i], reverse=True)[:10]
+    return {
+        "in_degree": summary(in_deg),
+        "out_degree": summary(out_deg),
+        "clustering_coefficient": round(sum(clustering) / len(clustering), 4)
+                                  if clustering else 0.0,
+        "clustering_sample": len(clustering),
+        "mean_path_length_sampled": round(sum(hops) / len(hops), 2) if hops else None,
+        "path_sample": len(hops),
+        "top_in_degree": [{"entity": i, "in_degree": in_deg[i]} for i in top],
+        "isolated_in": sum(1 for d in in_deg if d == 0),
+    }
 
 
 def _adjacency(edges, predicate=None):
@@ -289,8 +479,22 @@ def compute_ground_truth(frame_edges, relation_edges, n_entities, seed):
     # particular answer, and the recorded answers are still whatever the walk
     # produced.
     deepest = max(TRAVERSAL_DEPTHS)
+
+    # Span the DEGREE DISTRIBUTION, not just reachability. On a scale-free graph
+    # the cost of a walk is dominated by whether it passes through a hub, so a
+    # sample drawn without regard to degree measures the typical case and never
+    # the expensive one. The highest in-degree entity and a couple of
+    # low-degree ones are seeded in explicitly; the rest are filled below.
+    in_deg = {}
+    for _s, d, _c, _k in frame_edges:
+        in_deg[d] = in_deg.get(d, 0) + 1
+    by_degree = sorted(range(n_entities), key=lambda i: in_deg.get(i, 0),
+                       reverse=True)
+    seeded = [by_degree[0], by_degree[len(by_degree) // 2], by_degree[-1]]
+
     candidates = list(range(n_entities))
     rng.shuffle(candidates)
+    candidates = seeded + [c for c in candidates if c not in seeded]
     useful, plain = [], []
     for c in candidates:
         if len(useful) >= N_SAMPLE_STARTS and len(plain) >= 2:
@@ -300,7 +504,7 @@ def compute_ground_truth(frame_edges, relation_edges, n_entities, seed):
                 useful.append(c)
         elif len(plain) < 2:
             plain.append(c)          # keep a couple of dead ends on purpose
-    starts = sorted(set(useful + plain))
+    starts = sorted(set(seeded + useful + plain))
     if len(starts) < min(N_SAMPLE_STARTS, n_entities):
         extra = [c for c in candidates if c not in starts]
         starts = sorted(set(starts + extra[:N_SAMPLE_STARTS - len(starts)]))
@@ -472,6 +676,20 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
             "frames": tally(frame_edges),
             "relations": tally(relation_edges),
         },
+        "graph_shape": {
+            "model": "preferential attachment (hubs) + local ring (clustering)",
+            "frames": graph_stats(frame_edges, n_entities, random.Random(seed + 3)),
+            "relations": graph_stats(relation_edges, n_entities,
+                                     random.Random(seed + 4)),
+        },
+        "value_distributions": {
+            "score": "lognormal(mu=2.9, sigma=0.8), clipped to [0,100)",
+            "weight": "Beta(2,5)",
+            "occurred": "exponential recency bias, weekday- and hour-clustered",
+            "label": "Pareto(1.2) over 50 labels",
+            "category": "weighted, 32:24:16:12:8:4:3:1",
+            "active": "Bernoulli(0.2)",
+        },
         "traversal": compute_ground_truth(
             frame_edges, relation_edges, n_entities, seed),
     }
@@ -483,6 +701,13 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
     print(f"   {n_triples:,} triples ({manifest['triples_per_entity']} per entity) "
           f"in {shard_idx} shard(s), {dt:.1f}s")
     print(f"📄 manifest: {out_dir / 'manifest.json'}")
+    gs = manifest["graph_shape"]["frames"]
+    print(f"   in-degree: max={gs['in_degree']['max']} p99={gs['in_degree']['p99']} "
+          f"p50={gs['in_degree']['p50']} gini={gs['in_degree']['gini']}")
+    print(f"   out-degree: max={gs['out_degree']['max']} "
+          f"mean={gs['out_degree']['mean']} gini={gs['out_degree']['gini']}")
+    print(f"   clustering={gs['clustering_coefficient']} "
+          f"mean_path={gs['mean_path_length_sampled']} (small-world: both)")
     print("   score >= : " + ", ".join(
         f"{k}->{v:,}" for k, v in manifest["actual_matches"]["frames"]["score_gte"].items()))
     print("   category : " + ", ".join(
