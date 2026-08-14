@@ -38,6 +38,34 @@ uncollapsed give the same answer.
 
 ---
 
+## The design goal: constraints must not be cliffs
+
+All three problems are instances of one property being violated. Stated
+positively:
+
+> **Adding a criterion to a traversal must never make it dramatically slower.**
+> A filter that admits fewer rows should cost no more than the walk it filters,
+> whatever the criterion is on and whatever its datatype.
+
+That is a stronger goal than "make the redundant case free", and it is the one
+worth aiming at, because the queries a product issues are full of ordinary
+constraints — a URI equality on a frame type, a value threshold, a date range —
+and none of them are redundant. Today:
+
+    a URI constraint on the SLOT      collapse declines      ~28,000x   (Problem 1)
+    a URI constraint on the FRAME     collapse survives          ~160x   (Problem 2)
+    a value constraint on the FRAME   collapse survives    150x-950x     (Problem 2)
+
+The first two are both URI constraints and differ only in which node they touch.
+Nothing about a traversal makes that a reasonable difference, which is the
+clearest sign that the cost is coming from the plan rather than from the work.
+
+**Acceptance, for any fix here**: with the constraint present, `frame_entity`
+joins still equal the depth, the answer is unchanged, and the time is within a
+small factor of the unconstrained walk — not merely better than it was.
+
+---
+
 ## Problem 1 — a slot-type constraint disables the collapse entirely
 
 **Price: ~28,000x at depth 3.** Adding `?slot a KGEntitySlot`, which the
@@ -55,17 +83,41 @@ emitted SQL PostgreSQL rejected outright (`missing FROM-clause entry for table
 "mv0"`), so it now returns the plan untouched rather than collapsing while a
 constraint still references a collapsed alias.
 
-**Why this is fixable rather than fundamental.** The constraint is redundant by
-construction. A slot reached through `hasEntitySlotValue` from a `frame_entity`
-row IS a `KGEntitySlot` — that is what the row means. So the fix is to recognise
-constraints that the collapse already guarantees, and drop them rather than
-decline on them.
+**Recognising redundancy is NOT the fix — it is a special case of it.**
 
-Care: "redundant" must be proven, not assumed. `?slot a KGTextSlot` over the
-same pattern must still match nothing, and there is a test asserting exactly
-that — constrain slots to a type nothing has and the answer must be empty. A
-fix that discards slot constraints wholesale passes the fast path and breaks
-that one.
+It is tempting, because this particular constraint is redundant by construction:
+a slot reached through `hasEntitySlotValue` from a `frame_entity` row IS a
+`KGEntitySlot`. Detecting that and dropping it would make the canonical query
+fast.
+
+It would also fix exactly one constraint. A query that says
+`?slot a KGEntitySlot` gets rescued; one that constrains the slot on anything
+the collapse does not happen to guarantee falls off the same cliff. Users write
+constraints that are not redundant, and a URI constraint is the most ordinary
+thing a traversal carries.
+
+**The property wanted is that adding a criterion never costs orders of
+magnitude** — see the design goal below. Redundancy detection does not deliver
+it; it just moves the cliff to the next constraint along.
+
+Three ways to actually carry slot constraints through the collapse, none yet
+attempted:
+
+* **Apply them after the collapse, driven by the collapsed rows.** The
+  `frame_entity` row names the frame; the slots are one indexed hop from it. A
+  semi-join from a handful of collapsed rows back to the slot is cheap, and
+  needs no schema change. Most likely the right answer.
+* **Carry the slot uuids in `frame_entity`.** Widens the table and makes the
+  constraint a column test, at the cost of a schema change and another thing
+  `sync_frame_entity_table` must keep correct (`issues/041` is what that risks).
+* **Prove redundancy where it holds AND fall back to one of the above.** The
+  optimisation is real; it is just not the fix on its own.
+
+Care in every case: "redundant" must be proven, not assumed.
+`?slot a KGTextSlot` over the same pattern must still match NOTHING, and there
+is a test asserting exactly that. A fix that discards slot constraints wholesale
+passes the fast path and silently returns rows for a query that should return
+none.
 
 ## Problem 2 — a criterion that SHRINKS the answer makes it far slower
 
@@ -130,10 +182,21 @@ argued about:
   in six datatypes with skewed distributions. Uniform values would make any
   selectivity estimate right and hide a misestimation entirely.
 
-A fix for Problem 2 should show up as the filtered walk approaching the
-unfiltered one, at every datatype and at depth 3. A fix for Problem 1 should
-show `frame_entity` joins equal to the depth with `a KGEntitySlot` present, and
-the KGTextSlot test still returning nothing.
+**Judge a fix against the design goal, not against the previous number.**
+"Better than 17 seconds" is satisfied by 4 seconds, which is still a cliff. The
+bar is that the constrained walk costs about what the unconstrained one costs:
+
+    frame_entity joins == depth, WITH the constraint present
+    answer unchanged, and `?slot a KGTextSlot` still returns nothing
+    time within a small factor of the unconstrained walk, at depth 3
+
+and it has to hold for a constraint on the SLOT and one on the FRAME, and for
+every criterion datatype the fixture carries — not just the one that motivated
+the change. A fix that helps a URI equality and leaves the dateTime range at
+330 ms has found a special case, not the cause.
+
+The per-datatype sweep in `issues/090` is the table to re-run; it exists so the
+answer is a row of numbers rather than an impression.
 
 ---
 
