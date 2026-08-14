@@ -226,3 +226,42 @@ async def test_a_multi_valued_criterion_estimates_quads_not_subjects(perf_conn):
         f"estimate {estimate} vs {in_subjects} matching subjects: the "
         f"overcount is the documented behaviour, and it being ABSENT would "
         f"mean the counting semantics changed")
+
+
+async def test_the_fixture_has_hub_structure(perf_conn):
+    """Guards the fixture's TOPOLOGY, which is what the criterion gate needs.
+
+    `traversal_decision` refuses hop-wise emission for a walk with no measured
+    criterion, because an unfiltered walk fans out and a nested-loop plan loses.
+    That gate was calibrated on `wordnet_frames` alone for one reason: every
+    open traversal on graph_synth reached 4, 16 and 64 entities at depths 1-3.
+    A fixture that cannot fan out cannot exercise the gate, and nothing noticed
+    because every correctness test still passed.
+
+    Two generator defects caused it — sample starts seeded by IN-degree where a
+    forward walk fans out by OUT-degree, and an out-degree cap fixed at 200
+    while the in-degree cap already scaled with the dataset. This asserts on the
+    outcome rather than on either fix, so it stays honest if the generator
+    changes again.
+
+    The thresholds are deliberately far below what the generator now produces
+    (max out-degree 200 at 10k, open depth-3 reach in the hundreds), so ordinary
+    variation between seeds does not trip it.
+    """
+    fx = SMALL
+    await _require(perf_conn, fx)
+
+    top_out = await perf_conn.fetchval(
+        f"SELECT max(n) FROM (SELECT count(DISTINCT dest_entity_uuid) n "
+        f"FROM {fx.space}_frame_entity GROUP BY source_entity_uuid) d")
+    assert top_out >= 25, (
+        f"largest out-degree is {top_out}: the graph has no hubs, so a forward "
+        f"traversal cannot fan out and the criterion gate is untestable here")
+
+    walks = fx.manifest()["traversal"]["frame_traversal"]
+    best = max(len(walks[str(s)]["3"]) for s in fx.sample_starts())
+    assert best >= 100, (
+        f"the widest open depth-3 walk from any sample start reaches {best} "
+        f"entities. Sample starts must SPAN the degree distribution — seeding "
+        f"them by in-degree picks a fan-IN hub, which a forward walk does not "
+        f"exercise")

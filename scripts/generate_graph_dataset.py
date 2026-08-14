@@ -248,16 +248,25 @@ class Criteria:
         )
 
 
-def _draw_out_degree(rng: random.Random, mean_fanout: int) -> int:
+def _draw_out_degree(rng: random.Random, mean_fanout: int, cap: int = 200) -> int:
     """Out-degree per entity, heavy-tailed rather than constant.
 
     A fixed fan-out gives every entity the same cost profile, so a traversal
     bench measures one shape repeatedly. Real entities differ by orders of
     magnitude — most connect to a handful of things, a few connect to thousands
     — and the expensive queries are the ones that touch the few.
+
+    `cap` SCALES with the dataset, which the in-degree `hub_cap` already did and
+    this did not. A fixed 200 makes the biggest hub a smaller and smaller share
+    of the graph as the fixture grows: measured at 100k entities it reached 107
+    distinct neighbours, 0.107% of the graph, where `wordnet_frames`' largest
+    hub reaches 671 of 109,734 — 0.611%, nearly 6x hubbier in the terms that
+    matter. The consequence was that no synthetic fixture, at any size, could
+    reproduce the fan-out shape where hop-wise traversal measured 2.4x SLOWER,
+    so the gate protecting against it could only ever be calibrated on wordnet.
     """
     d = int(rng.paretovariate(1.6) * mean_fanout / 2)
-    return max(1, min(d, 200))
+    return max(1, min(d, cap))
 
 
 def build_topology(n_entities: int, fanout: int = 4,
@@ -347,11 +356,17 @@ def build_topology(n_entities: int, fanout: int = 4,
                 return dst
         return (src + 1) % n_entities
 
+    # Roughly `wordnet_frames`' hub share once duplicate edges collapse: the
+    # draw is of EDGES and a hub's targets repeat, so ~1.2% of entities as a raw
+    # cap lands near 0.6% as distinct neighbours. Floored at 200 so small
+    # fixtures keep the tail they already had.
+    out_cap = max(200, int(n_entities * 0.012))
+
     for i in range(n_entities):
-        for _ in range(_draw_out_degree(rng, fanout)):
+        for _ in range(_draw_out_degree(rng, fanout, out_cap)):
             frame_edges.append(
                 (i, pick_target(i), Criteria(rng), rng.choice(FRAME_TYPES)))
-        for _ in range(_draw_out_degree(rng, relation_fanout)):
+        for _ in range(_draw_out_degree(rng, relation_fanout, out_cap)):
             relation_edges.append(
                 (i, pick_target(i), Criteria(rng), rng.choice(RELATION_TYPES)))
 
@@ -500,14 +515,31 @@ def compute_ground_truth(frame_edges, relation_edges, n_entities, seed):
     # Span the DEGREE DISTRIBUTION, not just reachability. On a scale-free graph
     # the cost of a walk is dominated by whether it passes through a hub, so a
     # sample drawn without regard to degree measures the typical case and never
-    # the expensive one. The highest in-degree entity and a couple of
-    # low-degree ones are seeded in explicitly; the rest are filled below.
-    in_deg = {}
-    for _s, d, _c, _k in frame_edges:
+    # the expensive one.
+    #
+    # OUT-degree is seeded first, and that is the correction. This used to seed
+    # by IN-degree alone, which is the wrong end for the query these fixtures
+    # exist to measure: a forward walk pinned at its head fans out by the START
+    # entity's OUT-degree, and the highest in-degree entity has no particular
+    # out-degree at all. The consequence was measurable — every open traversal
+    # on graph_synth reached 4, 16 and 64 entities at depths 1-3, so the fixture
+    # could not reproduce the fan-out shape that made hop-wise emission 2.4x
+    # SLOWER on wordnet, and the gate protecting against it rested on one
+    # dataset.
+    #
+    # In-degree is still seeded, because a tail-pinned walk is the mirror case
+    # and will want it once reverse traversal is implemented.
+    out_deg, in_deg = {}, {}
+    for s, d, _c, _k in frame_edges:
+        out_deg[s] = out_deg.get(s, 0) + 1
         in_deg[d] = in_deg.get(d, 0) + 1
-    by_degree = sorted(range(n_entities), key=lambda i: in_deg.get(i, 0),
-                       reverse=True)
-    seeded = [by_degree[0], by_degree[len(by_degree) // 2], by_degree[-1]]
+    by_out = sorted(range(n_entities), key=lambda i: out_deg.get(i, 0),
+                    reverse=True)
+    by_in = sorted(range(n_entities), key=lambda i: in_deg.get(i, 0),
+                   reverse=True)
+    seeded = [by_out[0], by_out[1], by_out[len(by_out) // 2], by_out[-1],
+              by_in[0]]
+    seeded = list(dict.fromkeys(seeded))       # de-dupe, keep order
 
     candidates = list(range(n_entities))
     rng.shuffle(candidates)
