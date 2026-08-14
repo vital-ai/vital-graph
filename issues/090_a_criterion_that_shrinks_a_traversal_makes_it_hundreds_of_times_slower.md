@@ -375,6 +375,55 @@ wall-clock with no `EXPLAIN` behind it. The candidates worth separating are
 * whether the literal comparison lands in the typed lane or falls back to text,
   since `hasWeight >= 0.5` returning zero rows still costs 776 ms.
 
+### FIXED for filtered traversals — 2026-08-14
+
+Both directions above were taken. The estimates were fixed as far as they go
+(value histograms, temporal ranges, IN, equality, booleans), and the shape is
+now chosen explicitly: `emit_traversal.py` emits one nested
+`CROSS JOIN LATERAL (... OFFSET 0)` per hop so the pinned end drives the walk.
+
+The plan question at the top of "What to look at first" is answered. The flat
+join was driving from the CRITERION and probing the pinned entity last:
+
+    inner query, depth 3, score >= 50, one start entity
+    flat join        70,180 buffers   planning 26.5 ms   execution 56.6 ms
+    nested lateral      194 buffers   planning 30.0 ms   execution  1.9 ms
+
+362x fewer buffers. The nested form drives from
+`femv0.source_entity_uuid = <pin>` — 7 rows — and probes outward. End to end on
+graph_synth_10k, same answers, verified against the manifest BFS:
+
+    score >= 50        depth 2    42.3 ms -> 0.2 ms    214x
+    score >= 50        depth 3    61.4 ms -> 4.7 ms     13x
+    occurred >= mid    depth 2    45.3 ms -> 0.4 ms    122x
+    occurred >= mid    depth 3    57.9 ms -> 4.4 ms     13x
+    category IN (a,b)  depth 3    27.8 ms -> 4.4 ms    6.4x
+
+Planning is a flat ~28 ms in both shapes — the constant cost of a nine-table
+plan, and why wall-clock shows 13x where execution shows 29x. Nothing here
+touches it.
+
+**An unfiltered walk is the losing case, and is declined.** The first working
+version applied hop-wise to every pinned chain and regressed `wordnet_frames`
+depth 3 with no criterion: 865 ms flat against 2,044 ms hop-wise, 3,108 results
+from a start of out-degree 671. Hop-wise is a nested-loop strategy — it pays
+while each hop's input stays small and loses when the walk fans out. The split
+across both fixtures is exact:
+
+    criterion measured    1.8x - 234x faster, 6 of 6 cases
+    no criterion          parity on 4 synthetic cases, and that one 2.4x loss
+
+so a measured criterion is now required. Not a SELECTIVE one — `category IN`
+admits 56% of its predicate and still wins 6.4x.
+
+Worth naming plainly: that regression passed every test, because the answers
+were correct. It was caught only by benchmarking a second fixture with a
+different shape.
+
+**Still declined, deliberately**: depth 1 (no lateral to place — the depth-1 win
+needs a different structure, see `traversal_chain_plan.md`), tail-only pins
+(a reverse walk, unmeasured), and anything that will not partition into a line.
+
 ## Related
 
 - `issues/048` — the parent plan. This is Problem 2 of the three priced there;

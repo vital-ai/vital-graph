@@ -974,7 +974,12 @@ async def generate_sql(
                     total = (getattr(aliases, "pred_stats", None) or {}).get(p_uuid)
                     if total and (_crit is None or n / total < _crit / _pred):
                         _crit, _pred = n, total
-                decide_for_plan(_chains, _crit, _pred)
+                # Kept on `aliases` rather than discarded: `emit_bgp` reads
+                # it to choose the hop-wise shape. Stage order matters here and
+                # has bitten before — this runs at 2d.2, AFTER the stats it
+                # reads are loaded at 2d.1, and before emit at stage 3.
+                aliases.traversal_decision = decide_for_plan(
+                    _chains, _crit, _pred)
         except Exception as exc:
             logger.debug("traversal chain detection skipped: %s", exc)
 

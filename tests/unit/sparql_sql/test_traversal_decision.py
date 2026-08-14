@@ -10,9 +10,11 @@ Measured on graph_synth_10k, identical answers, three start entities:
     category IN (a,b)     2      1.9 ms     0.7 ms      3x
     occurred >= mid       2      2.3 ms     0.9 ms      3x
 
-Hop-wise is better in every case measured, so what remains to assert is that the
-requirement with a MECHANISM behind it still holds: a pinned end, which is what
-makes a hop's input small. An earlier version of these tests asserted that a
+What remains to assert are the two requirements with a MECHANISM behind them: a
+pinned end, which makes the first hop's input small, and a measured criterion,
+which keeps every later hop's input small. Without the second, an unfiltered
+depth-3 walk on `wordnet_frames` measured 865 ms flat against 2,044 ms hop-wise
+— hop-wise is a nested-loop strategy and fan-out is what defeats it. An earlier version of these tests asserted that a
 `category IN` criterion must be DECLINED, on a measurement of 320.9 ms that came
 from the benchmark filtering on `term_text` where the generated SQL resolves
 term UUIDs. That is 0.7 ms once corrected. Tests written around a wrong number
@@ -79,6 +81,15 @@ class TestTheGate:
         assert d.hop_wise is False
         assert "pinned" in d.reason
 
+    def test_an_unfiltered_walk_declines(self):
+        """The regression that put this gate back. `wordnet_frames`, depth 3,
+        no criterion: 865 ms flat against 2,044 ms hop-wise, 3,108 results from
+        a start of out-degree 671. Hop-wise is a nested-loop walk and it loses
+        when the intermediate sets grow unchecked."""
+        d = decide(_chain(3), criterion_rows=None, predicate_rows=47_488)
+        assert d.hop_wise is False
+        assert "no measured criterion" in d.reason
+
     def test_a_single_hop_is_CHOSEN(self):
         """This asserted the opposite, on the reasoning that one hop has nothing
         to sequence. Measured: a depth-1 walk with one criterion is 26.8 ms as
@@ -88,18 +99,12 @@ class TestTheGate:
         d = decide(_chain(1), criterion_rows=10, predicate_rows=47_488)
         assert d.hop_wise is True
 
-    def test_an_unknown_estimate_does_not_decline(self):
-        """Two of three criterion families are not measured at all yet
-        (issues/090), so requiring a number would decline most real queries for
-        no measured reason. It is reported instead."""
-        d = decide(_chain(3), criterion_rows=None, predicate_rows=47_488)
-        assert d.hop_wise is True
-        assert "unknown" in d.reason
-
     def test_a_zero_predicate_total_does_not_divide(self):
-        """Guards the division. The decision stands on depth and the pin."""
+        """Guards the division. A criterion count with nothing to divide by is
+        not a selectivity, so it is treated as unmeasured rather than as a
+        number — the conservative direction now that unmeasured declines."""
         d = decide(_chain(3), criterion_rows=5, predicate_rows=0)
-        assert d.hop_wise is True and "unknown" in d.reason
+        assert d.hop_wise is False
 
     def test_a_zero_length_chain_declines(self):
         assert decide(None).hop_wise is False
@@ -126,6 +131,7 @@ class TestReporting:
                   decide(_chain(1), 1, 10),
                   decide(_chain(3, head=False), 1, 10),
                   decide(_chain(3), None, 10),
+                  decide(_chain(3), 5, 0),
                   decide(_chain(3), 1, 10)):
             assert d.reason, "a decision with no reason cannot be diagnosed"
 

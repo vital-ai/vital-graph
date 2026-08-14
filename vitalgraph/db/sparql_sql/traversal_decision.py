@@ -34,13 +34,16 @@ declined for being insufficiently selective.
 
 WHAT IS STILL REQUIRED
 
-A pinned end, and depth. Without a pinned end there is no small driving set and
-each hop would materialise the whole relation — untested, and the one shape with
-an obvious mechanism for being worse. Depth 1 has nothing to sequence and is
-sub-millisecond either way.
+A pinned end, and a MEASURED criterion.
 
-The evidence is six cells on one fixture. That supports "do this when there is a
-driving set", not "do this always".
+Without a pinned end there is no small driving set and each hop would
+materialise the whole relation. Without a criterion the walk fans out unchecked,
+and that is not a hypothetical: an unfiltered depth-3 walk on `wordnet_frames`
+measured 865 ms flat against 2,044 ms hop-wise. Hop-wise is a nested-loop
+strategy and it loses when the intermediate sets grow.
+
+The criterion must be MEASURED, not selective. Those are different gates, and
+the difference is the whole correction above.
 """
 
 from __future__ import annotations
@@ -108,14 +111,34 @@ def decide(chain: Optional[TraversalChain],
     if not (chain.pinned_head or chain.pinned_tail):
         return Decision(False, "neither end pinned, no driving set", chain)
 
-    # Selectivity is REPORTED, not required. An unknown estimate no longer
-    # declines: hop-wise measured better on every criterion tried, including the
-    # least selective, so refusing without a number would decline the majority
-    # of real queries for no measured reason.
-    if criterion_rows is not None and predicate_rows:
-        sel = f", criterion admits {criterion_rows / predicate_rows:.0%}"
-    else:
-        sel = ", criterion selectivity unknown"
+    # A MEASURED criterion is required. Not a selective one — see below.
+    #
+    # This reverses the previous behaviour, on a measurement rather than an
+    # argument. Emitting hop-wise for every pinned chain regressed the one
+    # unfiltered deep walk in the corpus: `wordnet_frames`, depth 3, no
+    # criterion, 865 ms flat against 2,044 ms hop-wise. Hop-wise is a
+    # nested-loop strategy; it pays when each hop's input stays small and loses
+    # when the walk fans out unchecked, and 3,108 results through a start entity
+    # of out-degree 671 is the losing shape.
+    #
+    # Measured across both fixtures, the split is exact:
+    #
+    #     criterion measured    1.8x - 234x faster, 6 of 6 cases
+    #     no criterion          1.0x parity on 4 synthetic cases, and the
+    #                           single 2.4x REGRESSION above
+    #
+    # The earlier "unknown does not decline" rule was justified by two of three
+    # criterion families being unmeasurable (`issues/090`). Ranges, IN, equality
+    # and booleans have since been wired in, so "unknown" now much more often
+    # means "there is no criterion" — which is exactly the losing shape.
+    if criterion_rows is None or not predicate_rows:
+        return Decision(False, f"depth {chain.depth}, pinned but no measured "
+                               f"criterion — an unfiltered walk fans out", chain)
+
+    # Selectivity is REPORTED, not thresholded. A gate on HOW selective was
+    # tried and was wrong (see the correction above); `category IN` admits 56%
+    # of its predicate and still measured 7.1x faster at depth 3.
+    sel = f", criterion admits {criterion_rows / predicate_rows:.0%}"
 
     return Decision(
         True,

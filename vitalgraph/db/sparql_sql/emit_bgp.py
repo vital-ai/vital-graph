@@ -78,6 +78,21 @@ def emit_bgp(plan: PlanV2, ctx: EmitContext) -> str:
             f"vars: {sql_names}")
 
     # --- Build INNER query (quad tables + constraints) ---
+    # A traversal chain gets its own shape: one nested LATERAL per hop, so the
+    # pinned end drives the walk instead of whichever criterion PostgreSQL
+    # happened to root on. Same rows either way (see emit_traversal), so this
+    # declines to None freely and the flat path below is the fallback.
+    hop_wise = _try_hop_wise(plan, ctx, quad_tables, sql_names)
+    if hop_wise is not None:
+        inner_sql = hop_wise
+    else:
+        inner_sql = _emit_flat_inner(plan, ctx, quad_tables, sql_names)
+
+    return _wrap_with_terms(plan, ctx, sql_names, inner_sql)
+
+
+def _emit_flat_inner(plan: PlanV2, ctx: EmitContext, quad_tables, sql_names) -> str:
+    """The original inner query: every quad table in one reordered join."""
     inner_cols: List[str] = []
     for var, slot in plan.var_slots.items():
         sn = sql_names[var]
@@ -138,9 +153,34 @@ def emit_bgp(plan: PlanV2, ctx: EmitContext) -> str:
         if plan.constraints:
             inner_parts.append("WHERE " + " AND ".join(plan.constraints))
 
-    inner_sql = "\n".join(inner_parts)
+    return "\n".join(inner_parts)
 
-    # --- Build OUTER query (JOIN term for text + derived columns) ---
+
+def _try_hop_wise(plan: PlanV2, ctx: EmitContext, quad_tables,
+                  sql_names) -> Optional[str]:
+    """The hop-wise inner query, when a chain was found and chosen.
+
+    Wrapped so a failure here can never take a query down: the flat path is
+    still correct, and losing the optimisation is preferable to losing the
+    answer. The decision itself is made in the generator at stage 2d.2, where
+    the statistics it reads are already loaded.
+    """
+    decision = getattr(ctx.aliases, "traversal_decision", None)
+    if decision is None or not decision.hop_wise or decision.chain is None:
+        return None
+    try:
+        from .emit_traversal import emit_hop_wise
+        return emit_hop_wise(plan, decision.chain, quad_tables, sql_names)
+    except Exception as exc:
+        logger.warning("hop-wise emission failed, using the flat join: %s", exc)
+        return None
+
+
+def _wrap_with_terms(plan: PlanV2, ctx: EmitContext, sql_names,
+                     inner_sql: str) -> str:
+    """--- Build OUTER query (JOIN term for text + derived columns) ---"""
+    from .sql_type_generation import TypeRegistry, ColumnInfo
+
     # Only join term tables for variables that need text resolution
     # (projected, filtered, ordered, etc.).  Internal-only variables
     # used solely for UUID-level joins get null companions — saving one
