@@ -136,6 +136,62 @@ instability from unusable estimates rather than of a systematically bad plan
 shape, and it is why "make the estimates right" and "choose the shape
 explicitly" are different fixes.
 
+### What statistics exist, and the one gap — 2026-08-14
+
+Before collecting anything new, what is already there and already loaded into
+`AliasGenerator` at generation time:
+
+| table | content | used by |
+|---|---|---|
+| `rdf_pred_stats` | per-predicate row counts | `reorder_joins` |
+| `rdf_stats` | per (predicate, object) counts | `reorder_joins` |
+| `edge_fanout` | avg / p99 / max fan-out per edge type and direction | `emit_slice` |
+
+So per-hop fan-out WITH ITS TAIL is already measured, which is most of what a
+traversal cost model needs, and the estimates are already consulted — but only
+to order joins WITHIN a BGP. Nothing informs the plan across hops.
+
+**The gap is range selectivity on high-cardinality values.** `rdf_stats` is a
+frequent-value list, capped per predicate, and its coverage decides whether a
+criterion can be estimated at all:
+
+    predicate    distinct objects   in rdf_stats   coverage
+    score                     100            100     100.0%
+    category                    8              8     100.0%
+    occurred               68,502            196       0.3%
+    weight                 64,525          2,000       3.1%
+
+Derived selectivity, measured against ground truth:
+
+    score >= 50          est   6,936   actual   6,936    0.0% error
+    category IN (a,b)    est  38,368   actual  38,368    0.0% error
+    occurred >= mid      est     244   actual  53,455   99.5% error
+
+Exact where the value set is small; useless where it is not — and timestamps and
+doubles are precisely the criteria that arrive as ranges. So the thing to
+collect is a **per-predicate quantile summary over `num_val` and `dt_val`**:
+bucket boundaries, so a range predicate can be estimated by interpolation
+instead of by summing a frequent-value list that does not contain the values.
+Small — 32 buckets across ~20 predicates is a few hundred rows per space — and
+it fits beside `rdf_stats` on the same refresh path.
+
+Also worth fixing while there: deriving the score estimate took 90.9 ms, which
+is too slow to run per query. The summary should be read like `pred_stats` is,
+not computed by joining `rdf_stats` to `term` at generation time.
+
+### The part that changes the approach
+
+**PostgreSQL cannot be told any of this.** There are no planner hints, the
+schema is generic — the predicate is a column VALUE, not a column — and
+extended statistics on the correlated quad columns moved the estimate at the
+133,042-row node from 1 to 2.
+
+So "fix the estimates" cannot mean "make the planner's estimates right". It has
+to mean **use our own estimates to choose the plan we emit**, and emit SQL whose
+performance does not depend on the planner's estimates being right. That is what
+makes the two directions below complements rather than alternatives: the
+statistics work is what tells us WHEN to emit the hop-wise shape.
+
 ### Where that leaves it
 
 Hop-wise materialisation is the strongest candidate, but it needs to be CHOSEN
