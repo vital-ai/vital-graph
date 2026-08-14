@@ -200,7 +200,8 @@ def push_filters(plan: PlanV2, space_id: str, ctx=None) -> None:
             # not_has_any/Choice before this guard existed.
             by_var = ()
             if not in_correlated:
-                by_var = ((_inequality_var, _try_inequality_filter),
+                by_var = ((_equality_var, _try_equality_filter),
+                          (_inequality_var, _try_inequality_filter),
                           (_in_var, _try_in_filter),
                           (_text_search_var, _try_text_search))
             for find_var, try_push in by_var:
@@ -841,6 +842,78 @@ def _in_as_constants(conds_nodes, ctx) -> Optional[str]:
         col = aliases.register_constant(text, ttype)
         toks.append(f"{_CONST_PREFIX}{col}{_CONST_SUFFIX}")
     return ", ".join(toks)
+
+
+# ---------------------------------------------------------------------------
+# Equality against a single term: FILTER(?var = <uri>)
+# ---------------------------------------------------------------------------
+
+def _equality_operands(expr):
+    """(var_name, value_node) for `?var = <term>` in either order, else None."""
+    # The mapper names it "eq", not "=". Checking for the symbol matched
+    # nothing and the handler silently never fired.
+    if not isinstance(expr, ExprFunction) or (expr.name or "").lower() != "eq":
+        return None
+    args = list(expr.args or [])
+    if len(args) != 2:
+        return None
+    if isinstance(args[0], ExprVar) and isinstance(args[1], ExprValue):
+        return args[0].var, args[1].node
+    if isinstance(args[1], ExprVar) and isinstance(args[0], ExprValue):
+        return args[1].var, args[0].node
+    return None
+
+
+def _equality_var(expr) -> Optional[str]:
+    ops = _equality_operands(expr)
+    return ops[0] if ops else None
+
+
+def _try_equality_filter(expr, bgp, term_table: str, quad_aliases: set, ctx):
+    """Push `FILTER(?var = <uri>)` down to a UUID equality on the leaf.
+
+    Without this the comparison stays at the OUTERMOST level and runs against
+    the variable's resolved TEXT, so the whole query is computed and then
+    filtered. On a 3-hop traversal pinned by `FILTER(?e0 = <entity>)` the
+    generated SQL contained the entity's uuid zero times and its URI once — in a
+    trailing `WHERE (v1 = 'urn:graphsyn:entity:1256')`. Every entity in the
+    graph was walked three hops, every uuid resolved to text, and then all but
+    one starting point discarded.
+
+    Pushing it makes the leaf carry a constant, which is what lets the planner
+    drive from it. Same reasoning as `_in_as_constants`, and the same mechanism:
+    the constant is registered so the second materialization pass resolves it,
+    and an unresolved one degrades to a scalar subquery over `_const` — correct,
+    because a URI absent from the term table matches nothing.
+
+    Only single-term values qualify (`_literal_term_key`): a typed numeric is
+    several terms and one value, so term equality is not value equality and
+    `_try_numeric_filter` owns that case.
+    """
+    ops = _equality_operands(expr)
+    if ops is None:
+        return None
+    var_name, value_node = ops
+
+    key = _literal_term_key(value_node)
+    if key is None:
+        return None
+
+    slot = bgp.var_slots.get(var_name)
+    if not slot or not slot.positions:
+        return None
+    ref_id, col_name = slot.positions[0]
+    if ref_id not in quad_aliases:
+        return None
+
+    aliases = getattr(ctx, "aliases", None)
+    if aliases is None or not hasattr(aliases, "register_constant"):
+        return None
+    from .collect import _CONST_PREFIX, _CONST_SUFFIX
+    text, ttype = key
+    col = aliases.register_constant(text, ttype)
+    token = f"{_CONST_PREFIX}{col}{_CONST_SUFFIX}"
+    return (ref_id, f"{ref_id}.{col_name} = {token}")
 
 
 def _try_in_filter(expr, bgp, term_table: str, quad_aliases: set, ctx):
