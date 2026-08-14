@@ -8,6 +8,7 @@ WHAT THE CHOICE IS WORTH, on graph_synth_10k after the equality push-down,
 three start entities, identical answers throughout:
 
     criterion         depth   generated    hop-wise
+    score >= 50           1     26.8 ms     0.2 ms    134x
     score >= 50           2    132.6 ms     0.9 ms    145x
     score >= 50           3    170.0 ms     1.8 ms     97x
     category IN (a,b)     3     88.4 ms     1.4 ms     65x
@@ -56,10 +57,14 @@ logger = logging.getLogger(__name__)
 # correction in the module docstring for why a threshold here was wrong.
 SELECTIVE_FRACTION = 0.25
 
-# Below this depth there is no sequence to impose: one hop driven from a pinned
-# end is already the plan a sane optimiser picks, and the measurements agree
-# (depth 1 is sub-millisecond either way).
-MIN_DEPTH = 2
+# Depth 1 QUALIFIES. The reasoning that excluded it — "one hop is already the
+# plan a sane optimiser picks" — was wrong, and measurably so: a depth-1 walk
+# with one criterion is 26.8 ms as generated and 0.2 ms hop-wise, because the
+# planner drives from the criterion (50 terms -> 6,847 quads -> 4,660 frames)
+# and applies the PINNED ENTITY last, as a probe. The win is not from sequencing
+# several hops; it is from making the pinned constant drive, which a single hop
+# needs just as much.
+MIN_DEPTH = 1
 
 
 @dataclass
@@ -95,8 +100,7 @@ def decide(chain: Optional[TraversalChain],
         return Decision(False, "no chain")
 
     if chain.depth < MIN_DEPTH:
-        return Decision(False, f"depth {chain.depth} < {MIN_DEPTH}, nothing to sequence",
-                        chain)
+        return Decision(False, f"depth {chain.depth} < {MIN_DEPTH}", chain)
 
     # Without a pinned end there is no small driving set, so every hop would
     # materialise the whole relation. Untested, and the one shape with an

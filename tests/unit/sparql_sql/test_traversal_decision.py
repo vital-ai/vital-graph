@@ -79,11 +79,14 @@ class TestTheGate:
         assert d.hop_wise is False
         assert "pinned" in d.reason
 
-    def test_a_single_hop_declines(self):
-        """Nothing to sequence, and depth 1 is sub-millisecond either way."""
+    def test_a_single_hop_is_CHOSEN(self):
+        """This asserted the opposite, on the reasoning that one hop has nothing
+        to sequence. Measured: a depth-1 walk with one criterion is 26.8 ms as
+        generated and 0.2 ms hop-wise, because the planner drives from the
+        criterion and probes the pinned entity LAST. The win comes from making
+        the pin drive, which a single hop needs just as much."""
         d = decide(_chain(1), criterion_rows=10, predicate_rows=47_488)
-        assert d.hop_wise is False
-        assert str(MIN_DEPTH) in d.reason
+        assert d.hop_wise is True
 
     def test_an_unknown_estimate_does_not_decline(self):
         """Two of three criterion families are not measured at all yet
@@ -98,7 +101,7 @@ class TestTheGate:
         d = decide(_chain(3), criterion_rows=5, predicate_rows=0)
         assert d.hop_wise is True and "unknown" in d.reason
 
-    def test_no_chain_declines(self):
+    def test_a_zero_length_chain_declines(self):
         assert decide(None).hop_wise is False
         assert decide(TraversalChain()).hop_wise is False
 
