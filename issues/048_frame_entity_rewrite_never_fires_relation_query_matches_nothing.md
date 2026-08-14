@@ -87,6 +87,38 @@ is the property that matters, because multi-hop traversal is the thing a graph
 store exists to do. This answers the question the issue kept deferring: the
 table is not inert, and the join reduction is not theoretical.
 
+### The traversal nobody runs is the fast one — criteria are the open problem
+
+An unfiltered walk follows every edge, and is rarely the question. What decides
+which hops are taken is a criterion on the FRAME: its type in wordnet, and in
+production-shaped data a value test — score >= 100, a date range.
+
+Good news first: **a frame-level criterion does NOT cost the collapse.**
+`frame_entity` keeps `frame_uuid`, so the constraint still has a column to land
+on, and the rewrite fires with one join per hop as before. Contrast the slot-node
+constraint, which has no column and makes it decline outright. That difference
+is now covered by tests.
+
+The cost has moved rather than gone. On `wordnet_frames`, restricting each hop
+to hypernyms:
+
+    depth   unfiltered   frame type = hypernym    rows (filtered)
+    1           0.2 ms                  0.2 ms                  1
+    2           0.2 ms                  0.3 ms                  1
+    3           0.7 ms              4,043.3 ms                  1
+
+The collapse still happens — 3 frame_entity joins at depth 3 — and the query
+still takes 4 s to return ONE row, where the unfiltered version returns 32 in
+0.7 ms. **Adding a criterion that makes the answer smaller makes the query
+5,700x slower**, which is the opposite of what a filter should do, and it is
+not the rewrite declining: the plan for the criterion joins is what degrades.
+
+This is where the next work is. The table has done its job — 6 tables per hop
+became 1 — and the remaining cost is in how the per-hop criteria are joined
+onto the collapsed rows. Unmeasured so far: whether a criterion on a numeric or
+date value behaves the same way as one on a type, since wordnet can only express
+the type form.
+
 ### What still declines, and what it costs
 
 Adding `?slot a KGEntitySlot` — which the canonical query carries, and which is

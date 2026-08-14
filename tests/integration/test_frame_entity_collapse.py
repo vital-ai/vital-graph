@@ -81,6 +81,31 @@ CHAIN = [
     ("h2", "c2", "c3"),
 ]
 
+# Criteria ON THE FRAME, which is what decides whether a hop is followed. In
+# wordnet the only such criterion is the traversal type (hypernym vs hyponym);
+# production data filters on values — "score >= 100", "created in this range" —
+# so both are modelled here.
+#
+# Chosen so each criterion selects a DIFFERENT path out of c1, which is the
+# branch point. A filter that were silently ignored would return the union, and
+# every one of these tests would notice:
+#
+#     h0   HYPERNYM  score 150  2026-01-15     c0 -> c1
+#     h1   HYPERNYM  score  50  2026-06-15     c1 -> c2
+#     h1b  HYPONYM   score 200  2026-03-01     c1 -> b1
+#     h2   HYPERNYM  score 300  2026-09-01     c2 -> c3
+HYPERNYM = "urn:Edge_WordnetHypernym"
+HYPONYM = "urn:Edge_WordnetHyponym"
+FRAME_SCORE = f"{HALEY}hasKGFrameScore"
+FRAME_DATE = f"{HALEY}hasKGFrameDate"
+
+FRAME_CRITERIA = {
+    "h0":  (HYPERNYM, 150, "2026-01-15T00:00:00Z"),
+    "h1":  (HYPERNYM, 50, "2026-06-15T00:00:00Z"),
+    "h1b": (HYPONYM, 200, "2026-03-01T00:00:00Z"),
+    "h2":  (HYPERNYM, 300, "2026-09-01T00:00:00Z"),
+}
+
 ALL_FRAMES = FRAMES + CHAIN
 
 
@@ -109,10 +134,20 @@ async def seeded(collapse_space, space_impl):
         add(f"{EX}{e}", RDF_TYPE, f"{HALEY}KGEntity")
         add(f"{EX}{e}", f"{VITAL}vitaltype", f"{HALEY}KGEntity")
 
+    from rdflib import Literal, XSD
+
+    def add_lit(s, p, value, datatype):
+        quads.append((U(s), U(p), Literal(value, datatype=datatype), graph))
+
     for fname, src, dst in ALL_FRAMES:
         frame = f"{EX}{fname}"
         add(frame, RDF_TYPE, f"{HALEY}KGFrame")
         add(frame, f"{VITAL}vitaltype", f"{HALEY}KGFrame")
+        if fname in FRAME_CRITERIA:
+            ftype, score, when = FRAME_CRITERIA[fname]
+            add(frame, f"{HALEY}hasKGFrameType", ftype)
+            add_lit(frame, FRAME_SCORE, score, XSD.integer)
+            add_lit(frame, FRAME_DATE, when, XSD.dateTime)
         for role, ent, tag in ((SRC_ROLE, src, "s"), (DST_ROLE, dst, "d")):
             slot = f"{EX}{fname}_slot_{tag}"
             edge = f"{EX}{fname}_edge_{tag}"
@@ -552,3 +587,139 @@ class TestMultiHopTraversal:
         assert quad_on < quad_off, (
             f"the collapse did not reduce quad-table joins ({quad_off} -> "
             f"{quad_on}); it is meant to replace 6 tables per hop with 1")
+
+
+# ---------------------------------------------------------------------------
+# Criteria-filtered traversal — which hops are followed at all
+# ---------------------------------------------------------------------------
+
+def _filtered_chain(graph: str, start: str, depth: int, *, hop_filter: str) -> str:
+    """A chain where every hop must ALSO satisfy `hop_filter` on its frame.
+
+    This is what a real traversal looks like. An unfiltered walk follows every
+    edge and is rarely the question anyone asks; the criterion on the frame —
+    its type, a score threshold, a date range — is what decides which paths are
+    taken, and it is applied per hop rather than to the endpoints.
+    """
+    # `hop_filter` is a TEMPLATE using {n}: every variable it introduces must be
+    # numbered per hop. Sharing one `?sc` across hops silently requires a single
+    # score to satisfy every hop at once, which no path can, and the query
+    # returns empty for a reason that has nothing to do with the data.
+    hops = "".join(
+        _hop(i + 1, f"?ent{i}", f"?ent{i + 1}") + hop_filter.format(n=i + 1)
+        for i in range(depth))
+    return f"""
+    SELECT DISTINCT ?ent{depth} WHERE {{ GRAPH <{graph}> {{
+        {hops}
+        FILTER(?ent0 = <{start}>)
+    }} }}"""
+
+
+class TestCriteriaFilteredTraversal:
+    """The criterion on the frame decides which hops are followed.
+
+    wordnet can only express one kind — the traversal type — so these model the
+    value criteria production data uses: a numeric threshold and a date range.
+    Each selects a DIFFERENT path out of the branch at c1, so a criterion that
+    were dropped would return the union and be caught here rather than passing
+    as a plausible answer.
+    """
+
+    async def test_frame_type_selects_one_branch(self, seeded, pg_conn):
+        """c1 has a HYPERNYM hop to c2 and a HYPONYM hop to b1. Following only
+        hypernyms must reach c2 and not b1 — the wordnet criterion."""
+        space_id, graph = seeded
+        q = _filtered_chain(graph, f"{EX}c0", 2,
+                            hop_filter=f'\n        ?f{{n}} <{HALEY}hasKGFrameType> <{HYPERNYM}> .')
+        _sql, rows = await _rows(pg_conn, space_id, q)
+        assert _reached(rows) == {f"{EX}c2"}, (
+            "a dropped type criterion would also return b1, reached by the "
+            "hyponym edge")
+
+    async def test_a_numeric_threshold_selects_the_other_branch(self, seeded, pg_conn):
+        """score >= 100 admits h0 (150) and h1b (200) but rejects h1 (50), so
+        the walk goes to b1 — the opposite branch from the type filter. Two
+        criteria over the same graph giving different answers is what shows each
+        is actually applied."""
+        space_id, graph = seeded
+        q = _filtered_chain(graph, f"{EX}c0", 2,
+                            hop_filter=f'\n        ?f{{n}} <{FRAME_SCORE}> ?sc{{n}} . FILTER(?sc{{n}} >= 100)')
+        _sql, rows = await _rows(pg_conn, space_id, q)
+        assert _reached(rows) == {f"{EX}b1"}
+
+    async def test_a_threshold_nothing_meets_stops_the_walk(self, seeded, pg_conn):
+        space_id, graph = seeded
+        q = _filtered_chain(graph, f"{EX}c0", 2,
+                            hop_filter=f'\n        ?f{{n}} <{FRAME_SCORE}> ?sc{{n}} . FILTER(?sc{{n}} >= 10000)')
+        _sql, rows = await _rows(pg_conn, space_id, q)
+        assert _reached(rows) == set()
+
+    async def test_a_date_range_selects_by_when_the_hop_applies(self, seeded, pg_conn):
+        """h0 (Jan) and h1b (Mar) fall inside; h1 (Jun) does not. So the walk
+        reaches b1 and not c2 — the same shape a "created between" filter has."""
+        space_id, graph = seeded
+        q = _filtered_chain(
+            graph, f"{EX}c0", 2,
+            hop_filter=(f'\n        ?f{{n}} <{FRAME_DATE}> ?wh{{n}} . '
+                        f'FILTER(?wh{{n}} >= "2026-01-01T00:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> '
+                        f'&& ?wh{{n}} <= "2026-04-01T00:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime>)'))
+        _sql, rows = await _rows(pg_conn, space_id, q)
+        assert _reached(rows) == {f"{EX}b1"}
+
+    async def test_criteria_apply_per_hop_not_just_the_first(self, seeded, pg_conn):
+        """Depth 3 along the hypernym path: h0, h1 and h2 are all hypernyms, so
+        c3 is reachable. Reject h2 by score and the walk must stop at depth 2 —
+        proving the criterion is evaluated on the LAST hop too, not only where
+        the traversal starts.
+        """
+        space_id, graph = seeded
+        hyp = f'\n        ?f{{n}} <{HALEY}hasKGFrameType> <{HYPERNYM}> .'
+        _sql, rows = await _rows(pg_conn, space_id,
+                                 _filtered_chain(graph, f"{EX}c0", 3, hop_filter=hyp))
+        assert _reached(rows) == {f"{EX}c3"}
+
+        # h2 scores 300; excluding it must leave depth 3 unreachable.
+        strict = hyp + f'\n        ?f{{n}} <{FRAME_SCORE}> ?sc{{n}} . FILTER(?sc{{n}} < 300)'
+        _sql2, rows2 = await _rows(pg_conn, space_id,
+                                   _filtered_chain(graph, f"{EX}c0", 3, hop_filter=strict))
+        assert _reached(rows2) == set(), (
+            "the criterion was not applied to the final hop")
+
+    @pytest.mark.parametrize("depth", [2, 3])
+    async def test_the_collapse_survives_a_frame_criterion(self, seeded, pg_conn, depth):
+        """A criterion on the FRAME can be carried through the collapse —
+        frame_entity keeps frame_uuid, so the constraint still has a column to
+        land on. Contrast the slot-node constraint, which has none and makes the
+        rewrite decline entirely.
+
+        Recorded because it is the difference between a filtered traversal that
+        can use this table and one that cannot.
+        """
+        space_id, graph = seeded
+        q = _filtered_chain(graph, f"{EX}c0", depth,
+                            hop_filter=f'\n        ?f{{n}} <{HALEY}hasKGFrameType> <{HYPERNYM}> .')
+        sql = await _sql_for(pg_conn, space_id, q)
+        assert sql.count(f"{space_id}_frame_entity") == depth, (
+            "a frame-level criterion should not cost the collapse; if this "
+            "fails, filtered traversal has lost the table entirely")
+
+    @pytest.mark.parametrize("depth", [2, 3])
+    async def test_filtered_traversal_agrees_collapsed_or_not(
+            self, seeded, pg_conn, monkeypatch, depth):
+        """The differential that matters most: a criterion decides which paths
+        exist, so a collapse that mis-associates a frame with its endpoints
+        returns a WRONG SET rather than a slow one."""
+        space_id, graph = seeded
+        q = _filtered_chain(graph, f"{EX}c0", depth,
+                            hop_filter=f'\n        ?f{{n}} <{HALEY}hasKGFrameType> <{HYPERNYM}> .')
+
+        sql_on, rows_on = await _rows(pg_conn, space_id, q)
+        assert f"{space_id}_frame_entity" in sql_on
+
+        _disable_rewrite(monkeypatch)
+        sql_off, rows_off = await _rows(pg_conn, space_id, q)
+        assert f"{space_id}_frame_entity" not in sql_off, "rewrite not disabled"
+
+        assert _reached(rows_on) == _reached(rows_off), (
+            f"depth {depth}: the collapse changed which paths the criterion "
+            f"admits")
