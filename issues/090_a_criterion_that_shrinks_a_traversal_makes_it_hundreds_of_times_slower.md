@@ -465,6 +465,56 @@ does not without the fence.
 a single hop carrying no criterion at all (the SQL would be identical), and
 anything that will not partition into a line.
 
+### Unfiltered walks too, via deduplication — 2026-08-14
+
+The fence fixed FILTERED traversals. Unfiltered ones stayed slow, and the
+criterion gate declined them precisely because they fan out.
+
+`emit_dedup_chain` emits one CTE per hop holding the SET of entities reachable
+at that depth, so each hop's input is distinct entities rather than distinct
+paths. The wordnet depth-3 walk was materialising 501,538 rows to produce 3,108
+answers — the distinct entity count per hop is only 671 -> 583 -> 3,108 and the
+rest is the same entities reached different ways.
+
+    query                              before      dedup      ratio
+    wordnet_frames   open d3          3,092 ms      52 ms      59x
+    graph_synth_100k open d3 (hub)    2,892 ms      79 ms    36.7x
+
+Verified against the manifest BFS on 120 cases — both fixtures, every criterion,
+depths 1-3, both traversal shapes — 0 mismatches.
+
+It is deliberately NOT subject to the criterion gate: that gate exists because
+the path-wise form fans out, and deduplicating removes the fan-out by
+construction. Its own precondition is a correctness proof (a DISTINCT must be
+present, the projection confined to the final hop, nothing else needing text),
+not a cost estimate.
+
+### The remaining node, and the column for it — 2026-08-14
+
+With the walk itself fixed, the single most expensive node left is the frame
+TYPE check: on the wordnet depth-3 plan it was 79% of all buffers (2,006,247 of
+2,543,685), probed once per output row.
+
+`frame_entity.frame_type_uuid` now exists, is populated on both sync paths, and
+is migrated onto all 79 spaces — the `issues/060` treatment applied one table
+later. Against a materialised typed copy it is worth 5.8x on the dedup path
+(53 ms -> 9 ms) and 2.2x on a filtered hub walk (1,037 ms -> 466 ms).
+
+**The column is inert.** The rewrite consuming it was written and reverted: it
+returned correct answers while absorbing nothing, and the path it would have
+taken drops constraints owned by a removed table — which would have silently
+lost the type filter while every fixture still passed, since every frame in both
+IS a KGFrame. The consumption work needs a bogus-type test (assert 0 rows for a
+type matching nothing) as its correctness gate.
+
+### Where this leaves issues/090
+
+The reported symptom — "a criterion that shrinks a traversal makes it hundreds
+of times slower" — is FIXED, and the unfiltered case that was never part of the
+original report is fixed too. Remaining slow shapes are recorded in
+`planning_performance/traversal_chain_plan.md`: filtered walks from a hub that
+decline dedup (1-3 s), tail-only pins, and branching/UNION traversals.
+
 ## Related
 
 - `issues/048` — the parent plan. This is Problem 2 of the three priced there;
