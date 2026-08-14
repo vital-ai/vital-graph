@@ -1,43 +1,45 @@
 """Decide whether a traversal chain should be evaluated hop by hop.
 
 Step 2 of `planning_performance/traversal_chain_plan.md`. `traversal_chain`
-finds the chain; this says what to do about it. Like that module it is INERT —
-it returns a decision and a reason, and nothing emits differently yet.
+finds the chain; this says what to do about it. Still INERT — it returns a
+decision and a reason, and nothing emits differently yet.
 
-WHAT THE CHOICE IS WORTH, measured on graph_synth_10k after the equality
-push-down, three start entities, identical answers:
+WHAT THE CHOICE IS WORTH, on graph_synth_10k after the equality push-down,
+three start entities, identical answers throughout:
 
     criterion         depth   generated    hop-wise
-    score >= 50           2    126.7 ms     0.7 ms     181x better
-    score >= 50           3    187.7 ms     1.0 ms     188x better
-    occurred >= mid       3     75.1 ms     2.4 ms      31x better
-    category IN (a,b)     2      1.6 ms   320.9 ms     200x WORSE
-    category IN (a,b)     3     86.5 ms   684.5 ms       8x WORSE
+    score >= 50           2    132.6 ms     0.9 ms    145x
+    score >= 50           3    170.0 ms     1.8 ms     97x
+    category IN (a,b)     3     88.4 ms     1.4 ms     65x
+    occurred >= mid       3     62.8 ms     1.7 ms     37x
+    category IN (a,b)     2      1.9 ms     0.7 ms      3x
+    occurred >= mid       2      2.3 ms     0.9 ms      3x
 
-So this is not an optimisation to apply whenever a chain is found. Applied
-blindly it would make the third row 200x slower.
+Hop-wise is better in every case measured, and by more as depth grows.
 
-WHY THE RULE IS CONSERVATIVE
+A CORRECTION, because the first version of this file said otherwise. It recorded
+`category IN` at depth 2 as 200x WORSE hop-wise and built a narrow selectivity
+gate to exclude it. That measurement was wrong, and wrong because of the
+BENCHMARK rather than the shape: the hand-written comparison filtered on
+`term_text IN ('alpha','beta')` while the generated SQL resolves those values to
+term UUIDs. Filtering by text makes the planner enumerate the value side —
+38,368 quads scanned to answer a question about 11 — which is the exact failure
+`_in_as_constants` documents at 11,679 ms against 37 ms. With the constants
+resolved, the same query is 0.2 ms.
 
-Selectivity does not cleanly separate those rows: `occurred` matches ~78% of
-frames and hop-wise wins 31x, while `category` matches ~56% and hop-wise loses
-8x. The category case is NOT understood — it is not the criterion's formulation
-(a join to `term` and an `IN` subquery measure within 3% of each other), and it
-is not the result size (11 rows, 254 ms).
+So selectivity is NOT a gate here. It stays in the reason string because it is
+worth seeing, and because ranking two chains may want it later, but nothing is
+declined for being insufficiently selective.
 
-Building a rule on an unexplained correlation is how three plausible fixes in
-this area were measured to be wrong. So the gate is deliberately narrow: choose
-hop-wise only where the win is large AND explainable, and decline everywhere
-else — including cases where hop-wise would in fact have won.
+WHAT IS STILL REQUIRED
 
-That trade, on the numbers above: takes the 181x and 188x, avoids the 200x
-regression, and misses the 31x. A missed win costs what it already costs; a
-wrong choice makes a working query 200x slower.
+A pinned end, and depth. Without a pinned end there is no small driving set and
+each hop would materialise the whole relation — untested, and the one shape with
+an obvious mechanism for being worse. Depth 1 has nothing to sequence and is
+sub-millisecond either way.
 
-WHEN TO REVISIT
-
-Explain the category case first. Until then, widening the threshold is guessing
-with a bigger blast radius.
+The evidence is six cells on one fixture. That supports "do this when there is a
+driving set", not "do this always".
 """
 
 from __future__ import annotations
@@ -50,10 +52,8 @@ from .traversal_chain import TraversalChain
 
 logger = logging.getLogger(__name__)
 
-# A criterion must cut to at most this fraction of the predicate's rows before
-# hop-wise evaluation is worth forcing. 0.25 sits below the measured category
-# case (~56%) and above the score case (~15%), which is the only separation the
-# evidence actually supports.
+# Kept for reporting and for whatever ranking comes later. NOT a gate: see the
+# correction in the module docstring for why a threshold here was wrong.
 SELECTIVE_FRACTION = 0.25
 
 # Below this depth there is no sequence to impose: one hop driven from a pinned
@@ -87,9 +87,9 @@ def decide(chain: Optional[TraversalChain],
     (`sync_value_stats.estimate_range` and `rdf_pred_stats`): how many rows the
     per-hop criterion admits, out of how many the predicate has.
 
-    A missing estimate declines. `estimate_range` returns None for "unknown",
-    never zero, and treating unknown as selective would choose the shape that
-    can be 200x worse on exactly the queries nothing is known about.
+    Both are optional and neither gates the decision — they are reported so a
+    choice can be diagnosed. See the module docstring for why a selectivity
+    threshold here was wrong.
     """
     if chain is None or chain.depth == 0:
         return Decision(False, "no chain")
@@ -98,26 +98,25 @@ def decide(chain: Optional[TraversalChain],
         return Decision(False, f"depth {chain.depth} < {MIN_DEPTH}, nothing to sequence",
                         chain)
 
-    # Without a pinned end there is no small driving set, so hop-wise
-    # materialises the whole relation at every step — the shape that lost 200x.
+    # Without a pinned end there is no small driving set, so every hop would
+    # materialise the whole relation. Untested, and the one shape with an
+    # obvious mechanism for being worse — so it declines.
     if not (chain.pinned_head or chain.pinned_tail):
         return Decision(False, "neither end pinned, no driving set", chain)
 
-    if criterion_rows is None or not predicate_rows:
-        return Decision(False, "criterion selectivity unknown", chain)
-
-    fraction = criterion_rows / predicate_rows
-    if fraction > SELECTIVE_FRACTION:
-        return Decision(
-            False,
-            f"criterion admits {fraction:.0%} of rows, above the "
-            f"{SELECTIVE_FRACTION:.0%} threshold", chain)
+    # Selectivity is REPORTED, not required. An unknown estimate no longer
+    # declines: hop-wise measured better on every criterion tried, including the
+    # least selective, so refusing without a number would decline the majority
+    # of real queries for no measured reason.
+    if criterion_rows is not None and predicate_rows:
+        sel = f", criterion admits {criterion_rows / predicate_rows:.0%}"
+    else:
+        sel = ", criterion selectivity unknown"
 
     return Decision(
         True,
         f"depth {chain.depth}, pinned "
-        f"{'head' if chain.pinned_head else 'tail'}, criterion admits "
-        f"{fraction:.0%}", chain)
+        f"{'head' if chain.pinned_head else 'tail'}{sel}", chain)
 
 
 def decide_for_plan(chains, criterion_rows=None, predicate_rows=None) -> Decision:

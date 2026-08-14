@@ -3,18 +3,20 @@
 Measured on graph_synth_10k, identical answers, three start entities:
 
     criterion         depth   generated    hop-wise
-    score >= 50           3    187.7 ms     1.0 ms     188x better
-    occurred >= mid       3     75.1 ms     2.4 ms      31x better
-    category IN (a,b)     2      1.6 ms   320.9 ms     200x WORSE
+    score >= 50           2    132.6 ms     0.9 ms    145x
+    score >= 50           3    170.0 ms     1.8 ms     97x
+    category IN (a,b)     3     88.4 ms     1.4 ms     65x
+    occurred >= mid       3     62.8 ms     1.7 ms     37x
+    category IN (a,b)     2      1.9 ms     0.7 ms      3x
+    occurred >= mid       2      2.3 ms     0.9 ms      3x
 
-Applied whenever a chain is found, this optimisation makes the third row 200x
-slower. So these tests are mostly about what it must DECLINE.
-
-The category case is not understood — not the criterion's formulation (a join to
-`term` and an `IN` subquery are within 3% of each other) and not the result size
-(11 rows, 254 ms). Until it is, the gate stays narrow enough to exclude it, and
-these tests pin that narrowness so a later widening is a deliberate act rather
-than a drift.
+Hop-wise is better in every case measured, so what remains to assert is that the
+requirement with a MECHANISM behind it still holds: a pinned end, which is what
+makes a hop's input small. An earlier version of these tests asserted that a
+`category IN` criterion must be DECLINED, on a measurement of 320.9 ms that came
+from the benchmark filtering on `term_text` where the generated SQL resolves
+term UUIDs. That is 0.7 ms once corrected. Tests written around a wrong number
+lock the wrong behaviour in, which is why the numbers above are stated here.
 """
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ def _chain(depth=3, head=True, tail=False, kind="frame_entity"):
 class TestWhenItChoosesHopWise:
 
     def test_deep_pinned_and_selective(self):
-        """The measured 188x case: depth 3, pinned head, criterion ~15%."""
+        """The measured 97x case: depth 3, pinned head, criterion ~15%."""
         d = decide(_chain(3), criterion_rows=6_936, predicate_rows=47_488)
         assert d.hop_wise is True
         assert "depth 3" in d.reason and "15%" in d.reason
@@ -58,19 +60,20 @@ class TestWhenItChoosesHopWise:
         assert d.hop_wise is True
 
 
-class TestWhatItMustDecline:
-    """Each of these is a measured or reasoned way to make a query slower."""
+class TestTheGate:
+    """What is required, and what is only reported."""
 
-    def test_the_category_case_is_excluded(self):
-        """~56% of rows. Choosing hop-wise here measured 200x SLOWER at depth 2
-        and 8x slower at depth 3."""
+    def test_a_barely_selective_criterion_is_still_chosen(self):
+        """~56% of rows, and hop-wise measured 3x better at depth 2 and 65x at
+        depth 3. This asserted the opposite when the benchmark was wrong."""
         d = decide(_chain(2), criterion_rows=38_368, predicate_rows=68_704)
-        assert d.hop_wise is False
-        assert "above the" in d.reason
+        assert d.hop_wise is True
+        assert "56%" in d.reason
 
     def test_an_unpinned_chain_declines(self):
-        """No pinned end means no small driving set, so every hop materialises
-        the whole relation — the shape that lost 200x."""
+        """No pinned end means no small driving set, so every hop would
+        materialise the whole relation. Untested, and the one shape with an
+        obvious mechanism for being worse."""
         d = decide(_chain(3, head=False, tail=False),
                    criterion_rows=10, predicate_rows=47_488)
         assert d.hop_wise is False
@@ -82,43 +85,35 @@ class TestWhatItMustDecline:
         assert d.hop_wise is False
         assert str(MIN_DEPTH) in d.reason
 
-    def test_an_unknown_estimate_declines(self):
-        """`estimate_range` returns None for "unknown", never zero. Reading
-        unknown as selective would pick the 200x-worse shape on exactly the
-        queries nothing is known about."""
+    def test_an_unknown_estimate_does_not_decline(self):
+        """Two of three criterion families are not measured at all yet
+        (issues/090), so requiring a number would decline most real queries for
+        no measured reason. It is reported instead."""
         d = decide(_chain(3), criterion_rows=None, predicate_rows=47_488)
-        assert d.hop_wise is False
+        assert d.hop_wise is True
         assert "unknown" in d.reason
 
-    def test_a_zero_predicate_total_declines(self):
-        """Guards the division as well as the logic."""
+    def test_a_zero_predicate_total_does_not_divide(self):
+        """Guards the division. The decision stands on depth and the pin."""
         d = decide(_chain(3), criterion_rows=5, predicate_rows=0)
-        assert d.hop_wise is False
+        assert d.hop_wise is True and "unknown" in d.reason
 
     def test_no_chain_declines(self):
         assert decide(None).hop_wise is False
         assert decide(TraversalChain()).hop_wise is False
 
 
-class TestTheThreshold:
+class TestSelectivityIsReportedNotRequired:
+    """It was a gate, on a measurement that turned out to be a benchmark
+    artefact. Kept visible because a choice should be diagnosable."""
 
-    def test_just_inside_is_chosen(self):
-        d = decide(_chain(3), criterion_rows=int(1000 * SELECTIVE_FRACTION) - 1,
-                   predicate_rows=1000)
-        assert d.hop_wise is True
+    def test_both_selective_and_unselective_are_chosen(self):
+        score = decide(_chain(3), 6_936, 47_488)       # ~15%
+        category = decide(_chain(3), 38_368, 68_704)   # ~56%
+        assert score.hop_wise and category.hop_wise
 
-    def test_just_outside_declines(self):
-        d = decide(_chain(3), criterion_rows=int(1000 * SELECTIVE_FRACTION) + 1,
-                   predicate_rows=1000)
-        assert d.hop_wise is False
-
-    def test_the_threshold_separates_the_measured_cases(self):
-        """The only separation the evidence supports: score at ~15% is chosen,
-        category at ~56% is not. Change SELECTIVE_FRACTION and this says whether
-        the change still respects the measurements."""
-        score = decide(_chain(3), 6_936, 47_488)
-        category = decide(_chain(3), 38_368, 68_704)
-        assert score.hop_wise and not category.hop_wise
+    def test_the_fraction_appears_in_the_reason(self):
+        assert "15%" in decide(_chain(3), 6_936, 47_488).reason
 
 
 class TestReporting:

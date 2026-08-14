@@ -192,6 +192,41 @@ performance does not depend on the planner's estimates being right. That is what
 makes the two directions below complements rather than alternatives: the
 statistics work is what tells us WHEN to emit the hop-wise shape.
 
+### The "category IN is 200x worse" counter-example was a BENCHMARK error
+
+Retracted 2026-08-14. The hop-wise form was recorded as 200x slower on a
+non-selective string criterion, and a narrow selectivity gate was built to
+exclude it. `EXPLAIN` on that query showed the cause, and it was not the shape:
+
+    Index Scan rdf_quad   actual=19,184 rows  loops=2   ->  38,368 rows
+
+38,368 is every quad whose category is alpha or beta. The plan was enumerating
+the VALUE side to answer a question about 11 rows, because the hand-written
+comparison filtered `t.term_text IN ('alpha','beta')` while the generated SQL
+resolves those values to term UUIDs first. That is precisely the failure
+`_in_as_constants` documents — 11,679 ms against 37 ms on has_any/Text — and it
+was reproduced here by writing the benchmark the wrong way.
+
+With the constants resolved the same query is 0.2 ms. Corrected surface, three
+start entities, identical answers:
+
+    criterion         depth   generated    hop-wise
+    score >= 50           2    132.6 ms     0.9 ms    145x
+    score >= 50           3    170.0 ms     1.8 ms     97x
+    category IN (a,b)     3     88.4 ms     1.4 ms     65x
+    occurred >= mid       3     62.8 ms     1.7 ms     37x
+    category IN (a,b)     2      1.9 ms     0.7 ms      3x
+    occurred >= mid       2      2.3 ms     0.9 ms      3x
+
+**Hop-wise is better in every case measured**, and by more as depth grows. There
+is no counter-example, the decision no longer gates on selectivity, and the
+threshold that existed to exclude this case is gone.
+
+The lesson is about the measurement, not the optimisation: a hand-written
+comparison has to be written the way the generator writes it, or it measures the
+benchmark. Three of the day's conclusions in this issue came from hand-written
+SQL, and this is the one that was wrong.
+
 ### Not every criterion family is measured — found 2026-08-14
 
 The shape decision asks how selective the per-hop criterion is. For two of the
