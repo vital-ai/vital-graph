@@ -489,7 +489,7 @@ construction. Its own precondition is a correctness proof (a DISTINCT must be
 present, the projection confined to the final hop, nothing else needing text),
 not a cost estimate.
 
-### The remaining node, and the column for it — 2026-08-14
+### The remaining node, and the column that removed it — 2026-08-14
 
 With the walk itself fixed, the single most expensive node left is the frame
 TYPE check: on the wordnet depth-3 plan it was 79% of all buffers (2,006,247 of
@@ -500,12 +500,24 @@ is migrated onto all 79 spaces — the `issues/060` treatment applied one table
 later. Against a materialised typed copy it is worth 5.8x on the dedup path
 (53 ms -> 9 ms) and 2.2x on a filtered hub walk (1,037 ms -> 466 ms).
 
-**The column is inert.** The rewrite consuming it was written and reverted: it
-returned correct answers while absorbing nothing, and the path it would have
-taken drops constraints owned by a removed table — which would have silently
-lost the type filter while every fixture still passed, since every frame in both
-IS a KGFrame. The consumption work needs a bogus-type test (assert 0 rows for a
-type matching nothing) as its correctness gate.
+**Consumed as of `ce9d64c`**: `<frame> vitaltype <Type>` now emits
+`femv.frame_type_uuid = '...'::uuid` rather than joining back to rdf_quad.
+Measured with absorption toggled on the identical query, 7 interleaved
+repetitions: **48.1 ms -> 20.3 ms, 2.4x**, same 3,108 rows. Lower than the 5.8x
+estimated against a materialised copy, because that comparison was a bare
+`count(*)` over a hand-written CTE chain rather than the SQL the pipeline emits.
+
+A first attempt returned correct answers while absorbing nothing:
+`_remap_constraint_sql` leaves a column mapped to None untouched, so
+`q0.predicate_uuid` survived, the leftover check saw a removed alias still
+referenced, and the whole rewrite declined to the original plan. Silently
+correct, no faster, no symptom.
+
+The near-miss is why the suite now carries a test constraining on a type NOTHING
+has, asserting zero rows. Had the absorption taken effect through the generic
+path — which drops constraints owned by a removed table — the type filter would
+have been lost, and every differential would still have passed, because every
+frame in both fixtures IS a KGFrame and the constraint is a tautology there.
 
 ### Where this leaves issues/090
 
