@@ -262,6 +262,49 @@ because a partial sum is an undercount rather than an estimate.
 This benefits the semi-join gate and join ordering as much as the traversal
 decision — an unmeasured range or IN was making both run blind.
 
+### Criterion coverage, audited across every datatype — 2026-08-14
+
+Asked whether all datatypes are handled, including boolean, uri and
+multi-valued. Audited by running one query per shape through the gate on the
+traversal fixture, which carries all six:
+
+    integer  >=                  range stat
+    double   >=                  range stat
+    dateTime >=                  range stat
+    string   IN                  in/eq stat   38,368  exact
+    uri      IN                  in/eq stat   23,719
+    string   CONTAINS            text stat
+    string   = (FILTER)          in/eq stat   21,852  exact
+    uri      = (FILTER)          in/eq stat   11,823
+    boolean  = (FILTER)          NOT measured
+    string / boolean / uri INLINE in the triple
+                                 constant pair, already counted
+
+The audit found one coherent gap and one deliberate exclusion.
+
+**Equality as a FILTER was unmeasured for every datatype** — string, boolean and
+uri alike — while the same constant written INLINE in the triple was counted as
+an ordinary leaf pair. That mattered more after the equality push-down landed
+(`6d56a87`), which turns exactly that FILTER into a leaf constraint at emit
+time while nothing measured it at gate time. An equality is an IN of one value,
+so it now reuses that path.
+
+**Boolean as a FILTER stays unmeasured, deliberately.** `true` and `1` are two
+terms and one value, the same reason typed numerics are excluded from term-count
+summing — a sum over terms would answer a different question. The range path
+does not cover booleans either, so the only measured boolean form is the inline
+one. Worth revisiting only with a value-normalising lookup, not by relaxing
+`_literal_term_key`.
+
+**Multi-valued predicates are UNTESTED, not verified.** `rdf_stats.row_count`
+counts QUADS, so on a predicate with several values per subject an IN sum
+exceeds the number of matching SUBJECTS. Every criterion predicate in the
+traversal fixture is single-valued — quads equal distinct subjects, ratio 1.00 —
+so nothing here exercises it. The error direction is "looks less selective than
+it is", which is conservative for choosing a plan and wrong for ranking two
+criteria against each other. A multi-valued criterion in the generator would
+close this.
+
 ### Where that leaves it
 
 Hop-wise materialisation is the strongest candidate, but it needs to be CHOSEN

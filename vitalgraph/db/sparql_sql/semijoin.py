@@ -250,7 +250,8 @@ def needed_ins(plan, aliases) -> set:
     terms and one value, so summing term counts would not answer the question
     asked.
     """
-    from .filter_pushdown import _in_operands, _literal_term_key
+    from .filter_pushdown import (_in_operands, _literal_term_key,
+                                  _equality_operands)
     from ..jena_sparql.jena_types import ExprFunction
 
     out = set()
@@ -259,9 +260,24 @@ def needed_ins(plan, aliases) -> set:
             if not isinstance(expr, ExprFunction):
                 continue
             ops = _in_operands(expr)
-            if ops is None:
-                continue
-            var_name, _sql_op, _conds, nodes = ops
+            if ops is not None:
+                var_name, _sql_op, _conds, nodes = ops
+            else:
+                # An equality is an IN of one value, and it needs the same
+                # answer. Only the FILTER form arrives here: a constant written
+                # inline in the triple is a leaf term, so `needed_pairs` already
+                # counts it. Measured coverage before this: string, boolean and
+                # uri were all counted inline and all unmeasured as a FILTER.
+                eq = _equality_operands(expr)
+                if eq is None:
+                    continue
+                var_name, nodes = eq[0], [eq[1]]
+            # `_literal_term_key` accepts URIs and plain / xsd:string literals
+            # only. A typed numeric is several terms and one value ("5", "5.0",
+            # "05"), so summing term counts would answer a different question,
+            # and the same holds for xsd:boolean, where "true" and "1" are two
+            # terms. Those are declined here and covered by the range path or
+            # inline as a leaf constant.
             keys = [_literal_term_key(n) for n in nodes]
             if not keys or any(k is None for k in keys):
                 continue
