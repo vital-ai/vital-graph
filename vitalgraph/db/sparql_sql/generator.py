@@ -820,6 +820,16 @@ async def generate_sql(
         from .var_scope import compute_text_needed_vars
         text_needed = compute_text_needed_vars(plan)
 
+        # Stage 2c.1: Traversal chains. Detection only — this changes no SQL.
+        # It records what a multi-hop walk looks like so a later pass can order
+        # or reshape it; today it exists to be observable against real queries
+        # before anything acts on it (planning_performance/traversal_chain_plan.md).
+        try:
+            from .traversal_chain import describe_chains
+            describe_chains(plan)
+        except Exception as exc:
+            logger.debug("traversal chain detection skipped: %s", exc)
+
         # Stage 2d: Vector/geo optimization hints (pure, no I/O)
         from .vg_optimize import vg_optimize
         plan = vg_optimize(plan)
