@@ -17,6 +17,12 @@ SLOT_TYPE_URI = "http://vital.ai/ontology/haley-ai-kg#hasKGSlotType"
 SLOT_VALUE_URI = "http://vital.ai/ontology/haley-ai-kg#hasEntitySlotValue"
 SOURCE_ENTITY_URI = "urn:hasSourceEntity"
 DEST_ENTITY_URI = "urn:hasDestinationEntity"
+# The frame's type, denormalised onto the row (issues/060 did the same for
+# `edge`). VITALTYPE rather than rdf:type, for three reasons that agree: it is
+# single-valued by design so the column is well-defined, `edge_type_uuid` uses
+# it, and it is what the product actually queries with —
+# `kgframes_endpoint` emits `<frame> vital-core:vitaltype <KGFrame>`.
+VITALTYPE_URI = "http://vital.ai/ontology/vital-core#vitaltype"
 
 # Deterministic UUID namespace (same as sparql_sql_space_impl)
 _VITALGRAPH_NS = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
@@ -26,6 +32,7 @@ _ST_UUID = uuid.uuid5(_VITALGRAPH_NS, f"{SLOT_TYPE_URI}\x00U")
 _SV_UUID = uuid.uuid5(_VITALGRAPH_NS, f"{SLOT_VALUE_URI}\x00U")
 _SRC_UUID = uuid.uuid5(_VITALGRAPH_NS, f"{SOURCE_ENTITY_URI}\x00U")
 _DST_UUID = uuid.uuid5(_VITALGRAPH_NS, f"{DEST_ENTITY_URI}\x00U")
+_VT_UUID = uuid.uuid5(_VITALGRAPH_NS, f"{VITALTYPE_URI}\x00U")
 
 
 async def _resolve_uuids(conn, space_id: str):
@@ -90,7 +97,8 @@ async def sync_frame_entity_after_edge_insert(
     inserted = 0
     for chunk in chunk_uuids(touched_uuids):
         result = await conn.execute(f"""
-            INSERT INTO {t_fe} (frame_uuid, source_entity_uuid, dest_entity_uuid, context_uuid)
+            INSERT INTO {t_fe} (frame_uuid, source_entity_uuid, dest_entity_uuid,
+                                context_uuid, frame_type_uuid)
             SELECT
                 emv.source_node_uuid AS frame_uuid,
                 (array_agg(sv.object_uuid) FILTER (
@@ -99,7 +107,14 @@ async def sync_frame_entity_after_edge_insert(
                 (array_agg(sv.object_uuid) FILTER (
                     WHERE st.object_uuid = $4
                 ))[1] AS dest_entity_uuid,
-                emv.context_uuid
+                emv.context_uuid,
+                -- One vitaltype per frame by design, so this picks the single
+                -- value rather than choosing between several. Aggregated
+                -- because the GROUP BY is per frame while the join fans out
+                -- over that frame's slots, and FILTERed because the LEFT JOIN
+                -- contributes NULLs that would otherwise win position [1].
+                (array_agg(vt.object_uuid)
+                 FILTER (WHERE vt.object_uuid IS NOT NULL))[1] AS frame_type_uuid
             FROM {t_edge} emv
             JOIN {t_quad} st
                 ON st.subject_uuid = emv.dest_node_uuid
@@ -107,6 +122,10 @@ async def sync_frame_entity_after_edge_insert(
             JOIN {t_quad} sv
                 ON sv.subject_uuid = emv.dest_node_uuid
                 AND sv.predicate_uuid = $2
+            LEFT JOIN {t_quad} vt
+                ON vt.subject_uuid = emv.source_node_uuid
+                AND vt.context_uuid = emv.context_uuid
+                AND vt.predicate_uuid = $6
             WHERE st.object_uuid IN ($3, $4)
               -- Select the FRAMES the write touched, then aggregate over ALL
               -- of each frame's slots. Filtering the join rows themselves by
@@ -123,7 +142,7 @@ async def sync_frame_entity_after_edge_insert(
             HAVING (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $3))[1] IS NOT NULL
                AND (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $4))[1] IS NOT NULL
             ON CONFLICT DO NOTHING
-        """, st_uuid, sv_uuid, src_uuid, dst_uuid, chunk)
+        """, st_uuid, sv_uuid, src_uuid, dst_uuid, chunk, _VT_UUID)
         inserted += int(result.split()[-1]) if result else 0
 
     if inserted:
@@ -312,7 +331,8 @@ async def resync_frame_entity_table(conn, space_id: str) -> int:
     await conn.execute(f"TRUNCATE {t_fe}")
 
     result = await conn.execute(f"""
-        INSERT INTO {t_fe} (frame_uuid, source_entity_uuid, dest_entity_uuid, context_uuid)
+        INSERT INTO {t_fe} (frame_uuid, source_entity_uuid, dest_entity_uuid,
+                            context_uuid, frame_type_uuid)
         SELECT
             emv.source_node_uuid AS frame_uuid,
             (array_agg(sv.object_uuid) FILTER (
@@ -321,7 +341,9 @@ async def resync_frame_entity_table(conn, space_id: str) -> int:
             (array_agg(sv.object_uuid) FILTER (
                 WHERE st.object_uuid = $4
             ))[1] AS dest_entity_uuid,
-            emv.context_uuid
+            emv.context_uuid,
+            (array_agg(vt.object_uuid)
+             FILTER (WHERE vt.object_uuid IS NOT NULL))[1] AS frame_type_uuid
         FROM {t_edge} emv
         JOIN {t_quad} st
             ON st.subject_uuid = emv.dest_node_uuid
@@ -329,11 +351,15 @@ async def resync_frame_entity_table(conn, space_id: str) -> int:
         JOIN {t_quad} sv
             ON sv.subject_uuid = emv.dest_node_uuid
             AND sv.predicate_uuid = $2
+        LEFT JOIN {t_quad} vt
+            ON vt.subject_uuid = emv.source_node_uuid
+            AND vt.context_uuid = emv.context_uuid
+            AND vt.predicate_uuid = $5
         WHERE st.object_uuid IN ($3, $4)
         GROUP BY emv.source_node_uuid, emv.context_uuid
         HAVING (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $3))[1] IS NOT NULL
            AND (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $4))[1] IS NOT NULL
-    """, st_uuid, sv_uuid, src_uuid, dst_uuid)
+    """, st_uuid, sv_uuid, src_uuid, dst_uuid, _VT_UUID)
 
     inserted = int(result.split()[-1]) if result else 0
     await conn.execute(f"ANALYZE {t_fe}")
@@ -361,21 +387,26 @@ async def backfill_frame_entity_table(conn, space_id: str) -> int:
     t_quad = f"{space_id}_rdf_quad"
 
     result = await conn.execute(f"""
-        INSERT INTO {t_fe} (frame_uuid, source_entity_uuid, dest_entity_uuid, context_uuid)
+        INSERT INTO {t_fe} (frame_uuid, source_entity_uuid, dest_entity_uuid,
+                            context_uuid, frame_type_uuid)
         SELECT
             emv.source_node_uuid AS frame_uuid,
             (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $3))[1] AS source_entity_uuid,
             (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $4))[1] AS dest_entity_uuid,
-            emv.context_uuid
+            emv.context_uuid,
+            (array_agg(vt.object_uuid)
+             FILTER (WHERE vt.object_uuid IS NOT NULL))[1] AS frame_type_uuid
         FROM {t_edge} emv
         JOIN {t_quad} st ON st.subject_uuid = emv.dest_node_uuid AND st.predicate_uuid = $1
         JOIN {t_quad} sv ON sv.subject_uuid = emv.dest_node_uuid AND sv.predicate_uuid = $2
+        LEFT JOIN {t_quad} vt ON vt.subject_uuid = emv.source_node_uuid
+            AND vt.context_uuid = emv.context_uuid AND vt.predicate_uuid = $5
         WHERE st.object_uuid IN ($3, $4)
         GROUP BY emv.source_node_uuid, emv.context_uuid
         HAVING (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $3))[1] IS NOT NULL
            AND (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $4))[1] IS NOT NULL
         ON CONFLICT DO NOTHING
-    """, st_uuid, sv_uuid, src_uuid, dst_uuid)
+    """, st_uuid, sv_uuid, src_uuid, dst_uuid, _VT_UUID)
 
     inserted = int(result.split()[-1]) if result else 0
     if inserted:

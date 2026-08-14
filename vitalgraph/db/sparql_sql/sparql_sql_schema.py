@@ -777,6 +777,20 @@ class SparqlSQLSchema:
                 source_entity_uuid   UUID,
                 dest_entity_uuid     UUID,
                 context_uuid         UUID NOT NULL,
+                -- The frame's rdf:type / vitaltype, denormalised for the same
+                -- reason as `edge.edge_type_uuid` (issues/060): without it a
+                -- typed hop joins back to rdf_quad per row, handing back the
+                -- join reduction this table exists to provide. Measured on
+                -- wordnet_frames depth 3, the type probe was 79% of all buffers
+                -- (2,006,247 of 2,543,685) and the walk went 53 ms -> 9 ms once
+                -- it became a column predicate.
+                --
+                -- NULLABLE on purpose, matching edge: a frame reachable through
+                -- its slots but carrying no type triple is still a frame, and
+                -- populating this with an inner join would silently drop it —
+                -- changing which rows the table describes rather than only how
+                -- fast it answers.
+                frame_type_uuid      UUID,
                 PRIMARY KEY (frame_uuid, context_uuid)
             ){_part}''')
         if partition_quads > 0:
@@ -1067,6 +1081,11 @@ class SparqlSQLSchema:
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fe_dst_frame ON {t['frame_entity']} (dest_entity_uuid, frame_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fe_frame ON {t['frame_entity']} (frame_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fe_ctx ON {t['frame_entity']} (context_uuid)",
+            # Type-leading, mirroring idx_*_edge_type_src/_dst. A typed
+            # traversal filters on the type and then walks by source or dest,
+            # so the type has to lead for the scan to start there.
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fe_type_src ON {t['frame_entity']} (frame_type_uuid, source_entity_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fe_type_dst ON {t['frame_entity']} (frame_type_uuid, dest_entity_uuid)",
 
             # Geo table indexes
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_geo_gist ON {t['geo']} USING gist (location)",
