@@ -194,6 +194,32 @@ def estimate_range(stats: Dict[Tuple[str, str], dict], predicate_uuid: str,
             return None
         return d.total_seconds() if hasattr(d, "total_seconds") else float(d)
 
+    # A threshold AT or BEYOND an extreme boundary selects the mass sitting at
+    # that extreme, and the histogram does not record it. Quantile boundaries
+    # say where the data is divided, not how many rows share the end value.
+    #
+    # Reporting a number here was badly wrong on DISCRETE data. `hasScore` on
+    # graph_synth_100k runs 0..99 with 6,032 rows at exactly 99; `>= 99` fell
+    # into `frac_below = 1.0`, produced `max(1, 0)`, and estimated ONE row for
+    # six thousand — a 6,000x underestimate, in the direction that makes a
+    # criterion look perfectly selective and get applied last. Continuous data
+    # hides this, because ties at the maximum are negligible there.
+    #
+    # None sends the caller to the counted form, which is exact. That is the
+    # right trade precisely here: a tail predicate matches few rows, so the
+    # count is cheap and nowhere near `_PAIR_COUNT_CAP`.
+    #
+    # Inside the try because the comparison itself can fail: a datetime value
+    # against numeric bounds raises TypeError, and that has to stay "unknown"
+    # rather than propagating out of an estimator.
+    try:
+        if op in (">=", ">") and value >= bounds[-1]:
+            return None
+        if op in ("<=", "<") and value <= bounds[0]:
+            return None
+    except TypeError:
+        return None
+
     try:
         if value <= bounds[0]:
             frac_below = 0.0

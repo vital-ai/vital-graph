@@ -36,7 +36,7 @@ class TestUniform:
     error here is a bug in the estimator rather than in the model."""
 
     @pytest.mark.parametrize("value,expected", [
-        (0, 1000), (10, 900), (50, 500), (90, 100), (100, 1),
+        (0, 1000), (10, 900), (50, 500), (90, 100),
     ])
     def test_gte(self, value, expected):
         got = estimate_range(UNIFORM, P, NUM, ">=", value)
@@ -54,11 +54,34 @@ class TestUniform:
     def test_below_the_minimum_is_everything(self):
         assert estimate_range(UNIFORM, P, NUM, ">=", -5) == 1000
 
-    def test_above_the_maximum_is_not_zero(self):
-        """A zero estimate is what makes a planner apply the filter last, and
-        the boundaries are quantiles — beyond the last one there are still
-        rows. Never zero, by construction."""
-        assert estimate_range(UNIFORM, P, NUM, ">=", 1000) >= 1
+    def test_at_or_above_the_maximum_is_UNKNOWN(self):
+        """Not zero, and no longer a fabricated 1 either.
+
+        A threshold at or past the top boundary selects the mass sitting AT the
+        maximum, and a quantile histogram does not record how big that mass is.
+        The old code answered `max(1, 0)` — measured on graph_synth_100k, where
+        `hasScore` runs 0..99 with 6,032 rows at exactly 99, that estimated ONE
+        row for six thousand. A 6,000x underestimate, in the direction that
+        makes a criterion look perfectly selective and get applied last.
+
+        Continuous data hides it: ties at the maximum are negligible there, so
+        this only bites on discrete values, which is most integer criteria.
+
+        None sends the caller to the counted form, which is exact — and cheap
+        precisely here, because a tail predicate matches few rows."""
+        assert estimate_range(UNIFORM, P, NUM, ">=", 100) is None
+        assert estimate_range(UNIFORM, P, NUM, ">=", 1000) is None
+
+    def test_at_or_below_the_minimum_is_UNKNOWN(self):
+        """The mirror: `<= min` selects the mass at the minimum."""
+        assert estimate_range(UNIFORM, P, NUM, "<=", 0) is None
+        assert estimate_range(UNIFORM, P, NUM, "<=", -5) is None
+
+    def test_the_other_direction_at_an_extreme_is_still_answerable(self):
+        """`>= min` is everything and `<= max` is everything; neither depends
+        on the unrecorded tie mass, so neither goes unknown."""
+        assert estimate_range(UNIFORM, P, NUM, ">=", -5) == 1000
+        assert estimate_range(UNIFORM, P, NUM, "<=", 100) == 1000
 
 
 class TestUnknownIsNotZero:

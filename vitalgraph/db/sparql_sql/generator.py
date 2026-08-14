@@ -635,8 +635,17 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
             # SATURATE. The counted form below stops at _PAIR_COUNT_CAP, so on a
             # large space every wide range reports the same capped number and
             # two criteria that differ by orders of magnitude become
-            # indistinguishable (issues/061). Measured within 2% of exact on the
-            # traversal fixture's integer and dateTime criteria.
+            # indistinguishable (issues/061).
+            #
+            # ACCURACY, measured across 39 thresholds on graph_synth_10k and
+            # _100k: within ~2% in the BODY of a distribution, and unreliable in
+            # the TAILS — worst 47% on 100k and 8,566% on 10k, where 32
+            # equi-depth buckets put a wide, near-empty value range in one
+            # bucket and interpolate it linearly. An earlier comment here
+            # claimed "within 2%" outright; that was measured on mid-range
+            # thresholds only. `estimate_range` now returns None rather than a
+            # number at either extreme, so the worst case falls back to this
+            # counted form instead of inventing one.
             est = _estimate_from_histogram(vstats, p_uuid, op, literal)
             if est is not None:
                 aliases.range_stats[(p_uuid, op, literal)] = est
