@@ -32,22 +32,32 @@ So selectivity is NOT a gate here. It stays in the reason string because it is
 worth seeing, and because ranking two chains may want it later, but nothing is
 declined for being insufficiently selective.
 
-THE CRITERION REQUIREMENT IS UNDER REVIEW — 2026-08-14
+THE CRITERION REQUIREMENT IS CORRECT — re-measured 2026-08-14 on an isolated host
 
 It was added because an unfiltered depth-3 walk on `wordnet_frames` measured
-865 ms flat against 2,044 ms hop-wise. Re-measured with INTERLEAVED runs
-(alternating plans, 7-9 repetitions, medians rather than min-of-2), that
-reverses: 3,158 ms flat against 2,129 ms hop-wise, and the same reversal appears
-on `graph_synth_100k` (2,452 against 1,918). The flat plan's median on the
-wordnet query ranged 822 ms to 3,158 ms across one session with that space
-untouched, while hop-wise held 1,989-2,129 ms with a quarter of the variance.
+865 ms flat against 2,044 ms hop-wise. A re-measurement on the busy development
+machine appeared to REVERSE that, and this docstring said so for part of a day.
 
-So the evidence for this gate is currently contradicted, and the gate is
-DECLINING queries hop-wise would win. It stays until the comparison has been
-repeated on a quiet machine across sessions — this area has produced four
-measurements that reversed on closer inspection, and removing a safety gate on
-the fifth would be the same mistake. See
-`planning_performance/stats_table_freshness_plan.md`.
+Re-run on the isolated test cluster (`vg-test`, same 16 GB buffer pool as the
+host, nothing else on it), interleaved, 9 repetitions, on `graph_synth_100k`
+depth 3 from a hub start — a different fixture from the original:
+
+    flat                       1,555 ms   stdev 200
+    path-wise (gate bypassed)  2,514 ms   stdev 234      0.62x — 1.6x SLOWER
+    dedup (what ships now)       105 ms   stdev  20     14.7x FASTER
+
+**The original finding holds.** Path-wise emission really is ~1.6x slower for an
+unfiltered walk, on two independent fixtures, and the gate that refuses it is
+right. What did not hold was the contradicting measurement: it was taken on a
+machine that had spent a day loading and benchmarking 19M-quad fixtures, where
+the flat plan's median swung between 822 ms and 3,158 ms. Isolation, not
+repetition, was what the comparison needed.
+
+Note the scope this gate now has. `emit_dedup_chain` handles the unfiltered case
+far better than either arm above and is deliberately NOT gated, so the gate only
+decides what happens when dedup declines. It is still worth having — that is
+exactly when the walk is path-wise and fans out — but it is no longer the thing
+standing between a user and a slow query.
 
 WHAT IS STILL REQUIRED
 
