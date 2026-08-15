@@ -31,8 +31,8 @@ WHAT IT CONTAINS
   nested frames   frame -> frame via Edge_hasKGFrame, to depth 8. The third
                   shape, and the one nothing had: a criterion living one level
                   BELOW the frame that connects two entities, plus chains
-                  deeper than `emit_path.MAX_PATH_DEPTH = 5` so a truncating
-                  property path is caught rather than assumed absent
+                  deeper than any plausible cap so a truncating property
+                  path is caught rather than assumed absent
   criteria        on every connection frame and every relation:
                     integer   score       uniform [0, 100)
                     double    weight      uniform [0, 1)
@@ -127,7 +127,7 @@ RELATION_TYPES = ["Knows", "Owns", "Supersedes"]
 #
 # The third shape, and the one no fixture had. `traversal_chain_plan.md` GAP 4:
 # frames nest via `Edge_hasKGFrame`, arbitrary depth is served by SPARQL
-# property paths through a recursive CTE capped at `MAX_PATH_DEPTH = 5`, and
+# property paths through a recursive CTE, and
 # none of the chain detection, hop-wise emission or dedup has ever been tested
 # against a nested-frame walk. Checked before building this: zero
 # `Edge_hasKGFrame` terms in any loaded space, and `test_frame_nesting_hops.py`
@@ -158,7 +158,7 @@ NEST_DECAY = 0.5
 
 # THE CAP MUST BE EXERCISED, AND A PROBABILITY IS NOT A GUARANTEE.
 #
-# The question GAP 4 asks is whether `MAX_PATH_DEPTH = 5` silently truncates
+# The question GAP 4 asks is whether a recursive path silently truncates
 # real nesting, and a truncated walk returns FEWER rows — which reads as a
 # correct answer. A geometric draw at NEST_DECAY gives depth >= 6 about 3% of
 # the time, so on an unlucky seed the fixture would contain nothing past the cap
@@ -527,7 +527,7 @@ def nesting_ground_truth(nested, frame_edges):
     Two questions, because GAP 4 asks two:
 
       * **The property path.** `?f <Edge_hasKGFrame>* ?child` over a root whose
-        subtree is deeper than `MAX_PATH_DEPTH`. `deep_roots` records, per
+        subtree is deeper than 5. `deep_roots` records, per
         connection frame with a chain past the cap, the descendants at each
         depth — so a truncating walk is caught by a count, not by inspection.
       * **The nested criterion.** Which connection frames have a DESCENDANT
@@ -557,7 +557,7 @@ def nesting_ground_truth(nested, frame_edges):
     deep_roots = {}
     for fi in range(min(DEEP_CHAIN_COUNT, len(frame_edges))):
         d = descendants_by_depth(fi)
-        if len(d) > 5:                    # past MAX_PATH_DEPTH, which is the point
+        if len(d) > 5:                    # deep enough to expose truncation
             deep_roots[str(fi)] = d
 
     # Walked over the same list the N-Triples are rendered from, not inferred
@@ -570,9 +570,9 @@ def nesting_ground_truth(nested, frame_edges):
         "max_depth": max(by_depth_hist) if by_depth_hist else 0,
         "depth_histogram": {str(k): v for k, v in sorted(by_depth_hist.items())},
         "max_path_depth_note": (
-            "emit_path.py caps recursive property paths at MAX_PATH_DEPTH = 5. "
-            "deep_roots hold chains of DEEP_CHAIN_DEPTH, so a walk that "
-            "truncates at the cap returns strictly fewer descendants than "
+            "emit_path.py caps recursive property paths at MAX_PATH_DEPTH "
+            "(100). deep_roots hold chains of DEEP_CHAIN_DEPTH, so a walk that "
+            "truncates for any reason returns strictly fewer descendants than "
             "recorded here."),
         "deep_roots": deep_roots,
         # Per-hop selectivity of each nested criterion, as a fraction of all
@@ -1052,7 +1052,7 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
     print(f"✅ {n_entities:,} entities, {len(frame_edges):,} frames, "
           f"{len(nested):,} nested frames, {len(relation_edges):,} relations")
     print(f"   nesting: max depth {nesting['max_depth']}, "
-          f"{len(nesting['deep_roots'])} chain(s) past MAX_PATH_DEPTH=5")
+          f"{len(nesting['deep_roots'])} chain(s) deeper than 5")
     print("   nested walks: " + ", ".join(
         f"{k.replace('frame_traversal_', '')}->{v['fraction']:.0%}"
         for k, v in nesting["walk_density"].items()))

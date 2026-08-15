@@ -4,7 +4,7 @@ Frames nest via `Edge_hasKGFrame` (frame -> frame), which is how the product
 models a compound fact: a LeadStatusFrame carrying a LeadStatusQualificationFrame
 beneath it. So a criterion routinely lives one level BELOW the frame that
 connects two entities, and arbitrary depth is served by SPARQL property paths
-through a recursive CTE capped at `emit_path.MAX_PATH_DEPTH = 5`.
+through a recursive CTE (`emit_path.MAX_PATH_DEPTH`, which is 100).
 
 Before this, none of it had been tested: zero `Edge_hasKGFrame` terms in any
 loaded space, and `test_frame_nesting_hops.py` seeds raw edge-table rows with no
@@ -40,9 +40,10 @@ from .graph_fixtures import (NESTED_CRITERIA, SMALL, chain_query,
 pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
 
-# emit_path.py's cap. Named here so a change there fails this rather than
-# silently shortening every path walk.
-MAX_PATH_DEPTH = 5
+# How deep the fixture's forced chains run. Not emit_path's cap (that is 100)
+# — this is the depth the fixture must exceed for a truncating walk to be
+# distinguishable from a correct one at all.
+DEEP_CHAIN_MIN = 5
 
 
 async def _require(conn):
@@ -85,20 +86,20 @@ async def test_the_fixture_actually_contains_nesting(perf_conn):
     n = SMALL.nesting()
     assert n["n_nested_frames"] > 0
     deep = SMALL.deep_roots()
-    assert deep, "no chain runs past MAX_PATH_DEPTH — the cap cannot be tested"
+    assert deep, "no chain runs deep enough to expose truncation"
     reached = max(int(d) for v in deep.values() for d in v)
-    assert reached > MAX_PATH_DEPTH, (
-        f"deepest chain is {reached}, at or under the cap of {MAX_PATH_DEPTH}; "
+    assert reached > DEEP_CHAIN_MIN, (
+        f"deepest chain is {reached}, at or under {DEEP_CHAIN_MIN}; "
         f"a truncating path walk would be indistinguishable from a correct one")
 
 
 @pytest.mark.parametrize("depth", list(range(1, 9)))
 async def test_explicit_hops_descend_past_the_path_cap(perf_conn, depth):
-    """Written-out hops are not bounded by MAX_PATH_DEPTH, and must not be.
+    """Written-out hops are not bounded by any recursive-CTE cap, and must not be.
 
-    Depths 6-8 are the ones that matter: they are past the cap, so if the
-    recursive-CTE bound ever leaked into ordinary BGP emission this is where it
-    would show, as a silently short answer.
+    Depths 6-8 are the ones that matter: if a recursive-CTE bound ever leaked
+    into ordinary BGP emission this is where it would show, as a silently short
+    answer.
     """
     await _require(perf_conn)
     deep = SMALL.deep_roots()
@@ -136,33 +137,29 @@ async def test_traversal_with_the_criterion_one_level_down(perf_conn, criterion,
             f"missing {sorted(expected - got)[:5]}")
 
 
-@pytest.mark.xfail(reason="the recursive CTE is not seeded from the pinned "
-                          "start — see the docstring", strict=True)
 async def test_a_pinned_property_path_seeds_the_recursion_from_the_pin(perf_conn):
     """A `+` path from a CONSTANT frame must not close over the whole graph.
 
-    MEASURED 2026-08-15 and it is a real defect, though not the one GAP 4
-    predicted. The prediction was that `MAX_PATH_DEPTH = 5` would silently
-    TRUNCATE a deeper chain. It does not truncate — the query never completes:
-    `(^hasEdgeSource/hasEdgeDestination)+` from one frame with 8 descendants did
-    not finish in 60 s on the 10k fixture.
+    FOUND AND FIXED 2026-08-15, and it was not the defect GAP 4 predicted. The
+    prediction was that the recursive CTE's depth cap would silently TRUNCATE a
+    deeper chain. It did not truncate — the query never completed:
+    `(^hasEdgeSource/hasEdgeDestination)+` from one frame with 8 nested
+    descendants did not finish in 60 s on the 10k fixture. (`MAX_PATH_DEPTH` is
+    100, not 5 as the plan doc had it, which is why nothing was ever truncated.)
 
-    The generated SQL says why. The recursive CTE's non-recursive term selects
-    EVERY edge pair in the space (EXPLAIN: a parallel Gather over 46,911 rows,
-    estimated 49,661 for the Recursive Union), and the pin lands in the OUTER
-    WHERE — literally 3,185 characters after the CTE closes:
+    The generated SQL said why. The recursive CTE's non-recursive term selected
+    EVERY edge pair in the space — EXPLAIN showed a parallel Gather over 46,911
+    rows — and the pin landed in the OUTER WHERE, 3,185 characters after the CTE
+    closed. So the transitive closure of all 144,598 edges was computed and then
+    filtered to one root: the same pathology the whole traversal-chain effort
+    exists to remove, in `emit_path.py`, which that work never touched.
 
-        WHERE p0.start_uuid = (SELECT term_uuid FROM ..._term
-                               WHERE term_text = 'urn:graphsyn:frame:0' ...)
+    `emit_path` now hands a pinned subject down to `_path_to_sql`, which anchors
+    the base term. **60,000 ms -> 3-7 ms.**
 
-    So the transitive closure of all 144,598 edges is computed and then filtered
-    down to one root. That is the same pathology the whole traversal-chain effort
-    exists to remove — the pinned constant should DRIVE — in `emit_path.py`,
-    which that work never touched.
-
-    Asserted structurally rather than by running it: a timing assertion here
-    costs 60 s per run to tell us something a string already proves, and the fix
-    is exactly "put the pin in the base case".
+    Asserted structurally as well as behaviourally: the structural check names
+    the actual fix, so a refactor that keeps it fast for the wrong reason still
+    has to keep the pin in the base case.
     """
     await _require(perf_conn)
     from .graph_fixtures import EDGE_DEST, EDGE_SOURCE
@@ -197,6 +194,21 @@ async def test_a_pinned_property_path_seeds_the_recursion_from_the_pin(perf_conn
     assert uri in body, (
         "the recursive CTE does not reference the pinned start, so it closes "
         "over every edge in the space before filtering to one root")
+
+    # The seed goes on the BASE term only. If it were also applied to the
+    # recursive term's `step` relation the walk would stop at the pin's direct
+    # neighbours — fast, and wrong in the direction that looks like success.
+    # The chain is 8 deep, so its deepest member is the proof it did not.
+    depths = SMALL.deep_roots()[root]
+    deepest_idx = max(depths, key=int)
+    assert int(deepest_idx) > 1, "this root has no chain to walk"
+    tail = SMALL.nested_frame_uri(depths[deepest_idx][0])
+    rows = await perf_conn.fetch(gen.sql)
+    reached = {v for r in rows for v in r.values() if isinstance(v, str)}
+    assert tail in reached, (
+        f"the walk did not reach depth {deepest_idx} ({tail}) — the recursion "
+        f"is anchored but truncated, which returns a subset and reads as "
+        f"success")
 
 
 def _recursive_cte_body(sql: str) -> str | None:

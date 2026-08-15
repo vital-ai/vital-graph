@@ -130,9 +130,21 @@ def emit_path(plan: PlanV2, ctx: EmitContext) -> str:
     same_graph = graph_uri is not None  # True for GRAPH <uri> and GRAPH ?g
 
     # ── Generate path CTE — always (start_uuid, end_uuid, ctx_uuid) ──
+    #
+    # A pinned SUBJECT is handed down so a recursive path can seed its base term
+    # from it rather than closing over the whole graph and filtering afterwards.
+    # The outer WHERE below still applies the same constraint; it becomes
+    # redundant rather than wrong, because every row the seeded CTE produces
+    # already starts at the pin.
+    seed_start_sql = None
+    if isinstance(subject, URINode):
+        seed_start_sql = (
+            f"(SELECT term_uuid FROM {term_table} "
+            f"WHERE term_text = '{_esc(subject.value)}' AND term_type = 'U' LIMIT 1)"
+        )
     cte_parts, path_select = _path_to_sql(
         path_expr, quad_table, term_table, graph_clause, cte_alias,
-        same_graph=same_graph,
+        same_graph=same_graph, seed_start_sql=seed_start_sql,
     )
 
     # ── Subject / object constraints ──
@@ -231,7 +243,8 @@ def emit_path(plan: PlanV2, ctx: EmitContext) -> str:
 
 def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
                  graph_clause: str, cte_alias: str,
-                 same_graph: bool = False) -> Tuple[str, str]:
+                 same_graph: bool = False,
+                 seed_start_sql: Optional[str] = None) -> Tuple[str, str]:
     """Convert a PathExpr to SQL.
 
     Returns (cte_prefix, select_sql) where cte_prefix is a WITH RECURSIVE
@@ -240,6 +253,27 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
 
     When same_graph is True, multi-step paths (PathSeq, recursive) enforce
     that all steps share the same ctx_uuid.
+
+    `seed_start_sql` IS A SCALAR SQL EXPRESSION FOR A PINNED SUBJECT, and it is
+    what stops a recursive path closing over the whole graph.
+
+    Without it the base term of a `+` or `*` selects EVERY edge in the space and
+    the pin is applied afterwards, in the outer WHERE. Measured on
+    `graph_synth_10k`: `<one frame> (^hasEdgeSource/hasEdgeDestination)+ ?child`
+    with 8 real descendants did not complete in 60 s, because it computed the
+    transitive closure of all 144,598 edges and then kept the 8. EXPLAIN showed
+    a parallel Gather over 46,911 rows feeding the Recursive Union.
+
+    It applies to the BASE TERM ONLY. The recursive term's `step` relation must
+    stay unfiltered — filtering it too would restrict every hop to edges leaving
+    the pin, which stops the walk dead after one hop and silently returns only
+    the direct neighbours. That is the whole subtlety here.
+
+    Only a pinned SUBJECT is seeded. A pinned object would have to drive the
+    recursion backwards, and the recursive term is written forward
+    (`r.end_uuid = step.start_uuid`); filtering its base by `end_uuid` would
+    anchor the wrong end and then extend PAST it, which is a wrong answer rather
+    than a slow one. Tail-pinned paths therefore keep the old plan.
     """
 
     # Simple link: single quad scan
@@ -269,10 +303,14 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
 
     # Alternative: UNION (both branches carry ctx_uuid)
     if isinstance(path, PathAlt):
+        # Both branches start where the alternative starts, so both may be
+        # seeded.
         cte_l, sql_l = _path_to_sql(path.left, quad_table, term_table,
-                                     graph_clause, cte_alias + "_l", same_graph)
+                                     graph_clause, cte_alias + "_l", same_graph,
+                                     seed_start_sql=seed_start_sql)
         cte_r, sql_r = _path_to_sql(path.right, quad_table, term_table,
-                                     graph_clause, cte_alias + "_r", same_graph)
+                                     graph_clause, cte_alias + "_r", same_graph,
+                                     seed_start_sql=seed_start_sql)
         cte = ""
         if cte_l or cte_r:
             parts = [p for p in [cte_l, cte_r] if p]
@@ -282,8 +320,11 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
 
     # Sequence: JOIN on end→start; enforce same ctx_uuid when same_graph
     if isinstance(path, PathSeq):
+        # The sequence's start is the LEFT arm's start, so only the left may be
+        # seeded. Seeding the right would anchor a middle node to the pin.
         cte_l, sql_l = _path_to_sql(path.left, quad_table, term_table,
-                                     graph_clause, cte_alias + "_l", same_graph)
+                                     graph_clause, cte_alias + "_l", same_graph,
+                                     seed_start_sql=seed_start_sql)
         cte_r, sql_r = _path_to_sql(path.right, quad_table, term_table,
                                      graph_clause, cte_alias + "_r", same_graph)
         cte = ""
@@ -304,9 +345,15 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
                                             graph_clause, cte_alias + "_base", same_graph)
         rec_name = _next_cte_name(f"{cte_alias}_rec")
         ctx_rec_constraint = " AND r.ctx_uuid = step.ctx_uuid" if same_graph else ""
+        # Anchor the base term at the pin. `step` below stays UNFILTERED — see
+        # the note on `seed_start_sql` for why filtering it too would truncate
+        # the walk to the pin's direct neighbours.
+        seed_where = (f" WHERE _base.start_uuid = {seed_start_sql}"
+                      if seed_start_sql else "")
         rec_body = (
             f"{rec_name}(start_uuid, end_uuid, depth, ctx_uuid) AS (\n"
-            f"  SELECT start_uuid, end_uuid, 1, ctx_uuid FROM ({base_sql}) AS _base\n"
+            f"  SELECT start_uuid, end_uuid, 1, ctx_uuid FROM ({base_sql}) AS _base"
+            f"{seed_where}\n"
             f"  UNION\n"
             f"  SELECT r.start_uuid, step.end_uuid, r.depth + 1, r.ctx_uuid\n"
             f"  FROM {rec_name} r\n"
@@ -323,14 +370,26 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
         inner_cte, base_sql = _path_to_sql(path.sub, quad_table, term_table,
                                             graph_clause, cte_alias + "_base", same_graph)
         rec_name = _next_cte_name(f"{cte_alias}_rec")
-        # Identity: every node connected to itself (within its graph)
+        # Identity: every node connected to itself (within its graph).
+        #
+        # Unseeded this is TWO full scans of the quad table, which is worse than
+        # the `+` case it mirrors — a `*` path from a pinned subject materialised
+        # every subject and every object in the space before anything filtered
+        # it. With a pin, identity is the pin alone, and the scan reduces to the
+        # rows that mention it.
+        _id_seed_s = (f" AND q.subject_uuid = {seed_start_sql}"
+                      if seed_start_sql else "")
+        _id_seed_o = (f" AND q.object_uuid = {seed_start_sql}"
+                      if seed_start_sql else "")
+        _id_where = graph_clause + _id_seed_s
+        _id_where_o = graph_clause + _id_seed_o
         identity_sql = (
             f"SELECT q.subject_uuid AS start_uuid, q.subject_uuid AS end_uuid, "
             f"0, q.context_uuid AS ctx_uuid "
-            f"FROM {quad_table} q{' WHERE TRUE' + graph_clause if graph_clause else ''} "
+            f"FROM {quad_table} q{' WHERE TRUE' + _id_where if _id_where else ''} "
             f"UNION SELECT q.object_uuid, q.object_uuid, "
             f"0, q.context_uuid "
-            f"FROM {quad_table} q{' WHERE TRUE' + graph_clause if graph_clause else ''}"
+            f"FROM {quad_table} q{' WHERE TRUE' + _id_where_o if _id_where_o else ''}"
         )
         ctx_rec_constraint = " AND r.ctx_uuid = step.ctx_uuid" if same_graph else ""
         rec_body = (
@@ -351,12 +410,19 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
     if isinstance(path, PathZeroOrOne):
         _, base_sql = _path_to_sql(path.sub, quad_table, term_table,
                                     graph_clause, cte_alias + "_base", same_graph)
+        # Same identity full-scan as `*`, and seeded the same way. Not
+        # recursive, so it cannot run away — but unseeded it is still two full
+        # passes over the quad table to produce the one row `<C> p? ?x` needs
+        # from the zero-length branch.
+        _s = f" AND q.subject_uuid = {seed_start_sql}" if seed_start_sql else ""
+        _o = f" AND q.object_uuid = {seed_start_sql}" if seed_start_sql else ""
+        _w, _wo = graph_clause + _s, graph_clause + _o
         identity_sql = (
             f"SELECT q.subject_uuid AS start_uuid, q.subject_uuid AS end_uuid, "
             f"q.context_uuid AS ctx_uuid "
-            f"FROM {quad_table} q{' WHERE TRUE' + graph_clause if graph_clause else ''} "
+            f"FROM {quad_table} q{' WHERE TRUE' + _w if _w else ''} "
             f"UNION SELECT q.object_uuid, q.object_uuid, q.context_uuid "
-            f"FROM {quad_table} q{' WHERE TRUE' + graph_clause if graph_clause else ''}"
+            f"FROM {quad_table} q{' WHERE TRUE' + _wo if _wo else ''}"
         )
         sql = f"({identity_sql}) UNION ({base_sql})"
         return "", sql

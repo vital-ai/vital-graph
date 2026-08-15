@@ -77,7 +77,7 @@ TAG = f"{HALEY}hasTag"              # uri, MULTI-VALUED (1-4 per edge)
 # Nested frames: frame -> frame. `traversal_chain_plan.md` GAP 4 — the shape no
 # fixture had, and the one the product uses for compound facts. Two questions
 # come with it: whether a criterion one level DOWN is still exploited, and
-# whether `emit_path.MAX_PATH_DEPTH = 5` silently truncates real nesting.
+# whether a deep chain survives `emit_path`'s recursive CTE intact.
 NESTED_EDGE_TYPE = f"{HALEY}Edge_hasKGFrame"
 EDGE_SOURCE = f"{VITAL}hasEdgeSource"
 EDGE_DEST = f"{VITAL}hasEdgeDestination"
@@ -141,7 +141,7 @@ class GraphFixture:
     def deep_roots(self) -> dict:
         """{connection frame index: {depth: [nested frame indexes]}}.
 
-        Only roots whose chain runs PAST `MAX_PATH_DEPTH`, which is the point:
+        Only roots whose chain runs past depth 5, which is the point:
         a property path that truncates at the cap returns strictly fewer
         descendants than these record, and a truncated walk reads as a correct
         answer unless something counts.
@@ -239,9 +239,8 @@ def nested_path_query(fx, root_frame: int, depth: int) -> str:
     """Descendants of one frame at EXACTLY `depth` hops of Edge_hasKGFrame.
 
     Written as explicit hops rather than a property path so the two can be
-    compared: `MAX_PATH_DEPTH = 5` bounds the recursive CTE a `*` path compiles
-    to, and explicit hops are not bounded by it. Where they disagree past depth
-    5, the cap is what disagrees.
+    compared: a `*` path compiles to a recursive CTE and explicit hops do not,
+    so where the two disagree, the CTE is what disagrees.
     """
     hops = "".join(
         f"""
@@ -257,7 +256,7 @@ def nested_path_query(fx, root_frame: int, depth: int) -> str:
 
 
 def nested_star_query(fx, root_frame: int) -> str:
-    """The same descendants via a property path — the shape MAX_PATH_DEPTH bounds."""
+    """The same descendants via a property path — the recursive-CTE shape."""
     return f"""
     SELECT DISTINCT ?child WHERE {{ GRAPH <{fx.graph}> {{
         <{fx.frame_uri(root_frame)}> ^<{EDGE_SOURCE}>/<{EDGE_DEST}> ?child .
