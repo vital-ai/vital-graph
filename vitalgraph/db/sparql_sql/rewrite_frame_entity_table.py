@@ -23,6 +23,7 @@ import logging
 import re
 from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
+from .declines import Rule
 from .ir import PlanV2, TableRef, AliasGenerator, KIND_BGP
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,13 @@ VITALTYPE_URI = "http://vital.ai/ontology/vital-core#vitaltype"
 _PRED_RE = re.compile(r"(\w+)\.predicate_uuid\s*=\s*__CONST_(c_\d+)__")
 _OBJ_RE = re.compile(r"(\w+)\.object_uuid\s*=\s*__CONST_(c_\d+)__")
 _COREF_RE = re.compile(r"(\w+)\.(\w+)\s*=\s*(\w+)\.(\w+)")
+
+# Reads the EDGE rewrite's output, not just the collected plan: this pass
+# matches on `kind == "edge"` tables, so without stage 2a.1 having run there is
+# nothing here to collapse. Declaring the dependency is how "no edge table
+# bindings" stops being a message someone has to interpret.
+FE = Rule("frame_entity_rewrite", stage="frame_entity_rewrite",
+          reads=("collect", "materialize_constants", "edge_rewrite"))
 
 
 class _SlotGroup(NamedTuple):
@@ -141,9 +149,10 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
         # Silent declines are how a materialised table ends up maintained and
         # unused with nobody able to say why. Every exit says which precondition
         # failed (issues/048).
-        logger.info("frame_entity rewrite: no edge table bindings — the "
-                    "frame->slot hops were not rewritten to %s_edge first",
-                    space_id)
+        FE.decline(
+            "no edge table bindings — the frame->slot hops were not rewritten "
+            "to the edge table first",
+            table_kinds=sorted({t.kind for t in plan.tables}))
         return plan
 
     # --- Step 4: Find slot_type and slot_value quads ---
@@ -161,11 +170,11 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
             slot_value_quads.add(q_alias)
 
     if not slot_type_quads or not slot_value_quads:
-        logger.info("frame_entity rewrite: no source/dest slot groups "
-                    "(hasKGSlotType quads matching %s / %s: %d; "
-                    "hasEntitySlotValue quads: %d)",
-                    SOURCE_ENTITY_URI, DEST_ENTITY_URI,
-                    len(slot_type_quads), len(slot_value_quads))
+        FE.decline(
+            "no source/dest slot groups — a frame_entity row needs both a "
+            "typed slot and its entity value",
+            slot_type_quads=len(slot_type_quads),
+            slot_value_quads=len(slot_value_quads))
         return plan
 
     # --- Step 5: Build subject/object variable maps for quads ---
@@ -237,9 +246,10 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
             pairs.append((roles["source"], roles["dest"]))
 
     if not pairs:
-        logger.info("frame_entity rewrite: %d slot group(s) but no frame "
-                    "variable carries BOTH a source and a dest group, which "
-                    "is what a frame_entity row represents", len(frame_groups))
+        FE.decline(
+            "no frame variable carries BOTH a source and a dest group, which "
+            "is what one frame_entity row represents",
+            frame_vars={v: sorted(r) for v, r in frame_groups.items()})
         return plan
 
     logger.debug("Frame-entity table rewrite: found %d frame pattern(s)", len(pairs))
@@ -377,11 +387,11 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
             broken.append(_var_name)
         slot.positions = new_positions
     if broken:
-        logger.info(
-            "rewrite_frame_entity_table: declining — %s would lose the binding "
-            "that ties them to the frame while still being bound by a "
-            "surviving table, which reads as a cross product (issues/051)",
-            sorted(broken))
+        FE.decline(
+            "a variable would lose the binding that ties it to the frame "
+            "while still being bound by a surviving table, which reads as a "
+            "cross product (issues/051)",
+            broken=sorted(broken))
         return original_plan
     plan.var_slots = {k: v for k, v in plan.var_slots.items() if v.positions}
 
@@ -491,10 +501,16 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
     if leftover:
         offenders = [c for c in new_constraints
                      if any(_refs(c, a) for a in leftover)]
-        logger.info(
-            "rewrite_frame_entity_table: declining — constraints still "
-            "reference collapsed table(s) %s with no frame_entity column to "
-            "remap onto: %s (issues/048)", leftover, offenders[:3])
+        # The facts here are the ones that matter most in this module. This
+        # exact decline fired silently for the vitaltype absorption — a conjunct
+        # the remap left untouched still named a collapsed alias, so the whole
+        # rewrite reverted, giving right answers at the old speed with no
+        # symptom. `offenders` is the constraint text to read; without it the
+        # message says a rewrite declined and nothing about which conjunct.
+        FE.decline(
+            "constraints still reference collapsed table(s) with no "
+            "frame_entity column to remap onto (issues/048)",
+            leftover=leftover, offenders=offenders[:3])
         return original_plan
 
     plan.tagged_constraints = new_tagged

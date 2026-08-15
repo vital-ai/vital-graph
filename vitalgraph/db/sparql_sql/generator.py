@@ -55,6 +55,13 @@ class GenerateResult:
     # cannot fall back to a blocking sort over the whole match set
     # (issues/047).
     needs_ordered_scan: bool = False
+    # Every pass that considered a faster shape for this query and refused,
+    # with the values it refused on (`declines.py`). Carried on the result
+    # rather than left in the log because the question it answers — "why is
+    # this query not using the fast path" — is asked about a specific query,
+    # by someone who has that query and not the log level that was set when it
+    # ran.
+    declines: Optional[Any] = None
 
 
 # ---------------------------------------------------------------------------
@@ -778,6 +785,36 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
 
 
 async def generate_sql(
+    compile_result: CompileResult,
+    space_id: str,
+    conn_params: Optional[Dict[str, Any]] = None,
+    conn=None,
+    graph_lock_uri: Optional[str] = None,
+    default_graph: Optional[str] = None,
+    multi_vector_config: Optional[Dict[str, Any]] = None,
+) -> GenerateResult:
+    """Generate SQL, collecting every pass that declined along the way.
+
+    A thin wrapper so the collection window covers all five of the inner
+    function's exits, including the failure ones — a query that raised at
+    stage 3 is exactly when it is worth knowing which rewrite refused at
+    stage 2.
+    """
+    from . import declines
+    with declines.collecting() as log:
+        result = await _generate_sql(
+            compile_result, space_id, conn_params=conn_params, conn=conn,
+            graph_lock_uri=graph_lock_uri, default_graph=default_graph,
+            multi_vector_config=multi_vector_config)
+    if result is not None and result.declines is None:
+        result.declines = log
+    if log and logger.isEnabledFor(logging.DEBUG):
+        logger.debug("%d decline(s) generating SQL:\n%s", len(log),
+                     log.summary())
+    return result
+
+
+async def _generate_sql(
     compile_result: CompileResult,
     space_id: str,
     conn_params: Optional[Dict[str, Any]] = None,

@@ -56,7 +56,8 @@ WHAT IT DECLINES
 
 Every check below returns None and leaves the flat path untouched. The failure
 mode in this area has always been a pass that quietly declines — correct,
-slower, invisible — so each refusal is logged with its reason.
+slower, invisible — so each refusal is RECORDED, with the values it refused on,
+through the rules declared below (`declines.py`).
 """
 
 from __future__ import annotations
@@ -66,10 +67,27 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from .declines import Rule
 from .ir import PlanV2, TableRef
 from .traversal_chain import TraversalChain
 
 logger = logging.getLogger(__name__)
+
+# The three decision points in this module, and what each one's preconditions
+# read. All run at `emit_bgp`, and all three read `push_filters` — which is the
+# whole reason the stage order is declared rather than assumed.
+#
+# `dedup_chain` reading `push_filters` is not incidental. Asked before push-down
+# it sees a per-hop criterion as a filter over a variable dedup discards and
+# declines every FILTERED traversal, measured at 1-3 s on a hub start against
+# ~100 ms deduplicated. Declaring the read is what stops that being re-introduced
+# by moving the call.
+HOP_PARTITION = Rule("hop_partition", stage="emit_bgp",
+                     reads=("collect", "push_filters"))
+HOP_WISE = Rule("hop_wise", stage="emit_bgp",
+                reads=("collect", "traversal_decision", "push_filters"))
+DEDUP = Rule("dedup_chain", stage="emit_bgp",
+             reads=("collect", "traversal_decision", "push_filters"))
 
 # Depth 1 QUALIFIES, matching `traversal_decision.MIN_DEPTH`.
 #
@@ -146,17 +164,19 @@ def partition_hops(plan: PlanV2, chain: TraversalChain,
     """
     tagged = list(plan.tagged_constraints or [])
     if not tagged:
-        logger.debug("hop-wise declined: no tagged constraints to partition on")
-        return None
+        return HOP_PARTITION.decline(
+            "no tagged constraints to partition on",
+            tables=[t.alias for t in quad_tables])
 
     by_alias = {t.alias: t for t in quad_tables}
     known = set(by_alias)
 
     link_aliases = [l.ref_id for l in chain.links]
     if not all(a in by_alias for a in link_aliases):
-        logger.debug("hop-wise declined: chain link(s) %s are not BGP tables",
-                     [a for a in link_aliases if a not in by_alias])
-        return None
+        return HOP_PARTITION.decline(
+            "chain link(s) are not BGP tables",
+            missing=[a for a in link_aliases if a not in by_alias],
+            tables=sorted(known))
     hop_of = {a: i for i, a in enumerate(link_aliases)}
 
     # Adjacency between non-link tables, and each table's direct link contacts.
@@ -182,9 +202,9 @@ def partition_hops(plan: PlanV2, chain: TraversalChain,
                     seen.add(nxt)
                     frontier.append(nxt)
         if len(reached) != 1:
-            logger.debug("hop-wise declined: table %s reaches hops %s, "
-                         "expected exactly one", alias, sorted(reached))
-            return None
+            return HOP_PARTITION.decline(
+                "a table reaches other than exactly one hop",
+                table=alias, reaches=sorted(reached))
         hop_of[alias] = reached.pop()
 
     groups = [HopGroup(index=i, link_alias=a, tables=[by_alias[a]])
@@ -232,8 +252,9 @@ def _place(groups: List[HopGroup], tagged, known: set,
                 if nxt:
                     break
             if nxt is None:
-                logger.debug("hop-wise declined: %s in hop %d joins nothing "
-                             "already placed", remaining[0].alias, g.index)
+                HOP_PARTITION.decline(
+                    "a table joins nothing already placed in its hop",
+                    table=remaining[0].alias, hop=g.index, placed=list(placed))
                 return False
             placed.append(nxt.alias)
             remaining.remove(nxt)
@@ -271,17 +292,17 @@ def emit_hop_wise(plan: PlanV2, chain: TraversalChain,
     of the pipeline depends on is unchanged.
     """
     if chain is None or chain.depth < MIN_EMIT_DEPTH:
-        logger.debug("hop-wise declined: depth %s < %d",
-                     getattr(chain, "depth", None), MIN_EMIT_DEPTH)
-        return None
+        return HOP_WISE.decline("chain is too shallow",
+                                depth=getattr(chain, "depth", None),
+                                min_depth=MIN_EMIT_DEPTH)
     if not chain.pinned_head:
         # A tail pin is as good in principle and needs the chain walked in
         # reverse — a different emission, and one nothing has measured. The
         # decision reports tail pins as eligible; this declines them for now
         # rather than emitting a forward walk that drives from the wrong end.
-        logger.debug("hop-wise declined: head is not pinned "
-                     "(tail-pinned reverse walk is not implemented)")
-        return None
+        return HOP_WISE.decline(
+            "head is not pinned (tail-pinned reverse walk is not implemented)",
+            pinned_head=chain.pinned_head, pinned_tail=chain.pinned_tail)
 
     groups = partition_hops(plan, chain, quad_tables)
     if not groups:
@@ -291,9 +312,9 @@ def emit_hop_wise(plan: PlanV2, chain: TraversalChain,
     # link emits exactly the SQL it was asked to replace, so returning it would
     # cost a wasted rewrite and, worse, log "hop-wise" for a plan that is not.
     if len(groups) == 1 and len(groups[0].tables) == 1:
-        logger.debug("hop-wise declined: one hop with no criterion tables, "
-                     "the emitted SQL would be identical")
-        return None
+        return HOP_WISE.decline(
+            "one hop with no criterion tables, the emitted SQL would be "
+            "identical", link=groups[0].link_alias)
 
     hop_of = {t.alias: g.index for g in groups for t in g.tables}
 
@@ -308,9 +329,9 @@ def emit_hop_wise(plan: PlanV2, chain: TraversalChain,
         alias, col = slot.positions[0]
         hop = hop_of.get(alias)
         if hop is None:
-            logger.debug("hop-wise declined: variable %s binds on %s, which is "
-                         "in no hop", var, alias)
-            return None
+            return HOP_WISE.decline("a variable binds on a table in no hop",
+                                    var=var, alias=alias,
+                                    hop_tables=sorted(hop_of))
         target = link_binds if alias == groups[hop].link_alias else crit_binds
         target[hop].append((f"{sql_names[var]}__uuid", f"{alias}.{col}"))
 
@@ -481,25 +502,29 @@ def dedup_feasible(root, chain, text_needed_vars):
     from .ir import KIND_PROJECT, KIND_DISTINCT, KIND_SLICE, KIND_BGP
 
     if chain is None or chain.depth < 2 or not chain.pinned_head:
-        return None
+        return DEDUP.decline("chain is too shallow or has no pinned head",
+                             depth=getattr(chain, "depth", None),
+                             pinned_head=getattr(chain, "pinned_head", None))
     path = _path_to_bgp(root)
     if path is None:
-        return None
+        return DEDUP.decline(
+            "no single-child path from the root down to one BGP",
+            root_kind=root.kind)
     bgp = path[-1]
     above = path[:-1]
 
     if not any(n.kind == KIND_DISTINCT for n in above):
-        logger.debug("dedup declined: no DISTINCT above the traversal, so path "
-                     "multiplicity is part of the answer")
-        return None
+        return DEDUP.decline(
+            "no DISTINCT above the traversal, so path multiplicity is part "
+            "of the answer", above=[n.kind for n in above])
     from .ir import KIND_FILTER, KIND_ORDER
     _ok_kinds = (KIND_PROJECT, KIND_DISTINCT, KIND_SLICE, KIND_FILTER,
                  KIND_ORDER)
     if any(n.kind not in _ok_kinds for n in above):
-        logger.debug("dedup declined: %s above the traversal may read path "
-                     "multiplicity",
-                     [n.kind for n in above if n.kind not in _ok_kinds])
-        return None
+        return DEDUP.decline(
+            "an operator above the traversal may read path multiplicity",
+            offending=[n.kind for n in above if n.kind not in _ok_kinds],
+            above=[n.kind for n in above])
 
     quad_tables = [tb for tb in (bgp.tables or [])
                    if tb.kind in ("quad", "edge", "frame_entity")]
@@ -530,9 +555,10 @@ def dedup_feasible(root, chain, text_needed_vars):
         if alias == first.link_alias and col == chain.links[0].source_col:
             head_var = var
     if final_dest_var is None:
-        logger.debug("dedup declined: the final hop's destination binds no "
-                     "variable, so nothing survives to project")
-        return None
+        return DEDUP.decline(
+            "the final hop's destination binds no variable, so nothing "
+            "survives to project",
+            link=groups[-1].link_alias, dest_col=chain.links[-1].dest_col)
 
     allowed = {final_dest_var} | ({head_var} if head_var else set())
 
@@ -541,9 +567,10 @@ def dedup_feasible(root, chain, text_needed_vars):
         if n.kind == KIND_PROJECT and n.project_vars:
             projected |= set(n.project_vars)
     if not projected or not projected <= allowed:
-        logger.debug("dedup declined: projection %s is not confined to what "
-                     "survives %s", sorted(projected), sorted(allowed))
-        return None
+        return DEDUP.decline(
+            "the projection is not confined to what survives dedup",
+            projected=sorted(projected), allowed=sorted(allowed),
+            extra=sorted(projected - allowed))
 
 
     # A filter or a sort above the traversal is fine only if everything it
@@ -561,10 +588,10 @@ def dedup_feasible(root, chain, text_needed_vars):
                 else:
                     _expr_vars(key, read_above)
     if not read_above <= allowed:
-        logger.debug("dedup declined: a filter or sort above the traversal "
-                     "reads %s, which dedup discards",
-                     sorted(read_above - allowed))
-        return None
+        return DEDUP.decline(
+            "a filter or sort above the traversal reads what dedup discards",
+            discarded=sorted(read_above - allowed),
+            read_above=sorted(read_above), allowed=sorted(allowed))
 
     # NOT compared against `text_needed_vars` any more.
     #
@@ -606,7 +633,11 @@ def emit_dedup_chain(plan: PlanV2, chain: TraversalChain,
     if not groups:
         return None
     if any(len(g.tables) > 1 and not (g.on_map or g.crit_where) for g in groups):
-        return None
+        return DEDUP.decline(
+            "a hop has criterion tables but no condition connecting them, "
+            "which would emit a cartesian product",
+            hops=[g.index for g in groups
+                  if len(g.tables) > 1 and not (g.on_map or g.crit_where)])
 
     links = {g.link_alias for g in groups}
     head = groups[0]
@@ -621,10 +652,13 @@ def emit_dedup_chain(plan: PlanV2, chain: TraversalChain,
             allowed.add(groups[i - 1].link_alias)
         for sql in list(g.where) + list(g.crit_where) + \
                 [c for cs in g.on_map.values() for c in cs]:
-            if not _refs(sql, links | {t.alias for gg in groups for t in gg.tables}) <= allowed:
-                logger.debug("dedup declined: a constraint in hop %d crosses "
-                             "more than the chain link", i)
-                return None
+            refs = _refs(sql, links | {t.alias for gg in groups
+                                       for t in gg.tables})
+            if not refs <= allowed:
+                return DEDUP.decline(
+                    "a constraint crosses more than the chain link, so it "
+                    "would reference an alias in another CTE's scope",
+                    hop=i, refs=sorted(refs), in_scope=sorted(allowed))
 
     ctes = []
     for i, g in enumerate(groups):

@@ -79,9 +79,18 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
+from .declines import Rule
 from .traversal_chain import TraversalChain
 
 logger = logging.getLogger(__name__)
+
+# `semijoin` is stage 2d.1, which loads the range/text/IN statistics this reads.
+# Declaring it is not bookkeeping: placed BEFORE that stage, this gate saw no
+# number on any query and reported "selectivity unknown" every time. The
+# declaration is what makes moving the call a build failure instead of a silent
+# regression to the uninformed answer.
+SHAPE = Rule("traversal_shape", stage="traversal_decision",
+             reads=("collect", "pred_stats", "semijoin"))
 
 # Kept for reporting and for whatever ranking comes later. NOT a gate: see the
 # correction in the module docstring for why a threshold here was wrong.
@@ -127,15 +136,21 @@ def decide(chain: Optional[TraversalChain],
     threshold here was wrong.
     """
     if chain is None or chain.depth == 0:
+        SHAPE.decline("no chain", depth=getattr(chain, "depth", None))
         return Decision(False, "no chain")
 
     if chain.depth < MIN_DEPTH:
+        SHAPE.decline("chain is too shallow",
+                      depth=chain.depth, min_depth=MIN_DEPTH)
         return Decision(False, f"depth {chain.depth} < {MIN_DEPTH}", chain)
 
     # Without a pinned end there is no small driving set, so every hop would
     # materialise the whole relation. Untested, and the one shape with an
     # obvious mechanism for being worse — so it declines.
     if not (chain.pinned_head or chain.pinned_tail):
+        SHAPE.decline("neither end pinned, so there is no small driving set "
+                      "and every hop would materialise the whole relation",
+                      depth=chain.depth)
         return Decision(False, "neither end pinned, no driving set", chain)
 
     # A MEASURED criterion is required. Not a selective one — see below.
@@ -159,6 +174,10 @@ def decide(chain: Optional[TraversalChain],
     # and booleans have since been wired in, so "unknown" now much more often
     # means "there is no criterion" — which is exactly the losing shape.
     if criterion_rows is None or not predicate_rows:
+        SHAPE.decline("pinned, but no MEASURED criterion — an unfiltered walk "
+                      "fans out and hop-wise is a nested-loop strategy",
+                      depth=chain.depth, criterion_rows=criterion_rows,
+                      predicate_rows=predicate_rows)
         return Decision(False, f"depth {chain.depth}, pinned but no measured "
                                f"criterion — an unfiltered walk fans out", chain)
 
@@ -180,6 +199,7 @@ def decide_for_plan(chains, criterion_rows=None, predicate_rows=None) -> Decisio
     holding a 3-hop chain beside a 1-hop chain is dominated by the former.
     """
     if not chains:
+        SHAPE.decline("the plan holds no traversal chain")
         return Decision(False, "no chain")
     decision = decide(chains[0], criterion_rows, predicate_rows)
     logger.info("traversal decision: %s", decision)

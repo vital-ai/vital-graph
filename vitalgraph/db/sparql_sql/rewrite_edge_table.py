@@ -17,9 +17,16 @@ import logging
 import re
 from typing import Dict, List, Optional, Set, Tuple
 
+from .declines import Rule
 from .ir import PlanV2, TableRef, AliasGenerator, KIND_BGP
 
 logger = logging.getLogger(__name__)
+
+# Reads the resolved constant map, so it must run after `materialize_constants`
+# — an unresolved constant makes every predicate look unrecognised and the
+# rewrite declines for a reason that says nothing about the query.
+EDGE = Rule("edge_rewrite", stage="edge_rewrite",
+            reads=("collect", "materialize_constants"))
 
 EDGE_SOURCE_URI = "http://vital.ai/ontology/vital-core#hasEdgeSource"
 EDGE_DEST_URI = "http://vital.ai/ontology/vital-core#hasEdgeDestination"
@@ -66,14 +73,14 @@ def rewrite_edge_table(plan: PlanV2, aliases: AliasGenerator,
             dst_quads[quad_alias] = const_alias
 
     if not src_quads or not dst_quads:
-        logger.info("rewrite_edge_table: no edge pairs found in BGP. "
-                    "src_quads=%s, dst_quads=%s, const_to_uri has %d URIs, "
-                    "tagged_constraints=%d",
-                    src_quads, dst_quads, len(const_to_uri),
-                    len(plan.tagged_constraints))
-        if not const_to_uri:
-            logger.info("rewrite_edge_table: constant map is empty — constants: %s",
-                        dict(list(aliases.constants.items())[:10]))
+        EDGE.decline(
+            "no hasEdgeSource/hasEdgeDestination quad pair in this BGP"
+            + ("" if const_to_uri else
+               " (the constant map is EMPTY, so no predicate could be "
+               "recognised — this is a resolution failure, not a shape one)"),
+            src_quads=sorted(src_quads), dst_quads=sorted(dst_quads),
+            resolved_uris=len(const_to_uri),
+            tagged_constraints=len(plan.tagged_constraints))
         return plan
 
     # Find co-reference pairs: src and dst sharing same subject_uuid
@@ -122,8 +129,10 @@ def rewrite_edge_table(plan: PlanV2, aliases: AliasGenerator,
                             "%s(src) + %s(dst)", var_name, src_hit, dst_hit)
 
     if not pairs:
-        logger.info("rewrite_edge_table: found src/dst quads but no co-reference pairs. "
-                    "src=%s, dst=%s", src_quads, dst_quads)
+        EDGE.decline(
+            "src and dst quads are present but none share a subject, so no "
+            "pair describes one edge",
+            src_quads=sorted(src_quads), dst_quads=sorted(dst_quads))
         return plan
 
     logger.info("Edge table rewrite: found %d edge pair(s) to replace", len(pairs))
