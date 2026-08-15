@@ -693,6 +693,18 @@ class SparqlSQLSchema:
                 lower_num      DOUBLE PRECISION,
                 lower_dt       TIMESTAMP,
                 total_rows     BIGINT  NOT NULL DEFAULT 0,
+                -- The predicate's rdf_pred_stats count AS OF this build. The
+                -- freshness reference, and deliberately NOT total_rows:
+                -- total_rows counts quads with a value in THIS LANE, pred_stats
+                -- counts every quad for the predicate, and the two diverge
+                -- permanently on a mixed-type predicate — which would read as
+                -- permanently stale. Comparing like with like means storing the
+                -- pred_stats value here.
+                --
+                -- NULL means "built before this column existed": unknown, so no
+                -- scaling and no staleness verdict, which is the behaviour
+                -- before this existed.
+                pred_rows      BIGINT,
                 updated_time   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (predicate_uuid, lane, bucket)
             )

@@ -633,6 +633,24 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
         aliases.text_stats = {}
         vstats = await _load_value_stats_cached(
             space_id, conn=conn, conn_params=conn_params)
+        # Freshness is decided per query, NOT cached with the histograms.
+        #
+        # `_value_stats_cache` and `_stats_cache` both hold their contents for
+        # the life of the process, so a verdict computed once and cached would
+        # itself go stale — which is the failure this exists to prevent. The
+        # pre-filter is one indexed read of `rdf_pred_stats` (a few dozen rows,
+        # maintained incrementally on every write); a shape probe runs only for
+        # a predicate whose count has actually moved.
+        #
+        # It mutates the cached dict in place. Two queries racing here compute
+        # the same verdict from the same rows, so the only cost of the race is
+        # doing it twice.
+        if conn is not None and vstats:
+            try:
+                from .sync_value_stats import apply_freshness
+                await apply_freshness(conn, space_id, vstats)
+            except Exception as exc:
+                logger.debug("freshness check skipped for %s: %s", space_id, exc)
         for p_uuid, op, literal in needed_ranges(plan, aliases):
             ck = (space_id, p_uuid, op, literal)
             if ck in _pair_count_cache:
