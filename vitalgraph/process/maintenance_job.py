@@ -550,8 +550,21 @@ class MaintenanceJob:
         if not worst_space:
             return None
 
-        async with self._pool.acquire() as conn:
-            built = await resync_value_stats(conn, worst_space)
+        # Guarded, unlike the neighbouring steps, because of the hazard this
+        # cycle documents about itself: one `except` covers the whole run, so a
+        # throw here would silently skip every step after it. A full rebuild is
+        # up to 9.3 s of real work against a live pool, which makes it the most
+        # plausible place in the cycle to time out — and losing an accurate
+        # histogram must not also cost the vector reindex and the cleanup.
+        try:
+            async with self._pool.acquire() as conn:
+                built = await resync_value_stats(conn, worst_space)
+        except Exception as exc:
+            logger.warning("Value stats refresh failed for %s: %s — estimates "
+                           "stay scaled or withdrawn until the next cycle",
+                           worst_space, exc)
+            return {"space_id": worst_space, "drifted_histograms": worst_n,
+                    "failed": f"{type(exc).__name__}: {exc}"}
         # The rebuild moves the reference every cached freshness verdict was
         # taken against, so they have to go with it.
         try:
