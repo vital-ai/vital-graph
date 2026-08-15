@@ -232,10 +232,31 @@ async def resync_stats_tables(conn, space_id: str) -> Dict[str, int]:
     await conn.execute(f"ANALYZE {t_pred}")
     await conn.execute(f"ANALYZE {t_stats}")
 
-    # A full rebuild makes rdf_stats complete, so absence means zero again
-    # for every predicate. Leaving the flags set would keep the incremental
+    # A full rebuild makes rdf_stats complete WITHIN THE WINDOW, so absence
+    # means zero again for every predicate as far as any consumer of the
+    # window is concerned. Leaving the flags set would keep the incremental
     # sync permanently degraded to UPDATE-only long after the reason was
     # gone, and nothing would ever have cleared it.
+    #
+    # "Complete" is not literal, and the earlier wording said it was. The
+    # rebuild above carries `HAVING COUNT(*) <= 200000`, so absence means
+    # "zero OR larger than STATS_MAX_ROW_COUNT" — opposite answers. On
+    # graph_synth_100k that is 13 pairs of 5,669,790, covering 7,304,903 of
+    # 19,632,351 quads (37% of the space): vitaltype/Edge_hasKGSlot and
+    # vitaltype/KGEntitySlot at 946,548, the KGFrame and hasKGSlotType pairs
+    # at 473,274.
+    #
+    # MEASURED 2026-08-15 and left as it is. Restoring those 13 rows changes
+    # what `_load_missing_pair_stats` reports from 50,000 SATURATED to 473,274
+    # exact — a 9.5x difference in the input to join reordering, the semijoin
+    # marker and the slice direction gate — and produced BYTE-IDENTICAL SQL on
+    # all 14 shapes tried (traversals at three depths, anchored+paged queries,
+    # relation walks). Both values are "much larger than everything else", and
+    # the reorder ranks by cardinality, so big-versus-bigger reorders nothing.
+    # The one consumer that did read a restored value, the IN criterion gate,
+    # measured a NET LOSS when fed (test_scripts/perf/bench_in_criterion_gate.py).
+    # So the ambiguity is real and, on the evidence, inert. Do not "fix" it
+    # without a consumer that demonstrably needs it.
     await conn.execute(f"UPDATE {t_pred} SET pruned = FALSE WHERE pruned")
 
     logger.info("resync_stats_tables(%s): %d pred_stats, %d quad_stats",
