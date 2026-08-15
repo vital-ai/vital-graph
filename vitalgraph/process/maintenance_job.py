@@ -37,6 +37,19 @@ VACUUM_STALENESS_MINUTES = 30        # skip if vacuumed within this many minutes
 # minus edge rows; resync when it exceeds both an absolute and a relative floor.
 EDGE_DRIFT_MIN_ABS = 1_000           # ignore drift below this many edges
 EDGE_DRIFT_MIN_PCT = 0.01            # ...and below this fraction of edges
+
+# Value histograms: rebuild a space once a predicate's row count has moved this
+# far from the count its histogram was built at.
+#
+# Deliberately far above the read path's DRIFT_EPSILON (0.02). That one decides
+# whether a shape probe is worth a QUERY; this decides whether seconds of
+# rebuild are worth spending, and at 2% a busy space would rebuild constantly.
+# 0.50 is chosen against the measured curve rather than by feel: growth is
+# CORRECTED by scaling to at least 3.00x with the error flat at the histogram's
+# own resolution, so waiting this long costs accuracy only for a genuine shape
+# change — and a shape change is WITHDRAWN at read time, not served wrong. So
+# the cost of a late rebuild is exact counts, never a bad estimate.
+VALUE_STATS_DRIFT_THRESHOLD = 0.50
 # Above this fraction of sampled edge rows referencing vanished quads, the table
 # is stale rather than incomplete. Set high because a partially-backfilled table
 # has a genuinely low orphan rate; only a wholesale mismatch should trip it.
@@ -110,7 +123,8 @@ class MaintenanceJob:
     async def run(self) -> Dict:
         """Execute one maintenance cycle. Returns summary dict."""
         summary: Dict = {"analyze": None, "vacuum": None, "cleanup": False,
-                         "vector_reindex": None, "aborted": None}
+                         "vector_reindex": None, "value_stats": None,
+                         "aborted": None}
         start = time.monotonic()
 
         try:
@@ -152,6 +166,11 @@ class MaintenanceJob:
             stats_prune_result = await self._run_stats_prune(list(stats.keys()))
             if stats_prune_result:
                 summary["stats_prune"] = stats_prune_result
+
+            # --- Value histograms (rebuild the worst-drifted space) ---
+            vstats_result = await self._run_value_stats_refresh(list(stats.keys()))
+            if vstats_result:
+                summary["value_stats"] = vstats_result
 
             # --- Vector index REINDEX ---
             vector_result = await self._run_vector_reindex(list(stats.keys()))
@@ -477,6 +496,75 @@ class MaintenanceJob:
             kept = await prune_stats_tables(conn, worst_space)
         result = {"space_id": worst_space, "est_before": int(worst_rows), "kept": kept}
         logger.info("Stats prune: %s ~%d → %d rows", worst_space, int(worst_rows), kept)
+        return result
+
+    async def _run_value_stats_refresh(self, space_ids: List[str]) -> Optional[Dict]:
+        """Rebuild the value histograms for the single worst-drifted space.
+
+        THE MIDDLE CASE, which nothing else covers. A bulk load rebuilds these
+        (`add_rdf_quads_batch_bulk`), and `apply_freshness` keeps a drifted
+        histogram SAFE at read time by scaling it for growth or withdrawing it
+        on a shape change. Neither ever makes one ACCURATE again. A space that
+        accumulates small writes therefore degrades permanently: estimates get
+        withdrawn, every range criterion falls back to an exact count, and the
+        traversal criterion gate stops seeing a measured criterion at all.
+
+        There is no incremental form — bucket boundaries move as the
+        distribution does (`stats_table_freshness_plan.md`, candidate 4) — so
+        repair is a full rebuild, which is why it belongs here rather than on a
+        write path. Measured: 1.3 s on 2.5M quads, 9.3 s on 19.6M.
+
+        DETECTION IS FREE AND USES WHAT IS ALREADY STORED. `pred_rows` is the
+        predicate's row count as of the build; `rdf_pred_stats` is maintained on
+        every write. Their ratio is the drift, and both tables are tiny, so this
+        is one small indexed join per space with no scan of anything.
+
+        The threshold is deliberately far above the read path's. `DRIFT_EPSILON`
+        (2%) decides whether a shape probe is worth a query; this decides
+        whether seconds of rebuild are worth spending, and rebuilding for a 2%
+        change would mean rebuilding constantly. Growth up to this point is
+        already CORRECTED by scaling rather than merely tolerated, so waiting
+        costs accuracy only for a genuine shape change — which the read-time
+        guard withdraws rather than serving wrong.
+        """
+        from ..db.sparql_sql.sync_value_stats import resync_value_stats
+
+        worst_space, worst_drift, worst_n = None, 0.0, 0
+        for space_id in space_ids:
+            try:
+                async with self._pool.acquire() as conn:
+                    row = await conn.fetchrow(f"""
+                        SELECT count(*) AS n,
+                               max(abs(ps.row_count::float8 / vs.pred_rows - 1)) AS d
+                        FROM {space_id}_rdf_value_stats vs
+                        JOIN {space_id}_rdf_pred_stats ps
+                          ON ps.predicate_uuid = vs.predicate_uuid
+                        WHERE vs.pred_rows IS NOT NULL AND vs.pred_rows > 0
+                          AND abs(ps.row_count::float8 / vs.pred_rows - 1)
+                              > {VALUE_STATS_DRIFT_THRESHOLD}""")
+            except Exception:
+                continue          # no histograms yet, or a non-KG space
+            if row and row["n"] and (row["d"] or 0) > worst_drift:
+                worst_space, worst_drift, worst_n = space_id, row["d"], row["n"]
+
+        if not worst_space:
+            return None
+
+        async with self._pool.acquire() as conn:
+            built = await resync_value_stats(conn, worst_space)
+        # The rebuild moves the reference every cached freshness verdict was
+        # taken against, so they have to go with it.
+        try:
+            from ..db.sparql_sql.generator import invalidate_stats_cache
+            invalidate_stats_cache(worst_space)
+        except Exception:
+            pass
+        result = {"space_id": worst_space, "drifted_histograms": worst_n,
+                  "worst_drift": round(worst_drift, 3), "rebuilt": built}
+        logger.info("Value stats refresh: %s — %d histogram(s) past %.0f%% "
+                    "drift (worst %.2fx), rebuilt %s",
+                    worst_space, worst_n, VALUE_STATS_DRIFT_THRESHOLD * 100,
+                    1 + worst_drift, built)
         return result
 
     async def _run_edge_integrity(self, space_ids: List[str]) -> Optional[Dict]:
