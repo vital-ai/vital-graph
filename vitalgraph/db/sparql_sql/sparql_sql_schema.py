@@ -541,6 +541,7 @@ class SparqlSQLSchema:
             'rdf_value_stats': f'{space_id}_rdf_value_stats',
             'edge': f'{space_id}_edge',
             'edge_fanout': f'{space_id}_edge_fanout',
+            'entity_fanout': f'{space_id}_entity_fanout',
             'frame_entity': f'{space_id}_frame_entity',
             'vector_index': f'{space_id}_vector_index',
             'geo': f'{space_id}_geo',
@@ -768,6 +769,33 @@ class SparqlSQLSchema:
                 sample_nodes       BIGINT NOT NULL DEFAULT 0,
                 updated_time       TIMESTAMP DEFAULT NOW(),
                 PRIMARY KEY (edge_type_uuid, relation_type_uuid, direction)
+            )''')
+
+        # 8b. Entity fan-out — the HUB LIST.
+        #
+        # How wide a traversal gets from one entity, which `edge_fanout` cannot
+        # say: that is keyed on (edge type, relation type, direction) and is an
+        # aggregate over the whole space, built to choose a traversal DIRECTION.
+        # Every traversal question that stays open comes back to "how wide does
+        # the walk get from THIS entity" — see traversal_chain_plan.md GAP 7b.
+        #
+        # A LIST of hubs rather than a row per entity, because the distribution
+        # is scale-free and only the tail costs anything: measured on
+        # wordnet_frames, 80 entities of 109,734 have an out-degree >= 100
+        # (0.073%) against a mean of 2.60 and a p99 of 20. Storing the top N
+        # captures the whole cost profile in hundreds of rows instead of
+        # millions, and an entity absent from the list is by construction not a
+        # hub.
+        #
+        # Both directions, because a traversal can be pinned at either end.
+        stmts.append(f'''
+            CREATE TABLE IF NOT EXISTS {t['entity_fanout']} (
+                entity_uuid   UUID NOT NULL,
+                context_uuid  UUID NOT NULL,
+                direction     TEXT NOT NULL,        -- 'forward' | 'backward'
+                fanout        BIGINT NOT NULL,      -- DISTINCT neighbours, one hop
+                updated_time  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (entity_uuid, context_uuid, direction)
             )''')
 
         # 7. Frame-entity table (maintained by app-level sync; replaces frame_entity MV)
@@ -1098,6 +1126,9 @@ class SparqlSQLSchema:
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fuzzy_band_entity ON {t['fuzzy_band']} (entity_key)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fuzzy_pband_lookup ON {t['fuzzy_phonetic_band']} (band_id, band_hash)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fuzzy_pband_entity ON {t['fuzzy_phonetic_band']} (entity_key)",
+
+            # "who are the hubs, widest first" — the only query this table has.
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_entity_fanout_top ON {t['entity_fanout']} (direction, fanout DESC)",
         ]
 
     def drop_space_tables_sql(self, space_id: str) -> List[str]:
@@ -1108,6 +1139,11 @@ class SparqlSQLSchema:
             f"DROP TABLE IF EXISTS {t['edge']} CASCADE",
             f"DROP TABLE IF EXISTS {t['rdf_stats']} CASCADE",
             f"DROP TABLE IF EXISTS {t['rdf_pred_stats']} CASCADE",
+            # Added later than the rest and missed here, so every drop_space
+            # logged them as orphans and relied on the fallback sweep.
+            f"DROP TABLE IF EXISTS {t['rdf_value_stats']} CASCADE",
+            f"DROP TABLE IF EXISTS {t['edge_fanout']} CASCADE",
+            f"DROP TABLE IF EXISTS {t['entity_fanout']} CASCADE",
             f"DROP TABLE IF EXISTS {t['rdf_quad']} CASCADE",
             f"DROP TABLE IF EXISTS {t['term']} CASCADE",
             f"DROP TABLE IF EXISTS {t['datatype']} CASCADE",

@@ -63,6 +63,17 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
         logger.warning("resync_all(%s): edge fan-out skipped (%s)",
                        space_id, exc)
 
+    # 3b. Entity fan-out — the hub list. Same rationale as edge fan-out: a
+    # periodic full rebuild, never incremental. It is also FAIL-SAFE, so a
+    # failure here costs an optimisation and never an answer.
+    entity_hubs = {}
+    try:
+        from .sync_entity_fanout import resync_entity_fanout
+        entity_hubs = await resync_entity_fanout(conn, space_id)
+    except Exception as exc:
+        logger.warning("resync_all(%s): entity fan-out skipped (%s)",
+                       space_id, exc)
+
     # 4. Geo table — extract lat/lon from existing quads
     geo_points = 0
     try:
@@ -128,6 +139,7 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
         'pred_stats_rows': stats['pred_stats'],
         'quad_stats_rows': stats['quad_stats'],
         'edge_fanout_rows': fanout_rows,
+        'entity_fanout_rows': sum(entity_hubs.values()) if entity_hubs else 0,
         'geo_points': geo_points,
     }
     logger.info("resync_all_auxiliary_tables(%s): %s", space_id, result)
