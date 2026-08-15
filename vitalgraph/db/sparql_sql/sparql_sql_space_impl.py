@@ -1222,6 +1222,38 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             t = self.schema.get_table_names(space_id)
 
             # ------------------------------------------------------------------
+            # 0. Stamp server-managed properties on any KGEntity the batch
+            #    introduces, BEFORE anything else looks at `quads`.
+            #
+            #    These four are server-managed, so every KGEntity acquires them
+            #    eventually. Doing it here rather than in the background
+            #    backfill means they ride the same COPY, the same index rebuild
+            #    and the same transaction — and, critically, they are in
+            #    `quad_rows` when `sync_stats_after_insert` runs below. Added
+            #    afterwards by raw SQL they were not: measured on two freshly
+            #    loaded fixtures, `rdf_pred_stats` held 21 of 24 predicates,
+            #    missing exactly these three at 10,000 rows each, so every
+            #    consumer keyed on pred_stats lost them silently.
+            #
+            #    It must precede the datatype scan below, or the xsd:dateTime of
+            #    a creation time never reaches `dt_map` and the literal is
+            #    stored untyped.
+            try:
+                from ...kg_impl.kg_server_properties import (
+                    server_property_quads_for_import)
+                from datetime import timezone as _tz
+                _extra = server_property_quads_for_import(
+                    quads, datetime.now(_tz.utc))
+                if _extra:
+                    quads = list(quads) + _extra
+                    logger.debug("bulk insert: stamped %d server-property quad(s)",
+                                 len(_extra))
+            except Exception as exc:
+                # An import that loses a server property is recoverable — the
+                # backfill task still exists and will catch it. An import that
+                # FAILS because of one is not.
+                logger.warning("server-property stamping skipped: %s", exc)
+
             # 1. Collect unique datatype URIs from Literal objects
             # ------------------------------------------------------------------
             datatype_uris: set = set()

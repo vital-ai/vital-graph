@@ -384,6 +384,74 @@ async def count_entities_needing_backfill_sql(pool, space_id: str, graph_id: str
         )
 
 
+def server_property_quads_for_import(quads, now: datetime):
+    """The server-managed quads an incoming batch is missing, as RDF terms.
+
+    `quads` is the (s, p, o, g) sequence about to be imported, in whatever term
+    representation the caller uses; only `str()` of each part is inspected, so
+    this works on rdflib terms and on plain strings alike. Returns a list of
+    `(subject, predicate, object, graph)` string triples to APPEND to the batch.
+
+    WHY THIS BELONGS IN THE IMPORT AND NOT IN A BACKFILL
+    ----------------------------------------------------
+    These four properties are server-managed, so every KGEntity acquires them
+    sooner or later. Doing it during the import rather than afterwards is better
+    on three counts, and the third is the one that bit:
+
+      * **One pass instead of a second write pass.** The backfill task walks
+        every entity with a `SELECT` per entity to discover what is missing —
+        100,000 round trips for a 100,000-entity load — to learn something the
+        incoming batch already states.
+      * **They land in the COPY**, with the same index rebuild and the same
+        transaction as everything else.
+      * **The derived tables stay correct.** `add_rdf_quads_batch_bulk` already
+        calls `sync_stats_after_insert` with the quads it wrote, so properties
+        added HERE are counted. Added later by raw SQL they were not: measured
+        on two freshly loaded fixtures, `rdf_pred_stats` held 21 of 24
+        predicates, missing exactly these, at 10,000 rows each. Everything keyed
+        on pred_stats then silently loses them — the join reorder's cardinality,
+        the traversal criterion gate, the value-histogram freshness reference.
+
+    ONLY FOR SUBJECTS THE BATCH ITSELF TYPES AS A KGEntity, and only for
+    properties the batch does not already carry. This cannot see the database,
+    so it will not add a second creation time to an entity that already has one
+    — that case belongs to the caller, which knows whether the subject is new.
+
+    The timestamps are returned as TYPED literals. The bulk loader classifies a
+    term by its rdflib class and falls back to 'U' for anything else, so a plain
+    string would be stored as a URI: no `dt_val`, no histogram, and a range
+    query over a creation time silently matching nothing.
+    """
+    from rdflib import Literal, URIRef
+    from rdflib.namespace import XSD
+
+    type_uri = str(RDF_TYPE_URI)
+    entities = {}                      # subject -> graph term (as given)
+    have = set()                       # (subject, predicate) already in the batch
+    for s, p, o, g in quads:
+        sp, ss = str(p), str(s)
+        if sp == type_uri and str(o) == KGENTITY_CLASS_URI:
+            entities[ss] = g
+        have.add((ss, sp))
+
+    if not entities:
+        return []
+
+    stamp = Literal(now.isoformat(), datatype=XSD.dateTime)
+    defaults = (
+        (CREATION_TIME_URI, stamp),
+        (MODIFICATION_TIME_URI, stamp),
+        (STATUS_TYPE_URI, URIRef(DEFAULT_STATUS)),
+        (ENTITY_TYPE_URI, URIRef(DEFAULT_ENTITY_TYPE)),
+    )
+    out = []
+    for subj, graph in entities.items():
+        for pred, value in defaults:
+            if (subj, pred) not in have:
+                out.append((URIRef(subj), URIRef(pred), value, graph))
+    return out
+
+
 async def _backfill_one_batch_sql(
     pool,
     space_id: str,
@@ -470,6 +538,10 @@ async def _backfill_one_batch_sql(
 
         # For each entity, check which properties are missing and insert
         patched_uris: List[str] = []
+        # Every quad this batch actually writes, so the derived stats can be
+        # maintained once at the end rather than per entity. See the call below
+        # for why this is not optional.
+        written: List[tuple] = []
         for subj_uuid in entity_uuids:
             # Which predicates already exist for this entity in this graph?
             existing = await conn.fetch(
@@ -497,9 +569,42 @@ async def _backfill_one_batch_sql(
                     f"VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
                     insert_rows,
                 )
+                written.extend(insert_rows)
                 uri = uuid_to_uri.get(subj_uuid)
                 if uri:
                     patched_uris.append(uri)
+
+        # Maintain the derived statistics for what was just written.
+        #
+        # NOT optional, and it was missing. This task writes quads with raw SQL, so
+        # none of the incremental sync hooks in `sparql_sql_space_impl` fire — the
+        # same shape as the bulk-load hazard `load_wordnet_csv.resync_aux` documents
+        # (issues/041), except this one runs in production, on a nudge from the
+        # insert and update endpoints.
+        #
+        # The three predicates it asserts are asserted for the FIRST time here on a
+        # freshly loaded space, so `rdf_pred_stats` had no row for them at all —
+        # observed as 21 of 24 predicates on both loaded fixtures, with
+        # hasObjectCreationTime, hasObjectModificationDateTime and
+        # hasObjectStatusType missing at 10,000 rows each. Everything keyed on
+        # pred_stats then silently loses them: the join reorder's cardinality, the
+        # traversal criterion gate (which reports "unmeasured" without a predicate
+        # total), and the value-histogram freshness reference.
+        #
+        # `written` holds only rows this batch decided to insert after checking what
+        # already exists, so the ON CONFLICT DO NOTHING above is a race guard rather
+        # than the common path. A concurrent backfill could still make this a slight
+        # over-count, which the next full resync corrects — the alternative is
+        # RETURNING per row, and an occasional small over-count is a far better
+        # error than a predicate that does not appear at all.
+        if written:
+            try:
+                from ..db.sparql_sql.sync_stats_tables import sync_stats_after_insert
+                await sync_stats_after_insert(conn, space_id, written)
+            except Exception as exc:
+                logger.warning(
+                    "server-property backfill: stats sync failed for %s (%d quads); "
+                    "run resync_stats_tables: %s", space_id, len(written), exc)
 
         return patched_uris
 
