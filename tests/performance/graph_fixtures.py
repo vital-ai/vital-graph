@@ -74,6 +74,14 @@ CATEGORY = f"{HALEY}hasCategory"    # xsd:string, weighted — the IN case
 ACTIVE = f"{HALEY}hasActive"        # xsd:boolean
 TAG = f"{HALEY}hasTag"              # uri, MULTI-VALUED (1-4 per edge)
 
+# Nested frames: frame -> frame. `traversal_chain_plan.md` GAP 4 — the shape no
+# fixture had, and the one the product uses for compound facts. Two questions
+# come with it: whether a criterion one level DOWN is still exploited, and
+# whether `emit_path.MAX_PATH_DEPTH = 5` silently truncates real nesting.
+NESTED_EDGE_TYPE = f"{HALEY}Edge_hasKGFrame"
+EDGE_SOURCE = f"{VITAL}hasEdgeSource"
+EDGE_DEST = f"{VITAL}hasEdgeDestination"
+
 
 class GraphFixture:
     """A generated traversal space and the manifest that says what is in it."""
@@ -111,6 +119,37 @@ class GraphFixture:
 
     def sample_starts(self) -> list:
         return self.manifest()["traversal"]["sample_starts"]
+
+    def nesting(self) -> dict:
+        """The nested-frame ground truth, or a clear failure if this fixture predates it.
+
+        Fixtures generated before nested frames existed have no `nesting` key.
+        Raising says which one is loaded; returning `{}` would let a nesting
+        test pass by asserting nothing.
+        """
+        m = self.manifest()
+        if "nesting" not in m:
+            raise KeyError(
+                f"{self.manifest_path} has no `nesting` — it predates nested "
+                f"frames. Regenerate with scripts/generate_graph_dataset.py "
+                f"and reload the space.")
+        return m["nesting"]
+
+    def frame_uri(self, index: int) -> str:
+        return f"{BASE}:frame:{index}"
+
+    def deep_roots(self) -> dict:
+        """{connection frame index: {depth: [nested frame indexes]}}.
+
+        Only roots whose chain runs PAST `MAX_PATH_DEPTH`, which is the point:
+        a property path that truncates at the cap returns strictly fewer
+        descendants than these record, and a truncated walk reads as a correct
+        answer unless something counts.
+        """
+        return self.nesting()["deep_roots"]
+
+    def nested_frame_uri(self, index: int) -> str:
+        return f"{BASE}:nframe:{index}"
 
     def expected(self, key: str, start: int, depth: int) -> set:
         """The entity INDEXES reachable at exactly `depth`, per the manifest.
@@ -162,6 +201,67 @@ def frame_hop(n: int, from_var: str, to_var: str, criterion: str = "") -> str:
         ?de{n} <{VITAL}hasEdgeDestination> ?ds{n} .
         ?ds{n} <{HALEY}hasKGSlotType> <{DST_ROLE}> .
         ?ds{n} <{HALEY}hasEntitySlotValue> {to_var} .{criterion.format(n=n)}"""
+
+
+# Nested criterion templates, dropped into `frame_hop`'s `criterion` slot so the
+# walk is the same walk and only the criterion moves down a level. That is what
+# makes the differential meaningful: a rewrite that quietly declines the nested
+# hop still satisfies every flat-criterion case in the manifest.
+#
+# Each is paired with the manifest key holding their
+# answers — the same contract as CRITERIA, so a test cannot compare a query
+# against the wrong ground truth. Density (see `nesting.walk_density`) decides
+# how deep each stays non-empty: the category one is ~25% of frames and lives to
+# depth 3, `score >= 50` is ~7% and is a depth-1/2 case by construction.
+NESTED_CRITERIA = {
+    "nested_category_in_alpha_beta": (
+        f'\n        ?nfe{{n}} <{VITAL}vitaltype> <{NESTED_EDGE_TYPE}> .'
+        f'\n        ?nfe{{n}} <{EDGE_SOURCE}> ?f{{n}} .'
+        f'\n        ?nfe{{n}} <{EDGE_DEST}> ?nf{{n}} .'
+        f'\n        ?nf{{n}} <{CATEGORY}> ?nct{{n}} . '
+        f'FILTER(?nct{{n}} IN ("alpha", "beta"))',
+        "frame_traversal_nested_category_in_alpha_beta"),
+    "nested_score_gte_50": (
+        f'\n        ?nfe{{n}} <{VITAL}vitaltype> <{NESTED_EDGE_TYPE}> .'
+        f'\n        ?nfe{{n}} <{EDGE_SOURCE}> ?f{{n}} .'
+        f'\n        ?nfe{{n}} <{EDGE_DEST}> ?nf{{n}} .'
+        f'\n        ?nf{{n}} <{SCORE}> ?nsc{{n}} . FILTER(?nsc{{n}} >= 50)',
+        "frame_traversal_nested_score_gte_50"),
+    "has_nested": (
+        f'\n        ?nfe{{n}} <{VITAL}vitaltype> <{NESTED_EDGE_TYPE}> .'
+        f'\n        ?nfe{{n}} <{EDGE_SOURCE}> ?f{{n}} .'
+        f'\n        ?nfe{{n}} <{EDGE_DEST}> ?nf{{n}} .',
+        "frame_traversal_has_nested"),
+}
+
+
+def nested_path_query(fx, root_frame: int, depth: int) -> str:
+    """Descendants of one frame at EXACTLY `depth` hops of Edge_hasKGFrame.
+
+    Written as explicit hops rather than a property path so the two can be
+    compared: `MAX_PATH_DEPTH = 5` bounds the recursive CTE a `*` path compiles
+    to, and explicit hops are not bounded by it. Where they disagree past depth
+    5, the cap is what disagrees.
+    """
+    hops = "".join(
+        f"""
+        ?ne{i} <{VITAL}vitaltype> <{NESTED_EDGE_TYPE}> .
+        ?ne{i} <{EDGE_SOURCE}> ?nf{i} .
+        ?ne{i} <{EDGE_DEST}> ?nf{i + 1} ."""
+        for i in range(depth))
+    return f"""
+    SELECT DISTINCT ?nf{depth} WHERE {{ GRAPH <{fx.graph}> {{
+        {hops}
+        FILTER(?nf0 = <{fx.frame_uri(root_frame)}>)
+    }} }}"""
+
+
+def nested_star_query(fx, root_frame: int) -> str:
+    """The same descendants via a property path — the shape MAX_PATH_DEPTH bounds."""
+    return f"""
+    SELECT DISTINCT ?child WHERE {{ GRAPH <{fx.graph}> {{
+        <{fx.frame_uri(root_frame)}> ^<{EDGE_SOURCE}>/<{EDGE_DEST}> ?child .
+    }} }}"""
 
 
 def relation_hop(n: int, from_var: str, to_var: str, criterion: str = "") -> str:

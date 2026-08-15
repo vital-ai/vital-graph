@@ -28,6 +28,11 @@ WHAT IT CONTAINS
   KG relations    entity -> entity directly, via Edge_hasKGRelation. The other
                   traversal shape, deliberately NOT frame-mediated, so a query
                   crossing both is possible and so the two can be compared
+  nested frames   frame -> frame via Edge_hasKGFrame, to depth 8. The third
+                  shape, and the one nothing had: a criterion living one level
+                  BELOW the frame that connects two entities, plus chains
+                  deeper than `emit_path.MAX_PATH_DEPTH = 5` so a truncating
+                  property path is caught rather than assumed absent
   criteria        on every connection frame and every relation:
                     integer   score       uniform [0, 100)
                     double    weight      uniform [0, 1)
@@ -115,6 +120,52 @@ FRAME_TYPES = ["Mentions", "WorksWith", "DerivedFrom", "LocatedIn"]
 
 # Relation types for the non-frame traversal.
 RELATION_TYPES = ["Knows", "Owns", "Supersedes"]
+
+# ---------------------------------------------------------------------------
+# NESTED FRAMES — frame -> frame via Edge_hasKGFrame
+# ---------------------------------------------------------------------------
+#
+# The third shape, and the one no fixture had. `traversal_chain_plan.md` GAP 4:
+# frames nest via `Edge_hasKGFrame`, arbitrary depth is served by SPARQL
+# property paths through a recursive CTE capped at `MAX_PATH_DEPTH = 5`, and
+# none of the chain detection, hop-wise emission or dedup has ever been tested
+# against a nested-frame walk. Checked before building this: zero
+# `Edge_hasKGFrame` terms in any loaded space, and `test_frame_nesting_hops.py`
+# seeds raw edge-table rows with no quads and no SPARQL, so it exercises the
+# index and nothing above it.
+#
+# It is how the product actually models compound facts — a LeadStatusFrame
+# carrying a LeadStatusQualificationFrame beneath it — so a criterion routinely
+# lives one level BELOW the frame that connects two entities.
+NESTED_FRAME_TYPES = ["Qualification", "Provenance", "Confidence", "Revision"]
+
+# Fraction of connection frames that carry a child frame at all. Under 1, so a
+# query can still tell a nested frame from a plain one — but not far under, and
+# the first value tried was too far.
+#
+# At 0.15 the derived criterion "this frame has a descendant with score >= 50"
+# came out at 2.9% per hop, and a depth-3 walk under it was EMPTY from all 13
+# sample starts. That is the failure this generator's own docstring names: a
+# fixture whose expected answers are mostly `[]` cannot distinguish a working
+# traversal from one that returns nothing. Raised until the densest nested
+# criterion survives to depth 3 — see `nesting.walk_density` in the manifest,
+# which reports what was actually achieved rather than what this implies.
+NEST_P = 0.35
+
+# Probability a nested frame itself carries a child. Geometric, so chain length
+# has a tail rather than a fixed depth.
+NEST_DECAY = 0.5
+
+# THE CAP MUST BE EXERCISED, AND A PROBABILITY IS NOT A GUARANTEE.
+#
+# The question GAP 4 asks is whether `MAX_PATH_DEPTH = 5` silently truncates
+# real nesting, and a truncated walk returns FEWER rows — which reads as a
+# correct answer. A geometric draw at NEST_DECAY gives depth >= 6 about 3% of
+# the time, so on an unlucky seed the fixture would contain nothing past the cap
+# and the test would pass by not asking. So a fixed number of chains are forced
+# to exactly DEEP_CHAIN_DEPTH, which is deliberately GREATER than the cap.
+DEEP_CHAIN_COUNT = 40
+DEEP_CHAIN_DEPTH = 8
 
 # The IN / VALUES case: skewed on purpose. A uniform categorical makes every
 # `IN (...)` roughly the same size, which hides whether selectivity is being
@@ -373,6 +424,169 @@ def build_topology(n_entities: int, fanout: int = 4,
     return frame_edges, relation_edges
 
 
+def build_nesting(n_frames: int, seed: int = 0):
+    """Attach child frames beneath connection frames, forming a forest.
+
+    Returns a list of nested frames, each a tuple:
+
+        (nested_idx, parent_kind, parent_idx, depth, Criteria, frame_type)
+
+    where `parent_kind` is "frame" for a connection frame (`frame_edges[idx]`)
+    or "nested" for another nested frame (`nested[idx]`), and `depth` is 1 for a
+    direct child. The list is in creation order, and a parent always precedes
+    its children, so a single forward pass can render or walk it.
+
+    The first DEEP_CHAIN_COUNT connection frames get a straight chain of exactly
+    DEEP_CHAIN_DEPTH — see the constant for why that is forced rather than
+    drawn. Everything after that nests geometrically.
+    """
+    rng = random.Random(seed + 7)
+    nested = []
+
+    def add(parent_kind, parent_idx, depth):
+        idx = len(nested)
+        nested.append((idx, parent_kind, parent_idx, depth, Criteria(rng),
+                       rng.choice(NESTED_FRAME_TYPES)))
+        return idx
+
+    n_deep = min(DEEP_CHAIN_COUNT, n_frames)
+    for fi in range(n_deep):
+        parent_kind, parent_idx = "frame", fi
+        for depth in range(1, DEEP_CHAIN_DEPTH + 1):
+            parent_idx = add(parent_kind, parent_idx, depth)
+            parent_kind = "nested"
+
+    for fi in range(n_deep, n_frames):
+        if rng.random() >= NEST_P:
+            continue
+        parent_kind, parent_idx, depth = "frame", fi, 1
+        while True:
+            parent_idx = add(parent_kind, parent_idx, depth)
+            parent_kind = "nested"
+            depth += 1
+            if rng.random() >= NEST_DECAY:
+                break
+
+    return nested
+
+
+def _nested_matching_set(nested, predicate=None, max_depth=1):
+    """Connection frames with a descendant at depth <= `max_depth` satisfying `predicate`.
+
+    `predicate(Criteria) -> bool`, or None for "has any descendant at all".
+
+    `max_depth` DEFAULTS TO 1, AND THAT DEFAULT IS THE WHOLE POINT.
+    ------------------------------------------------------------
+    The ground truth has to ask the same question the query asks. The nested
+    criterion templates in `graph_fixtures.NESTED_CRITERIA` descend exactly one
+    `Edge_hasKGFrame` hop, so a frame whose only matching descendant is a
+    GRANDCHILD is not matched by them.
+
+    Computing this at any depth is what the first version did, and it produced a
+    ground truth 11,536 frames wide against a query that matches 9,065 — so a
+    correct engine returned 3 entities where the manifest said 4, on one case in
+    twelve. Read as a test failure that is "the traversal silently drops rows",
+    which is the most alarming defect this fixture can report and was entirely
+    the fixture's own. Deriving the expected answer from a DIFFERENT definition
+    than the query uses is the same drift the fixture exists to catch, one level
+    up.
+
+    A transitive walk needs `max_depth=None` AND a query using a property path.
+    That combination is not currently usable: the `+` path over
+    `^hasEdgeSource/hasEdgeDestination` did not complete within 60 s on the 10k
+    fixture for a root with 8 descendants.
+    """
+    parent_of = {idx: (pk, pi) for idx, pk, pi, _d, _c, _ft in nested}
+    out = set()
+    for idx, _pk, _pi, depth, crit, _ft in nested:
+        if max_depth is not None and depth > max_depth:
+            continue
+        if predicate is not None and not predicate(crit):
+            continue
+        pk, pi = parent_of[idx]
+        while pk == "nested":            # climb to the connection frame
+            pk, pi = parent_of[pi]
+        out.add(pi)
+    return out
+
+
+# The nested criteria the manifest records walks for, densest first. A test
+# picks by what it needs: the dense ones survive to depth 3, `score >= 50` is
+# a depth-1/2 case by construction and the manifest says so.
+NESTED_WALKS = {
+    "frame_traversal_has_nested": None,
+    "frame_traversal_nested_category_in_alpha_beta":
+        lambda c: c.category in ("alpha", "beta"),
+    "frame_traversal_nested_score_gte_50": lambda c: c.score >= 50,
+}
+
+
+def nesting_ground_truth(nested, frame_edges):
+    """What a nested-frame query must return, walked from the same list.
+
+    Two questions, because GAP 4 asks two:
+
+      * **The property path.** `?f <Edge_hasKGFrame>* ?child` over a root whose
+        subtree is deeper than `MAX_PATH_DEPTH`. `deep_roots` records, per
+        connection frame with a chain past the cap, the descendants at each
+        depth — so a truncating walk is caught by a count, not by inspection.
+      * **The nested criterion.** Which connection frames have a DESCENDANT
+        carrying `score >= 50`. That is the traversal question the product
+        actually asks, and it is the one where a criterion sits below the frame
+        that joins two entities.
+    """
+    children = {}
+    for idx, pkind, pidx, _depth, _crit, _ft in nested:
+        children.setdefault((pkind, pidx), []).append(idx)
+
+    by_depth_hist = {}
+    for _idx, _pk, _pi, depth, _c, _ft in nested:
+        by_depth_hist[depth] = by_depth_hist.get(depth, 0) + 1
+
+    def descendants_by_depth(root_frame_idx):
+        """{relative depth: [nested idx]} beneath one connection frame."""
+        out, frontier, d = {}, children.get(("frame", root_frame_idx), []), 1
+        while frontier:
+            out[str(d)] = sorted(frontier)
+            nxt = []
+            for n in frontier:
+                nxt += children.get(("nested", n), [])
+            frontier, d = nxt, d + 1
+        return out
+
+    deep_roots = {}
+    for fi in range(min(DEEP_CHAIN_COUNT, len(frame_edges))):
+        d = descendants_by_depth(fi)
+        if len(d) > 5:                    # past MAX_PATH_DEPTH, which is the point
+            deep_roots[str(fi)] = d
+
+    # Walked over the same list the N-Triples are rendered from, not inferred
+    # from NEST_P, and through the SAME function the traversal walks use.
+    matching = {k: _nested_matching_set(nested, p)
+                for k, p in NESTED_WALKS.items()}
+
+    return {
+        "n_nested_frames": len(nested),
+        "max_depth": max(by_depth_hist) if by_depth_hist else 0,
+        "depth_histogram": {str(k): v for k, v in sorted(by_depth_hist.items())},
+        "max_path_depth_note": (
+            "emit_path.py caps recursive property paths at MAX_PATH_DEPTH = 5. "
+            "deep_roots hold chains of DEEP_CHAIN_DEPTH, so a walk that "
+            "truncates at the cap returns strictly fewer descendants than "
+            "recorded here."),
+        "deep_roots": deep_roots,
+        # Per-hop selectivity of each nested criterion, as a fraction of all
+        # connection frames. Reported because it is what decides how deep the
+        # matching walk stays non-empty, and because the first version of this
+        # fixture shipped one at 2.9% whose depth-3 answers were all `[]`.
+        "walk_density": {
+            k: {"frames": len(v),
+                "fraction": round(len(v) / max(len(frame_edges), 1), 4)}
+            for k, v in matching.items()
+        },
+    }
+
+
 def graph_stats(edges, n_entities: int, rng: random.Random) -> dict:
     """Degree distribution, clustering and path length — the evidence that the
     generated graph has the shape it claims.
@@ -463,6 +677,20 @@ def _adjacency(edges, predicate=None):
     return adj
 
 
+def _adjacency_by_index(edges, keep_indexes):
+    """Adjacency keeping only edges whose POSITION is in `keep_indexes`.
+
+    The nested-criterion walk cannot be expressed as a predicate over an edge's
+    own criteria — what qualifies it is a value on a frame BENEATH it — so the
+    filter is by identity rather than by value.
+    """
+    adj = {}
+    for i, (src, dst, _crit, _kind) in enumerate(edges):
+        if i in keep_indexes:
+            adj.setdefault(src, set()).add(dst)
+    return adj
+
+
 def _reachable(adj, start: int, depth: int) -> set:
     """Entities EXACTLY `depth` hops away, following `adj`.
 
@@ -481,7 +709,8 @@ def _reachable(adj, start: int, depth: int) -> set:
     return frontier
 
 
-def compute_ground_truth(frame_edges, relation_edges, n_entities, seed):
+def compute_ground_truth(frame_edges, relation_edges, n_entities, seed,
+                         nested_matching=None):
     """Walk the finished edge lists and record the answers a query must give."""
     rng = random.Random(seed + 1)
 
@@ -498,6 +727,13 @@ def compute_ground_truth(frame_edges, relation_edges, n_entities, seed):
     frame_adj_recent = _adjacency(
         frame_edges,
         lambda c, _k: c.occurred >= DATE_START + timedelta(days=DATE_DAYS // 2))
+    # The nested cases: keep a hop only when the connecting frame has a CHILD
+    # frame satisfying the criterion. Structurally different from every filter
+    # above — the criterion is one Edge_hasKGFrame BELOW the traversal edge — so
+    # a rewrite that quietly drops the nested hop still satisfies all the others.
+    nested_matching = nested_matching or {}
+    nested_adj = {k: _adjacency_by_index(frame_edges, v)
+                  for k, v in nested_matching.items()}
 
     # Sample starts are CHOSEN, not drawn uniformly. With a filter admitting
     # roughly half the hops, a uniformly-drawn start usually has an empty
@@ -545,10 +781,17 @@ def compute_ground_truth(frame_edges, relation_edges, n_entities, seed):
     rng.shuffle(candidates)
     candidates = seeded + [c for c in candidates if c not in seeded]
     useful, plain = [], []
+    # A start must keep the NESTED walk alive too, not only the flat one. The
+    # two select different corners of the graph — nesting is a property of the
+    # frame, reachability a property of the entity — and picking on the flat
+    # criterion alone left the densest nested walk empty at depth 3 from every
+    # start, which is a fixture that cannot fail.
+    dense_nested = nested_adj.get("frame_traversal_nested_category_in_alpha_beta")
     for c in candidates:
         if len(useful) >= N_SAMPLE_STARTS and len(plain) >= 2:
             break
-        if _reachable(frame_adj_score50, c, deepest):
+        if _reachable(frame_adj_score50, c, deepest) and (
+                dense_nested is None or _reachable(dense_nested, c, deepest)):
             if len(useful) < N_SAMPLE_STARTS - 2:
                 useful.append(c)
         elif len(plain) < 2:
@@ -573,6 +816,7 @@ def compute_ground_truth(frame_edges, relation_edges, n_entities, seed):
         "frame_traversal_type_is_" + FRAME_TYPES[0]: walk(frame_adj_type0),
         "frame_traversal_occurred_second_half": walk(frame_adj_recent),
         "relation_traversal": walk(rel_adj),
+        **{k: walk(adj) for k, adj in nested_adj.items()},
     }
 
 
@@ -632,6 +876,7 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
     t0 = time.time()
     frame_edges, relation_edges = build_topology(
         n_entities, fanout, relation_fanout, seed)
+    nested = build_nesting(len(frame_edges), seed)
 
     rng = random.Random(seed + 2)
     entity_kind = [rng.choice(ENTITY_KINDS) for _ in range(n_entities)]
@@ -700,6 +945,37 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
             fh.write(block)
             n_triples += block.count("\n")
 
+        # Nested frames: frame -> frame via Edge_hasKGFrame.
+        #
+        # A child is an ordinary KGFrame — same type, same criteria predicates —
+        # so nothing distinguishes it structurally except what points AT it.
+        # That is the shape the product uses and it is what makes the criterion
+        # reachable only by descending one more edge.
+        for (ni, pkind, pidx, _depth, crit, ftype) in nested:
+            if fh is None:
+                break
+            child = _uri("nframe", ni)
+            parent = (_uri("frame", pidx) if pkind == "frame"
+                      else _uri("nframe", pidx))
+            nedge = _uri("nedge", ni)
+            buf = [
+                _t(child, RDF_TYPE, f"{HALEY}KGFrame"),
+                _t(child, f"{VITAL}vitaltype", f"{HALEY}KGFrame"),
+                _t(child, f"{VITAL}URIProp", child),
+                _t(child, f"{HALEY}hasKGFrameType", f"{BASE}:frametype:{ftype}"),
+                _lit(child, f"{HALEY}hasKGFrameTypeDescription", ftype,
+                     f"{XSD}string"),
+                crit.triples(child),
+                _t(nedge, RDF_TYPE, f"{HALEY}Edge_hasKGFrame"),
+                _t(nedge, f"{VITAL}vitaltype", f"{HALEY}Edge_hasKGFrame"),
+                _t(nedge, f"{VITAL}URIProp", nedge),
+                _t(nedge, f"{VITAL}hasEdgeSource", parent),
+                _t(nedge, f"{VITAL}hasEdgeDestination", child),
+            ]
+            block = "".join(buf)
+            fh.write(block)
+            n_triples += block.count("\n")
+
         # KG relations: entity -> entity directly, no frame in between.
         for ri, (src, dst, crit, rtype) in enumerate(relation_edges):
             rel = _uri("relation", ri)
@@ -720,9 +996,14 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
         if fh:
             fh.close()
 
+    nesting = nesting_ground_truth(nested, frame_edges)
+    nested_matching = {k: _nested_matching_set(nested, p)
+                       for k, p in NESTED_WALKS.items()}
+
     manifest = {
         "n_entities": n_entities,
         "n_frames": len(frame_edges),
+        "n_nested_frames": len(nested),
         "n_relations": len(relation_edges),
         "n_triples": n_triples,
         "triples_per_entity": round(n_triples / max(n_entities, 1), 1),
@@ -760,14 +1041,21 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
             "category": "weighted, 32:24:16:12:8:4:3:1",
             "active": "Bernoulli(0.2)",
         },
+        "nesting": nesting,
         "traversal": compute_ground_truth(
-            frame_edges, relation_edges, n_entities, seed),
+            frame_edges, relation_edges, n_entities, seed,
+            nested_matching=nested_matching),
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
     dt = time.time() - t0
     print(f"✅ {n_entities:,} entities, {len(frame_edges):,} frames, "
-          f"{len(relation_edges):,} relations")
+          f"{len(nested):,} nested frames, {len(relation_edges):,} relations")
+    print(f"   nesting: max depth {nesting['max_depth']}, "
+          f"{len(nesting['deep_roots'])} chain(s) past MAX_PATH_DEPTH=5")
+    print("   nested walks: " + ", ".join(
+        f"{k.replace('frame_traversal_', '')}->{v['fraction']:.0%}"
+        for k, v in nesting["walk_density"].items()))
     print(f"   {n_triples:,} triples ({manifest['triples_per_entity']} per entity) "
           f"in {shard_idx} shard(s), {dt:.1f}s")
     print(f"📄 manifest: {out_dir / 'manifest.json'}")
