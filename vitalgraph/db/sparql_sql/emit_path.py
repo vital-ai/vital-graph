@@ -136,15 +136,24 @@ def emit_path(plan: PlanV2, ctx: EmitContext) -> str:
     # The outer WHERE below still applies the same constraint; it becomes
     # redundant rather than wrong, because every row the seeded CTE produces
     # already starts at the pin.
-    seed_start_sql = None
+    # A pinned OBJECT is handed down too. It cannot seed the same recursion —
+    # the forward form would anchor the last edge and then extend PAST the pin —
+    # so `_path_to_sql` emits a reverse recursion for it instead.
+    seed_start_sql = seed_end_sql = None
     if isinstance(subject, URINode):
         seed_start_sql = (
             f"(SELECT term_uuid FROM {term_table} "
             f"WHERE term_text = '{_esc(subject.value)}' AND term_type = 'U' LIMIT 1)"
         )
+    if isinstance(obj, URINode):
+        seed_end_sql = (
+            f"(SELECT term_uuid FROM {term_table} "
+            f"WHERE term_text = '{_esc(obj.value)}' AND term_type = 'U' LIMIT 1)"
+        )
     cte_parts, path_select = _path_to_sql(
         path_expr, quad_table, term_table, graph_clause, cte_alias,
         same_graph=same_graph, seed_start_sql=seed_start_sql,
+        seed_end_sql=seed_end_sql,
     )
 
     # ── Subject / object constraints ──
@@ -244,7 +253,8 @@ def emit_path(plan: PlanV2, ctx: EmitContext) -> str:
 def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
                  graph_clause: str, cte_alias: str,
                  same_graph: bool = False,
-                 seed_start_sql: Optional[str] = None) -> Tuple[str, str]:
+                 seed_start_sql: Optional[str] = None,
+                 seed_end_sql: Optional[str] = None) -> Tuple[str, str]:
     """Convert a PathExpr to SQL.
 
     Returns (cte_prefix, select_sql) where cte_prefix is a WITH RECURSIVE
@@ -292,8 +302,12 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
 
     # Inverse: swap start/end, keep ctx_uuid
     if isinstance(path, PathInverse):
+        # An inverse swaps the ends, so a pin on this path's start is a pin on
+        # the sub-path's end and vice versa.
         cte, inner_sql = _path_to_sql(path.sub, quad_table, term_table,
-                                       graph_clause, cte_alias, same_graph)
+                                       graph_clause, cte_alias, same_graph,
+                                       seed_start_sql=seed_end_sql,
+                                       seed_end_sql=seed_start_sql)
         sql = (
             f"SELECT inv.end_uuid AS start_uuid, inv.start_uuid AS end_uuid, "
             f"inv.ctx_uuid "
@@ -307,10 +321,12 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
         # seeded.
         cte_l, sql_l = _path_to_sql(path.left, quad_table, term_table,
                                      graph_clause, cte_alias + "_l", same_graph,
-                                     seed_start_sql=seed_start_sql)
+                                     seed_start_sql=seed_start_sql,
+                                     seed_end_sql=seed_end_sql)
         cte_r, sql_r = _path_to_sql(path.right, quad_table, term_table,
                                      graph_clause, cte_alias + "_r", same_graph,
-                                     seed_start_sql=seed_start_sql)
+                                     seed_start_sql=seed_start_sql,
+                                     seed_end_sql=seed_end_sql)
         cte = ""
         if cte_l or cte_r:
             parts = [p for p in [cte_l, cte_r] if p]
@@ -326,7 +342,8 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
                                      graph_clause, cte_alias + "_l", same_graph,
                                      seed_start_sql=seed_start_sql)
         cte_r, sql_r = _path_to_sql(path.right, quad_table, term_table,
-                                     graph_clause, cte_alias + "_r", same_graph)
+                                     graph_clause, cte_alias + "_r", same_graph,
+                                     seed_end_sql=seed_end_sql)
         cte = ""
         if cte_l or cte_r:
             parts = [p for p in [cte_l, cte_r] if p]
@@ -348,19 +365,41 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
         # Anchor the base term at the pin. `step` below stays UNFILTERED — see
         # the note on `seed_start_sql` for why filtering it too would truncate
         # the walk to the pin's direct neighbours.
-        seed_where = (f" WHERE _base.start_uuid = {seed_start_sql}"
-                      if seed_start_sql else "")
-        rec_body = (
-            f"{rec_name}(start_uuid, end_uuid, depth, ctx_uuid) AS (\n"
-            f"  SELECT start_uuid, end_uuid, 1, ctx_uuid FROM ({base_sql}) AS _base"
-            f"{seed_where}\n"
-            f"  UNION\n"
-            f"  SELECT r.start_uuid, step.end_uuid, r.depth + 1, r.ctx_uuid\n"
-            f"  FROM {rec_name} r\n"
-            f"  JOIN ({base_sql}) AS step ON r.end_uuid = step.start_uuid{ctx_rec_constraint}\n"
-            f"  WHERE r.depth < {MAX_PATH_DEPTH}\n"
-            f")"
-        )
+        if seed_start_sql or not seed_end_sql:
+            seed_where = (f" WHERE _base.start_uuid = {seed_start_sql}"
+                          if seed_start_sql else "")
+            rec_body = (
+                f"{rec_name}(start_uuid, end_uuid, depth, ctx_uuid) AS (\n"
+                f"  SELECT start_uuid, end_uuid, 1, ctx_uuid FROM ({base_sql}) AS _base"
+                f"{seed_where}\n"
+                f"  UNION\n"
+                f"  SELECT r.start_uuid, step.end_uuid, r.depth + 1, r.ctx_uuid\n"
+                f"  FROM {rec_name} r\n"
+                f"  JOIN ({base_sql}) AS step ON r.end_uuid = step.start_uuid{ctx_rec_constraint}\n"
+                f"  WHERE r.depth < {MAX_PATH_DEPTH}\n"
+                f")"
+            )
+        else:
+            # A pinned OBJECT and a free subject: walk BACKWARD from the pin.
+            #
+            # Seeding the forward recursion by `end_uuid` would be wrong, not
+            # merely slow — it anchors the last edge and then extends PAST the
+            # pin, so the answer contains paths that pass through it rather than
+            # ending at it. The recursion has to run the other way: the base is
+            # the edges arriving AT the pin, and each step PREPENDS an edge,
+            # moving `start_uuid` further back while `end_uuid` stays the pin.
+            rec_body = (
+                f"{rec_name}(start_uuid, end_uuid, depth, ctx_uuid) AS (\n"
+                f"  SELECT start_uuid, end_uuid, 1, ctx_uuid FROM ({base_sql}) AS _base"
+                f" WHERE _base.end_uuid = {seed_end_sql}\n"
+                f"  UNION\n"
+                f"  SELECT step.start_uuid, r.end_uuid, r.depth + 1, r.ctx_uuid\n"
+                f"  FROM {rec_name} r\n"
+                f"  JOIN ({base_sql}) AS step ON step.end_uuid = r.start_uuid"
+                f"{ctx_rec_constraint.replace('r.ctx_uuid = step.ctx_uuid', 'step.ctx_uuid = r.ctx_uuid')}\n"
+                f"  WHERE r.depth < {MAX_PATH_DEPTH}\n"
+                f")"
+            )
         cte = _merge_ctes(inner_cte, rec_body)
         sql = f"SELECT DISTINCT start_uuid, end_uuid, ctx_uuid FROM {rec_name}"
         return cte, sql
@@ -377,10 +416,11 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
         # every subject and every object in the space before anything filtered
         # it. With a pin, identity is the pin alone, and the scan reduces to the
         # rows that mention it.
-        _id_seed_s = (f" AND q.subject_uuid = {seed_start_sql}"
-                      if seed_start_sql else "")
-        _id_seed_o = (f" AND q.object_uuid = {seed_start_sql}"
-                      if seed_start_sql else "")
+        # A pin at EITHER end reduces identity to that one node: `<C> p* ?x`
+        # and `?x p* <C>` both include only (C, C) from the zero-length branch.
+        _id_pin = seed_start_sql or seed_end_sql
+        _id_seed_s = f" AND q.subject_uuid = {_id_pin}" if _id_pin else ""
+        _id_seed_o = f" AND q.object_uuid = {_id_pin}" if _id_pin else ""
         _id_where = graph_clause + _id_seed_s
         _id_where_o = graph_clause + _id_seed_o
         identity_sql = (
@@ -392,13 +432,27 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
             f"FROM {quad_table} q{' WHERE TRUE' + _id_where_o if _id_where_o else ''}"
         )
         ctx_rec_constraint = " AND r.ctx_uuid = step.ctx_uuid" if same_graph else ""
+        if seed_end_sql and not seed_start_sql:
+            # Same reversal as `+`: from the identity row (C, C), PREPEND edges
+            # so `start_uuid` walks backwards and `end_uuid` stays the pin.
+            # Extending forward from (C, C) would return C's DESCENDANTS, which
+            # is the opposite question.
+            step_join = (f"  SELECT step.start_uuid, r.end_uuid, r.depth + 1, "
+                         f"r.ctx_uuid\n"
+                         f"  FROM {rec_name} r\n"
+                         f"  JOIN ({base_sql}) AS step "
+                         f"ON step.end_uuid = r.start_uuid{ctx_rec_constraint}\n")
+        else:
+            step_join = (f"  SELECT r.start_uuid, step.end_uuid, r.depth + 1, "
+                         f"r.ctx_uuid\n"
+                         f"  FROM {rec_name} r\n"
+                         f"  JOIN ({base_sql}) AS step "
+                         f"ON r.end_uuid = step.start_uuid{ctx_rec_constraint}\n")
         rec_body = (
             f"{rec_name}(start_uuid, end_uuid, depth, ctx_uuid) AS (\n"
             f"  ({identity_sql})\n"
             f"  UNION\n"
-            f"  SELECT r.start_uuid, step.end_uuid, r.depth + 1, r.ctx_uuid\n"
-            f"  FROM {rec_name} r\n"
-            f"  JOIN ({base_sql}) AS step ON r.end_uuid = step.start_uuid{ctx_rec_constraint}\n"
+            f"{step_join}"
             f"  WHERE r.depth < {MAX_PATH_DEPTH}\n"
             f")"
         )

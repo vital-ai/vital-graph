@@ -211,6 +211,65 @@ async def test_a_pinned_property_path_seeds_the_recursion_from_the_pin(perf_conn
         f"success")
 
 
+@pytest.mark.parametrize("quant", ["+", "*"])
+async def test_a_tail_pinned_path_walks_backward_from_the_pin(perf_conn, quant):
+    """`?x path+ <C>` — the ancestors of C, not the whole graph.
+
+    The sibling of the pinned-subject case and NOT the same fix. Seeding the
+    forward recursion by `end_uuid` anchors the last edge and then extends PAST
+    the pin, so the answer contains paths that pass THROUGH C rather than
+    ending at it — more rows, and no error. The recursion has to run the other
+    way: base is the edges arriving at C, and each step prepends one.
+
+    `*` needs the same reversal for a subtler reason. Its identity row is
+    correctly (C, C) once pinned, but extending FORWARD from there returns C's
+    DESCENDANTS — the opposite question, with a plausible row count.
+
+    Checked against a hand-written anchored closure rather than against the
+    unseeded plan, because a reversed walk can be fast and wrong in a way
+    result-equality with a timeout cannot see. Measured 8-28 ms against a
+    75 s timeout unseeded.
+    """
+    await _require(perf_conn)
+    from .graph_fixtures import EDGE_DEST, EDGE_SOURCE
+
+    deep = SMALL.deep_roots()
+    root = sorted(deep, key=int)[0]
+    depths = deep[root]
+    tail = depths[max(depths, key=int)][0]
+    uri = SMALL.nested_frame_uri(tail)
+
+    truth = await perf_conn.fetchval(f"""
+        WITH RECURSIVE
+         src AS (SELECT term_uuid FROM {SMALL.space}_term WHERE term_text=$1),
+         dst AS (SELECT term_uuid FROM {SMALL.space}_term WHERE term_text=$2),
+         tgt AS (SELECT term_uuid FROM {SMALL.space}_term WHERE term_text=$3),
+         step AS (SELECT a.object_uuid AS frm, b.object_uuid AS too
+                  FROM {SMALL.space}_rdf_quad a
+                  JOIN {SMALL.space}_rdf_quad b
+                    ON b.subject_uuid = a.subject_uuid
+                  WHERE a.predicate_uuid=(SELECT * FROM src)
+                    AND b.predicate_uuid=(SELECT * FROM dst)),
+         walk(n) AS (SELECT frm FROM step WHERE too=(SELECT * FROM tgt)
+                     UNION SELECT s.frm FROM walk w JOIN step s ON s.too=w.n)
+        SELECT count(*) FROM walk""", EDGE_SOURCE, EDGE_DEST, uri)
+    assert truth > 1, "this pin has no ancestors, so the test proves nothing"
+
+    sparql = f"""
+    SELECT DISTINCT ?x WHERE {{ GRAPH <{SMALL.graph}> {{
+        ?x (^<{EDGE_SOURCE}>/<{EDGE_DEST}>){quant} <{uri}> .
+    }} }}"""
+    rows, gen = await _run(perf_conn, sparql)
+    expected = truth + (1 if quant == "*" else 0)   # `*` includes C itself
+    assert len(rows) == expected, (
+        f"tail-pinned {quant} returned {len(rows)}, closure says {expected}")
+
+    body = _recursive_cte_body(gen.sql)
+    assert body is not None and uri in body, (
+        "the recursion is not anchored at the pinned object, so it closes over "
+        "the whole graph before filtering")
+
+
 def _recursive_cte_body(sql: str) -> str | None:
     """The text between `WITH RECURSIVE x(...) AS (` and its matching paren."""
     import re
