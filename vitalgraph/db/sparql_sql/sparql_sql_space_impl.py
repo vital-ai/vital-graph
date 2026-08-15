@@ -1386,6 +1386,48 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 # Sync stats tables
                 from .sync_stats_tables import sync_stats_after_insert
                 await sync_stats_after_insert(conn, space_id, quad_rows)
+
+                # Value histograms, for a BULK load only.
+                #
+                # Nothing on any write path used to build these — only an
+                # explicit `resync_all`. So a space loaded through the API had
+                # no histograms at all, `estimate_range` returned None for every
+                # range, and the traversal criterion gate (which requires a
+                # MEASURED criterion) declined every range criterion it saw. The
+                # whole range-selectivity mechanism was dormant on exactly the
+                # spaces that got their data through the product.
+                #
+                # A full rebuild is the only option — bucket BOUNDARIES move as
+                # the distribution does, so there is no incremental form (see
+                # `stats_table_freshness_plan.md`, candidate 4, rejected for
+                # that reason). Measured: 1.3 s on 2.5M quads, 9.3 s on 19.6M.
+                # Trivial next to the load it follows, and far too expensive per
+                # small write.
+                #
+                # Hence the size gate, which splits the work between the two
+                # mechanisms by what each is good at:
+                #   * a BULK batch rebuilds, so the histograms are accurate;
+                #   * smaller writes leave them alone, and `apply_freshness`
+                #     scales for the growth or withdraws on a shape change, so
+                #     they stay SAFE until the next bulk load or resync.
+                if len(quad_rows) >= REBUILD_MIN_QUADS:
+                    try:
+                        from .sync_value_stats import resync_value_stats
+                        _vs = await resync_value_stats(conn, space_id)
+                        # The rebuild moves the reference every cached freshness
+                        # verdict was taken against, so the verdicts have to go
+                        # with it — a surviving "stale" would keep withdrawing
+                        # estimates from a histogram just made correct.
+                        from .generator import invalidate_stats_cache
+                        invalidate_stats_cache(space_id)
+                        logger.info("bulk insert: rebuilt value histograms (%s)",
+                                    _vs)
+                    except Exception as exc:
+                        # A missing histogram degrades an estimate to an exact
+                        # count. It must never fail the load that produced the
+                        # data.
+                        logger.warning("value histogram rebuild skipped for "
+                                       "%s: %s", space_id, exc)
                 _t6 = _time.monotonic()
 
                 logger.info(
