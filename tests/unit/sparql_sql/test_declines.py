@@ -164,3 +164,59 @@ def test_the_traversal_rules_declare_the_dependency_that_bit():
     assert "semijoin" in by_name["traversal_shape"].reads
     # The frame_entity rewrite consumes the edge rewrite's output.
     assert "edge_rewrite" in by_name["frame_entity_rewrite"].reads
+
+
+# ---------------------------------------------------------------------------
+# entity_fanout is a diagnostic, and that is a decision worth enforcing
+# ---------------------------------------------------------------------------
+
+def test_entity_fanout_is_not_read_by_the_query_path():
+    """Decided 2026-08-15: keep it as an OPERATOR DIAGNOSTIC, not a plan input.
+
+    The obvious consumer — choosing the emission shape by the start's fan-out —
+    was tested and rejected: dedup wins 5 of the 6 hub cases, and the single
+    loss needs hub AND depth 2 AND a highly selective criterion, which is a rule
+    fitted to one point. The other candidate, traversal DIRECTION, is
+    unavailable rather than untested, because `emit_hop_wise` declines tail pins
+    so there is no reverse BGP walk to choose.
+
+    Keeping it is a deliberate bet that it becomes useful later. This asserts
+    the bet has not been quietly cashed in the meantime: a future consumer
+    should arrive with a measurement and delete this test, not slip in without
+    one. It lives here rather than beside the fan-out tests because it is about
+    the pipeline, and because it needs no database.
+    """
+    import pathlib
+
+    pkg = pathlib.Path(__file__).resolve().parents[3] / "vitalgraph"
+    allowed = {
+        "sync_entity_fanout.py",     # defines it
+        "sparql_sql_schema.py",      # creates and drops the table
+        "resync_all.py",             # rebuilds it
+    }
+    offenders, seen_allowed = [], set()
+    for path in pkg.rglob("*.py"):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if "entity_fanout" not in text:
+            continue
+        if path.name in allowed:
+            seen_allowed.add(path.name)
+        else:
+            offenders.append(path.relative_to(pkg).as_posix())
+
+    # A search that finds nothing passes whether or not there is anything to
+    # find. The three allowed files must actually match, or this guard is
+    # asserting that a broken grep found no consumers.
+    assert seen_allowed == allowed, (
+        f"expected every allowlisted file to mention entity_fanout; matched "
+        f"{sorted(seen_allowed)}. Either one was renamed, or the search is "
+        f"looking in the wrong place and this test proves nothing.")
+    assert not offenders, (
+        "entity_fanout is read outside its own module: "
+        f"{offenders}. It is an operator diagnostic — see the header in "
+        "sync_entity_fanout.py. If this is a deliberate consumer, it needs a "
+        "measurement that beats the two already rejected, and this test should "
+        "be updated with it.")

@@ -1,5 +1,36 @@
 """Compute `{space}_entity_fanout`: how wide a traversal gets from one entity.
 
+AN OPERATOR DIAGNOSTIC. NOT A QUERY-PATH INPUT. Decided 2026-08-15.
+===================================================================
+Nothing in the SQL pipeline reads this table and nothing should start to
+without new evidence. It exists to answer an operator's question — "why is this
+query slow" answered by "the start entity has out-degree 432" — and it is kept
+because that question keeps coming up, not because a planner needs it.
+
+Read this before wiring it into a decision, because the obvious use was already
+tried and measured:
+
+  * **Choosing the emission shape by the start's fan-out: TESTED AND REJECTED.**
+    The hypothesis was that dedup loses at hubs, since the one recorded loss was
+    a hub start. Measured with the statistic live, 3 criteria x depths 2-3 x 5
+    starts, of which exactly one is a hub at fan-out 432: **dedup wins 5 of the
+    6 hub cases.** The single loss needs hub AND depth 2 AND a highly selective
+    criterion — a three-way conjunction on one data point, which is a rule
+    fitted to noise. See `traversal_chain_plan.md` GAP 7b for the table.
+
+  * **Choosing traversal DIRECTION: unavailable, not untested.** A per-entity
+    forward/backward split is exactly what a direction choice would want, and
+    there is no direction to choose: `emit_hop_wise` declines tail pins
+    outright, so no reverse BGP walk exists. (`emit_path` gained a reverse
+    recursion in `6a83ebe`, but that is the property-path emitter and it does
+    not consult this table.) If reverse BGP traversal is ever implemented, this
+    becomes the first real candidate consumer and should be measured then.
+
+So: query it from a shell, put it in an operator report, use it to explain a
+slow query. Do not branch on it in the planner without a measurement that
+beats those two.
+
+
 The statistic nothing else expresses. `edge_fanout` is keyed on
 `(edge type, relation type, direction)` and is an aggregate over the whole
 space — built to choose a traversal DIRECTION, where a per-type average is the
@@ -54,10 +85,9 @@ omitted the second direction, the TRUNCATE and the ANALYZE. Seconds, not
 hundreds of milliseconds — still comfortably a periodic task, but worth stating
 as measured rather than as projected.
 
-NOT YET CONSUMED. Nothing reads this table. It is inert until a caller uses it,
-and wiring it into the emission choice needs its own measurement — the point of
-landing it separately is that the statistic can be validated on real spaces
-before any decision depends on it.
+NOT CONSUMED BY THE QUERY PATH, deliberately — see the header. Landing it inert
+is what allowed the emission-choice hypothesis to be tested against real spaces
+before anything depended on it, and that test is the reason it is still inert.
 """
 
 from __future__ import annotations
@@ -128,6 +158,9 @@ async def resync_entity_fanout(conn, space_id: str,
 
 async def entity_fanout(conn, space_id: str, entity_uuid, direction: str = "forward"):
     """This entity's fan-out, or None if it is not a recorded hub.
+
+    For operators and diagnostics — see the module header before calling this
+    from anything that decides a plan.
 
     None means "not a hub", which is the answer for all but a few hundred
     entities and is why the table stays small. It does NOT mean "unknown" — a
