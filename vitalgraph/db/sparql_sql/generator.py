@@ -227,8 +227,21 @@ _stats_cache: Dict[str, tuple] = {}
 
 
 def invalidate_stats_cache(space_id: str) -> None:
-    """Clear cached stats for a space so the next query reloads from DB."""
+    """Clear cached stats for a space so the next query reloads from DB.
+
+    Also drops the value histograms and the cached freshness verdicts. A
+    rebuild moves the reference count the verdicts were taken against, so a
+    surviving "stale" verdict would keep withdrawing estimates from a histogram
+    that has just been made correct — and a surviving "fresh" one would vouch
+    for boundaries that have changed underneath it.
+    """
     _stats_cache.pop(space_id, None)
+    _value_stats_cache.pop(space_id, None)
+    try:
+        from .sync_value_stats import invalidate_freshness_cache
+        invalidate_freshness_cache(space_id)
+    except Exception:  # pragma: no cover - import guard only
+        pass
 
 
 async def _load_quad_stats(

@@ -83,3 +83,97 @@ def test_thresholds_sit_where_the_measurement_put_them():
 @pytest.mark.parametrize("op,expected", [(">=", 60_000), ("<=", 60_000)])
 def test_scaling_applies_to_both_directions(op, expected):
     assert estimate_range(_stats(scale=2.0), PRED, "num", op, 50) == expected
+
+
+# ---------------------------------------------------------------------------
+# The probe cache — see the note on `_probe_cache`
+# ---------------------------------------------------------------------------
+
+class _FakeConn:
+    """Counts the probe queries `apply_freshness` issues."""
+
+    def __init__(self, pred_rows, below, total):
+        self.pred_rows, self.below, self.total = pred_rows, below, total
+        self.counts = 0
+
+    async def fetch(self, sql, *args):
+        return [{"predicate_uuid": PRED, "row_count": self.pred_rows}]
+
+    async def fetchval(self, sql, *args):
+        self.counts += 1
+        return self.below if " < $2" in sql else self.total
+
+
+@pytest.fixture(autouse=True)
+def _clear_probe_cache():
+    from vitalgraph.db.sparql_sql.sync_value_stats import invalidate_freshness_cache
+    invalidate_freshness_cache()
+    yield
+    invalidate_freshness_cache()
+
+
+async def _apply(conn, stats):
+    from vitalgraph.db.sparql_sql.sync_value_stats import apply_freshness
+    return await apply_freshness(conn, "sp_test", stats)
+
+
+@pytest.mark.asyncio
+async def test_the_probe_runs_once_per_drift_level_not_once_per_query():
+    """Two count(*) scans per predicate per QUERY is what this avoids.
+
+    Drift persists until a rebuild, so an uncached probe repeats a scan
+    proportional to the predicate's row count on every query the space serves.
+    """
+    conn = _FakeConn(pred_rows=120_000, below=60_000, total=120_000)
+    for _ in range(5):
+        s = _stats()
+        s[(PRED, "num")]["pred_rows"] = 60_000     # 2.00x drift
+        summary = await _apply(conn, s)
+    assert conn.counts == 2, (
+        f"probed {conn.counts // 2} times for one drift level; the cache is "
+        f"not holding")
+    assert summary["cached"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_a_cached_stale_verdict_still_withdraws_the_estimate():
+    """The cache must carry the VERDICT, not just skip the work."""
+    # 90% of rows below the median: a large shape move.
+    conn = _FakeConn(pred_rows=120_000, below=108_000, total=120_000)
+    s = _stats()
+    s[(PRED, "num")]["pred_rows"] = 60_000
+    await _apply(conn, s)
+    assert s[(PRED, "num")]["stale"] is True
+
+    s2 = _stats()
+    s2[(PRED, "num")]["pred_rows"] = 60_000
+    await _apply(conn, s2)                          # served from cache
+    assert s2[(PRED, "num")]["stale"] is True, (
+        "a cached stale verdict was dropped, so the estimate is used again")
+
+
+@pytest.mark.asyncio
+async def test_a_materially_different_drift_level_re_probes():
+    """The verdict is valid for a band, not forever."""
+    conn = _FakeConn(pred_rows=120_000, below=60_000, total=120_000)
+    s = _stats()
+    s[(PRED, "num")]["pred_rows"] = 60_000          # 2.00x
+    await _apply(conn, s)
+    assert conn.counts == 2
+
+    conn.pred_rows = 200_000                        # 3.33x — well outside the band
+    s2 = _stats()
+    s2[(PRED, "num")]["pred_rows"] = 60_000
+    await _apply(conn, s2)
+    assert conn.counts == 4, "drift moved materially and was not re-probed"
+
+
+@pytest.mark.asyncio
+async def test_no_drift_means_no_probe_at_all():
+    """The free pre-filter: a distribution cannot move without writing rows."""
+    conn = _FakeConn(pred_rows=60_000, below=30_000, total=60_000)
+    s = _stats()
+    s[(PRED, "num")]["pred_rows"] = 60_000          # 1.00x
+    summary = await _apply(conn, s)
+    assert conn.counts == 0
+    assert summary["probes"] == 0 and summary["scaled"] == 0

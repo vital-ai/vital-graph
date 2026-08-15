@@ -191,6 +191,31 @@ DRIFT_EPSILON = 0.02
 # at the smallest drift tested.
 SHAPE_TOLERANCE = 0.03
 
+# (space_id, predicate, lane) -> (drift ratio when probed, was_stale)
+#
+# The probe is two `count(*)`s over a predicate's quads joined to term, which is
+# a SCAN, not a lookup — and drift persists until something rebuilds the
+# histogram, so an uncached probe would repeat that scan on EVERY query for as
+# long as the space is drifted. The guard is supposed to make staleness safe,
+# not make it expensive.
+#
+# Caching it per drift LEVEL rather than per query is sound because a verdict
+# can only go wrong as fast as new rows can move the distribution. Re-probing
+# once the ratio has moved by more than DRIFT_EPSILON bounds the lag to 2% of
+# rows, and the measured shift arm moves the median split by 0.051 for a 10%
+# addition — so ~0.010 for 2%, comfortably inside the 0.03 tolerance. The
+# verdict cannot silently go stale within its own band.
+_probe_cache: Dict[Tuple[str, str, str], Tuple[float, bool]] = {}
+
+
+def invalidate_freshness_cache(space_id: Optional[str] = None) -> None:
+    """Drop cached probe verdicts. Call after a rebuild changes the reference."""
+    if space_id is None:
+        _probe_cache.clear()
+        return
+    for key in [k for k in _probe_cache if k[0] == space_id]:
+        _probe_cache.pop(key, None)
+
 
 async def apply_freshness(conn, space_id: str,
                           stats: Dict[Tuple[str, str], dict]) -> Dict[str, int]:
@@ -237,7 +262,7 @@ async def apply_freshness(conn, space_id: str,
     # 21 of 24 predicates after a bulk load, so three predicates with 10,000
     # rows each had no reference at all. A `resync_stats_tables` restores it.
     summary = {"checked": 0, "scaled": 0, "stale": 0, "probes": 0,
-               "no_reference": 0}
+               "cached": 0, "no_reference": 0}
     if not stats:
         return summary
 
@@ -270,6 +295,19 @@ async def apply_freshness(conn, space_id: str,
         bounds = [b for b in entry["bounds"] if b is not None]
         if len(bounds) < 3:
             continue
+
+        # A verdict taken at a nearby drift level still holds — see the note on
+        # `_probe_cache`. This is what keeps a drifted space from paying two
+        # count(*) scans per predicate on every query it serves.
+        ck = (space_id, pred, lane)
+        cached = _probe_cache.get(ck)
+        if cached is not None and abs(ratio - cached[0]) <= DRIFT_EPSILON:
+            summary["cached"] += 1
+            if cached[1]:
+                entry["stale"] = True
+                summary["stale"] += 1
+            continue
+
         mid = bounds[len(bounds) // 2]
         col = "num_val" if lane == NUM else "dt_val"
         try:
@@ -292,6 +330,7 @@ async def apply_freshness(conn, space_id: str,
             continue
         expected = (len(bounds) // 2) / (len(bounds) - 1)
         moved = abs(below / total_live - expected)
+        _probe_cache[ck] = (ratio, moved > SHAPE_TOLERANCE)
         if moved > SHAPE_TOLERANCE:
             # The boundaries no longer describe the data. Scaling cannot fix
             # that, so the estimate is withdrawn rather than corrected — the
