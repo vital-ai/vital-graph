@@ -352,6 +352,33 @@ async def prune_stats_tables(conn, space_id: str,
     The per-predicate step is what stops one high-cardinality predicate evicting
     every other — see the comment at step 2. Returns rows kept. pred_stats is
     left alone (bounded by the distinct-predicate count).
+
+    KEEP-AND-REWRITE, NOT DELETE, and the difference is hundreds of megabytes.
+    ------------------------------------------------------------------------
+    This used to run three DELETEs. They removed ~99.8% of the rows — wordnet's
+    rdf_stats goes 2,817,658 -> 6,427 — and a plain VACUUM returns those pages
+    to the free space map, never to the OS. So the file stayed at its
+    high-water mark for a table that now holds a few thousand rows. Measured
+    before this change, live rows against total size:
+
+        wordnet_frames         6,427 rows    375 MB
+        sp_graph_synth_10k     8,710 rows     99 MB
+        prolog_spike_synth     8,454 rows     68 MB
+        sp_graph_synth_100k   10,687 rows    752 MB  -> 1,352 kB after rewrite
+
+    Selecting the keepers into a temp table takes no exclusive lock, so the
+    expensive part runs concurrently with readers; only the TRUNCATE and the
+    re-insert of a few thousand rows hold one, and both are fast. TRUNCATE
+    allocates a new relfilenode, so the space is returned rather than pooled.
+
+    WHY NOT FIX THIS IN THE RESYNC INSTEAD, which is where the 2.8M rows are
+    written: because `pruned` would then be permanent. The flag degrades
+    `sync_stats_after_insert` to UPDATE-only so a pruned predicate never gains
+    new pairs, and a full resync clearing it is the ONLY thing that restores
+    "absence means zero". If the resync wrote a pruned set it would have to set
+    the flag, nothing would ever clear it, and new (predicate, object) pairs
+    would stop being recorded for good. The write amplification is real and it
+    is the cheaper of the two problems.
     """
     t_stats = f"{space_id}_rdf_stats"
     t_pred = f"{space_id}_rdf_pred_stats"
@@ -364,66 +391,80 @@ async def prune_stats_tables(conn, space_id: str,
     # pruned" from "absent because zero". Without that distinction it treats a
     # pruned pair's missing row as a zero base and stores only the post-prune
     # delta: 100,000 -> 1 after one write (issues/062).
-    pruned_preds: set = set()
-
-    # 1. Drop pairs the reorder never uses: singletons and super-common pairs.
-    rows = await conn.fetch(
-        f"DELETE FROM {t_stats} "
-        f"WHERE row_count < $1 OR row_count > $2 "
-        f"RETURNING predicate_uuid",
-        STATS_MIN_ROW_COUNT, STATS_MAX_ROW_COUNT)
-    pruned_preds.update(r["predicate_uuid"] for r in rows)
-
-    # 2. Hard cap, PER PREDICATE rather than globally.
+    # The keeper set, computed in one pass with no exclusive lock held.
     #
-    # A global "lowest N" ranking lets one high-cardinality predicate evict every
-    # other. Measured on sp_lead_synth_100k: of 50,000 surviving rows, 49,516
-    # were hasEdgeSource and 484 were hasDateTimeSlotValue, every one with
-    # row_count=2 — while vitaltype (10,054,000 quads), hasKGSlotType (3,877,000)
-    # and hasKGFrameType (1,100,000) were absent entirely. Those are exactly the
-    # predicates that decide plan shape, so the table held nothing useful for the
-    # queries that needed it (issues/061).
+    #   * `WHERE row_count BETWEEN` is old step 1 — drop the singletons the
+    #     reorder never reads and the super-common pairs it filters out.
+    #   * `rn <= per_predicate_n` is old step 2, and the comment that justified
+    #     it still applies: a global "lowest N" ranking lets one
+    #     high-cardinality predicate evict every other. Measured on
+    #     sp_lead_synth_100k, 49,516 of 50,000 survivors were hasEdgeSource
+    #     while vitaltype (10,054,000 quads), hasKGSlotType and hasKGFrameType
+    #     were absent entirely — the predicates that decide plan shape, gone
+    #     (issues/061). Per-predicate retention is the shape of PostgreSQL's own
+    #     MCV lists: no predicate can starve another.
+    #   * `ORDER BY rn` then `LIMIT` is old step 3. Ordering by the PER-PREDICATE
+    #     rank rather than by row_count is deliberate — row_count would undo
+    #     step 2, since the structural pairs it just protected are precisely the
+    #     high-count ones and would sort to the end again. Taking rank 1 of every
+    #     predicate, then rank 2, trims every predicate's tail evenly instead of
+    #     one predicate whole.
     #
-    # The fixture's unique-per-row datetimes made it extreme (409,017 distinct
-    # values at ~2 occurrences each, issues/050), but any high-cardinality
-    # literal does the same in production — the flooding predicate is whichever
-    # one happens to have the most distinct objects.
+    # WITHIN a rank tier the tiebreak is row_count, and that is a fix rather
+    # than a port. The DELETE form broke ties on `ctid` — physical order — which
+    # a rewrite does not preserve and which carries no meaning about a pair.
+    # `test_prune_hard_cap_keeps_lowest_row_counts` passed under it only by
+    # accident: every row in that fixture has its own predicate so every row is
+    # rank 1, and the fixture inserts in ascending row_count, so ctid happened
+    # to equal selectivity order. In production it does not.
     #
-    # Per-predicate retention is the same shape as PostgreSQL's own MCV lists:
-    # every predicate keeps its own most-selective objects, so no predicate can
-    # starve another. The global cap still applies afterwards as a size bound.
-    rows = await conn.fetch(
-        f"DELETE FROM {t_stats} WHERE ctid IN ("
-        f"  SELECT ctid FROM ("
-        f"    SELECT ctid, row_number() OVER ("
-        f"      PARTITION BY predicate_uuid "
-        f"      ORDER BY row_count ASC, object_uuid) AS rn"
-        f"    FROM {t_stats}) r"
-        f"  WHERE r.rn > $1) RETURNING predicate_uuid",
-        per_predicate_n)
-    pruned_preds.update(r["predicate_uuid"] for r in rows)
-
-    # 3. Global size bound. Ordered by the PER-PREDICATE rank, not by row_count:
-    #    ordering by row_count here would undo step 2, since the structural
-    #    pairs it just protected are precisely the high-count ones and would sort
-    #    to the end again. Taking rank 1 of every predicate, then rank 2, and so
-    #    on, trims every predicate's tail evenly instead of one predicate whole.
-    rows = await conn.fetch(
-        f"DELETE FROM {t_stats} WHERE ctid IN ("
-        f"  SELECT ctid FROM ("
-        f"    SELECT ctid, row_number() OVER ("
-        f"      PARTITION BY predicate_uuid "
-        f"      ORDER BY row_count ASC, object_uuid) AS rn"
-        f"    FROM {t_stats}) r"
-        f"  ORDER BY r.rn ASC, r.ctid "
-        f"  OFFSET $1) RETURNING predicate_uuid",
-        keep_top_n)
-    pruned_preds.update(r["predicate_uuid"] for r in rows)
-
-    if pruned_preds:
+    # Ordering by rn FIRST still protects step 2 — sorting by row_count alone
+    # would undo it, putting the structural high-count pairs back at the end —
+    # but within one tier the most selective pair is the one worth keeping, so
+    # the cap now trims by selectivity instead of by where a row happens to sit.
+    # (predicate_uuid, object_uuid) remains as a final tiebreak for determinism.
+    async with conn.transaction():
         await conn.execute(
-            f"UPDATE {t_pred} SET pruned = TRUE WHERE predicate_uuid = ANY($1)",
-            list(pruned_preds))
+            f"CREATE TEMP TABLE _keep_stats ON COMMIT DROP AS "
+            f"  SELECT predicate_uuid, object_uuid, row_count FROM ("
+            f"    SELECT predicate_uuid, object_uuid, row_count,"
+            f"           row_number() OVER ("
+            f"             PARTITION BY predicate_uuid "
+            f"             ORDER BY row_count ASC, object_uuid) AS rn"
+            f"    FROM {t_stats}"
+            f"    WHERE row_count >= $1 AND row_count <= $2) r"
+            f"  WHERE r.rn <= $3"
+            f"  ORDER BY r.rn ASC, r.row_count ASC, r.predicate_uuid, r.object_uuid"
+            f"  LIMIT $4",
+            STATS_MIN_ROW_COUNT, STATS_MAX_ROW_COUNT,
+            per_predicate_n, keep_top_n)
+
+        # Which predicates lose a row. Collected BEFORE the rewrite, because
+        # afterwards there is nothing left to compare against.
+        #
+        # Marking them is what lets sync_stats_after_insert tell "absent because
+        # pruned" from "absent because zero". Without that distinction it treats
+        # a pruned pair's missing row as a zero base and stores only the
+        # post-prune delta: 100,000 -> 1 after one write (issues/062).
+        pruned_preds = [r["predicate_uuid"] for r in await conn.fetch(
+            f"SELECT DISTINCT s.predicate_uuid FROM {t_stats} s "
+            f"LEFT JOIN _keep_stats k "
+            f"  ON k.predicate_uuid = s.predicate_uuid "
+            f" AND k.object_uuid = s.object_uuid "
+            f"WHERE k.predicate_uuid IS NULL")]
+
+        # TRUNCATE allocates a new relfilenode, so the pages the old rows
+        # occupied are returned to the OS rather than pooled in the FSM. That is
+        # the whole point of the rewrite; a DELETE here reclaims nothing.
+        await conn.execute(f"TRUNCATE {t_stats}")
+        await conn.execute(
+            f"INSERT INTO {t_stats} (predicate_uuid, object_uuid, row_count) "
+            f"SELECT predicate_uuid, object_uuid, row_count FROM _keep_stats")
+
+        if pruned_preds:
+            await conn.execute(
+                f"UPDATE {t_pred} SET pruned = TRUE WHERE predicate_uuid = ANY($1)",
+                pruned_preds)
 
     kept = await conn.fetchval(f"SELECT count(*) FROM {t_stats}")
     logger.info("prune_stats_tables(%s): kept %d rows (cap %d)",
