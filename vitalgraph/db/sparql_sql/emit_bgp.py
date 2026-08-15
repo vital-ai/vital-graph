@@ -185,11 +185,26 @@ def _try_hop_wise(plan: PlanV2, ctx: EmitContext, quad_tables,
         #
         # Its own precondition (`dedup_feasible`) is a correctness proof rather
         # than a cost estimate, so it does not need a second one.
-        final_vars = getattr(ctx.aliases, "dedup_final_vars", None)
+        # Asked HERE because `push_filters` has already run for this BGP's
+        # enclosing FILTER and removed what it pushed. See the note in
+        # generator.py stage 2d.2.
+        from .emit_traversal import dedup_feasible
+        root = getattr(ctx.aliases, "plan_root", None)
+        feasible = None
+        if root is not None:
+            feasible = dedup_feasible(
+                root, decision.chain,
+                getattr(ctx.aliases, "text_needed_vars", None))
+        final_vars = feasible[0] if feasible else None
         if final_vars:
             sql = emit_dedup_chain(plan, decision.chain, quad_tables,
                                    sql_names, final_vars)
             if sql is not None:
+                # Everything outside the surviving set is emitted NULL, so its
+                # term JOIN — an INNER join — would drop every row. Suppressing
+                # it is sound by dedup's own precondition: nothing above this
+                # traversal reads those variables.
+                ctx.dedup_surviving_vars = feasible[1]
                 return sql
 
         if not decision.hop_wise:
@@ -214,6 +229,12 @@ def _wrap_with_terms(plan: PlanV2, ctx: EmitContext, sql_names,
     outer_cols: List[str] = []
     outer_joins: List[str] = []
     text_needed = ctx.text_needed_vars  # None or set of SPARQL var names
+    surviving = getattr(ctx, "dedup_surviving_vars", None)
+    if surviving is not None:
+        # Set only when the set-based traversal emission was used for this BGP.
+        text_needed = (set(text_needed) & surviving if text_needed is not None
+                       else set(surviving))
+        ctx.dedup_surviving_vars = None
 
     for var, slot in plan.var_slots.items():
         sn = sql_names[var]

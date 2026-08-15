@@ -446,7 +446,9 @@ def _path_to_bgp(node, depth=0):
 def dedup_feasible(root, chain, text_needed_vars):
     """Can this plan's rows be deduplicated between hops without changing it?
 
-    Returns the set of variables the final hop binds when yes, None when no.
+    Returns `(final_vars, surviving_vars)` when yes, None when no.
+    `surviving_vars` is what still has a value after dedup — the final hop's
+    variables plus the pinned head, which is a constant and is carried through.
 
     Computed from the ROOT of the plan, not from the BGP, because the question
     is what the operators ABOVE the traversal do with path multiplicity — and
@@ -507,26 +509,42 @@ def dedup_feasible(root, chain, text_needed_vars):
     last, first = groups[-1], groups[0]
     last_aliases = {t.alias for t in last.tables}
 
-    final_vars, head_var = set(), None
+    # SURVIVING is narrower than "bound by the last hop", and the difference
+    # cost a wrong answer. `emit_dedup_chain` projects exactly two things: the
+    # final link's DEST column, and the pinned head. Everything else — including
+    # a criterion value bound on one of the last hop's quad tables — is emitted
+    # NULL, because a set of entities does not remember what it was filtered by.
+    #
+    # Treating all last-hop variables as surviving let a criterion variable keep
+    # its term JOIN, which then inner-joined against that NULL and dropped every
+    # row: 0 answers where 16 were expected, on 46 of 120 cases.
+    final_vars, head_var, final_dest_var = set(), None, None
     for var, slot in (bgp.var_slots or {}).items():
         if not slot.positions:
             continue
         alias, col = slot.positions[0]
         if alias in last_aliases:
             final_vars.add(var)
+        if alias == groups[-1].link_alias and col == chain.links[-1].dest_col:
+            final_dest_var = var
         if alias == first.link_alias and col == chain.links[0].source_col:
             head_var = var
+    if final_dest_var is None:
+        logger.debug("dedup declined: the final hop's destination binds no "
+                     "variable, so nothing survives to project")
+        return None
+
+    allowed = {final_dest_var} | ({head_var} if head_var else set())
 
     projected = set()
     for n in above:
         if n.kind == KIND_PROJECT and n.project_vars:
             projected |= set(n.project_vars)
-    if not projected or not projected <= final_vars:
-        logger.debug("dedup declined: projection %s is not confined to the "
-                     "final hop %s", sorted(projected), sorted(final_vars))
+    if not projected or not projected <= allowed:
+        logger.debug("dedup declined: projection %s is not confined to what "
+                     "survives %s", sorted(projected), sorted(allowed))
         return None
 
-    allowed = final_vars | ({head_var} if head_var else set())
 
     # A filter or a sort above the traversal is fine only if everything it
     # reads survives. An order key arrives either as a bare variable name or as
@@ -548,11 +566,20 @@ def dedup_feasible(root, chain, text_needed_vars):
                      sorted(read_above - allowed))
         return None
 
-    if text_needed_vars is not None and not set(text_needed_vars) <= allowed:
-        logger.debug("dedup declined: %s need text but do not survive dedup",
-                     sorted(set(text_needed_vars) - allowed))
-        return None
-    return final_vars
+    # NOT compared against `text_needed_vars` any more.
+    #
+    # That set is computed at stage 2c, BEFORE push-down, so a per-hop criterion
+    # variable is marked text-needed because a FILTER mentions it. By the time
+    # this runs the filter has been pushed into the hop and the variable is
+    # unused — but the stale set still named it, and every FILTERED traversal
+    # declined on a variable nothing reads. Measured at 1-3 s on a hub start
+    # against ~100 ms deduplicated.
+    #
+    # The caller suppresses the term JOIN for anything outside `allowed`, which
+    # is sound by the proof already established above: nothing beyond these
+    # variables is read by any operator over this traversal. Emitting a term
+    # join for one of them would inner-join against a NULL and drop every row.
+    return final_vars, allowed
 
 
 def emit_dedup_chain(plan: PlanV2, chain: TraversalChain,

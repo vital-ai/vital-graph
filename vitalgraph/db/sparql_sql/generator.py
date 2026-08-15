@@ -989,17 +989,25 @@ async def generate_sql(
                 # reads are loaded at 2d.1, and before emit at stage 3.
                 aliases.traversal_decision = decide_for_plan(
                     _chains, _crit, _pred)
-                # Whether rows may be deduplicated BETWEEN hops. Decided here
-                # rather than in `emit_bgp` because the question is what the
-                # operators ABOVE the traversal do with path multiplicity, and
-                # emit_bgp only sees the BGP.
-                try:
-                    from .emit_traversal import dedup_feasible
-                    aliases.dedup_final_vars = dedup_feasible(
-                        plan, _chains[0], text_needed)
-                except Exception as exc:
-                    logger.debug("dedup feasibility skipped: %s", exc)
-                    aliases.dedup_final_vars = None
+                # Whether rows may be deduplicated BETWEEN hops depends on what
+                # the operators ABOVE the traversal do with path multiplicity,
+                # which `emit_bgp` cannot see — so the ROOT is handed to it and
+                # the question is answered at emit time.
+                #
+                # Emit time, not here, because `push_filters` runs immediately
+                # before the BGP is emitted and REMOVES the filters it pushes.
+                # Asked at this stage, a per-hop criterion still looks like a
+                # filter reading a variable dedup discards, and every FILTERED
+                # traversal declined — measured at 1-3 s on a hub start where
+                # the deduplicated form is ~100 ms. Asked after push-down, the
+                # same filter has already become a constraint inside the hop and
+                # the question answers itself.
+                #
+                # A filter push-down could NOT handle is still there, and still
+                # declines. The check went from conservative to exact, not from
+                # strict to loose.
+                aliases.plan_root = plan
+                aliases.text_needed_vars = text_needed
         except Exception as exc:
             logger.debug("traversal chain detection skipped: %s", exc)
 

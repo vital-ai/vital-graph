@@ -297,7 +297,9 @@ class TestDedupPrecondition:
     def test_project_distinct_over_a_traversal_is_allowed(self):
         from vitalgraph.db.sparql_sql.ir import KIND_PROJECT, KIND_DISTINCT
         got = self._feasible(self._tree(KIND_DISTINCT, KIND_PROJECT))
-        assert got is not None and "e3" in got
+        assert got is not None
+        _final, surviving = got
+        assert "e3" in surviving
 
     def test_without_DISTINCT_it_refuses(self):
         """`SELECT ?e3` returns a row per path. Deduplicating would answer a
@@ -324,7 +326,7 @@ class TestDedupPrecondition:
                                                  KIND_ORDER)
         got = self._feasible(self._tree(KIND_DISTINCT, KIND_ORDER, KIND_PROJECT,
                                         order=[("e3", "ASC")]))
-        assert got is not None and "e3" in got
+        assert got is not None and "e3" in got[1]
 
     def test_an_order_by_a_discarded_variable_refuses(self):
         """Sorting on a column dedup nulls would order the answer by nothing."""
@@ -382,14 +384,40 @@ class TestDedupPrecondition:
         assert self._feasible(
             self._tree(KIND_DISTINCT, KIND_PROJECT, KIND_FILTER, filters=[f])) is None
 
-    def test_text_on_an_intermediate_variable_refuses(self):
-        """`_wrap_with_terms` joins the term table on `__uuid` with an INNER
-        join. Dedup emits NULL there for anything that does not survive, so a
-        text-needed intermediate would silently drop every row."""
+    def test_only_the_final_destination_and_the_head_survive(self):
+        """The SURVIVING set is narrower than "bound by the last hop", and the
+        difference cost a wrong answer.
+
+        `emit_dedup_chain` projects exactly two things — the final link's DEST
+        column and the pinned head. A criterion value bound on one of the last
+        hop's QUAD tables is emitted NULL, because a set of entities does not
+        remember what it was filtered by. Treating those as surviving let one
+        keep its term JOIN, which inner-joined against the NULL and dropped
+        every row: 0 answers where 16 were expected, on 46 of 120 cases.
+        """
+        from vitalgraph.db.sparql_sql.ir import KIND_PROJECT, KIND_DISTINCT
+        final, surviving = self._feasible(self._tree(KIND_DISTINCT, KIND_PROJECT))
+        assert surviving == {"e3", "e0"}, (
+            "only the final destination and the pinned head are projected")
+        assert "c2" in final, "the last hop does BIND a criterion variable..."
+        assert "c2" not in surviving, "...but it does not survive dedup"
+
+    def test_text_on_an_intermediate_variable_no_longer_refuses(self):
+        """It narrows instead, and the caller suppresses the term JOIN.
+
+        Refusing was over-broad: `text_needed_vars` is computed BEFORE
+        push-down, so a per-hop criterion is marked text-needed because a FILTER
+        mentions it. By emit time that filter has become a constraint inside the
+        hop and the variable is unused — but the stale set still named it, and
+        every FILTERED traversal declined on a variable nothing reads.
+        """
         from vitalgraph.db.sparql_sql.ir import KIND_PROJECT, KIND_DISTINCT
         tree = self._tree(KIND_DISTINCT, KIND_PROJECT)
-        assert self._feasible(tree, text={"e3", "c1"}) is None
-        assert self._feasible(tree, text={"e3"}) is not None
+        got = self._feasible(tree, text={"e3", "c1"})
+        assert got is not None, "a stale text flag must not refuse"
+        assert "c1" not in got[1], (
+            "c1 must not be reported as surviving, or its term JOIN would be "
+            "emitted against a NULL")
 
     def test_depth_one_refuses(self):
         """One hop has no multiplicity between hops to collapse; the outer
