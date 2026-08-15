@@ -308,28 +308,44 @@ async def apply_freshness(conn, space_id: str,
                 summary["stale"] += 1
             continue
 
-        mid = bounds[len(bounds) // 2]
+        # THREE quantiles, not one, in ONE scan.
+        #
+        # The median alone is blind to a SYMMETRIC shift — mass added equally to
+        # both tails leaves the split at 0.5 while every boundary goes wrong.
+        # Measured: base uniform 20..80, then half the new rows below 20 and
+        # half above 80, gives 73.2% error after scaling and a median move of
+        # 0.008 — indistinguishable from benign growth, which also moves it
+        # 0.008. `>= 75` read 9,376 against an actual 35,039. The quartiles see
+        # it: the first quartile moves 0.125 on the same data.
+        #
+        # Conditional aggregation makes this ONE pass with four counts, so
+        # covering the hole also halves the scans the previous version issued.
+        nb = len(bounds) - 1
+        idx = [max(1, nb // 4), nb // 2, min(nb - 1, (3 * nb) // 4)]
+        pts = [(i, bounds[i]) for i in sorted(set(idx))]
         col = "num_val" if lane == NUM else "dt_val"
         try:
-            below = await conn.fetchval(f"""
-                SELECT count(*) FROM {space_id}_rdf_quad q
-                JOIN {space_id}_term t ON t.term_uuid = q.object_uuid
-                WHERE q.predicate_uuid = $1::uuid AND t.{col} IS NOT NULL
-                  AND t.{col} < $2""", pred, mid)
-            total_live = await conn.fetchval(f"""
-                SELECT count(*) FROM {space_id}_rdf_quad q
+            sel = ", ".join(
+                f"count(*) FILTER (WHERE t.{col} < ${n + 2}) AS b{n}"
+                for n in range(len(pts)))
+            row = await conn.fetchrow(f"""
+                SELECT {sel}, count(*) AS total
+                FROM {space_id}_rdf_quad q
                 JOIN {space_id}_term t ON t.term_uuid = q.object_uuid
                 WHERE q.predicate_uuid = $1::uuid AND t.{col} IS NOT NULL""",
-                pred)
+                pred, *[v for _i, v in pts])
         except Exception as exc:
             logger.debug("apply_freshness(%s): probe failed for %s/%s: %s",
                          space_id, pred, lane, exc)
             continue
         summary["probes"] += 1
+        total_live = row["total"]
         if not total_live:
             continue
-        expected = (len(bounds) // 2) / (len(bounds) - 1)
-        moved = abs(below / total_live - expected)
+        # The worst disagreement across the quantiles decides it. Any one of
+        # them being wrong means the boundaries no longer describe the data.
+        moved = max(abs(row[f"b{n}"] / total_live - i / nb)
+                    for n, (i, _v) in enumerate(pts))
         _probe_cache[ck] = (ratio, moved > SHAPE_TOLERANCE)
         if moved > SHAPE_TOLERANCE:
             # The boundaries no longer describe the data. Scaling cannot fix

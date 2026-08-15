@@ -90,18 +90,26 @@ def test_scaling_applies_to_both_directions(op, expected):
 # ---------------------------------------------------------------------------
 
 class _FakeConn:
-    """Counts the probe queries `apply_freshness` issues."""
+    """Counts the probe queries `apply_freshness` issues.
 
-    def __init__(self, pred_rows, below, total):
-        self.pred_rows, self.below, self.total = pred_rows, below, total
+    The probe asks for three quantiles in ONE pass, so `counts` is the number
+    of scans — one per probe, not two as the first version issued.
+    `fracs` is the live fraction below each of (Q1, median, Q3); the histogram
+    is uniform, so (0.25, 0.5, 0.75) is a perfectly fresh shape.
+    """
+
+    def __init__(self, pred_rows, fracs=(0.25, 0.5, 0.75), total=120_000):
+        self.pred_rows, self.fracs, self.total = pred_rows, fracs, total
         self.counts = 0
 
     async def fetch(self, sql, *args):
         return [{"predicate_uuid": PRED, "row_count": self.pred_rows}]
 
-    async def fetchval(self, sql, *args):
+    async def fetchrow(self, sql, *args):
         self.counts += 1
-        return self.below if " < $2" in sql else self.total
+        row = {f"b{i}": int(f * self.total) for i, f in enumerate(self.fracs)}
+        row["total"] = self.total
+        return row
 
 
 @pytest.fixture(autouse=True)
@@ -124,22 +132,22 @@ async def test_the_probe_runs_once_per_drift_level_not_once_per_query():
     Drift persists until a rebuild, so an uncached probe repeats a scan
     proportional to the predicate's row count on every query the space serves.
     """
-    conn = _FakeConn(pred_rows=120_000, below=60_000, total=120_000)
+    conn = _FakeConn(pred_rows=120_000)
     for _ in range(5):
         s = _stats()
         s[(PRED, "num")]["pred_rows"] = 60_000     # 2.00x drift
         summary = await _apply(conn, s)
-    assert conn.counts == 2, (
-        f"probed {conn.counts // 2} times for one drift level; the cache is "
-        f"not holding")
+    assert conn.counts == 1, (
+        f"probed {conn.counts} times for one drift level; the cache is not "
+        f"holding")
     assert summary["cached"] >= 1
 
 
 @pytest.mark.asyncio
 async def test_a_cached_stale_verdict_still_withdraws_the_estimate():
     """The cache must carry the VERDICT, not just skip the work."""
-    # 90% of rows below the median: a large shape move.
-    conn = _FakeConn(pred_rows=120_000, below=108_000, total=120_000)
+    # Mass piled below Q1: a large shape move at the first quantile.
+    conn = _FakeConn(pred_rows=120_000, fracs=(0.90, 0.95, 0.98))
     s = _stats()
     s[(PRED, "num")]["pred_rows"] = 60_000
     await _apply(conn, s)
@@ -155,23 +163,23 @@ async def test_a_cached_stale_verdict_still_withdraws_the_estimate():
 @pytest.mark.asyncio
 async def test_a_materially_different_drift_level_re_probes():
     """The verdict is valid for a band, not forever."""
-    conn = _FakeConn(pred_rows=120_000, below=60_000, total=120_000)
+    conn = _FakeConn(pred_rows=120_000)
     s = _stats()
     s[(PRED, "num")]["pred_rows"] = 60_000          # 2.00x
     await _apply(conn, s)
-    assert conn.counts == 2
+    assert conn.counts == 1
 
     conn.pred_rows = 200_000                        # 3.33x — well outside the band
     s2 = _stats()
     s2[(PRED, "num")]["pred_rows"] = 60_000
     await _apply(conn, s2)
-    assert conn.counts == 4, "drift moved materially and was not re-probed"
+    assert conn.counts == 2, "drift moved materially and was not re-probed"
 
 
 @pytest.mark.asyncio
 async def test_no_drift_means_no_probe_at_all():
     """The free pre-filter: a distribution cannot move without writing rows."""
-    conn = _FakeConn(pred_rows=60_000, below=30_000, total=60_000)
+    conn = _FakeConn(pred_rows=60_000, total=60_000)
     s = _stats()
     s[(PRED, "num")]["pred_rows"] = 60_000          # 1.00x
     summary = await _apply(conn, s)
