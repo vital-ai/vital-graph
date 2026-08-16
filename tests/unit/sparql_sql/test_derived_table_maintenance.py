@@ -233,15 +233,24 @@ def test_no_module_creates_a_per_space_table_outside_the_schema():
                     "{table}" in target:
                 offenders.append(f"{path.relative_to(root).as_posix()}: {target}")
 
-    # vector_index_setup builds a table whose column TYPE depends on the chosen
-    # embedding dimensions, so it cannot be static DDL — and it is already
-    # invoked from create_space rather than from a data path, which satisfies
-    # the rule it appears to break.
+    # PER-INDEX artifacts are a different category from space schema, and the
+    # rule does not apply to them.
+    #
+    # A space has ONE fixed schema. It also has zero or more vector and FTS
+    # INDEXES, each of which brings its own storage table — `{space}_vec_{name}`
+    # and `{space}_fts_{name}` — created when that index is created, alongside
+    # the document collection or entity type it serves. Their schema cannot be
+    # static: the embedding column is `vector(dimensions)`, and the dimensions
+    # come from the model chosen at index-creation time.
+    #
+    # This is not on-demand creation from a data path. The catalogue tables that
+    # record which indexes exist — `{space}_vector_index`, `{space}_fts_index` —
+    # ARE fixed space schema and are created with the space; the per-index
+    # tables are created by the explicit action that creates an index.
+    #
+    # So: a table named for the SPACE must come from the schema; a table named
+    # for an INDEX comes from the action that creates that index.
     allowed_dynamic = {
-        # The vector tables' column TYPE depends on the chosen embedding
-        # dimensions, so they cannot be static DDL. Both are invoked from an
-        # explicit action rather than a data path — vector_index_setup from
-        # create_space itself — which satisfies the rule they appear to break.
         "document/vector_index_setup.py",
         "kg_impl/kgtype_index_setup.py",
     }
