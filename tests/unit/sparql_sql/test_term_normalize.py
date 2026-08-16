@@ -197,3 +197,67 @@ class TestImportScopeIdentity:
         from vitalgraph.endpoint.impl.data_import_impl import _bnode_scope_for
         assert _bnode_scope_for("urn:g1", "/data/a.nq") != \
                _bnode_scope_for("urn:g2", "/data/a.nq")
+
+
+class TestAllIngestPathsScopeBlankNodes:
+    """Skolemisation must be active on EVERY ingest path, not just one.
+
+    A conformance requirement is not satisfied by one importer honouring it.
+    Two documents using `_:b0` describe two different nodes whichever path
+    loaded them, so any path that skips the scope merges them — and which path
+    a caller used is not visible in the resulting data.
+    """
+
+    def _classify(self, label, scope):
+        from vitalgraph.endpoint.impl.data_import_impl import _classify_node
+
+        class _BlankNode:                    # shaped like pyoxigraph's
+            def __init__(self, v): self.value = v
+        _BlankNode.__name__ = "BlankNode"
+        return _classify_node(_BlankNode(label), scope)
+
+    def test_the_ntriples_classifier_scopes_labels(self):
+        a = self._classify("b0", "docA")
+        b = self._classify("b0", "docB")
+        assert a[1] == b[1] == "B"
+        assert a[0] != b[0], (
+            "the N-Triples path merged `_:b0` from two documents; both "
+            "importers share _classify_node, so this is two paths, not one")
+
+    def test_the_ntriples_classifier_is_stable_for_one_document(self):
+        assert self._classify("b0", "docA") == self._classify("b0", "docA")
+
+    def test_a_skolem_iri_read_back_becomes_a_blank_node_again(self):
+        """Export round-trip through the classifier, not just the N-Quads parser."""
+        from vitalgraph.endpoint.impl.data_import_impl import _classify_node
+        from vitalgraph.db.sparql_sql.term_normalize import skolem_iri
+
+        label, _, _ = self._classify("b0", "docA")
+
+        class _NamedNode:
+            def __init__(self, v): self.value = v
+        _NamedNode.__name__ = "NamedNode"
+        assert _classify_node(_NamedNode(skolem_iri(label))) == (label, "B", None)
+
+    def test_an_ordinary_iri_is_untouched(self):
+        from vitalgraph.endpoint.impl.data_import_impl import _classify_node
+
+        class _NamedNode:
+            def __init__(self, v): self.value = v
+        _NamedNode.__name__ = "NamedNode"
+        assert _classify_node(_NamedNode("http://example.org/x")) == \
+            ("http://example.org/x", "U", None)
+
+    def test_both_ntriples_passes_use_the_same_scope(self):
+        """Pass 1 resolves terms; pass 2 builds quads referencing them.
+
+        Different scopes between the passes would mint different labels for one
+        node, and pass 2 would emit quads pointing at term uuids pass 1 never
+        inserted — a dangling reference, not a merge.
+        """
+        import inspect
+        from vitalgraph.endpoint.impl import data_import_impl as m
+        src = inspect.getsource(m)
+        assert src.count("bnode_scope = _bnode_scope_for(graph_uri, file_path)") >= 4, (
+            "an ingest path computes its scope differently, or one of the two "
+            "N-Triples passes does not compute one at all")

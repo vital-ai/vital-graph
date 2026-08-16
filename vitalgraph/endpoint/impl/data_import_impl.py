@@ -61,15 +61,35 @@ def _term_uuid(text: str, ttype: str, lang: Optional[str] = None,
     return str(uuid_mod.uuid5(_NS, "\x00".join(parts)))
 
 
-def _classify_node(node) -> Tuple[str, str, Optional[str]]:
-    """Classify a pyoxigraph triple node into (value, term_type, lang)."""
+def _classify_node(node, bnode_scope: Optional[str] = None
+                   ) -> Tuple[str, str, Optional[str]]:
+    """Classify a pyoxigraph triple node into (value, term_type, lang).
+
+    `bnode_scope` skolemises blank-node labels against the document they came
+    from. RDF scopes labels to the document, so two files using `_:b0` describe
+    two different nodes; without a scope they merge, which is a conformance
+    defect regardless of whether anyone has imported such a file here.
+
+    Shared by both N-Triples importers, which is why the scope belongs on this
+    function rather than at each of its call sites.
+    """
     cls_name = type(node).__name__
     if cls_name == "Literal":
         lang = str(node.language) if node.language else None
         return node.value, "L", lang
     elif cls_name == "BlankNode":
-        return node.value, "B", None
+        label = node.value
+        if bnode_scope:
+            from vitalgraph.db.sparql_sql.term_normalize import skolem_label
+            label = skolem_label(bnode_scope, label)
+        return label, "B", None
     else:
+        # One of our own Skolem IRIs read back becomes the blank node it was,
+        # rather than an ordinary IRI — the export round-trip.
+        from vitalgraph.db.sparql_sql.term_normalize import deskolemize_iri
+        inner = deskolemize_iri(node.value)
+        if inner is not None:
+            return inner, "B", None
         return node.value, "U", None
 
 
@@ -225,6 +245,10 @@ class ImportEngine:
         triple_count = 0
         file_size = os.path.getsize(file_path)
         t0 = time.time()
+        # Labels are scoped to this document (issues/076 facet 2). Must match
+        # the scope pass 2 uses, or the two passes would mint different labels
+        # for one node and the quads would reference terms that do not exist.
+        bnode_scope = _bnode_scope_for(graph_uri, file_path)
 
         def ensure(text: str, ttype: str, lang: Optional[str] = None) -> str:
             key = (text, ttype, lang)
@@ -237,10 +261,10 @@ class ImportEngine:
 
         with open(file_path, "rb") as f:
             for triple in ox_parse(f, "application/n-triples"):
-                s_val, s_type, _ = _classify_node(triple.subject)
+                s_val, s_type, _ = _classify_node(triple.subject, bnode_scope)
                 ensure(s_val, s_type)
                 ensure(triple.predicate.value, "U")
-                o_val, o_type, o_lang = _classify_node(triple.object)
+                o_val, o_type, o_lang = _classify_node(triple.object, bnode_scope)
                 ensure(o_val, o_type, o_lang)
                 triple_count += 1
 
@@ -384,12 +408,17 @@ class ImportEngine:
                 )
             total_quads += len(batch)
 
+        # SAME scope as pass 1, which resolved the terms. A different scope here
+        # would mint different labels for the same node, and the quads would
+        # reference term uuids that pass 1 never inserted.
+        bnode_scope = _bnode_scope_for(graph_uri, file_path)
+
         with open(file_path, "rb") as f:
             for triple in ox_parse(f, "application/n-triples"):
-                s_val, s_type, _ = _classify_node(triple.subject)
+                s_val, s_type, _ = _classify_node(triple.subject, bnode_scope)
                 s_uuid = terms[(s_val, s_type, None)]
                 p_uuid = terms[(triple.predicate.value, "U", None)]
-                o_val, o_type, o_lang = _classify_node(triple.object)
+                o_val, o_type, o_lang = _classify_node(triple.object, bnode_scope)
                 o_uuid = terms[(o_val, o_type, o_lang)]
 
                 quad_batch.append((s_uuid, p_uuid, o_uuid, graph_uuid, "primary"))
@@ -549,6 +578,9 @@ class ImportEngine:
         # Ensure graph term exists
         term_batch.append((graph_uuid, graph_uri, "U", None, "primary"))
 
+        # Document scope for blank-node labels (issues/076 facet 2).
+        bnode_scope = _bnode_scope_for(graph_uri, file_path)
+
         with open(file_path, "rb") as f:
             if checkpoint_offset > 0:
                 f.seek(checkpoint_offset)
@@ -556,7 +588,7 @@ class ImportEngine:
 
             for triple in ox_parse(f, "application/n-triples"):
                 # Subject
-                s_val, s_type, _ = _classify_node(triple.subject)
+                s_val, s_type, _ = _classify_node(triple.subject, bnode_scope)
                 s_uuid = _term_uuid(s_val, s_type)
                 term_batch.append((s_uuid, s_val, s_type, None, "primary"))
 
@@ -566,7 +598,7 @@ class ImportEngine:
                 term_batch.append((p_uuid, p_val, "U", None, "primary"))
 
                 # Object
-                o_val, o_type, o_lang = _classify_node(triple.object)
+                o_val, o_type, o_lang = _classify_node(triple.object, bnode_scope)
                 o_uuid = _term_uuid(o_val, o_type, lang=o_lang)
                 term_batch.append((o_uuid, o_val, o_type, o_lang, "primary"))
 
