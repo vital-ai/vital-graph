@@ -1,7 +1,7 @@
 # Issues
 
 Numbered, append-only, one defect each. Resolved ones move to `archive/` —
-70 there, 20 live. An issue is archived only when nothing remains to do:
+76 there, 15 live. An issue is archived only when nothing remains to do:
 "FIXED in the converter, existing spaces need reloading" is not resolved, it is
 half-done, and it stays here.
 
@@ -35,25 +35,23 @@ is repaired and watched; what remains is the cause in each case.
 | 091 | OPEN | 619 grouping URIs lost their self-link; repaired, but the writer was never identified — and reads now return EMPTY when it happens |
 | 092 | OPEN | A grouping target with no type at all; no server-property path can create it, and one exists |
 
-## Blank nodes
+## Blank nodes — RESOLVED 2026-08-16, all five archived
 
-Found together while writing `planning/planning_sparql_features/blank_nodes.md`.
-Worked 2026-08-16, starting with 069 as advised — and the fixture was the right
-first move: every fix that held was one where the measurement came first.
+`065`, `066`, `067`, `069`, `076`. Worked in the order `069`'s own advice gave —
+fixture first — and that ordering earned its keep: two existing unit tests
+*asserted* the defects, so both fixes would have read as regressions to anyone
+trusting a green suite.
 
-| | status | |
-|---|---|---|
-| 069 | RESOLVED | Fixture + all 12 tests. Writing them found two more defects and corrected one assumption |
-| 065 | RESOLVED | One convention, enforced at term identity. 0 blank-node terms on 85 spaces, so no migration |
-| 066 | RESOLVED | `.label`, not `.value`; the test that hid it rewritten to describe the type |
-| 067 | RESOLVED | Fresh per solution, and scoped per execution — the salt is computed at runtime, so the compile cache reusing SQL does not matter |
-| 076 | RESOLVED | Fresh `INSERT DATA` labels; `DELETE DATA` rejects them; scoping DECIDED as deterministic skolemisation |
-
-The scoping decision is the one worth reading: RDF 1.1 §3.5 recommends
-skolemisation directly, and RDF4J's `PRESERVE_BNODE_IDS` defaults to false — so
-fresh-per-parse is the industry default and this store did the opposite.
-Deterministic over `(document, label)` gives RDF scoping AND idempotent reload,
+Scoping was decided as deterministic skolemisation over `(document, label)`:
+RDF 1.1 §3.5 recommends skolemisation directly, and RDF4J's `PRESERVE_BNODE_IDS`
+defaults to false, so fresh-per-parse is the industry default and this store did
+the opposite. Determinism is what gives RDF scoping *and* idempotent reload,
 which neither listed option gave alone.
+
+Two assumptions recorded as settled turned out to be wrong when measured: the
+edge table DOES project blank-node endpoints, and `BNODE(expr)` per-execution
+scoping was never actually blocked by the compile cache. Both are written up in
+`planning/planning_sparql_features/blank_nodes.md` §4.7 and §4.2.
 
 ## Query performance
 
