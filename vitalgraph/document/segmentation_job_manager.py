@@ -50,38 +50,6 @@ class SegmentationJobDTO:
 
 
 # ---------------------------------------------------------------------------
-# DDL
-# ---------------------------------------------------------------------------
-
-CREATE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS {table_name} (
-    job_id             SERIAL PRIMARY KEY,
-    space_id           VARCHAR(200) NOT NULL,
-    graph_id           TEXT NOT NULL,
-    document_uri       TEXT NOT NULL,
-    status             VARCHAR(20) NOT NULL DEFAULT 'pending',
-    attempt_count      INTEGER NOT NULL DEFAULT 0,
-    segment_count      INTEGER,
-    segment_method_uri VARCHAR(500),
-    max_segment_tokens INTEGER,
-    error_message      TEXT,
-    content_hash       VARCHAR(64),
-    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-"""
-
-CREATE_INDEXES_SQL = [
-    """CREATE INDEX IF NOT EXISTS {table_name}_status_idx
-       ON {table_name} (status, created_at) WHERE status IN ('pending', 'failed', 'vectorizing');""",
-    """CREATE INDEX IF NOT EXISTS {table_name}_document_idx
-       ON {table_name} (document_uri, created_at DESC);""",
-    """CREATE INDEX IF NOT EXISTS {table_name}_space_idx
-       ON {table_name} (space_id, status);""",
-]
-
-
-# ---------------------------------------------------------------------------
 # Manager
 # ---------------------------------------------------------------------------
 
@@ -101,14 +69,6 @@ class SegmentationJobManager:
     # ------------------------------------------------------------------
     # Table management
     # ------------------------------------------------------------------
-
-    async def ensure_table(self) -> None:
-        """Create the jobs table if it doesn't exist."""
-        sql = CREATE_TABLE_SQL.format(table_name=self._table)
-        await self.conn.execute(sql)
-        for idx_sql in CREATE_INDEXES_SQL:
-            await self.conn.execute(idx_sql.format(table_name=self._table))
-        logger.debug(f"Ensured segmentation jobs table: {self._table}")
 
     # ------------------------------------------------------------------
     # Enqueue

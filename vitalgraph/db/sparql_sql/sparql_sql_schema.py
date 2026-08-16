@@ -554,6 +554,8 @@ class SparqlSQLSchema:
             'search_mapping_index': f'{space_id}_search_mapping_index',
             'search_mapping_property': f'{space_id}_search_mapping_property',
             'fts_index': f'{space_id}_fts_index',
+            'segmentation_jobs': f'{space_id}_segmentation_jobs',
+            'document_segmentation_config': f'{space_id}_document_segmentation_config',
         }
 
     # ------------------------------------------------------------------
@@ -988,6 +990,55 @@ class SparqlSQLSchema:
             )
         ''')
 
+        # 17. Document segmentation job queue.
+        # 18. Document segmentation config.
+        #
+        # These two were created ON DEMAND by SegmentationJobManager and
+        # SegmentationConfigManager at first use, so a space's schema depended on
+        # which features had been exercised against it. That is the thing this
+        # DDL is supposed to be the single answer to, and it cost twice: the
+        # drop path had to grow a self-healing sweep because "on-demand tables
+        # keep being added without anyone updating it", and one of the two was
+        # missed there anyway and leaked an orphan table per space ever created
+        # (116 on one local stack).
+        #
+        # Neither holds a denormalisation of rdf_quad and no query reads them,
+        # so they are outside the derived-table contract
+        # (planning_sql/derived_table_maintenance.md). They are here on the
+        # simpler rule: every space gets the same schema at creation, and schema
+        # is never a side effect of a data path.
+        stmts.append(f'''
+            CREATE TABLE IF NOT EXISTS {t['segmentation_jobs']} (
+                job_id             SERIAL PRIMARY KEY,
+                space_id           VARCHAR(200) NOT NULL,
+                graph_id           TEXT NOT NULL,
+                document_uri       TEXT NOT NULL,
+                status             VARCHAR(20) NOT NULL DEFAULT 'pending',
+                attempt_count      INTEGER NOT NULL DEFAULT 0,
+                segment_count      INTEGER,
+                segment_method_uri VARCHAR(500),
+                max_segment_tokens INTEGER,
+                error_message      TEXT,
+                content_hash       VARCHAR(64),
+                created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        ''')
+        stmts.append(f'''
+            CREATE TABLE IF NOT EXISTS {t['document_segmentation_config']} (
+                config_id          SERIAL PRIMARY KEY,
+                document_type_uri  VARCHAR(500) NOT NULL,
+                segment_method_uri VARCHAR(500) NOT NULL,
+                max_segment_tokens INTEGER NOT NULL DEFAULT 512,
+                min_segment_tokens INTEGER NOT NULL DEFAULT 50,
+                overlap_tokens     INTEGER NOT NULL DEFAULT 0,
+                enabled            BOOLEAN NOT NULL DEFAULT TRUE,
+                auto_vectorize     BOOLEAN NOT NULL DEFAULT TRUE,
+                created_time       TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE (document_type_uri, segment_method_uri)
+            )
+        ''')
+
         return stmts
 
     def create_space_indexes_sql(self, space_id: str) -> List[str]:
@@ -997,6 +1048,7 @@ class SparqlSQLSchema:
         directly (unlike fuseki_postgresql which relies on Fuseki).
         """
         t = self.get_table_names(space_id)
+
         return [
             # Term table indexes
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_tt ON {t['term']} USING hash (term_text)",
@@ -1126,6 +1178,21 @@ class SparqlSQLSchema:
             # so the type has to lead for the scan to start there.
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fe_type_src ON {t['frame_entity']} (frame_type_uuid, source_entity_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fe_type_dst ON {t['frame_entity']} (frame_type_uuid, dest_entity_uuid)",
+            # Document segmentation job queue and config. These indexes lived in
+            # SegmentationJobManager / SegmentationConfigManager and were created
+            # on demand with their tables, so a space had them only if the
+            # feature had run against it. Schema comes from one place now.
+            f"CREATE INDEX IF NOT EXISTS {t['segmentation_jobs']}_status_idx "
+            f"ON {t['segmentation_jobs']} (status, created_at) "
+            f"WHERE status IN ('pending', 'failed', 'vectorizing')",
+            f"CREATE INDEX IF NOT EXISTS {t['segmentation_jobs']}_document_idx "
+            f"ON {t['segmentation_jobs']} (document_uri, created_at DESC)",
+            f"CREATE INDEX IF NOT EXISTS {t['segmentation_jobs']}_space_idx "
+            f"ON {t['segmentation_jobs']} (space_id, status)",
+            f"CREATE INDEX IF NOT EXISTS "
+            f"{t['document_segmentation_config']}_doc_type_idx "
+            f"ON {t['document_segmentation_config']} (document_type_uri) "
+            f"WHERE enabled = TRUE",
 
             # Geo table indexes
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_geo_gist ON {t['geo']} USING gist (location)",
@@ -1469,6 +1536,7 @@ class SparqlSQLSchema:
             f'''CREATE INDEX IF NOT EXISTS idx_{space_id}_vec_{index_name}_subj
                 ON {table} (subject_uuid)''',
         ]
+
         return stmts
 
     def drop_vector_data_table_sql(self, space_id: str, index_name: str) -> List[str]:

@@ -454,7 +454,6 @@ class KGDocumentsEndpoint:
             if not conn:
                 return None, None, None
             manager = SegmentationJobManager(conn, space_id)
-            await manager.ensure_table()
             return manager, pool, conn
         except Exception as e:
             self.logger.error(f"Error getting job manager for {space_id}: {e}")
@@ -985,7 +984,6 @@ class KGDocumentsEndpoint:
             raise HTTPException(status_code=503, detail="Could not obtain DB connection")
 
         manager = SegmentationConfigManager(conn, space_id)
-        await manager.ensure_table()
         return manager, pool, conn
 
     async def _get_connection(self, backend_impl):

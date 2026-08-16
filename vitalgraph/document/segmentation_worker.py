@@ -276,7 +276,6 @@ class SegmentationWorker:
         async with pool.acquire() as conn:
             try:
                 manager = SegmentationJobManager(conn, space_id)
-                await manager.ensure_table()
 
                 job = await manager.claim_next()
                 if not job:

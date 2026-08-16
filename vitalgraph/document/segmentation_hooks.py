@@ -194,7 +194,6 @@ async def _enqueue_jobs(
     try:
         async with pool.acquire() as conn:
             manager = SegmentationJobManager(conn, space_id)
-            await manager.ensure_table()
             for document_uri, graph_uri in targets:
                 try:
                     job_id = await manager.enqueue(

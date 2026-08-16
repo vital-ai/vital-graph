@@ -43,31 +43,6 @@ class SegmentationConfigDTO:
 
 
 # ---------------------------------------------------------------------------
-# DDL
-# ---------------------------------------------------------------------------
-
-CREATE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS {table_name} (
-    config_id SERIAL PRIMARY KEY,
-    document_type_uri VARCHAR(500) NOT NULL,
-    segment_method_uri VARCHAR(500) NOT NULL,
-    max_segment_tokens INTEGER NOT NULL DEFAULT 512,
-    min_segment_tokens INTEGER NOT NULL DEFAULT 50,
-    overlap_tokens INTEGER NOT NULL DEFAULT 0,
-    enabled BOOLEAN NOT NULL DEFAULT TRUE,
-    auto_vectorize BOOLEAN NOT NULL DEFAULT TRUE,
-    created_time TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE (document_type_uri, segment_method_uri)
-);
-"""
-
-CREATE_INDEX_SQL = """
-CREATE INDEX IF NOT EXISTS {table_name}_doc_type_idx
-    ON {table_name} (document_type_uri) WHERE enabled = TRUE;
-"""
-
-
-# ---------------------------------------------------------------------------
 # Manager
 # ---------------------------------------------------------------------------
 
@@ -87,14 +62,6 @@ class SegmentationConfigManager:
     # ------------------------------------------------------------------
     # Table management
     # ------------------------------------------------------------------
-
-    async def ensure_table(self) -> None:
-        """Create the config table if it doesn't exist."""
-        sql = CREATE_TABLE_SQL.format(table_name=self._table)
-        await self.conn.execute(sql)
-        idx_sql = CREATE_INDEX_SQL.format(table_name=self._table)
-        await self.conn.execute(idx_sql)
-        logger.info(f"Ensured segmentation config table: {self._table}")
 
     # ------------------------------------------------------------------
     # CRUD

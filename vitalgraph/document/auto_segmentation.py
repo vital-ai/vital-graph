@@ -83,9 +83,6 @@ class AutoSegmentationHook:
         if seg_type == "urn:segtype:segmentation_parent":
             return False
 
-        # Ensure config table exists
-        await self._config_manager.ensure_table()
-
         # Look up configs for this document type
         configs = await self._config_manager.get_config_for_document_type(doc_type)
         if not configs:

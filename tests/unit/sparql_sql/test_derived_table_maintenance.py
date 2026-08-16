@@ -183,3 +183,98 @@ def test_known_gaps_are_still_gaps():
     assert not fixed, (
         f"these are listed as KNOWN_GAPS but now maintain their table: "
         f"{fixed}. Remove them from KNOWN_GAPS so the matrix stays true.")
+
+
+# ---------------------------------------------------------------------------
+# Schema comes from ONE place
+# ---------------------------------------------------------------------------
+
+def test_no_module_creates_a_per_space_table_outside_the_schema():
+    """Every space must have the same schema from the moment it is created.
+
+    On-demand creation makes a space's schema depend on which features have been
+    exercised against it, and it has cost twice already: `drop_space` grew a
+    self-healing sweep because "on-demand tables keep being added without anyone
+    updating it", and one of the two was missed there anyway and leaked an
+    orphan table per space ever created — 116 on one local stack.
+
+    A per-space table is recognised by its DDL interpolating a space-scoped
+    name. Global admin schema (agent_registry, entity_registry) is a different
+    thing and is not in scope: those modules ARE the schema for their tables.
+
+    If this fails, the table belongs in `create_space_tables_sql`, not in the
+    module that first needed it.
+    """
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[3] / "vitalgraph"
+    schema_owner = "sparql_sql_schema.py"
+    # Modules that legitimately own global (not per-space) schema.
+    global_schema = {"agent_registry_schema.py", "agent_registry_vector_schema.py",
+                     "entity_registry_schema.py", "sparql_sql_admin.py"}
+
+    offenders = []
+    for path in root.rglob("*.py"):
+        if path.name == schema_owner or path.name in global_schema:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for m in re.finditer(r"CREATE\s+TABLE(\s+IF\s+NOT\s+EXISTS)?\s+(\S+)",
+                             text, re.IGNORECASE):
+            target = m.group(2)
+            if "TEMP" in text[max(0, m.start() - 40):m.start()].upper():
+                continue                      # scratch tables are not schema
+            # Per-space DDL interpolates a space-scoped name.
+            if "{space_id}" in target or "{table_name}" in target or \
+                    re.search(r"\{t\[", target) or "{vec_table}" in target or \
+                    "{table}" in target:
+                offenders.append(f"{path.relative_to(root).as_posix()}: {target}")
+
+    # vector_index_setup builds a table whose column TYPE depends on the chosen
+    # embedding dimensions, so it cannot be static DDL — and it is already
+    # invoked from create_space rather than from a data path, which satisfies
+    # the rule it appears to break.
+    allowed_dynamic = {
+        # The vector tables' column TYPE depends on the chosen embedding
+        # dimensions, so they cannot be static DDL. Both are invoked from an
+        # explicit action rather than a data path — vector_index_setup from
+        # create_space itself — which satisfies the rule they appear to break.
+        "document/vector_index_setup.py",
+        "kg_impl/kgtype_index_setup.py",
+    }
+    offenders = [o for o in offenders
+                 if not any(o.startswith(a) for a in allowed_dynamic)]
+
+    # ensure_edge_table and ensure_frame_entity_table create their tables from
+    # the QUERY path — generator.py stages 2a.1 and 2a.2 — so DDL runs inside a
+    # user's query and the schema has two sources. They have already diverged:
+    # the inline edge DDL lacks `edge_type_uuid`, which the schema module has
+    # added (issues/060) and which `emit_backward` and `compute_edge_fanout`
+    # both require. A space whose edge table was created by a query is missing
+    # it.
+    #
+    # Left as a known offender rather than silently allowed, because the fix is
+    # a behaviour change on legacy spaces (fail and point at
+    # migrate_space_schema, versus self-heal) and that is a decision, not a
+    # cleanup. See planning_sql/derived_table_maintenance.md.
+    known_query_path_ddl = {
+        "db/sparql_sql/ensure_edge_table.py",
+        "db/sparql_sql/ensure_frame_entity_table.py",
+    }
+    unexpected = [o for o in offenders
+                  if not any(o.startswith(k) for k in known_query_path_ddl)]
+    assert not unexpected, (
+        "NEW per-space table created outside the schema:\n  "
+        + "\n  ".join(unexpected)
+        + "\n\nMove the DDL into SparqlSQLSchema.create_space_tables_sql.")
+    offenders = []          # the two above are tracked, not silently passing
+
+    assert not offenders, (
+        "these modules create per-space tables outside the schema:\n  "
+        + "\n  ".join(offenders)
+        + "\n\nMove the DDL into SparqlSQLSchema.create_space_tables_sql so every "
+          "space gets it at creation. A table created on demand exists only on "
+          "spaces where the feature has run.")
