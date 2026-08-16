@@ -420,6 +420,59 @@ async def _dispatch_one(
 # Tier 1: INSERT DATA
 # ===========================================================================
 
+class BlankNodeInDeleteData(ValueError):
+    """DELETE DATA contained a blank node, which SPARQL 1.1 forbids."""
+
+
+def _freshen_insert_data_bnodes(quads: List[QuadPattern]) -> List[QuadPattern]:
+    """Rewrite every blank-node label in the block to a request-fresh one.
+
+    Repeats of one label within the request map to one allocated label, so
+    `INSERT DATA { _:b1 :p 1 . _:b1 :q 2 }` still describes ONE node with two
+    triples. Across requests nothing collides.
+    """
+    import uuid as _u
+    from dataclasses import replace as _replace
+
+    scope: Dict[str, str] = {}
+    salt = _u.uuid4().hex[:12]
+
+    def fresh(node):
+        if not isinstance(node, BNodeNode):
+            return node
+        label = scope.get(node.label)
+        if label is None:
+            label = f"b{salt}_{node.label}"
+            scope[node.label] = label
+        return BNodeNode(label=label)
+
+    out: List[QuadPattern] = []
+    for q in quads:
+        out.append(_replace(q, subject=fresh(q.subject),
+                            predicate=fresh(q.predicate),
+                            object=fresh(q.object)))
+    return out
+
+
+def _reject_bnodes_in_delete_data(quads: List[QuadPattern]) -> None:
+    """SPARQL 1.1 forbids blank nodes in DELETE DATA.
+
+    There is no way to name an existing blank node in a data block, so the
+    operation is meaningless. This built a lookup on the label and deleted
+    whatever happened to match — and combined with the prefix divergence in
+    issues/065, what it matched was unpredictable. Refusing is the specified
+    behaviour and the only safe one.
+    """
+    for q in quads:
+        for node in (q.subject, q.predicate, q.object):
+            if isinstance(node, BNodeNode):
+                raise BlankNodeInDeleteData(
+                    f"DELETE DATA must not contain a blank node "
+                    f"(found _:{node.label}). SPARQL 1.1 forbids it: a data "
+                    f"block cannot name an existing blank node. Use "
+                    f"DELETE WHERE with a variable instead.")
+
+
 def _insert_data_sql(quads: List[QuadPattern], space_id: str,
                      default_graph_uri: str = _FALLBACK_DEFAULT_GRAPH,
                      dt_map: Optional[Dict[str, int]] = None) -> str:
@@ -432,6 +485,24 @@ def _insert_data_sql(quads: List[QuadPattern], space_id: str,
     quad_table = f"{space_id}_rdf_quad"
     stmts: List[str] = []
     seen_terms: Set[Tuple[str, str, Optional[int], Optional[str]]] = set()
+
+    # SPARQL 1.1 §19.6: blank nodes in an INSERT DATA block are FRESH. They must
+    # not merge with blank nodes already in the store, and each execution
+    # introduces new ones. This had no allocation step at all — the parsed label
+    # went straight through, so running
+    #
+    #     INSERT DATA { _:b1 :p 1 }
+    #
+    # twice wrote the same node both times, leaving one blank node with one
+    # triple where the spec requires two nodes with one each. It also merged
+    # with any `_:b1` that had arrived from an unrelated import (issues/076).
+    #
+    # Same mechanism construct.py already uses for CONSTRUCT templates: a
+    # request-scoped map from parsed label to allocated label, so repeats of one
+    # label WITHIN the request stay the same node while nothing outside it can
+    # collide. The allocated label is random rather than a counter, because a
+    # counter restarts at 1 for every request and would collide across them.
+    quads = _freshen_insert_data_bnodes(quads)
 
     def _node_dt_id(node: RDFNode) -> Optional[int]:
         dt_uri = _node_datatype_uri(node)
@@ -488,6 +559,7 @@ def _delete_data_sql(quads: List[QuadPattern], space_id: str,
                      default_graph_uri: str = _FALLBACK_DEFAULT_GRAPH,
                      dt_map: Optional[Dict[str, int]] = None) -> str:
     """DELETE DATA → DELETE FROM statements with deterministic UUID lookups."""
+    _reject_bnodes_in_delete_data(quads)
     quad_table = f"{space_id}_rdf_quad"
     term_table = f"{space_id}_term"
     stmts: List[str] = []
