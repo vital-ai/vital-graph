@@ -282,20 +282,16 @@ class GraphObjectRetriever:
             
             SELECT ?s ?p ?o WHERE {{
                 GRAPH <{graph_id}> {{
-                    {{
-                        # Get the entity itself
-                        <{entity_uri}> ?p ?o .
-                        BIND(<{entity_uri}> AS ?s)
-                        {filter_clause}
-                    }}
-                    UNION
-                    {{
-                        # Get objects with same entity-level grouping URI
-                        ?s <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> <{entity_uri}> .
-                        FILTER(?s != <{entity_uri}>)
-                        ?s ?p ?o .
-                        {filter_clause}
-                    }}
+                    # ONE branch: the entity is a member of its own graph, so it
+                    # carries hasKGGraphURI pointing at itself. This was a UNION
+                    # whose first branch re-fetched the entity by pinning its
+                    # URI — compensation for a self-link that should always be
+                    # present, and which masked 619 targets across 12 spaces
+                    # that had lost it. With the invariant repaired and checked,
+                    # the compensation is what would hide the next breakage.
+                    ?s <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> <{entity_uri}> .
+                    ?s ?p ?o .
+                    {filter_clause}
                 }}
             }}
         """
@@ -609,18 +605,16 @@ class GraphObjectRetriever:
             
             SELECT ?s ?p ?o WHERE {{
                 GRAPH <{graph_id}> {{
-                    {{
-                        <{entity_uri}> ?p ?o .
-                        BIND(<{entity_uri}> AS ?s)
-                        {filter_clause}
-                    }}
-                    UNION
-                    {{
-                        ?s <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> <{entity_uri}> .
-                        FILTER(?s != <{entity_uri}>)
-                        ?s ?p ?o .
-                        {filter_clause}
-                    }}
+                    # ONE branch: the entity is a member of its own graph, so it
+                    # carries hasKGGraphURI pointing at itself. This was a UNION
+                    # whose first branch re-fetched the entity by pinning its
+                    # URI — compensation for a self-link that should always be
+                    # present, and which masked 619 targets across 12 spaces
+                    # that had lost it. With the invariant repaired and checked,
+                    # the compensation is what would hide the next breakage.
+                    ?s <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> <{entity_uri}> .
+                    ?s ?p ?o .
+                    {filter_clause}
                 }}
             }}
         """
@@ -636,6 +630,84 @@ class GraphObjectRetriever:
         
         return await asyncio.to_thread(_bindings_to_objects, results)
     
+    async def get_entity_graphs_as_objects(
+        self,
+        space_id: str,
+        graph_id: str,
+        entity_uris: List[str],
+        include_materialized_edges: bool = False
+    ) -> Dict[str, List[Any]]:
+        """Entity graphs for a PAGE of entities, in one query.
+
+        The per-entity version of this, called once per URI, is what a list with
+        `include_entity_graph=True` used to do: measured on a 5.1M-quad space at
+        exactly 10 SQL statements per request (= page_size), 33.5ms each, for a
+        321ms response. The work is the same shape for every URI, so it is one
+        query with the URIs supplied as VALUES.
+
+        `?entity` is PROJECTED, not just bound, because the caller has to
+        regroup the flat result back into one graph per entity. Without it the
+        rows arrive indistinguishable and the page collapses into a single
+        undifferentiated object list — which still looks plausible, since the
+        object count is unchanged.
+
+        Returns {entity_uri: [GraphObject, ...]}; an entity with no rows is
+        absent rather than mapped to an empty list, matching the single-entity
+        version's "falsy means nothing found".
+        """
+        if not entity_uris:
+            return {}
+
+        filter_clause = "" if include_materialized_edges else MaterializedPredicateConstants.get_filter_clause()
+        in_list = ", ".join(f"<{u}>" for u in entity_uris)
+
+        # ONE branch, because the entity is a member of its own graph: it
+        # carries hasKGGraphURI pointing at itself. The two-branch UNION the
+        # single-entity version uses exists to compensate for that link being
+        # absent, which is a data defect (619 targets across 12 spaces, since
+        # repaired) rather than a shape the model allows.
+        #
+        # IN, not VALUES. The generator does not translate SPARQL VALUES into a
+        # SQL VALUES list: the VALUES form built the whole union and hash-joined
+        # it down, materialising ~10M rows for 1.9M buffers and taking 27.9s for
+        # this page. IN compiles to `subject_uuid = ANY (...)`, one index search
+        # per URI — 59ms and 31k buffers for the same 10 entities.
+        query = f"""
+            PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
+            PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
+
+            SELECT ?entity ?s ?p ?o WHERE {{
+                GRAPH <{graph_id}> {{
+                    ?s <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> ?entity .
+                    FILTER(?entity IN ({in_list}))
+                    ?s ?p ?o .
+                    {filter_clause}
+                }}
+            }}
+        """
+
+        self.logger.debug("Retrieving %d entity graphs in one query", len(entity_uris))
+        results = await self.backend.execute_sparql_query(space_id, query)
+
+        if isinstance(results, dict):
+            results = results.get('results', {}).get('bindings', [])
+        if not results:
+            return {}
+
+        # Regroup before rebuilding objects: _bindings_to_objects assembles a
+        # GraphObject per subject, so feeding it the whole page at once would
+        # merge entities that share nothing but this query.
+        by_entity: Dict[str, List[dict]] = {}
+        for row in results:
+            uri = (row.get('entity') or {}).get('value')
+            if uri:
+                by_entity.setdefault(uri, []).append(row)
+
+        out: Dict[str, List[Any]] = {}
+        for uri, rows in by_entity.items():
+            out[uri] = await asyncio.to_thread(_bindings_to_objects, rows)
+        return out
+
     async def get_entity_graph_by_reference_id_as_objects(
         self,
         space_id: str,

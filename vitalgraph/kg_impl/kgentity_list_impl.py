@@ -261,26 +261,61 @@ class KGEntityListProcessor:
         if not entity_uris:
             return ListEntitiesResult(entities=[], total_count=total_count)
 
-        # Fetch entity graphs concurrently
-        get_processor = KGEntityGetProcessor(logger=self.logger)
-
-        async def _fetch(uri):
-            try:
-                return await get_processor.get_entity(
-                    space_id=space_id, graph_id=graph_id,
-                    entity_uri=uri, include_entity_graph=True,
-                    backend_adapter=backend_adapter,
-                )
-            except Exception as e:
-                self.logger.warning("Error retrieving entity graph %s: %s", uri, e)
-                return None
-
-        results = await asyncio.gather(*[_fetch(uri) for uri in entity_uris])
-
+        # Fetch every entity graph on the page in ONE query.
+        #
+        # This was a per-URI `asyncio.gather`, which is an N+1 the concurrency
+        # hides rather than removes: measured on a 5.1M-quad space at exactly 10
+        # SQL statements per request (= page_size) averaging 33.5ms, for a 321ms
+        # response. Ten round trips whose combined cost tracked the response
+        # time almost exactly, so whatever overlap the gather achieved, it was
+        # not enough to matter — and at the route's 200 cap it would be 200.
+        #
+        # Falls back to the per-entity path on failure. The batched query is one
+        # unit: a single malformed URI on the page fails all ten, where the old
+        # loop caught per-URI and returned the rest. Preserving that is what the
+        # fallback is for — not defensiveness about the query being wrong.
         entities: List[GraphObject] = []
-        for uri, objs in zip(entity_uris, results):
-            if objs:
-                entities.extend(objs)
+        graphs = None
+        try:
+            from .kg_graph_retrieval_utils import GraphObjectRetriever
+            # The adapter builds one already; fall back to wrapping the adapter,
+            # which exposes the same execute_sparql_query the retriever needs.
+            retriever = getattr(backend_adapter, "retriever", None) \
+                or GraphObjectRetriever(backend_adapter)
+            graphs = await retriever.get_entity_graphs_as_objects(
+                space_id, graph_id, entity_uris)
+        except Exception as e:
+            self.logger.warning(
+                "Batched entity-graph fetch failed (%s) — falling back to "
+                "per-entity retrieval for this page", e)
+
+        if graphs is not None:
+            # Emit in the ORDER THE PAGING QUERY ESTABLISHED. Iterating the
+            # result dict instead would return rows grouped however the batched
+            # query happened to produce them, silently discarding the ORDER BY
+            # that sort_by exists to apply.
+            for uri in entity_uris:
+                objs = graphs.get(uri)
+                if objs:
+                    entities.extend(objs)
+        else:
+            get_processor = KGEntityGetProcessor(logger=self.logger)
+
+            async def _fetch(uri):
+                try:
+                    return await get_processor.get_entity(
+                        space_id=space_id, graph_id=graph_id,
+                        entity_uri=uri, include_entity_graph=True,
+                        backend_adapter=backend_adapter,
+                    )
+                except Exception as e:
+                    self.logger.warning("Error retrieving entity graph %s: %s", uri, e)
+                    return None
+
+            results = await asyncio.gather(*[_fetch(uri) for uri in entity_uris])
+            for uri, objs in zip(entity_uris, results):
+                if objs:
+                    entities.extend(objs)
 
         self.logger.debug("list_entities_with_graph: %d objects, total=%d", len(entities), total_count)
         return ListEntitiesResult(entities=entities, total_count=total_count)

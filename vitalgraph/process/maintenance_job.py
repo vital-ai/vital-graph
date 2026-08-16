@@ -162,6 +162,11 @@ class MaintenanceJob:
             if fe_result:
                 summary["frame_entity_integrity"] = fe_result
 
+            # --- Grouping self-link (entity-graph reads depend on it) ---
+            selflink_result = await self._run_grouping_self_link_check(list(stats.keys()))
+            if selflink_result:
+                summary["grouping_self_link"] = selflink_result
+
             # --- Stats integrity (wrong counts => wrong plans, silently) ---
             stats_int_result = await self._run_stats_integrity(list(stats.keys()))
             if stats_int_result:
@@ -468,6 +473,58 @@ class MaintenanceJob:
                 await self._tracker.mark_failed(process_id, str(e))
             logger.error("VACUUM failed for space %s: %s", space_id, e)
             return {"space_id": space_id, "error": str(e)}
+
+    async def _run_grouping_self_link_check(self, space_ids: List[str]) -> Optional[Dict]:
+        """Report grouping URIs that are not members of their own graph.
+
+        Every object in an entity's graph carries `hasKGGraphURI -> <entity>`,
+        the entity included. The retrieval queries now rely on that: they select
+        the graph in ONE branch by grouping URI, where they used to UNION in a
+        second branch that re-fetched the entity by pinning its URI.
+
+        That second branch was compensation, and it hid the breakage completely
+        — 619 targets across 12 spaces had no self-link and nothing surfaced,
+        because the branch supplied the entity's own properties anyway. With the
+        compensation gone a missing self-link means the entity's name, type and
+        status silently vanish from its graph while the object count still looks
+        plausible. So the invariant has to be watched rather than assumed.
+
+        REPORTS, does not repair. Writing the quad is a data change on a path
+        that never wrote quads before, and the repair already exists as
+        `scripts/repair_grouping_self_link.py` where it can be reviewed before
+        it runs.
+        """
+        GRAPH_URI_PRED = "http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI"
+        for space_id in space_ids:
+            try:
+                async with self._pool.acquire() as conn:
+                    pred = await conn.fetchval(
+                        f"SELECT term_uuid FROM {space_id}_term WHERE term_text = $1",
+                        GRAPH_URI_PRED)
+                    if not pred:
+                        continue
+                    broken = await conn.fetchval(f"""
+                        WITH targets AS (
+                            SELECT DISTINCT object_uuid AS e, context_uuid AS ctx
+                            FROM {space_id}_rdf_quad WHERE predicate_uuid = $1)
+                        SELECT count(*) FROM targets t WHERE NOT EXISTS (
+                            SELECT 1 FROM {space_id}_rdf_quad q
+                            WHERE q.predicate_uuid = $1 AND q.subject_uuid = t.e
+                              AND q.object_uuid = t.e AND q.context_uuid = t.ctx)
+                    """, pred)
+                    if not broken:
+                        continue
+                    logger.warning(
+                        "Grouping self-link: %s has %d URI(s) that group objects "
+                        "but are not members of their own graph — those entities "
+                        "lose their own properties from entity-graph reads. Run "
+                        "scripts/repair_grouping_self_link.py --space %s",
+                        space_id, broken, space_id)
+                    return {"space_id": space_id, "missing_self_links": broken}
+            except Exception as exc:
+                logger.debug("Self-link check skipped for %s: %s", space_id, exc)
+                continue
+        return None
 
     async def _run_stats_integrity(self, space_ids: List[str]) -> Optional[Dict]:
         """Catch rdf_stats counts that have gone wrong, and rebuild that space.
