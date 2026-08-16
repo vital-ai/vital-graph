@@ -181,13 +181,59 @@ def query_is_provably_empty(plan: PlanV2, aliases: AliasGenerator) -> bool:
     return _required_subtree_is_dead(plan, dead)
 
 
+# Comparisons where an ABSENT term means "this constraint does nothing", rather
+# than "this constraint can never hold". Everything is DISTINCT FROM a missing
+# term, so the row survives.
+#
+# `collect.py` emits exactly this for `GRAPH ?g`, and says why: SPARQL's GRAPH ?g
+# ranges over the named graphs, so the default graph is EXCLUDED, and
+# `IS DISTINCT FROM` is chosen over `!=` precisely so a missing default-graph
+# term reads as "no exclusion" instead of filtering every row.
+_NO_OP_WHEN_ABSENT = ("IS DISTINCT FROM",)
+
+
+def _dead_constant_is_required(constraint: str, tok: str) -> bool:
+    """Whether this constraint genuinely cannot hold without `tok`.
+
+    The distinction the caller needs, and the one this function exists for:
+
+        col = <missing>                  can never hold  -> required
+        col IS DISTINCT FROM <missing>   always holds    -> NOT required
+
+    Treating the second as required is a silent wrong answer, not a slow one:
+    the query is rewritten to `LIMIT 0` and returns nothing, with no error.
+    """
+    idx = 0
+    while True:
+        i = constraint.find(tok, idx)
+        if i == -1:
+            return False
+        before = constraint[:i].rstrip()
+        # Look for a no-op operator immediately to the left, allowing for the
+        # opening parenthesis of the scalar subquery the constant compiles to.
+        head = before[:-1].rstrip() if before.endswith("(") else before
+        if not any(head.upper().endswith(op) for op in _NO_OP_WHEN_ABSENT):
+            return True
+        idx = i + len(tok)
+
+
 def _node_owns_dead_constant(plan: PlanV2, dead: Set[str]) -> bool:
-    """Dead constant in THIS node's own constraints (not its children's)."""
+    """Dead constant REQUIRED by THIS node's own constraints (not its children's).
+
+    "Required" is load-bearing. An earlier version asked only whether a dead
+    constant appeared anywhere in the constraint text, which made
+    `IS DISTINCT FROM <missing>` look fatal when it is the opposite — every row
+    satisfies it. Any query with a `GRAPH ?g` and a `default_graph` whose URI is
+    not in the term table (an empty default graph is enough) was declared
+    provably empty and rewritten to `LIMIT 0`.
+    """
     for constraint in plan.constraints:
-        if any(tok in constraint for tok in dead):
+        if any(tok in constraint and _dead_constant_is_required(constraint, tok)
+               for tok in dead):
             return True
     for _tag, constraint in plan.tagged_constraints:
-        if any(tok in constraint for tok in dead):
+        if any(tok in constraint and _dead_constant_is_required(constraint, tok)
+               for tok in dead):
             return True
     return False
 

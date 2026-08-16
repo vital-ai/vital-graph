@@ -93,11 +93,9 @@ P0_CATEGORIES = [
 # Each names the issue; an entry that starts passing should be deleted, not
 # left as a permanent xfail.
 KNOWN_FAILURES = {
-    ("subquery", "sq01 - Subquery within graph pattern"): "issues/093",
-    ("subquery", "sq02 - Subquery within graph pattern, graph variable is bound"):
-        "issues/093",
-    ("subquery", "sq03 - Subquery within graph pattern, graph variable is not bound"):
-        "issues/093",
+    # issues/093 (sq01-sq03) removed 2026-08-16 — fixed, and an entry that
+    # starts passing must be DELETED rather than left as a permanent xfail, or
+    # the number stops meaning anything.
     ("cast", "xsd:float cast"): "issues/094",
 }
 
