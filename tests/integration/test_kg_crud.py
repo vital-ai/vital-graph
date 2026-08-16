@@ -303,6 +303,21 @@ class TestEntityGraph:
         edge.edgeSource = entity.URI
         edge.edgeDestination = frame.URI
 
+        # Every member of an entity graph carries hasKGGraphURI pointing at the
+        # entity, the entity included — it is a member of its own graph. That is
+        # the invariant `get_entity_graph` reads, and it is the PRODUCER's job to
+        # establish it (`utils/test_data.py` and `document/auto_segmentation.py`
+        # both do; `store_objects` is a raw store and does not).
+        #
+        # This test used to omit it and pass anyway, because get_entity_graph
+        # had a UNION branch that re-fetched the entity by pinning its URI.
+        # issues/091 removed that branch deliberately: it was compensation for a
+        # self-link that should always be present, and it had been masking 619
+        # targets across 12 spaces that had lost theirs. So this test was green
+        # only by way of the fallback whose absence the whole issue is about.
+        for obj in (entity, frame, edge):
+            obj.kGGraphURI = entity.URI
+
         await backend_adapter.store_objects(
             kg_space, graph_uri, [entity, frame, edge]
         )
@@ -312,11 +327,17 @@ class TestEntityGraph:
         )
         assert result.success
         assert result.objects is not None
-        # Should contain entity + frame + edge (at minimum the entity)
-        assert len(result.objects) >= 1
 
-        uris = {obj.URI for obj in result.objects}
-        assert entity.URI in uris
+        # All three, by URI. The old `>= 1` would have passed on the entity
+        # alone, which is the one case the removed fallback could still serve —
+        # so it could not have told the difference between a working graph
+        # retrieval and the compensation that was hiding a broken one.
+        uris = {str(obj.URI) for obj in result.objects}
+        for expected in (entity, frame, edge):
+            assert str(expected.URI) in uris, (
+                f"{type(expected).__name__} missing from the entity graph; "
+                f"got {len(uris)} objects"
+            )
 
 
 # ---------------------------------------------------------------------------
