@@ -99,6 +99,45 @@ class TestExtractorPassesThroughAndNeverDerives:
         assert out == {"total_count": 0, "page_size": 0, "offset": 0, "has_more": None}
 
 
+class TestOnlyOneExtractorImplementation:
+    """Two copies of one rule is how this codebase has been bitten before.
+
+    `response_builder.extract_pagination_metadata` was a second implementation
+    with DIFFERENT answers — `page_size` defaulting to 10, and `has_more`
+    defaulting to False, which is the whole defect. Nothing called it, so nobody
+    got a wrong answer; but a dormant duplicate is the version the next person
+    copies. It now delegates, and this holds the two names to one behaviour.
+
+    Same guard as the regex flag mapper, where two copies let a performance
+    heuristic change query semantics.
+    """
+
+    CASES = [
+        {},
+        {"total_count": 100, "page_size": 25, "offset": 0},
+        {"total_count": 100, "page_size": 25, "offset": 75},
+        {"total_count": 100, "page_size": 25, "offset": 0, "has_more": True},
+        {"total_count": 100, "page_size": 25, "offset": 0, "has_more": False},
+        {"total_count": 5, "page_size": 1, "offset": 0},
+    ]
+
+    @pytest.mark.parametrize("payload", CASES)
+    def test_both_names_agree(self, payload):
+        from vitalgraph.client.response.response_builder import (
+            extract_pagination_metadata,
+        )
+        assert extract_pagination_metadata(payload) == \
+            extract_pagination_from_json_quads(payload)
+
+    def test_the_deprecated_name_does_not_default_has_more_to_false(self):
+        """The specific value that made the duplicate dangerous."""
+        from vitalgraph.client.response.response_builder import (
+            extract_pagination_metadata,
+        )
+        assert extract_pagination_metadata(
+            {"total_count": 100, "page_size": 25, "offset": 0})["has_more"] is None
+
+
 class TestMultiGraphResponsesCarryPagination:
     """The models that had none, which is why the total had nowhere to go."""
 

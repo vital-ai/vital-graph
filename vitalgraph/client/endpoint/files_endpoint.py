@@ -108,7 +108,10 @@ class FilesEndpoint(BaseEndpoint):
                 total_count=response_data.get('total_count', len(objects)),
                 offset=offset,
                 page_size=page_size,
-                has_more=response_data.get('has_more', False),
+                # Absent means the route has not been taught to answer, not
+                # that the answer is no. Defaulting to False here is the defect
+                # fixed across the client on 2026-08-16.
+                has_more=response_data.get('has_more'),
                 status_code=response.status_code,
                 status=response_data.get('status'),
                 message=f"Retrieved {len(objects)} files",
@@ -225,6 +228,10 @@ class FilesEndpoint(BaseEndpoint):
                 total_count=len(objects),
                 offset=0,
                 page_size=len(objects),
+                # A real False, not a default: this route is addressed by URI
+                # list and returns every object asked for, so there is no next
+                # page to have. Distinct from the absent-means-False bug fixed
+                # elsewhere in this client -- here the answer is known.
                 has_more=False,
                 status_code=response.status_code,
                 status=response_data.get('status'),
@@ -454,13 +461,13 @@ class FilesEndpoint(BaseEndpoint):
         validate_required_params(space_id=space_id, graph_id=graph_id, file_uri=file_uri, source=source)
         
         try:
-            url = f"{self._get_server_url()}/api/files/upload"
+            url = f"{self._get_server_url()}/api/files/stream/upload"
             params = build_query_params(
                 space_id=space_id,
                 graph_id=graph_id,
                 uri=file_uri
             )
-            
+
             # Create generator from source
             generator = create_generator(
                 source, 
@@ -550,7 +557,7 @@ class FilesEndpoint(BaseEndpoint):
         validate_required_params(space_id=space_id, graph_id=graph_id, file_uri=file_uri)
         
         try:
-            url = f"{self._get_server_url()}/api/files/download"
+            url = f"{self._get_server_url()}/api/files/stream/download"
             params = build_query_params(
                 space_id=space_id,
                 graph_id=graph_id,
@@ -651,7 +658,7 @@ class FilesEndpoint(BaseEndpoint):
         
         try:
             # Download from source
-            download_url = f"{self._get_server_url()}/api/files/download"
+            download_url = f"{self._get_server_url()}/api/files/stream/download"
             download_params = build_query_params(
                 space_id=source_space_id,
                 graph_id=source_graph_id,
@@ -667,7 +674,7 @@ class FilesEndpoint(BaseEndpoint):
             content_type = download_response.headers.get('content-type', 'application/octet-stream')
             
             # Upload to target
-            upload_url = f"{self._get_server_url()}/api/files/upload"
+            upload_url = f"{self._get_server_url()}/api/files/stream/upload"
             upload_params = build_query_params(
                 space_id=target_space_id,
                 graph_id=target_graph_id,

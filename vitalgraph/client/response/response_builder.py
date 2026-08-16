@@ -206,21 +206,22 @@ def build_error_response(
 
 
 def extract_pagination_metadata(response_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Deprecated alias for `format_helpers.extract_pagination_from_json_quads`.
+
+    This was a SECOND copy of the same rule with different answers: `page_size`
+    defaulted to 10 rather than 0, and `has_more` defaulted to **False** — the
+    defect fixed in the other copy on 2026-08-16, still live here.
+
+    Nothing calls it (it is imported by `kgentities_endpoint` and
+    `kgframes_endpoint` and used by neither), so no caller was getting the wrong
+    answer — but a dormant second implementation is worse than a used one. It is
+    the version the next person copies, and two copies of a rule is how a
+    performance heuristic ended up changing regex semantics elsewhere in this
+    codebase. Delegating rather than deleting so any out-of-tree caller keeps
+    working, with one implementation behind both names.
     """
-    Extract pagination metadata from server response.
-    
-    Args:
-        response_data: Server response data
-        
-    Returns:
-        Dictionary with pagination fields
-    """
-    return {
-        'total_count': response_data.get('total_count', 0),
-        'page_size': response_data.get('page_size', 10),
-        'offset': response_data.get('offset', 0),
-        'has_more': response_data.get('has_more', False)
-    }
+    from ..utils.format_helpers import extract_pagination_from_json_quads
+    return extract_pagination_from_json_quads(response_data)
 
 
 def build_entity_graph(entity_uri: str, objects: List[GraphObject]) -> EntityGraph:
