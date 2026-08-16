@@ -1,7 +1,7 @@
 # Issues
 
 Numbered, append-only, one defect each. Resolved ones move to `archive/` —
-76 there, 20 live. An issue is archived only when nothing remains to do:
+76 there, 21 live. An issue is archived only when nothing remains to do:
 "FIXED in the converter, existing spaces need reloading" is not resolved, it is
 half-done, and it stays here.
 
@@ -69,6 +69,7 @@ All 15 are now run or declined in writing. 705 → **907 executed cases**.
 | 094 | OPEN | `xsd:float` casts render `+33.3300` as `33.33000183105469` — CONFIRMED ours |
 | 095 | OPEN | Four syntax forms the grammar forbids are accepted — Jena, upstream |
 | 097 | FIXED | A non-JSON request body returned HTTP 500 on every endpoint |
+| 098 | OPEN | **Search input is interpolated into SPARQL unescaped — confirmed filter bypass.** Previously carried as "quotes break the query"; a balanced payload does not break it, it disables the FILTER and returns everything. 5 sites; a 6th in the same file already escapes |
 
 Verified PASSING rather than assumed: `property-path` 33/33, `project-expression`
 7/7, and 166 of 170 syntax cases. The feature tracker had listed property paths
@@ -101,7 +102,7 @@ scope) and `http-rdf-update` (deferred).
 
 | | status | |
 |---|---|---|
-| **096** | correctness fixed; 85x found, unbuilt | **Frame/slot sort orders by a variable it never projects.** The 500 and the duplicate-row defect under it are fixed and tested (2026-08-16); the one-line fix the report recommended was WRONG (many-per-anchor → needs `GROUP BY`+`MIN`/`MAX`). Pattern order took a further 17%. Solutions then surveyed: extended stats already in place and aimed at scan not join estimates; **the semi-join is structurally unavailable to a SORT** (it must project the value a semi-join collapses). Left: a direction gate (2.9x, 87x worse pinned) and a **denormalised sort table — 85x, flat with page depth, 38 MB, prototyped and verified**. Unbuilt: third derived table, and both existing ones have shipped stale |
+| **096** | fixed; direction gate still open | **Frame/slot sort orders by a variable it never projects.** The 500 and the duplicate-row defect under it are fixed and tested; the one-line fix the report recommended was WRONG (many-per-anchor → needs `GROUP BY`+`MIN`/`MAX`). Then **869 ms → 8 ms end to end** via `{space}_entity_slot_sort`, a new STRUCTURAL MIRROR: incremental on all 8 write paths, drift-detected, repairable, and READ by `fast_slot_sort`. Eliminated on evidence first: extended stats (already present, aimed at scan not join estimates) and the semi-join (**structurally unavailable to a SORT** — it must project the value a semi-join collapses). Left open: the direction gate (2.9x general, 87x worse pinned) and the shapes the reader declines |
 
 `043` (above) is the other `kg_query_builder.py` defect — both are silent to the
 caller, which is what makes that file worth a sweep rather than two point fixes.
