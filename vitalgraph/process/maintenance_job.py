@@ -512,15 +512,50 @@ class MaintenanceJob:
                             WHERE q.predicate_uuid = $1 AND q.subject_uuid = t.e
                               AND q.object_uuid = t.e AND q.context_uuid = t.ctx)
                     """, pred)
-                    if not broken:
+                    # A grouping target with NO type is the other way an
+                    # entity graph comes back empty. The self-link may be
+                    # present, but a typeless subject builds no GraphObject, so
+                    # the entity is absent from its own graph and the read
+                    # returns nothing. Observed once on a 5.1M-quad space: a
+                    # campaign URI carrying only the three server properties,
+                    # with 26 objects grouped under it. Neither the import-time
+                    # stamping nor either SQL backfill can create that — all
+                    # three require rdf:type = KGEntity — so the origin is
+                    # unexplained, which is precisely why it is worth watching
+                    # rather than assuming it cannot happen again.
+                    typeless = await conn.fetchval(f"""
+                        WITH targets AS (
+                            SELECT DISTINCT object_uuid AS e
+                            FROM {space_id}_rdf_quad WHERE predicate_uuid = $1)
+                        SELECT count(*) FROM targets t WHERE NOT EXISTS (
+                            SELECT 1 FROM {space_id}_rdf_quad q
+                            JOIN {space_id}_term p ON p.term_uuid = q.predicate_uuid
+                            WHERE q.subject_uuid = t.e
+                              AND p.term_text IN (
+                                'http://www.w3.org/1999/02/22-rdf-syntax-ns#type',
+                                'http://vital.ai/ontology/vital-core#vitaltype'))
+                    """, pred)
+                    if not broken and not typeless:
                         continue
-                    logger.warning(
-                        "Grouping self-link: %s has %d URI(s) that group objects "
-                        "but are not members of their own graph — those entities "
-                        "lose their own properties from entity-graph reads. Run "
-                        "scripts/repair_grouping_self_link.py --space %s",
-                        space_id, broken, space_id)
-                    return {"space_id": space_id, "missing_self_links": broken}
+                    if broken:
+                        logger.warning(
+                            "Grouping self-link: %s has %d URI(s) that group "
+                            "objects but are not members of their own graph — "
+                            "those entities lose their own properties from "
+                            "entity-graph reads. Run "
+                            "scripts/repair_grouping_self_link.py --space %s",
+                            space_id, broken, space_id)
+                    if typeless:
+                        logger.warning(
+                            "Grouping target without a type: %s has %d URI(s) "
+                            "that group objects but carry no rdf:type or "
+                            "vitaltype. Their entity graphs read as EMPTY, "
+                            "because a typeless subject builds no object. "
+                            "Decide whether the URI should be typed or whether "
+                            "its members are grouped under the wrong URI.",
+                            space_id, typeless)
+                    return {"space_id": space_id, "missing_self_links": broken,
+                            "typeless_targets": typeless}
             except Exception as exc:
                 logger.debug("Self-link check skipped for %s: %s", space_id, exc)
                 continue

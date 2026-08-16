@@ -385,20 +385,42 @@ async def backfill_edge_table(conn, space_id: str) -> int:
 
 
 async def edge_table_drift(conn, space_id: str) -> tuple[int, int]:
-    """Return (edge_source_quads, edge_rows) — a cheap, fully-indexed drift signal.
+    """Return (expected_edges, edge_rows) — a cheap, fully-indexed drift signal.
 
-    edge_source_quads = number of hasEdgeSource quads (≈ number of edges).
-    edge_rows         = rows currently in {space}_edge.
-    A large positive (edge_source_quads - edge_rows) means the edge table has
-    drifted behind rdf_quad (edges inserted via a path that didn't sync it) and
-    should be resynced.  Both counts are single-column index scans.
+    expected_edges = DISTINCT (subject, context) among hasEdgeSource quads.
+    edge_rows      = rows currently in {space}_edge.
+    A large positive difference means the edge table has drifted behind rdf_quad
+    (edges inserted via a path that didn't sync it) and should be resynced.
+
+    DISTINCT, not `count(*)`. The edge table's primary key is
+    (edge_uuid, context_uuid) and `resync_edge_table` builds it with
+    `DISTINCT ON (src.subject_uuid, src.context_uuid)`, so ONE row exists per
+    edge regardless of how many hasEdgeSource QUADS that edge has.
+
+    And a quad can repeat: `rdf_quad`'s primary key includes `quad_uuid`, so the
+    identical (subject, predicate, object, context) can be stored more than
+    once. Counting quads then reports each duplicate as a missing edge row, and
+    no resync can ever clear it — the rebuild produces exactly the count the
+    comparison calls short.
+
+    Measured on the local host cluster 2026-08-16: two spaces reported 31.3% and
+    50.0% "missing" and were byte-for-byte correct. 67 source quads over 46
+    distinct edges against 46 rows, and 70 over 35 against 35 — and crucially
+    `count(DISTINCT (subject, object, context))` was ALSO 46 and 35, so those
+    edges are not multi-valued, the surplus quads are exact duplicates. A resync
+    changed nothing, twice, which is what a permanently unreachable zero looks
+    like from the outside.
+
+    This measure now sees through the duplication. The duplication itself is a
+    separate defect in rdf_quad and is not this function's to fix.
     """
     t_edge = f"{space_id}_edge"
     t_quad = f"{space_id}_rdf_quad"
-    src_quads = await conn.fetchval(
-        f"SELECT count(*) FROM {t_quad} WHERE predicate_uuid = $1", _EDGE_SRC_UUID)
+    expected = await conn.fetchval(
+        f"SELECT count(DISTINCT (subject_uuid, context_uuid)) FROM {t_quad} "
+        f"WHERE predicate_uuid = $1", _EDGE_SRC_UUID)
     edge_rows = await conn.fetchval(f"SELECT count(*) FROM {t_edge}")
-    return int(src_quads or 0), int(edge_rows or 0)
+    return int(expected or 0), int(edge_rows or 0)
 
 
 async def edge_table_orphan_rate(conn, space_id: str, sample: int = 200) -> float:
