@@ -257,33 +257,12 @@ def test_no_module_creates_a_per_space_table_outside_the_schema():
     offenders = [o for o in offenders
                  if not any(o.startswith(a) for a in allowed_dynamic)]
 
-    # ensure_edge_table and ensure_frame_entity_table create their tables from
-    # the QUERY path — generator.py stages 2a.1 and 2a.2 — so DDL runs inside a
-    # user's query and the schema has two sources. They have already diverged:
-    # the inline edge DDL lacks `edge_type_uuid`, which the schema module has
-    # added (issues/060) and which `emit_backward` and `compute_edge_fanout`
-    # both require. A space whose edge table was created by a query is missing
-    # it.
-    #
-    # Left as a known offender rather than silently allowed, because the fix is
-    # a behaviour change on legacy spaces (fail and point at
-    # migrate_space_schema, versus self-heal) and that is a decision, not a
-    # cleanup. See planning_sql/derived_table_maintenance.md.
-    known_query_path_ddl = {
-        "db/sparql_sql/ensure_edge_table.py",
-        "db/sparql_sql/ensure_frame_entity_table.py",
-    }
-    unexpected = [o for o in offenders
-                  if not any(o.startswith(k) for k in known_query_path_ddl)]
-    assert not unexpected, (
-        "NEW per-space table created outside the schema:\n  "
-        + "\n  ".join(unexpected)
-        + "\n\nMove the DDL into SparqlSQLSchema.create_space_tables_sql.")
-    offenders = []          # the two above are tracked, not silently passing
-
     assert not offenders, (
         "these modules create per-space tables outside the schema:\n  "
         + "\n  ".join(offenders)
         + "\n\nMove the DDL into SparqlSQLSchema.create_space_tables_sql so every "
           "space gets it at creation. A table created on demand exists only on "
-          "spaces where the feature has run.")
+          "spaces where the feature has run, and a second copy of the DDL "
+          "diverges from the first — which is exactly what happened to "
+          "ensure_edge_table, whose inline copy never gained edge_type_uuid.")
+

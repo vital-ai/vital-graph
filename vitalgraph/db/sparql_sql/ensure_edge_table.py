@@ -1,7 +1,20 @@
-"""DDL helpers — ensure the edge table exists for query rewrites.
+"""Verify and populate the edge table for query rewrites. NO DDL.
 
-The edge table is a regular table maintained by app-level sync
-(replacing the old edge_mv materialized view).
+The edge table is part of the space schema — `SparqlSQLSchema.create_space` —
+and is maintained by app-level sync. This module used to CREATE it when
+missing, from its own copy of the DDL, called from `generator` stage 2a.1.
+Two things were wrong with that and one of them had already bitten:
+
+  * Schema as a side effect of a READ. DDL ran inside a user's query.
+  * Two sources for one schema, which diverged. The copy here never gained
+    `edge_type_uuid` (issues/060), which `emit_backward` consumes as a column
+    predicate and `compute_edge_fanout` requires — "without it every edge pools
+    into one bucket and the result describes nothing". A space whose edge table
+    was created here was missing the column, silently.
+
+A missing table now disables the rewrite for that space and says which
+migration to run. It cannot happen on a space created or migrated properly,
+which is why it is reported rather than repaired.
 """
 
 from __future__ import annotations
@@ -65,24 +78,25 @@ async def ensure_edge_table(space_id: str, conn=None, conn_params=None) -> bool:
         )
 
         if not table_rows:
-            # Create the edge table + indexes
-            logger.info("ensure_edge_table(%s): creating edge table", space_id)
-            async with _acquire_conn(conn, conn_params) as c:
-                await c.execute(f"""
-                    CREATE TABLE IF NOT EXISTS {table_name} (
-                        edge_uuid        UUID NOT NULL,
-                        source_node_uuid UUID NOT NULL,
-                        dest_node_uuid   UUID NOT NULL,
-                        context_uuid     UUID NOT NULL,
-                        PRIMARY KEY (edge_uuid, context_uuid)
-                    )
-                """)
-                idx = f"idx_{space_id}_edge"
-                await c.execute(f"CREATE INDEX IF NOT EXISTS {idx}_src_dst ON {table_name} (source_node_uuid, dest_node_uuid)")
-                await c.execute(f"CREATE INDEX IF NOT EXISTS {idx}_dst_src ON {table_name} (dest_node_uuid, source_node_uuid)")
-                await c.execute(f"CREATE INDEX IF NOT EXISTS {idx}_edge ON {table_name} (edge_uuid)")
-                await c.execute(f"CREATE INDEX IF NOT EXISTS {idx}_ctx ON {table_name} (context_uuid)")
-            logger.info("ensure_edge_table(%s): edge table created", space_id)
+            # The table is part of the space schema, so this cannot happen on a
+            # space created or migrated properly. It is NOT created here.
+            #
+            # It used to be, and the DDL had drifted: the inline copy never
+            # gained `edge_type_uuid`, which the schema added (issues/060) and
+            # which `emit_backward` consumes as a column predicate and
+            # `compute_edge_fanout` requires — "without it every edge pools into
+            # one bucket and the result describes nothing". A space whose edge
+            # table was created HERE was missing that column, and nothing said
+            # so. Two sources for one schema is what produced that, and creating
+            # schema from a read path is what hid it.
+            logger.error(
+                "ensure_edge_table(%s): %s does not exist. It is created with "
+                "the space; a space predating it needs "
+                "`python scripts/migrate_space_schema.py --space %s`. The edge "
+                "rewrite is disabled for this space until then.",
+                space_id, table_name, space_id)
+            _edge_table_ready[space_id] = False
+            return False
 
         # Check if table is empty and needs population
         count_rows = await db.execute_query(

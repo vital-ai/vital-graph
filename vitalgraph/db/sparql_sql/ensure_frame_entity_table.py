@@ -72,23 +72,20 @@ async def ensure_frame_entity_table(space_id: str, conn=None, conn_params=None) 
         )
 
         if not table_rows:
-            logger.info("ensure_frame_entity_table(%s): creating table", space_id)
-            async with _acquire_conn(conn, conn_params) as c:
-                await c.execute(f"""
-                    CREATE TABLE IF NOT EXISTS {table_name} (
-                        frame_uuid           UUID NOT NULL,
-                        source_entity_uuid   UUID,
-                        dest_entity_uuid     UUID,
-                        context_uuid         UUID NOT NULL,
-                        PRIMARY KEY (frame_uuid, context_uuid)
-                    )
-                """)
-                idx = f"idx_{space_id}_fe"
-                await c.execute(f"CREATE INDEX IF NOT EXISTS {idx}_src_frame ON {table_name} (source_entity_uuid, frame_uuid)")
-                await c.execute(f"CREATE INDEX IF NOT EXISTS {idx}_dst_frame ON {table_name} (dest_entity_uuid, frame_uuid)")
-                await c.execute(f"CREATE INDEX IF NOT EXISTS {idx}_frame ON {table_name} (frame_uuid)")
-                await c.execute(f"CREATE INDEX IF NOT EXISTS {idx}_ctx ON {table_name} (context_uuid)")
-            logger.info("ensure_frame_entity_table(%s): table created", space_id)
+            # Part of the space schema; not created here. See the same note in
+            # ensure_edge_table — this inline DDL had drifted too, lacking
+            # `frame_type_uuid`, which the schema added and the frame_entity
+            # rewrite consumes to turn `<frame> vitaltype <Type>` into a column
+            # predicate (2.4x on a typed walk). A space whose table was created
+            # here silently lost that.
+            logger.error(
+                "ensure_frame_entity_table(%s): %s does not exist. It is "
+                "created with the space; a space predating it needs "
+                "`python scripts/migrate_space_schema.py --space %s`. The "
+                "frame_entity rewrite is disabled for this space until then.",
+                space_id, table_name, space_id)
+            _frame_entity_table_ready[space_id] = False
+            return False
 
         # Check if table is empty and needs population
         count_rows = await db.execute_query(
