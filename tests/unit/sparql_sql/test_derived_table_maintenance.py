@@ -272,3 +272,85 @@ def test_no_module_creates_a_per_space_table_outside_the_schema():
           "diverges from the first — which is exactly what happened to "
           "ensure_edge_table, whose inline copy never gained edge_type_uuid.")
 
+
+
+# ---------------------------------------------------------------------------
+# Quad writers OUTSIDE the space implementation
+# ---------------------------------------------------------------------------
+
+def test_raw_sql_quad_writers_maintain_stats():
+    """A module that INSERTs into rdf_quad directly gets no sync hook for free.
+
+    The matrix above reads `sparql_sql_space_impl.py` only, so it proves nothing
+    about a module that bypasses those methods and writes the quad table with
+    raw SQL. That is not a hypothetical bypass — it is how the drift this test
+    was added for happened.
+
+    Measured on the host cluster 2026-08-15: 23 of 77 spaces had predicates
+    present in `rdf_quad` with NO row in `rdf_pred_stats`, and on every one of
+    them the missing predicates were the three server properties
+    (`hasObjectCreationTime`, `hasObjectModificationDateTime`,
+    `hasObjectStatusType`) written by `kg_server_properties`' raw-SQL backfill
+    before it learned to sync. On `wordnet_frames` that was 3 predicates of 18
+    covering 109,745 quads each, and because two of them carry the space's only
+    temporal histograms, `rdf_value_stats.pred_rows` backfilled entirely NULL —
+    freshness scaling inert on the one space where it had something to scale.
+
+    A MISSING pred_stats row is categorically worse than a stale one. Stale
+    gives the planner a number that drifts; missing gives it nothing, and
+    nothing is not self-correcting, because the incremental sync only ever
+    UPDATEs counts for predicates it already knows.
+
+    Both accepted mechanisms appear here: an incremental sync of what was just
+    written, or a full resync afterwards. A full resync is the stronger of the
+    two and is what the import path uses.
+    """
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[3] / "vitalgraph"
+    stats_markers = ("sync_stats_after_insert", "resync_stats_tables",
+                     "resync_stats_for_predicates")
+
+    # Modules where a raw quad INSERT is correct without a sync in the same file.
+    exempt = {
+        # The SQL EMITTER for SPARQL UPDATE. It builds statement text; it does
+        # not execute it. Its caller, execute_sparql_update, maintains stats by
+        # resync_stats_for_predicates and is covered by the matrix above.
+        "db/sparql_sql/emit_update.py":
+            "emits SQL text; execute_sparql_update runs it and resyncs",
+        # A DIFFERENT BACKEND. The fuseki_postgresql backend does not have
+        # these derived tables at all — they are sparql_sql constructs.
+        "db/fuseki_postgresql/postgresql_db_impl.py":
+            "fuseki backend; rdf_pred_stats is a sparql_sql construct",
+    }
+
+    offenders = []
+    for path in root.rglob("*.py"):
+        rel = path.relative_to(root).as_posix()
+        if rel == "db/sparql_sql/sparql_sql_space_impl.py" or rel in exempt:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        # A raw insert into the quad table, whatever local name holds it.
+        if not re.search(r"INSERT\s+INTO\s+\{[a-z_]*quad[a-z_]*\}", text, re.I):
+            continue
+        # A CALL, not a mention. The first version of this check tested `m in
+        # text` and passed even with the sync deleted, because the module names
+        # `resync_stats_tables` in a log message ("...run resync_stats_tables")
+        # — the marker matched prose. That is the false-negative direction the
+        # note on DERIVED calls the dangerous one, reproduced here immediately.
+        if not any(re.search(rf"\b{m}\s*\(", text) for m in stats_markers):
+            offenders.append(rel)
+
+    assert not offenders, (
+        "these modules INSERT into rdf_quad with raw SQL but never sync "
+        "rdf_pred_stats:\n  " + "\n  ".join(offenders)
+        + "\n\nRaw SQL fires none of the incremental hooks in "
+          "sparql_sql_space_impl. Call sync_stats_after_insert with the rows "
+          "written, or resync_stats_tables afterwards. A predicate written "
+          "without either gets NO pred_stats row, and the incremental sync "
+          "will never create one — it only updates predicates it already "
+          "knows. That left 23 of 77 host spaces with unrecorded predicates.")
