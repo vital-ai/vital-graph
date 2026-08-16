@@ -1,6 +1,6 @@
 # `xsd:float` Casts Leak the float32→float64 Expansion Into the Lexical Form
 
-## Status: OPEN — CONFIRMED ours, 2026-08-16. Reclassified from "low confidence".
+## Status: PRECISION LEAK FIXED 2026-08-16; canonical-form question still open
 
     SELECT ?a ?v (xsd:float(?v) AS ?float) WHERE { ?a :p ?v }
 
@@ -10,7 +10,8 @@ with `:s04 :p "+33.3300"`:
 |---|---|
 | expected (`cast-float.srx`) | `3.333E1` |
 | pyoxigraph | `33.33` |
-| **ours** | **`33.33000183105469`** |
+| ours, before | `33.33000183105469` |
+| **ours, after the fix** | **`33.33`** |
 
 ## Correction to the first version of this issue
 
@@ -44,6 +45,25 @@ correctly; the loss happens after, in the lane.
 So this is not a rounding disagreement or a spec ambiguity. It is a real number
 rendered with sixteen digits of binary noise, in a form no engine and no
 specification produces, and it is visible to anyone who calls `xsd:float`.
+
+## Fixed
+
+Two changes, and the second is the one that made the first take effect.
+
+`_normalize_float` renders at the width the datatype actually has: the shortest
+decimal that survives a round trip through binary32. Rendered via `repr` rather
+than `%g`, whose exponent threshold would turn `-10200` into `-1.02e+04`.
+
+`sql_to_sparql_binding` stringified the value BEFORE reading the `__datatype`
+companion, so the datatype could not inform the rendering even in principle —
+and that is the path the conformance suite uses. The lookup now happens first.
+Fixing only the formatter would have changed nothing measurable, which is worth
+recording: the first version of this fix was written in
+`sparql_sql_space_impl._rows_to_bindings` and had no effect at all, because that
+is a different binding builder from the one under test.
+
+The rule lives in `sql_type_binding.normalize_numeric` alone; the inline copy
+was removed rather than left beside it.
 
 ## The second, separate question
 

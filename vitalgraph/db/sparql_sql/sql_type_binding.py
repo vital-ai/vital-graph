@@ -11,6 +11,7 @@ This replaces the scattered _infer_binding() logic in v1's dawg_sql_executor.py.
 from __future__ import annotations
 
 import decimal
+import struct
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -24,6 +25,7 @@ XSD_STRING = f"{XSD}string"
 XSD_INTEGER = f"{XSD}integer"
 XSD_DECIMAL = f"{XSD}decimal"
 XSD_DOUBLE = f"{XSD}double"
+XSD_FLOAT = f"{XSD}float"
 XSD_BOOLEAN = f"{XSD}boolean"
 RDF_LANG_STRING = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString"
 
@@ -73,13 +75,17 @@ def sql_to_sparql_binding(
     if value is None:
         return None
 
-    # Normalize value to string
-    val_str = _value_to_string(value)
-
-    # Look up companion columns
+    # Look up companion columns FIRST. The datatype decides how the value is
+    # rendered, so reading it afterwards meant it could not: an xsd:float came
+    # back as a Python float (binary64) holding a binary32 value, and str() of
+    # that is the exact decimal expansion — 33.33000183105469 for 33.33. See
+    # _normalize_float and issues/094.
     term_type = _get_companion(row, sql_col, "__type")
     term_lang = _get_companion(row, sql_col, "__lang")
     term_datatype = _get_companion(row, sql_col, "__datatype")
+
+    # Normalize value to string
+    val_str = _value_to_string(value, term_datatype)
 
     # Path 1: Explicit type from companion column
     if term_type is not None:
@@ -147,6 +153,8 @@ def normalize_numeric(value: Any, datatype: Optional[str] = None) -> str:
     if isinstance(value, float):
         if datatype == XSD_DOUBLE:
             return _normalize_double(value)
+        if datatype == XSD_FLOAT:
+            return _normalize_float(value)
         # Default: treat as decimal
         return f"{value:.15g}"
 
@@ -168,6 +176,42 @@ def _normalize_decimal(value: decimal.Decimal, datatype: Optional[str] = None) -
     return str(normalized)
 
 
+def _normalize_float(value: float) -> str:
+    """Normalize an xsd:float, at the width xsd:float actually has (issues/094).
+
+    PostgreSQL stores an xsd:float cast as REAL (binary32) and prints the
+    shortest string that round-trips AT THAT WIDTH: `33.33`. The driver hands it
+    back as a Python float, which is binary64, so every default rendering prints
+    the shortest string that round-trips at DOUBLE width — and that is the exact
+    decimal expansion of the binary32 value:
+
+        SELECT CAST('+33.3300' AS REAL)::text  ->  33.33
+        str(same value as a Python float)      ->  33.33000183105469
+
+    Sixteen digits of binary noise, in a form no engine and no specification
+    produces, returned to anyone who calls `xsd:float`. The VALUE is right; the
+    width it is being printed at is not.
+
+    So: shortest decimal that survives a round trip through binary32. Rendered
+    via repr rather than `%g`, whose exponent threshold is low enough to turn
+    -10200 into `-1.02e+04`.
+
+    Not byte-identical to PostgreSQL's own float4 output — it prints `1e+06`
+    where this prints `1000000`. Both are valid lexical forms; matching it
+    exactly would mean rendering in SQL rather than here, and what issues/094 is
+    about is the expansion, not the notation.
+    """
+    if value != value or value in (float("inf"), float("-inf")):
+        return str(value)
+    target = struct.unpack("f", struct.pack("f", value))[0]
+    for precision in range(1, 10):
+        candidate = f"{value:.{precision}g}"
+        if struct.unpack("f", struct.pack("f", float(candidate)))[0] == target:
+            plain = repr(float(candidate))
+            return plain[:-2] if plain.endswith(".0") else plain
+    return repr(value)
+
+
 def _normalize_double(value: float) -> str:
     """Normalize a float to XSD double canonical form (scientific notation)."""
     if value == 0.0:
@@ -185,8 +229,12 @@ def _normalize_double(value: float) -> str:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _value_to_string(value: Any) -> str:
-    """Convert a Python value to its string representation."""
+def _value_to_string(value: Any, datatype: Optional[str] = None) -> str:
+    """Convert a Python value to its string representation.
+
+    `datatype` is optional so existing callers keep working, but it is what
+    makes a float printable at the width its datatype actually has.
+    """
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, decimal.Decimal):
@@ -194,6 +242,8 @@ def _value_to_string(value: Any) -> str:
         if normalized == normalized.to_integral_value():
             return str(int(normalized))
         return str(normalized)
+    if isinstance(value, float) and datatype in (XSD_FLOAT, XSD_DOUBLE):
+        return normalize_numeric(value, datatype)
     return str(value)
 
 

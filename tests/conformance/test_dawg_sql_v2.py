@@ -96,7 +96,10 @@ KNOWN_FAILURES = {
     # issues/093 (sq01-sq03) removed 2026-08-16 — fixed, and an entry that
     # starts passing must be DELETED rather than left as a permanent xfail, or
     # the number stops meaning anything.
-    ("cast", "xsd:float cast"): "issues/094",
+    ("cast", "xsd:float cast"):
+        "issues/094 precision leak is FIXED; this remains because the manifest "
+        "expects XSD canonical scientific form (3.333E1) and neither we nor "
+        "pyoxigraph emit it — a separate, still-open question",
 }
 
 

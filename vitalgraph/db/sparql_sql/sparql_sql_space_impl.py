@@ -31,6 +31,21 @@ from . import db_provider
 
 logger = logging.getLogger(__name__)
 
+def _lexical_form(value: Any, datatype: Optional[str]) -> str:
+    """The literal's lexical form, as the caller should see it.
+
+    Delegates to `sql_type_binding.normalize_numeric`, which is where the rule
+    lives. Written inline here first and then moved: two copies of one
+    formatting rule is how the regex flag mapping let a performance heuristic
+    change query semantics, and the DAWG path goes through the shared function
+    rather than this one — so an inline copy here would have fixed the binding
+    builder nobody was measuring.
+    """
+    from .sql_type_binding import normalize_numeric
+    if isinstance(value, float) and datatype:
+        return normalize_numeric(value, datatype)
+    return str(value)
+
 # Module-level shared compile cache (space-independent, sidecar compilation
 # depends only on SPARQL structure, not on which space is queried).
 _compile_cache = SparqlCompileCache(maxsize=512)
@@ -2104,16 +2119,16 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     continue
 
                 term_type = row.get(f'{sql_name}__type', 'L')
+                datatype = row.get(f'{sql_name}__datatype')
                 entry: Dict[str, Any] = {
                     'type': type_map.get(term_type, 'literal'),
-                    'value': str(val),
+                    'value': _lexical_form(val, datatype),
                 }
 
                 lang = row.get(f'{sql_name}__lang')
                 if lang:
                     entry['xml:lang'] = lang
 
-                datatype = row.get(f'{sql_name}__datatype')
                 if datatype and term_type == 'L':
                     entry['datatype'] = str(datatype)
 
