@@ -1,7 +1,7 @@
 # Issues
 
 Numbered, append-only, one defect each. Resolved ones move to `archive/` —
-76 there, 19 live. An issue is archived only when nothing remains to do:
+76 there, 20 live. An issue is archived only when nothing remains to do:
 "FIXED in the converter, existing spaces need reloading" is not resolved, it is
 half-done, and it stays here.
 
@@ -17,6 +17,7 @@ were found while working on something else, which is why the themes are uneven.
 | **048** | OPEN | **Frame/entity traversal: three priced performance problems.** The `frame_entity` collapse works (4 orders of magnitude at depth 3); constraining a walk is what costs — a URI constraint on the SLOT disables the collapse (~28,000x), the same constraint on the FRAME survives it and still costs ~160x, and value criteria cost 150-950x. The goal is that adding a criterion is never a cliff, not that redundant ones are detected. Start here. |
 | **090** | OPEN | Problem 2 of 048 in full: a criterion that SHRINKS a traversal makes it hundreds of times slower, across every datatype. Read before starting the work. |
 | 043 | OPEN | KGQuery hardcodes entity/frame attachment — whole datasets unqueryable through KGQuery, silently |
+| 096 | worked case | Not traversal work itself, but carries a tail-only pin priced BOTH ways on real data: selective-end-first is **2.9x**, the same form is **87x WORSE** when the entity is pinned. Win, regression, separating statistic and formulation all measured. `traversal_decision` needs only to count a type-constrained end as pinned, and something to read its answer |
 | 041 | detection + repair | In-place reload leaves derived tables stale. Repair is no longer manual: `scripts/repair_derived_tables.py` rebuilds frame_entity/entity_fanout/value_stats, and the maintenance cycle audits rdf_stats counts every run (2026-08-16) |
 | 060 | landed locally | Edge table has no type column; remaining work is non-local spaces |
 
@@ -67,6 +68,7 @@ All 15 are now run or declined in writing. 705 → **907 executed cases**.
 | 093 | OPEN | A subquery inside `GRAPH` returns ZERO rows — silent, ours, 3 DAWG cases |
 | 094 | OPEN | `xsd:float` casts render `+33.3300` as `33.33000183105469` — CONFIRMED ours |
 | 095 | OPEN | Four syntax forms the grammar forbids are accepted — Jena, upstream |
+| 097 | FIXED | A non-JSON request body returned HTTP 500 on every endpoint |
 
 Verified PASSING rather than assumed: `property-path` 33/33, `project-expression`
 7/7, and 166 of 170 syntax cases. The feature tracker had listed property paths
@@ -84,9 +86,25 @@ Fixed in the same pass, all found by the harness rather than by the categories:
 `tests/conformance/test_dawg_coverage.py` now fails if a category is neither run
 nor declined with a reason, so a new manifest cannot land unnoticed.
 
+`protocol` (34 cases) was then wired too, because it was the one declined
+category testing something we actually ship. First run: 2 passed and **22
+returned HTTP 500** — every one through a single un-encoded validation handler
+that made ANY non-JSON request body a server fault on ANY endpoint. See 097.
+Now 12 pass, zero 5xx, and the remaining 22 are honest gaps: 17 need the
+Protocol's body content types, 3 need `application/sparql-results+json`, and 2
+need a decision on 200-vs-4xx that conflicts with this project's convention.
+
 Declined deliberately: `entailment`, `service`, `service-description` (out of
-scope), `http-rdf-update` and `protocol` (deferred — `protocol` is the one that
-tests something we actually ship).
+scope) and `http-rdf-update` (deferred).
+
+## KGQuery construction
+
+| | status | |
+|---|---|---|
+| **096** | correctness fixed; 85x found, unbuilt | **Frame/slot sort orders by a variable it never projects.** The 500 and the duplicate-row defect under it are fixed and tested (2026-08-16); the one-line fix the report recommended was WRONG (many-per-anchor → needs `GROUP BY`+`MIN`/`MAX`). Pattern order took a further 17%. Solutions then surveyed: extended stats already in place and aimed at scan not join estimates; **the semi-join is structurally unavailable to a SORT** (it must project the value a semi-join collapses). Left: a direction gate (2.9x, 87x worse pinned) and a **denormalised sort table — 85x, flat with page depth, 38 MB, prototyped and verified**. Unbuilt: third derived table, and both existing ones have shipped stale |
+
+`043` (above) is the other `kg_query_builder.py` defect — both are silent to the
+caller, which is what makes that file worth a sweep rather than two point fixes.
 
 ## Query performance
 

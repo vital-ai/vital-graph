@@ -46,10 +46,6 @@ DECLINED = {
         "syntax-fed IS run — we parse federation we cannot execute.",
     "service-description":
         "Out of scope: we do not serve a service-description document.",
-    "protocol":
-        "Deferred, NOT rejected. Tests the SPARQL Protocol over HTTP and we do "
-        "serve SPARQL over HTTP, so these 34 apply to something we ship. Needs "
-        "a live-server fixture rather than a manifest loop.",
     "http-rdf-update":
         "Deferred: Graph Store HTTP Protocol, a REST surface for graph "
         "management we do not currently expose.",
@@ -64,12 +60,14 @@ def _wired_categories() -> set:
         MIXED_CATEGORIES,
         SYNTAX_CATEGORIES,
     )
+    from tests.conformance.test_dawg_protocol import PROTOCOL_CATEGORIES
 
     return (
         set(P0_CATEGORIES)
         | set(UPDATE_CATEGORIES)
         | set(SYNTAX_CATEGORIES)
         | set(MIXED_CATEGORIES)
+        | set(PROTOCOL_CATEGORIES)
     )
 
 
@@ -108,6 +106,19 @@ class TestDAWGCoverage:
         assert not stale, (
             f"DECLINED names categories not in the corpus: {stale}. "
             f"Remove them so the list keeps meaning what it says."
+        )
+
+    def test_nothing_is_both_run_and_declined(self):
+        """A category that got implemented but kept its decline reads as a gap.
+
+        `protocol` was declined as "deferred, needs a live-server fixture" and
+        then got one. Without this, the stale decline would sit there implying
+        34 cases are unmeasured while they run on every CI pass.
+        """
+        both = sorted(_wired_categories() & set(DECLINED))
+        assert not both, (
+            f"Declined AND run: {both}. Remove the DECLINED entry — a decline "
+            f"that is no longer true understates coverage."
         )
 
     def test_declined_reasons_are_substantive(self):
