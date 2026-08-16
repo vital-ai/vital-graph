@@ -56,6 +56,43 @@ async def _table_exists(conn, table: str) -> bool:
         table))
 
 
+async def sampled_counts_wrong(conn, space_id: str, sample: int = 5) -> tuple | None:
+    """Is `rdf_stats` UNDERSTATING pairs it already records?
+
+    Absence was the only thing this script originally tested, and a recorded
+    count can be arbitrarily wrong while every predicate is present. Measured on
+    a 5.1M-quad host space: the pair (rdf:type, KGFrame) was recorded as 6
+    against 60,054 actual, and (rdf:type, Edge_hasKGSlot) as 37 against 304,859
+    — four orders of magnitude, on a table that passed the missing-predicate
+    check cleanly.
+
+    That is not a cosmetic drift. `semijoin._selective_enough` divides the
+    probe's match count by the ANCHOR's candidate count to decide between a
+    per-row probe and a set-based join. With the anchor reading 6 instead of
+    60,054, a genuinely 0.008%-selective query scored 83% selective and took the
+    probe: 60,054 correlated EXISTS evaluations to return 5 rows, 269 ms where
+    the set-based plan is 33 ms.
+
+    Checks the LARGEST recorded pairs, because understatement is what flips the
+    gate and the largest rows are where it shows. Exact counts on `sample`
+    pairs are index scans on (predicate_uuid, object_uuid) — bounded work.
+    """
+    t_stats = f"{space_id}_rdf_stats"
+    if not await _table_exists(conn, t_stats):
+        return None
+    rows = await conn.fetch(
+        f"SELECT predicate_uuid, object_uuid, row_count FROM {t_stats} "
+        f"ORDER BY row_count DESC LIMIT {int(sample)}")
+    for r in rows:
+        actual = await conn.fetchval(
+            f"SELECT count(*) FROM {space_id}_rdf_quad "
+            f"WHERE predicate_uuid = $1 AND object_uuid = $2",
+            r["predicate_uuid"], r["object_uuid"])
+        if actual != r["row_count"]:
+            return (r["row_count"], actual)
+    return None
+
+
 async def survey_space(conn, space_id: str) -> dict | None:
     """Predicates present in rdf_quad but absent from rdf_pred_stats.
 
@@ -76,7 +113,8 @@ async def survey_space(conn, space_id: str) -> dict | None:
                           WHERE p.predicate_uuid = q.predicate_uuid)
         GROUP BY 1 ORDER BY 2 DESC
     """)
-    if not missing:
+    stale = await sampled_counts_wrong(conn, space_id)
+    if not missing and not stale:
         return None
     return {
         "space": space_id,
@@ -84,6 +122,7 @@ async def survey_space(conn, space_id: str) -> dict | None:
         "missing": len(missing),
         "missing_quads": sum(r["n"] for r in missing),
         "recorded": await conn.fetchval(f"SELECT count(*) FROM {t_ps}"),
+        "stale": stale,
     }
 
 
@@ -148,11 +187,14 @@ async def main():
                 continue
             drifted += 1
             if a.dry_run:
+                stale = ("" if not s.get("stale") else
+                         f", largest recorded pair says {s['stale'][0]:,} "
+                         f"against {s['stale'][1]:,} actual")
                 logger.info(
                     "[dry-run] %s: %d predicate(s) unrecorded covering %s quads "
-                    "(%d recorded, %s total quads)",
+                    "(%d recorded, %s total quads)%s",
                     sid, s["missing"], f"{s['missing_quads']:,}", s["recorded"],
-                    f"{s['quads']:,}")
+                    f"{s['quads']:,}", stale)
                 continue
             r = await repair_space(conn, sid)
             logger.info(
