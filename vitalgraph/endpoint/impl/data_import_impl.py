@@ -82,7 +82,9 @@ def _unescape_nquads_string(s: str) -> str:
             .replace('\\\\', '\\'))
 
 
-def _parse_nquads_term_for_import(term_str: str) -> Tuple[str, str, Optional[str]]:
+def _parse_nquads_term_for_import(
+        term_str: str,
+        bnode_scope: Optional[str] = None) -> Tuple[str, str, Optional[str]]:
     """Parse an N-Quads-encoded term into (text, term_type, lang).
 
     Returns values matching the term table schema:
@@ -94,13 +96,34 @@ def _parse_nquads_term_for_import(term_str: str) -> Tuple[str, str, Optional[str
     """
     term_str = term_str.strip()
 
-    # URI
+    # URI. One of OUR OWN Skolem IRIs is checked FIRST, because this branch
+    # returns unconditionally and would otherwise read an exported blank node
+    # back as an ordinary IRI — losing that it was ever a blank node, which is
+    # exactly the round-trip skolemisation exists to preserve.
     if term_str.startswith('<') and term_str.endswith('>'):
+        from vitalgraph.db.sparql_sql.term_normalize import deskolemize_iri
+        inner = deskolemize_iri(term_str[1:-1])
+        if inner is not None:
+            return inner, "B", None
         return term_str[1:-1], "U", None
 
     # Blank node
     if term_str.startswith('_:'):
-        return term_str[2:], "B", None
+        label = term_str[2:]
+        # SKOLEMISE against the document this term came from. RDF 1.1: blank
+        # node identifiers are "locally scoped to the file or RDF store, and
+        # are *not* persistent or portable" — so two files each using `_:b0`
+        # describe two different nodes. Without a scope they collapsed into
+        # one, silently and unrecoverably (issues/076 facet 2).
+        #
+        # Deterministic in the scope, so re-importing the same document
+        # reproduces the same nodes and reload stays idempotent (issues/041).
+        # A random per-load label would satisfy RDF and break that.
+        if bnode_scope:
+            from vitalgraph.db.sparql_sql.term_normalize import skolem_label
+            label = skolem_label(bnode_scope, label)
+        return label, "B", None
+
 
     # Literal
     if term_str.startswith('"'):

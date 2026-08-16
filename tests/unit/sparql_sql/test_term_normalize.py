@@ -76,3 +76,93 @@ class TestIdentityAgreesAcrossWritePaths:
         assert _node_text(BNodeNode(label="b1")) == "b1", (
             "returning `_:b1` here is what made the UPDATE path diverge; it "
             "feeds both the term upsert and the uuid computation")
+
+
+class TestSkolemisation:
+    """issues/076 facet 2: blank-node labels are scoped, not global.
+
+    RDF 1.1 Concepts: blank node identifiers are "locally scoped to the file or
+    RDF store, and are *not* persistent or portable identifiers". Two documents
+    each using `_:b0` describe two different nodes. This store made the label
+    the identity globally and forever, so they merged — silently, and
+    unrecoverably, because nothing recorded that they were ever separate.
+
+    Skolemisation is the spec's own answer (§3.5: "SHOULD mint a new, globally
+    unique IRI", using the registered `genid` well-known name), and it is
+    DETERMINISTIC here so that re-importing a document reproduces its nodes.
+    Random allocation per load would satisfy RDF and break idempotent reload
+    (issues/041); deriving from the scope gives both.
+    """
+
+    def test_the_same_label_in_different_documents_is_different_nodes(self):
+        from vitalgraph.db.sparql_sql.term_normalize import skolem_label
+        assert skolem_label("docA", "b0") != skolem_label("docB", "b0"), (
+            "two documents using `_:b0` collapsed into one node")
+
+    def test_reimporting_a_document_reproduces_its_nodes(self):
+        from vitalgraph.db.sparql_sql.term_normalize import skolem_label
+        assert skolem_label("docA", "b0") == skolem_label("docA", "b0"), (
+            "re-import produced different nodes, so reload is not idempotent")
+
+    def test_distinct_labels_in_one_document_stay_distinct(self):
+        from vitalgraph.db.sparql_sql.term_normalize import skolem_label
+        assert skolem_label("docA", "b0") != skolem_label("docA", "b1")
+
+    def test_the_label_is_a_valid_ntriples_label(self):
+        """The reason the stored value is a label and not the full Skolem IRI.
+
+        BLANK_NODE_LABEL admits neither `:` nor `/`, so storing the IRI would
+        export as `_:http://.../genid/abc`, which no parser reads back.
+        """
+        import re
+        from vitalgraph.db.sparql_sql.term_normalize import skolem_label
+        label = skolem_label("docA", "b0")
+        assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", label), label
+
+    def test_iri_form_uses_the_registered_well_known_name(self):
+        from vitalgraph.db.sparql_sql.term_normalize import skolem_iri, skolem_label
+        assert "/.well-known/genid/" in skolem_iri(skolem_label("docA", "b0"))
+
+    def test_skolem_labels_are_recognisable(self):
+        """Labels from before skolemisation must stay distinguishable."""
+        from vitalgraph.db.sparql_sql.term_normalize import (
+            is_skolem_label, skolem_label)
+        assert is_skolem_label(skolem_label("docA", "b0"))
+        assert not is_skolem_label("b0")
+        assert not is_skolem_label("vgnothex_not_a_digest")
+
+    def test_iri_round_trips(self):
+        from vitalgraph.db.sparql_sql.term_normalize import (
+            deskolemize_iri, skolem_iri, skolem_label)
+        label = skolem_label("docA", "b0")
+        assert deskolemize_iri(skolem_iri(label)) == label
+        assert deskolemize_iri("http://example.org/ordinary") is None
+
+
+class TestImportParserScoping:
+
+    def test_import_scopes_blank_nodes_per_document(self):
+        from vitalgraph.endpoint.impl.data_import_impl import (
+            _parse_nquads_term_for_import as parse)
+        a, ta, _ = parse("_:b0", "docA")
+        b, tb, _ = parse("_:b0", "docB")
+        assert a != b and ta == tb == "B", (
+            "the same label in two documents produced one node")
+
+    def test_an_exported_skolem_iri_reads_back_as_a_blank_node(self):
+        """The URI branch returns unconditionally, so this is checked first.
+
+        My first version placed the check after it, making it dead code: an
+        exported blank node would have come back as an ordinary IRI, losing
+        that it was ever blank — the exact round-trip skolemisation exists for.
+        """
+        from vitalgraph.endpoint.impl.data_import_impl import (
+            _parse_nquads_term_for_import as parse)
+        from vitalgraph.db.sparql_sql.term_normalize import skolem_iri
+        label, _, _ = parse("_:b0", "docA")
+        assert parse(f"<{skolem_iri(label)}>") == (label, "B", None)
+
+    def test_an_ordinary_iri_is_still_a_uri(self):
+        from vitalgraph.endpoint.impl.data_import_impl import (
+            _parse_nquads_term_for_import as parse)
+        assert parse("<http://example.org/x>") == ("http://example.org/x", "U", None)

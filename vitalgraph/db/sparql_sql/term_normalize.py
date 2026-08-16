@@ -62,3 +62,80 @@ def serialize_term_text(term_text: str, term_type: str) -> str:
             and not term_text.startswith(_PREFIX):
         return _PREFIX + term_text
     return term_text
+
+
+# ---------------------------------------------------------------------------
+# Skolemisation
+# ---------------------------------------------------------------------------
+
+# The fixed namespace every skolemised blank node belongs to.
+#
+# RDF 1.1 Concepts §3.5: a system replacing blank nodes with IRIs "SHOULD mint a
+# new, globally unique IRI (a Skolem IRI) for each blank node so replaced", and
+# one that wants them recognisable outside its boundaries "SHOULD use a
+# well-known IRI with the registered name `genid`". So the shape is registered,
+# not invented here.
+SKOLEM_BASE = "http://vital.ai/.well-known/genid/"
+
+# Label prefix, carried in `term_text`. Short, and a letter first because
+# N-Triples BLANK_NODE_LABEL must begin with PN_CHARS_U or a digit.
+_SKOLEM_LABEL_PREFIX = "vg"
+
+
+def skolem_label(scope_id: str, label: str) -> str:
+    """The stored label for blank node `label` appearing in scope `scope_id`.
+
+    DETERMINISTIC in both arguments, which is the whole point of the design:
+
+      * different documents, same label -> different nodes, because `scope_id`
+        differs. That is RDF's rule — blank node identifiers are "locally
+        scoped to the file or RDF store, and are *not* persistent or portable"
+        — and it is what a global label registry got wrong: two files each
+        using `_:b0` silently merged into one node, unrecoverably.
+      * the SAME document re-imported -> the SAME nodes, because neither
+        argument changed. A random allocation per load would satisfy RDF and
+        break idempotent reload (issues/041); deriving from the scope gives
+        both, which neither per-load mangling nor random skolemisation gives
+        alone.
+
+    Returns a BARE label, not an IRI. `term_text` for a 'B' row holds the bare
+    value (see normalize_term_text), and N-Triples BLANK_NODE_LABEL admits
+    neither `:` nor `/` — so storing the full Skolem IRI would export as
+    `_:http://.../genid/abc`, which no parser reads back. The IRI form is
+    rendered by `skolem_iri` when it is actually wanted.
+    """
+    import hashlib
+
+    digest = hashlib.sha256(
+        f"{scope_id}\x00{label}".encode("utf-8")).hexdigest()[:32]
+    return f"{_SKOLEM_LABEL_PREFIX}{digest}"
+
+
+def skolem_iri(term_text: str) -> str:
+    """The Skolem IRI form of a stored blank-node label."""
+    return SKOLEM_BASE + normalize_term_text(term_text, BLANK)
+
+
+def is_skolem_label(term_text: str) -> bool:
+    """Whether a stored label was minted by `skolem_label`.
+
+    Labels that predate skolemisation, or arrive from a path that does not
+    skolemise, stay readable — this is how they are told apart rather than
+    assumed.
+    """
+    bare = normalize_term_text(term_text, BLANK)
+    return (bare.startswith(_SKOLEM_LABEL_PREFIX)
+            and len(bare) == len(_SKOLEM_LABEL_PREFIX) + 32
+            and all(c in "0123456789abcdef"
+                    for c in bare[len(_SKOLEM_LABEL_PREFIX):]))
+
+
+def deskolemize_iri(iri: str) -> str | None:
+    """The blank-node label inside a Skolem IRI, or None if it is not one.
+
+    Used on import: a document containing our own exported Skolem IRIs should
+    read them back as the blank nodes they were, rather than as ordinary IRIs.
+    """
+    if isinstance(iri, str) and iri.startswith(SKOLEM_BASE):
+        return iri[len(SKOLEM_BASE):]
+    return None
