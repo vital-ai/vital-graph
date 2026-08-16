@@ -630,9 +630,21 @@ class GraphObjectRetriever:
         
         if not results:
             return []
-        
-        return await asyncio.to_thread(_bindings_to_objects, results)
-    
+
+        objs = await asyncio.to_thread(_bindings_to_objects, results)
+        # NO ENTITY, NO GRAPH — see get_entity_graphs_as_objects. A graph
+        # missing its own entity is a wrong answer rather than a partial one,
+        # and it looks complete: the frames and slots are all there, only the
+        # name, type and status are gone.
+        if not any(str(getattr(o, 'URI', '')) == entity_uri for o in objs):
+            self.logger.warning(
+                "Entity graph for %s does not contain the entity itself — the "
+                "hasKGGraphURI self-link is missing. Returning empty rather "
+                "than a graph with no entity. Repair with "
+                "scripts/repair_grouping_self_link.py", entity_uri)
+            return []
+        return objs
+
     async def get_objects_by_uris_as_objects(
         self,
         space_id: str,
@@ -761,7 +773,21 @@ class GraphObjectRetriever:
 
         out: Dict[str, List[Any]] = {}
         for uri, rows in by_entity.items():
-            out[uri] = await asyncio.to_thread(_bindings_to_objects, rows)
+            objs = await asyncio.to_thread(_bindings_to_objects, rows)
+            # NO ENTITY, NO GRAPH. The entity is a member of its own graph, so
+            # its absence from the result means the self-link is missing — and a
+            # graph without its entity is not a partial answer, it is a wrong
+            # one: the frames and slots arrive with no name, type or status, and
+            # the object count still looks plausible. Fail loudly and emptily
+            # rather than return something that reads as complete.
+            if not any(str(getattr(o, 'URI', '')) == uri for o in objs):
+                logger.warning(
+                    "Entity graph for %s does not contain the entity itself — "
+                    "the hasKGGraphURI self-link is missing. Returning empty "
+                    "rather than a graph with no entity. Repair with "
+                    "scripts/repair_grouping_self_link.py", uri)
+                continue
+            out[uri] = objs
         return out
 
     async def get_entity_graph_by_reference_id_as_objects(

@@ -940,6 +940,15 @@ async def _generate_sql(
             await _load_quad_stats(aliases, space_id,
                                    conn_params=conn_params, conn=conn)
 
+        # Stage 2a.0: VALUES -> FILTER ... IN
+        #
+        # Before the table rewrites, so a VALUES-restricted pattern reaches them
+        # as an ordinary filtered BGP rather than as a join against a literal
+        # row set. Pure plan shape, no connection needed, so it runs whether or
+        # not stats loaded.
+        from .rewrite_values_filter import rewrite_values_filter
+        plan = rewrite_values_filter(plan)
+
         # Stage 2a.1: Edge table rewrite
         from .ensure_edge_table import ensure_edge_table
         from .ensure_frame_entity_table import ensure_frame_entity_table
