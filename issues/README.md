@@ -43,10 +43,10 @@ first move: every fix that held was one where the measurement came first.
 
 | | status | |
 |---|---|---|
-| 069 | fixture added | Fixture + tests 3-8 done; 9-12 outstanding, and 9-10 need no fixture |
+| 069 | fixture added | Fixture + tests 3-10 and 12 done; 11 and the end-to-end halves of 1-2 remain |
 | 065 | RESOLVED | One convention, enforced at term identity. 0 blank-node terms on 85 spaces, so no migration |
 | 066 | RESOLVED | `.label`, not `.value`; the test that hid it rewritten to describe the type |
-| 067 | RESOLVED | Fresh per solution. One gap left in place: `BNODE(expr)` is not scoped per execution, because the compile cache reuses SQL |
+| 067 | RESOLVED | Fresh per solution, and scoped per execution — the salt is computed at runtime, so the compile cache reusing SQL does not matter |
 | 076 | RESOLVED | Fresh `INSERT DATA` labels; `DELETE DATA` rejects them; scoping DECIDED as deterministic skolemisation |
 
 The scoping decision is the one worth reading: RDF 1.1 §3.5 recommends

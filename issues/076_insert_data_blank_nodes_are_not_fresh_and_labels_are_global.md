@@ -38,9 +38,20 @@ Scope is graph URI plus source basename, not the full path: the same file
 imported from a different directory is the same document.
 
 REMAINING: the JSONL importer passes a scope; other ingest paths do not yet, and
-fall back to the raw label. The derived-table question at the end of this issue
-is unverified — `sync_edge_table_*` skipping blank-node rows was reasoned about,
-not tested (that is `issues/069` test 12).
+fall back to the raw label.
+
+The derived-table question is now MEASURED, and the answer is the opposite of
+what this issue assumed. `tests/integration/test_derived_tables_blank_nodes.py`:
+the edge table DOES project a blank-node endpoint. Nothing in sync_edge_table
+filters on term_type, and dest_node_uuid is a plain uuid column with no type
+beside it. frame_entity is unaffected, as connector frames are keyed on entity
+slots a blank node cannot carry.
+
+Projecting it is defensible — an edge to a blank node is an edge, and dropping
+it would make the edge table an incomplete mirror of rdf_quad, the failure mode
+issues/041 exists to prevent. What it means is that a consumer treating an edge
+endpoint as a dereferenceable URI can be handed a blank node. Recorded as an
+assertion so changing it is deliberate.
 
 Two facets of one root cause: **a blank node's identity in this store is its
 label, forever, everywhere.**

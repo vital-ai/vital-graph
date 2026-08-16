@@ -22,9 +22,17 @@ Covered so far, at unit level:
     identity level (one term uuid whatever the write path), NOT yet end to end
     through a loaded space.
 
-Still outstanding: 9 (anonymous blank nodes in patterns), 10 (term ordering),
-11 (DESCRIBE with a blank-node object), 12 (derived tables skip blank nodes).
-9 and 10 are pure unit tests and need no fixture.
+9, 10 and 12 are done:
+  * 9, 10 — `tests/unit/sparql_sql/test_blank_node_query_paths.py` (anonymous
+    variables are not projected; §15.1 term ordering, including that DESC
+    reverses every component rather than only the value).
+  * 12 — `tests/integration/test_derived_tables_blank_nodes.py`, which found
+    the opposite of what issues/076 assumed: the edge table DOES project a
+    blank-node endpoint.
+
+Still outstanding: 11 (DESCRIBE with a blank-node object), and the end-to-end
+halves of 1 and 2 — write/read round-trip and load/UPDATE agreement are covered
+at the identity level but not yet through a loaded space.
 
 `issues/065`, `066`, `067` and `076` are four blank-node defects — a divergent storage
 convention, a hard crash on `VALUES`, a spec-violating `BNODE()`, and merged

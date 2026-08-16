@@ -1,6 +1,6 @@
 # `BNODE()` Returns One Constant For Every Solution
 
-## Status: RESOLVED 2026-08-16 — with one documented gap
+## Status: RESOLVED 2026-08-16
 
 `BNODE()` is now fresh per solution (`gen_random_uuid()`, VOLATILE so
 PostgreSQL evaluates it per row — verified as 5 distinct values over 5 rows).
@@ -10,10 +10,16 @@ requirements, so they have separate implementations and separate tests.
 The emitted value is the BARE label, which fixes the result-path half of
 `issues/065`.
 
-STILL OPEN, deliberately: the one-argument form is not scoped per execution, so
-two separate queries using `BNODE("x")` produce the same label. A per-execution
-salt cannot simply be baked into the generated SQL because `SparqlCompileCache`
-reuses it across executions. Noted in place at the call site.
+Per-execution scoping is done too, which an earlier pass recorded as blocked:
+the salt is computed at RUNTIME rather than baked into the SQL, so
+`SparqlCompileCache` reusing generated SQL across executions is irrelevant.
+
+`pg_backend_pid() || statement_timestamp()`. statement_timestamp() is STABLE
+within a statement — every row and every repeat of `BNODE("x")` in one
+execution sees the same value — and differs for the next statement, so two
+executions do not collide. Not clock_timestamp(), which advances DURING a
+statement and would give a different node per row: that is the no-arg rule.
+Verified against PostgreSQL on all three properties.
 
 The two bug-asserting tests were replaced with spec-describing ones.
 

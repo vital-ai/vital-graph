@@ -668,6 +668,17 @@ class TestConstructors:
         assert "gen_random_uuid" not in sql, (
             "BNODE(?x) must NOT be fresh per row — that is the no-arg form")
         assert "'_:" not in sql
+        # §17.4.2.2 also scopes it to ONE execution: two separate queries using
+        # BNODE("x") must not agree. The salt is computed at runtime rather
+        # than baked in, because SparqlCompileCache reuses generated SQL across
+        # executions and would reuse a constant salt with it.
+        assert "statement_timestamp()" in sql, (
+            "no per-execution salt, so two separate queries using BNODE(?x) "
+            "would produce the same blank node")
+        # statement_timestamp is STABLE within a statement; clock_timestamp
+        # advances during one and would give a different node per row, which is
+        # the no-arg form's rule rather than this one.
+        assert "clock_timestamp" not in sql
 
 
 # ---------------------------------------------------------------------------

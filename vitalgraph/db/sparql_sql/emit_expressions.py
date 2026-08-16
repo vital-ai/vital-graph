@@ -859,16 +859,29 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
         # spec wants "b0", and would double it on export.
         if args:
             a = expr_to_sql(args[0], ctx)
-            # Same argument -> same node. md5 of the argument is stable within
-            # the execution, which is the requirement that matters.
+            # Same argument -> same node WITHIN one execution; different across
+            # executions. Both halves of §17.4.2.2's one-argument rule.
             #
-            # NOT scoped to the execution, and the spec asks for that too: two
-            # separate queries using BNODE("x") produce the same label here. A
-            # per-execution salt cannot simply be baked into the SQL because
-            # SparqlCompileCache reuses generated SQL across executions, so the
-            # salt would be reused with it. Left as-is deliberately; see
-            # issues/067.
-            return f"('b' || md5({a}))" if a else "('b' || md5(''))"
+            # The salt is computed at RUNTIME rather than baked into the SQL,
+            # which is what makes this work with SparqlCompileCache: the cache
+            # reuses generated SQL across executions, so any constant salt would
+            # be reused with it and two separate queries using BNODE("x") would
+            # agree — the thing the spec forbids.
+            #
+            #   statement_timestamp()  the start of the CURRENT statement. STABLE
+            #                          within it, so every row and every repeat
+            #                          of BNODE("x") in one execution sees the
+            #                          same value; different for the next
+            #                          statement, so executions do not collide.
+            #   pg_backend_pid()       two concurrent backends cannot land on one
+            #                          microsecond and share a node.
+            #
+            # Not clock_timestamp(), which advances DURING a statement and would
+            # give a different node per row — that is the no-arg form's rule,
+            # not this one.
+            salt = "pg_backend_pid()::text || statement_timestamp()::text"
+            return (f"('b' || md5({a} || {salt}))" if a
+                    else f"('b' || md5({salt}))")
         # Fresh per row. gen_random_uuid() is VOLATILE, so PostgreSQL evaluates
         # it once per row rather than folding it to a constant — which is the
         # whole point.
