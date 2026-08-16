@@ -30,13 +30,34 @@ DEFAULT_GEO_DATATYPE_URIS = [
     "http://vital.ai/ontology/vital-core#geoLocation",
 ]
 
-# Legacy predicate sets (kept for backward compat with existing config rows)
+# Predicate sets for predicate-driven detection.
+#
+# These are RECOGNITION lists: geo_populator matches them against predicates
+# already in the data, it never mints them. So an entry that matches nothing is
+# free, while a missing entry is a silent under-population — the same asymmetry
+# that runs through the rest of the derived-data layer, and the reason these
+# lists should be generous rather than minimal.
+#
+# W3C Basic Geo (`wgs84_pos`) is the standard vocabulary for point coordinates
+# and is what most third-party RDF uses. It was in the deployed geo_config
+# defaults but never in the code, so a schema realignment dropped it — this
+# restores it as the first-class entry rather than an artifact of old tables.
+#
+# NOTE ON THE NAMESPACE: it is `http://`, not `https://`. The W3C serves the
+# vocabulary document over https, but the namespace URI that appears in RDF —
+# and therefore the string that has to match a predicate in the data — is the
+# http form. Using https here would match nothing.
 DEFAULT_LAT_PREDICATES = [
+    "http://www.w3.org/2003/01/geo/wgs84_pos#lat",
     "http://vital.ai/ontology/vital-aimp#hasLatitude",
+    "http://vital.ai/ontology/haley-ai-kg#hasLatitude",
 ]
 
+# `long`, not `lon` — that is the term W3C Basic Geo actually defines.
 DEFAULT_LON_PREDICATES = [
+    "http://www.w3.org/2003/01/geo/wgs84_pos#long",
     "http://vital.ai/ontology/vital-aimp#hasLongitude",
+    "http://vital.ai/ontology/haley-ai-kg#hasLongitude",
 ]
 
 

@@ -864,11 +864,21 @@ class SparqlSQLSchema:
                     'http://www.opengis.net/ont/geosparql#wktLiteral',
                     'http://vital.ai/ontology/vital-core#geoLocation'
                 ],
+                -- Recognition lists, matched against predicates already in the
+                -- data. W3C Basic Geo (wgs84_pos) first: it is the standard
+                -- vocabulary for point coordinates and what most third-party
+                -- RDF uses. The namespace is http://, not https:// — the https
+                -- URL serves the document, the http one appears in the data.
+                -- Keep in step with DEFAULT_LAT_PREDICATES in geo_config_manager.
                 lat_predicates  TEXT[] NOT NULL DEFAULT ARRAY[
-                    'http://vital.ai/ontology/vital-aimp#hasLatitude'
+                    'http://www.w3.org/2003/01/geo/wgs84_pos#lat',
+                    'http://vital.ai/ontology/vital-aimp#hasLatitude',
+                    'http://vital.ai/ontology/haley-ai-kg#hasLatitude'
                 ],
                 lon_predicates  TEXT[] NOT NULL DEFAULT ARRAY[
-                    'http://vital.ai/ontology/vital-aimp#hasLongitude'
+                    'http://www.w3.org/2003/01/geo/wgs84_pos#long',
+                    'http://vital.ai/ontology/vital-aimp#hasLongitude',
+                    'http://vital.ai/ontology/haley-ai-kg#hasLongitude'
                 ],
                 updated_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )

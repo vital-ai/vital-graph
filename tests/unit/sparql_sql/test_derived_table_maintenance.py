@@ -354,3 +354,57 @@ def test_raw_sql_quad_writers_maintain_stats():
           "without either gets NO pred_stats row, and the incremental sync "
           "will never create one — it only updates predicates it already "
           "knows. That left 23 of 77 host spaces with unrecorded predicates.")
+
+
+def test_geo_config_predicate_defaults_agree_across_all_three_copies():
+    """The geo_config defaults exist in three places and must not diverge.
+
+    `DEFAULT_LAT_PREDICATES` in geo_config_manager, the `CREATE TABLE` in
+    sparql_sql_schema, and a second `CREATE TABLE` in migrate_vector_geo_schema
+    all state the same list. They HAD diverged: the deployed tables defaulted to
+    a set including W3C Basic Geo `wgs84_pos`, while both DDL copies had been
+    narrowed to a single vital-aimp URI, and a schema realignment then propagated
+    the narrower list over the wider one on 16 of 77 host tables.
+
+    These are RECOGNITION lists — matched against predicates already in the data,
+    never minted — so a missing entry is a silent under-population and an extra
+    one is free. That asymmetry is why divergence here is worth a test rather
+    than a comment.
+    """
+    import pathlib
+    import re
+
+    from vitalgraph.vectorization.geo_config_manager import (
+        DEFAULT_LAT_PREDICATES, DEFAULT_LON_PREDICATES)
+    from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+
+    def ddl_default(text: str, column: str) -> tuple[str, ...]:
+        m = re.search(rf"{column}\s+TEXT\[\]\s+NOT NULL DEFAULT ARRAY\[([^\]]*)\]",
+                      text, re.S)
+        assert m, f"no {column} default found"
+        return tuple(re.findall(r"'([^']+)'", m.group(1)))
+
+    probe = "\x00SPACE\x00"
+    schema_ddl = [s for s in SparqlSQLSchema().create_space_tables_sql(probe)
+                  if f"{probe}_geo_config (" in s][0]
+    migration = (pathlib.Path(__file__).resolve().parents[3] / "vitalgraph" / "db"
+                 / "migrations" / "migrate_vector_geo_schema.py").read_text()
+
+    for column, constant in (("lat_predicates", DEFAULT_LAT_PREDICATES),
+                             ("lon_predicates", DEFAULT_LON_PREDICATES)):
+        from_schema = ddl_default(schema_ddl, column)
+        from_migration = ddl_default(migration, column)
+        assert tuple(constant) == from_schema == from_migration, (
+            f"{column} disagrees across its three definitions:\n"
+            f"  geo_config_manager      : {tuple(constant)}\n"
+            f"  sparql_sql_schema       : {from_schema}\n"
+            f"  migrate_vector_geo_schema: {from_migration}")
+
+    # The namespace that appears in RDF is http://. The https:// form serves the
+    # vocabulary document and would match no predicate in any dataset.
+    joined = " ".join(DEFAULT_LAT_PREDICATES + DEFAULT_LON_PREDICATES)
+    assert "https://www.w3.org/2003/01/geo" not in joined, (
+        "W3C Basic Geo predicates must use the http:// namespace; the https:// "
+        "URL is the document, not the namespace, and matches nothing.")
+    assert "http://www.w3.org/2003/01/geo/wgs84_pos#lat" in DEFAULT_LAT_PREDICATES
+    assert "http://www.w3.org/2003/01/geo/wgs84_pos#long" in DEFAULT_LON_PREDICATES

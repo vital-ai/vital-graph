@@ -22,11 +22,20 @@ that omit the column; it never rewrites existing rows, so this cannot change
 data. Whether the SCHEMA or the DEPLOYED value is the correct one is a real
 question and the answer here is neither obvious nor universal:
 
-  * `lat_predicates` / `lon_predicates` — the deployed default is WIDER (two
-    URIs vs one), so aligning to the schema NARROWS it. That is safe only
-    because the sole insert path, `GeoConfigManager.ensure_config`, passes both
-    columns explicitly from `DEFAULT_LAT_PREDICATES` / `DEFAULT_LON_PREDICATES`.
-    The column default is dead metadata for these two: never exercised.
+  * `lat_predicates` / `lon_predicates` — the first run of this script got the
+    DIRECTION WRONG. The deployed default was WIDER, including W3C Basic Geo
+    `wgs84_pos`, and the schema had been narrowed to a single vital-aimp URI
+    with `wgs84_pos` appearing nowhere in the code at all. Realigning to the
+    schema propagated the narrower list over the wider one on 16 tables and
+    erased the last trace of the standard vocabulary. The schema has since been
+    widened to include it and these lists are pinned together by
+    `test_geo_config_predicate_defaults_agree_across_all_three_copies`.
+
+    The lesson is that "deployed disagrees with schema" does not tell you which
+    is right, and a realignment tool defaults to assuming the schema is. For a
+    RECOGNITION list — matched against predicates already in the data, never
+    minted — the wider set is almost always the correct one, because a missing
+    entry silently under-populates and an extra entry costs nothing.
   * `geo_datatype_uris` — the opposite. `ensure_config` does NOT pass it, so
     this column's value comes from the DDL default on every insert. It is the
     one geo_config default that is load-bearing.
