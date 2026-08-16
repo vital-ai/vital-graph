@@ -945,12 +945,25 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             o_uuid = _generate_term_uuid(o, self._infer_type(o))
             g_uuid = _generate_term_uuid(g, 'U')
             async with self._db._pool.acquire() as conn:
-                await conn.execute(
-                    f"DELETE FROM {t['rdf_quad']} "
-                    f"WHERE subject_uuid = $1 AND predicate_uuid = $2 "
-                    f"AND object_uuid = $3 AND context_uuid = $4",
-                    s_uuid, p_uuid, o_uuid, g_uuid,
-                )
+                # Atomic, and the derived tables go first — frame_entity before
+                # edge because it derives from it, and both before the quad is
+                # gone because the sync helpers read it to know what to remove.
+                # This path maintained nothing at all, the mirror of
+                # add_rdf_quad, which syncs edge and frame_entity but not stats.
+                async with conn.transaction():
+                    from .sync_frame_entity_table import sync_frame_entity_before_delete
+                    await sync_frame_entity_before_delete(conn, space_id, [s_uuid])
+                    from .sync_edge_table import sync_edge_table_before_delete
+                    await sync_edge_table_before_delete(conn, space_id, [s_uuid])
+                    from .sync_stats_tables import sync_stats_after_delete
+                    await sync_stats_after_delete(
+                        conn, space_id, [(s_uuid, p_uuid, o_uuid, g_uuid)])
+                    await conn.execute(
+                        f"DELETE FROM {t['rdf_quad']} "
+                        f"WHERE subject_uuid = $1 AND predicate_uuid = $2 "
+                        f"AND object_uuid = $3 AND context_uuid = $4",
+                        s_uuid, p_uuid, o_uuid, g_uuid,
+                    )
             self._invalidate_counts_for_quads(space_id, [(s, p, o, g)])
             return True
         except Exception as e:
@@ -1681,6 +1694,9 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
               # a raise mid-loop rolls back cleanly rather than leaving the pooled
               # connection in an aborted state (issue 019 hardening).
               async with conn.transaction():
+                # Resolve every quad FIRST, so the derived tables can be synced
+                # before the quads they are derived from disappear.
+                delete_rows = []
                 for s, p, o, g in quads:
                     s_uuid = _generate_term_uuid(str(s), 'U')
                     p_uuid = _generate_term_uuid(str(p), 'U')
@@ -1697,7 +1713,32 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                             o_datatype_id = await self._resolve_datatype_id(
                                 conn, t, str(o.datatype))
                     o_uuid = _generate_term_uuid(o_text, o_type, o_lang, o_datatype_id)
+                    delete_rows.append((s_uuid, p_uuid, o_uuid, g_uuid))
 
+                # Maintain the derived tables. This path used to delete quads and
+                # maintain NOTHING, while remove_rdf_quads_batch_bulk beside it
+                # maintained all three — and this one is live product surface
+                # (triples_endpoint, files_impl, objects_impl). Every delete
+                # through it left an edge row whose defining quads were gone:
+                # the issues/064 orphan class, on a path that pass never covered
+                # because it was scoped to execute_sparql_update and CLEAR/DROP.
+                #
+                # ORDER MATTERS and is copied from the bulk path, not invented:
+                # frame_entity is derived from edge so it goes first, edge next,
+                # and both must run BEFORE the quads are deleted because the
+                # sync helpers read those quads to work out what to remove.
+                # Stats decrement before the delete for the same reason.
+                unique_subjects = list({row[0] for row in delete_rows})
+                from .sync_frame_entity_table import sync_frame_entity_before_delete
+                await sync_frame_entity_before_delete(
+                    conn, space_id, unique_subjects)
+                from .sync_edge_table import sync_edge_table_before_delete
+                await sync_edge_table_before_delete(
+                    conn, space_id, unique_subjects)
+                from .sync_stats_tables import sync_stats_after_delete
+                await sync_stats_after_delete(conn, space_id, delete_rows)
+
+                for s_uuid, p_uuid, o_uuid, g_uuid in delete_rows:
                     result = await conn.execute(
                         f"DELETE FROM {t['rdf_quad']} "
                         f"WHERE subject_uuid = $1 AND predicate_uuid = $2 "

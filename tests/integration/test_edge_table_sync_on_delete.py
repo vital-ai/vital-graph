@@ -217,3 +217,76 @@ class TestEdgeTableSyncOnDelete:
             "an edge inserted through SPARQL UPDATE was not recorded in the "
             "edge table, so frame traversals will not find it (issues/041)")
         assert await _orphan_count(pg_conn, test_space) == 0
+
+
+class TestRestDeletePathsSyncTheEdgeTable:
+    """`remove_rdf_quads_batch` — the REST delete path, not SPARQL UPDATE.
+
+    The 2026-08-10 pass fixed the delete half for `execute_sparql_update` and
+    for CLEAR/DROP, because those were the paths the production incident ran
+    through. It produced the rule "a test per write MODE, not per structure" —
+    and the gap was that "mode" was read as insert/update/delete when the real
+    axis is (PATH x mode).
+
+    `remove_rdf_quads_batch` is the delete mode of a path that was never in
+    scope. It deleted quads and maintained nothing at all — not edge, not
+    frame_entity, not stats — while `remove_rdf_quads_batch_bulk` beside it
+    maintained all three. It is live product surface: `triples_endpoint`,
+    `files_impl`, and `objects_impl` in two places.
+
+    Same orphan class as `issues/064`, so the same referential assertion: an
+    orphan is an EXTRA row, and a count check reads a table with orphans as
+    healthy.
+    """
+
+    async def test_remove_rdf_quads_batch_leaves_no_orphans(
+        self, test_space, space_impl, pg_conn
+    ):
+        uris = await _seed(space_impl, test_space, 5, "restbatch")
+        assert await _edge_rows(pg_conn, test_space) >= 5
+        assert await _orphan_count(pg_conn, test_space) == 0
+
+        quads = [
+            (URIRef(u), p, o, GRAPH)
+            for u in uris
+            for p, o in ((VITALTYPE, KG_SLOT_EDGE),
+                         (HAS_EDGE_SOURCE,
+                          URIRef(u.replace(":edge:", ":src:"))),
+                         (HAS_EDGE_DEST,
+                          URIRef(u.replace(":edge:", ":dst:"))))
+        ]
+        removed = await space_impl.remove_rdf_quads_batch(test_space, quads)
+        assert removed == len(quads), f"removed {removed} of {len(quads)}"
+
+        assert await _orphan_count(pg_conn, test_space) == 0, (
+            "remove_rdf_quads_batch deleted the defining quads and left the "
+            "edge rows behind — the issues/064 orphan class on the REST path")
+
+    async def test_remove_rdf_quads_batch_decrements_stats(
+        self, test_space, space_impl, pg_conn
+    ):
+        """Stats too, which the edge assertions above cannot see.
+
+        A path can remove its edge rows correctly and still leave
+        rdf_pred_stats counting quads that no longer exist, which is what makes
+        a predicate look larger than it is to the join reorder.
+        """
+        uris = await _seed(space_impl, test_space, 4, "reststats")
+        src_pred = await pg_conn.fetchval(
+            f"SELECT term_uuid FROM {test_space}_term WHERE term_text = $1",
+            str(HAS_EDGE_SOURCE))
+        before = await pg_conn.fetchval(
+            f"SELECT row_count FROM {test_space}_rdf_pred_stats "
+            f"WHERE predicate_uuid = $1", src_pred)
+        assert before and before >= 4
+
+        quads = [(URIRef(u), HAS_EDGE_SOURCE,
+                  URIRef(u.replace(":edge:", ":src:")), GRAPH) for u in uris]
+        await space_impl.remove_rdf_quads_batch(test_space, quads)
+
+        after = await pg_conn.fetchval(
+            f"SELECT row_count FROM {test_space}_rdf_pred_stats "
+            f"WHERE predicate_uuid = $1", src_pred)
+        assert after == before - 4, (
+            f"pred_stats went {before} -> {after} after deleting 4 quads; "
+            f"expected {before - 4}. The delete path is not decrementing stats.")

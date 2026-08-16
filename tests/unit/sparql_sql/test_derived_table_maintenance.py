@@ -88,17 +88,7 @@ KNOWN_GAPS: dict[tuple[str, str], str] = {
         "syncs edge and frame_entity but not stats — its own comment explains "
         "why edge/frame were added ('this path bypasses the bulk sync') and "
         "stats were not included in that reasoning",
-    ("remove_rdf_quad", "edge"):
-        "deletes a quad and maintains nothing; the _bulk variant of the same "
-        "operation does. This is the issues/041 failure mode: a deleted edge "
-        "quad leaves a live row in {space}_edge",
-    ("remove_rdf_quad", "frame_entity"): "same as edge — no delete-side sync",
-    ("remove_rdf_quad", "stats"): "same as edge — no delete-side sync",
-    ("remove_rdf_quads_batch", "edge"):
-        "deletes quads and maintains nothing; remove_rdf_quads_batch_bulk does",
-    ("remove_rdf_quads_batch", "frame_entity"): "same as edge",
-    ("remove_rdf_quads_batch", "stats"): "same as edge",
-    ("execute_sparql_update", "stats"):
+        ("execute_sparql_update", "stats"):
         "syncs edge and frame_entity but not stats. edge_table_integrity_bug.md "
         "notes the delete side separately: sync_stats_after_delete is "
         "subject-driven like the edge hooks, so a WHERE-bound DELETE misses it "
