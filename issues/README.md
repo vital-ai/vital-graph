@@ -37,16 +37,23 @@ is repaired and watched; what remains is the cause in each case.
 
 ## Blank nodes
 
-Found together while writing `planning/planning_sparql_features/blank_nodes.md`;
-they are one subject and probably one fix each on the same path.
+Found together while writing `planning/planning_sparql_features/blank_nodes.md`.
+Worked 2026-08-16, starting with 069 as advised — and the fixture was the right
+first move: every fix that held was one where the measurement came first.
 
 | | status | |
 |---|---|---|
-| 065 | OPEN | Prefix convention diverges by write path |
-| 066 | OPEN | `VALUES` with a blank node raises AttributeError |
-| 067 | OPEN | `BNODE()` returns a constant, not a fresh node |
-| 069 | OPEN | No fixture or behavioural coverage — do this one first |
-| 076 | OPEN | `INSERT DATA` blank nodes are not fresh; labels are global |
+| 069 | fixture added | Fixture + tests 3-8 done; 9-12 outstanding, and 9-10 need no fixture |
+| 065 | RESOLVED | One convention, enforced at term identity. 0 blank-node terms on 85 spaces, so no migration |
+| 066 | RESOLVED | `.label`, not `.value`; the test that hid it rewritten to describe the type |
+| 067 | RESOLVED | Fresh per solution. One gap left in place: `BNODE(expr)` is not scoped per execution, because the compile cache reuses SQL |
+| 076 | RESOLVED | Fresh `INSERT DATA` labels; `DELETE DATA` rejects them; scoping DECIDED as deterministic skolemisation |
+
+The scoping decision is the one worth reading: RDF 1.1 §3.5 recommends
+skolemisation directly, and RDF4J's `PRESERVE_BNODE_IDS` defaults to false — so
+fresh-per-parse is the industry default and this store did the opposite.
+Deterministic over `(document, label)` gives RDF scoping AND idempotent reload,
+which neither listed option gave alone.
 
 ## Query performance
 

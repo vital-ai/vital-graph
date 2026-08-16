@@ -1,6 +1,24 @@
 # Blank Node `_:` Prefix Convention Diverges By Write Path
 
-## Status: OPEN — identified 2026-08-10 while writing `planning/planning_sparql_features/blank_nodes.md`
+## Status: RESOLVED 2026-08-16 — one convention, enforced at term identity
+
+Fixed at the source (`emit_update._node_text` returns the bare label) and, per
+item 4, at the CHOKE POINT rather than only at call sites: `term_normalize`
+holds the convention, and both copies of `_generate_term_uuid` plus
+`_ensure_term` normalise through it. A fifth write path cannot reintroduce the
+divergence by forgetting to strip.
+
+`term_normalize` also carries the inverse, `serialize_term_text`, so the pairing
+is in one file instead of inlined in each serializer.
+
+NO MIGRATION NEEDED. Both clusters hold **0 blank-node terms across 85 spaces**,
+so no space carries a prefixed row — the issue said to check before building the
+migration, and the count is zero.
+
+The result-path half (`BNODE()` emitting `_:` into the JSON value) was fixed
+with `issues/067`, as this issue proposed.
+
+Tests: `tests/unit/sparql_sql/test_term_normalize.py`.
 
 A blank node is stored as an ordinary term row with `term_type = 'B'`. The
 intended convention is that `term_text` holds the **bare label**, and every

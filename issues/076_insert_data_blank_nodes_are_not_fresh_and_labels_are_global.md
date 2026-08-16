@@ -1,6 +1,46 @@
 # `INSERT DATA` Blank Nodes Are Not Fresh, And Labels Are Globally Scoped
 
-## Status: OPEN — identified 2026-08-10
+## Status: RESOLVED 2026-08-16 — all three facets; scoping decided as skolemisation
+
+Facet 1 — `INSERT DATA` allocates fresh labels through a request-scoped map,
+the mechanism `construct.py` already used for CONSTRUCT templates. Repeats of
+one label within a request stay one node; nothing across requests collides. The
+allocated label carries a random salt rather than a counter, because a
+per-request counter restarts at 1 and would collide across requests — the bug
+reintroduced by the obvious implementation, so there is a test for it.
+
+Facet 1b — `DELETE DATA` rejects blank nodes, with an error naming
+`DELETE WHERE` as the alternative.
+
+Facet 2 — DECIDED: **option 2, skolemisation**, which RDF 1.1 Concepts §3.5
+recommends directly ("SHOULD mint a new, globally unique IRI", using the
+registered `genid` well-known name) rather than being one option among three.
+Checked against another implementation: RDF4J's `PRESERVE_BNODE_IDS` defaults to
+**false**, so fresh-per-parse is the industry default and preserving labels is
+the opt-in — this store did the opposite and offered no choice.
+
+Implemented as DETERMINISTIC skolemisation over `(document scope, label)`, which
+is the part neither listed option gave alone: different documents produce
+different nodes as RDF requires, AND re-importing one document reproduces its
+nodes, so reload stays idempotent (`issues/041`). Random per-load allocation
+satisfies the first and breaks the second.
+
+`term_type` stays `'B'`: that is what makes `isBlank()` work, tells serializers
+to emit `_:`, and lets the derived tables skip these rows. As `'U'` they would
+be indistinguishable from real IRIs and would flow into the edge model.
+
+`term_text` holds the bare LABEL, not the Skolem IRI — `BLANK_NODE_LABEL` admits
+neither `:` nor `/`, so storing the IRI would export as
+`_:http://.../genid/abc`, which no parser reads back. The IRI form is rendered
+on demand and read back on import, so an exported blank node round-trips.
+
+Scope is graph URI plus source basename, not the full path: the same file
+imported from a different directory is the same document.
+
+REMAINING: the JSONL importer passes a scope; other ingest paths do not yet, and
+fall back to the raw label. The derived-table question at the end of this issue
+is unverified — `sync_edge_table_*` skipping blank-node rows was reasoned about,
+not tested (that is `issues/069` test 12).
 
 Two facets of one root cause: **a blank node's identity in this store is its
 label, forever, everywhere.**

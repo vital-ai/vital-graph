@@ -1,6 +1,30 @@
 # No Fixture Contains a Blank Node, So Nothing Tests Blank-Node Behavior
 
-## Status: OPEN — identified 2026-08-10
+## Status: FIXTURE ADDED 2026-08-16 — tests 1-8 partly done, 9-12 outstanding
+
+`tests/fixtures/blank_nodes.nt` (13 triples, 6 blank nodes: subject position,
+object position, the same node in BOTH, two distinct labels to catch collapse,
+and an `rdf:first`/`rest` collection) and `blank_nodes_collide.nt`, which reuses
+the same labels so facet 2 of `issues/076` is testable.
+
+Confirmed from the data side as well: **0 blank-node terms across 85 spaces on
+two clusters**. Nothing in production exercised these paths either.
+
+Covered so far, at unit level:
+  * 3 — `VALUES` with a blank node (`test_emit_table.py`, rewritten)
+  * 4, 5 — `BNODE()` freshness and result shape (`test_emit_expressions.py`,
+    rewritten)
+  * 6, 7 — `INSERT DATA` freshness and `DELETE DATA` rejection
+    (`test_update_blank_nodes.py`)
+  * 8 — cross-document collision, now that `issues/076` facet 2 is decided
+    (`test_term_normalize.py`)
+  * 1, 2 — write/read round-trip and load/UPDATE agreement are covered at the
+    identity level (one term uuid whatever the write path), NOT yet end to end
+    through a loaded space.
+
+Still outstanding: 9 (anonymous blank nodes in patterns), 10 (term ordering),
+11 (DESCRIBE with a blank-node object), 12 (derived tables skip blank nodes).
+9 and 10 are pure unit tests and need no fixture.
 
 `issues/065`, `066`, `067` and `076` are four blank-node defects — a divergent storage
 convention, a hard crash on `VALUES`, a spec-violating `BNODE()`, and merged

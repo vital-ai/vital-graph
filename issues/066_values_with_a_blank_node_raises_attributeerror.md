@@ -1,6 +1,14 @@
 # `VALUES` Containing a Blank Node Raises AttributeError, and the Unit Test Hides It
 
-## Status: OPEN — identified 2026-08-10
+## Status: RESOLVED 2026-08-16
+
+`emit_table` reads `.label`, the field `BNodeNode` actually has.
+
+The unit test was rewritten rather than adjusted: it built a plain `BNodeNode`
+instead of patching `.value` onto one first. The old test described the
+implementation, so it could not fail when the implementation was wrong —
+verified by reverting the fix and watching the new test raise the original
+AttributeError.
 
 `emit_table.py` builds the inline-data SELECT by branching on the node type of
 each row value. The blank-node branch reads `.value`:

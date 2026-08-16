@@ -166,3 +166,34 @@ class TestImportParserScoping:
         from vitalgraph.endpoint.impl.data_import_impl import (
             _parse_nquads_term_for_import as parse)
         assert parse("<http://example.org/x>") == ("http://example.org/x", "U", None)
+
+
+class TestImportScopeIdentity:
+    """What counts as "the document" a label is scoped to."""
+
+    def test_the_same_file_reimported_has_the_same_scope(self):
+        from vitalgraph.endpoint.impl.data_import_impl import _bnode_scope_for
+        assert _bnode_scope_for("urn:g", "/data/a.nq") == \
+               _bnode_scope_for("urn:g", "/data/a.nq")
+
+    def test_a_moved_file_is_the_same_document(self):
+        """Basename, not full path.
+
+        The same file imported from a different working directory or machine is
+        the same document. Keying on the path would make it a different one and
+        mint new nodes on every reload, which is how a correct-per-RDF scoping
+        scheme breaks idempotent reload (issues/041).
+        """
+        from vitalgraph.endpoint.impl.data_import_impl import _bnode_scope_for
+        assert _bnode_scope_for("urn:g", "/data/a.nq") == \
+               _bnode_scope_for("urn:g", "/elsewhere/a.nq")
+
+    def test_different_files_are_different_documents(self):
+        from vitalgraph.endpoint.impl.data_import_impl import _bnode_scope_for
+        assert _bnode_scope_for("urn:g", "/data/a.nq") != \
+               _bnode_scope_for("urn:g", "/data/b.nq")
+
+    def test_the_same_file_into_different_graphs_is_scoped_apart(self):
+        from vitalgraph.endpoint.impl.data_import_impl import _bnode_scope_for
+        assert _bnode_scope_for("urn:g1", "/data/a.nq") != \
+               _bnode_scope_for("urn:g2", "/data/a.nq")

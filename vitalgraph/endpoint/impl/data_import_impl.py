@@ -82,6 +82,22 @@ def _unescape_nquads_string(s: str) -> str:
             .replace('\\\\', '\\'))
 
 
+def _bnode_scope_for(graph_uri: str, file_path: str) -> str:
+    """The document scope a blank-node label is interpreted in.
+
+    RDF scopes labels to the document, so the scope has to identify the
+    document — and it has to be STABLE across reloads, or re-importing a file
+    would mint new nodes every time and reload would stop being idempotent
+    (issues/041).
+
+    Graph URI plus source basename, not the full path: the same file imported
+    from a different working directory or a different machine is the same
+    document, and a path would make it a different one.
+    """
+    import os
+    return f"{graph_uri}\x00{os.path.basename(file_path or '')}"
+
+
 def _parse_nquads_term_for_import(
         term_str: str,
         bnode_scope: Optional[str] = None) -> Tuple[str, str, Optional[str]]:
@@ -690,6 +706,9 @@ class ImportEngine:
 
         file_size = os.path.getsize(file_path)
         default_graph_uuid = _term_uuid(graph_uri, "U")
+        # Blank-node labels are scoped to this document, so two files each
+        # using `_:b0` describe two different nodes (issues/076 facet 2).
+        bnode_scope = _bnode_scope_for(graph_uri, file_path)
 
         term_batch: List[Tuple] = []
         quad_batch: List[Tuple] = []
@@ -733,9 +752,9 @@ class ImportEngine:
                 g_str = quad.get("g")
 
                 # Parse N-Quads-encoded terms → (text, type, lang)
-                s_text, s_type, s_lang = _parse_nquads_term_for_import(s_str)
-                p_text, p_type, _      = _parse_nquads_term_for_import(p_str)
-                o_text, o_type, o_lang = _parse_nquads_term_for_import(o_str)
+                s_text, s_type, s_lang = _parse_nquads_term_for_import(s_str, bnode_scope)
+                p_text, p_type, _      = _parse_nquads_term_for_import(p_str, bnode_scope)
+                o_text, o_type, o_lang = _parse_nquads_term_for_import(o_str, bnode_scope)
 
                 s_uuid = _term_uuid(s_text, s_type, lang=s_lang)
                 p_uuid = _term_uuid(p_text, p_type)
@@ -747,7 +766,7 @@ class ImportEngine:
 
                 # Determine graph UUID: use per-line g if present, else default
                 if g_str:
-                    g_text, g_type, _ = _parse_nquads_term_for_import(g_str)
+                    g_text, g_type, _ = _parse_nquads_term_for_import(g_str, bnode_scope)
                     g_uuid = _term_uuid(g_text, g_type)
                     term_batch.append((g_uuid, g_text, g_type, None, "primary"))
                 else:

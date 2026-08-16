@@ -1,6 +1,21 @@
 # `BNODE()` Returns One Constant For Every Solution
 
-## Status: OPEN — identified 2026-08-10
+## Status: RESOLVED 2026-08-16 — with one documented gap
+
+`BNODE()` is now fresh per solution (`gen_random_uuid()`, VOLATILE so
+PostgreSQL evaluates it per row — verified as 5 distinct values over 5 rows).
+`BNODE(expr)` is stable for equal arguments (`md5`). Those are opposite
+requirements, so they have separate implementations and separate tests.
+
+The emitted value is the BARE label, which fixes the result-path half of
+`issues/065`.
+
+STILL OPEN, deliberately: the one-argument form is not scoped per execution, so
+two separate queries using `BNODE("x")` produce the same label. A per-execution
+salt cannot simply be baked into the generated SQL because `SparqlCompileCache`
+reuses it across executions. Noted in place at the call site.
+
+The two bug-asserting tests were replaced with spec-describing ones.
 
 SPARQL 1.1 §17.4.2.2: `BNODE()` with no argument **must** return a distinct
 blank node for each solution in which it is invoked. The one-argument form
