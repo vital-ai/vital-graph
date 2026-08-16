@@ -362,16 +362,19 @@ class GraphObjectRetriever:
             return {}
         
         filter_clause = "" if include_materialized_edges else MaterializedPredicateConstants.get_filter_clause()
-        uri_values = " ".join([f"<{uri}>" for uri in object_uris])
+        uri_values = ", ".join([f"<{uri}>" for uri in object_uris])
         
         query = f"""
             PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
             PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
             
             SELECT ?s ?p ?o WHERE {{
-                VALUES ?s {{ {uri_values} }}
                 GRAPH <{graph_id}> {{
+                    # IN, not VALUES — see get_entity_graphs_as_objects. VALUES
+                    # is not pushed into a SQL VALUES list and costs orders of
+                    # magnitude; IN becomes subject_uuid = ANY (...).
                     ?s ?p ?o .
+                    FILTER(?s IN ({uri_values}))
                     {filter_clause}
                 }}
             }}
@@ -630,6 +633,59 @@ class GraphObjectRetriever:
         
         return await asyncio.to_thread(_bindings_to_objects, results)
     
+    async def get_objects_by_uris_as_objects(
+        self,
+        space_id: str,
+        graph_id: str,
+        object_uris: List[str],
+        include_materialized_edges: bool = False
+    ) -> Dict[str, List[Any]]:
+        """The objects themselves for a list of URIs, in one query.
+
+        The entity-only counterpart of get_entity_graphs_as_objects: no grouping
+        URI, just each subject's own triples. Exists because the criteria-query
+        path fetched these one URI at a time behind an asyncio.gather —
+        measured at exactly page_size (50) SQL statements per request.
+
+        Returns {uri: [GraphObject]}; a URI with no triples is absent.
+        """
+        if not object_uris:
+            return {}
+
+        filter_clause = "" if include_materialized_edges else MaterializedPredicateConstants.get_filter_clause()
+        in_list = ", ".join(f"<{u}>" for u in object_uris)
+
+        query = f"""
+            PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
+            PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
+
+            SELECT ?s ?p ?o WHERE {{
+                GRAPH <{graph_id}> {{
+                    ?s ?p ?o .
+                    FILTER(?s IN ({in_list}))
+                    {filter_clause}
+                }}
+            }}
+        """
+
+        results = await self.backend.execute_sparql_query(space_id, query)
+        if isinstance(results, dict):
+            results = results.get('results', {}).get('bindings', [])
+        if not results:
+            return {}
+
+        # Group by subject before rebuilding: _bindings_to_objects assembles one
+        # GraphObject per subject, so the split has to happen on ?s.
+        by_uri: Dict[str, List[dict]] = {}
+        for row in results:
+            s = (row.get('s') or {}).get('value')
+            if s:
+                by_uri.setdefault(s, []).append(row)
+        out: Dict[str, List[Any]] = {}
+        for uri, rows in by_uri.items():
+            out[uri] = await asyncio.to_thread(_bindings_to_objects, rows)
+        return out
+
     async def get_entity_graphs_as_objects(
         self,
         space_id: str,
@@ -943,15 +999,20 @@ class GraphObjectRetriever:
 
         if fast_uris is not None:
             if fast_uris:
-                values = " ".join(f"<{u}>" for u in fast_uris)
+                values = ", ".join(f"<{u}>" for u in fast_uris)
                 query = f"""
                     PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
                     PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
 
                     SELECT ?s ?p ?o WHERE {{
                         GRAPH <{graph_id}> {{
-                            VALUES ?s {{ {values} }}
+                            # IN, not VALUES: the generator does not translate SPARQL VALUES into a
+                            # SQL VALUES list — it builds the full result and hash-joins
+                            # it down (~10M rows, 1.9M buffers, 27.9s on one page).
+                            # IN compiles to subject_uuid = ANY (...), one index search
+                            # per URI.
                             ?s ?p ?o .
+                            FILTER(?s IN ({values}))
                             {filter_clause}
                         }}
                     }}

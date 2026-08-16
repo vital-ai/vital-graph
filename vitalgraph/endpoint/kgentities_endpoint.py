@@ -2516,24 +2516,53 @@ class KGEntitiesEndpoint:
                 from ..kg_impl.kgentity_get_impl import KGEntityGetProcessor
                 processor = KGEntityGetProcessor(self.logger)
                 
-                async def _fetch_query_entity(uri):
-                    try:
-                        return await processor.get_entity(
-                            space_id=space_id,
-                            graph_id=graph_id,
-                            entity_uri=uri,
-                            include_entity_graph=False,
-                            backend_adapter=backend_adapter
-                        )
-                    except Exception as e:
-                        self.logger.warning(f"Error fetching entity {uri}: {e}")
-                        return None
-                
-                fetch_results = await asyncio.gather(*[_fetch_query_entity(uri) for uri in entity_uris])
-                
-                for entity_list in fetch_results:
-                    if entity_list:
-                        all_objects.extend(entity_list)
+                # One query for the page. This was a per-URI asyncio.gather,
+                # which is an N+1 the concurrency hides rather than removes:
+                # measured at exactly 50.0 SQL statements per request — the
+                # page_size — for ~155ms of a 220ms response, and it scales with
+                # the page, so the route's 200 cap means 200 round trips.
+                #
+                # The list path already fetched a page in one query; this one
+                # resolved the page to URIs and then looped. Same batched
+                # primitive, wired in.
+                fetched = None
+                try:
+                    from ..kg_impl.kg_graph_retrieval_utils import GraphObjectRetriever
+                    retriever = getattr(backend_adapter, "retriever", None) \
+                        or GraphObjectRetriever(backend_adapter)
+                    fetched = await retriever.get_objects_by_uris_as_objects(
+                        space_id, graph_id, entity_uris)
+                except Exception as e:
+                    self.logger.warning(
+                        "Batched entity fetch failed (%s) — falling back to "
+                        "per-entity retrieval for this page", e)
+
+                if fetched is not None:
+                    # Emit in the order the query established; iterating the dict
+                    # would discard the sort the criteria asked for.
+                    for uri in entity_uris:
+                        objs = fetched.get(uri)
+                        if objs:
+                            all_objects.extend(objs)
+                else:
+                    async def _fetch_query_entity(uri):
+                        try:
+                            return await processor.get_entity(
+                                space_id=space_id,
+                                graph_id=graph_id,
+                                entity_uri=uri,
+                                include_entity_graph=False,
+                                backend_adapter=backend_adapter
+                            )
+                        except Exception as e:
+                            self.logger.warning(f"Error fetching entity {uri}: {e}")
+                            return None
+
+                    fetch_results = await asyncio.gather(*[_fetch_query_entity(uri) for uri in entity_uris])
+
+                    for entity_list in fetch_results:
+                        if entity_list:
+                            all_objects.extend(entity_list)
             
             quads = await asyncio.to_thread(graphobjects_to_quad_list, all_objects, graph_id)
             return QuadResponse(
