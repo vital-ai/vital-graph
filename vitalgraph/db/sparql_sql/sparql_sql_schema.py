@@ -872,13 +872,11 @@ class SparqlSQLSchema:
                 -- Keep in step with DEFAULT_LAT_PREDICATES in geo_config_manager.
                 lat_predicates  TEXT[] NOT NULL DEFAULT ARRAY[
                     'http://www.w3.org/2003/01/geo/wgs84_pos#lat',
-                    'http://vital.ai/ontology/vital-aimp#hasLatitude',
-                    'http://vital.ai/ontology/haley-ai-kg#hasLatitude'
+                    'http://vital.ai/ontology/vital-aimp#hasLatitude'
                 ],
                 lon_predicates  TEXT[] NOT NULL DEFAULT ARRAY[
                     'http://www.w3.org/2003/01/geo/wgs84_pos#long',
-                    'http://vital.ai/ontology/vital-aimp#hasLongitude',
-                    'http://vital.ai/ontology/haley-ai-kg#hasLongitude'
+                    'http://vital.ai/ontology/vital-aimp#hasLongitude'
                 ],
                 updated_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )

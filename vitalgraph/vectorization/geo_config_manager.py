@@ -47,17 +47,24 @@ DEFAULT_GEO_DATATYPE_URIS = [
 # vocabulary document over https, but the namespace URI that appears in RDF —
 # and therefore the string that has to match a predicate in the data — is the
 # http form. Using https here would match nothing.
+#
+# EVERY ENTRY MUST BE A PREDICATE THAT EXISTS. "An entry matching nothing is
+# free" is true of query cost and false of everything else: a URI listed here
+# reads as evidence that the predicate exists, and it propagates into the DDL
+# and every deployed table. `haley-ai-kg#hasLatitude` / `#hasLongitude` were
+# briefly listed on exactly that reasoning and are not defined by that ontology
+# at all — it has `hasLongSlotValue` and `hasLongTextSlotValue`, nothing geo.
+# The two real sources are W3C Basic Geo and vital-aimp, which is what
+# `haley-ai-kg-0.1.0-schema.json` names for latitude and longitude.
 DEFAULT_LAT_PREDICATES = [
     "http://www.w3.org/2003/01/geo/wgs84_pos#lat",
     "http://vital.ai/ontology/vital-aimp#hasLatitude",
-    "http://vital.ai/ontology/haley-ai-kg#hasLatitude",
 ]
 
 # `long`, not `lon` — that is the term W3C Basic Geo actually defines.
 DEFAULT_LON_PREDICATES = [
     "http://www.w3.org/2003/01/geo/wgs84_pos#long",
     "http://vital.ai/ontology/vital-aimp#hasLongitude",
-    "http://vital.ai/ontology/haley-ai-kg#hasLongitude",
 ]
 
 

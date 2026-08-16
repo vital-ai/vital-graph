@@ -408,3 +408,52 @@ def test_geo_config_predicate_defaults_agree_across_all_three_copies():
         "URL is the document, not the namespace, and matches nothing.")
     assert "http://www.w3.org/2003/01/geo/wgs84_pos#lat" in DEFAULT_LAT_PREDICATES
     assert "http://www.w3.org/2003/01/geo/wgs84_pos#long" in DEFAULT_LON_PREDICATES
+
+
+def test_geo_predicates_are_real_predicates():
+    """Every configured geo predicate must exist in a vocabulary we can point to.
+
+    The sibling test above only checks the three copies AGREE. They agreed
+    perfectly while all three carried `haley-ai-kg#hasLatitude` and
+    `#hasLongitude`, which that ontology does not define — it has
+    `hasLongSlotValue` and `hasLongTextSlotValue`, nothing geo. Consistency is
+    not correctness, and a fabricated URI propagated cleanly through all three
+    copies and into 77 deployed tables precisely because they were consistent.
+
+    They were added on the reasoning that an entry matching nothing is free.
+    That holds for query cost and fails for everything else: a URI listed as a
+    default reads as evidence the predicate exists, and the next reader has no
+    way to tell an invented one from a researched one.
+
+    Vital predicates are checked against the domain schema, which is the
+    authority for what the ontologies define. W3C Basic Geo is external and
+    allowlisted by exact term — `lat`, `long`, `alt` are the three it defines.
+    """
+    import json
+    import pathlib
+
+    from vitalgraph.vectorization.geo_config_manager import (
+        DEFAULT_LAT_PREDICATES, DEFAULT_LON_PREDICATES)
+
+    root = pathlib.Path(__file__).resolve().parents[3]
+    schema_text = "".join(
+        p.read_text(encoding="utf-8")
+        for p in (root / "domain_schema").glob("*.json"))
+
+    WGS84 = "http://www.w3.org/2003/01/geo/wgs84_pos#"
+    wgs84_terms = {"lat", "long", "alt"}
+
+    unknown = []
+    for uri in DEFAULT_LAT_PREDICATES + DEFAULT_LON_PREDICATES:
+        if uri.startswith(WGS84):
+            if uri[len(WGS84):] not in wgs84_terms:
+                unknown.append(f"{uri} (not a W3C Basic Geo term)")
+        elif f'"{uri}"' not in schema_text:
+            unknown.append(f"{uri} (not defined in domain_schema)")
+
+    assert not unknown, (
+        "these geo predicates are not defined by any vocabulary in the tree:\n  "
+        + "\n  ".join(unknown)
+        + "\n\nA default that names a nonexistent predicate matches nothing and "
+          "misleads every later reader into thinking it exists. Verify the URI "
+          "against domain_schema before adding it.")
