@@ -1172,7 +1172,15 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                         f"VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
                         s_uuid, p_uuid, o_uuid, g_uuid,
                     )
-                    if 'INSERT' in result:
+                    # asyncpg returns "INSERT <oid> <count>", so `'INSERT' in
+                    # result` is true for INSERT 0 0 as well — the suppressed
+                    # row counted as written. Harmless while the ON CONFLICT
+                    # could never fire (nothing was ever suppressed); wrong the
+                    # moment the key actually enforces (s,p,o,c), which is
+                    # exactly when rdf_stats would start over-counting. Parse
+                    # the count.
+                    if result and result.rsplit(" ", 1)[-1].isdigit() \
+                            and int(result.rsplit(" ", 1)[-1]) > 0:
                         inserted += 1
                         inserted_rows.append((s_uuid, p_uuid, o_uuid, g_uuid))
                     subjects.add(s_uuid)

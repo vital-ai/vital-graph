@@ -628,6 +628,21 @@ class SparqlSQLSchema:
             ''')
             stmts += self._partition_children(t['rdf_quad'], partition_quads)
         else:
+            # Slim 4-col PK, matching the partitioned variant above. An RDF
+            # graph is a SET of triples: SPARQL 1.1 Update says a triple "MAY be
+            # considered to be processed with no action if that triple already
+            # exists in the graph", so (s,p,o,c) is unique BY THE DATA MODEL and
+            # the key should say so.
+            #
+            # It used to include quad_uuid, which defaults to a random UUID — so
+            # an identical quad got a fresh key and never conflicted, and every
+            # `ON CONFLICT DO NOTHING` on this table was a no-op. Verified by
+            # re-inserting an existing quad: INSERT 0 1, row count 1 -> 2. Found
+            # 1,323 duplicate quads across 6 spaces that way, one of them in a
+            # 5.1M-quad space.
+            #
+            # quad_uuid stays as a non-key identity column, as in the
+            # partitioned branch.
             stmts.append(f'''
                 CREATE TABLE IF NOT EXISTS {t['rdf_quad']} (
                     subject_uuid   UUID NOT NULL,
@@ -636,7 +651,7 @@ class SparqlSQLSchema:
                     context_uuid   UUID NOT NULL,
                     quad_uuid      UUID NOT NULL DEFAULT gen_random_uuid(),
                     dataset        VARCHAR(50) NOT NULL DEFAULT 'primary',
-                    PRIMARY KEY (subject_uuid, predicate_uuid, object_uuid, context_uuid, quad_uuid)
+                    PRIMARY KEY (subject_uuid, predicate_uuid, object_uuid, context_uuid)
                 )
             ''')
 
