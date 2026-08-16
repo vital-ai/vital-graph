@@ -120,7 +120,7 @@ caller, which is what makes that file worth a sweep rather than two point fixes.
 | | status | |
 |---|---|---|
 | 055 | OPEN | Loaders and tests target different clusters. Recurred 2026-08-14; needs a decision, not more documentation |
-| 084 | OPEN | Load-test setup erases its own fixture list when the space is already seeded |
+| 084 | FIXED | Load-test setup wrote an empty entity list over a TRACKED file when the space was already seeded, printed it as success, and told you to re-run the command that did it |
 
 | 022 | partially resolved | E2E list-visibility flake under parallel load; one class not swept |
 

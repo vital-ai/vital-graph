@@ -1,93 +1,63 @@
-"""Load-test data — populated by setup.py."""
+"""Load-test data — space/graph ids, and the entity list `setup.py` generates.
+
+WHY THIS FILE NO LONGER HOLDS THE LIST (issues/084). It used to BE the list:
+`setup.py` rewrote it in place with the URIs it had just created. That made a
+tracked source file the output of a command, with two consequences.
+
+Running setup against an already-seeded space created nothing — the URIs are
+derived from the org names, so every entity already existed — and the empty
+result was then written over the file:
+
+    SETUP COMPLETE — 0 entities ready        <- printed as success
+    load_test_data.py | 83 +----------------
+
+after which the driver refused to start with "run setup.py first", naming as the
+cure the command that had caused it. Running it again did not help, and
+recovering meant `git checkout` of a tracked file, which the message did not say.
+And any local edit to the list was destroyed as a side effect of a setup run.
+
+So the generated list now lives in an untracked JSON file beside this one, and
+this module reads it. The tracked file is stable; the generated one is
+regenerable and gitignored; `git status` stays clean after seeding.
+"""
+
+import json
+import logging
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 LOAD_TEST_SPACE_ID = "kg_load_test"
 LOAD_TEST_GRAPH_ID = "urn:kg_load_test_graph"
 
-ENTITY_DATA = [
-    {
-        "uri": "http://vital.ai/test/kgentity/organization/techcorp_industries",
-        "name": "TechCorp Industries"
-    },
-    {
-        "uri": "http://vital.ai/test/kgentity/organization/global_finance_group",
-        "name": "Global Finance Group"
-    },
-    {
-        "uri": "http://vital.ai/test/kgentity/organization/healthcare_solutions_inc",
-        "name": "Healthcare Solutions Inc"
-    },
-    {
-        "uri": "http://vital.ai/test/kgentity/organization/energy_innovations_llc",
-        "name": "Energy Innovations LLC"
-    },
-    {
-        "uri": "http://vital.ai/test/kgentity/organization/retail_dynamics_corp",
-        "name": "Retail Dynamics Corp"
-    },
-    {
-        "uri": "http://vital.ai/test/kgentity/organization/manufacturing_excellence",
-        "name": "Manufacturing Excellence"
-    },
-    {
-        "uri": "http://vital.ai/test/kgentity/organization/education_systems_ltd",
-        "name": "Education Systems Ltd"
-    },
-    {
-        "uri": "http://vital.ai/test/kgentity/organization/transportation_networks",
-        "name": "Transportation Networks"
-    },
-    {
-        "uri": "http://vital.ai/test/kgentity/organization/media_and_entertainment_co",
-        "name": "Media and Entertainment Co"
-    },
-    {
-        "uri": "http://vital.ai/test/kgentity/organization/biotech_research_labs",
-        "name": "Biotech Research Labs"
-    },
-    {
-        "uri": "http://vital.ai/test/kgentity/organization/techcorp_industries_#11",
-        "name": "TechCorp Industries #11"
-    },
-    {
-        "uri": "http://vital.ai/test/kgentity/organization/global_finance_group_#12",
-        "name": "Global Finance Group #12"
-    },
-    {
-        "uri": "http://vital.ai/test/kgentity/organization/healthcare_solutions_inc_#13",
-        "name": "Healthcare Solutions Inc #13"
-    },
-    {
-        "uri": "http://vital.ai/test/kgentity/organization/energy_innovations_llc_#14",
-        "name": "Energy Innovations LLC #14"
-    },
-    {
-        "uri": "http://vital.ai/test/kgentity/organization/retail_dynamics_corp_#15",
-        "name": "Retail Dynamics Corp #15"
-    },
-    {
-        "uri": "http://vital.ai/test/kgentity/organization/manufacturing_excellence_#16",
-        "name": "Manufacturing Excellence #16"
-    },
-    {
-        "uri": "http://vital.ai/test/kgentity/organization/education_systems_ltd_#17",
-        "name": "Education Systems Ltd #17"
-    },
-    {
-        "uri": "http://vital.ai/test/kgentity/organization/transportation_networks_#18",
-        "name": "Transportation Networks #18"
-    },
-    {
-        "uri": "http://vital.ai/test/kgentity/organization/media_and_entertainment_co_#19",
-        "name": "Media and Entertainment Co #19"
-    },
-    {
-        "uri": "http://vital.ai/test/kgentity/organization/biotech_research_labs_#20",
-        "name": "Biotech Research Labs #20"
-    }
-]
+# Written by setup.py, read here. Untracked — see .gitignore.
+ENTITY_FILE = Path(__file__).parent / "load_test_entities.json"
+
+
+def load_entity_data():
+    """The entities setup.py recorded, or [] if it has not run.
+
+    Returning [] rather than raising keeps `--cleanup` usable on a machine that
+    never seeded, and the driver reports the missing-fixture case itself with a
+    message that can name the real cause.
+    """
+    if not ENTITY_FILE.exists():
+        return []
+    try:
+        with ENTITY_FILE.open() as handle:
+            data = json.load(handle)
+    except (OSError, ValueError) as exc:
+        logger.warning("Cannot read %s: %s", ENTITY_FILE.name, exc)
+        return []
+    return data if isinstance(data, list) else []
+
+
+ENTITY_DATA = load_entity_data()
+
 
 def get_entity_uris():
-    return [e['uri'] for e in ENTITY_DATA]
+    return [e["uri"] for e in ENTITY_DATA if "uri" in e]
+
 
 def get_entity_names():
-    return [e['name'] for e in ENTITY_DATA]
+    return [e["name"] for e in ENTITY_DATA if "name" in e]

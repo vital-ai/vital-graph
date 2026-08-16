@@ -30,8 +30,13 @@ python load_test_scripts/load_test.py -u 20 -t 120
 LOAD_TEST_ENV=test python load_test_scripts/load_test.py -u 10 -t 30
 ```
 
-`setup.py` writes the created entity URIs into `load_test_data.py`;
-`load_test.py` prints a per-operation latency table at the end.
+`setup.py` records the entities the space CONTAINS into
+`load_test_entities.json` (generated, gitignored); `load_test.py` prints a
+per-operation latency table at the end.
+
+Setup is idempotent: run it against an already-seeded space and it creates
+nothing, records what is there, and still leaves a usable entity list. It exits
+non-zero rather than reporting completion if it cannot produce one.
 
 ## Config
 
@@ -46,5 +51,6 @@ overridable via `LOAD_TEST_<ENV>_VITALGRAPH_URL` / `_USERNAME` / `_PASSWORD`
 | `load_test.py` | asyncio driver — N `VitalGraphClient` workers, weighted ops, metrics |
 | `setup.py` | seed/teardown space + entities via `VitalGraphClient` |
 | `load_test_config.py` | environment/target resolution |
-| `load_test_data.py` | space/graph id + entity pool (rewritten by `setup.py`) |
+| `load_test_data.py` | space/graph id, and reads the generated entity pool |
+| `load_test_entities.json` | **gitignored** — the entity pool `setup.py` generates |
 | `data_gen/` | **gitignored** — org-entity generator copied from acme |

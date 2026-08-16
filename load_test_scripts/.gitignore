@@ -1,7 +1,11 @@
 # Data generators copied from the acme repo — borrowed test data, not vendored here.
 data_gen/
 
-# Locust outputs (load_test_data.py is a committed template that setup.py overwrites locally)
+# The entity list setup.py generates. Regenerable, machine-specific, and
+# formerly written over load_test_data.py itself — see issues/084.
+load_test_entities.json
+
+# Locust outputs
 validation_output/
 *.log
 *.csv

@@ -312,7 +312,18 @@ async def run(users, duration, ramp, think, read_only, record_path=None):
     cfg = load_env()
     uris = get_entity_uris()
     if not uris:
-        print("No entity URIs — run setup.py first.", file=sys.stderr)
+        # Name the actual state, not just the command. The old message was
+        # "run setup.py first", which was the command that had emptied the list
+        # in the first place when the space was already seeded (issues/084) —
+        # so it sent people to do the thing that broke it, twice.
+        from load_test_data import ENTITY_FILE
+        if ENTITY_FILE.exists():
+            print(f"{ENTITY_FILE.name} exists but lists no entities. The space "
+                  f"may be empty, or setup did not finish — re-run setup.py and "
+                  f"check it exits 0.", file=sys.stderr)
+        else:
+            print(f"No {ENTITY_FILE.name} — run setup.py to seed the space and "
+                  f"generate it.", file=sys.stderr)
         return 1
     ops = _build_ops(uris, read_only, cfg["profile"].get("writes_enabled", True))
     weights = [w for w, _, _ in ops]
