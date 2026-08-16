@@ -89,6 +89,16 @@ XFAIL_TESTS = {
         "pyoxigraph GROUP_CONCAT language tag propagation",
     ("aggregates", "HAVING: multiple conditions"):
         "pyoxigraph HAVING multi-condition evaluation",
+    # --- csv-tsv-res ---
+    # This suite has listed csv-tsv-res and json-res in QUERY_CATEGORIES all
+    # along; they were skipping silently because parse_result_file returned None
+    # for .csv/.tsv. With the parsers added (2026-08-16) they run, and this one
+    # exposes pyoxigraph canonicalising `"1.0E6"^^xsd:double` to `1000000`.
+    # RDF 1.1 makes the lexical form part of a literal's identity, so the
+    # manifest is right and the oracle is not. Our SQL pipeline returns `1.0E6`
+    # and passes the same case.
+    ("csv-tsv-res", "csv03 - CSV Result Format"):
+        "pyoxigraph canonicalises xsd:double lexical form; the manifest preserves it",
     # --- negation ---
     ("negation", "outer GRAPH operator does not affect MINUS disjointness"):
         "pyoxigraph GRAPH + MINUS interaction",

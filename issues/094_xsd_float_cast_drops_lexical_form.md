@@ -1,31 +1,71 @@
-# `xsd:float` Cast Disagrees With the Manifest on Lexical Form
+# `xsd:float` Casts Leak the float32→float64 Expansion Into the Lexical Form
 
-## Status: OPEN — low confidence this is ours; found 2026-08-16
+## Status: OPEN — CONFIRMED ours, 2026-08-16. Reclassified from "low confidence".
 
-`cast/xsd:float cast` expects a row with `v = "+33.3300"` (the ORIGINAL lexical
-form preserved) alongside `float = 33.33`. We return the row with `v` already
-normalised.
+    SELECT ?a ?v (xsd:float(?v) AS ?float) WHERE { ?a :p ?v }
 
-The harness classifies it `ACCEPTED: ... [pyoxigraph also differs from .srx]`,
-which is the important qualifier: **the reference implementation disagrees with
-the manifest here too.** So this may be a manifest that encodes a stricter
-lexical-preservation rule than either implementation follows, rather than a
-defect in ours.
+with `:s04 :p "+33.3300"`:
 
-## Why it is filed anyway
+| | `?float` |
+|---|---|
+| expected (`cast-float.srx`) | `3.333E1` |
+| pyoxigraph | `33.33` |
+| **ours** | **`33.33000183105469`** |
 
-Because "both implementations differ from the spec text" is a claim worth
-recording rather than re-deriving. The next person to widen the cast category
-will otherwise repeat this investigation from scratch.
+## Correction to the first version of this issue
 
-## What would settle it
+It said *"We return the row with `v` already normalised"* and gave the defect low
+confidence because "pyoxigraph also differs from the manifest". Both claims were
+wrong, and measuring instead of inferring reversed the conclusion.
 
-Read XPath F&O §17.1.3 on `xsd:float` casting and decide whether the input's
-lexical form must survive into an unrelated projected variable. If it must, this
-is ours and the fix is in the cast path; if not, the case belongs on the
-xfail list with this reasoning attached.
+`?v` is **not** normalised by us. We return `+33.3300` exactly as the manifest
+requires — verified across all 31 rows. The original reading confused the two
+columns.
+
+And while pyoxigraph does differ from the manifest here, it differs in a
+*different and much smaller* way than we do, so "both differ" was hiding rather
+than excusing the defect.
+
+## The mechanism
+
+`33.33` is not representable in binary32. The nearest float32 is
+`33.3300018310546875`, and rendering depends entirely on which width you render
+at:
+
+    SELECT CAST('+33.3300' AS REAL)::text                          -->  33.33
+    SELECT CAST(CAST('+33.3300' AS REAL) AS DOUBLE PRECISION)::text -->  33.33000183105469
+
+PostgreSQL gets this right on its own: `REAL::text` gives the shortest string
+that round-trips. We produce the second form, which means the cast result is
+being **widened into the float8 numeric lane before it is serialised**.
+`_XSD_CAST_MAP` at `emit_expressions.py:389` maps `xsd:float` to `REAL`
+correctly; the loss happens after, in the lane.
+
+So this is not a rounding disagreement or a spec ambiguity. It is a real number
+rendered with sixteen digits of binary noise, in a form no engine and no
+specification produces, and it is visible to anyone who calls `xsd:float`.
+
+## The second, separate question
+
+Even the shortest round-trip is not what the manifest asks for. XSD's canonical
+form for `float` is scientific — `3.333E1`, `-1.02E4`, `0E0` — and NEITHER
+engine emits it. pyoxigraph gives `33.33`, we give the expansion, the manifest
+wants `3.333E1`.
+
+That half is a genuine "both implementations differ from the spec" case, and is
+worth deciding separately from the precision leak. The leak should be fixed
+regardless of how canonical-form is settled.
+
+## Why the precision leak was not found earlier
+
+The `cast` category was never in `P0_CATEGORIES`. See
+`planning/planning_sparql_features/dawg_conformance_coverage.md`.
 
 ## Related
 
-- `issues/093` — found in the same pass
-- `planning/planning_sparql_features/README.md` §4 — datatype edge cases
+- `issues/093` — subquery inside `GRAPH` returns zero rows, found in the same pass
+- `csv-tsv-res/csv03` — the OPPOSITE result, and the reason this issue got
+  re-examined: there we preserve `"1.0E6"^^xsd:double` correctly and pyoxigraph
+  canonicalises it to `1000000`. Lexical-form handling is not uniformly wrong in
+  either engine, which is exactly why each case needs measuring rather than
+  attributing by reputation.

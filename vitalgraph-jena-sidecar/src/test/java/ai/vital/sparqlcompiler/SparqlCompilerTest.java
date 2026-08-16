@@ -38,6 +38,48 @@ class SparqlCompilerTest {
     }
 
     @Test
+    void testSemanticRejectionIsAParseErrorNotAnException() {
+        // Regression, found 2026-08-16 by wiring in the DAWG syntax categories
+        // (syntax-query/syn-bad-03). Jena throws grammar errors as
+        // QueryParseException but raises a bare QueryException for checks it
+        // performs after the parse succeeds -- this one gives "Duplicate
+        // variable in result projection". That escaped compile()'s catch and
+        // reached App.java's blanket `catch (Exception)`, so a MALFORMED USER
+        // QUERY was answered with HTTP 500 / INTERNAL_ERROR: a caller's mistake
+        // reported as a server fault, which pages someone and pollutes error
+        // rates over input we should simply reject.
+        //
+        // The assertion that matters is `compile` RETURNING rather than
+        // throwing. If it throws, the HTTP layer turns it back into a 500 and
+        // the defect is exactly where it started.
+        CompileRequest req = makeRequest("SELECT (1 AS ?X) (1 AS ?X) {}");
+
+        CompileResponse resp = assertDoesNotThrow(() -> compiler.compile(req),
+                "a semantically invalid query must be reported, not thrown");
+
+        assertFalse(resp.ok);
+        assertEquals("PARSE_ERROR", resp.error.get("code"),
+                "callers handle one rejection code; splitting grammar from "
+                + "semantic rejection would make every client handle two");
+        assertTrue(resp.error.get("message").toString().contains("Duplicate variable"));
+    }
+
+    @Test
+    void testGrammarErrorStillCarriesPosition() {
+        // Guards the other half of the change above: adding the QueryException
+        // catch must not swallow QueryParseException, which is its SUBCLASS and
+        // therefore order-dependent. If the catches were reordered, this query
+        // would lose its line and column and nothing else would notice.
+        CompileRequest req = makeRequest("SELECT ?s WHERE { ?s ?p }");
+        CompileResponse resp = compiler.compile(req);
+
+        assertFalse(resp.ok);
+        assertEquals("PARSE_ERROR", resp.error.get("code"));
+        assertNotNull(resp.error.get("line"), "grammar errors keep their position");
+        assertNotNull(resp.error.get("column"));
+    }
+
+    @Test
     void testSimpleSelect() {
         CompileRequest req = makeRequest("SELECT ?s ?o WHERE { ?s <http://example.org/p> ?o }");
         CompileResponse resp = compiler.compile(req);

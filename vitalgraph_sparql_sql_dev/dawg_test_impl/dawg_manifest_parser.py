@@ -26,6 +26,13 @@ RDFS = "http://www.w3.org/2000/01/rdf-schema#"
 QUERY_EVAL_TEST = f"{MF}QueryEvaluationTest"
 NEGATIVE_SYNTAX_TEST = f"{MF}NegativeSyntaxTest11"
 POSITIVE_SYNTAX_TEST = f"{MF}PositiveSyntaxTest11"
+# UPDATE syntax. Distinct manifest types from the query ones, and absent here
+# until 2026-08-16, which is why `syntax-update-1` (54 cases) and
+# `syntax-update-2` (1) parsed to nothing at all rather than to something that
+# failed. A category that yields zero tests is indistinguishable from a category
+# that passes, in every count pytest prints.
+NEGATIVE_UPDATE_SYNTAX_TEST = f"{MF}NegativeUpdateSyntaxTest11"
+POSITIVE_UPDATE_SYNTAX_TEST = f"{MF}PositiveUpdateSyntaxTest11"
 
 
 @dataclass
@@ -77,6 +84,8 @@ def parse_manifest(manifest_path: Path, category: Optional[str] = None) -> List[
         QUERY_EVAL_TEST: "QueryEvaluation",
         NEGATIVE_SYNTAX_TEST: "NegativeSyntax",
         POSITIVE_SYNTAX_TEST: "PositiveSyntax",
+        NEGATIVE_UPDATE_SYNTAX_TEST: "NegativeUpdateSyntax",
+        POSITIVE_UPDATE_SYNTAX_TEST: "PositiveUpdateSyntax",
     }
 
     for rdf_type_uri, test_type_label in type_map.items():
@@ -194,10 +203,33 @@ def parse_manifest(manifest_path: Path, category: Optional[str] = None) -> List[
 
         comment = _get_literal(store, subject, f"{RDFS}comment")
 
+        # The type this entry actually declares, if any. Before 2026-08-16 this
+        # branch stamped "QueryEvaluation" on everything it picked up, which is
+        # how csv01-csv03 (mf:CSVResultFormatTest) arrived labelled as query
+        # evaluation tests. Harmless there, but it meant wiring in `protocol`
+        # would have turned 34 mf:ProtocolTest entries into "query evaluation"
+        # failures that read like a backend defect. Claim QueryEvaluation only
+        # when a query action was actually found; otherwise report the declared
+        # type so a caller can skip it deliberately.
+        declared = _get_object(store, subject, f"{RDF}type")
+        declared_name = (
+            declared.value[len(MF):]
+            if declared is not None
+            and hasattr(declared, "value")
+            and declared.value.startswith(MF)
+            else None
+        )
+        if query_file is not None:
+            test_type = "QueryEvaluation"
+        elif declared_name:
+            test_type = declared_name
+        else:
+            test_type = "Unknown"
+
         tests.append(DawgTestCase(
             name=name,
             test_uri=subject_id,
-            test_type="QueryEvaluation",  # Assume query eval for ARQ entries
+            test_type=test_type,
             category=category,
             query_file=query_file,
             data_file=data_file,

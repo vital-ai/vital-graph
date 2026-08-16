@@ -1,7 +1,7 @@
 # Issues
 
 Numbered, append-only, one defect each. Resolved ones move to `archive/` —
-76 there, 17 live. An issue is archived only when nothing remains to do:
+76 there, 19 live. An issue is archived only when nothing remains to do:
 "FIXED in the converter, existing spaces need reloading" is not resolved, it is
 half-done, and it stays here.
 
@@ -55,23 +55,38 @@ scoping was never actually blocked by the compile cache. Both are written up in
 
 ## Conformance coverage — found 2026-08-16
 
-The DAWG suite ran 19 of 34 categories; the other 15 had manifests and `.rq`
-files in the tree that nothing executed. A green run meant "green on the
-categories someone remembered to add". Four query categories are now wired in,
-and running them cost nothing and found two defects and one reassurance:
+The DAWG suite ran 19 of 34 `sparql11` categories. The other 15 had manifests and
+query files sitting in the tree that nothing executed, so "conformance is green"
+meant "green on the categories someone remembered to add" — and nothing in the
+repo would tell you the difference, because the failure mode is ABSENCE.
+
+All 15 are now run or declined in writing. 705 → **907 executed cases**.
 
 | | status | |
 |---|---|---|
-| 093 | OPEN | A subquery inside `GRAPH` returns ZERO rows — silent, 3 DAWG cases |
-| 094 | OPEN | `xsd:float` cast lexical form; low confidence it is ours, pyoxigraph also differs |
+| 093 | OPEN | A subquery inside `GRAPH` returns ZERO rows — silent, ours, 3 DAWG cases |
+| 094 | OPEN | `xsd:float` casts render `+33.3300` as `33.33000183105469` — CONFIRMED ours |
+| 095 | OPEN | Four syntax forms the grammar forbids are accepted — Jena, upstream |
 
-`property-path` (33 cases) and `project-expression` (7) pass with no failures —
-the feature tracker listed property paths as implemented but unverified, and now
-they are verified.
+Verified PASSING rather than assumed: `property-path` 33/33, `project-expression`
+7/7, and 166 of 170 syntax cases. The feature tracker had listed property paths
+as implemented-but-unverified; they are now verified.
 
-Still unwired, needing a different harness rather than a list entry: `service`,
-`protocol`, `http-rdf-update`, `syntax-*`, `csv-tsv-res`, `json-res`,
-`entailment`.
+Fixed in the same pass, all found by the harness rather than by the categories:
+
+- a malformed user query returned **HTTP 500** from the sidecar (`SparqlCompiler`
+  let a post-parse `QueryException` escape to a blanket handler)
+- the oracle xfail table was suppressing `test_sql_v2` too, switching off **14
+  passing tests of our own backend**
+- the DAWG loader silently dropped user-defined datatype IRIs — harness only;
+  production registers them
+
+`tests/conformance/test_dawg_coverage.py` now fails if a category is neither run
+nor declined with a reason, so a new manifest cannot land unnoticed.
+
+Declined deliberately: `entailment`, `service`, `service-description` (out of
+scope), `http-rdf-update` and `protocol` (deferred — `protocol` is the one that
+tests something we actually ship).
 
 ## Query performance
 

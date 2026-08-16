@@ -78,6 +78,14 @@ P0_CATEGORIES = [
     "subquery",
     "cast",
     "project-expression",
+    # Result-format categories, added once the parsers existed to read their
+    # expectations. `json-res` needed nothing — dawg_srx_parser has handled
+    # `.srj` since it was written, so these four cases were being skipped for
+    # want of a list entry. `csv-tsv-res` needed CSV/TSV parsing, and the CSV
+    # half compares on VALUES ONLY because the format cannot carry term types;
+    # see dawg_srx_parser's module docstring.
+    "json-res",
+    "csv-tsv-res",
 ]
 
 # Cases that fail today, kept RUNNING rather than removed so the count stays
@@ -125,6 +133,19 @@ pytestmark = [
 # Known xfail for sql_v2 pipeline
 # ---------------------------------------------------------------------------
 
+# ORACLE limitations: pyoxigraph disagrees with the manifest. Consulted ONLY by
+# `test_oracle_baseline`.
+#
+# It used to be consulted by `test_sql_v2` as well, and that was quietly
+# expensive. Measured 2026-08-16 by removing the deferral: 14 of the 16 entries
+# below PASS through the real SQL pipeline. So a table whose whole purpose is
+# "the oracle is wrong here" was also switching off the test of OUR backend for
+# those cases -- the same failure this whole exercise started from, one level
+# down: coverage disappearing silently, with a green count to cover it.
+#
+# `pytest.xfail()` is imperative, so it does not merely tolerate a failure, it
+# STOPS THE TEST. An entry here would never surface as an XPASS no matter how
+# right our answer became.
 XFAIL_TESTS_V2 = {
     # Tests that fail due to pyoxigraph oracle limitations
     ("aggregates", "GROUP_CONCAT with one element"):
@@ -157,6 +178,17 @@ XFAIL_TESTS_V2 = {
         "pyoxigraph subquery in CONSTRUCT",
     ("subquery", "sq14 - limit by resource"):
         "pyoxigraph LIMIT-by-resource subquery",
+
+    # Worth reading before trusting the oracle anywhere else in this file.
+    # data2.ttl holds `"1.0E6"^^xsd:double` and the CSV expectation preserves
+    # that lexical form, as RDF 1.1 requires -- a literal's identity includes
+    # its lexical form, so `"1.0E6"^^xsd:double` and `"1000000"^^xsd:double`
+    # are DIFFERENT terms. pyoxigraph canonicalises to `1000000` and fails.
+    # OUR pipeline returns `1.0E6` and passes: `test_sql_v2` for this same case
+    # is green. Measured on the same run, we also preserve
+    # `"-3"^^xsd:negativeInteger` where pyoxigraph widens it to xsd:integer.
+    ("csv-tsv-res", "csv03 - CSV Result Format"):
+        "pyoxigraph canonicalises xsd:double lexical form; ours preserves it",
 }
 
 # Real gaps in the SQL pipeline surfaced when test_sql_v2 began actually
@@ -164,6 +196,23 @@ XFAIL_TESTS_V2 = {
 # Kept as the place for the next one, with the rule that removing an entry
 # must make its test pass.
 XFAIL_SQL_V2_EXEC: dict = {}
+
+# Cases where OUR output differs from the manifest AND so does pyoxigraph -- the
+# runner reports these as `ACCEPTED` rather than `FAIL`, meaning it could not
+# attribute the difference. Distinct from XFAIL_TESTS_V2 (oracle wrong, we are
+# right) and from XFAIL_SQL_V2_EXEC (we are wrong, known gap).
+#
+# Kept separate so the count of "our backend is not being measured here" stays
+# visible and small. These two are the entire list; everything else previously
+# excused by the oracle table is now actually run.
+XFAIL_SQL_V2_ACCEPTED = {
+    ("aggregates", "GROUP_CONCAT with one element"):
+        "both engines differ from the manifest on GROUP_CONCAT separators; "
+        "attribution unresolved",
+    ("aggregates", "GROUP_CONCAT with same language tag"):
+        "both engines differ from the manifest on GROUP_CONCAT language tags; "
+        "attribution unresolved",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -279,8 +328,9 @@ class TestDAWGSqlV2:
         key = (tc.category, tc.name)
         if key in XFAIL_SQL_V2_EXEC:
             pytest.xfail(XFAIL_SQL_V2_EXEC[key])
-        if key in XFAIL_TESTS_V2:
-            pytest.xfail(XFAIL_TESTS_V2[key])
+        if key in XFAIL_SQL_V2_ACCEPTED:
+            pytest.xfail(XFAIL_SQL_V2_ACCEPTED[key])
+        # Deliberately NOT consulting XFAIL_TESTS_V2 -- see the comment on it.
 
         from vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_test_runner import (
             run_single_test_sql_v2,

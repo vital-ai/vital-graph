@@ -133,6 +133,34 @@ async def load_ttl_into_space(
     for row in rows:
         dt_uri_to_id[row["datatype_uri"]] = row["datatype_id"]
 
+    # Register datatypes this table has never seen.
+    #
+    # The table ships seeded with 38 well-known XSD/RDF datatypes, and this
+    # loader used to do a bare `.get(datatype)` against it — so a USER-DEFINED
+    # datatype IRI silently became NULL and the literal came back untyped.
+    # Found 2026-08-16 via csv-tsv-res/tsv03, whose data carries
+    # `"5,5"^^<http://example.org/myCustomDatatype>`.
+    #
+    # This was a defect in the HARNESS, not the backend: the production ingest
+    # paths (`sparql_sql_space_impl._resolve_all_datatypes` and
+    # `emit_update._datatype_id`) both INSERT an unseen datatype URI and use the
+    # returned id. So the conformance suite was loading data through a path that
+    # loses information production preserves — which would have reported a
+    # backend defect that does not exist, and would equally have hidden a real
+    # one by making every custom-datatype literal untyped on both sides.
+    unknown = {
+        datatype
+        for (_text, _ttype, _lang, datatype) in terms
+        if datatype and datatype not in dt_uri_to_id
+    }
+    for uri in sorted(unknown):
+        dt_uri_to_id[uri] = await conn.fetchval(
+            f"INSERT INTO {datatype_table} (datatype_uri) VALUES ($1) "
+            f"ON CONFLICT (datatype_uri) DO UPDATE SET datatype_uri = EXCLUDED.datatype_uri "
+            f"RETURNING datatype_id",
+            uri,
+        )
+
     # Bulk insert terms (asyncpg executemany with $1..$5 params)
     term_rows = [
         (uuid_mod.UUID(uid), text, ttype, lang,

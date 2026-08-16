@@ -4,6 +4,7 @@ import ai.vital.sparqlcompiler.serializer.*;
 import ai.vital.sparqlcompiler.util.QueryMetadataExtractor;
 import ai.vital.sparqlcompiler.util.TimingContext;
 import org.apache.jena.query.Query;
+import org.apache.jena.query.QueryException;
 import org.apache.jena.query.QueryFactory;
 import org.apache.jena.query.QueryParseException;
 import org.apache.jena.sparql.algebra.Algebra;
@@ -57,6 +58,27 @@ public class SparqlCompiler {
                 // Return the query parse error since it's usually more informative
                 return buildParseError(qpe, request.sparql, timing, trace);
             }
+        } catch (QueryException qe) {
+            // Jena raises grammar errors as QueryParseException, but throws a
+            // bare QueryException for restrictions it checks AFTER the parse
+            // succeeds -- `SELECT (1 AS ?X) (1 AS ?X)` gives "Duplicate variable
+            // in result projection". Those escaped both catches and reached
+            // App.java's blanket `catch (Exception)`, so a MALFORMED USER QUERY
+            // came back as HTTP 500 / INTERNAL_ERROR.
+            //
+            // That is wrong twice over. It reports a caller error as a server
+            // fault, which pages someone and pollutes error rates for input we
+            // should simply reject; and it violates this project's rule that
+            // domain outcomes return 200 with the outcome in the body, with
+            // non-200 reserved for genuine server-level failures.
+            //
+            // No fallback to UpdateFactory here: reaching this catch means the
+            // text DID parse as a query and was then rejected on its meaning,
+            // so retrying it as an update would only replace a precise message
+            // with a worse one. A QueryException carries no line or column,
+            // hence the separate builder.
+            timing.stop("parse");
+            return buildSemanticError(qe, request.sparql, timing, trace);
         }
         timing.stop("parse");
 
@@ -186,6 +208,24 @@ public class SparqlCompiler {
         CompileResponse response = CompileResponse.error("PARSE_ERROR",
                 e.getMessage(), line > 0 ? line : null,
                 column > 0 ? column : null, snippet);
+
+        if (trace.includeTiming) {
+            response.setTiming(timing.getTimings());
+        }
+
+        return response;
+    }
+
+    private CompileResponse buildSemanticError(QueryException e, String sparql,
+                                                TimingContext timing,
+                                                CompileRequest.Trace trace) {
+        // Reported as PARSE_ERROR, matching the grammar case: from a caller's
+        // side both mean "this query was rejected, do not retry it", and
+        // splitting them would make every client handle two codes for one
+        // outcome. Line and column are omitted rather than faked -- Jena does
+        // not carry a position on these, and a wrong caret is worse than none.
+        CompileResponse response = CompileResponse.error("PARSE_ERROR",
+                e.getMessage(), null, null, extractSnippet(sparql, 0));
 
         if (trace.includeTiming) {
             response.setTiming(timing.getTimings());

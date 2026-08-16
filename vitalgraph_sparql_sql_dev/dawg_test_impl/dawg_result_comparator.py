@@ -101,9 +101,16 @@ def compare_results(
             actual_count=len(actual.rows),
         )
 
+    # CSV expectations cannot carry term types (see dawg_srx_parser's module
+    # docstring), so comparing them strictly would fail every row on a
+    # distinction the file never encoded. Degrade to a value-only comparison
+    # when either side came from a lossy format — and only then, so no ordinary
+    # comparison is weakened by this.
+    lossy = getattr(expected, "lossy_types", False) or getattr(actual, "lossy_types", False)
+
     # Normalize rows
-    norm_expected = [_normalize_row(row, exp_vars) for row in expected.rows]
-    norm_actual = [_normalize_row(row, exp_vars) for row in actual.rows]
+    norm_expected = [_normalize_row(row, exp_vars, lossy=lossy) for row in expected.rows]
+    norm_actual = [_normalize_row(row, exp_vars, lossy=lossy) for row in actual.rows]
 
     if ordered:
         for i, (exp_row, act_row) in enumerate(zip(norm_expected, norm_actual)):
@@ -154,14 +161,37 @@ NormalizedBinding = Tuple[str, str, str, str]  # (type, value, datatype, lang)
 NormalizedRow = Dict[str, NormalizedBinding]
 
 
-def _normalize_row(row: Dict[str, SparqlBinding], variables: Set[str]) -> NormalizedRow:
-    """Normalize a result row for comparison."""
+def _normalize_row(
+    row: Dict[str, SparqlBinding],
+    variables: Set[str],
+    lossy: bool = False,
+) -> NormalizedRow:
+    """Normalize a result row for comparison.
+
+    `lossy` drops everything the CSV format cannot represent, so both sides are
+    reduced to the same information content before being compared.
+    """
     normalized: NormalizedRow = {}
     for var in variables:
         if var in row:
-            normalized[var] = _normalize_binding(row[var])
+            normalized[var] = (
+                _lossy_binding(row[var]) if lossy else _normalize_binding(row[var])
+            )
         # Missing bindings are simply absent (not included)
     return normalized
+
+
+def _lossy_binding(b: SparqlBinding) -> NormalizedBinding:
+    """Reduce a binding to what a CSV file could have recorded: the value.
+
+    Blank nodes keep their `bnode` type because CSV DOES write `_:label`, so the
+    isomorphism check downstream still has something to match on. Everything
+    else collapses to a literal, since CSV writes a bare URI and a bare string
+    identically and no amount of guessing here can recover which it was.
+    """
+    if b.type == "bnode":
+        return ("bnode", b.value, "", "")
+    return ("literal", b.value, "", "")
 
 
 def _normalize_binding(b: SparqlBinding) -> NormalizedBinding:
