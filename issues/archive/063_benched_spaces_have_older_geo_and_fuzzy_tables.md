@@ -1,6 +1,23 @@
 # Three Benched Spaces Carry an Older Geo Table and No Fuzzy Tables
 
-## Status: OPEN — surfaced 2026-08-10 by the widened index guard
+## Status: RESOLVED 2026-08-16 — all 77 spaces carry the current geo and fuzzy tables
+
+Fixed as a side effect of reconciling every space against the schema
+(`scripts/migrate_space_schema.py --all`), which drops and recreates DERIVED
+tables at the current definition; `geo`, `fuzzy_band` and `fuzzy_phonetic_band`
+are all on that allowlist.
+
+Verified across the whole cluster, not just the three spaces named below:
+
+    spaces=77  geo missing source_slot_uuid=0  missing fuzzy_band=0
+
+and `test_fixture_indexes_match_schema` passes.
+
+The question the Fix section raises — the semantics of `source_slot_uuid`
+versus `subject_uuid`/`predicate_uuid` — did NOT need settling, because these
+tables held nothing: they are rebuilt from geo-typed quads, so recreating them
+at the current shape loses nothing and the older shape was simply discarded.
+That is why this closed without the decision it asked for.
 
 `test_fixture_indexes_match_schema` fails for `wordnet_frames`,
 `sp_sql_lead_dataset` and `sp_lead_dup`:
