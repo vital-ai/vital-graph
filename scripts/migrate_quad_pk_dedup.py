@@ -17,10 +17,13 @@ WHAT IT COSTS. Building the new key is an index build over the whole table, and
 the DELETE rewrites only the duplicate rows. Both take a lock: the ALTER holds
 ACCESS EXCLUSIVE for the duration. Sizes are reported before acting.
 
-STATS AFTER. rdf_stats and rdf_pred_stats counted the duplicates, because they
-counted rows. Removing rows makes them wrong by exactly the number removed, so
-any space this changes needs `repair_stats_tables.py` afterwards — this reports
-which, and refuses to leave that implicit.
+STATS AFTER, done here rather than advised. rdf_stats and rdf_pred_stats
+counted the duplicates, because they count rows — so removing rows leaves them
+high by exactly that many, and this script is the only thing that knows which
+spaces changed. Advising `repair_stats_tables.py` instead was not enough: that
+script samples the LARGEST recorded pairs, and duplicates concentrated in small
+pairs leave those matching. Run over the 5 spaces this changed, it found 3 and
+reported the other 2 as clean.
 
     python scripts/migrate_quad_pk_dedup.py --all --dry-run
     python scripts/migrate_quad_pk_dedup.py --space my_space
@@ -157,18 +160,29 @@ async def main():
                 continue
             r = await migrate_space(conn, sid, s)
             if r["dropped"]:
+                # Resync HERE rather than advising it. rdf_stats counted the
+                # removed rows, so this space is now wrong by exactly that many
+                # — a fact this script knows and nothing downstream can
+                # rediscover reliably: repair_stats_tables samples the LARGEST
+                # recorded pairs, and duplicates concentrated in small pairs
+                # leave those matching. Run against 5 changed spaces it found 3
+                # and passed the other 2 as clean.
+                from vitalgraph.db.sparql_sql.sync_stats_tables import (
+                    resync_stats_tables)
+                await resync_stats_tables(conn, sid)
                 needs_stats.append(sid)
-            logger.info("%s: dropped %s duplicate(s), PK narrowed, %.1fs",
+            logger.info("%s: dropped %s duplicate(s), PK narrowed, stats "
+                        "resynced, %.1fs",
                         sid, f"{r['dropped']:,}", r["seconds"])
         logger.info("\n%d space(s) %s, %s duplicate quad(s) %s", n,
                     "need migration" if a.dry_run else "migrated",
                     f"{total_dupes:,}", "found" if a.dry_run else "removed")
-        if needs_stats:
-            logger.warning(
-                "rdf_stats and rdf_pred_stats counted the removed rows and are "
-                "now high by exactly that many. Run:\n"
-                "  python scripts/repair_stats_tables.py --all\n"
-                "affected: %s", ", ".join(needs_stats))
+        if needs_stats and a.dry_run:
+            logger.info(
+                "these spaces will have rows removed, so their rdf_stats will "
+                "be resynced as part of the migration: %s", ", ".join(needs_stats))
+        elif needs_stats:
+            logger.info("stats resynced for: %s", ", ".join(needs_stats))
     finally:
         await conn.close()
     return 0
