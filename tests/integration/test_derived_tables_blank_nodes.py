@@ -69,11 +69,16 @@ class TestEdgeTableWithBlankNodes:
         # mine, by reading code that contains no such check. Asserting the real
         # behaviour makes changing it deliberate.
         #
-        # It is defensible: an edge to a blank node IS an edge, and dropping it
-        # would make the edge table an incomplete mirror of rdf_quad — the
-        # failure mode issues/041 and the edge-integrity work exist to prevent.
-        # What it means is that any consumer treating an edge endpoint as a
-        # dereferenceable URI can be handed a blank node.
+        # This is CORRECT, not a compromise. RDF permits a blank node in
+        # subject and object position, so an edge to one is an edge, and
+        # dropping it would make the edge table an incomplete mirror of
+        # rdf_quad — the failure mode issues/041 exists to prevent.
+        #
+        # Nothing is lost: source_node_uuid/dest_node_uuid reference the term
+        # table, which carries term_type, so an endpoint's blank-node-ness is
+        # recoverable by any consumer that joins. A consumer assuming edge
+        # endpoints are dereferenceable URIs is asserting something RDF never
+        # granted.
         assert n == 1, (
             f"expected the blank-node endpoint to be projected (measured "
             f"behaviour), got {n} rows")
