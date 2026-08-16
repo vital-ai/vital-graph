@@ -1,6 +1,6 @@
 # The Parser Accepts Four Forms the SPARQL Grammar Forbids
 
-## Status: OPEN — upstream (Jena); found 2026-08-16 by wiring in the DAWG syntax categories
+## Status: 3 of 4 FIXED 2026-08-16; the fourth declined with a reason
 
 Four `NegativeSyntaxTest11` cases are accepted by our parse path when the
 grammar says they must be rejected:
@@ -46,12 +46,39 @@ filters `test_type == "QueryEvaluation"`, so its two negative-syntax cases were
 read out of the manifest and dropped. Nine cases across four wired categories
 were being parsed and discarded that way.
 
+## Fixed
+
+`SparqlCompiler.grammarViolation` rejects the three SELECT cases after the parse
+succeeds. Narrow on purpose: this is a slice of grammar enforcement Jena
+declines to do, so every rule has to earn its maintenance.
+
+    SELECT * with GROUP BY          -> rejected
+    projected expression without AS -> rejected (covers syn-bad-04 and -05)
+
+`syn-bad-01` is the one that justifies the mechanism: `SELECT *` with `GROUP BY`
+has NO DEFINED ANSWER, so accepting it means returning something undefined
+rather than something permissive. The other two are milder but not cosmetic —
+Jena names the column with an internally allocated variable (`.0`, `.1`), which
+is not a legal SPARQL variable, so the caller gets a result column it cannot
+refer to.
+
+`constructwhere06` is NOT fixed, deliberately. Telling the short `CONSTRUCT
+WHERE` form from the long one needs syntax-level state Jena does not expose on
+`Query`, and the harm is a template that behaves sensibly rather than an
+undefined answer. It stays xfail with that reasoning attached.
+
+The risk being managed here is the opposite of the defect: over-acceptance is
+mild, but wrongly REFUSING a valid query breaks callers. Nine valid shapes are
+asserted to still compile, including the legal form of each rejected case.
+
 ## Tests
 
-`tests/conformance/test_dawg_syntax.py` runs all 152 syntax cases plus the nine
-recovered ones. These four are `xfail` with this issue named; the other 166
-pass. An entry that starts passing should be deleted rather than left as a
-permanent xfail.
+`tests/conformance/test_dawg_syntax.py` — 169 of 170 pass; only
+`constructwhere06` remains xfail. The three fixed entries were DELETED from the
+table rather than left behind.
+
+`SparqlCompilerTest` — the three rejections, and nine valid queries asserted to
+still compile.
 
 ## Related
 

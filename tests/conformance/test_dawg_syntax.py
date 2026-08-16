@@ -105,17 +105,18 @@ pytestmark = [
 # `SELECT * ... GROUP BY` has no defined answer, so what we return for it is
 # undefined behaviour rather than a documented extension.
 KNOWN_SYNTAX_FAILURES = {
-    ("syntax-query", "syn-bad-01.rq"):
-        "issues/095 — SELECT * with GROUP BY is accepted; Jena, upstream",
-    ("syntax-query", "syn-bad-04.rq"):
-        "issues/095 — projected expression without AS is accepted; Jena, upstream",
-    ("syntax-query", "syn-bad-05.rq"):
-        "issues/095 — bare aggregate in the projection is accepted; Jena, upstream",
-    # Recovered from a category that WAS wired, whose syntax cases the query
-    # suite discarded. `CONSTRUCT WHERE { GRAPH ... }` — the short form takes a
-    # bare TriplesTemplate and the grammar does not admit GRAPH inside it.
+    # syn-bad-01/04/05 removed 2026-08-16 — the sidecar now rejects them in
+    # SparqlCompiler.grammarViolation. An entry that starts passing is DELETED,
+    # not left as a permanent xfail.
+    #
+    # `CONSTRUCT WHERE { GRAPH ... }` stays, knowingly. The short form takes a
+    # bare TriplesTemplate and the grammar does not admit GRAPH inside it, but
+    # telling the short form from the long one needs syntax-level state Jena
+    # does not expose on Query — and the harm is a template that behaves
+    # sensibly, not an undefined answer. See issues/095.
     ("construct", "constructwhere06.rq"):
-        "issues/095 — CONSTRUCT WHERE with GRAPH is accepted; Jena, upstream",
+        "issues/095 — CONSTRUCT WHERE with GRAPH; needs syntax-level state "
+        "Jena does not expose, and the result is well-defined",
 }
 
 

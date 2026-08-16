@@ -38,6 +38,48 @@ class SparqlCompilerTest {
     }
 
     @Test
+    void testGrammarRestrictionsJenaAcceptsAreRejected() {
+        // issues/095. Jena parses all of these; SPARQL 1.1 forbids them.
+        //
+        // The GROUP BY one is the reason this check exists: SELECT * with
+        // GROUP BY has NO DEFINED ANSWER, so accepting it means returning
+        // something undefined rather than something permissive.
+        String[] forbidden = {
+            "SELECT * { ?s ?p ?o } GROUP BY ?s",
+            "SELECT (?x +?y) {}",
+            "SELECT COUNT(*) {}",
+        };
+        for (String sparql : forbidden) {
+            CompileResponse resp = compiler.compile(makeRequest(sparql));
+            assertFalse(resp.ok, "should have been rejected: " + sparql);
+            assertEquals("PARSE_ERROR", resp.error.get("code"));
+        }
+    }
+
+    @Test
+    void testTheGrammarCheckDoesNotRejectValidQueries() {
+        // The failure mode that would matter: over-acceptance is mild, but
+        // refusing a VALID query breaks callers. Each of these is the legal
+        // form of something rejected above, plus the ordinary shapes.
+        String[] valid = {
+            "SELECT ?s { ?s ?p ?o } GROUP BY ?s",
+            "SELECT (COUNT(*) AS ?n) {}",
+            "SELECT ((?x + ?y) AS ?sum) { ?a ?b ?x . ?a ?c ?y }",
+            "SELECT * { ?s ?p ?o }",
+            "SELECT * { ?s ?p ?o } ORDER BY ?s LIMIT 10",
+            "SELECT (SUM(?v) AS ?t) { ?s ?p ?v } GROUP BY ?s HAVING (SUM(?v) > 1)",
+            "ASK { ?s ?p ?o }",
+            "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",
+            "DESCRIBE <http://example.org/x>",
+        };
+        for (String sparql : valid) {
+            CompileResponse resp = compiler.compile(makeRequest(sparql));
+            assertTrue(resp.ok, "should have been accepted: " + sparql
+                       + " -> " + (resp.error == null ? "" : resp.error.get("message")));
+        }
+    }
+
+    @Test
     void testSemanticRejectionIsAParseErrorNotAnException() {
         // Regression, found 2026-08-16 by wiring in the DAWG syntax categories
         // (syntax-query/syn-bad-03). Jena throws grammar errors as

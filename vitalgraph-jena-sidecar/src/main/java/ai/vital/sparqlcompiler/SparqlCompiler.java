@@ -7,6 +7,8 @@ import org.apache.jena.query.Query;
 import org.apache.jena.query.QueryException;
 import org.apache.jena.query.QueryFactory;
 import org.apache.jena.query.QueryParseException;
+import org.apache.jena.sparql.core.Var;
+import org.apache.jena.sparql.core.VarExprList;
 import org.apache.jena.sparql.algebra.Algebra;
 import org.apache.jena.sparql.algebra.Op;
 import org.apache.jena.sparql.syntax.Element;
@@ -81,6 +83,15 @@ public class SparqlCompiler {
             return buildSemanticError(qe, request.sparql, timing, trace);
         }
         timing.stop("parse");
+
+        // Grammar restrictions Jena parses but SPARQL 1.1 forbids (issues/095).
+        if ("QUERY".equals(sparqlForm)) {
+            String violation = grammarViolation(query);
+            if (violation != null) {
+                return buildSemanticError(new QueryException(violation),
+                                          request.sparql, timing, trace);
+            }
+        }
 
         CompileResponse response = CompileResponse.success();
         response.input = new LinkedHashMap<>();
@@ -214,6 +225,53 @@ public class SparqlCompiler {
         }
 
         return response;
+    }
+
+    /**
+     * SPARQL 1.1 grammar restrictions that Jena accepts (issues/095).
+     *
+     * Over-acceptance is the mild direction of a syntax defect -- we answer
+     * queries that should have been refused, rather than refusing valid ones --
+     * with ONE exception, which is why this exists at all: `SELECT *` with
+     * `GROUP BY` has NO DEFINED ANSWER. The spec forbids it precisely because
+     * `*` cannot be resolved against a grouped solution, so whatever we return
+     * is undefined behaviour rather than a documented extension, and two
+     * engines that both accept it may still disagree.
+     *
+     * The projected-expression cases are milder but not cosmetic either: Jena
+     * names the column with an internally allocated variable (`.0`, `.1`),
+     * which is not a legal SPARQL variable name, so the caller receives a
+     * result column they cannot refer to.
+     *
+     * Returns null when the query is fine. Deliberately NARROW -- this is a
+     * slice of grammar enforcement Jena declines to do, and every rule here has
+     * to earn its maintenance. `CONSTRUCT WHERE { GRAPH ... }` is knowingly not
+     * checked: distinguishing the short form from the long one needs
+     * syntax-level state Jena does not expose on Query, and the harm is a
+     * template that behaves sensibly rather than an undefined answer.
+     */
+    static String grammarViolation(Query query) {
+        if (query == null || !query.isSelectType()) {
+            return null;
+        }
+
+        // SPARQL 1.1 §11.5 / grammar: SELECT * is not permitted with GROUP BY.
+        if (query.isQueryResultStar() && query.hasGroupBy()) {
+            return "SELECT * is not permitted with GROUP BY";
+        }
+
+        // A projected expression must be named: ( expr AS ?var ). Without AS,
+        // Jena allocates an internal variable for it.
+        VarExprList project = query.getProject();
+        if (project != null) {
+            for (Var var : project.getVars()) {
+                if (var.isAllocVar() && project.hasExpr(var)) {
+                    return "A projected expression must be named with AS "
+                           + "(SELECT (expr AS ?var))";
+                }
+            }
+        }
+        return null;
     }
 
     private CompileResponse buildSemanticError(QueryException e, String sparql,
