@@ -358,3 +358,65 @@ class TestExportRoundTrip:
         from vitalgraph.endpoint.impl.data_import_impl import (
             _parse_nquads_term_for_import as parse)
         assert parse("_:b0", "docA")[0] != parse("_:b0", "docB")[0]
+
+
+class TestRestBatchScoping:
+    """A REST batch insert is a document too (issues/076 facet 2, REST path).
+
+    `nquads_term_to_rdflib` returned `BNode(label)` verbatim, so the caller's
+    label became the node's identity globally. Two independent POSTs each
+    carrying `_:b1` merged into one node — the file-import defect, reached
+    through REST.
+
+    Fresh per request rather than deterministic, matching INSERT DATA (§19.6).
+    A file has a stable identity to key on; a request does not.
+    """
+
+    def test_unscoped_conversion_still_merges(self):
+        """The read/convert path passes no scope and must not be changed.
+
+        Nothing is stored there, so no identity is asserted — and requiring a
+        scope would break callers that only need the terms.
+        """
+        from vitalgraph.utils.quad_format_utils import nquads_term_to_rdflib
+        assert str(nquads_term_to_rdflib("_:b1")) == "b1"
+
+    def test_a_scope_makes_the_label_local(self):
+        from vitalgraph.utils.quad_format_utils import nquads_term_to_rdflib
+        a = nquads_term_to_rdflib("_:b1", "request:1")
+        b = nquads_term_to_rdflib("_:b1", "request:2")
+        assert str(a) != str(b), (
+            "two requests carrying `_:b1` produced one node")
+
+    def test_one_label_stays_one_node_within_a_request(self):
+        from vitalgraph.utils.quad_format_utils import nquads_term_to_rdflib
+        s = "request:same"
+        assert str(nquads_term_to_rdflib("_:b1", s)) == \
+               str(nquads_term_to_rdflib("_:b1", s))
+
+    def test_distinct_labels_stay_distinct_within_a_request(self):
+        from vitalgraph.utils.quad_format_utils import nquads_term_to_rdflib
+        s = "request:same"
+        assert str(nquads_term_to_rdflib("_:b1", s)) != \
+               str(nquads_term_to_rdflib("_:b2", s))
+
+    def test_uris_and_literals_are_unaffected_by_a_scope(self):
+        from vitalgraph.utils.quad_format_utils import nquads_term_to_rdflib
+        assert str(nquads_term_to_rdflib("<http://example.org/x>", "r")) == \
+            "http://example.org/x"
+        assert str(nquads_term_to_rdflib('"v"', "r")) == "v"
+
+    def test_the_triples_endpoint_passes_a_per_request_scope(self):
+        """Guard: the converter accepting a scope is useless if no writer sends one."""
+        import inspect
+        from vitalgraph.endpoint import triples_endpoint
+        src = inspect.getsource(triples_endpoint)
+        assert 'bnode_scope = f"request:' in src, (
+            "the triples endpoint no longer builds a per-request scope")
+        assert src.count("nquads_term_to_rdflib(q.") == \
+               src.count("nquads_term_to_rdflib(q.s, bnode_scope)") + \
+               src.count("nquads_term_to_rdflib(q.p, bnode_scope)") + \
+               src.count("nquads_term_to_rdflib(q.o, bnode_scope)") + \
+               src.count("nquads_term_to_rdflib(q.g, bnode_scope)"), (
+            "a quad position is converted without the request scope, so blank "
+            "nodes in that position still merge across requests")

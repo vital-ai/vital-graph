@@ -85,7 +85,8 @@ def _unescape_nquads_string(s: str) -> str:
 # N-Quads string encoding  →  RDFLib term
 # ---------------------------------------------------------------------------
 
-def nquads_term_to_rdflib(term_str: str) -> Node:
+def nquads_term_to_rdflib(term_str: str,
+                          bnode_scope: Optional[str] = None) -> Node:
     """Parse an N-Quads encoded term string back to an RDFLib term.
 
     Accepts:
@@ -101,7 +102,21 @@ def nquads_term_to_rdflib(term_str: str) -> Node:
         return URIRef(term_str[1:-1])
 
     if term_str.startswith('_:'):
-        return BNode(term_str[2:])
+        label = term_str[2:]
+        # `bnode_scope` makes the label local to one request. Without it this
+        # returns BNode(label) verbatim — the caller's label becomes the node's
+        # identity, so two independent requests each carrying `_:b1` merge into
+        # one node. That is the same defect fixed on the file-import paths
+        # (issues/076 facet 2), reached through the REST batch endpoints
+        # instead.
+        #
+        # Callers on a WRITE path must pass a scope. Read/convert callers (quads
+        # -> GraphObjects) do not need one: nothing is stored, so no identity is
+        # being asserted.
+        if bnode_scope:
+            from vitalgraph.db.sparql_sql.term_normalize import skolem_label
+            label = skolem_label(bnode_scope, label)
+        return BNode(label)
 
     if term_str.startswith('"'):
         # Find the closing quote (handling escaped quotes)

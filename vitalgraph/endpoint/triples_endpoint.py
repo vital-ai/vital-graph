@@ -378,17 +378,36 @@ class TriplesEndpoint:
         
         Quad fields use N-Quads term encoding (e.g. <http://...>, "value"^^<xsd:int>).
         """
+        import uuid as _uuid
         from rdflib import URIRef
         from ..utils.quad_format_utils import nquads_term_to_rdflib
-        
+
         quads = []
         graph_uri = URIRef(graph_id)
-        
+
+        # One scope per REQUEST. A blank-node label is local to the document
+        # that carries it, and for a batch insert the request IS the document:
+        # `_:b1` repeated within this call is one node, and `_:b1` in a
+        # different call is a different node.
+        #
+        # Without this the caller's label became the node's identity globally,
+        # so two independent requests each carrying `_:b1` merged — the same
+        # defect fixed on the file-import paths, reached through REST.
+        #
+        # FRESH per request rather than deterministic, matching SPARQL's
+        # INSERT DATA (§19.6: each execution introduces new blank nodes). The
+        # file importers can be deterministic because a file has a stable
+        # identity to key on; a request does not. The consequence is that a
+        # retried POST inserts a second set of blank nodes — which is equally
+        # true of a retried INSERT DATA, and is why a caller wanting stable
+        # identity should send URIs.
+        bnode_scope = f"request:{_uuid.uuid4().hex}"
+
         for q in quad_request.quads:
-            s = nquads_term_to_rdflib(q.s)
-            p = nquads_term_to_rdflib(q.p)
-            o = nquads_term_to_rdflib(q.o)
-            g = nquads_term_to_rdflib(q.g) if q.g else graph_uri
+            s = nquads_term_to_rdflib(q.s, bnode_scope)
+            p = nquads_term_to_rdflib(q.p, bnode_scope)
+            o = nquads_term_to_rdflib(q.o, bnode_scope)
+            g = nquads_term_to_rdflib(q.g, bnode_scope) if q.g else graph_uri
             quads.append((s, p, o, g))
         
         self.logger.info(f"Converted {len(quads)} quads from QuadRequest")
