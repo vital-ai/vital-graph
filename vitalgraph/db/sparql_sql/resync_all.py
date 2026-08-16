@@ -37,6 +37,18 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
     # 2. Frame-entity table
     fe_count = await resync_frame_entity_table(conn, space_id)
 
+    # 2b. Entity/slot sort table (issues/096). Also derived from edge, so it
+    # follows it for the same reason frame_entity does. Tolerated missing: a
+    # space created before this table exists must still resync everything else,
+    # and `repair_derived_tables.py` / `migrate_space_schema.py` are what add it.
+    ess_count = 0
+    try:
+        from .sync_entity_slot_sort import resync_entity_slot_sort
+        ess_count = await resync_entity_slot_sort(conn, space_id)
+    except Exception as exc:
+        logger.warning("resync_all(%s): entity_slot_sort skipped (%s)",
+                       space_id, exc)
+
     # 3. Stats tables
     stats = await resync_stats_tables(conn, space_id)
     # Value histograms: rdf_stats answers equality on a small value set,
@@ -135,6 +147,7 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
     result = {
         'edge_rows': edge_count,
         'frame_entity_rows': fe_count,
+        'entity_slot_sort_rows': ess_count,
         'value_stats_rows': vstats.get('rows', 0),
         'pred_stats_rows': stats['pred_stats'],
         'quad_stats_rows': stats['quad_stats'],

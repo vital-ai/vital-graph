@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Populate `frame_entity`, `entity_fanout` and `rdf_value_stats` where empty.
+"""Populate `frame_entity`, `entity_fanout`, `rdf_value_stats` and
+`entity_slot_sort` where empty.
 
 THE GAP. `migrate_space_schema.py` CREATES a missing derived table and says so
 ("Recreated derived tables are EMPTY — run the resync to repopulate them"), but
@@ -149,11 +150,32 @@ async def survey_space(conn, space_id: str) -> dict | None:
               HAVING count(*) >= $1)""", DEFAULT_BUCKETS)
         if buildable:
             need.append("value_stats")
+    # entity_slot_sort (issues/096). Same trap once more, and the mirror is
+    # exact here rather than approximated: ask the DERIVATION whether it would
+    # produce a row. A space with no entity->frame->slot walk carrying a value
+    # correctly has zero, and a proxy like "has slot edges" would flag it
+    # forever.
+    ess = await _count(conn, space_id, "entity_slot_sort")
+    if ess is not None and not ess:
+        from vitalgraph.db.sparql_sql.sync_entity_slot_sort import (
+            _select_rows, _type_args)
+        try:
+            row = await conn.fetchrow(
+                f"SELECT 1 FROM ({_select_rows(space_id, 'TRUE')}) s LIMIT 1",
+                *(await _type_args(space_id)))
+            if row:
+                need.append("entity_slot_sort")
+        except Exception:
+            # A space predating the table has no schema for it; not applicable
+            # rather than empty, exactly as the connector check treats a term
+            # table without the connector URIs.
+            pass
+
     if not need:
         return None
     return {"space": space_id, "quads": quads, "need": need,
             "frame_entity": fe, "uses_connectors": uses_connectors,
-            "edge": edge, "value_stats": vs}
+            "edge": edge, "value_stats": vs, "entity_slot_sort": ess}
 
 
 async def repair_space(conn, space_id: str, need: list[str]) -> dict:
@@ -177,6 +199,14 @@ async def repair_space(conn, space_id: str, need: list[str]) -> dict:
         r = await resync_value_stats(conn, space_id)
         out["value_stats"] = r.get("rows") if isinstance(r, dict) else r
         out["value_stats_s"] = round(time.time() - t0, 1)
+    # entity_slot_sort is derived from `edge` like frame_entity, and from
+    # nothing this script rebuilds, so its position here is free.
+    if "entity_slot_sort" in need:
+        from vitalgraph.db.sparql_sql.sync_entity_slot_sort import (
+            resync_entity_slot_sort)
+        t0 = time.time()
+        out["entity_slot_sort"] = await resync_entity_slot_sort(conn, space_id)
+        out["entity_slot_sort_s"] = round(time.time() - t0, 1)
     return out
 
 

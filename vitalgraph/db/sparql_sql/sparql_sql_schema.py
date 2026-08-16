@@ -543,6 +543,7 @@ class SparqlSQLSchema:
             'edge_fanout': f'{space_id}_edge_fanout',
             'entity_fanout': f'{space_id}_entity_fanout',
             'frame_entity': f'{space_id}_frame_entity',
+            'entity_slot_sort': f'{space_id}_entity_slot_sort',
             'vector_index': f'{space_id}_vector_index',
             'geo': f'{space_id}_geo',
             'geo_config': f'{space_id}_geo_config',
@@ -852,6 +853,51 @@ class SparqlSQLSchema:
             ){_part}''')
         if partition_quads > 0:
             stmts += self._partition_children(t['frame_entity'], partition_quads)
+
+        # 7b. Entity/slot sort table (issues/096). One row per slot reachable by
+        # `entity -Edge_hasEntityKGFrame-> frame -Edge_hasKGSlot-> slot`,
+        # carrying the slot's value and the three types the walk discriminates
+        # on, so a sort by a slot value is an ordered index scan instead of a
+        # six-way join: 360 ms -> 4.2 ms for a 25-row page on `cardiff_kg`, and
+        # flat as the page deepens instead of O(offset).
+        #
+        # Keyed on the SLOT, not the entity: an entity may carry several slots
+        # of the sort type (measured — 9,354 such pairs on cardiff_kg, up to 6),
+        # and one row per slot is what lets a write delete precisely what it
+        # invalidated rather than everything for the entity.
+        #
+        # The three type columns are NULLABLE for the reason
+        # `frame_entity.frame_type_uuid` is: an untyped frame or entity is still
+        # part of the walk, and an inner join would drop it from the table —
+        # changing which rows it describes, not just how fast it answers.
+        stmts.append(f'''
+            CREATE TABLE IF NOT EXISTS {t['entity_slot_sort']} (
+                slot_uuid         UUID NOT NULL,
+                context_uuid      UUID NOT NULL,
+                entity_uuid       UUID NOT NULL,
+                frame_uuid        UUID NOT NULL,
+                entity_type_uuid  UUID,
+                -- The ORDERED frame types from the entity down to the slot's
+                -- parent — a path, not one level, because a slot may sit under
+                -- nested frames and a sort criterion names a type per level.
+                -- A single column here excluded every child-frame slot, which
+                -- on cardiff_kg was two of the eight columns the portal's lead
+                -- list renders, absent with nothing to say so.
+                frame_type_path   UUID[],
+                slot_type_uuid    UUID,
+                -- The value, in the same three lanes the term table splits on,
+                -- so ordering is correct per type rather than lexical for all.
+                -- Safe to denormalise: a term_uuid is a hash of its text, so a
+                -- value's text cannot change under a row — only the QUAD
+                -- linking slot to value can, and that is a write path this
+                -- table is maintained by.
+                value_text        TEXT,
+                value_num         NUMERIC,
+                value_dt          TIMESTAMP,
+                PRIMARY KEY (slot_uuid, context_uuid)
+            ){_part}''')
+        if partition_quads > 0:
+            stmts += self._partition_children(t['entity_slot_sort'], partition_quads)
 
         # 8. Vector index registry (per-space catalog of named vector indexes)
         stmts.append(f'''
@@ -1201,6 +1247,50 @@ class SparqlSQLSchema:
             # so the type has to lead for the scan to start there.
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fe_type_src ON {t['frame_entity']} (frame_type_uuid, source_entity_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fe_type_dst ON {t['frame_entity']} (frame_type_uuid, dest_entity_uuid)",
+
+            # Entity/slot sort indexes (issues/096). Each is the FULL sort key
+            # for one value lane, ending in entity_uuid so the scan is
+            # index-only — the measured page did no heap access at all, which is
+            # where 423,742 buffers became 58.
+            #
+            # Three lanes rather than one because SPARQL orders by TYPE, not
+            # lexically: a datetime slot sorted as text puts "9" after "10".
+            # `term` splits the same way for the same reason.
+            #
+            # COLLATE "C" matches what the generator emits for a text ORDER BY;
+            # under any other collation the index cannot serve the sort and the
+            # planner silently falls back to the six-way join this replaces.
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_ess_text "
+            f"ON {t['entity_slot_sort']} (context_uuid, entity_type_uuid, "
+            f"frame_type_path, slot_type_uuid, value_text COLLATE \"C\", entity_uuid)",
+            # PARTIAL, and that is load-bearing twice over. Every row has a
+            # value_text (a term always has text) but only numeric and temporal
+            # literals have num_val / dt_val, so unrestricted these two would
+            # index mostly NULLs.
+            #
+            # More importantly they would COMPETE. Measured on cardiff_kg with
+            # all three unrestricted, the planner served a TEXT sort from the
+            # datetime index — same leading four columns, cheaper to scan, and
+            # missing `value_text`, so the index-only scan became an Index Scan
+            # with heap fetches: 58 buffers became 2,918 and 4 ms became 15 ms.
+            # A partial index cannot be chosen unless the query implies its
+            # predicate, which is what keeps a text sort on the text index.
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_ess_num "
+            f"ON {t['entity_slot_sort']} (context_uuid, entity_type_uuid, "
+            f"frame_type_path, slot_type_uuid, value_num, entity_uuid) "
+            f"WHERE value_num IS NOT NULL",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_ess_dt "
+            f"ON {t['entity_slot_sort']} (context_uuid, entity_type_uuid, "
+            f"frame_type_path, slot_type_uuid, value_dt, entity_uuid) "
+            f"WHERE value_dt IS NOT NULL",
+            # Incremental maintenance walks up from a touched entity or frame;
+            # without these the per-write DELETE is a seq scan of the table.
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_ess_entity "
+            f"ON {t['entity_slot_sort']} (entity_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_ess_frame "
+            f"ON {t['entity_slot_sort']} (frame_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_ess_ctx "
+            f"ON {t['entity_slot_sort']} (context_uuid)",
             # Document segmentation job queue and config. These indexes lived in
             # SegmentationJobManager / SegmentationConfigManager and were created
             # on demand with their tables, so a space had them only if the
@@ -1238,6 +1328,7 @@ class SparqlSQLSchema:
         t = self.get_table_names(space_id)
         return [
             f"DROP TABLE IF EXISTS {t['frame_entity']} CASCADE",
+            f"DROP TABLE IF EXISTS {t['entity_slot_sort']} CASCADE",
             f"DROP TABLE IF EXISTS {t['edge']} CASCADE",
             f"DROP TABLE IF EXISTS {t['rdf_stats']} CASCADE",
             f"DROP TABLE IF EXISTS {t['rdf_pred_stats']} CASCADE",

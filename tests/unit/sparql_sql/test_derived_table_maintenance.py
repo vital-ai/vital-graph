@@ -81,6 +81,12 @@ DERIVED = {
              "plan for entity/frame/relation queries"),
     "frame_entity": (("sync_frame_entity",),
                      "derived from edge; collapses 6 tables per hop"),
+    # issues/096. A stale row here is a WRONG SORT ORDER, not a slow query —
+    # the sort reads the value straight off this table — so it is a structural
+    # mirror on the same terms as edge and frame_entity.
+    "entity_slot_sort": (("sync_entity_slot_sort", "delete_entity_slot_sort_for_context"),
+                         "denormalised entity->frame->slot sort values; a slot "
+                         "sort reads its ORDER from this table"),
     "stats": (("sync_stats_after", "resync_stats_for_predicates"),
               "rdf_pred_stats + rdf_stats; join reorder and the criterion gate "
               "read them"),

@@ -162,6 +162,11 @@ class MaintenanceJob:
             if fe_result:
                 summary["frame_entity_integrity"] = fe_result
 
+            # --- Entity/slot sort integrity (derived from edge; issues/096) ---
+            ess_result = await self._run_entity_slot_sort_integrity(list(stats.keys()))
+            if ess_result:
+                summary["entity_slot_sort_integrity"] = ess_result
+
             # --- Grouping self-link (entity-graph reads depend on it) ---
             selflink_result = await self._run_grouping_self_link_check(list(stats.keys()))
             if selflink_result:
@@ -1011,6 +1016,62 @@ class MaintenanceJob:
             if self._tracker and process_id:
                 await self._tracker.mark_failed(process_id, str(e))
             logger.error("Frame-entity integrity backfill failed for %s: %s", worst_space, e)
+            return {"space_id": worst_space, "error": str(e)}
+
+    async def _run_entity_slot_sort_integrity(self, space_ids: List[str]) -> Optional[Dict]:
+        """Backfill the worst-drifted {space}_entity_slot_sort table, if any.
+
+        Same shape as _run_frame_entity_integrity, and after it for the same
+        reason: both are derived from the edge table, so repairing them before
+        the edge step would reproduce whatever the edge table is missing.
+
+        A stale row here is a WRONG SORT ORDER rather than a slow query
+        (issues/096), which is why this table gets a drift step at all rather
+        than relying on the next bulk resync.
+
+        The backfill only ADDS, so this closes the "rows missing" direction.
+        Rows that are present but describe a value that has moved are prevented
+        at the write path (delete-then-re-derive) — see `entity_slot_sort_drift`.
+        """
+        from ..db.sparql_sql.sync_entity_slot_sort import (
+            entity_slot_sort_drift, backfill_entity_slot_sort)
+
+        worst_space = None
+        worst_drift = 0
+        for space_id in space_ids:
+            try:
+                async with self._pool.acquire() as conn:
+                    expected, actual = await entity_slot_sort_drift(conn, space_id)
+            except Exception:
+                continue  # space predates the table, or is not a KG space
+            drift = expected - actual
+            if drift > max(EDGE_DRIFT_MIN_ABS, int(EDGE_DRIFT_MIN_PCT * expected)):
+                if drift > worst_drift:
+                    worst_drift, worst_space = drift, space_id
+
+        if not worst_space:
+            return None
+
+        process_id = None
+        if self._tracker:
+            process_id = await self._tracker.create_process(
+                "entity_slot_sort_backfill", process_subtype=worst_space,
+                instance_id=self._instance_id, status="running")
+            await self._tracker.mark_running(process_id, self._instance_id)
+        try:
+            async with self._pool.acquire() as conn:
+                inserted = await backfill_entity_slot_sort(conn, worst_space)
+            result = {"space_id": worst_space, "drift": worst_drift,
+                      "rows_added": inserted}
+            if self._tracker and process_id:
+                await self._tracker.mark_completed(process_id, result_details=result)
+            logger.info("Entity-slot-sort integrity: backfilled %s (drift=%d → +%d rows)",
+                        worst_space, worst_drift, inserted)
+            return result
+        except Exception as e:
+            if self._tracker and process_id:
+                await self._tracker.mark_failed(process_id, str(e))
+            logger.error("Entity-slot-sort backfill failed for %s: %s", worst_space, e)
             return {"space_id": worst_space, "error": str(e)}
 
     async def _run_stats_rebuild(self, space_id: str) -> Dict:

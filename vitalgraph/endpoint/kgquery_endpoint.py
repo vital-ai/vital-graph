@@ -407,6 +407,50 @@ class KGQueriesEndpoint:
                 detail=f"Failed to execute relation query: {str(e)}"
             )
     
+    async def _try_fast_slot_sort(self, backend, space_id: str, graph_id: str,
+                                  entity_criteria, query_request):
+        """The slot-sort page from `{space}_entity_slot_sort`, or None.
+
+        None on ANY doubt — wrong shape, no pool, missing table, an error — and
+        the caller runs the general pipeline. The table is a denormalised
+        mirror, so the failure it must never produce is a confidently wrong
+        page; falling back costs latency and nothing else.
+        """
+        from ..db.sparql_sql.fast_slot_sort import (
+            can_serve, fast_slot_sort_page, fast_slot_sort_count)
+        if not can_serve(entity_criteria):
+            return None
+        pool = getattr(getattr(backend, 'db_impl', None), 'connection_pool', None)
+        if pool is None:
+            return None
+        try:
+            t0 = _time.monotonic()
+            async with pool.acquire() as conn:
+                uris = await fast_slot_sort_page(
+                    conn, space_id, graph_id, entity_criteria,
+                    query_request.page_size, query_request.offset)
+                if uris is None:
+                    return None
+                total = await fast_slot_sort_count(
+                    conn, space_id, graph_id, entity_criteria)
+            if total is None:
+                return None
+        except Exception as exc:
+            self.logger.warning("fast slot sort declined (%s) — using SPARQL", exc)
+            return None
+
+        self.logger.info(
+            "Entity slot sort via entity_slot_sort: %d uris, total=%d, %.0fms",
+            len(uris), total, (_time.monotonic() - t0) * 1000)
+        return KGQueryResponse(
+            status=OperationStatus.FOUND if uris else OperationStatus.EMPTY,
+            query_type="entity",
+            entity_uris=uris,
+            total_count=total,
+            page_size=query_request.page_size,
+            offset=query_request.offset,
+        )
+
     async def _execute_entity_query(self, backend, space_id: str, graph_id: str, query_request: KGQueryRequest) -> KGQueryResponse:
         """Execute entity query — return matching entity URIs with correct total count."""
         try:
@@ -548,6 +592,20 @@ class KGQueriesEndpoint:
                     'fusion_strategy': builder_multi_vector_criteria.fusion_strategy,
                     'oversample_factor': builder_multi_vector_criteria.oversample_factor,
                 }
+
+            # --- Direct-SQL fast path for a slot-value sort (issues/096) ---
+            #
+            # `{space}_entity_slot_sort` answers "order these entities by this
+            # slot value" as an index-only scan: 360 ms -> 7 ms for a 25-row
+            # page, and flat as the page deepens instead of O(offset). It serves
+            # a narrow shape and declines everything else by returning None, so
+            # the general pipeline below stays the answer for anything it does
+            # not recognise. See `fast_slot_sort.can_serve`.
+            if not query_request.count_only:
+                fast = await self._try_fast_slot_sort(
+                    backend, space_id, graph_id, entity_criteria, query_request)
+                if fast is not None:
+                    return fast
 
             # Build paginated query + count query
             sparql_query = self.query_builder.build_entity_query_sparql(

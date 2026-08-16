@@ -46,6 +46,33 @@ only criterion that space can express:
 So it is not an artefact of the synthetic fixture, and it grows with depth: the
 criterion is free at depth 1-2 and catastrophic at 3.
 
+### A second real-data case, priced both ways — `096`
+
+`issues/096` §"What was DELIBERATELY NOT shipped" carries a worked instance of
+the direction problem on `cardiff_kg`, a 2-hop entity→frame→slot sort. Useful
+here because both arms are measured, so it constrains a fix rather than only
+motivating one:
+
+| | buffers | exec |
+|---|---:|---:|
+| anchor-driven (ships today), 2,863 entities | 507,492 | 360 ms |
+| slot-driven (selective end pinned) | 279,323 | **125 ms** |
+| **the same slot-driven form, entity pinned to ONE URI** | **133,067** | **60.8 ms** |
+| anchor-driven, entity pinned to ONE URI | 222 | 0.7 ms |
+
+2.9x the right way round, **87x the wrong way**. The separating statistic is
+already cheap to obtain (2,863 entities against 5,726 slots of the sort type,
+from `rdf_stats`, 3 ms) — so what is missing is not a measurement but the gate:
+`traversal_decision` recognises only a URI-pinned end, and a type-constrained
+end like `hasKGSlotType = CompanyName` (1.9% of its predicate) does not count.
+Nothing reads the decision in any case.
+
+**This is not a reopening of the symptom below, which is fixed.** It belongs to
+the shapes handed on to `traversal_chain_plan.md` in "Where this leaves
+issues/090" — specifically the tail-only pin, here with both arms priced. It is
+recorded at this point in the document because the mechanism is the same one the
+sections above characterise.
+
 ## Why there was no fixture until now
 
 Neither existing fixture can pose the question:
@@ -533,4 +560,7 @@ decline dedup (1-3 s), tail-only pins, and branching/UNION traversals.
   the collapse itself is working, and Problem 1 (the slot-type decline) is a
   separate cause with its own price
 - `issues/072` — nested-loop misplanning, the same family of symptom
+- `issues/096` — a tail-only pin on real data with BOTH arms priced (2.9x right,
+  87x wrong) and the separating statistic identified; see §"The same shape on
+  real data" above
 - `planning/planning_performance/unexplored_performance_surface.md`

@@ -1320,6 +1320,23 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
         
         return patterns
     
+    @staticmethod
+    def _sort_needs_aggregate(sc: SortCriteria) -> bool:
+        """Whether this criterion can bind more than one value per anchor.
+
+        Multiplicity is a property of the PATH to the value, not of the data
+        that happens to be loaded. `urn:cardiff:kg:slot:CompanyName` resolves to
+        exactly one slot per lead in every space checked — and nothing in the
+        model says it must, so a query built on that observation breaks on the
+        first entity that carries two.
+        """
+        if sc.sort_type == "entity_property":
+            # One triple on the anchor, unless the property is list-valued.
+            return _FILTERABLE_ENTITY_PROPERTIES.get(sc.property_uri) == "uri_list"
+        # Every other sort_type walks an edge to a frame and/or a slot. Both
+        # attachments are to-many.
+        return True
+
     def _build_sort_bindings(self, sort_criteria: List[SortCriteria],
                              anchor_var: str = "entity",
                              use_edge_pattern: bool = True) -> tuple[List[str], List[str], str, bool]:
@@ -1341,106 +1358,138 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
         """
         if not sort_criteria:
             return [], [], "", False
-        
+
         # Sort by priority to ensure correct order
         sorted_criteria = sorted(sort_criteria, key=lambda x: x.priority)
-        
+
+        # Decide aggregation ONCE, across all criteria, before emitting anything.
+        #
+        # Two separate reasons, and the second is why this cannot be decided
+        # inside the loop:
+        #
+        # 1. A sort value reached through a frame or a slot is many-per-anchor by
+        #    construction — an entity may carry several frames of the sort type,
+        #    and a frame several slots of it. Projecting such a value beside
+        #    ?entity under DISTINCT gives one ROW PER VALUE, so a LIMIT 25 page
+        #    returns fewer than 25 entities and repeats some. Aggregating to one
+        #    value per anchor is what makes the page a page.
+        # 2. GROUP BY ?entity forbids projecting any other variable bare, so ONE
+        #    aggregated criterion forces every other criterion to aggregate too.
+        #    Deciding per-criterion left the mixed case (a frame/slot sort beside
+        #    an entity_property sort) unrepresentable: it emitted a bare
+        #    ?sort_val_1 under a GROUP BY.
+        #
+        # Aggregating a genuinely single-valued property is a no-op — MIN of one
+        # value is that value — so promoting the whole query costs nothing.
+        requires_group_by = any(self._sort_needs_aggregate(sc) for sc in sorted_criteria)
+
         patterns = []
         select_vars = []
         order_terms = []
-        requires_group_by = False
-        
+
         for idx, sc in enumerate(sorted_criteria):
             sort_val_var = f"sort_val_{idx}"
-            
+            descending = sc.sort_order.lower() == "desc"
+
+            # The value the ORDER BY names must be in the projection — under
+            # SELECT DISTINCT that is a SPARQL 1.1 §15.1 requirement, and under
+            # GROUP BY it has to be the aggregate alias. Binding the variable in
+            # the WHERE clause and ordering on it without projecting it is what
+            # `issues/095` was: valid to Jena, and SQL referencing a column the
+            # DISTINCT subquery never selected.
+            if requires_group_by:
+                # MIN for ascending, MAX for descending — order each anchor by
+                # the value that will actually determine its position.
+                agg_fn = "MAX" if descending else "MIN"
+                value_var = f"_sort_raw_{idx}"
+                select_vars.append(f"({agg_fn}(?{value_var}) AS ?{sort_val_var})")
+            else:
+                value_var = sort_val_var
+                select_vars.append(f"?{sort_val_var}")
+
+            order_terms.append(
+                f"DESC(?{sort_val_var})" if descending else f"ASC(?{sort_val_var})")
+
             # entity_property: single triple on the anchor node
             if sc.sort_type == "entity_property":
                 if not sc.property_uri:
                     raise ValueError("property_uri is required for entity_property sort_type")
-                sort_datatype = _FILTERABLE_ENTITY_PROPERTIES.get(sc.property_uri)
-                if sort_datatype == "uri_list":
-                    raw_var = f"_sort_raw_{idx}"
-                    agg_fn = "MAX" if sc.sort_order.lower() == "desc" else "MIN"
-                    patterns.append(f"?{anchor_var} <{sc.property_uri}> ?{raw_var} .")
-                    select_vars.append(f"({agg_fn}(?{raw_var}) AS ?{sort_val_var})")
-                    requires_group_by = True
-                else:
-                    patterns.append(f"?{anchor_var} <{sc.property_uri}> ?{sort_val_var} .")
-                    select_vars.append(f"?{sort_val_var}")
-                if sc.sort_order.lower() == "desc":
-                    order_terms.append(f"DESC(?{sort_val_var})")
-                else:
-                    order_terms.append(f"ASC(?{sort_val_var})")
+                patterns.append(f"?{anchor_var} <{sc.property_uri}> ?{value_var} .")
                 continue
-            
+
             frame_path = sc.frame_path or []
             value_property = self._get_slot_value_property(slot_class_uri=sc.slot_class_uri)
-            
-            if not frame_path:
-                # No frame path — slot is directly on the anchor (for frame_slot sort_type)
-                slot_var = f"sort_slot_{idx}"
-                slot_edge_var = f"sort_slot_edge_{idx}"
+
+            # ORDER MATTERS, and not only for readability. These patterns are one
+            # BGP, so the join order is the planner's to choose — but the order
+            # they arrive in is where its search starts, and on this shape it
+            # does not find its way back. Leading with the two SLOT constraints
+            # (type, then value) is worth 17% of the buffers on a broad sort and
+            # nothing at all on a pinned one:
+            #
+            #     KGLead/CompanyName, 2,863 entities   507,492 -> 423,742 buffers
+            #     the same sort pinned to ONE entity       222 ->     222 buffers
+            #
+            # Measured the same direction on three (entity, frame, slot)
+            # combinations. Emitting the walk anchor-first instead lets the
+            # frame->slot fan-out materialise before anything narrows it: each
+            # KGLeadInfoFrame carries ~24 slots, so the value predicate gets
+            # probed 68,683 times to keep 2,863 rows.
+            #
+            # This is a nudge, not a fix — see `issues/096` for the 2.9x that
+            # needs a cost-based traversal-direction decision rather than an
+            # ordering convention.
+            slot_var = f"sort_slot_{idx}"
+            slot_edge_var = f"sort_slot_edge_{idx}"
+            patterns.append(f"?{slot_var} haley:hasKGSlotType <{sc.slot_type}> .")
+            patterns.append(f"?{slot_var} {value_property} ?{value_var} .")
+
+            # The frame walk, innermost hop first, so each step narrows the one
+            # before it rather than widening it.
+            walk = []
+            prev_var = anchor_var
+            frame_vars = []
+            for depth, frame_type_uri in enumerate(frame_path):
+                frame_var = f"sort_frame_{idx}_{depth}"
+                frame_edge_var = f"sort_frame_edge_{idx}_{depth}"
+                # depth 0 hangs off the anchor via Edge_hasEntityKGFrame;
+                # deeper frames are child frames via Edge_hasKGFrame.
+                edge_type = ("Edge_hasEntityKGFrame" if depth == 0
+                             else "Edge_hasKGFrame")
+                direct_pred = ("vg-direct:hasEntityFrame" if depth == 0
+                               else "vg-direct:hasFrame")
                 if use_edge_pattern:
-                    patterns.extend([
-                        f"?{slot_edge_var} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .",
-                        f"?{slot_edge_var} vital-core:hasEdgeSource ?{anchor_var} .",
-                        f"?{slot_edge_var} vital-core:hasEdgeDestination ?{slot_var} .",
-                    ])
+                    hop = [
+                        f"?{frame_var} haley:hasKGFrameType <{frame_type_uri}> .",
+                        f"?{frame_edge_var} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#{edge_type}> .",
+                        f"?{frame_edge_var} vital-core:hasEdgeDestination ?{frame_var} .",
+                        f"?{frame_edge_var} vital-core:hasEdgeSource ?{prev_var} .",
+                    ]
                 else:
-                    patterns.append(f"?{anchor_var} vg-direct:hasSlot ?{slot_var} .")
-                patterns.append(f"?{slot_var} haley:hasKGSlotType <{sc.slot_type}> .")
-                patterns.append(f"?{slot_var} {value_property} ?{sort_val_var} .")
+                    hop = [
+                        f"?{frame_var} haley:hasKGFrameType <{frame_type_uri}> .",
+                        f"?{prev_var} {direct_pred} ?{frame_var} .",
+                    ]
+                walk.append(hop)
+                frame_vars.append(frame_var)
+                prev_var = frame_var
+
+            # The slot hangs off the LAST frame walked, or off the anchor when
+            # there is no frame path (the `frame_slot` sort type).
+            slot_parent = frame_vars[-1] if frame_vars else anchor_var
+            if use_edge_pattern:
+                patterns.extend([
+                    f"?{slot_edge_var} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .",
+                    f"?{slot_edge_var} vital-core:hasEdgeDestination ?{slot_var} .",
+                    f"?{slot_edge_var} vital-core:hasEdgeSource ?{slot_parent} .",
+                ])
             else:
-                # Walk the frame path from anchor
-                prev_var = anchor_var
-                for depth, frame_type_uri in enumerate(frame_path):
-                    frame_var = f"sort_frame_{idx}_{depth}"
-                    frame_edge_var = f"sort_frame_edge_{idx}_{depth}"
-                    
-                    if depth == 0:
-                        # First frame is attached to the anchor via Edge_hasEntityKGFrame
-                        if use_edge_pattern:
-                            patterns.extend([
-                                f"?{frame_edge_var} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame> .",
-                                f"?{frame_edge_var} vital-core:hasEdgeSource ?{prev_var} .",
-                                f"?{frame_edge_var} vital-core:hasEdgeDestination ?{frame_var} .",
-                            ])
-                        else:
-                            patterns.append(f"?{prev_var} vg-direct:hasEntityFrame ?{frame_var} .")
-                    else:
-                        # Subsequent frames are child frames via Edge_hasKGFrame
-                        if use_edge_pattern:
-                            patterns.extend([
-                                f"?{frame_edge_var} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGFrame> .",
-                                f"?{frame_edge_var} vital-core:hasEdgeSource ?{prev_var} .",
-                                f"?{frame_edge_var} vital-core:hasEdgeDestination ?{frame_var} .",
-                            ])
-                        else:
-                            patterns.append(f"?{prev_var} vg-direct:hasFrame ?{frame_var} .")
-                    
-                    patterns.append(f"?{frame_var} haley:hasKGFrameType <{frame_type_uri}> .")
-                    prev_var = frame_var
-                
-                # Now attach the slot to the last frame in the path
-                slot_var = f"sort_slot_{idx}"
-                slot_edge_var = f"sort_slot_edge_{idx}"
-                if use_edge_pattern:
-                    patterns.extend([
-                        f"?{slot_edge_var} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .",
-                        f"?{slot_edge_var} vital-core:hasEdgeSource ?{prev_var} .",
-                        f"?{slot_edge_var} vital-core:hasEdgeDestination ?{slot_var} .",
-                    ])
-                else:
-                    patterns.append(f"?{prev_var} vg-direct:hasSlot ?{slot_var} .")
-                patterns.append(f"?{slot_var} haley:hasKGSlotType <{sc.slot_type}> .")
-                patterns.append(f"?{slot_var} {value_property} ?{sort_val_var} .")
-            
-            # Build ORDER BY term
-            if sc.sort_order.lower() == "desc":
-                order_terms.append(f"DESC(?{sort_val_var})")
-            else:
-                order_terms.append(f"ASC(?{sort_val_var})")
-        
+                patterns.append(f"?{slot_parent} vg-direct:hasSlot ?{slot_var} .")
+
+            # Reversed: the hop nearest the slot first, the anchor hop last.
+            for hop in reversed(walk):
+                patterns.extend(hop)
+
         # Add tiebreaker on anchor variable for deterministic pagination
         if order_terms:
             order_by_clause = f"ORDER BY {' '.join(order_terms)} ?{anchor_var}"

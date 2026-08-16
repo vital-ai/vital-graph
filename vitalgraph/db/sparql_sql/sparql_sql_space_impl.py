@@ -935,6 +935,9 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     await sync_edge_table_after_insert(conn, space_id, [s_uuid])
                     from .sync_frame_entity_table import sync_frame_entity_after_edge_insert
                     await sync_frame_entity_after_edge_insert(conn, space_id, [s_uuid])
+                    # entity_slot_sort is derived from edge as well (issues/096).
+                    from .sync_entity_slot_sort import sync_entity_slot_sort_after_edge_insert
+                    await sync_entity_slot_sort_after_edge_insert(conn, space_id, [s_uuid])
                     # Stats too. The comment above explains why edge and
                     # frame_entity were added — "this path bypasses the bulk
                     # sync" — and stats were simply not part of that thought,
@@ -965,6 +968,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 async with conn.transaction():
                     from .sync_frame_entity_table import sync_frame_entity_before_delete
                     await sync_frame_entity_before_delete(conn, space_id, [s_uuid])
+                    from .sync_entity_slot_sort import sync_entity_slot_sort_before_delete
+                    await sync_entity_slot_sort_before_delete(conn, space_id, [s_uuid])
                     from .sync_edge_table import sync_edge_table_before_delete
                     await sync_edge_table_before_delete(conn, space_id, [s_uuid])
                     from .sync_stats_tables import sync_stats_after_delete
@@ -1198,6 +1203,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     await sync_edge_table_after_insert(conn, space_id, list(subjects))
                     from .sync_frame_entity_table import sync_frame_entity_after_edge_insert
                     await sync_frame_entity_after_edge_insert(conn, space_id, list(subjects))
+                    from .sync_entity_slot_sort import sync_entity_slot_sort_after_edge_insert
+                    await sync_entity_slot_sort_after_edge_insert(conn, space_id, list(subjects))
                 # rdf_stats too. Only the BULK path synced these, so every quad
                 # written through this one left the planner's cardinality
                 # estimates behind — the same write-path gap as the edge table
@@ -1416,6 +1423,11 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     conn, space_id, unique_subjects)
                 _t5b = _time.monotonic()
 
+                # Sync entity_slot_sort (also depends on the edge table)
+                from .sync_entity_slot_sort import sync_entity_slot_sort_after_edge_insert
+                await sync_entity_slot_sort_after_edge_insert(
+                    conn, space_id, unique_subjects)
+
                 # Sync stats tables
                 from .sync_stats_tables import sync_stats_after_insert
                 await sync_stats_after_insert(conn, space_id, quad_rows)
@@ -1563,6 +1575,12 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     await sync_frame_entity_before_delete(
                         conn, space_id, subject_uuids, context_uuid=g_uuid)
 
+                    # Step 2a: entity_slot_sort, also before the edge rows go —
+                    # it resolves a touched slot back through the edge table.
+                    from .sync_entity_slot_sort import sync_entity_slot_sort_before_delete
+                    await sync_entity_slot_sort_before_delete(
+                        conn, space_id, subject_uuids, context_uuid=g_uuid)
+
                     # Step 2b: Sync edge table — remove edge rows before quads
                     from .sync_edge_table import sync_edge_table_before_delete
                     edge_deleted = await sync_edge_table_before_delete(
@@ -1666,6 +1684,11 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 await sync_frame_entity_before_delete(
                     conn, space_id, unique_subjects)
 
+                # entity_slot_sort — also before the edge rows
+                from .sync_entity_slot_sort import sync_entity_slot_sort_before_delete
+                await sync_entity_slot_sort_before_delete(
+                    conn, space_id, unique_subjects)
+
                 # Sync edge table — remove edge rows before quads
                 from .sync_edge_table import sync_edge_table_before_delete
                 edge_deleted = await sync_edge_table_before_delete(
@@ -1751,6 +1774,9 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 unique_subjects = list({row[0] for row in delete_rows})
                 from .sync_frame_entity_table import sync_frame_entity_before_delete
                 await sync_frame_entity_before_delete(
+                    conn, space_id, unique_subjects)
+                from .sync_entity_slot_sort import sync_entity_slot_sort_before_delete
+                await sync_entity_slot_sort_before_delete(
                     conn, space_id, unique_subjects)
                 from .sync_edge_table import sync_edge_table_before_delete
                 await sync_edge_table_before_delete(
@@ -2163,12 +2189,17 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                             from .sync_edge_table import delete_edges_for_context
                             from .sync_frame_entity_table import (
                                 delete_frame_entity_for_context)
+                            from .sync_entity_slot_sort import (
+                                delete_entity_slot_sort_for_context)
                             ctx_uuid = _generate_term_uuid(g_uri, 'U')
                             async with conn.transaction():
                                 # frame_entity first: it is derived FROM the
                                 # edge table, so clearing edges first would
                                 # leave it unable to describe what it lost.
                                 await delete_frame_entity_for_context(
+                                    conn, space_id, ctx_uuid)
+                                # entity_slot_sort, same reason, same order.
+                                await delete_entity_slot_sort_for_context(
                                     conn, space_id, ctx_uuid)
                                 await delete_edges_for_context(
                                     conn, space_id, ctx_uuid)
@@ -2188,11 +2219,23 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                                 sync_frame_entity_after_edge_insert,
                                 sync_frame_entity_before_delete,
                             )
+                            # entity_slot_sort reconciles the same way — drop
+                            # then re-derive — so a slot whose VALUE was
+                            # repointed gets a corrected row. Insert-only would
+                            # hit ON CONFLICT DO NOTHING and keep the old value
+                            # with no change in row count for a drift check to
+                            # notice.
+                            from .sync_entity_slot_sort import (
+                                sync_entity_slot_sort_after_edge_insert,
+                            )
                             async with conn.transaction():
                                 await sync_edge_table_after_insert(conn, space_id, subj_uuids)
                                 await cleanup_orphan_edges_for_subjects(conn, space_id, subj_uuids)
                                 await sync_frame_entity_before_delete(conn, space_id, subj_uuids)
                                 await sync_frame_entity_after_edge_insert(conn, space_id, subj_uuids)
+                                # Deletes internally before re-deriving.
+                                await sync_entity_slot_sort_after_edge_insert(
+                                    conn, space_id, subj_uuids)
 
                         # Subjects bound by a WHERE clause could not be
                         # enumerated above, so nothing removed the edge rows
