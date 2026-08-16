@@ -492,8 +492,22 @@ class MaintenanceJob:
         if not worst_space:
             return None
 
-        async with self._pool.acquire() as conn:
-            kept = await prune_stats_tables(conn, worst_space)
+        # Guarded for the reason this cycle documents about itself: one
+        # `except` covers the whole run, so a throw here silently skips every
+        # step after it — and the completion line then reports those steps as
+        # None, which reads exactly like a cycle that had nothing to do. The
+        # prune now rewrites the table (TRUNCATE plus re-insert) rather than
+        # deleting from it, so it briefly takes an exclusive lock and can lose
+        # a lock race. Failing to bound one stats table must not also cost the
+        # value-histogram refresh, the vector reindex and the cleanup.
+        try:
+            async with self._pool.acquire() as conn:
+                kept = await prune_stats_tables(conn, worst_space)
+        except Exception as exc:
+            logger.warning("Stats prune failed for %s: %s — the table stays "
+                           "over its cap until the next cycle", worst_space, exc)
+            return {"space_id": worst_space, "est_before": int(worst_rows),
+                    "failed": f"{type(exc).__name__}: {exc}"}
         result = {"space_id": worst_space, "est_before": int(worst_rows), "kept": kept}
         logger.info("Stats prune: %s ~%d → %d rows", worst_space, int(worst_rows), kept)
         return result
