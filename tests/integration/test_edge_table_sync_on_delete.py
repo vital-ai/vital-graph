@@ -290,3 +290,67 @@ class TestRestDeletePathsSyncTheEdgeTable:
         assert after == before - 4, (
             f"pred_stats went {before} -> {after} after deleting 4 quads; "
             f"expected {before - 4}. The delete path is not decrementing stats.")
+
+
+class TestSingleQuadInsertMaintainsStats:
+    """`add_rdf_quad` — the last write path that did not maintain stats.
+
+    It syncs edge and frame_entity, and its own comment explains why: "this
+    path bypasses the bulk sync, so edge quads inserted here would otherwise
+    never reach the edge table". Stats were not part of that thought, so
+    rdf_pred_stats under-counted every quad inserted through it — which makes a
+    predicate look SMALLER than it is to the join reorder, the direction that
+    gets it driven first.
+
+    Asserted as a delta rather than an absolute, so the test does not depend on
+    what else the fixture has written.
+    """
+
+    async def test_add_rdf_quad_increments_pred_stats(
+        self, test_space, space_impl, pg_conn
+    ):
+        pred = URIRef("urn:test:singlequad:pred")
+        before = await pg_conn.fetchval(
+            f"SELECT coalesce(row_count, 0) FROM {test_space}_rdf_pred_stats ps "
+            f"JOIN {test_space}_term t ON t.term_uuid = ps.predicate_uuid "
+            f"WHERE t.term_text = $1", str(pred)) or 0
+
+        for i in range(3):
+            ok = await space_impl.add_rdf_quad(
+                test_space, (URIRef(f"urn:test:singlequad:s:{i}"), pred,
+                             URIRef(f"urn:test:singlequad:o:{i}"), GRAPH))
+            assert ok
+
+        after = await pg_conn.fetchval(
+            f"SELECT row_count FROM {test_space}_rdf_pred_stats ps "
+            f"JOIN {test_space}_term t ON t.term_uuid = ps.predicate_uuid "
+            f"WHERE t.term_text = $1", str(pred))
+        assert after == before + 3, (
+            f"pred_stats went {before} -> {after} after three single-quad "
+            f"inserts; expected {before + 3}. Either the path is not "
+            f"incrementing stats, or it is double counting.")
+
+    async def test_add_rdf_quad_matches_the_quad_table(
+        self, test_space, space_impl, pg_conn
+    ):
+        """The stronger check: stats must equal reality, not just move.
+
+        A path that increments twice per quad also passes a delta test if the
+        delta is read loosely. This compares the recorded count against an
+        actual count of the quads.
+        """
+        pred = URIRef("urn:test:singlequad2:pred")
+        for i in range(4):
+            await space_impl.add_rdf_quad(
+                test_space, (URIRef(f"urn:test:singlequad2:s:{i}"), pred,
+                             URIRef(f"urn:test:singlequad2:o:{i}"), GRAPH))
+
+        recorded, actual = await pg_conn.fetchrow(
+            f"""SELECT
+                  (SELECT row_count FROM {test_space}_rdf_pred_stats ps
+                   WHERE ps.predicate_uuid = t.term_uuid) AS recorded,
+                  (SELECT count(*) FROM {test_space}_rdf_quad q
+                   WHERE q.predicate_uuid = t.term_uuid) AS actual
+                FROM {test_space}_term t WHERE t.term_text = $1""", str(pred))
+        assert recorded == actual, (
+            f"rdf_pred_stats says {recorded}, the quad table holds {actual}")

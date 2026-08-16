@@ -61,14 +61,27 @@ WRITE_PATHS = [
     "execute_sparql_update",
 ]
 
-# derived table -> the marker that proves a path maintains it.
+# derived table -> (markers that prove a path maintains it, why it matters).
+#
+# MARKERS ARE A PROXY AND CAN BE WRONG IN BOTH DIRECTIONS. The first version of
+# this test accepted only `sync_stats_after` for stats and therefore reported
+# execute_sparql_update as a gap — it maintains them by
+# `resync_stats_for_predicates`, a full per-predicate RECOUNT rather than
+# incremental deltas, which is the stronger mechanism here because a recount is
+# immune both to the WHERE-bound subject problem and to the issues/062
+# resurrection bug.
+#
+# A false negative is the dangerous direction. "Fixing" that reported gap by
+# adding sync_stats_after_insert on top of the recount would have DOUBLE
+# COUNTED. So each entry lists every accepted mechanism, and adding a new one
+# means adding it here.
 DERIVED = {
-    "edge": ("sync_edge_table",
+    "edge": (("sync_edge_table", "delete_edges_for_context"),
              "denormalised edge mirror; the edge-table rewrite is the default "
              "plan for entity/frame/relation queries"),
-    "frame_entity": ("sync_frame_entity",
+    "frame_entity": (("sync_frame_entity",),
                      "derived from edge; collapses 6 tables per hop"),
-    "stats": ("sync_stats_after",
+    "stats": (("sync_stats_after", "resync_stats_for_predicates"),
               "rdf_pred_stats + rdf_stats; join reorder and the criterion gate "
               "read them"),
 }
@@ -83,17 +96,20 @@ EXEMPT: dict[tuple[str, str], str] = {}
 #
 # Measured 2026-08-15 by reading each method. See
 # `planning_sql/derived_table_maintenance.md`.
-KNOWN_GAPS: dict[tuple[str, str], str] = {
-    ("add_rdf_quad", "stats"):
-        "syncs edge and frame_entity but not stats — its own comment explains "
-        "why edge/frame were added ('this path bypasses the bulk sync') and "
-        "stats were not included in that reasoning",
-        ("execute_sparql_update", "stats"):
-        "syncs edge and frame_entity but not stats. edge_table_integrity_bug.md "
-        "notes the delete side separately: sync_stats_after_delete is "
-        "subject-driven like the edge hooks, so a WHERE-bound DELETE misses it "
-        "the same way",
-}
+# Pairs that are KNOWN BROKEN, kept as expected failures so the suite passes on
+# the current tree while naming what is wrong. Removing an entry should be
+# accompanied by wiring the sync in, not by adding an exemption.
+#
+# EMPTY as of 2026-08-15. Every write path maintains every derived table:
+#
+#   * remove_rdf_quad / remove_rdf_quads_batch gained all three (d56a4ca) —
+#     they previously deleted quads and maintained nothing, the issues/064
+#     orphan class on the REST delete paths;
+#   * add_rdf_quad gained stats;
+#   * execute_sparql_update was never a gap. It maintains stats by
+#     `resync_stats_for_predicates`, and the first version of this test simply
+#     did not recognise that mechanism. See the note on DERIVED.
+KNOWN_GAPS: dict[tuple[str, str], str] = {}
 
 
 def _method_bodies() -> dict[str, str]:
@@ -116,8 +132,8 @@ def _method_bodies() -> dict[str, str]:
     return out
 
 
-def _maintains(body: str, marker: str) -> bool:
-    return marker in body
+def _maintains(body: str, markers) -> bool:
+    return any(m in body for m in markers)
 
 
 def test_the_matrix_is_derived_from_real_implementations():
@@ -135,16 +151,16 @@ def test_the_matrix_is_derived_from_real_implementations():
     # And the one path known to maintain everything must read that way, or the
     # marker strings have drifted from the code.
     full = bodies["add_rdf_quads_batch_bulk"]
-    for table, (marker, _why) in DERIVED.items():
-        assert _maintains(full, marker), (
+    for table, (markers, _why) in DERIVED.items():
+        assert _maintains(full, markers), (
             f"add_rdf_quads_batch_bulk does not appear to maintain {table}; "
-            f"the marker {marker!r} is probably stale")
+            f"the markers {markers!r} are probably stale")
 
 
 @pytest.mark.parametrize("path", WRITE_PATHS)
 @pytest.mark.parametrize("table", sorted(DERIVED))
 def test_write_path_maintains_derived_table(path, table):
-    marker, why = DERIVED[table]
+    markers, why = DERIVED[table]
     body = _method_bodies()[path]
     key = (path, table)
 
@@ -153,7 +169,7 @@ def test_write_path_maintains_derived_table(path, table):
     if key in KNOWN_GAPS:
         pytest.xfail(f"KNOWN GAP: {KNOWN_GAPS[key]}")
 
-    assert _maintains(body, marker), (
+    assert _maintains(body, markers), (
         f"{path} changes quads but does not maintain {{space}}_{table} "
         f"({why}).\n"
         f"Either call the sync, or add an entry to EXEMPT with the reason it "

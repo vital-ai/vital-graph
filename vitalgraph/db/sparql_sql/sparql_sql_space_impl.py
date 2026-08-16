@@ -931,6 +931,14 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     await sync_edge_table_after_insert(conn, space_id, [s_uuid])
                     from .sync_frame_entity_table import sync_frame_entity_after_edge_insert
                     await sync_frame_entity_after_edge_insert(conn, space_id, [s_uuid])
+                    # Stats too. The comment above explains why edge and
+                    # frame_entity were added — "this path bypasses the bulk
+                    # sync" — and stats were simply not part of that thought,
+                    # so rdf_pred_stats and rdf_stats silently under-counted
+                    # every quad inserted here. Same reasoning, same fix.
+                    from .sync_stats_tables import sync_stats_after_insert
+                    await sync_stats_after_insert(
+                        conn, space_id, [(s_uuid, p_uuid, o_uuid, g_uuid)])
             self._invalidate_counts_for_quads(space_id, [quad])
             return True
         except Exception as e:
