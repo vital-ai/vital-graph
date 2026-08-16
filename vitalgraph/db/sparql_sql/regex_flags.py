@@ -76,6 +76,21 @@ def pg_embedded_options(sparql_flags: str) -> str:
     return opts
 
 
+def apply_to_literal(pattern_text: str, sparql_flags: str) -> tuple[str, bool]:
+    """Options + class translation for a pattern whose TEXT we have.
+
+    Returns `(pattern_text, needs_unicode_ctype)`. The flag propagates from
+    `regex_classes.translate_classes`: POSIX classes are ASCII-only under this
+    database's `C` ctype, so a translated pattern is only correct if the operand
+    is collated. Ignoring it would turn an honest error into a silently narrow
+    match on non-ASCII text.
+    """
+    from .regex_classes import translate_classes
+
+    body, needs_ctype = translate_classes(pattern_text)
+    return f"(?{pg_embedded_options(sparql_flags)}){body}", needs_ctype
+
+
 def apply_to_pattern(pattern_sql: str, sparql_flags: str) -> str:
     """Prefix a SQL *pattern literal* with the embedded options.
 

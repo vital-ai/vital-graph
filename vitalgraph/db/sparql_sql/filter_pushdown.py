@@ -330,8 +330,15 @@ def _try_text_filter(
         # newline), and `s`+`m` together emitted the contradictory `sn` instead
         # of `w`.
         op = "~*" if is_case_insensitive(raw_flags) else "~"
-        pat = f"(?{pg_embedded_options(raw_flags)}){escaped}"
-        term_cond = f"term_text {op} '{pat}'"
+        # Same translation as emit_expressions, for the same reason the flag
+        # mapping is shared: which emitter runs is a performance decision and
+        # must not change semantics.
+        from .regex_classes import CLASSIFY_COLLATION, translate_classes
+        body, needs_ctype = translate_classes(escaped)
+        pat = f"(?{pg_embedded_options(raw_flags)}){body}"
+        col = (f"(term_text COLLATE {CLASSIFY_COLLATION})" if needs_ctype
+               else "term_text")
+        term_cond = f"{col} {op} '{pat}'"
     elif name == "eq":
         term_cond = f"term_text = '{escaped}'"
     else:

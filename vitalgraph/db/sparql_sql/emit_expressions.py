@@ -815,6 +815,26 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
             # default: XPath's `.` does not match a newline and PostgreSQL's does.
             # See regex_flags for the 2x2 and the measurements.
             op = "~*" if is_case_insensitive(raw_flags) else "~"
+
+            # A LITERAL pattern is translated: XPath's `\p{L}` and `\i` have no
+            # POSIX equivalent, and PostgreSQL rejects them outright. A runtime
+            # pattern (a column) cannot be inspected, so it keeps the
+            # options-only path and the same rejection as before.
+            a1 = args[1]
+            if isinstance(a1, ExprValue) and isinstance(a1.node, LiteralNode):
+                from .regex_flags import apply_to_literal
+                body, needs_ctype = apply_to_literal(a1.node.value or "",
+                                                     raw_flags)
+                pat_sql = f"'{_esc(body)}'"
+                if needs_ctype:
+                    # POSIX classes are ASCII-only under this database's `C`
+                    # ctype, so a translated pattern needs a Unicode-aware
+                    # collation on the OPERAND or it silently under-matches.
+                    # Applied only when a class was translated, so ordinary
+                    # patterns keep their existing plans.
+                    from .regex_classes import CLASSIFY_COLLATION
+                    s = f"({s} COLLATE {CLASSIFY_COLLATION})"
+                return f"({s} {op} {pat_sql})"
             return f"({s} {op} {apply_to_pattern(pat, raw_flags)})"
 
     # --- Accessors ---
