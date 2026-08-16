@@ -20,7 +20,7 @@ later is covered without anyone remembering to come back here.
 The second half of the fix is aggregation, and it is a correctness fix rather
 than a tidiness one: a value reached through a frame or slot is many-per-entity,
 so projecting it beside ?entity under DISTINCT yields one row PER VALUE. Measured
-on `cardiff_kg`, 9,354 (entity-graph, slot-type) pairs hold more than one slot of
+on `prod_kg`, 9,354 (entity-graph, slot-type) pairs hold more than one slot of
 the same type — up to six — and one NurtureAction returned 4 rows for 1 entity.
 A LIMIT 25 page of those is not 25 entities. See the integration test of the same
 name for that half executed against real data.
@@ -221,7 +221,7 @@ class TestPatternOrder:
 
     This is a performance property expressed as pattern order, so it has no
     visible effect on results and nothing else would catch its loss. Measured on
-    `cardiff_kg` (KGLead sorted by CompanyName, 2,863 entities): 507,492 buffers
+    `prod_kg` (KGLead sorted by CompanyName, 2,863 entities): 507,492 buffers
     anchor-first against 423,742 slot-first, and identical (222) when the query
     is pinned to a single entity — so it is a win on the broad case and free on
     the narrow one. Interleaved timing puts it at 1.08x; the buffer count is the

@@ -13,7 +13,7 @@ all 68,683, and only then asked which were CompanyName: 360 ms and 423,742
 buffers for 25 rows. Against this table the same page is **4.2 ms and 58
 buffers**, and — because the index is ordered by value — it stays flat as the
 page deepens (9.5 ms at offset 500, 6.1 ms at offset 2000) rather than growing
-with OFFSET. Prototyped on `cardiff_kg` before being built: 126,452 rows, 38 MB,
+with OFFSET. Prototyped on `prod_kg` before being built: 126,452 rows, 38 MB,
 1.6% of that space's quad table, covering all 99 of its slot types.
 
 WHY NOT THE OTHER OPTIONS, since a derived table is the expensive answer:
@@ -44,7 +44,7 @@ COVERAGE: NESTED FRAMES, to `MAX_FRAME_DEPTH`. The walk is
 from the entity down to the slot's parent.
 
 The first version stopped at ONE hop and stored a single `frame_type_uuid`. That
-silently excluded every slot under a child frame — on `cardiff_kg`,
+silently excluded every slot under a child frame — on `prod_kg`,
 `GuarantorEmail` and `GuarantorPhone`, 2,863 each, reachable only through
 `PersonalGuarantorContactFrame`, which is reached by `Edge_hasKGFrame` 2,863
 times and by `Edge_hasEntityKGFrame` zero times. Two of the eight columns the
@@ -119,7 +119,7 @@ _SLOT_VALUE_PREDS = [_u(x) for x in SLOT_VALUE_URIS]
 
 
 # How many frame hops the walk will follow below the entity. Measured on
-# `cardiff_kg`: real nesting reaches depth 3 (41,730 frames at 1, 18,551 at 2,
+# `prod_kg`: real nesting reaches depth 3 (41,730 frames at 1, 18,551 at 2,
 # 6 at 3) and terminates, so 6 is slack rather than a limit anyone is near.
 #
 # It exists because nothing in the model forbids a frame cycle, and a recursive
@@ -147,7 +147,7 @@ def _select_rows(space_id: str, where: str) -> str:
     Storing a PATH rather than the immediate frame type is what makes nested
     frames representable at all. The first version stored a single
     `frame_type_uuid`, which silently excluded every slot under a child frame:
-    on `cardiff_kg` that was `GuarantorEmail` and `GuarantorPhone`, 2,863 each,
+    on `prod_kg` that was `GuarantorEmail` and `GuarantorPhone`, 2,863 each,
     reachable only through `PersonalGuarantorContactFrame` — a child frame.
 
     `$1..$5` are the discriminating type uuids, `$6` the value predicates.

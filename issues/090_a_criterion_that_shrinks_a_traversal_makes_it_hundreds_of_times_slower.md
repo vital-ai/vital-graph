@@ -49,7 +49,7 @@ criterion is free at depth 1-2 and catastrophic at 3.
 ### A second real-data case, priced both ways — `096`
 
 `issues/096` §"What was DELIBERATELY NOT shipped" carries a worked instance of
-the direction problem on `cardiff_kg`, a 2-hop entity→frame→slot sort. Useful
+the direction problem on `prod_kg`, a 2-hop entity→frame→slot sort. Useful
 here because both arms are measured, so it constrains a fix rather than only
 motivating one:
 

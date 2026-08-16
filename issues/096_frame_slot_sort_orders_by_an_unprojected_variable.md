@@ -8,7 +8,7 @@ investigated") eliminated extended statistics and the semi-join on evidence and
 identified a denormalised sort table as the answer. **That table is now built,
 maintained and read.**
 
-End to end through the portal's own call path, `cardiff_kg`, 25-row page:
+End to end through the portal's own call path, `prod_kg`, 25-row page:
 
 | | before | after |
 |---|---:|---:|
@@ -48,11 +48,11 @@ What landed, all in `vitalgraph/sparql/kg_query_builder.py`:
   pre-fix), `tests/integration/test_kgquery_sort_projection.py` (5 cases, all
   fail pre-fix with the production error).
 
-Verified against `cardiff_kg` through the portal's own call path
+Verified against `prod_kg` through the portal's own call path
 (`kgqueries.query_entities`): 25 distinct URIs per page, `total_count=2863`,
 pages disjoint, ordering correct across page boundaries in both directions.
 
-## Original report — every `entity_frame_slot` / `frame_slot` sort 500s; found 2026-08-16 while timing the Cardiff portal's query shapes
+## Original report — every `entity_frame_slot` / `frame_slot` sort 500s; found 2026-08-16 while timing the portal's query shapes
 
 `KGQueryBuilder` emits `ORDER BY ?sort_val_0` over a `SELECT DISTINCT ?entity`
 that does not project `?sort_val_0`. The generated SQL then orders the outer
@@ -69,19 +69,19 @@ request shape (`v5` and `v6` both observed) — same defect.
 ## Reproduce
 
 Any `query_entities` call carrying a `SortCriteria` with
-`sort_type="entity_frame_slot"` or `"frame_slot"`. Measured on `cardiff_kg`
+`sort_type="entity_frame_slot"` or `"frame_slot"`. Measured on `prod_kg`
 (5.1M quads):
 
 ```python
 sc = SortCriteria(sort_type="entity_frame_slot",
-                  frame_path=["urn:cardiff:kg:frame:KGLeadInfoFrame"],
-                  slot_type="urn:cardiff:kg:slot:CompanyName",
+                  frame_path=["urn:example:kg:frame:KGLeadInfoFrame"],
+                  slot_type="urn:example:kg:slot:CompanyName",
                   slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGTextSlot",
                   sort_order="asc", priority=1)
 
 await client.kgqueries.query_entities(
-    space_id="cardiff_kg", graph_id="urn:cardiff_kg",
-    entity_type="urn:cardiff:kg:entity:KGLead",
+    space_id="prod_kg", graph_id="urn:prod_kg",
+    entity_type="urn:example:kg:entity:KGLead",
     sort_criteria=[sc], page_size=25, offset=0)
 ```
 
@@ -116,16 +116,16 @@ references `?{sort_val_var}` regardless of whether it was projected. The
 builder's caller emits `SELECT DISTINCT ?entity` (`:318`, `:958`, `:968`), so:
 
 ```sparql
-SELECT DISTINCT ?entity WHERE { GRAPH <urn:cardiff_kg> {
-    ?entity haley:hasKGEntityType <urn:cardiff:kg:entity:KGLead> .
+SELECT DISTINCT ?entity WHERE { GRAPH <urn:prod_kg> {
+    ?entity haley:hasKGEntityType <urn:example:kg:entity:KGLead> .
     ?sort_frame_edge_0_0 vital-core:vitaltype <...Edge_hasEntityKGFrame> .
     ?sort_frame_edge_0_0 vital-core:hasEdgeSource ?entity .
     ?sort_frame_edge_0_0 vital-core:hasEdgeDestination ?sort_frame_0_0 .
-    ?sort_frame_0_0 haley:hasKGFrameType <urn:cardiff:kg:frame:KGLeadInfoFrame> .
+    ?sort_frame_0_0 haley:hasKGFrameType <urn:example:kg:frame:KGLeadInfoFrame> .
     ?sort_slot_edge_0 vital-core:vitaltype <...Edge_hasKGSlot> .
     ?sort_slot_edge_0 vital-core:hasEdgeSource ?sort_frame_0_0 .
     ?sort_slot_edge_0 vital-core:hasEdgeDestination ?sort_slot_0 .
-    ?sort_slot_0 haley:hasKGSlotType <urn:cardiff:kg:slot:CompanyName> .
+    ?sort_slot_0 haley:hasKGSlotType <urn:example:kg:slot:CompanyName> .
     ?sort_slot_0 haley:hasTextSlotValue ?sort_val_0 .
 } }
 ORDER BY ASC(?sort_val_0) ?entity
@@ -163,13 +163,13 @@ Whatever fix lands should look like that one.
 ## Severity: silent wrong ordering, not a visible error
 
 The HTTP 500 does not reach users. Callers wrap this path in a fallback —
-`cardiff-portal-app/backend/.../kg_entity_router.py:129` catches, logs a
+`portal-app/backend/.../kg_entity_router.py:129` catches, logs a
 warning, clears `sort_slot_type`, and falls through to `list_entities` with
 `sort_by=None`. The user clicks a sort header and gets the **default-ordered**
 list with no indication anything failed.
 
 That is why this survived: a wrong sort order is indistinguishable from a
-working one unless someone checks the values. On the Cardiff portal it is the
+working one unless someone checks the values. On the portal it is the
 "Company" column of the KG Leads table, and it has presumably never worked.
 
 Cost of the fallback is also paid: the failing round trip happens first.
@@ -185,7 +185,7 @@ row PER VALUE, so a `LIMIT 25` page holds fewer than 25 entities and repeats
 some of them — trading a visible 500 for a silently short page.
 
 Not hypothetical, and not visible on the data the bug was found with. On
-`cardiff_kg`:
+`prod_kg`:
 
 | | |
 |---|---|
@@ -343,7 +343,7 @@ much larger and simpler answer, and eliminated two candidates on evidence.
 #### Extended statistics — already landed, and they do not reach this
 
 `high_cardinality_slot_value_query_plan.md` makes these recommendation (1). They
-exist: `stat_cardiff_kg_quad_po` on `(predicate_uuid, object_uuid)`, kinds
+exist: `stat_prod_kg_quad_po` on `(predicate_uuid, object_uuid)`, kinds
 `{d,m}`, with `attstattarget` 1000 on subject and predicate.
 
 They are working — the *scan* estimates are good (q4 estimates 2,774 against
@@ -379,7 +379,7 @@ alike and the plan for one has been read as covering the other.
 #### The denormalised table — BUILT, and what the prototype got wrong
 
 One row per slot reachable by the entity→frame→slot walk, carrying the value and
-the three types the walk discriminates on. SQL-level, `cardiff_kg`:
+the three types the walk discriminates on. SQL-level, `prod_kg`:
 
 | | before | after |
 |---|---:|---:|
@@ -442,7 +442,7 @@ because the batch-delete path removes the row by another route and masked it.
 
 **The first version walked ONE frame hop** and stored a single
 `frame_type_uuid`. That silently excluded every slot under a CHILD frame. On
-`cardiff_kg` it removed two of the eight columns the portal's lead list renders:
+`prod_kg` it removed two of the eight columns the portal's lead list renders:
 `GuarantorEmail` and `GuarantorPhone` hang off `PersonalGuarantorContactFrame`,
 reached by `Edge_hasKGFrame` 2,863 times and by `Edge_hasEntityKGFrame` zero.
 
@@ -455,7 +455,7 @@ slots were indistinguishable from slots with no value.
 became `frame_type_path UUID[]`, the ordered frame types from the entity down to
 the slot's parent, derived by a recursive walk over `Edge_hasKGFrame`. That is
 exactly what a `SortCriteria.frame_path` names, so the reader matches the whole
-array. Measured on `cardiff_kg` after the change:
+array. Measured on `prod_kg` after the change:
 
 | | before | after |
 |---|---|---|
@@ -505,7 +505,7 @@ maintenance obligations, not as a performance patch.
 
 ### Not the frame_entity table
 
-Ruled out before measuring anything: `cardiff_kg_frame_entity` is empty, and
+Ruled out before measuring anything: `prod_kg_frame_entity` is empty, and
 `041` says these derived tables are empty on every space, so it looks like the
 answer. It is not — `repair_derived_tables.py` states that `frame_entity` indexes
 CONNECTOR frames (a frame joining two entities through source and destination

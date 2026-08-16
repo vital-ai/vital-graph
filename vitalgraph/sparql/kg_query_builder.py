@@ -1389,7 +1389,7 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.searc
         """Whether this criterion can bind more than one value per anchor.
 
         Multiplicity is a property of the PATH to the value, not of the data
-        that happens to be loaded. `urn:cardiff:kg:slot:CompanyName` resolves to
+        that happens to be loaded. `urn:example:kg:slot:CompanyName` resolves to
         exactly one slot per lead in every space checked — and nothing in the
         model says it must, so a query built on that observation breaks on the
         first entity that carries two.

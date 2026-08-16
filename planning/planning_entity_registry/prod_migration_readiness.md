@@ -7,7 +7,7 @@ standardization). Purpose: confirm whether prod data needs migrating, and how.
 **Verdict: prod data is compatible. Exactly 2 rows need transformation, and
 `migrate.py` does it automatically.** No manual fixes, no blockers.
 
-Assessed by querying `cardiff-postgres-prod` (`PROD_DB_*` in `.env`) read-only on
+Assessed by querying `postgres-prod` (`PROD_DB_*` in `.env`) read-only on
 2026-07-25. Nothing was modified.
 
 Companion plans:
@@ -22,7 +22,7 @@ The move is: **old instance → new instance running updated vitalgraph.** Load 
 data into the new DB, run `apps/entity_registry/migrate.py` against it, then cut
 over. The migration is idempotent and additive (plus one 2-row `UPDATE`).
 
-Old/current: `cardiff-postgres-prod` (`vitalgraphdb`).
+Old/current: `postgres-prod` (`vitalgraphdb`).
 New: `vitalgraph-pg18-prod` (`NEW_PROD_DB_*`).
 
 ---

@@ -18,7 +18,7 @@ general SPARQL pipeline rather than this having to be complete.
 WHAT IT REPLACES. `SortCriteria(sort_type="entity_frame_slot")` compiles to a
 six-way join that walks entity -> frame -> EVERY slot of that frame and fetches
 each one's value before discarding all but the sort slot: measured on
-`cardiff_kg`, 360 ms and 423,742 buffers for a 25-row page. Against the table
+`prod_kg`, 360 ms and 423,742 buffers for a 25-row page. Against the table
 the same page is an index-only scan — **7.2 ms and 78 buffers, flat as the page
 deepens** rather than growing with OFFSET.
 

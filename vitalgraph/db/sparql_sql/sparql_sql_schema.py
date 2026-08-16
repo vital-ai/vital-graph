@@ -858,11 +858,11 @@ class SparqlSQLSchema:
         # `entity -Edge_hasEntityKGFrame-> frame -Edge_hasKGSlot-> slot`,
         # carrying the slot's value and the three types the walk discriminates
         # on, so a sort by a slot value is an ordered index scan instead of a
-        # six-way join: 360 ms -> 4.2 ms for a 25-row page on `cardiff_kg`, and
+        # six-way join: 360 ms -> 4.2 ms for a 25-row page on `prod_kg`, and
         # flat as the page deepens instead of O(offset).
         #
         # Keyed on the SLOT, not the entity: an entity may carry several slots
-        # of the sort type (measured — 9,354 such pairs on cardiff_kg, up to 6),
+        # of the sort type (measured — 9,354 such pairs on prod_kg, up to 6),
         # and one row per slot is what lets a write delete precisely what it
         # invalidated rather than everything for the entity.
         #
@@ -881,7 +881,7 @@ class SparqlSQLSchema:
                 -- parent — a path, not one level, because a slot may sit under
                 -- nested frames and a sort criterion names a type per level.
                 -- A single column here excluded every child-frame slot, which
-                -- on cardiff_kg was two of the eight columns the portal's lead
+                -- on prod_kg was two of the eight columns the portal's lead
                 -- list renders, absent with nothing to say so.
                 frame_type_path   UUID[],
                 slot_type_uuid    UUID,
@@ -1268,7 +1268,7 @@ class SparqlSQLSchema:
             # literals have num_val / dt_val, so unrestricted these two would
             # index mostly NULLs.
             #
-            # More importantly they would COMPETE. Measured on cardiff_kg with
+            # More importantly they would COMPETE. Measured on prod_kg with
             # all three unrestricted, the planner served a TEXT sort from the
             # datetime index — same leading four columns, cheaper to scan, and
             # missing `value_text`, so the index-only scan became an Index Scan

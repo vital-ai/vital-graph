@@ -207,7 +207,7 @@ async def test_a_slot_under_a_nested_frame_is_covered(
     """A slot two frames below the entity must be in the table, with its PATH.
 
     The first version of this table walked ONE hop and stored a single frame
-    type, so every child-frame slot was silently absent — on `cardiff_kg` that
+    type, so every child-frame slot was silently absent — on `prod_kg` that
     was `GuarantorEmail` and `GuarantorPhone`, 2,863 each, two of the eight
     columns the portal's lead list renders. Nothing about the table said so;
     they simply were not there.

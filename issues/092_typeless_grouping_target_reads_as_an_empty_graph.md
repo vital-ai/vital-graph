@@ -2,7 +2,7 @@
 
 ## Status: OPEN — one instance, origin unexplained, detection added
 
-`urn:cardiff:campaign:cer:reactivate_merchant_1` on the host space `cardiff_kg`
+`urn:example:campaign:cer:reactivate_merchant_1` on the host space `prod_kg`
 groups 26 objects under `hasKGGraphURI` but has only three triples of its own,
 all server-managed:
 

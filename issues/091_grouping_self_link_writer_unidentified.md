@@ -26,7 +26,7 @@ visibly empty entity graphs** rather than quietly complete-looking ones.
 
 * The distribution is a write path, not drift. Several spaces were 100% broken —
   `doc_test` 500 of 500, `graph_viz_a` 30 of 30, `customer_journey_test` 11 of
-  11 — while `cardiff_kg` was 1 of 8,752.
+  11 — while `prod_kg` was 1 of 8,752.
 * The predicate is ABSENT on those entities, not pointing elsewhere. Checked,
   because "missing" and "wrong" need different repairs.
 * The targets are real objects: `KGEntity` in the graph_viz and

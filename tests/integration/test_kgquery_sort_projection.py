@@ -11,7 +11,7 @@ the second only appears against data:
 
 2. **Projecting the variable alone would have been wrong.** A value reached
    through a frame or slot is many-per-entity, so `SELECT DISTINCT ?entity
-   ?sort_val_0` returns one row PER VALUE. On `cardiff_kg` that is not
+   ?sort_val_0` returns one row PER VALUE. On `prod_kg` that is not
    theoretical: 9,354 (entity-graph, slot-type) pairs carry more than one slot
    of the same type, and the naive form returned 4 rows for 1 entity. A page of
    25 rows is then fewer than 25 entities, with some repeated.
@@ -19,7 +19,7 @@ the second only appears against data:
 The fixture below gives ONE entity two slots of the sort type for exactly this
 reason. A fixture with clean 1:1 data passes under both the correct fix and the
 naive one, which is how a test like this ends up guarding nothing — the first
-25 leads in `cardiff_kg` are 1:1 and did not distinguish them either.
+25 leads in `prod_kg` are 1:1 and did not distinguish them either.
 """
 
 from __future__ import annotations

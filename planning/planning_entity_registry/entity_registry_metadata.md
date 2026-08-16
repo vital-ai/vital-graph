@@ -206,7 +206,7 @@ where `applied_to` lists the entity types the value appears on.
 
 The identifier vocabulary is **owned outside this repository**. There is no
 Salesforce code in vitalgraph. The producer is
-`cardiff-resource-rest`, principally `cardiff_rest_api/entity_registry/sync.py`,
+`resource-rest`, principally `resource_rest_api/entity_registry/sync.py`,
 which uses **bare inline string literals — no enum, no constants module** —
 repeated across ~15 files (`entity_registry/sync.py`, `financials`, `plaid`,
 `account/provision`, `celery/actions`, `cer_agent` scripts, tests).
@@ -367,7 +367,7 @@ Read via `GET /api/registry/changelog/entity?entity_id=` (one entity) or
 >   or tag values. Any replacement must either give those up or source them
 >   another way.
 > - **No external callers:** the only caller is this repo's own UI screen. Other
->   apps (e.g. the Cardiff portal) talk to their own upstream API, not to this
+>   apps (e.g. the portal) talk to their own upstream API, not to this
 >   endpoint, so removal breaks nothing outside this repo.
 > - **Cost of the counting rules:** the soft-delete and dual-FK counting logic
 >   (below) lives only here. If the counts move elsewhere, that logic moves with
@@ -506,5 +506,5 @@ typo in a filter looks like "no results" rather than an error.
 | No `is_active` on lookups | Nothing can be retired; every value is offered forever. |
 | `relationship_type.inverse_key` has no FK | An inverse can point at a nonexistent type. |
 | ~~No CHECK constraints on `status`~~ | ✅ Fixed — per-table CHECK constraints added; binary word unified to `retracted`. |
-| Tag vocabulary owned externally | `SF_*` namespaces are defined by inline literals in `cardiff-resource-rest`; the entity-type rule is unwritten here. |
+| Tag vocabulary owned externally | `SF_*` namespaces are defined by inline literals in `resource-rest`; the entity-type rule is unwritten here. |
 | Lead conversion not tracked | `ConvertedAccountId` / `ConvertedContactId` are never fetched from Salesforce, and the sync ignores conversion entirely, so a converted Lead usually yields a second entity instead of enriching the first. `entity_same_as` exists and is unused by the sync. |

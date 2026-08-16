@@ -6,7 +6,7 @@ a space is DONE therefore costs the same as finding work in it. Measured
 2026-08-13, all three fully backfilled:
 
     sp_lead_synth_100k      2,593.1 ms     0 missing
-    cardiff_kg                 30.8 ms     0 missing
+    prod_kg                 30.8 ms     0 missing
     kg_load_test                0.9 ms     0 missing
 
 It scales with entity count, so the largest spaces are the most expensive to
