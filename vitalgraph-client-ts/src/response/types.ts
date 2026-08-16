@@ -89,11 +89,37 @@ export interface GraphObjectResponse extends VitalGraphResponse {
   objects?: VitalSignsObject[];
 }
 
-export interface PaginatedGraphObjectResponse extends GraphObjectResponse {
+/**
+ * Pagination as the server actually sends it.
+ *
+ * `has_more` is THREE-STATE, and the type says so:
+ *
+ *   true       there is another page
+ *   false      this is the last page
+ *   null/absent the route has not been taught to answer — NOT "no"
+ *
+ * It was declared `has_more: boolean` here, which was wrong in both directions.
+ * Most routes omit the key entirely, so a caller under `strictNullChecks` was
+ * told a value was always present when it usually was not; and the ones that do
+ * send it may send `null`. Reading a missing value as `false` is the defect
+ * fixed across the Python client on 2026-08-16 — the field was always present,
+ * always False, and never computed, so "is there a next page?" got a confident
+ * No on every list call.
+ *
+ * DO NOT DERIVE IT from `(offset + page_size) < total_count`. `page_size` does
+ * not mean the same thing on every route: get-by-URI routes set it to the
+ * number of identifiers requested and `total_count` to the number of objects
+ * across them, so the formula reports a next page for a route that has none.
+ * The server is the only party that knows.
+ */
+export interface PaginationFields {
   total_count: number;
   page_size: number;
   offset: number;
-  has_more: boolean;
+  has_more?: boolean | null;
+}
+
+export interface PaginatedGraphObjectResponse extends GraphObjectResponse, PaginationFields {
   entity_type_uri?: string;
   search?: string;
   /**
@@ -135,7 +161,18 @@ export interface EntityGraphResponse extends VitalGraphResponse {
   requested_reference_id?: string;
 }
 
-export interface MultiEntityGraphResponse extends VitalGraphResponse {
+/**
+ * Paged on `list`, unpaged on the get-by-URI helpers.
+ *
+ * The pagination fields were absent here until 2026-08-16 even though the
+ * server sent them, so a typed caller of `KGEntitiesEndpoint.list` with
+ * `includeEntityGraph: true` could not see the total without casting — the
+ * Python client had the same gap and silently dropped the value instead.
+ *
+ * They are optional because the get-by-URI methods share this type and have
+ * nothing to page: absent means "not a paged call", not "zero".
+ */
+export interface MultiEntityGraphResponse extends VitalGraphResponse, Partial<PaginationFields> {
   graph_list?: EntityGraph[];
   space_id?: string;
   graph_id?: string;
@@ -167,7 +204,8 @@ export interface FrameGraphResponse extends VitalGraphResponse {
   requested_frame_uri?: string;
 }
 
-export interface MultiFrameGraphResponse extends VitalGraphResponse {
+/** Paged on `listWithGraphs`, unpaged on the get-by-URI helpers. See above. */
+export interface MultiFrameGraphResponse extends VitalGraphResponse, Partial<PaginationFields> {
   frame_graph_list?: FrameGraph[];
   space_id?: string;
   graph_id?: string;

@@ -16,6 +16,31 @@ describe('extractPagination', () => {
     const result = extractPagination({ total_count: 50 });
     expect(result).toEqual({ total_count: 50, page_size: 0, offset: 0 });
   });
+
+  // has_more is three-state and the distinction is the point: `false` means
+  // "last page", `undefined` means "the route did not answer". Collapsing the
+  // second into the first is the defect that made every list call report no
+  // next page. See planning_client/pagination_contract_plan.md.
+  it('passes has_more through when the server sends it', () => {
+    expect(extractPagination({ total_count: 100, page_size: 25, offset: 0, has_more: true }).has_more)
+      .toBe(true);
+    expect(extractPagination({ total_count: 100, page_size: 75, offset: 50, has_more: false }).has_more)
+      .toBe(false);
+  });
+
+  it('returns undefined — not false — when the server is silent', () => {
+    expect(extractPagination({ total_count: 100, page_size: 25, offset: 0 }).has_more)
+      .toBeUndefined();
+  });
+
+  it('never derives has_more from page_size and total_count', () => {
+    // The shape of a get-by-URI response: page_size is the number of
+    // identifiers asked for and total_count the objects across them, so
+    // `(offset + page_size) < total_count` would claim a next page for a route
+    // that has none. page_size does not mean the same thing on every route.
+    expect(extractPagination({ total_count: 5, page_size: 1, offset: 0 }).has_more)
+      .toBeUndefined();
+  });
 });
 
 describe('isJsonQuadsResponse', () => {
