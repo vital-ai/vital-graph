@@ -77,9 +77,14 @@ class ObjectsEndpoint(BaseEndpoint):
                 status=response_data.get('status'),
                 message=f"Retrieved {len(graph_objects)} objects",
                 objects=graph_objects,
-                count=pagination.get('total_count', len(graph_objects)),
+                # count is THIS page; total_count is the result set. These
+                # were both fed the server's total, so `count` reported the
+                # whole corpus for a 25-row page.
+                count=len(graph_objects),
+                total_count=pagination.get('total_count', len(graph_objects)),
                 page_size=pagination.get('page_size', page_size),
-                offset=pagination.get('offset', offset)
+                offset=pagination.get('offset', offset),
+                has_more=pagination.get('has_more')
             )
             
         except VitalGraphClientError as e:

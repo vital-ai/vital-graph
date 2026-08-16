@@ -168,6 +168,61 @@ class TestMultiGraphResponsesCarryPagination:
         assert r.metadata["total_graphs"] == 25 and r.total_count == 8751
 
 
+class TestCountVersusTotalCountIsOneContract:
+    """`count` = items in this response. `total_count` = size of the result set.
+
+    That contract was already written down in `KGTypeSearchResponse` and
+    already implemented by `GraphObjectResponse.count`. Three list responses
+    disagreed: they declared `count` as "total count of X" and the client fed
+    them the server's total, so `count` reported the whole corpus for a 25-row
+    page. Aligned 2026-08-16; this is what stops it drifting back.
+    """
+
+    LIST_MODELS = ["KGTypesListResponse", "ObjectsListResponse",
+                   "KGDocumentsListResponse", "KGTypeSearchResponse"]
+
+    @pytest.mark.parametrize("name", LIST_MODELS)
+    def test_both_fields_exist(self, name):
+        import vitalgraph.client.response.client_response as m
+        fields = getattr(m, name).model_fields
+        assert "count" in fields and "total_count" in fields, (
+            f"{name} carries only {sorted(set(fields) & {'count','total_count'})}; "
+            f"one name for two quantities is how the totals got lost"
+        )
+
+    @pytest.mark.parametrize("name", LIST_MODELS)
+    def test_count_is_not_described_as_a_total(self, name):
+        """The description is the contract a caller actually reads."""
+        import vitalgraph.client.response.client_response as m
+        desc = (getattr(m, name).model_fields["count"].description or "").lower()
+        assert "total" not in desc, (
+            f"{name}.count is described as {desc!r}. It is the count of what is "
+            f"in this response; total_count is the total."
+        )
+
+    @pytest.mark.parametrize("name", LIST_MODELS)
+    def test_they_are_independently_settable(self, name):
+        import vitalgraph.client.response.client_response as m
+        r = getattr(m, name)(error_code=0, status_code=200, count=25, total_count=8751)
+        assert (r.count, r.total_count) == (25, 8751)
+
+    def test_graph_object_response_count_still_means_this_response(self):
+        """The property the others were aligned TO must not have moved."""
+        from vitalgraph.client.response.client_response import GraphObjectResponse
+        r = GraphObjectResponse(error_code=0, status_code=200, objects=[])
+        assert r.count == 0
+
+    def test_passing_count_to_a_property_backed_model_is_a_no_op(self):
+        """Why the dead `count=` arguments were removed rather than kept.
+
+        FilesListResponse inherits `count` as a PROPERTY, so a passed value is
+        silently discarded — it looked like it was being set and never was.
+        """
+        from vitalgraph.client.response.client_response import FilesListResponse
+        r = FilesListResponse(error_code=0, status_code=200, objects=[], count=99)
+        assert r.count == 0
+
+
 class TestServerSideBoundary:
     """The formula the server uses, checked at the edges where it matters."""
 

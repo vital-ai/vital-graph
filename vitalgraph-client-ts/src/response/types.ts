@@ -346,9 +346,19 @@ export interface KGTypeResponse extends VitalGraphResponse {
 
 export interface KGTypesListResponse extends VitalGraphResponse {
   types: Record<string, unknown>[];
+  /**
+   * Items on THIS page. `total_count` is the size of the whole result set.
+   *
+   * These three interfaces declared only `count` and the Python client fed it
+   * the server's TOTAL, so `count` reported the whole corpus for a 25-row page.
+   * KGTypeSearchResponse already documented both correctly and is the shape the
+   * others are aligned to (2026-08-16).
+   */
   count: number;
+  total_count?: number;
   page_size?: number;
   offset?: number;
+  has_more?: boolean | null;
 }
 
 export interface KGTypeCreateResponse extends VitalGraphResponse {
@@ -439,9 +449,19 @@ export interface ObjectResponse extends VitalGraphResponse {
 
 export interface ObjectsListResponse extends VitalGraphResponse {
   objects: Record<string, unknown>[];
+  /**
+   * Items on THIS page. `total_count` is the size of the whole result set.
+   *
+   * These three interfaces declared only `count` and the Python client fed it
+   * the server's TOTAL, so `count` reported the whole corpus for a 25-row page.
+   * KGTypeSearchResponse already documented both correctly and is the shape the
+   * others are aligned to (2026-08-16).
+   */
   count: number;
+  total_count?: number;
   page_size?: number;
   offset?: number;
+  has_more?: boolean | null;
 }
 
 export interface ObjectCreateResponse extends VitalGraphResponse {
@@ -532,9 +552,19 @@ export interface KGDocumentResponse extends VitalGraphResponse {
 
 export interface KGDocumentsListResponse extends VitalGraphResponse {
   documents: Record<string, unknown>[];
+  /**
+   * Items on THIS page. `total_count` is the size of the whole result set.
+   *
+   * These three interfaces declared only `count` and the Python client fed it
+   * the server's TOTAL, so `count` reported the whole corpus for a 25-row page.
+   * KGTypeSearchResponse already documented both correctly and is the shape the
+   * others are aligned to (2026-08-16).
+   */
   count: number;
+  total_count?: number;
   page_size?: number;
   offset?: number;
+  has_more?: boolean | null;
 }
 
 export interface KGDocumentCreateResponse extends VitalGraphResponse {
@@ -572,6 +602,7 @@ export interface KGDocumentDeleteResponse extends VitalGraphResponse {
 
 export interface KGDocumentSegmentsResponse extends VitalGraphResponse {
   segments: Record<string, unknown>[];
+  /** Unpaged: every segment is returned, so this is both the page and the total. */
   count: number;
   parent_uri?: string;
 }

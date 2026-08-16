@@ -93,9 +93,14 @@ class KGDocumentsEndpoint(BaseEndpoint):
                 status=response_data.get('status'),
                 message=f"Retrieved {len(graph_objects)} KGDocuments",
                 documents=graph_objects,
-                count=pagination.get('total_count', len(graph_objects)),
+                # count is THIS page; total_count is the result set. These
+                # were both fed the server's total, so `count` reported the
+                # whole corpus for a 25-row page.
+                count=len(graph_objects),
+                total_count=pagination.get('total_count', len(graph_objects)),
                 page_size=pagination.get('page_size', page_size),
                 offset=pagination.get('offset', offset),
+                has_more=pagination.get('has_more'),
             )
 
         except VitalGraphClientError as e:
@@ -202,6 +207,9 @@ class KGDocumentsEndpoint(BaseEndpoint):
                 status=response_data.get('status'),
                 message=f"Retrieved {len(graph_objects)} segments for {parent_uri}",
                 segments=graph_objects,
+                # Unpaged: this returns every segment of the document, so the
+                # count IS the total. No total_count field here, and passing one
+                # would be silently discarded rather than stored.
                 count=len(graph_objects),
                 parent_uri=parent_uri,
             )

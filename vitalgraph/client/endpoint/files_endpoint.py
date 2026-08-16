@@ -104,7 +104,9 @@ class FilesEndpoint(BaseEndpoint):
             return build_success_response(
                 FilesListResponse,
                 objects=objects,
-                count=len(objects),
+                # No count= here: FilesListResponse inherits `count` as a
+                # PROPERTY (len of objects), so a passed value is silently
+                # discarded. Verified: passing count=99 still read back 0.
                 total_count=response_data.get('total_count', len(objects)),
                 offset=offset,
                 page_size=page_size,
@@ -224,7 +226,9 @@ class FilesEndpoint(BaseEndpoint):
             return build_success_response(
                 FilesListResponse,
                 objects=objects,
-                count=len(objects),
+                # No count= here: FilesListResponse inherits `count` as a
+                # PROPERTY (len of objects), so a passed value is silently
+                # discarded. Verified: passing count=99 still read back 0.
                 total_count=len(objects),
                 offset=0,
                 page_size=len(objects),

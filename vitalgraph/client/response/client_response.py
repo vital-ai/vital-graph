@@ -547,9 +547,22 @@ class KGTypeResponse(VitalGraphResponse):
 class KGTypesListResponse(VitalGraphResponse):
     """Response for KGType list operations."""
     types: List[Any] = Field(default_factory=list, description="List of KGTypes")
-    count: int = Field(0, description="Total count of types")
+    # `count` is the number on THIS page; `total_count` is the size of the whole
+    # result set. That is the contract KGTypeSearchResponse already documented
+    # and GraphObjectResponse.count already implements — these three were the
+    # odd ones out, declaring `count` as "total count" and being handed the
+    # server's total by the list methods. Aligned 2026-08-16.
+    #
+    # BREAKING: a caller reading `count` for the total must read `total_count`.
+    # `count` now means what its name says everywhere in this module.
+    count: int = Field(0, description="Number of types on this page")
+    total_count: int = Field(0, description="Total types across all pages")
     page_size: Optional[int] = Field(None, description="Page size for pagination")
     offset: Optional[int] = Field(None, description="Offset for pagination")
+    has_more: Optional[bool] = Field(
+        None,
+        description="Whether more pages exist; None when the server did not say",
+    )
     
     @property
     def is_success(self) -> bool:
@@ -691,9 +704,22 @@ class ObjectResponse(VitalGraphResponse):
 class ObjectsListResponse(VitalGraphResponse):
     """Response for object list operations."""
     objects: List[Any] = Field(default_factory=list, description="List of objects")
-    count: int = Field(0, description="Total count of objects")
+    # `count` is the number on THIS page; `total_count` is the size of the whole
+    # result set. That is the contract KGTypeSearchResponse already documented
+    # and GraphObjectResponse.count already implements — these three were the
+    # odd ones out, declaring `count` as "total count" and being handed the
+    # server's total by the list methods. Aligned 2026-08-16.
+    #
+    # BREAKING: a caller reading `count` for the total must read `total_count`.
+    # `count` now means what its name says everywhere in this module.
+    count: int = Field(0, description="Number of objects on this page")
+    total_count: int = Field(0, description="Total objects across all pages")
     page_size: Optional[int] = Field(None, description="Page size for pagination")
     offset: Optional[int] = Field(None, description="Offset for pagination")
+    has_more: Optional[bool] = Field(
+        None,
+        description="Whether more pages exist; None when the server did not say",
+    )
     
     @property
     def is_success(self) -> bool:
@@ -754,9 +780,22 @@ class KGDocumentResponse(VitalGraphResponse):
 class KGDocumentsListResponse(VitalGraphResponse):
     """Response for KGDocument list operations."""
     documents: List[Any] = Field(default_factory=list, description="List of KGDocuments")
-    count: int = Field(0, description="Total count of documents")
+    # `count` is the number on THIS page; `total_count` is the size of the whole
+    # result set. That is the contract KGTypeSearchResponse already documented
+    # and GraphObjectResponse.count already implements — these three were the
+    # odd ones out, declaring `count` as "total count" and being handed the
+    # server's total by the list methods. Aligned 2026-08-16.
+    #
+    # BREAKING: a caller reading `count` for the total must read `total_count`.
+    # `count` now means what its name says everywhere in this module.
+    count: int = Field(0, description="Number of documents on this page")
+    total_count: int = Field(0, description="Total documents across all pages")
     page_size: Optional[int] = Field(None, description="Page size for pagination")
     offset: Optional[int] = Field(None, description="Offset for pagination")
+    has_more: Optional[bool] = Field(
+        None,
+        description="Whether more pages exist; None when the server did not say",
+    )
     
     @property
     def is_success(self) -> bool:
@@ -811,7 +850,10 @@ class KGDocumentDeleteResponse(VitalGraphResponse):
 class KGDocumentSegmentsResponse(VitalGraphResponse):
     """Response for listing segments of a KGDocument."""
     segments: List[Any] = Field(default_factory=list, description="List of segment GraphObjects")
-    count: int = Field(0, description="Total count of segments")
+    # Unpaged: every segment of the document is returned, so this is both the
+    # page count and the total. Described as a count of what is here, matching
+    # `count` everywhere else in this module, rather than as a "total".
+    count: int = Field(0, description="Number of segments returned (all of them)")
     parent_uri: Optional[str] = Field(None, description="Parent document URI")
     
     @property
