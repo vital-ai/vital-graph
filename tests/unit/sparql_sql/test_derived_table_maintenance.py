@@ -54,6 +54,11 @@ WRITE_PATHS = [
     "remove_rdf_quads_batch",
     "remove_rdf_quads_batch_bulk",
     "delete_entity_graph_bulk",
+    # SPARQL UPDATE. Named in edge_table_integrity_bug.md's root cause as a
+    # path that did not sync, and omitted from the first version of this matrix
+    # — which is the failure this test exists to prevent, made by the test
+    # itself. Any write path that reaches rdf_quad belongs here.
+    "execute_sparql_update",
 ]
 
 # derived table -> the marker that proves a path maintains it.
@@ -93,6 +98,11 @@ KNOWN_GAPS: dict[tuple[str, str], str] = {
         "deletes quads and maintains nothing; remove_rdf_quads_batch_bulk does",
     ("remove_rdf_quads_batch", "frame_entity"): "same as edge",
     ("remove_rdf_quads_batch", "stats"): "same as edge",
+    ("execute_sparql_update", "stats"):
+        "syncs edge and frame_entity but not stats. edge_table_integrity_bug.md "
+        "notes the delete side separately: sync_stats_after_delete is "
+        "subject-driven like the edge hooks, so a WHERE-bound DELETE misses it "
+        "the same way",
 }
 
 
