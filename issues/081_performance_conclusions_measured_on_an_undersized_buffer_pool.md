@@ -1,6 +1,6 @@
 # Most Performance Conclusions Were Measured on a 1 GB Buffer Pool
 
-## Status: OPEN — triage below, 2026-08-11
+## Status: the three actions are DONE; the safeguard is closed 2026-08-16
 
 `shared_buffers` was **1 GB on a 64 GB machine**, and `effective_cache_size` was
 at its 4 GB default and had never been tuned. A single query on
@@ -204,9 +204,42 @@ configuration as the first line of every run:**
             random_page_cost=1  shared_buffers=16GB  work_mem=64MB
     fixture: sp_lead_synth_100k
 
-Remaining: find out why `env.pg` was empty in the promoted baseline and make an
-empty stamp a recorded failure rather than a silent one. Every ad-hoc timing
-script written during this investigation also lacked it — including all of mine.
+### Answered 2026-08-16 — and the interesting half is why it stayed invisible
+
+**Why it was empty.** `pg_stamp`, the conftest wiring that populates
+`env["pg"]`, and the promoted baseline all arrived in the SAME commit
+(`63163ee`, 2026-08-06). The run that became the baseline did not carry the
+stamp the commit introduced. That much is mundane.
+
+**Why nothing noticed for six days is the real finding.** `compare_env` gated
+on:
+
+    if a is not None and b is not None and a != b
+
+which reads as careful and means an ABSENT value can never disagree with
+anything. So the empty baseline stamp did not FAIL the configuration gate — it
+DISABLED it. A disabled gate reports exactly what a satisfied one reports, and
+`perf_compare` printed no environment problems for every run compared against
+it.
+
+Measured on the committed baseline:
+
+    compare_env(stamped_run, committed_baseline)  ->  []      (before)
+    compare_env(stamped_run, committed_baseline)  ->  4 problems  (after)
+
+**Fixed.** Absence is now reported rather than skipped, in both directions and
+per-key, and `promote()` REFUSES a run with no stamp — promotion being the
+moment a run becomes the thing everything is later compared against.
+`--force-unstamped` exists and records `baseline.pg_stamped: false` in the
+artifact, so an override leaves a trace instead of producing a baseline
+indistinguishable from a good one.
+
+The committed baseline still has `env.pg == {}` and is now REPORTED as such on
+every comparison. It should be re-promoted from a stamped run; until then the
+tooling says so rather than implying agreement.
+
+Every ad-hoc timing script written during this investigation also lacked a
+stamp — including all of mine.
 
 ## The rule this earns
 

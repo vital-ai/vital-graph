@@ -93,12 +93,47 @@ def pct_change(baseline: float, current: float) -> Optional[float]:
 # ---------------------------------------------------------------------------
 
 def compare_env(run: Dict[str, Any], base: Dict[str, Any]) -> List[str]:
-    """Return a list of environment mismatches that invalidate the comparison."""
+    """Return a list of environment mismatches that invalidate the comparison.
+
+    A MISSING server stamp is reported, not skipped. The rule used to be
+    `a is not None and b is not None and a != b`, which reads sensibly and has
+    the effect that an absent value can never disagree with anything — so the
+    committed baseline, whose `env.pg` is `{}`, silently disabled the entire
+    configuration gate rather than failing it.
+
+    That is how every timing in this repository came to be compared against a
+    baseline taken on a 1 GB `shared_buffers` without anyone noticing
+    (issues/081): the check existed, ran, and reported nothing, which reads
+    exactly like agreement.
+
+    Absence is not agreement. It is the absence of evidence, and for a
+    comparison gate that is a problem to report.
+    """
     problems = []
+    base_pg = base.get("env", {}).get("pg") or {}
+    run_pg = run.get("env", {}).get("pg") or {}
+    if not base_pg:
+        problems.append(
+            "baseline records NO PostgreSQL settings — timings cannot be shown "
+            "comparable to it. Promote a baseline from a stamped run "
+            "(see issues/081)")
+    if not run_pg:
+        problems.append(
+            "this run records NO PostgreSQL settings — see issues/081")
+
     for section, key in ENV_GATES:
         a = (base.get("env", {}).get(section, {}) or {}).get(key)
         b = (run.get("env", {}).get(section, {}) or {}).get(key)
-        if a is not None and b is not None and a != b:
+        if a is None and b is None:
+            continue          # neither side claims anything; nothing to compare
+        if a is None or b is None:
+            # One side knows and the other does not. Previously silent.
+            known, unknown = ("run", "baseline") if a is None else ("baseline", "run")
+            problems.append(
+                f"{section}.{key}: {known}={b if a is None else a!r} but "
+                f"{unknown} did not record it")
+            continue
+        if a != b:
             problems.append(f"{section}.{key}: baseline={a!r} run={b!r}")
     return problems
 
@@ -289,8 +324,27 @@ def report(run: Dict[str, Any], base: Dict[str, Any],
 # Promote / trend
 # ---------------------------------------------------------------------------
 
-def promote(run_path: str, name: str, reason: str = "") -> str:
+def promote(run_path: str, name: str, reason: str = "", force: bool = False) -> str:
     run = load_json(run_path)
+
+    # Promotion is the moment a run becomes the thing everything is compared
+    # against, so it is the right place to be strict. The committed baseline was
+    # promoted with `env.pg == {}` (issues/081), and because the comparison gate
+    # skipped absent values, nothing downstream could notice: every subsequent
+    # run was measured against a configuration nobody had recorded, which turned
+    # out to be a 1 GB shared_buffers on a fixture needing more than 3 GB.
+    if not (run.get("env", {}).get("pg") or {}):
+        msg = (f"{run_path} records NO PostgreSQL settings (env.pg is empty). "
+               f"A baseline without them cannot be shown comparable to anything "
+               f"later. See issues/081.")
+        if not force:
+            print(f"❌ refusing to promote: {msg}", file=sys.stderr)
+            print("   Re-run the benchmarks so the stamp is captured, or pass "
+                  "--force-unstamped if you accept an uncomparable baseline.",
+                  file=sys.stderr)
+            raise SystemExit(2)
+        print(f"⚠️  {msg}\n   Promoting anyway (--force-unstamped).")
+
     bad = [b["bench_id"] for b in run.get("benches", []) if b.get("status") != "ok"]
     if bad:
         print(f"⚠️  {len(bad)} bench(es) are not 'ok' and will be promoted as holes:")
@@ -300,7 +354,8 @@ def promote(run_path: str, name: str, reason: str = "") -> str:
         print("⚠️  run was recorded from a DIRTY working tree — the baseline commit "
               "will not reproduce it exactly.")
     run["baseline"] = {"name": name, "promoted_from": os.path.abspath(run_path),
-                       "reason": reason}
+                       "reason": reason,
+                       "pg_stamped": bool(run.get("env", {}).get("pg") or {})}
     os.makedirs(BASELINE_DIR, exist_ok=True)
     out = os.path.join(BASELINE_DIR, f"{name}.json")
     with open(out, "w") as fh:
@@ -342,6 +397,10 @@ def main() -> int:
     ap.add_argument("run", nargs="?", help="path to a recorded run JSON")
     ap.add_argument("--baseline", help="baseline name (tests/performance/baselines/<name>.json) or path")
     ap.add_argument("--promote", metavar="NAME", help="promote this run to a named baseline")
+    ap.add_argument("--force-unstamped", action="store_true",
+                    help="promote even if the run recorded no PostgreSQL "
+                         "settings (issues/081 — the resulting baseline cannot "
+                         "be shown comparable to anything)")
     ap.add_argument("--reason", default="", help="why this baseline was promoted")
     ap.add_argument("--json", metavar="PATH", help="write the findings as JSON")
     ap.add_argument("--trend", metavar="BENCH_ID", help="show a metric's history")
@@ -355,7 +414,8 @@ def main() -> int:
     if not args.run:
         ap.error("a run path is required (or use --trend)")
     if args.promote:
-        promote(args.run, args.promote, args.reason)
+        promote(args.run, args.promote, args.reason,
+                force=args.force_unstamped)
         return 0
     if not args.baseline:
         ap.error("--baseline is required when comparing")

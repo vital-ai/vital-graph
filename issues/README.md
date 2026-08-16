@@ -112,7 +112,7 @@ caller, which is what makes that file worth a sweep rather than two point fixes.
 | | status | |
 |---|---|---|
 | 088 | partially fixed | Absence-defined filters scan every row when the predicate EXISTS. Fast when absent (13.4 s -> 0.76 s cold, 0.03 s warm); still 9.7 s in the 22 of 79 spaces that populate the predicate |
-| 081 | OPEN | Performance conclusions measured on an undersized buffer pool — read before trusting an old number |
+| 081 | SAFEGUARD CLOSED | Perf conclusions measured on a 1 GB pool. The three re-measurements are done; the comparison gate skipped ABSENT values, so an unstamped baseline disabled it rather than failing it — a disabled gate reports what a satisfied one reports |
 | 070 | largely fixed | Pushed term subqueries re-execute inside correlated probes; `contains` not fully closed |
 
 ## Fixtures and test infrastructure
