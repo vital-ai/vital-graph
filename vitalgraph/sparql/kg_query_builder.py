@@ -10,6 +10,70 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Escaping caller-supplied values into SPARQL syntax (issues/098)
+# ---------------------------------------------------------------------------
+#
+# Every query in this module is built by f-string interpolation, so any caller
+# value that lands inside a literal or an IRI is SPARQL SYNTAX unless escaped.
+# It was not, at eight sites, and that is not only a broken-query bug:
+#
+#     search_string = 'x")) || (1=1)) #'
+#     -> FILTER(CONTAINS(LCASE(?search_name), LCASE("x")) || (1=1)) #")))
+#
+# which parses, is unconditionally true, and returns every entity of the type in
+# a response that looks like an ordinary page. The breakage half was loud and got
+# reported; the bypass was silent, so it was not.
+#
+# ORDER MATTERS. The backslash must be replaced FIRST -- doing quotes first
+# leaves the backslash it introduced to be doubled by the next pass, and a value
+# ending in a backslash escapes the closing quote and reopens the hole the
+# escaping was for. Three sites here previously did `.replace('"', '\\"')` alone,
+# which is exactly that case.
+
+_SPARQL_STRING_ESCAPES = (
+    ("\\", "\\\\"),   # first, always
+    ('"', '\\"'),
+    ("\n", "\\n"),
+    ("\r", "\\r"),
+    ("\t", "\\t"),
+    ("\b", "\\b"),
+    ("\f", "\\f"),
+)
+
+
+def escape_sparql_string(value: Any) -> str:
+    """Escape a value for use inside a SPARQL double-quoted literal.
+
+    Covers the characters SPARQL 1.1 §19.7 does not permit raw in a
+    STRING_LITERAL. Returns the BODY only -- callers supply the quotes, because
+    some sites need a datatype suffix and some do not.
+    """
+    text = value if isinstance(value, str) else str(value)
+    for raw, escaped in _SPARQL_STRING_ESCAPES:
+        text = text.replace(raw, escaped)
+    return text
+
+
+def escape_sparql_iri(value: Any) -> str:
+    """Escape a value for use inside `<...>`.
+
+    An IRIREF is terminated by `>` and forbids whitespace and a handful of
+    delimiters, so the payload shape here is `x> ?s ?p ?o . <y` rather than a
+    quote. Percent-encoding the excluded characters keeps the IRI addressing the
+    same resource while making it impossible to leave the brackets.
+    """
+    text = value if isinstance(value, str) else str(value)
+    out = []
+    for ch in text:
+        # SPARQL 1.1 §19.8 IRIREF excludes <>"{}|^`\ and everything <= 0x20.
+        if ch in '<>"{}|^`\\' or ord(ch) <= 0x20:
+            out.append("".join(f"%{b:02X}" for b in ch.encode("utf-8")))
+        else:
+            out.append(ch)
+    return "".join(out)
+
 # ---------------------------------------------------------------------------
 # Slot class URI → value property mapping (full URIs, never use substring match)
 # ---------------------------------------------------------------------------
@@ -549,7 +613,7 @@ class KGQueryCriteriaBuilder:
         # Add search string filter (search in hasName only)
         if criteria.search_string:
             filter_clauses.append(f"""?entity vital-core:hasName ?search_name .
-FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
+FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.search_string)}")))""")
         
         # Frame type filtering is now handled via frame_criteria, not a single frame_type field
         
@@ -572,7 +636,7 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
                     filter_clauses.append(f"FILTER(?{filter_var} != \"{filter_criterion.value}\")")
                 elif filter_criterion.operator == "contains":
                     filter_clauses.append(f"?entity <{property_uri}> ?{filter_var} .")
-                    filter_clauses.append(f"FILTER(CONTAINS(LCASE(STR(?{filter_var})), LCASE(\"{filter_criterion.value}\")))")
+                    filter_clauses.append(f"FILTER(CONTAINS(LCASE(STR(?{filter_var})), LCASE(\"{escape_sparql_string(filter_criterion.value)}\")))")
         
         # Add direct entity property filters (datatype-aware)
         if criteria.entity_property_filters:
@@ -598,7 +662,7 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
                         filter_clauses.append(f'FILTER(?{var} != "{epf.value}")')
                 elif epf.operator == "contains":
                     filter_clauses.append(f"?entity <{prop_uri}> ?{var} .")
-                    filter_clauses.append(f'FILTER(CONTAINS(LCASE(STR(?{var})), LCASE("{epf.value}")))')
+                    filter_clauses.append(f'FILTER(CONTAINS(LCASE(STR(?{var})), LCASE("{escape_sparql_string(epf.value)}")))')
                 elif epf.operator in ("gt", "lt", "gte", "lte"):
                     filter_clauses.append(f"?entity <{prop_uri}> ?{var} .")
                     op_map = {"gt": ">", "lt": "<", "gte": ">=", "lte": "<="}
@@ -998,7 +1062,7 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
         # Add search string filter (search in hasName only)
         if criteria.search_string:
             where_clauses.append(f"""?frame vital-core:hasName ?search_name .
-FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
+FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.search_string)}")))""")
 
         
         # Add entity type filter
@@ -1538,9 +1602,9 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
             # Check if this is a URI-valued slot class - use angle brackets for URI references
             is_uri_slot = (slot_class_uri in _URI_VALUE_SLOT_CLASSES) or (slot_type in _URI_VALUE_SLOT_CLASSES)
             if is_uri_slot:
-                escaped_value = f'<{value}>'
+                escaped_value = f'<{escape_sparql_iri(value)}>'
             elif (slot_class_uri in _TEXT_SLOT_CLASSES) or (slot_type in _TEXT_SLOT_CLASSES):
-                escaped_value = f'"{value}"^^xsd:string'
+                escaped_value = f'"{escape_sparql_string(value)}"^^xsd:string'
             elif (slot_class_uri in _DATETIME_SLOT_CLASSES) or (slot_type in _DATETIME_SLOT_CLASSES):
                 # Typed, so the SQL layer can recognise it as a datetime and
                 # push the comparison to the indexed dt_val column. Emitted
@@ -1548,9 +1612,9 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
                 # and the range is evaluated above the join over every
                 # candidate — which is why datetime ranges timed out at 100k
                 # while the numeric ones ran in milliseconds (issues/053).
-                escaped_value = f'"{value}"^^xsd:dateTime'
+                escaped_value = f'"{escape_sparql_string(value)}"^^xsd:dateTime'
             else:
-                escaped_value = f'"{value}"'
+                escaped_value = f'"{escape_sparql_string(value)}"'
         else:
             escaped_value = str(value)
         
@@ -1732,9 +1796,9 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
             arg_parts = []
             for v in mvc.vectors:
                 if v.vector:
-                    escaped_val = v.vector.replace('"', '\\"')
+                    escaped_val = escape_sparql_string(v.vector)
                 else:
-                    escaped_val = (v.search_text or "").replace('"', '\\"')
+                    escaped_val = escape_sparql_string(v.search_text or "")
                 arg_parts.append(f'"{escaped_val}", "{v.index_name}", {v.weight}')
             
             args_str = ", ".join(arg_parts)
@@ -1760,7 +1824,7 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
             
             if vc.search_text:
                 # Server-side vectorization: vg:vectorSimilarity
-                escaped_text = vc.search_text.replace('"', '\\"')
+                escaped_text = escape_sparql_string(vc.search_text)
                 where_parts.append(
                     f'BIND(vg:vectorSimilarity(?{anchor_var}, "{escaped_text}", "{vc.index_name}") AS ?{score_var})')
             elif vc.vector:
@@ -1902,7 +1966,7 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
 
         # Text search
         if criteria.search_text:
-            escaped_text = criteria.search_text.replace('"', '\\"')
+            escaped_text = escape_sparql_string(criteria.search_text)
             if criteria.fts_index_name:
                 # GIN-indexed BM25 search via vg:textSearch
                 filter_clauses.append(
@@ -1962,7 +2026,7 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
                         filter_clauses.append(f'FILTER(?{var} != "{epf.value}")')
                 elif epf.operator == "contains":
                     filter_clauses.append(f"?entity <{prop_uri}> ?{var} .")
-                    filter_clauses.append(f'FILTER(CONTAINS(LCASE(STR(?{var})), LCASE("{epf.value}")))')
+                    filter_clauses.append(f'FILTER(CONTAINS(LCASE(STR(?{var})), LCASE("{escape_sparql_string(epf.value)}")))')
                 elif epf.operator in ("gt", "lt", "gte", "lte"):
                     filter_clauses.append(f"?entity <{prop_uri}> ?{var} .")
                     op_map = {"gt": ">", "lt": "<", "gte": ">=", "lte": "<="}

@@ -69,7 +69,7 @@ All 15 are now run or declined in writing. 705 → **907 executed cases**.
 | 094 | OPEN | `xsd:float` casts render `+33.3300` as `33.33000183105469` — CONFIRMED ours |
 | 095 | OPEN | Four syntax forms the grammar forbids are accepted — Jena, upstream |
 | 097 | FIXED | A non-JSON request body returned HTTP 500 on every endpoint |
-| 098 | OPEN | **Search input is interpolated into SPARQL unescaped — confirmed filter bypass.** Previously carried as "quotes break the query"; a balanced payload does not break it, it disables the FILTER and returns everything. 5 sites; a 6th in the same file already escapes |
+| 098 | FIXED | **Search input was interpolated into SPARQL unescaped — confirmed filter bypass.** Previously carried as "quotes break the query"; a balanced payload does not break it, it disables the FILTER and returns everything. Eight sites, including three that escaped the quote but not the backslash |
 
 Verified PASSING rather than assumed: `property-path` 33/33, `project-expression`
 7/7, and 166 of 170 syntax cases. The feature tracker had listed property paths

@@ -1,6 +1,6 @@
 # Search Input Is Interpolated Into SPARQL Unescaped — Confirmed Filter Bypass
 
-## Status: OPEN — found 2026-08-16 while reviewing the portal query work
+## Status: FIXED 2026-08-16 — found while reviewing the portal query work
 
 `KGQueryCriteriaBuilder` builds its filters by f-string interpolation, so a
 caller-supplied search string lands inside a SPARQL string literal with no
@@ -72,12 +72,28 @@ Note `_build_vector_criteria` (`:1735`, `:1737`) ALREADY escapes quotes:
 so the convention exists in this very file and was applied at one site out of
 six.
 
-## Not fixed here, deliberately
+## Fixed
 
-`kg_query_builder.py` currently has ~215 uncommitted lines of in-flight sort
-work in the tree (`issues/096`). Adding an escaping change on top would tangle
-two unrelated changes in one file. Worth doing as its own commit once that
-settles, or immediately if this is judged urgent enough to interleave.
+`escape_sparql_string` and `escape_sparql_iri`, applied at all eight sites —
+including the three that previously escaped the quote alone, which is its own
+hole: a value ending in a backslash escapes the closing quote. The backslash is
+replaced FIRST for that reason; doing quotes first doubles the backslash the
+quote-escape introduced.
+
+The IRI case needed its own helper. An `<...>` is terminated by `>`, so the
+payload shape there is `x> ?s ?p ?o . <y` rather than a quote; the excluded
+characters are percent-encoded, which keeps the IRI addressing the same resource
+while making it impossible to leave the brackets.
+
+Verified: the bypass payload now reaches the parser as one literal containing
+that text, and the compiled ALGEBRA is identical to the same query built with an
+inert search term. That is the assertion in the tests — not "it compiles", since
+the injected form compiled perfectly well, which is what made it dangerous
+rather than merely broken.
+
+`tests/unit/sparql/test_kg_query_builder_escaping.py` — 22 cases. Checked
+against three broken variants, each of which it catches: no escaping (14 fail),
+quote-only (5), and quote-before-backslash (9).
 
 ## Related
 
