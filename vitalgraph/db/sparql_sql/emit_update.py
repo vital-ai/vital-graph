@@ -512,6 +512,17 @@ def _insert_data_sql(quads: List[QuadPattern], space_id: str,
 
     for q in quads:
         graph_uri = _node_text(q.graph) if q.graph else default_graph_uri
+        # The graph's TYPE, not a hardcoded 'U'. N-Quads permits a blank node in
+        # the graph position and the schema allows it ('B' is a legal
+        # term_type), so typing it 'U' stored a blank node as a URI — silently,
+        # and with a term_uuid computed over the wrong type, so the same graph
+        # named through the import path and through here would not match.
+        #
+        # SPARQL's own grammar does not admit a blank node after GRAPH, so this
+        # is unreachable from a SPARQL UPDATE today. It is still wrong to write
+        # a type the node does not have, and the import path already types this
+        # position correctly.
+        graph_type = _node_type(q.graph) if q.graph else "U"
 
         # Upsert terms (deduplicated within the batch)
         for node in [q.subject, q.predicate, q.object]:
@@ -526,10 +537,10 @@ def _insert_data_sql(quads: List[QuadPattern], space_id: str,
                                           datatype_id=dt_id))
 
         # Graph term
-        key = (graph_uri, "U", None, None)
+        key = (graph_uri, graph_type, None, None)
         if key not in seen_terms:
             seen_terms.add(key)
-            stmts.append(_term_upsert(term_table, graph_uri, "U"))
+            stmts.append(_term_upsert(term_table, graph_uri, graph_type))
 
         # Insert quad using deterministic UUID references
         s_uuid = _term_uuid_subquery(term_table, _node_text(q.subject), _node_type(q.subject))
@@ -537,7 +548,7 @@ def _insert_data_sql(quads: List[QuadPattern], space_id: str,
         o_uuid = _term_uuid_subquery(term_table, _node_text(q.object), _node_type(q.object),
                                      datatype_id=_node_dt_id(q.object),
                                      lang=_node_lang(q.object))
-        g_uuid = _term_uuid_subquery(term_table, graph_uri, "U")
+        g_uuid = _term_uuid_subquery(term_table, graph_uri, graph_type)
 
         stmts.append(
             f"INSERT INTO {quad_table} "

@@ -261,3 +261,100 @@ class TestAllIngestPathsScopeBlankNodes:
         assert src.count("bnode_scope = _bnode_scope_for(graph_uri, file_path)") >= 4, (
             "an ingest path computes its scope differently, or one of the two "
             "N-Triples passes does not compute one at all")
+
+
+class TestExportRoundTrip:
+    """Skolemisation must survive a real export and re-import (§7 item 3).
+
+    The functions were covered, and both import parsers were covered, but the
+    SERIALIZERS were not — and they are where the `_:` prefix is re-added. A
+    label that is valid stored and valid on import can still export to something
+    no parser reads back, which is precisely why `term_text` holds the label
+    rather than the Skolem IRI.
+    """
+
+    def _skolem(self):
+        from vitalgraph.db.sparql_sql.term_normalize import skolem_label
+        return skolem_label("docA", "b0")
+
+    def test_the_python_serializer_emits_a_valid_ntriples_label(self):
+        import re
+        from vitalgraph.endpoint.impl.data_export_impl import _format_term_nt
+        out = _format_term_nt(self._skolem(), "B", None)
+        assert re.fullmatch(r"_:[A-Za-z0-9][A-Za-z0-9._-]*", out), (
+            f"exported {out!r}, which is not a valid N-Triples BLANK_NODE_LABEL")
+
+    def test_the_nquads_serializer_agrees_with_the_ntriples_one(self):
+        from vitalgraph.endpoint.impl.data_export_impl import (
+            _format_term_nquads, _format_term_nt)
+        label = self._skolem()
+        assert _format_term_nt(label, "B", None) == \
+               _format_term_nquads(label, "B", None)
+
+    def test_the_prefix_is_added_exactly_once(self):
+        """The doubling failure: a stored `_:b1` plus a serializer prefix gives
+        `_:_:b1`. Storage is normalised now, but the serializer must not be the
+        thing relied on to notice."""
+        from vitalgraph.endpoint.impl.data_export_impl import _format_term_nt
+        assert _format_term_nt(self._skolem(), "B", None).count("_:") == 1
+
+    def test_the_sql_exporter_uses_the_same_convention(self):
+        """bulk_export builds the prefix in SQL, so it cannot share the Python
+        helper — but it must agree with it, or the two export routes disagree."""
+        import inspect
+        from vitalgraph.db.sparql_sql import bulk_export
+        src = inspect.getsource(bulk_export)
+        assert "WHEN 'B' THEN '_:' || " in src, (
+            "the SQL exporter no longer re-adds `_:` for a blank node, or does "
+            "it differently from data_export_impl")
+
+    def test_an_exported_label_re_imports_as_the_same_node(self):
+        """The round trip that matters: export, then parse back."""
+        from vitalgraph.endpoint.impl.data_export_impl import _format_term_nt
+        from vitalgraph.endpoint.impl.data_import_impl import (
+            _parse_nquads_term_for_import as parse)
+        label = self._skolem()
+        exported = _format_term_nt(label, "B", None)
+        # Re-imported WITHOUT a scope: an already-skolemised label must survive
+        # unchanged rather than being skolemised a second time.
+        assert parse(exported) == (label, "B", None)
+
+    def test_a_scoped_reimport_preserves_identity(self):
+        """Export then re-import WITH a scope must land on the same node.
+
+        This failed when written. The importers always pass a scope now, so an
+        exported `_:vg<hash>` was skolemised a SECOND time and became a
+        different node — every export/import cycle minting another, identity
+        drifting instead of round-tripping.
+
+        A skolem label is globally unique and document-independent, which is the
+        point of minting it; scoping it again treats a global identifier as a
+        document-local one. Guarded with `is_skolem_label`.
+        """
+        from vitalgraph.endpoint.impl.data_export_impl import _format_term_nt
+        from vitalgraph.endpoint.impl.data_import_impl import (
+            _parse_nquads_term_for_import as parse)
+        label, _, _ = parse("_:b0", "docA")
+        again, _, _ = parse(_format_term_nt(label, "B", None), "docA")
+        assert again == label, "a scoped re-import changed the node's identity"
+
+    def test_identity_survives_import_into_a_different_document(self):
+        """The reason skolem IRIs exist: they are portable where labels are not.
+
+        A raw `_:b0` is document-scoped and must NOT be, but one of our own
+        skolem labels carries its origin, so moving it between documents keeps
+        it the same node.
+        """
+        from vitalgraph.endpoint.impl.data_export_impl import _format_term_nt
+        from vitalgraph.endpoint.impl.data_import_impl import (
+            _parse_nquads_term_for_import as parse)
+        label, _, _ = parse("_:b0", "docA")
+        moved, _, _ = parse(_format_term_nt(label, "B", None), "docB")
+        assert moved == label
+
+    def test_fresh_labels_are_still_scoped_apart(self):
+        """Guard the guard: skipping skolemisation for skolem-shaped labels
+        must not skip it for ordinary ones, which would restore the merge."""
+        from vitalgraph.endpoint.impl.data_import_impl import (
+            _parse_nquads_term_for_import as parse)
+        assert parse("_:b0", "docA")[0] != parse("_:b0", "docB")[0]

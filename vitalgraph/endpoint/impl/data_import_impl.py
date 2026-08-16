@@ -80,8 +80,16 @@ def _classify_node(node, bnode_scope: Optional[str] = None
     elif cls_name == "BlankNode":
         label = node.value
         if bnode_scope:
-            from vitalgraph.db.sparql_sql.term_normalize import skolem_label
-            label = skolem_label(bnode_scope, label)
+            from vitalgraph.db.sparql_sql.term_normalize import (
+                is_skolem_label, skolem_label)
+            # NOT if it is already skolemised. A skolem label is globally
+            # unique and document-independent — that is the whole point of
+            # minting it — so scoping it again treats a global identifier as a
+            # document-local one. Our own export re-imported would then land on
+            # a DIFFERENT node, and every export/import cycle would mint
+            # another, so identity would drift instead of round-tripping.
+            if not is_skolem_label(label):
+                label = skolem_label(bnode_scope, label)
         return label, "B", None
     else:
         # One of our own Skolem IRIs read back becomes the blank node it was,
@@ -156,8 +164,16 @@ def _parse_nquads_term_for_import(
         # reproduces the same nodes and reload stays idempotent (issues/041).
         # A random per-load label would satisfy RDF and break that.
         if bnode_scope:
-            from vitalgraph.db.sparql_sql.term_normalize import skolem_label
-            label = skolem_label(bnode_scope, label)
+            from vitalgraph.db.sparql_sql.term_normalize import (
+                is_skolem_label, skolem_label)
+            # NOT if it is already skolemised. A skolem label is globally
+            # unique and document-independent — that is the whole point of
+            # minting it — so scoping it again treats a global identifier as a
+            # document-local one. Our own export re-imported would then land on
+            # a DIFFERENT node, and every export/import cycle would mint
+            # another, so identity would drift instead of round-tripping.
+            if not is_skolem_label(label):
+                label = skolem_label(bnode_scope, label)
         return label, "B", None
 
 
