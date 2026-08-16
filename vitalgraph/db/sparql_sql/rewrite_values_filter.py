@@ -113,14 +113,28 @@ def rewrite_values_filter(plan: Optional[PlanV2], depth: int = 0) -> Optional[Pl
         if got is None:
             continue
         var, nodes = got
-        # The other side must BIND the variable, or the join assigns it and a
-        # filter would delete every row instead.
+        # The other side must DEFINITELY bind the variable — `defined`, not
+        # `all_visible`. `all_visible` is `defined | maybe`, and `maybe` is
+        # exactly the OPTIONAL/UNION case where the variable can arrive unbound.
+        #
+        # Those two forms disagree on an unbound value: VALUES is a join, and an
+        # unbound variable is compatible with every VALUES row, so the solution
+        # survives and gains the binding. `FILTER(?v IN (...))` on an unbound
+        # variable eliminates the row instead.
+        #
+        # Caught by DAWG bindings/values07 (`?o2` bound inside an OPTIONAL,
+        # then `VALUES (?o2)` applied after): expected 5 rows, this returned 3.
+        # The first version of this guard used `all_visible` and let it through,
+        # which is the difference between a variable being MENTIONABLE and being
+        # BOUND.
         try:
-            bound = set(compute_scope(other).all_visible)
+            scope = compute_scope(other)
         except Exception:
             return plan
-        if var not in bound:
-            logger.debug("values->in declined: %s not bound by the other side", var)
+        if var not in scope.defined:
+            logger.debug(
+                "values->in declined: %s is not definitely bound by the other "
+                "side (maybe=%s)", var, var in scope.maybe)
             continue
         logger.debug("values->in: %s over %d constant(s)", var, len(nodes))
         return _as_in_filter(var, nodes, other)

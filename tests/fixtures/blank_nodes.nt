@@ -1,0 +1,32 @@
+# Blank-node fixture. Every other fixture in this repo is URI-only, because
+# every VitalGraph KG object has a URI — which is why the blank-node paths are
+# the least-trodden code in the backend while staying reachable from any SPARQL
+# query or third-party import (issues/069).
+#
+# Deliberately tiny: the point is reaching the code paths, not volume.
+
+# A subject blank node with two triples — within-node consistency: both must
+# resolve to ONE term row, not two.
+_:b1 <http://example.org/p1> "first" .
+_:b1 <http://example.org/p2> "second" .
+
+# An object blank node reachable from a URI subject — the DESCRIBE case.
+<http://example.org/s1> <http://example.org/hasThing> _:b2 .
+_:b2 <http://example.org/label> "object position" .
+
+# The same blank node in BOTH subject and object position. If the two positions
+# resolved to different term rows this triple would dangle.
+<http://example.org/s2> <http://example.org/points> _:b1 .
+
+# A distinct label, to catch collapse: _:b1 and _:b3 must never merge.
+_:b3 <http://example.org/p1> "distinct from b1" .
+
+# An RDF collection, which desugars to an rdf:first/rdf:rest chain of blank
+# nodes. Doubles as the seed fixture for RDF lists.
+<http://example.org/s3> <http://example.org/items> _:c1 .
+_:c1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/a> .
+_:c1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> _:c2 .
+_:c2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/b> .
+_:c2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> _:c3 .
+_:c3 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/c> .
+_:c3 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .

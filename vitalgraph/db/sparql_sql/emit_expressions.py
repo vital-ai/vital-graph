@@ -846,10 +846,33 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
         return a
 
     if fname == "bnode" and len(args) <= 1:
+        # SPARQL 1.1 §17.4.2.2. BNODE() must return a DISTINCT blank node for
+        # each solution it is invoked in; BNODE(literal) must return the same
+        # node for the same simple-literal argument within one execution.
+        #
+        # This returned the constant '_:b0' for both forms, so every solution
+        # collapsed onto one node — and under DISTINCT, rows the spec calls
+        # distinct deduplicated down to one (issues/067).
+        #
+        # BARE LABEL, no `_:`. The prefix belongs to the serializers, which
+        # re-add it; emitting it here put it in the JSON result value where the
+        # spec wants "b0", and would double it on export.
         if args:
             a = expr_to_sql(args[0], ctx)
-            return f"CONCAT('_:', {a})" if a else "'_:b0'"
-        return "'_:b0'"
+            # Same argument -> same node. md5 of the argument is stable within
+            # the execution, which is the requirement that matters.
+            #
+            # NOT scoped to the execution, and the spec asks for that too: two
+            # separate queries using BNODE("x") produce the same label here. A
+            # per-execution salt cannot simply be baked into the SQL because
+            # SparqlCompileCache reuses generated SQL across executions, so the
+            # salt would be reused with it. Left as-is deliberately; see
+            # issues/067.
+            return f"('b' || md5({a}))" if a else "('b' || md5(''))"
+        # Fresh per row. gen_random_uuid() is VOLATILE, so PostgreSQL evaluates
+        # it once per row rather than folding it to a constant — which is the
+        # whole point.
+        return "('b' || replace(gen_random_uuid()::text, '-', ''))"
 
     if fname == "strdt" and len(args) == 2:
         a = expr_to_sql(args[0], ctx)

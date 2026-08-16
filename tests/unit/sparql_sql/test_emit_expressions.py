@@ -634,16 +634,40 @@ class TestConstructors:
         # Should attempt relative resolution
         assert "CASE" in sql or "v0" in sql
 
-    def test_bnode_no_args(self):
+    def test_bnode_no_args_is_fresh_per_row(self):
+        """SPARQL 1.1 §17.4.2.2: a DISTINCT blank node per solution.
+
+        This used to assert `sql == "'_:b0'"` — encoding the defect, so the fix
+        looked like a regression. A constant makes every solution collapse onto
+        one node, and under DISTINCT rows the spec calls distinct deduplicate
+        away entirely (issues/067).
+
+        Asserts a VOLATILE per-row expression rather than a specific one, so
+        the test survives a change of generator but fails on any constant.
+        """
         ctx = _make_ctx()
         sql = expr_to_sql(_func("bnode"), ctx)
-        assert sql == "'_:b0'"
+        assert "gen_random_uuid" in sql, (
+            f"BNODE() emitted {sql!r}, which is the same value for every row; "
+            f"the spec requires a distinct blank node per solution")
+        assert "'_:" not in sql, (
+            "emitted the `_:` prefix; the stored/bound value is the bare label "
+            "and serializers add the prefix on the way out")
 
-    def test_bnode_with_arg(self):
+    def test_bnode_with_arg_is_stable_for_equal_arguments(self):
+        """BNODE(literal): the same argument must give the same node.
+
+        Which is the opposite requirement to the no-arg form, so a single
+        implementation cannot satisfy both — hence two tests.
+        """
         ctx = _make_ctx({"x": "text"})
         sql = expr_to_sql(_func("bnode", _var("x")), ctx)
-        assert "CONCAT" in sql
-        assert "_:" in sql
+        assert "md5" in sql, (
+            f"BNODE(?x) emitted {sql!r}; equal arguments must map to equal "
+            f"blank nodes, so the value has to be derived from the argument")
+        assert "gen_random_uuid" not in sql, (
+            "BNODE(?x) must NOT be fresh per row — that is the no-arg form")
+        assert "'_:" not in sql
 
 
 # ---------------------------------------------------------------------------

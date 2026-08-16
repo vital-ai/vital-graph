@@ -121,7 +121,15 @@ def emit_table(plan: PlanV2, ctx: EmitContext) -> str:
                 cols.append(f"NULL::boolean AS {sn}__bool")
                 cols.append(f"NULL::timestamp AS {sn}__dt")
             elif isinstance(val, BNodeNode):
-                cols.append(f"'{_esc(val.value)}' AS {sn}")
+                # `.label`, not `.value` — BNodeNode has no `value` field, so
+                # this raised AttributeError for any VALUES clause containing a
+                # blank node. The unit test passed because it patched `.value`
+                # onto the node before calling, describing the implementation
+                # rather than the type (issues/066).
+                #
+                # The bare label, matching how a blank node is stored: term_text
+                # holds the label and serializers re-add `_:` on the way out.
+                cols.append(f"'{_esc(val.label)}' AS {sn}")
                 cols.append(f"'B' AS {sn}__type")
                 cols.append(f"NULL::uuid AS {sn}__uuid")
                 cols.append(f"NULL AS {sn}__lang")

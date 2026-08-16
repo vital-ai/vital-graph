@@ -1,0 +1,12 @@
+# REUSES THE SAME LABELS as blank_nodes.nt, on purpose.
+#
+# RDF 1.1: blank node labels are scoped to the document. `_:b1` here and `_:b1`
+# there are DIFFERENT nodes, and loading both files must not merge them.
+#
+# This store makes a blank node's identity its label, forever and everywhere —
+# term_uuid is a UUIDv5 over (term_text, term_type, lang, datatype_id), which
+# for a blank node reduces to the label. So loading both files merges _:b1 and
+# _:b3 across documents. That is the collision issues/076 facet 2 has to
+# decide about, and this file is the only way to test whichever way it goes.
+_:b1 <http://example.org/from_second_file> "should not merge with b1" .
+_:b3 <http://example.org/from_second_file> "should not merge with b3" .

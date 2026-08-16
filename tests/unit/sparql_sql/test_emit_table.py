@@ -79,23 +79,34 @@ class TestEmitTable:
         assert xsd_int in sql
 
     def test_bnode_value(self):
-        """VALUES ?x { _:b0 } → blank node.
+        """VALUES ?x { _:b0 } emits SQL for a plain BNodeNode.
 
-        Note: emit_table accesses .value on BNodeNode, but BNodeNode's
-        field is .label — we set both so the test exercises the code path.
+        NO ATTRIBUTE PATCHING. The previous version of this test set `.value`
+        onto the node before calling, because that is what emit_table read —
+        and BNodeNode has no `value` field, so every real VALUES clause
+        containing a blank node raised AttributeError while this test passed
+        (issues/066). A test that patches the object into the shape the
+        implementation expects describes the implementation, not the contract,
+        and cannot fail when the implementation is wrong.
+
+        Built from the type as the AST mapper produces it, so the test breaks
+        if the field is renamed or the branch reverts.
         """
         ctx = _make_ctx({})
-        bnode = BNodeNode(label="b0")
-        bnode.value = "b0"  # type: ignore[attr-defined]  # match emit_table's usage
         plan = PlanV2(
             kind=KIND_TABLE,
             values_vars=["x"],
-            values_rows=[{"x": bnode}],
+            values_rows=[{"x": BNodeNode(label="b0")}],
         )
         from vitalgraph.db.sparql_sql.emit_table import emit_table
         sql = emit_table(plan, ctx)
-        assert "'b0'" in sql
-        assert "'B'" in sql  # type = BNode
+        assert "'b0'" in sql, "the label was not emitted"
+        assert "'B'" in sql, "the term type was not marked as a blank node"
+        # The bare label, matching storage: term_text holds the label and the
+        # serializers re-add `_:`. Emitting the prefix here would double it.
+        assert "'_:b0'" not in sql, (
+            "emitted the `_:` prefix into the VALUES row; term_text holds the "
+            "bare label and serializers add the prefix on the way out")
 
     def test_undef_value(self):
         """VALUES ?x { UNDEF } → NULL companions."""
