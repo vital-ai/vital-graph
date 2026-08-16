@@ -967,7 +967,18 @@ def _insert_from_bindings(iq: QuadPattern, space_id: str,
         f"WHERE NOT EXISTS ("
         f"SELECT 1 FROM {quad_table} "
         f"WHERE subject_uuid = _ins._s AND predicate_uuid = _ins._p "
-        f"AND object_uuid = _ins._o AND context_uuid = _ins._g)"
+        f"AND object_uuid = _ins._o AND context_uuid = _ins._g) "
+        # NOT EXISTS covers rows already STORED. It cannot cover duplicates the
+        # binding set produces WITHIN this statement — two solutions mapping to
+        # the same output quad both pass the check, because neither is visible
+        # to the other until the statement completes.
+        #
+        # DELETE/INSERT is where that happens: the DAWG Halloween-Problem case
+        # rewrites salaries by +100, and two rows can land on one value. It
+        # inserted twice and was silently fine while quad_uuid made every row
+        # unique; once the key enforced (s,p,o,c) it raised a duplicate-key
+        # error on a correct query.
+        f"ON CONFLICT DO NOTHING"
     )
 
 
@@ -1064,7 +1075,11 @@ def _copy_sql(op: UpdateCopy, space_id: str,
         f"(subject_uuid, predicate_uuid, object_uuid, context_uuid) "
         f"SELECT q.subject_uuid, q.predicate_uuid, q.object_uuid, {dst_uuid} "
         f"FROM {quad_table} q "
-        f"WHERE q.context_uuid = {src_uuid}"
+        f"WHERE q.context_uuid = {src_uuid} "
+        # Copying into a graph that already holds the quad is a no-op, not an
+        # error: an RDF graph is a set. This had no guard, which only became
+        # visible once rdf_quad's key actually enforced (s,p,o,c).
+        f"ON CONFLICT DO NOTHING"
     )
     return ";\n".join(stmts)
 
@@ -1110,7 +1125,11 @@ def _add_sql(op: UpdateAdd, space_id: str,
         f"(subject_uuid, predicate_uuid, object_uuid, context_uuid) "
         f"SELECT q.subject_uuid, q.predicate_uuid, q.object_uuid, {dst_uuid} "
         f"FROM {quad_table} q "
-        f"WHERE q.context_uuid = {src_uuid}"
+        f"WHERE q.context_uuid = {src_uuid} "
+        # Copying into a graph that already holds the quad is a no-op, not an
+        # error: an RDF graph is a set. This had no guard, which only became
+        # visible once rdf_quad's key actually enforced (s,p,o,c).
+        f"ON CONFLICT DO NOTHING"
     )
     return ";\n".join(stmts)
 

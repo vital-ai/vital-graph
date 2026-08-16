@@ -31,54 +31,44 @@ def get_table_names(space_id: str = SPACE_ID) -> Dict[str, str]:
 
 
 async def create_space(conn, space_id: str = SPACE_ID):
-    """Create the term and rdf_quad tables for the DAWG test space.
+    """Create the DAWG scratch space using the CANONICAL schema.
 
-    Uses simplified DDL — no partitioning, minimal indexes.
-    Safe to call repeatedly (IF NOT EXISTS).
+    This used to carry its own "simplified DDL" — a second copy of the term,
+    quad, datatype and stats tables. It drifted, as second copies do, and the
+    drift was invisible until a generated query happened to use a column the
+    copy lacked:
+
+        DELETE { ?s ex:salary ?o } INSERT { ?s ex:salary ?v }
+        WHERE { ?s ex:salary ?o FILTER(?o < 1500) BIND(?o + 100 AS ?v) }
+
+    The generator pushes that FILTER down to `num_val < 1500.0`, using the
+    STORED GENERATED column on the term table. The real schema has it; this
+    copy did not, so the DAWG delete-insert/Halloween-Problem case failed with
+    `column "num_val" does not exist` — a conformance failure that was not a
+    conformance problem at all.
+
+    The copy had also missed the (s,p,o,c) primary key, so this space still
+    permitted duplicate quads after the real schema stopped doing so.
+
+    Building from `create_space_tables_sql` means the suite tests the schema
+    that ships. Everything is IF NOT EXISTS, so it stays safe to call
+    repeatedly, and the datatype seeding below is DATA rather than schema and
+    stays here.
     """
+    from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+
+    schema = SparqlSQLSchema()
+    for stmt in schema.create_space_tables_sql(space_id):
+        await conn.execute(stmt)
+    # Indexes are best-effort: a failure here costs speed, not correctness, and
+    # must not stop the suite from running.
+    for stmt in schema.create_space_indexes_sql(space_id):
+        try:
+            await conn.execute(stmt)
+        except Exception:
+            pass
+
     tables = get_table_names(space_id)
-
-    await conn.execute(f"""
-        CREATE TABLE IF NOT EXISTS {tables['term']} (
-            term_uuid  UUID PRIMARY KEY,
-            term_text  TEXT NOT NULL,
-            term_type  CHAR(1) NOT NULL CHECK (term_type IN ('U', 'L', 'B', 'G')),
-            lang       VARCHAR(20),
-            datatype_id BIGINT,
-            created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            dataset    VARCHAR(50) NOT NULL DEFAULT 'primary'
-        )
-    """)
-
-    # Datatype lookup table (matches production schema)
-    await conn.execute(f"""
-        CREATE TABLE IF NOT EXISTS {tables['datatype']} (
-            datatype_id BIGSERIAL PRIMARY KEY,
-            datatype_uri VARCHAR(255) NOT NULL UNIQUE,
-            datatype_name VARCHAR(100),
-            created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    await conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{space_id}_datatype_uri ON {tables['datatype']} (datatype_uri)")
-
-    await conn.execute(f"""
-        CREATE TABLE IF NOT EXISTS {tables['rdf_quad']} (
-            subject_uuid   UUID NOT NULL,
-            predicate_uuid UUID NOT NULL,
-            object_uuid    UUID NOT NULL,
-            context_uuid   UUID NOT NULL,
-            quad_uuid      UUID NOT NULL DEFAULT gen_random_uuid(),
-            dataset        VARCHAR(50) NOT NULL DEFAULT 'primary',
-            PRIMARY KEY (subject_uuid, predicate_uuid, object_uuid, context_uuid, quad_uuid)
-        )
-    """)
-
-    # Minimal indexes for SQL generator
-    await conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_pred ON {tables['rdf_quad']} (predicate_uuid)")
-    await conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_subj ON {tables['rdf_quad']} (subject_uuid)")
-    await conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_obj ON {tables['rdf_quad']} (object_uuid)")
-    await conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_po ON {tables['rdf_quad']} (predicate_uuid, object_uuid)")
-    await conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_tt ON {tables['term']} (term_text, term_type)")
 
     # Populate standard XSD datatypes
     _STANDARD_DATATYPES = [
@@ -127,44 +117,11 @@ async def create_space(conn, space_id: str = SPACE_ID):
         _STANDARD_DATATYPES,
     )
 
-    # Empty stats tables — the SQL generator queries these during
-    # generate_sql(). Without them, the query fails.
-    await conn.execute(f"""
-        CREATE TABLE IF NOT EXISTS {tables['rdf_pred_stats']} (
-            predicate_uuid UUID PRIMARY KEY,
-            row_count      BIGINT NOT NULL DEFAULT 0
-        )
-    """)
-    await conn.execute(f"""
-        CREATE TABLE IF NOT EXISTS {tables['rdf_stats']} (
-            predicate_uuid UUID NOT NULL,
-            object_uuid    UUID NOT NULL,
-            row_count      BIGINT NOT NULL DEFAULT 0,
-            PRIMARY KEY (predicate_uuid, object_uuid)
-        )
-    """)
-
-    # Edge table (maintained by app-level sync; replaces old edge MV)
-    await conn.execute(f"""
-        CREATE TABLE IF NOT EXISTS {tables['edge']} (
-            edge_uuid        UUID NOT NULL,
-            source_node_uuid UUID NOT NULL,
-            dest_node_uuid   UUID NOT NULL,
-            context_uuid     UUID NOT NULL,
-            PRIMARY KEY (edge_uuid, context_uuid)
-        )
-    """)
-
-    # Frame-entity table (maintained by app-level sync; replaces frame_entity MV)
-    await conn.execute(f"""
-        CREATE TABLE IF NOT EXISTS {tables['frame_entity']} (
-            frame_uuid           UUID NOT NULL,
-            source_entity_uuid   UUID,
-            dest_entity_uuid     UUID,
-            context_uuid         UUID NOT NULL,
-            PRIMARY KEY (frame_uuid, context_uuid)
-        )
-    """)
+    # The stats, edge and frame_entity tables come from the canonical schema
+    # above. They used to be re-declared here, and those copies had drifted:
+    # rdf_pred_stats was missing `pruned`, and edge was missing
+    # `edge_type_uuid`. Being IF NOT EXISTS they were already dead once the
+    # real DDL ran first — but a dead wrong copy is what the next person reads.
 
     logger.info("Created space tables: %s", list(tables.values()))
 

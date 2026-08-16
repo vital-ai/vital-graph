@@ -151,9 +151,18 @@ async def load_ttl_into_space(
         (uuid_mod.UUID(s), uuid_mod.UUID(p), uuid_mod.UUID(o), uuid_mod.UUID(g))
         for s, p, o, g in quad_rows
     ]
+    # ON CONFLICT DO NOTHING, because an RDF graph is a SET: a document that
+    # states the same triple twice describes one triple, not an error. Several
+    # DAWG data files do exactly that.
+    #
+    # This was unguarded and silently fine while rdf_quad's key included a
+    # random quad_uuid — every row was unique, so nothing ever conflicted. Once
+    # the key enforced (s,p,o,c) the duplicate raised, executemany aborted, and
+    # the space was left EMPTY: eleven conformance cases failed reporting
+    # "expected 5, got 0", none of which was a conformance problem.
     await conn.executemany(
         f"INSERT INTO {quad_table} (subject_uuid, predicate_uuid, object_uuid, context_uuid, dataset) "
-        f"VALUES ($1, $2, $3, $4, 'primary')",
+        f"VALUES ($1, $2, $3, $4, 'primary') ON CONFLICT DO NOTHING",
         quad_rows_uuid,
     )
 
