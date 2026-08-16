@@ -94,7 +94,14 @@ class SidecarClient:
             "sidecar compile %.1fms ok=%s hash=%s",
             elapsed_ms,
             data.get("ok"),
-            data.get("input", {}).get("sparqlHash", "?"),
+            # `or {}`, not a default: on an error response the key is
+            # PRESENT with value null, and `.get(k, {})` returns the null. This
+            # line then raised AttributeError from inside a DEBUG log call —
+            # crashing the request and replacing the sidecar's actual parse
+            # error with a traceback about NoneType. Seen while checking that
+            # a blank node in DELETE DATA is rejected: it is, and the reason
+            # was unreadable.
+            (data.get("input") or {}).get("sparqlHash", "?"),
         )
         return data
 
@@ -172,6 +179,13 @@ class AsyncSidecarClient:
             "async sidecar compile %.1fms ok=%s hash=%s",
             elapsed_ms,
             data.get("ok"),
-            data.get("input", {}).get("sparqlHash", "?"),
+            # `or {}`, not a default: on an error response the key is
+            # PRESENT with value null, and `.get(k, {})` returns the null. This
+            # line then raised AttributeError from inside a DEBUG log call —
+            # crashing the request and replacing the sidecar's actual parse
+            # error with a traceback about NoneType. Seen while checking that
+            # a blank node in DELETE DATA is rejected: it is, and the reason
+            # was unreadable.
+            (data.get("input") or {}).get("sparqlHash", "?"),
         )
         return data

@@ -43,7 +43,7 @@ first move: every fix that held was one where the measurement came first.
 
 | | status | |
 |---|---|---|
-| 069 | fixture added | Fixture + tests 3-10 and 12 done; 11 and the end-to-end halves of 1-2 remain |
+| 069 | RESOLVED | Fixture + all 12 tests. Writing them found two more defects and corrected one assumption |
 | 065 | RESOLVED | One convention, enforced at term identity. 0 blank-node terms on 85 spaces, so no migration |
 | 066 | RESOLVED | `.label`, not `.value`; the test that hid it rewritten to describe the type |
 | 067 | RESOLVED | Fresh per solution, and scoped per execution — the salt is computed at runtime, so the compile cache reusing SQL does not matter |

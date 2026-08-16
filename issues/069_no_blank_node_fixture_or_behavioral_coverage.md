@@ -1,6 +1,6 @@
 # No Fixture Contains a Blank Node, So Nothing Tests Blank-Node Behavior
 
-## Status: FIXTURE ADDED 2026-08-16 — tests 1-8 partly done, 9-12 outstanding
+## Status: RESOLVED 2026-08-16 — fixture added, tests 1-12 covered
 
 `tests/fixtures/blank_nodes.nt` (13 triples, 6 blank nodes: subject position,
 object position, the same node in BOTH, two distinct labels to catch collapse,
@@ -30,9 +30,27 @@ Covered so far, at unit level:
     the opposite of what issues/076 assumed: the edge table DOES project a
     blank-node endpoint.
 
-Still outstanding: 11 (DESCRIBE with a blank-node object), and the end-to-end
-halves of 1 and 2 — write/read round-trip and load/UPDATE agreement are covered
-at the identity level but not yet through a loaded space.
+1, 2 and 11 now run end to end through a real space
+(`tests/integration/test_blank_node_roundtrip.py`):
+
+  * 1 — a blank node written through the batch path is stored with a BARE
+    label and reads back with its type intact.
+  * 2 — the expected outcome CHANGED while this was open. The issue framed it
+    as "load `_:b1`, then DELETE DATA the same triple; currently deletes
+    nothing". SPARQL forbids a blank node in DELETE DATA at all, so the correct
+    behaviour is refusal, not a successful delete. The test asserts refusal and
+    accepts it from EITHER layer — the sidecar parser rejects the construct
+    outright, and emit_update guards it as well.
+  * 11 — DESCRIBE returns the subject's triple with its blank-node object (bare
+    label, type `bnode`) and NOT the blank node's own triples. The documented
+    forward, non-recursive CBD, pinned so changing `_describe_triples` is
+    deliberate.
+
+Writing 11 turned up an unrelated defect: the sidecar client formatted a DEBUG
+log line with `data.get("input", {}).get(...)`, and on an ERROR response that
+key is present with value null — so `.get(k, {})` returned the null and the log
+call raised AttributeError, crashing the request and replacing the sidecar's
+parse error with a traceback about NoneType. Fixed at both sites.
 
 `issues/065`, `066`, `067` and `076` are four blank-node defects — a divergent storage
 convention, a hard crash on `VALUES`, a spec-violating `BNODE()`, and merged
