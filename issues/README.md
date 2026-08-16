@@ -66,7 +66,7 @@ All 15 are now run or declined in writing. 705 → **907 executed cases**.
 | | status | |
 |---|---|---|
 | 093 | FIXED | **A missing term used only to EXCLUDE emptied the whole query.** Not subqueries — any `GRAPH ?g` with a `default_graph` whose URI had no term returned zero rows, silently. Two passes disagreed on what an absent term means |
-| 094 | PRECISION FIXED | `xsd:float` rendered `33.33` as `33.33000183105469` — a binary32 value printed at binary64 width. Canonical scientific form still open |
+| 094 | FIXED | `xsd:float` rendered `33.33` as `33.33000183105469` — a binary32 value printed at binary64 width. All six cast cases pass; the "canonical form" second half I recorded turned out not to exist |
 | 095 | 3 of 4 FIXED | Grammar restrictions Jena parses but SPARQL forbids. `SELECT *` with `GROUP BY` has no defined answer, so accepting it returned something undefined. The fourth is declined with a reason |
 | 097 | FIXED | A non-JSON request body returned HTTP 500 on every endpoint |
 | 098 | FIXED | **Search input was interpolated into SPARQL unescaped — confirmed filter bypass.** Previously carried as "quotes break the query"; a balanced payload does not break it, it disables the FILTER and returns everything. Eight sites, including three that escaped the quote but not the backslash |

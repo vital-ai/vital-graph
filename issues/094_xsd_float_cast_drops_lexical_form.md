@@ -1,6 +1,6 @@
 # `xsd:float` Casts Leak the float32→float64 Expansion Into the Lexical Form
 
-## Status: PRECISION LEAK FIXED 2026-08-16; canonical-form question still open
+## Status: FIXED 2026-08-16 — all six cast cases pass
 
     SELECT ?a ?v (xsd:float(?v) AS ?float) WHERE { ?a :p ?v }
 
@@ -65,18 +65,43 @@ is a different binding builder from the one under test.
 The rule lives in `sql_type_binding.normalize_numeric` alone; the inline copy
 was removed rather than left beside it.
 
-## The second, separate question
+## Correction: there was no "canonical form" problem
 
-Even the shortest round-trip is not what the manifest asks for. XSD's canonical
-form for `float` is scientific — `3.333E1`, `-1.02E4`, `0E0` — and NEITHER
-engine emits it. pyoxigraph gives `33.33`, we give the expansion, the manifest
-wants `3.333E1`.
+I first recorded a second, still-open half — that the manifest wants XSD
+canonical scientific form (`3.333E1`) and neither engine emits it. That was
+wrong twice over, and re-reading the manifest instead of the one row I had
+looked at is what showed it.
 
-That half is a genuine "both implementations differ from the spec" case, and is
-worth deciding separately from the precision leak. The leak should be fixed
-regardless of how canonical-form is settled.
+**The manifest is not canonical.** Correlating every expected value against its
+input, the same magnitude comes back in different forms depending on the input's
+datatype and spelling:
 
-## Why the precision leak was not found earlier
+    '1.5'  (plain)    -> 1.5E0        '2.5'  (decimal) -> 2.5
+    '13'   (plain)    -> 13           '1.25' (float)   -> 1.25
+    '1'    (integer)  -> 1.0          '0'    (integer) -> 0
+
+That is not a rule; it is whatever the 2011 reference implementation produced,
+preserving aspects of the input. There is nothing to conform to.
+
+**And SPARQL does not generally return scientific notation.** Casting follows
+XPath F&O, whose cast-to-string rule uses DECIMAL notation for magnitudes in
+[1e-6, 1e6) and scientific only outside that range. `33.33` is in range, so
+`33.33` is the F&O-correct answer — which is what pyoxigraph returns and what we
+now return.
+
+**The test never depended on the lexical form anyway.** The comparator collapses
+numeric datatypes and compares by `Decimal`, so `3.333E1` and `33.33` are equal
+to it. What made the case fail was the PRECISION: `Decimal("33.33000183105469")`
+is genuinely a different number from `Decimal("3.333E1")`. Fixing the width
+fixed the test.
+
+`cast/xsd:float` was left as an xfail with the canonical-form reasoning attached,
+and it was already passing. Entry removed — `KNOWN_FAILURES` is now empty. All
+six `test_sql_v2` cast cases pass; the six `test_oracle_baseline` ones still fail
+because pyoxigraph really does differ from the manifest, and those xfails are
+correct.
+
+## Why the precision leak was not found earlier## Why the precision leak was not found earlier
 
 The `cast` category was never in `P0_CATEGORIES`. See
 `planning/planning_sparql_features/dawg_conformance_coverage.md`.
