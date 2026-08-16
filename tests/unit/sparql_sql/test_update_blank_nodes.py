@@ -104,3 +104,64 @@ class TestDeleteDataRejectsBlankNodes:
         with pytest.raises(BlankNodeInDeleteData, match="DELETE WHERE"):
             _reject_bnodes_in_delete_data([_q(BNodeNode(label="b1"),
                                               LiteralNode(value="1"))])
+
+
+class TestGraphNameTyping:
+    """INSERT DATA and DELETE DATA must agree on a graph term's TYPE.
+
+    N-Quads permits a blank node in the graph position and the schema allows it
+    ('B' is a legal term_type). term_uuid is computed over (text, TYPE), so the
+    two paths disagreeing is not cosmetic: a graph written as 'B' and looked up
+    as 'U' hashes differently, and the delete matches nothing while reporting
+    success.
+
+    Both paths hardcoded 'U'. Fixing only the insert side made it worse —
+    consistently wrong at least round-trips. That is what this pins.
+    """
+
+    def _sql(self, fn, graph_node):
+        from vitalgraph.db.sparql_sql import emit_update
+        q = QuadPattern(subject=URINode(value="urn:s"), predicate=P,
+                        object=LiteralNode(value="v"), graph=graph_node)
+        return getattr(emit_update, fn)([q], "sp")
+
+    def _uuid_for(self, text, ttype):
+        from vitalgraph.db.sparql_sql.emit_update import _generate_term_uuid
+        return str(_generate_term_uuid(text, ttype))
+
+    # The type is not visible as a string in the SQL: _term_uuid_subquery folds
+    # a resolvable term down to a precomputed uuid constant. So the type is
+    # asserted through the uuid it produces, which is also the thing that
+    # actually has to match between the two paths.
+
+    def test_a_blank_node_graph_is_typed_B_on_insert(self):
+        sql = self._sql("_insert_data_sql", BNodeNode(label="g1"))
+        assert self._uuid_for("g1", "B") in sql, (
+            "a blank-node graph was not stored under its 'B' term uuid; it is "
+            "being written as a URI")
+        assert self._uuid_for("g1", "U") not in sql
+
+    def test_a_blank_node_graph_is_typed_B_on_delete(self):
+        sql = self._sql("_delete_data_sql", BNodeNode(label="g1"))
+        assert self._uuid_for("g1", "B") in sql, (
+            "DELETE DATA looked the graph up under its 'U' uuid while INSERT "
+            "DATA writes the 'B' one — the delete matches nothing and reports "
+            "success")
+        assert self._uuid_for("g1", "U") not in sql
+
+    def test_both_paths_agree_on_the_same_graph(self):
+        """The asymmetry is the bug. Fixing one side alone is worse than
+        fixing neither: consistently wrong at least round-trips."""
+        g = BNodeNode(label="g1")
+        ins = self._sql("_insert_data_sql", g)
+        dele = self._sql("_delete_data_sql", g)
+        u = self._uuid_for("g1", "B")
+        assert u in ins and u in dele
+
+    def test_a_uri_graph_is_unchanged_on_both(self):
+        """Guard the guard: deriving the type must not disturb ordinary graphs,
+        which are the overwhelming majority."""
+        for fn in ("_insert_data_sql", "_delete_data_sql"):
+            sql = self._sql(fn, URINode(value="urn:g"))
+            assert self._uuid_for("urn:g", "U") in sql, (
+                f"{fn} changed how a URI graph is identified")

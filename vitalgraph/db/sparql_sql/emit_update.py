@@ -596,8 +596,15 @@ def _delete_data_sql(quads: List[QuadPattern], space_id: str,
         ]
         if q.graph:
             graph_text = _node_text(q.graph)
+            # The graph's own type, matching _insert_data_sql. Hardcoding 'U'
+            # here while the insert path derived it would be WORSE than both
+            # being wrong: term_uuid is computed over (text, TYPE), so a
+            # blank-node graph written by INSERT DATA as 'B' would be looked up
+            # as 'U', hash differently, and the delete would match nothing and
+            # report success.
             where_parts.append(
-                f"context_uuid = {_term_uuid_subquery(term_table, graph_text, 'U')}"
+                f"context_uuid = "
+                f"{_term_uuid_subquery(term_table, graph_text, _node_type(q.graph))}"
             )
         else:
             # No GRAPH clause → target default graph only
