@@ -83,15 +83,32 @@ async def migrate_space(conn, space_id: str, dry_run: bool = True) -> dict:
     else:
         missing = rows
 
-    # How many of those could actually be filled — the rest have no vitaltype
+    # How many of THOSE could actually be filled — the rest have no vitaltype
     # quad, where NULL is the right answer rather than a gap.
+    #
+    # The NULL filter matters twice. Without it this counts every row carrying a
+    # vitaltype quad including the ones already filled, so a space that is fully
+    # migrated reports work outstanding; and because a space whose remaining
+    # NULLs are all unfillable then never reaches "already current", it is
+    # reported as needing migration on every future run, forever. Observed on a
+    # fixture with 200 frames and no vitaltype quads at all: the migration
+    # correctly left all 200 NULL and the next dry run still claimed 1 space
+    # needed migrating.
+    null_filter = "" if added else "AND fe.frame_type_uuid IS NULL"
     fillable = await conn.fetchval(f"""
         SELECT count(*) FROM {t_fe} fe
         WHERE EXISTS (SELECT 1 FROM {space_id}_rdf_quad q
                       WHERE q.subject_uuid = fe.frame_uuid
                         AND q.context_uuid = fe.context_uuid
                         AND q.predicate_uuid = $1)
+          {null_filter}
     """, VT_UUID)
+
+    # Column present and nothing left that CAN be filled: this space is done.
+    # The remaining NULLs are the correct answer for frames with no vitaltype.
+    if not added and not fillable:
+        return {"space": space_id, "skipped": "already current",
+                "unfillable_nulls": missing}
 
     summary = {"space": space_id, "rows": rows, "added_column": added,
                "unfilled_before": missing, "fillable": fillable}
