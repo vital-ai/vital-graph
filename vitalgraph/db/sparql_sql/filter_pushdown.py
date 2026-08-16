@@ -312,19 +312,25 @@ def _try_text_filter(
     elif name == "strends":
         term_cond = f"term_text {like} '%{like_esc}'"
     elif name == "regex":
+        from .regex_flags import pg_embedded_options, is_case_insensitive
+
         raw_flags = ""
         if flags_arg and isinstance(flags_arg, ExprValue):
             if isinstance(flags_arg.node, LiteralNode):
                 raw_flags = flags_arg.node.value or ""
-        op = "~*" if "i" in raw_flags else "~"
-        pg_embedded = ""
-        if "s" in raw_flags:
-            pg_embedded += "s"
-        if "m" in raw_flags:
-            pg_embedded += "n"
-        if "x" in raw_flags:
-            pg_embedded += "x"
-        pat = f"(?{pg_embedded}){escaped}" if pg_embedded else escaped
+        # SHARED with emit_expressions. These two were the only REGEX emitters
+        # and they disagreed: this one mapped s/m/x, that one handled only `i`.
+        # Which runs is decided by whether the filter was PUSHABLE — a
+        # performance heuristic — so the same query returned different rows
+        # depending on an optimisation, and stopped reproducing as soon as
+        # anyone simplified it. Both now ask for the same semantics.
+        #
+        # This also fixes two bugs of its own: no option at all was emitted for
+        # the default (SPARQL wants `p`, PostgreSQL defaults to dot-matches-
+        # newline), and `s`+`m` together emitted the contradictory `sn` instead
+        # of `w`.
+        op = "~*" if is_case_insensitive(raw_flags) else "~"
+        pat = f"(?{pg_embedded_options(raw_flags)}){escaped}"
         term_cond = f"term_text {op} '{pat}'"
     elif name == "eq":
         term_cond = f"term_text = '{escaped}'"

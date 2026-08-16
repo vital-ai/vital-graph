@@ -683,17 +683,28 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
         pat = expr_to_sql(args[1], ctx)
         rep = expr_to_sql(args[2], ctx)
         if s and pat and rep:
-            # Convert SPARQL $N backreferences to PostgreSQL \N format
-            rep = f"REPLACE({rep}, '$1', '\\1')"
-            rep = f"REPLACE({rep}, '$2', '\\2')"
-            rep = f"REPLACE({rep}, '$3', '\\3')"
-            flags = "'g'"
+            # SPARQL $N backreferences -> PostgreSQL \N. This stopped at $3,
+            # so a pattern with four or more capture groups left `$4` in the
+            # output as a literal. Nine covers the single-digit range, which is
+            # all either dialect addresses without extra syntax.
+            for n in range(1, 10):
+                rep = f"REPLACE({rep}, '${n}', '\\{n}')"
+
+            # Flags. The SPARQL string was previously concatenated onto `g` and
+            # handed to PostgreSQL as-is, which meant `s`/`m` were passed with
+            # PostgreSQL's meaning rather than XPath's, and the default emitted
+            # nothing at all — dot-matches-newline, which is not the SPARQL
+            # default. Same mapping as REGEX now; see regex_flags.
+            raw_flags = ""
             if len(args) >= 4:
-                f_sql = expr_to_sql(args[3], ctx)
-                if f_sql:
-                    # Merge SPARQL flags with global 'g'
-                    raw = f_sql.strip("'")
-                    flags = f"'g{raw}'"
+                a3 = args[3]
+                if isinstance(a3, ExprValue) and isinstance(a3.node, LiteralNode):
+                    raw_flags = a3.node.value or ""
+            from .regex_flags import apply_to_pattern, is_case_insensitive
+            pat = apply_to_pattern(pat, raw_flags)
+            # `g` is not a SPARQL flag: REPLACE replaces every occurrence by
+            # definition (§17.4.3.15), so it is always requested.
+            flags = "'gi'" if is_case_insensitive(raw_flags) else "'g'"
             result = f"regexp_replace({s}, {pat}, {rep}, {flags})"
             return _typed_literal_guard(args[0], ctx, result)
 
@@ -786,11 +797,25 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
         s = expr_to_sql(args[0], ctx)
         pat = expr_to_sql(args[1], ctx)
         if s and pat:
+            from .regex_flags import apply_to_pattern, is_case_insensitive
+
+            # SPARQL flags are a STRING LITERAL argument; read the value rather
+            # than substring-matching the emitted SQL, which is how `'i'` used
+            # to be detected and would also have matched a flags string that
+            # merely contained the letter inside something else.
+            raw_flags = ""
             if len(args) >= 3:
-                flags = expr_to_sql(args[2], ctx)
-                if flags and "'i'" in flags.lower():
-                    return f"({s} ~* {pat})"
-            return f"({s} ~ {pat})"
+                a2 = args[2]
+                if isinstance(a2, ExprValue) and isinstance(a2.node, LiteralNode):
+                    raw_flags = a2.node.value or ""
+
+            # Every flag but `i` becomes an embedded option on the pattern. This
+            # used to handle ONLY `i` and drop `s`, `m`, `x`, `q` silently — and,
+            # worse, emitted no option at all by default, which is not the SPARQL
+            # default: XPath's `.` does not match a newline and PostgreSQL's does.
+            # See regex_flags for the 2x2 and the measurements.
+            op = "~*" if is_case_insensitive(raw_flags) else "~"
+            return f"({s} {op} {apply_to_pattern(pat, raw_flags)})"
 
     # --- Accessors ---
     if fname == "lang" and len(args) == 1:
