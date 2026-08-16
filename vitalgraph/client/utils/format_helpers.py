@@ -137,11 +137,48 @@ def deserialize_response_to_graphobjects(
 
 
 def extract_pagination_from_json_quads(response_data: dict) -> dict:
-    """Extract pagination metadata from a QuadResponse envelope."""
+    """Extract pagination metadata from a QuadResponse envelope.
+
+    `has_more` is included here rather than left to each caller, because this is
+    the only place that can tell the difference between the three states a
+    caller actually needs:
+
+        True   there is another page
+        False  this is the last page
+        None   we cannot tell
+
+    Before 2026-08-16 it was not extracted at all, and the model defaulted it to
+    `False`. So it was a field that was always present, always False, and never
+    computed — which is worse than being absent, because absent would have made
+    a caller ask. "Is there a next page?" was answered with a confident No on
+    every list call in the client.
+
+    THE CLIENT DOES NOT DERIVE IT. An earlier version of this fix computed
+    `(offset + page_size) < total_count` when the server was silent. That is
+    wrong, and wrong in the same way as the bug it replaced.
+
+    `page_size` does not mean the same thing on every route. On the paged list
+    routes it is the page size; on `get_kgentities_by_uris` the server sets
+    `page_size=len(identifiers), offset=0` and `total_count` to the number of
+    OBJECTS across them. Ask one identifier that owns five objects and the
+    formula yields `1 < 5` -> `has_more=True`, for a route that has no next page
+    at all. Deriving from a field whose meaning varies per route is how a
+    confident wrong answer gets rebuilt out of arithmetic.
+
+    So: the server is the only party that knows, and it says so explicitly or
+    not at all. `None` is a real answer here — "nobody told me" — and it is the
+    honest one for every route that has not been taught to send it.
+    """
+    total = response_data.get("total_count")
+    page_size = response_data.get("page_size")
+    offset = response_data.get("offset")
+
     return {
-        "total_count": response_data.get("total_count", 0),
-        "page_size": response_data.get("page_size", 0),
-        "offset": response_data.get("offset", 0),
+        "total_count": total if total is not None else 0,
+        "page_size": page_size if page_size is not None else 0,
+        "offset": offset if offset is not None else 0,
+        # Passed through, never computed. Absent stays None.
+        "has_more": response_data.get("has_more"),
     }
 
 

@@ -97,7 +97,17 @@ class PaginatedGraphObjectResponse(GraphObjectResponse):
     total_count: int = Field(default=0, description="Total count across all pages")
     page_size: int = Field(default=10, description="Items per page")
     offset: int = Field(default=0, description="Current offset")
-    has_more: bool = Field(default=False, description="Whether more pages exist")
+    # Optional, and defaulting to None rather than False, because `bool` cannot
+    # express "unknown" — and that is precisely what this field was returning
+    # before 2026-08-16. It was never computed anywhere on this path, so a
+    # caller asking "is there a next page?" got a confident No on every list
+    # call. `None` makes the absence of an answer visible instead of dressing it
+    # as one; `if response.has_more:` behaves identically, since None is falsy.
+    has_more: Optional[bool] = Field(
+        default=None,
+        description="Whether more pages exist; None when the server did not say "
+                    "and it could not be derived",
+    )
     
     entity_type_uri: Optional[str] = Field(default=None, description="Entity type URI filter from request")
     search: Optional[str] = Field(default=None, description="Search term from request")
@@ -195,7 +205,20 @@ class MultiEntityGraphResponse(VitalGraphResponse):
     """Response for operations returning multiple entity graphs."""
     
     graph_list: Optional[List[EntityGraph]] = Field(default=None, description="List of EntityGraph containers, each with entity_uri and objects")
-    
+
+    # Pagination. Absent until 2026-08-16, which is why
+    # `list_kgentities(include_entity_graph=True)` returned a page with no total
+    # even though the SERVER sent the correct one — the client computed
+    # pagination and then had nowhere to put it, so it dropped it. See
+    # planning_client/pagination_contract_plan.md.
+    total_count: int = Field(default=0, description="Total count across all pages")
+    page_size: int = Field(default=0, description="Items per page")
+    offset: int = Field(default=0, description="Current offset")
+    has_more: Optional[bool] = Field(
+        default=None,
+        description="Whether more pages exist; None when it could not be determined",
+    )
+
     space_id: Optional[str] = Field(default=None, description="Space ID from request")
     graph_id: Optional[str] = Field(default=None, description="Graph ID from request")
     requested_uris: Optional[List[str]] = Field(default=None, description="Entity URIs requested")
@@ -206,7 +229,20 @@ class MultiFrameGraphResponse(VitalGraphResponse):
     """Response for operations returning multiple frame graphs."""
     
     frame_graph_list: Optional[List[FrameGraph]] = Field(default=None, description="List of FrameGraph containers, each with frame_uri and objects")
-    
+
+    # Pagination. Absent until 2026-08-16, which is why
+    # `list_kgentities(include_entity_graph=True)` returned a page with no total
+    # even though the SERVER sent the correct one — the client computed
+    # pagination and then had nowhere to put it, so it dropped it. See
+    # planning_client/pagination_contract_plan.md.
+    total_count: int = Field(default=0, description="Total count across all pages")
+    page_size: int = Field(default=0, description="Items per page")
+    offset: int = Field(default=0, description="Current offset")
+    has_more: Optional[bool] = Field(
+        default=None,
+        description="Whether more pages exist; None when it could not be determined",
+    )
+
     space_id: Optional[str] = Field(default=None, description="Space ID from request")
     graph_id: Optional[str] = Field(default=None, description="Graph ID from request")
     entity_uri: Optional[str] = Field(default=None, description="Entity URI that owns the frames")

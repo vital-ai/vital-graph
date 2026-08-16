@@ -213,6 +213,15 @@ class KGEntitiesEndpoint(BaseEndpoint):
                     status=response_data.get('status'),
                     message=f"Retrieved {len(entity_graphs)} entity graphs",
                     space_id=space_id, graph_id=graph_id,
+                    # The server sends the true total on this branch exactly as
+                    # it does on the other one; until 2026-08-16 this branch
+                    # computed `pagination` and then threw it away, so a caller
+                    # asking for entity graphs got a page with no total. Passed
+                    # through rather than recomputed — deriving it from
+                    # `entity_graphs` would silently substitute the page length.
+                    **pagination,
+                    # Kept: this answers a different question from total_count,
+                    # namely how many graphs are in THIS response.
                     metadata={'total_graphs': len(entity_graphs)}
                 )
             else:

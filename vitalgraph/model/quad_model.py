@@ -47,6 +47,19 @@ class QuadResponse(QuadResultsResponse):
     """JSON Quads response envelope — paginated list results."""
     page_size: int = Field(description="Number of results per page")
     offset: int = Field(description="Offset into the result set")
+    has_more: Optional[bool] = Field(
+        None,
+        description=(
+            "Whether another page exists. None means the route has not been "
+            "taught to answer, NOT that the answer is no. The client passes "
+            "this through and never derives it, because `page_size` does not "
+            "mean the same thing on every route — get-by-identifiers sets it "
+            "to the number of identifiers requested, so any formula over it "
+            "would report a next page for a route that has none. A route that "
+            "sets this must be genuinely paged and must compute it against the "
+            "real result-set size, not the length of the page it is returning."
+        ),
+    )
     slot_counts: Optional[Dict[str, int]] = Field(
         None,
         description=(

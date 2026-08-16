@@ -1273,7 +1273,14 @@ class KGFramesEndpoint(BaseEndpoint):
             
             response = await self._make_request('GET', url, params=params)
             response_data = response.json()
-            
+
+            # This method IS paged -- it takes page_size and offset -- so both
+            # branches owe the caller the total. Neither carried it before
+            # 2026-08-16, so paging UI over frames had no way to know where the
+            # end was. The sibling get_kgframes_by_uris deliberately has none:
+            # it is addressed by URI and there is nothing to page.
+            pagination = extract_pagination_from_json_quads(response_data)
+
             if include_frame_graphs:
                 complete_graphs_dict = response_data.get('complete_graphs', {})
                 frame_graphs = []
@@ -1288,6 +1295,7 @@ class KGFramesEndpoint(BaseEndpoint):
                     status=response_data.get('status'),
                     message=f"Retrieved {len(frame_graphs)} frame graphs",
                     space_id=space_id, graph_id=graph_id,
+                    **pagination,
                     metadata={'total_graphs': len(frame_graphs)}
                 )
             else:
@@ -1304,6 +1312,7 @@ class KGFramesEndpoint(BaseEndpoint):
                     status=response_data.get('status'),
                     message=f"Retrieved {len(frame_graphs)} frames",
                     space_id=space_id, graph_id=graph_id,
+                    **pagination,
                     metadata={'total_frames': len(frame_graphs)}
                 )
         except VitalGraphClientError:

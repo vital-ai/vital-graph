@@ -481,11 +481,29 @@ class KGEntitiesEndpoint:
             
             quads = await asyncio.to_thread(graphobjects_to_quad_list, result.entities or [], graph_id)
             t_quads = _time.monotonic()
+
+            # has_more is answerable HERE and nowhere downstream: this route is
+            # genuinely paged and `result.total_count` is the size of the result
+            # SET, not of the page. The client deliberately does not derive this
+            # (see format_helpers.extract_pagination_from_json_quads) because
+            # `page_size` means different things on different routes.
+            #
+            # The guard matters. A non-empty page reported with total_count == 0
+            # means the count was not computed, and answering False there is the
+            # exact defect this replaces — a confident No standing in for "no
+            # one counted". None says so.
+            _n_entities = len(result.entities) if result.entities else 0
+            if result.total_count or not _n_entities:
+                has_more = (offset + page_size) < result.total_count
+            else:
+                has_more = None
+
             resp = QuadResponse(
                 results=quads,
                 total_count=result.total_count,
                 page_size=page_size,
                 offset=offset,
+                has_more=has_more,
             )
             t_resp = _time.monotonic()
             n_ent = len(result.entities) if result.entities else 0
