@@ -48,6 +48,10 @@ def _generate_term_uuid(
     lang: Optional[str] = None, datatype_id: Optional[int] = None,
 ) -> _uuid.UUID:
     """Deterministic UUID v5 for an RDF term — mirrors sparql_sql_space_impl."""
+    # Normalised first, so the two spellings of a blank node cannot hash to
+    # two different terms however the caller spelled it (issues/065).
+    from .term_normalize import normalize_term_text
+    term_text = normalize_term_text(term_text, term_type)
     parts = [term_text, term_type]
     if lang is not None:
         parts.append(f"lang:{lang}")
@@ -167,7 +171,13 @@ def _node_text(node: RDFNode) -> str:
     elif isinstance(node, LiteralNode):
         return node.value
     elif isinstance(node, BNodeNode):
-        return f"_:{node.label}"
+        # The BARE label. This returned f"_:{node.label}", and _node_text feeds
+        # both the term upsert and the term-UUID computation — so a blank node
+        # written through SPARQL UPDATE was stored as `_:b1` while every other
+        # write path stored `b1`, giving the same node two different term
+        # UUIDs and making cross-path deletes silently match nothing
+        # (issues/065).
+        return node.label
     elif isinstance(node, VarNode):
         return f"?{node.name}"
     return ""

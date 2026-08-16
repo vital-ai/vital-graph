@@ -101,6 +101,10 @@ def _generate_term_uuid(
     lang: Optional[str] = None, datatype_id: Optional[int] = None,
 ) -> uuid.UUID:
     """Deterministic UUID v5 for an RDF term — matches fuseki_postgresql."""
+    # Normalised first, so the two spellings of a blank node cannot hash to
+    # two different terms however the caller spelled it (issues/065).
+    from .term_normalize import normalize_term_text
+    term_text = normalize_term_text(term_text, term_type)
     parts = [term_text, term_type]
     if lang is not None:
         parts.append(f"lang:{lang}")
@@ -2391,6 +2395,13 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             term_type = 'L'
         else:
             term_type = 'U'
+
+        # One convention for what gets STORED: term_text is the bare value, so
+        # a blank node is `b1` and never `_:b1`. Normalising the uuid input
+        # alone would leave the two spellings sharing an id while the stored
+        # text still varied by entry point (issues/065).
+        from .term_normalize import normalize_term_text
+        term_text = normalize_term_text(term_text, term_type)
 
         lang = None
         datatype_id = None
