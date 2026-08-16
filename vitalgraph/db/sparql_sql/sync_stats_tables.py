@@ -218,14 +218,20 @@ async def resync_stats_tables(conn, space_id: str) -> Dict[str, int]:
     """)
     pred_count = int(result.split()[-1]) if result else 0
 
-    # Predicate+object co-occurrence (cap at 200k to exclude extremely common pairs)
+    # Predicate+object co-occurrence, excluding extremely common pairs.
+    #
+    # The bound is STATS_MAX_ROW_COUNT, not a literal. It was written out here
+    # as 200000 while the `pruned` update below has to use exactly the same
+    # threshold to decide which predicates this rebuild covered — two copies of
+    # a constant that must agree, where disagreement silently mislabels a
+    # predicate as fully covered and re-opens the delta-only bug.
     await conn.execute(f"TRUNCATE {t_stats}")
     result = await conn.execute(f"""
         INSERT INTO {t_stats} (predicate_uuid, object_uuid, row_count)
         SELECT predicate_uuid, object_uuid, COUNT(*)
         FROM {t_quad}
         GROUP BY predicate_uuid, object_uuid
-        HAVING COUNT(*) <= 200000
+        HAVING COUNT(*) <= {STATS_MAX_ROW_COUNT}
     """)
     stats_count = int(result.split()[-1]) if result else 0
 
@@ -255,9 +261,31 @@ async def resync_stats_tables(conn, space_id: str) -> Dict[str, int]:
     # the reorder ranks by cardinality, so big-versus-bigger reorders nothing.
     # The one consumer that did read a restored value, the IN criterion gate,
     # measured a NET LOSS when fed (test_scripts/perf/bench_in_criterion_gate.py).
-    # So the ambiguity is real and, on the evidence, inert. Do not "fix" it
-    # without a consumer that demonstrably needs it.
-    await conn.execute(f"UPDATE {t_pred} SET pruned = FALSE WHERE pruned")
+    #
+    # THE AMBIGUITY IS NOT INERT. Clearing the flag for a predicate whose pair
+    # is above the cap tells the incremental sync that absence means zero, and
+    # it then INSERTS a delta-only row over a pair holding hundreds of
+    # thousands. Observed on a 5.1M-quad space: (rdf:type, Edge_hasKGSlot)
+    # recorded 37 against 304,859 actual, (rdf:type, KGFrame) 6 against 60,054.
+    #
+    # The reasoning above is about what a CORRECT absent value would change,
+    # and the damage is done by a WRONG present value — a different thing, and
+    # not big-versus-bigger. `semijoin._selective_enough` divides the probe's
+    # matches by the anchor's candidates, so 5/6 scored 83% selective where
+    # 5/60,054 is 0.008%: it chose a per-row probe and evaluated 60,054
+    # correlated EXISTS to return 5 rows. 269ms against 33ms end to end, 150ms
+    # against 0.1ms for the generated SQL.
+    #
+    # So the flag is cleared only for predicates this rebuild fully covered.
+    # A predicate with any pair above the cap keeps `pruned = TRUE`, which is
+    # what it means: absence for this predicate is not evidence of zero.
+    await conn.execute(f"""
+        UPDATE {t_pred} SET pruned = EXISTS (
+            SELECT 1 FROM {t_quad} q
+            WHERE q.predicate_uuid = {t_pred}.predicate_uuid
+            GROUP BY q.object_uuid
+            HAVING COUNT(*) > {STATS_MAX_ROW_COUNT})
+    """)
 
     logger.info("resync_stats_tables(%s): %d pred_stats, %d quad_stats",
                 space_id, pred_count, stats_count)

@@ -228,3 +228,62 @@ class TestStatsTablesAfterCrud:
             f"{actual} actual quads. The planner reads that as a highly "
             f"selective predicate and seeds the join from it. Absent would "
             f"have been correct — the reader counts what it cannot find.")
+
+
+class TestResyncAboveCapKeepsPrunedFlag:
+    """A pair the rebuild could not cover must leave its predicate flagged.
+
+    `resync_stats_tables` writes pairs `HAVING COUNT(*) <= STATS_MAX_ROW_COUNT`
+    and used to clear `pruned` for EVERY predicate afterwards. For a predicate
+    whose pair sits above that cap those two statements contradict each other:
+    the row is absent, and the flag says absence means zero. The incremental
+    sync then treats the next write as the whole truth and INSERTs a delta-only
+    row over a pair holding hundreds of thousands.
+
+    Observed on a 5.1M-quad space before the fix: (rdf:type, Edge_hasKGSlot)
+    stored 37 against 304,859 actual, and (rdf:type, KGFrame) 6 against 60,054.
+    The comment on the clearing statement argued the ambiguity was inert, having
+    measured what a correct ABSENT value would change. The damage is done by a
+    wrong PRESENT value, which is a different question — the semi-join gate read
+    5/6 as 83% selective where the truth was 5/60,054, and probed 60,054 rows to
+    return 5.
+
+    The cap is patched down rather than writing 200k quads: the branch under
+    test is "some pair exceeds the threshold", and the threshold's value is not
+    what is being tested.
+    """
+
+    async def test_predicate_above_cap_stays_pruned(
+        self, test_space, space_impl, pg_conn, monkeypatch
+    ):
+        from vitalgraph.db.sparql_sql import sync_stats_tables as sst
+
+        monkeypatch.setattr(sst, "STATS_MAX_ROW_COUNT", 3)
+
+        # One pair well above the patched cap, one comfortably below it.
+        quads = [(URIRef(f"urn:test:s{i}"), PRED, OTHER, GRAPH) for i in range(8)]
+        quads += [(URIRef("urn:test:lone"), PRED, URIRef("urn:test:rare"), GRAPH)]
+        await space_impl.add_rdf_quads_batch(test_space, quads)
+
+        await sst.resync_stats_tables(pg_conn, test_space)
+
+        pred_uuid = await pg_conn.fetchval(
+            f"SELECT term_uuid FROM {test_space}_term WHERE term_text = $1",
+            str(PRED))
+        pruned = await pg_conn.fetchval(
+            f"SELECT pruned FROM {test_space}_rdf_pred_stats "
+            f"WHERE predicate_uuid = $1", pred_uuid)
+        assert pruned is True, (
+            "a predicate with a pair above STATS_MAX_ROW_COUNT was left "
+            "unflagged, so absence of that pair now reads as zero and the next "
+            "write will store only its delta")
+
+        # The write that used to corrupt it. With the flag set the sync stays
+        # UPDATE-only, so no delta-only row appears for the over-cap pair.
+        await space_impl.add_rdf_quads_batch(
+            test_space, [(URIRef("urn:test:s99"), PRED, OTHER, GRAPH)])
+
+        bad = await _mismatched_stats(pg_conn, test_space)
+        assert not bad, (
+            "rdf_stats holds a count that disagrees with rdf_quad after a write "
+            f"following resync: {[dict(r) for r in bad]}")
