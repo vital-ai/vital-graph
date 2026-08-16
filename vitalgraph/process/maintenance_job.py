@@ -162,6 +162,11 @@ class MaintenanceJob:
             if fe_result:
                 summary["frame_entity_integrity"] = fe_result
 
+            # --- Stats integrity (wrong counts => wrong plans, silently) ---
+            stats_int_result = await self._run_stats_integrity(list(stats.keys()))
+            if stats_int_result:
+                summary["stats_integrity"] = stats_int_result
+
             # --- Stats prune (bound rdf_stats to the reorder window) ---
             stats_prune_result = await self._run_stats_prune(list(stats.keys()))
             if stats_prune_result:
@@ -463,6 +468,64 @@ class MaintenanceJob:
                 await self._tracker.mark_failed(process_id, str(e))
             logger.error("VACUUM failed for space %s: %s", space_id, e)
             return {"space_id": space_id, "error": str(e)}
+
+    async def _run_stats_integrity(self, space_ids: List[str]) -> Optional[Dict]:
+        """Catch rdf_stats counts that have gone wrong, and rebuild that space.
+
+        A wrong count does not produce a wrong answer, it produces a wrong PLAN,
+        so nothing about the result reveals it. `semijoin._selective_enough`
+        divides the probe's match count by the anchor's candidate count: with
+        the anchor understated the gate takes a per-row probe over a set-based
+        join and the query stays correct while running orders of magnitude
+        slower. Found on a 5.1M-quad space only because someone profiled a slow
+        endpoint — (rdf:type, Edge_hasKGSlot) stored 37 against 304,859 actual,
+        269ms against 33ms once repaired.
+
+        Checked by SAMPLING the largest recorded pairs, not by recounting the
+        table. Understatement is what flips the gate, and the largest rows are
+        where it shows; an exact count on a handful of pairs is an index scan
+        each, which is what makes this affordable per cycle.
+
+        Runs BEFORE the prune, deliberately. The prune removes pairs and flags
+        their predicates, so auditing after it would be reading a table that was
+        just rewritten — and one space per cycle is already the pattern here.
+        """
+        from ..db.sparql_sql.sync_stats_tables import resync_stats_tables
+
+        SAMPLE = 3
+        for space_id in space_ids:
+            try:
+                async with self._pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        f"SELECT predicate_uuid, object_uuid, row_count "
+                        f"FROM {space_id}_rdf_stats "
+                        f"ORDER BY row_count DESC LIMIT {SAMPLE}")
+                    bad = None
+                    for r in rows:
+                        actual = await conn.fetchval(
+                            f"SELECT count(*) FROM {space_id}_rdf_quad "
+                            f"WHERE predicate_uuid = $1 AND object_uuid = $2",
+                            r["predicate_uuid"], r["object_uuid"])
+                        if actual != r["row_count"]:
+                            bad = (r["row_count"], actual)
+                            break
+                    if bad is None:
+                        continue
+                    # One space per cycle, like every other step here.
+                    logger.warning(
+                        "Stats integrity: %s has a recorded pair of %d against "
+                        "%d actual — rebuilding", space_id, bad[0], bad[1])
+                    await resync_stats_tables(conn, space_id)
+                    return {"space_id": space_id, "stored": bad[0],
+                            "actual": bad[1], "rebuilt": True}
+            except Exception as exc:
+                # Same reason every step here is guarded: one `except` covers
+                # the whole cycle, so a throw would silently skip the prune,
+                # the histogram refresh, the reindex and the cleanup.
+                logger.debug("Stats integrity check skipped for %s: %s",
+                             space_id, exc)
+                continue
+        return None
 
     async def _run_stats_prune(self, space_ids: List[str]) -> Optional[Dict]:
         """Prune the single space whose rdf_stats is most over its cap.
