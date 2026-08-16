@@ -316,6 +316,29 @@ def _boolean_arg(expr, ctx: EmitContext) -> Optional[str]:
     return f"CAST({sql} AS BOOLEAN)"
 
 
+def _is_text_operand(expr, ctx: EmitContext) -> bool:
+    """True only when this operand is certainly a text column or string literal.
+
+    Conservative on purpose. `COLLATE` on a non-text expression is a PostgreSQL
+    ERROR, not a no-op, so a wrong answer here turns a working query into a
+    failing one — strictly worse than the locale-ordering defect it is meant to
+    fix. `_cmp_pair`'s fallthrough lane carries more than strings: `STRLEN(?x)`
+    is not caught by `_is_numeric_expr` in every form, and collating an integer
+    would raise.
+
+    So this admits exactly two shapes — a plain or xsd:string literal, and a
+    variable resolving to its text column with no typed lane claiming otherwise.
+    Anything else is left uncollated, which is the pre-existing behaviour.
+    """
+    if isinstance(expr, ExprValue) and isinstance(expr.node, LiteralNode):
+        dt = expr.node.datatype or ""
+        return dt in ("", f"{XSD}string")
+    if isinstance(expr, ExprVar):
+        info = ctx.types.get(expr.var)
+        return bool(info and info.text_col and not info.typed_lane)
+    return False
+
+
 def _cmp_pair(left, right, ctx: EmitContext):
     """Return (left_sql, right_sql) using numeric columns when appropriate.
 
@@ -344,7 +367,15 @@ def _cmp_pair(left, right, ctx: EmitContext):
         if a and b:
             return a, b
 
-    return expr_to_sql(left, ctx), expr_to_sql(right, ctx)
+    a, b = expr_to_sql(left, ctx), expr_to_sql(right, ctx)
+    # The text lane. SPARQL compares strings by code point (§15.1 ordering,
+    # via fn:compare); PostgreSQL uses the cluster's collation, so `?a < ?b`
+    # admits different rows on a locale-collated deployment. Pinned only when
+    # BOTH sides are provably text — see _is_text_operand.
+    if a and b and _is_text_operand(left, ctx) and _is_text_operand(right, ctx):
+        from .collation import collate
+        return collate(a), b
+    return a, b
 
 
 _XSD_CAST_MAP = {

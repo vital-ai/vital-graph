@@ -41,7 +41,22 @@ def emit_order(plan: PlanV2, ctx: EmitContext) -> str:
         if isinstance(key, str):
             info = ctx.types.get(key)
             sn = info.sql_name if info else key
-            col = f"{o_alias}.{sn}__uuid" if stable else f"{o_alias}.{sn}"
+            if stable:
+                col = f"{o_alias}.{sn}__uuid"
+            elif info is not None and info.typed_lane:
+                # A computed variable on the numeric or boolean lane — ORDER BY
+                # over a COUNT, for instance. `sn` is not a text column there
+                # and PostgreSQL raises "collations are not supported by type
+                # numeric" rather than ignoring the clause. Caught by DAWG
+                # aggregates/COUNT 8b.
+                col = f"{o_alias}.{sn}"
+            else:
+                # Pinned, not inherited: SPARQL orders strings by code point and
+                # PostgreSQL orders by the cluster's collation. Only the text
+                # column takes it — the stable-paging branch orders by uuid,
+                # where COLLATE is a type error rather than a no-op.
+                from .collation import collate
+                col = collate(f"{o_alias}.{sn}")
         else:
             col = _scoped_expr(key, plan, ctx)
             if not col:

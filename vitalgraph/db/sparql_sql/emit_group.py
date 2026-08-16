@@ -162,8 +162,9 @@ def _emit_group_impl(plan: PlanV2, ctx: EmitContext) -> str:
                 inp_info = ctx.types.get(input_var)
                 if inp_info and inp_info.sql_name:
                     isrc = inp_info.sql_name
-                    key = sparql_order_key(g_alias, isrc,
-                                           descending=(agg_name == "MAX"))
+                    key = sparql_order_key(
+                        g_alias, isrc, descending=(agg_name == "MAX"),
+                        collatable=not inp_info.typed_lane)
                     for suffix in ("__type", "__lang", "__datatype"):
                         pick = _ordered_pick(g_alias, isrc,
                                              f"{g_alias}.{isrc}{suffix}", key)
@@ -231,7 +232,8 @@ def _emit_group_impl(plan: PlanV2, ctx: EmitContext) -> str:
     return "\n".join(parts)
 
 
-def sparql_order_key(alias: str, sql_name: str, descending: bool) -> str:
+def sparql_order_key(alias: str, sql_name: str, descending: bool,
+                     collatable: bool = True) -> str:
     """ORDER BY key reproducing SPARQL term ordering (§15.1) for MIN/MAX.
 
     SPARQL 1.1 §18.5.1 defines MIN/MAX by the ORDER BY ordering, which places
@@ -247,11 +249,26 @@ def sparql_order_key(alias: str, sql_name: str, descending: bool) -> str:
     both directions); SPARQL leaves the ordering of mutually incomparable
     literals implementation-defined.
     """
+    from .collation import collate
+
     d = "DESC" if descending else "ASC"
     rank = (f"CASE WHEN {alias}.{sql_name}__type = 'B' THEN 1 "
             f"WHEN {alias}.{sql_name}__type = 'U' THEN 2 ELSE 3 END")
+    # The text component is collated; the rank and numeric components are not
+    # text and COLLATE on them is a type error. §18.5.1 defines MIN/MAX BY this
+    # ordering, so an inherited collation changes which TERM the aggregate
+    # returns, not merely the order rows arrive in.
+    #
+    # `collatable=False` when the base column is NOT text — a variable on the
+    # numeric or boolean typed lane has a numeric `sql_name`, and PostgreSQL
+    # raises "collations are not supported by type numeric" rather than ignoring
+    # it. Caught by DAWG aggregates/COUNT 8b, which is an aggregate over a
+    # numeric lane; collating unconditionally turned a passing query into a
+    # hard error, which is worse than the ordering defect being fixed.
+    value = (collate(f"{alias}.{sql_name}") if collatable
+             else f"{alias}.{sql_name}")
     return (f"{rank} {d}, {alias}.{sql_name}__num {d} NULLS LAST, "
-            f"{alias}.{sql_name} {d}")
+            f"{value} {d}")
 
 
 def _ordered_pick(alias: str, sql_name: str, column: str, order_key: str) -> str:
@@ -313,8 +330,10 @@ def _aggregate_to_sql(expr: ExprAggregator, src_alias: str,
                 # ordering, not the lexicographic max of the text column.
                 info = ctx.types.get(expr.expr.var)
                 if info and info.sql_name:
-                    key = sparql_order_key(src_alias, info.sql_name,
-                                           descending=(agg_name == "MAX"))
+                    key = sparql_order_key(
+                        src_alias, info.sql_name,
+                        descending=(agg_name == "MAX"),
+                        collatable=not info.typed_lane)
                     return _ordered_pick(src_alias, info.sql_name,
                                          f"{src_alias}.{info.sql_name}", key)
 

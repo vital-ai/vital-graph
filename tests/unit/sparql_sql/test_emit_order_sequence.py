@@ -71,7 +71,12 @@ class TestOrderByExpressionKey:
         assert order_clause.count(",") >= 1
         # the frame variable's column is the trailing term
         frame_col = ctx.types.get("frame").sql_name
-        assert order_clause.rstrip().endswith(frame_col)
+        # The trailing term is the frame column, now carrying the pinned
+        # collation (`... COLLATE "C"`). Asserting on the LAST TERM rather than
+        # on the exact tail keeps the intent — frame sorts last — without
+        # re-encoding the emitted spelling.
+        last_term = order_clause.rstrip().rsplit(",", 1)[-1]
+        assert frame_col in last_term
 
     def test_descending_expression_key(self):
         """sort_order=desc applies DESC to the expression term."""

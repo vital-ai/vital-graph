@@ -57,7 +57,10 @@ class TestTermOrdering:
         because "3.5" > "3.0E4" lexicographically (issue 029)."""
         key = sparql_order_key("t", "v0", descending=False)
         assert "v0__num" in key, "no numeric column in the ordering key"
-        assert key.index("v0__num") < key.index("t.v0 ASC"), (
+        # The TEXT term is now `t.v0 COLLATE "C" ASC`, so match on the column
+        # rather than on the old exact spelling.
+        text_pos = key.index("t.v0 COLLATE")
+        assert key.index("v0__num") < text_pos, (
             "the text column is consulted before the numeric one, which is the "
             "lexicographic bug this key exists to prevent")
 
