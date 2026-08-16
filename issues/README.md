@@ -1,7 +1,7 @@
 # Issues
 
 Numbered, append-only, one defect each. Resolved ones move to `archive/` —
-76 there, 15 live. An issue is archived only when nothing remains to do:
+76 there, 17 live. An issue is archived only when nothing remains to do:
 "FIXED in the converter, existing spaces need reloading" is not resolved, it is
 half-done, and it stays here.
 
@@ -52,6 +52,26 @@ Two assumptions recorded as settled turned out to be wrong when measured: the
 edge table DOES project blank-node endpoints, and `BNODE(expr)` per-execution
 scoping was never actually blocked by the compile cache. Both are written up in
 `planning/planning_sparql_features/blank_nodes.md` §4.7 and §4.2.
+
+## Conformance coverage — found 2026-08-16
+
+The DAWG suite ran 19 of 34 categories; the other 15 had manifests and `.rq`
+files in the tree that nothing executed. A green run meant "green on the
+categories someone remembered to add". Four query categories are now wired in,
+and running them cost nothing and found two defects and one reassurance:
+
+| | status | |
+|---|---|---|
+| 093 | OPEN | A subquery inside `GRAPH` returns ZERO rows — silent, 3 DAWG cases |
+| 094 | OPEN | `xsd:float` cast lexical form; low confidence it is ours, pyoxigraph also differs |
+
+`property-path` (33 cases) and `project-expression` (7) pass with no failures —
+the feature tracker listed property paths as implemented but unverified, and now
+they are verified.
+
+Still unwired, needing a different harness rather than a list entry: `service`,
+`protocol`, `http-rdf-update`, `syntax-*`, `csv-tsv-res`, `json-res`,
+`entailment`.
 
 ## Query performance
 
