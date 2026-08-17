@@ -91,6 +91,23 @@ class TraversalChain:
     pinned_head: bool = False
     pinned_tail: bool = False
 
+    # A CONSTRAINED end is not the same as a pinned one. Pinned means "fixed to
+    # one value", which is what `_pinned` above answers. Constrained means the
+    # end carries a type predicate against a constant — `?slot hasKGSlotType
+    # <CompanyName>` — which admits a SET, not a row.
+    #
+    # That distinction is the whole of issues/090's direction problem. A
+    # constrained end can be the better side to drive from when its set is
+    # smaller than the other end's, and the gate could not see it at all: only
+    # a pinned end counted, so a query constrained at one end and open at the
+    # other was declined as "neither end pinned".
+    #
+    # Stored as (predicate_uuid, object_uuid) so `decide` can price it against
+    # rdf_stats. Detection here, pricing there, because the statistics are
+    # loaded at a later stage than chain detection.
+    head_constraint: Optional[tuple] = None
+    tail_constraint: Optional[tuple] = None
+
     @property
     def depth(self) -> int:
         return len(self.links)
@@ -221,6 +238,45 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set) -> List[TraversalChain]:
             return True
         return (ref_id, col) in leaf_terms
 
+    def _constrained(ref_id: str, col: str):
+        """A type-ish constraint sitting on this end, as (pred_uuid, obj_uuid).
+
+        The end's variable must also be the SUBJECT of some quad table whose
+        predicate and object are both constants. `leaf_terms` records the
+        constants collect() resolved, keyed by (alias, column) — so this asks
+        for a table where subject is the chain end's variable and both other
+        columns are known.
+
+        Returns None when the end is open, or when the constraint cannot be
+        priced (a variable predicate or object), because an unpriceable
+        constraint is no basis for choosing a direction.
+        """
+        end_var = col_var.get((ref_id, col))
+        if end_var is None:
+            return None
+        for (alias, c), term in leaf_terms.items():
+            if c != "subject_uuid":
+                continue
+            if col_var.get((alias, "subject_uuid")) != end_var:
+                continue
+            pred = leaf_terms.get((alias, "predicate_uuid"))
+            obj = leaf_terms.get((alias, "object_uuid"))
+            if pred is not None and obj is not None:
+                return (pred, obj)
+        # The end variable may instead be the subject of a table whose subject
+        # is NOT a leaf term — the ordinary case, where subject is the join
+        # variable and predicate/object are the constants.
+        for (alias, c) in list(leaf_terms):
+            if c != "predicate_uuid":
+                continue
+            if col_var.get((alias, "subject_uuid")) != end_var:
+                continue
+            pred = leaf_terms.get((alias, "predicate_uuid"))
+            obj = leaf_terms.get((alias, "object_uuid"))
+            if pred is not None and obj is not None:
+                return (pred, obj)
+        return None
+
     chains: List[TraversalChain] = []
     seen: set = set()
     for ref_id in links:
@@ -236,7 +292,9 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set) -> List[TraversalChain]:
             chains.append(TraversalChain(
                 links=ordered,
                 pinned_head=_pinned(ordered[0].ref_id, ordered[0].source_col),
-                pinned_tail=_pinned(ordered[-1].ref_id, ordered[-1].dest_col)))
+                pinned_tail=_pinned(ordered[-1].ref_id, ordered[-1].dest_col),
+                head_constraint=_constrained(ordered[0].ref_id, ordered[0].source_col),
+                tail_constraint=_constrained(ordered[-1].ref_id, ordered[-1].dest_col)))
 
     # A cycle has no head, so the walk above never starts on it. Emit each
     # remaining link rather than dropping it silently.
@@ -246,7 +304,9 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set) -> List[TraversalChain]:
             chains.append(TraversalChain(
                 links=[link],
                 pinned_head=_pinned(ref_id, link.source_col),
-                pinned_tail=_pinned(ref_id, link.dest_col)))
+                pinned_tail=_pinned(ref_id, link.dest_col),
+                head_constraint=_constrained(ref_id, link.source_col),
+                tail_constraint=_constrained(ref_id, link.dest_col)))
     return chains
 
 

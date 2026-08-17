@@ -118,13 +118,73 @@ class Decision:
     reason: str
     chain: Optional[TraversalChain] = None
 
+    # Which end to drive from: "head", "tail", or None when there is no basis
+    # to choose. Separate from `hop_wise` because they answer different
+    # questions — whether to walk hop by hop, and which way to walk.
+    #
+    # Only "head" is emittable today: `emit_hop_wise` declines a tail-driven
+    # walk as not implemented. A "tail" decision therefore falls back to the
+    # flat plan and is RECORDED as a decline, which is the point — the gap
+    # shows up in the declines report instead of being invisible.
+    direction: Optional[str] = None
+
     def __repr__(self):
-        return f"Decision({'hop-wise' if self.hop_wise else 'as-is'}: {self.reason})"
+        d = f", drive from {self.direction}" if self.direction else ""
+        return f"Decision({'hop-wise' if self.hop_wise else 'as-is'}: {self.reason}{d})"
+
+
+def _end_sizes(chain, pair_rows):
+    """How many rows each end admits, when that is knowable.
+
+    A PINNED end admits one row by definition. A CONSTRAINED end admits
+    whatever `rdf_stats` says its (predicate, object) pair holds. An open end
+    is unknown and returns None — and unknown is not "large", so it must never
+    be compared as if it were.
+    """
+    def size(pinned, constraint):
+        if pinned:
+            return 1
+        if constraint and pair_rows:
+            return pair_rows.get(constraint)
+        return None
+    return (size(chain.pinned_head, chain.head_constraint),
+            size(chain.pinned_tail, chain.tail_constraint))
+
+
+def choose_direction(chain, pair_rows=None) -> Optional[str]:
+    """Which end to drive from — the smaller one, when both are known.
+
+    issues/090, re-measured 2026-08-16 on a 5.1M-quad space:
+
+        entity end open (2,863 entities, 5,726 slots of the type)
+            anchor-driven   2,452,092 buffers   537.1 ms
+            end-driven        338,252 buffers    58.4 ms     9.2x
+
+        entity pinned to ONE uri
+            anchor-driven           542 buffers   0.2 ms
+            end-driven              601 buffers   1.0 ms     4.2x the other way
+
+    So the direction cannot be a convention; it follows the smaller end. Both
+    counts come from statistics already loaded — a pinned end is 1 by
+    definition, a constrained end is one `rdf_stats` lookup.
+
+    Returns None when only one end is knowable, because a comparison needs two
+    numbers and guessing at the other is how a 4.2x regression gets shipped.
+    """
+    head, tail = _end_sizes(chain, pair_rows)
+    if head is not None and tail is not None:
+        return "head" if head <= tail else "tail"
+    if head is not None:
+        return "head"
+    if tail is not None:
+        return "tail"
+    return None
 
 
 def decide(chain: Optional[TraversalChain],
            criterion_rows: Optional[int] = None,
-           predicate_rows: Optional[int] = None) -> Decision:
+           predicate_rows: Optional[int] = None,
+           pair_rows: Optional[dict] = None) -> Decision:
     """Choose an evaluation shape for one chain.
 
     `criterion_rows` / `predicate_rows` come from the value histograms
@@ -147,11 +207,26 @@ def decide(chain: Optional[TraversalChain],
     # Without a pinned end there is no small driving set, so every hop would
     # materialise the whole relation. Untested, and the one shape with an
     # obvious mechanism for being worse — so it declines.
-    if not (chain.pinned_head or chain.pinned_tail):
-        SHAPE.decline("neither end pinned, so there is no small driving set "
-                      "and every hop would materialise the whole relation",
-                      depth=chain.depth)
-        return Decision(False, "neither end pinned, no driving set", chain)
+    direction = choose_direction(chain, pair_rows)
+    if direction is None:
+        SHAPE.decline("neither end pinned or constrained, so there is no small "
+                      "driving set and every hop would materialise the whole "
+                      "relation", depth=chain.depth)
+        return Decision(False, "neither end pinned or constrained, "
+                               "no driving set", chain)
+
+    # A CONSTRAINED end now counts. It admits a set rather than a row, so it is
+    # a driving set when that set is the smaller of the two — which is what
+    # `choose_direction` decides from statistics rather than by convention
+    # (issues/090: 9.2x choosing right, 4.2x choosing wrong).
+    #
+    # Emission has not caught up: `emit_hop_wise` serves a head-driven walk
+    # only and declines a tail-driven one, with its own recorded reason. That
+    # decline stays THERE rather than being duplicated here, because the two
+    # answer different questions — this module decides what is BEST, the
+    # emitter decides what it can BUILD. Folding "not implemented" into the
+    # strategy would make the decision unable to express the thing issues/090
+    # needs it to express: that the tail is the better end.
 
     # A MEASURED criterion is required. Not a selective one — see below.
     #
@@ -188,11 +263,12 @@ def decide(chain: Optional[TraversalChain],
 
     return Decision(
         True,
-        f"depth {chain.depth}, pinned "
-        f"{'head' if chain.pinned_head else 'tail'}{sel}", chain)
+        f"depth {chain.depth}, driving from {direction}{sel}",
+        chain, direction=direction)
 
 
-def decide_for_plan(chains, criterion_rows=None, predicate_rows=None) -> Decision:
+def decide_for_plan(chains, criterion_rows=None, predicate_rows=None,
+                    pair_rows=None) -> Decision:
     """Decide for the deepest chain in a plan, and log it.
 
     The deepest is the one that matters: cost compounds per hop, and a plan
@@ -201,6 +277,6 @@ def decide_for_plan(chains, criterion_rows=None, predicate_rows=None) -> Decisio
     if not chains:
         SHAPE.decline("the plan holds no traversal chain")
         return Decision(False, "no chain")
-    decision = decide(chains[0], criterion_rows, predicate_rows)
+    decision = decide(chains[0], criterion_rows, predicate_rows, pair_rows)
     logger.info("traversal decision: %s", decision)
     return decision
