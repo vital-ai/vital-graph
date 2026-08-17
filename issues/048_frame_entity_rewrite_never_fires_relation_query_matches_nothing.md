@@ -227,6 +227,90 @@ gone red over this.
 
 Reproduce with `test_scripts/debug/remeasure_048.py`.
 
+## Problem 1 — the fix, specified against the code as it stands 2026-08-17
+
+Written after reading the rewrite and building the fixture that can catch the
+wrong version of it. Everything below is checked against the current source, not
+recalled.
+
+### Where it goes
+
+`rewrite_frame_entity_table` already does exactly this shape for the FRAME type
+(`ce9d64c`): `_type_quads_for` finds `<frame_var> vitaltype <const>` quads, they
+are added to `removed_aliases` and `type_quad_owned`, and a replacement conjunct
+is appended to `absorbed_type` as `(fe_alias, sql)`, which line ~493 folds into
+`new_tagged` / `new_constraints`. The slot fix is the same five steps with a
+different conjunct. `space_id` is a parameter of the function, so
+`f"{space_id}_edge"` and `f"{space_id}_rdf_quad"` are both available.
+
+### The conjunct
+
+For a slot group `g` (which already carries `slot_var`, `role`, `edge_alias`,
+`frame_var`), a constraint `<g.slot_var> a|vitaltype <T>` becomes:
+
+    EXISTS (SELECT 1
+            FROM {space}_edge e_x
+            JOIN {space}_rdf_quad st_x
+              ON st_x.subject_uuid = e_x.dest_node_uuid
+             AND st_x.predicate_uuid = <hasKGSlotType>::uuid
+             AND st_x.object_uuid    = <role uri>::uuid
+            JOIN {space}_rdf_quad ty_x
+              ON ty_x.subject_uuid = e_x.dest_node_uuid
+             AND ty_x.predicate_uuid = <the type predicate>::uuid
+             AND ty_x.object_uuid    = <T token>
+            WHERE e_x.source_node_uuid = {fe_alias}.frame_uuid
+              AND e_x.context_uuid     = {fe_alias}.context_uuid)
+
+**The role join is the whole correctness of it.** Without `st_x` this reads "the
+frame has SOME slot of type T" instead of "the ROLE-scoped slot is of type T".
+On every fixture before 2026-08-17 those two returned the same answer, because
+every slot was a `KGEntitySlot`. On `sp_graph_skew_2k` regenerated with
+`--attribute-slot-fraction 0.25` they are **0 and 2,317**.
+
+### Two preconditions, both required
+
+1. **Every surviving binding of `slot_var` is a type quad with a CONSTANT
+   object.** `_type_quads_for` enforces the constant for frames and says why; a
+   variable object binds something the query may read, and the column cannot
+   supply it here at all. Handle `rdf:type` AND `vital-core#vitaltype` —
+   `_type_quads_for` matches only the latter, and measurement shows both spellings
+   reach the same decline, so both must be absorbed or the fix covers half the
+   cases.
+2. **`slot_var` is not projected.** Absorbing removes its last position, and
+   `plan.var_slots` is then filtered to positions-only; if the query selects the
+   slot, its value is gone. Decline instead.
+
+Anything else — a slot constrained on something that is not a type, a slot whose
+value is read — keeps today's decline. This widens what collapses; it does not
+try to make everything collapse.
+
+### The same treatment for the slot EDGE
+
+`?slotEdge vitaltype Edge_hasKGSlot` breaks identically (691K buffers) and is
+what `kgframes_endpoint` emits. It is CHEAPER to absorb: `{space}_edge` carries
+`edge_type_uuid`, so the conjunct needs no `ty_x` join at all — add
+`AND e_x.edge_type_uuid = <T>::uuid` to the EXISTS above and drop the type quad.
+
+### How to know it worked
+
+    correctness   ?srcSlot a KGTextSlot   -> 0 rows      (2,317 if the role join is missing)
+                  ?srcSlot a KGEntitySlot -> 9,266 rows
+                  both already asserted in test_traversal_direction_gate.py
+    collapse      frame_entity joins goes 0 -> 2 on the depth-2 slot-typed query
+    cost          542,012 buffers -> the ~10,626 the unconstrained walk reads
+    no regression the differential against the flat plan, which
+                  test_frame_entity_collapse.py already runs with slot_typed=True
+
+### Why this was not landed on 2026-08-17
+
+Context budget, honestly stated. This file has twice shipped a silent defect —
+invalid SQL (`missing FROM-clause entry for table "mv0"`) and a cross product
+that turned 285,348 correct rows into over a million — and both were found by
+measurement rather than by tests. A half-applied change here returns WRONG
+ANSWERS rather than slow ones. The fixture that can catch the likely bug now
+exists, which was the prerequisite; the change itself wants a session with room
+to measure it properly.
+
 ## Problem 1 — a slot-type constraint disables the collapse entirely
 
 **Price: ~28,000x at depth 3.** Adding `?slot a KGEntitySlot`, which the
