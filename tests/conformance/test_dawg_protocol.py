@@ -57,7 +57,8 @@ MANIFEST = (
 # run or declined in writing. `protocol` moved from DECLINED to here.
 PROTOCOL_CATEGORIES = ["protocol"]
 
-BASE_URL = os.getenv("VG_PROTOCOL_BASE_URL", "http://localhost:8001")
+# Test stack (:8002), not dev (:8001) — see tests/api/conftest.py.
+BASE_URL = os.getenv("VG_PROTOCOL_BASE_URL", "http://localhost:8002")
 SPACE_ID = os.getenv("VG_PROTOCOL_SPACE_ID", "wordnet_frames")
 USERNAME = os.getenv("VG_PROTOCOL_USER", "admin")
 PASSWORD = os.getenv("VG_PROTOCOL_PASSWORD", "admin")

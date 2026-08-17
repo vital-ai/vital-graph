@@ -91,7 +91,7 @@ def _swap(node, old: str, new: str):
 def _sidecar_up() -> bool:
     try:
         req = urllib.request.Request(
-            "http://localhost:7070/v1/sparql/compile",
+            _SIDECAR,
             data=b'{"sparql":"SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"}',
             headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=2) as r:
@@ -105,7 +105,7 @@ HAS_SIDECAR = _sidecar_up()
 
 def _compile(sparql: str) -> dict:
     req = urllib.request.Request(
-        "http://localhost:7070/v1/sparql/compile",
+        _SIDECAR,
         data=json.dumps({"sparql": sparql, "phases": {"algebraCompiled": True}}).encode(),
         headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(req, timeout=30) as r:

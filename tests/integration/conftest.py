@@ -28,12 +28,22 @@ import httpx
 # ---------------------------------------------------------------------------
 
 PG_HOST = os.environ.get("VG_TEST_PG_HOST", "localhost")
-PG_PORT = int(os.environ.get("VG_TEST_PG_PORT", "5432"))
+# Defaults target the docker test stack (vg-test, port 5433), NOT the host
+# cluster. issues/099: the fixture loaders default to 5433 and these
+# defaulted to 5432, so fixtures were seeded into one cluster and read from
+# the other — which held stale same-named spaces, so tests got plausible
+# wrong answers instead of a connection error.
+PG_PORT = int(os.environ.get("VG_TEST_PG_PORT", "5433"))
 PG_DATABASE = os.environ.get("VG_TEST_PG_DATABASE", "sparql_sql_graph")
 PG_USER = os.environ.get("VG_TEST_PG_USER", "postgres")
-PG_PASSWORD = os.environ.get("VG_TEST_PG_PASSWORD", "")
+PG_PASSWORD = os.environ.get("VG_TEST_PG_PASSWORD", "testpass")
 
-SIDECAR_URL = os.environ.get("VG_TEST_SIDECAR_URL", "http://localhost:7070")
+# The TEST-stack sidecar (vitalgraph-test-sidecar, host 7071 -> 7070 in the
+# container), not the dev one on 7070. tests/performance already defaulted
+# here; integration and conformance did not, so they silently checked a
+# sidecar belonging to the other stack — and skipped themselves when it was
+# down, which reads as "infrastructure absent" rather than "wrong port".
+SIDECAR_URL = os.environ.get("VG_TEST_SIDECAR_URL", "http://localhost:7071")
 
 
 # ---------------------------------------------------------------------------

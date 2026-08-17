@@ -20,17 +20,58 @@ logger = logging.getLogger(__name__)
 # Connection parameters
 # ---------------------------------------------------------------------------
 
+# The stack every test suite targets. One set of variables decides it, and this
+# module resolves them the same way `tests/{performance,integration,api}/
+# conftest.py` do — so the conformance suites, which reach the database through
+# here rather than through those conftests, cannot end up on a different stack
+# from the rest.
+#
+# They did. This module defaulted to port 5432 (host cluster) while the fixture
+# loaders and the other suites defaulted to 5433 (docker test stack), so the
+# conformance suite ran against the dev database while its sidecar checks
+# pointed at the test one. Nothing said so — the host cluster carries
+# same-named spaces, so the queries answered (issues/099).
+_STACK_DEFAULTS = {
+    "host": "localhost",
+    "port": "5433",          # docker test stack; 5432 is the host cluster
+    "dbname": "sparql_sql_graph",
+    "user": "postgres",
+    "password": "testpass",
+}
+
+
 def get_connection_params() -> Dict[str, Any]:
+    """Build connection parameters for the configured stack.
+
+    Precedence, most specific first:
+
+      1. ``VG_TEST_PG_*``   — the stack selector the test suites share
+      2. ``PGHOST``/``PGPORT``/...  — standard libpq variables
+      3. ``LOCAL_DB_*``     — the .env development profile
+      4. the docker test stack
+
+    An explicit setting always wins; the DEFAULT is what had to stop
+    disagreeing, since with nothing set each caller silently chose its own.
     """
-    Build connection parameters from environment variables.
-    Falls back to local development defaults matching .env LOCAL_ config.
-    """
+    def _pick(vg: str, pg: str, local: str, key: str) -> str:
+        for name in (vg, pg, local):
+            value = os.environ.get(name)
+            if value is not None and value != "":
+                return value
+        return _STACK_DEFAULTS[key]
+
     return {
-        "host": os.environ.get("PGHOST", os.environ.get("LOCAL_DB_HOST", "localhost")),
-        "port": int(os.environ.get("PGPORT", os.environ.get("LOCAL_DB_PORT", "5432"))),
-        "dbname": os.environ.get("PGDATABASE", os.environ.get("LOCAL_DB_NAME", "sparql_sql_graph")),
-        "user": os.environ.get("PGUSER", os.environ.get("LOCAL_DB_USERNAME", "postgres")),
-        "password": os.environ.get("PGPASSWORD", os.environ.get("LOCAL_DB_PASSWORD", "")),
+        "host": _pick("VG_TEST_PG_HOST", "PGHOST", "LOCAL_DB_HOST", "host"),
+        "port": int(_pick("VG_TEST_PG_PORT", "PGPORT", "LOCAL_DB_PORT", "port")),
+        "dbname": _pick("VG_TEST_PG_DATABASE", "PGDATABASE", "LOCAL_DB_NAME", "dbname"),
+        "user": _pick("VG_TEST_PG_USER", "PGUSER", "LOCAL_DB_USERNAME", "user"),
+        # Password is the one field where an empty string is a legitimate value
+        # (trust auth), so it is read separately rather than through the
+        # non-empty filter above.
+        "password": next(
+            (os.environ[n] for n in ("VG_TEST_PG_PASSWORD", "PGPASSWORD",
+                                     "LOCAL_DB_PASSWORD") if n in os.environ),
+            _STACK_DEFAULTS["password"]),
     }
 
 

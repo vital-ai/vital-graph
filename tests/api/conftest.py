@@ -6,7 +6,8 @@ launched via docker-compose).  If the server is unreachable, tests fail.
 
 Configuration is driven by environment variables:
     VITALGRAPH_CLIENT_ENVIRONMENT  — profile name (default: "local")
-    LOCAL_CLIENT_SERVER_URL        — server URL  (default: http://localhost:8001)
+    LOCAL_CLIENT_SERVER_URL        — server URL  (default: http://localhost:8002,
+                                     the TEST stack; :8001 is dev)
     LOCAL_CLIENT_AUTH_USERNAME     — login user  (default: admin)
     LOCAL_CLIENT_AUTH_PASSWORD     — login pass  (default: admin)
 """
@@ -23,14 +24,40 @@ import asyncpg
 # Configuration
 # ---------------------------------------------------------------------------
 
-SERVER_URL = os.getenv("LOCAL_CLIENT_SERVER_URL", "http://localhost:8001")
+# The TEST stack, not the dev one. :8001 is vitalgraph-app, which talks to the
+# HOST postgres; :8002 is vitalgraph-test-app, which talks to the container
+# postgres these tests also connect to directly (VG_TEST_PG_PORT=5433).
+# Defaulting to :8001 pointed the API calls at one database and the
+# verification queries at another, and tested whatever image happened to be
+# running in dev. See issues/099.
+SERVER_URL = os.getenv("LOCAL_CLIENT_SERVER_URL", "http://localhost:8002")
+
+# Push it into the variable the CLIENT reads, or this constant governs only the
+# raw-HTTP checks while VitalGraphClient() goes somewhere else entirely.
+#
+# VitalGraphClient takes no URL argument — it resolves one through
+# VitalGraphClientConfig, which tries {PROFILE}_CLIENT_SERVER_URL, then
+# CLIENT_SERVER_URL, then falls back to a hardcoded http://localhost:8001. That
+# fallback is the DEV app, which talks to the HOST postgres, while these tests
+# verify against the container postgres on 5433. So the API calls and the
+# assertions could land in different databases, and the suite would be testing
+# whatever image happened to be running in dev (issues/099).
+#
+# pytest does not load .env, so nothing else sets this for a bare run.
+_CLIENT_PROFILE = os.getenv("VITALGRAPH_CLIENT_ENVIRONMENT", "local").upper()
+os.environ[f"{_CLIENT_PROFILE}_CLIENT_SERVER_URL"] = SERVER_URL
 
 # Direct PostgreSQL access (for DB-level verification tests)
 PG_HOST = os.getenv("VG_TEST_PG_HOST", "localhost")
-PG_PORT = int(os.getenv("VG_TEST_PG_PORT", "5432"))
+# Defaults target the docker test stack (vg-test, port 5433), NOT the host
+# cluster. issues/099: the fixture loaders default to 5433 and these
+# defaulted to 5432, so fixtures were seeded into one cluster and read from
+# the other — which held stale same-named spaces, so tests got plausible
+# wrong answers instead of a connection error.
+PG_PORT = int(os.getenv("VG_TEST_PG_PORT", "5433"))
 PG_DATABASE = os.getenv("VG_TEST_PG_DATABASE", "sparql_sql_graph")
 PG_USER = os.getenv("VG_TEST_PG_USER", "postgres")
-PG_PASSWORD = os.getenv("VG_TEST_PG_PASSWORD", "")
+PG_PASSWORD = os.getenv("VG_TEST_PG_PASSWORD", "testpass")
 
 TEST_SPACE_PREFIX = "apitest_"
 

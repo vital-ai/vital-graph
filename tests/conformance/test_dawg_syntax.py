@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -48,7 +49,13 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DAWG_ROOT = _PROJECT_ROOT / "vitalgraph_sparql_sql_dev" / "dawg_tests"
 
-SIDECAR_COMPILE = "http://localhost:7070/v1/sparql/compile"
+# The TEST-stack sidecar (vitalgraph-test-sidecar, host 7071 -> 7070 in the
+# container), not the dev one on 7070. tests/performance already defaulted
+# here; integration and conformance did not, so they silently checked a
+# sidecar belonging to the other stack — and skipped themselves when it was
+# down, which reads as "infrastructure absent" rather than "wrong port".
+SIDECAR_COMPILE = (os.environ.get("VG_TEST_SIDECAR_URL", "http://localhost:7071")
+                   + "/v1/sparql/compile")
 
 # Categories that are ENTIRELY syntax tests.
 SYNTAX_CATEGORIES = [

@@ -69,7 +69,8 @@ All 15 are now run or declined in writing. 705 → **907 executed cases**.
 | 094 | FIXED | `xsd:float` rendered `33.33` as `33.33000183105469` — a binary32 value printed at binary64 width. All six cast cases pass; the "canonical form" second half I recorded turned out not to exist |
 | 095 | 3 of 4 FIXED | Grammar restrictions Jena parses but SPARQL forbids. `SELECT *` with `GROUP BY` has no defined answer, so accepting it returned something undefined. The fourth is declined with a reason |
 | 097 | FIXED | A non-JSON request body returned HTTP 500 on every endpoint |
-| 099 | FIXED (one decision left) | **The fixture loader and the perf tests default to different clusters.** `VG_TEST_PG_PORT` defaults to 5433 in the seeders and 5432 in the tests, so fixtures were seeded into one and read from the other — which held a stale same-named space, so tests got plausible wrong answers instead of an error |
+| 100 | OPEN | KGType search finds nothing on the test stack — 6 cases, including keyword which needs no embeddings. Provenance not established: the dev app is stopped, so there is no before/after comparison |
+| 099 | FIXED | **The fixture loader and the perf tests default to different clusters.** `VG_TEST_PG_PORT` defaults to 5433 in the seeders and 5432 in the tests, so fixtures were seeded into one and read from the other — which held a stale same-named space, so tests got plausible wrong answers instead of an error |
 | 098 | FIXED | **Search input was interpolated into SPARQL unescaped — confirmed filter bypass.** Previously carried as "quotes break the query"; a balanced payload does not break it, it disables the FILTER and returns everything. Eight sites, including three that escaped the quote but not the backslash |
 
 Verified PASSING rather than assumed: `property-path` 33/33, `project-expression`

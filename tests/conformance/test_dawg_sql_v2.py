@@ -17,6 +17,7 @@ Usage (local with DB + sidecar):
 from __future__ import annotations
 
 import asyncio
+import os
 import logging
 from pathlib import Path
 from typing import List, Tuple
@@ -105,7 +106,8 @@ def _check_infrastructure() -> bool:
     try:
         import urllib.request
         req = urllib.request.Request(
-            "http://localhost:7070/v1/sparql/compile",
+            os.environ.get("VG_TEST_SIDECAR_URL", "http://localhost:7071")
+            + "/v1/sparql/compile",
             data=b'{"sparql":"SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"}',
             headers={"Content-Type": "application/json"},
             method="POST",

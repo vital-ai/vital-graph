@@ -23,10 +23,15 @@ import asyncpg
 from . import perf_record as perf_record_mod
 
 PG_HOST = os.environ.get("VG_TEST_PG_HOST", "localhost")
-PG_PORT = int(os.environ.get("VG_TEST_PG_PORT", "5432"))
+# Defaults target the docker test stack (vg-test, port 5433), NOT the host
+# cluster. issues/099: the fixture loaders default to 5433 and these
+# defaulted to 5432, so fixtures were seeded into one cluster and read from
+# the other — which held stale same-named spaces, so tests got plausible
+# wrong answers instead of a connection error.
+PG_PORT = int(os.environ.get("VG_TEST_PG_PORT", "5433"))
 PG_DATABASE = os.environ.get("VG_TEST_PG_DATABASE", "sparql_sql_graph")
 PG_USER = os.environ.get("VG_TEST_PG_USER", "postgres")
-PG_PASSWORD = os.environ.get("VG_TEST_PG_PASSWORD", "")
+PG_PASSWORD = os.environ.get("VG_TEST_PG_PASSWORD", "testpass")
 
 pytestmark = pytest.mark.performance
 

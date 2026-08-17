@@ -10,11 +10,18 @@ Allowed to import from both v1 and v2 per §11.7 (test harness exception).
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 from .dawg_srx_parser import SparqlBinding, SparqlResults
 
 logger = logging.getLogger(__name__)
+
+# Follows the same stack configuration as the database (see
+# vitalgraph_sparql_sql_dev/db.get_connection_params). Hardcoding 7070 pointed
+# these runners at the DEV sidecar while their queries ran against whichever
+# database the config chose — issues/099. 7071 is the docker test stack.
+DEFAULT_SIDECAR_URL = os.environ.get("VG_TEST_SIDECAR_URL", "http://localhost:7071")
 
 XSD_STRING = "http://www.w3.org/2001/XMLSchema#string"
 XSD_BOOLEAN = "http://www.w3.org/2001/XMLSchema#boolean"
@@ -26,7 +33,7 @@ class SqlV2PipelineError(Exception):
 
 async def execute_query_via_v2_pipeline(
     sparql: str,
-    sidecar_url: str = "http://localhost:7070",
+    sidecar_url: str = DEFAULT_SIDECAR_URL,
     space_id: str = "dawg_test",
     conn=None,
     conn_params=None,
@@ -157,7 +164,7 @@ async def execute_query_via_v2_pipeline(
 
 async def execute_update_via_v2_pipeline(
     sparql: str,
-    sidecar_url: str = "http://localhost:7070",
+    sidecar_url: str = DEFAULT_SIDECAR_URL,
     space_id: str = "dawg_test",
     conn=None,
     conn_params=None,

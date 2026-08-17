@@ -84,7 +84,19 @@ class VitalGraphClientConfig:
         """
         return {
             'server': {
-                'url': self._get_profile_env('SERVER_URL', 'http://localhost:8001'),
+                # NO DEFAULT. A client that silently picks a server picks the
+                # WRONG one: this used to fall back to http://localhost:8001,
+                # which is the dev app talking to the host database, while the
+                # test stack is :8002 against the container database. Anything
+                # constructed without configuration — 109 bare
+                # `VitalGraphClient()` calls in this repo — went to dev and said
+                # nothing, so a suite could call one database and assert against
+                # another (issues/099).
+                #
+                # Empty here; `get_server_url` raises. Failing at the point of
+                # use with the variable names is worth more than a default that
+                # is right on one machine.
+                'url': self._get_profile_env('SERVER_URL', ''),
                 'api_base_path': self._get_profile_env('API_BASE_PATH', '/api/v1')
             },
             'auth': {
@@ -145,14 +157,23 @@ class VitalGraphClientConfig:
         return self.config_data.get('client', {})
     
     def get_server_url(self) -> str:
-        """
-        Get the VitalGraph API server URL.
-        
-        Returns:
-            Server URL string
+        """Get the VitalGraph API server URL.
+
+        Raises:
+            ClientConfigurationError: if no URL is configured. There is
+                deliberately no default — see `_load_from_env`.
         """
         server_config = self.get_server_config()
-        return server_config.get('url', 'http://localhost:8001')
+        url = (server_config.get('url') or '').strip()
+        if not url:
+            raise ClientConfigurationError(
+                f"No VitalGraph server URL configured. Set "
+                f"{self.environment}_CLIENT_SERVER_URL (or CLIENT_SERVER_URL) — "
+                f"for example http://localhost:8002 for the docker test stack, "
+                f"or http://localhost:8001 for a local dev server. "
+                f"VITALGRAPH_CLIENT_ENVIRONMENT is currently "
+                f"{self.environment!r}.")
+        return url
     
     def get_api_base_path(self) -> str:
         """

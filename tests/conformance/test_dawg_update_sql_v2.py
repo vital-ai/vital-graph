@@ -58,7 +58,12 @@ UPDATE_CATEGORIES = [
     "update-silent",
 ]
 
-SIDECAR_URL = os.environ.get("VG_TEST_SIDECAR_URL", "http://localhost:7070")
+# The TEST-stack sidecar (vitalgraph-test-sidecar, host 7071 -> 7070 in the
+# container), not the dev one on 7070. tests/performance already defaulted
+# here; integration and conformance did not, so they silently checked a
+# sidecar belonging to the other stack — and skipped themselves when it was
+# down, which reads as "infrastructure absent" rather than "wrong port".
+SIDECAR_URL = os.environ.get("VG_TEST_SIDECAR_URL", "http://localhost:7071")
 
 
 # ---------------------------------------------------------------------------

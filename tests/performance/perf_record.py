@@ -80,7 +80,7 @@ def runner_stamp() -> Dict[str, Any]:
     and must not be compared against a vg-test baseline.
     """
     host = os.environ.get("VG_TEST_PG_HOST", "localhost")
-    port = os.environ.get("VG_TEST_PG_PORT", "5432")
+    port = os.environ.get("VG_TEST_PG_PORT", "5433")  # docker test stack (issues/099)
     is_vgtest = port == "5433"
     # A clean container DB and a persisted volume holding several loaded spaces
     # are NOT the same measurement environment, even though both are
