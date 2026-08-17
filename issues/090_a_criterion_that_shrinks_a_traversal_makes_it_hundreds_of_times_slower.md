@@ -650,14 +650,39 @@ badly. Without that decline the extension shipped a 2.5-6.3x pessimisation on
 every shape measured. The decision layer keeps its direction: it is correct, it
 is asserted against real statistics, and it is what the hoist will need.
 
-### What is left
+### What is left: the hoist, and it is now measured rather than assumed
 
 **Hoist the driving end's constraint out of the criteria fence** and into the
 outer FROM beside the link. The criteria lateral nests INSIDE the body, so
 anything placed in the body stays in lexical scope for it — the move is
-mechanically available. What it needs is a rule for identifying which table
-carries the driving constraint, and `_place` currently assigns by hop, not by
-role.
+mechanically available.
+
+Built by hand and measured (`test_scripts/debug/measure_hoist_value.py`), which
+moves exactly one JOIN in the emitted SQL. Depth 2, all three arms returning
+identical answers:
+
+    fixture / driving end        flat      hop-wise    hop-wise + HOIST
+    2k,    Rare (40 entities)  17,237  106,040 6.2x W    4,717  3.7x BETTER
+    2k,    Person (394)        37,220   93,803 2.5x W   39,949  parity
+    19.6M, Person (~20%)         2.60M    8.12M 3.1x W    2.42M  parity
+
+So the hoist is the missing half of the direction work, not an optimisation on
+top of it. It converts the pessimisation into a win, and the size of the win
+tracks how SMALL the driving end is — 3.7x at 40 entities, parity at 394 and at
+20% of a 19.6M-quad space. That is precisely what `_end_sizes` already prices,
+so the two compose: drive from the smaller end, and the payoff scales with how
+much smaller it is.
+
+Left open with it: whether the driving end's size should become a THRESHOLD, not
+just a direction. At 20% the hoisted form is parity rather than a win, so there
+is nothing to lose today; the question is worth its own measurement rather than
+a guess. Note this is a different question from criterion selectivity, which was
+tried as a threshold and was wrong (see the correction above).
+
+What the fix needs is a rule for identifying which table carries the driving
+constraint. The hand-built version keys off "the quad table joined to the outer
+link's driving column from inside the first lateral", which is exactly right for
+this shape and is not yet a general rule — `_place` assigns by hop, not by role.
 
 Delete `TestAConstrainedDriveIsDeclined` (unit and performance) when that lands,
 and put a timing assertion in its place.
