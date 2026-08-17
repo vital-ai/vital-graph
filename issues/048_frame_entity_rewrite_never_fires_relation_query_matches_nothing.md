@@ -100,6 +100,54 @@ small factor of the unconstrained walk — not merely better than it was.
 
 ---
 
+## Who actually issues these queries — the scoping question, ANSWERED
+
+Asked 2026-08-17 before building the fix, because it decides whether Problem 1 is
+urgent or merely open. The answer is that **no product path generates the shape**.
+
+`frame_entity` only ever holds CONNECTION frames. `sync_frame_entity_table`
+requires a frame to reach a slot typed `urn:hasSourceEntity` AND one typed
+`urn:hasDestinationEntity` — that is the `HAVING` clause — so a frame with
+neither produces no row. Measured:
+
+    wordnet_frames        285,348 frame_entity rows    connection frames
+    sp_graph_synth_10k     45,643                      connection frames
+    sp_lead_synth_10k           0                      attribute frames
+    sp_kg_types                 0
+    kg_load_test                0
+
+And those two role URIs appear NOWHERE outside `vitalgraph/db/sparql_sql/`
+— not in `kg_query_builder`, not in the portal query set.
+
+What `kg_query_builder` actually emits, for an entity query with frame and slot
+criteria including a nested frame, is:
+
+    ?entity        vitaltype     KGEntity (UNION over four kinds)
+    ?frame_edge_0  vitaltype     Edge_hasEntityKGFrame
+    ?frame_edge_0  hasEdgeSource ?entity
+    ?frame_edge_0  hasEdgeDestination ?frame_0
+    ?frame_0       hasKGFrameType <LeadStatusFrame>
+    ?slot_edge_0_0 vitaltype     Edge_hasKGSlot
+    ?slot_edge_0_0 hasEdgeSource ?frame_0
+    ?slot_0_0      hasKGSlotType <hasStatus>
+    ... nested frame via Edge_hasKGFrame, then its slots
+
+That is entity -> ATTRIBUTE frame -> slot, and frame -> frame for nesting. There
+is no second entity hop anywhere in it, so these frames never enter
+`frame_entity` and the collapse is not involved. The `Edge_hasKGSlot` constraint
+it carries is on the losing side of the table above, but it is attached to a
+shape the collapse never sees.
+
+**So Problem 1 costs nothing to any query the product or the portal issues
+today.** It costs hand-written SPARQL over a connection-frame dataset — which is
+a first-class use of a SPARQL endpoint, and is what every fixture and benchmark
+here does, but is not a live production regression.
+
+This is a re-pricing, not a dismissal: 690,949 buffers where the collapsed form
+reads 10,626 is real, and a customer writing the canonical reference query hits
+it. It moves the work from "this week" to "when the traversal area is next
+opened".
+
 ## Which side of the hop the constraint sits on — the whole discrimination
 
 Added 2026-08-17, after asking whether Problem 1 had been fixed before and
