@@ -23,10 +23,40 @@ What can be said: the symptom is gone, it was never attributed, and the original
 question — did this predate the move to the test stack — was never answered
 because the dev app was deliberately stopped.
 
+### RULED OUT: the 8001/8002 confusion, and a stale app image
+
+Both are the obvious suspects and the timestamps exclude them:
+
+    image built        2026-08-16 20:55:05 EDT
+    container started  2026-08-16 20:55:08 EDT
+    issue filed        2026-08-16 21:06        (commit 4722c78)
+
+The app container is running the SAME image in the SAME container it was eleven
+minutes before these failures were recorded, and has not been rebuilt or
+restarted since. And this issue was filed IN `4722c78` — the commit that made
+every suite follow one stack configuration — so the failures were observed AFTER
+the port fix, against the intended target.
+
+**That narrows it to the database side**, because the application side is
+provably unchanged between failing and passing. What happened in between:
+
+  * postgres restarted, which recycled every pooled connection the app held
+  * `dynamic_shared_memory_type` went posix -> sysv (`issues/102`)
+  * `sp_kg_types` gained an empty `{space}_entity_slot_sort` (`issues/055`)
+
+The third is already unlikely — the search path does not reference that table and
+it is still empty. Of the remaining two, the connection recycle is the one that
+fits the SHAPE of the symptom: zero rows rather than an error. A pool holding
+connections whose cached statements were prepared against an earlier state of the
+space would answer, and answer emptily, which is what was seen. That is a
+hypothesis and it is untested — recorded so the next person starts there rather
+than at the port.
+
 **Left open deliberately rather than closed.** A test that starts passing for
 unknown reasons can stop passing for the same unknown reasons. If these six fail
-again, the first thing to check is whether a parallel plan is involved, and the
-second is whether the app container was restarted since the space was created.
+again, restart the app container FIRST and see whether that alone fixes it: that
+is the cheapest way to confirm or kill the connection-state hypothesis, and it
+was never tried while the failure was live.
 
 Six `tests/api/test_kgtypes_api.py::TestKGTypeSearch` cases fail on the docker
 test stack:
