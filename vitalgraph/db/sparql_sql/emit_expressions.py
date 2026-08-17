@@ -1243,6 +1243,26 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext,
     # the subquery still produces the _var_to_sql diagnostic instead of a
     # silent NULL.
     inner_ctx.query_all_vars = ctx.query_all_vars
+    # An EXISTS body projects `SELECT 1`, so nothing in it needs term TEXT unless
+    # a filter inside the body compares on it. Without this the body resolved
+    # term_text/term_type/lang/datatype for every variable it binds, inside an
+    # anti-join that discards all of them (issues/088).
+    #
+    # Computed rather than emptied: a body carrying `FILTER(STRSTARTS(?x, "a"))`
+    # does need ?x's text, and blanking the set would emit a comparison against a
+    # column that was never resolved.
+    #
+    # It has to happen HERE. `prepare_exists_subplans` builds the body at stage
+    # 2a.3 and `compute_text_needed_vars` runs at 2c, so the prepared body never
+    # sees the outer pass — the ordering is deliberate for other reasons and this
+    # is the place both are in scope.
+    try:
+        from .var_scope import compute_text_needed_vars
+        inner_ctx.text_needed_vars = compute_text_needed_vars(
+            inner_plan, projection_discarded=True)
+    except Exception:
+        # Unknown shape: leave it None and resolve text as before. Slow, correct.
+        inner_ctx.text_needed_vars = None
     # Everything emitted below here sits inside a correlated subquery, so filter
     # push-down must not add an uncorrelated one — see the field's own comment.
     inner_ctx.in_correlated_subquery = True

@@ -1,6 +1,50 @@
 # Absence-Defined Filters Scan Every Row Once the Predicate Actually Exists
 
-## Status: PARTIALLY FIXED 2026-08-13 — fast when the predicate is absent, still 9.7 s when it is not
+## Status: IMPROVED 9.6x 2026-08-17 for the case that remained — not yet closed
+
+The `fold_dead_not_exists` fix only reached spaces where the predicates are
+ABSENT. Where they exist — 22 of 79 production spaces — the anti-join runs, and
+that path had **no fixture at all**: every generated space omits both predicates,
+so every fixture took the folded path and the remaining half of this issue was
+unreachable. `--form-type-fraction` now emits them; `sp_graph_forms_20k` (91,631
+frames, 30% carrying an explicit form type or a frame-graph URI) reproduces it.
+
+Reproduced, then fixed one layer of it. On that space, `LIMIT 25`:
+
+    predicates ABSENT  (already fast)        991 buffers    17.9 ms
+    predicates PRESENT (the open case)   639,843 buffers   536.7 ms
+    after the fix below                   66,589 buffers   9.6x fewer
+
+### An EXISTS body was resolving term text nothing reads
+
+`NOT EXISTS (SELECT 1 FROM (SELECT t_ex_v0.term_text, t_ex_v0.term_type,
+t_ex_v0.lang, ... ))` — the body projects `SELECT 1` and the subquery beneath it
+resolved four term columns per variable, inside an anti-join that discards all of
+them.
+
+The cause is a rule that inverts between the two positions.
+`compute_text_needed_vars` treats "no PROJECT node" as `SELECT *` — everything is
+projected, everything needs text. For an EXISTS body the same absence means the
+opposite: the output is discarded, so only a variable an expression INSIDE the
+body reads needs its text. It now takes `projection_discarded=True` and the
+EXISTS emitter passes it.
+
+Computed rather than blanked, because a body carrying
+`FILTER(STRSTARTS(?ft, "http"))` genuinely needs `?ft` — verified, that shape
+still resolves text and still answers.
+
+Ordering is why it was missed: `prepare_exists_subplans` builds the bodies at
+stage 2a.3 and `compute_text_needed_vars` runs at 2c, so a prepared body never
+saw the outer pass.
+
+### What is still open
+
+The remaining cost is the OUTER term join. Every one of them sits BEFORE the
+`LIMIT`, so a page of 25 still resolves URI text for every candidate frame — the
+plan shows a `Parallel Seq Scan` over 442,167 term rows for 25 output rows. That
+is the late-materialisation shape `emit_slice` already reasons about for deep
+pages, and applying it here is blocked by the `DISTINCT` over a `UNION`. That is
+the next piece, and it is larger than this one.
 
 The frames "Assertion" tab took **13.4 seconds** on a 1.1M-frame graph. It is now
 **0.76 s cold, 0.03 s warm**. But the fix only reaches the case where the predicates are

@@ -274,6 +274,43 @@ class TestVarsInExpr:
 # compute_text_needed_vars
 # ---------------------------------------------------------------------------
 
+class TestProjectionDiscarded:
+    """An EXISTS body's output is thrown away, so `no PROJECT node` means the
+    opposite of what it means at the top level (issues/088).
+
+    A top-level plan without a PROJECT is `SELECT *` — everything is projected.
+    An EXISTS body without one is wrapped in `NOT EXISTS (SELECT 1 ...)` —
+    NOTHING is. Reading the first rule for the second made every body resolve
+    term_text, term_type, lang and datatype for every variable it bound, inside
+    an anti-join that discards all of them: 639,843 shared buffers against
+    66,590 on the Assertion filter, for the same 25 rows.
+    """
+
+    def test_a_discarded_projection_needs_no_text(self):
+        plan = _bgp("frame", "ft")
+        assert compute_text_needed_vars(plan) == {"frame", "ft"}
+        assert compute_text_needed_vars(plan, projection_discarded=True) == set()
+
+    def test_but_a_filter_inside_the_body_still_does(self):
+        """The reason this is computed rather than blanked. A body carrying
+        `FILTER(STRSTARTS(?ft, "http"))` reads ?ft's text, and emitting the
+        comparison against a column that was never resolved is a wrong answer,
+        not a slow one."""
+        bgp = _bgp("frame", "ft")
+        filtered = PlanV2(kind=KIND_FILTER, children=[bgp],
+                          filter_exprs=[ExprFunction(
+                              name="strstarts",
+                              args=[ExprVar(var="ft")])])
+        needed = compute_text_needed_vars(filtered, projection_discarded=True)
+        assert "ft" in needed
+        assert "frame" not in needed
+
+    def test_the_default_is_unchanged(self):
+        """Every existing caller passes nothing and must behave as before."""
+        plan = _bgp("x", "y", "z")
+        assert compute_text_needed_vars(plan) == {"x", "y", "z"}
+
+
 class TestComputeTextNeededVars:
 
     def test_no_project_all_vars_needed(self):

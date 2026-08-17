@@ -273,7 +273,8 @@ def vars_in_expr(expr) -> Set[str]:
 # Text-needed variable computation
 # ---------------------------------------------------------------------------
 
-def compute_text_needed_vars(plan: PlanV2) -> Set[str]:
+def compute_text_needed_vars(plan: PlanV2, *,
+                             projection_discarded: bool = False) -> Set[str]:
     """Compute the set of variables that need term-table text resolution.
 
     Strategy: start with ALL variables from all BGP nodes (conservative).
@@ -292,6 +293,20 @@ def compute_text_needed_vars(plan: PlanV2) -> Set[str]:
 
     if not all_bgp_vars:
         return set()
+
+    # `projection_discarded` is for a plan whose OUTPUT nobody reads — an
+    # EXISTS body, which the caller wraps in `NOT EXISTS (SELECT 1 ...)`. There
+    # the absence of a PROJECT node means the opposite of what it means for a
+    # top-level plan: not "everything is projected" but "nothing is". Only a
+    # variable an expression INSIDE the body reads needs its text.
+    #
+    # Without this an EXISTS body resolved term_text/term_type/lang/datatype for
+    # every variable it bound, inside an anti-join that discards all of them:
+    # 639,843 buffers against 66,590 on the Assertion filter (issues/088).
+    if projection_discarded:
+        referenced_in_body: Set[str] = set()
+        _collect_referenced_vars(plan, referenced_in_body)
+        return all_bgp_vars & referenced_in_body
 
     # If there's no PROJECT node in the tree (SELECT *), every BGP variable
     # is projected to the output and needs text resolution.

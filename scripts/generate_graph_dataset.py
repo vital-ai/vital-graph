@@ -186,6 +186,27 @@ ATTRIBUTE_SLOTS = [
 # heterogeneity real data has and the schema does not forbid.
 MISTYPED_ROLE_SLOT_CLASS = "KGURISlot"
 
+# KGFrame FORM TYPE — Assertion vs Aspect (issues/088).
+#
+# A frame is an Assertion if `hasKGFormType` says so, OR if it has NEITHER
+# `hasKGFormType` NOR `hasFrameGraphURI`. The endpoint compiles that second half
+# to two `FILTER NOT EXISTS`, and the class is defined by ABSENCE, which no index
+# can answer.
+#
+# `prune_union.fold_dead_not_exists` makes that fast when the predicates are
+# absent from the SPACE — the body can never match, so the filter is a tautology
+# and is folded away. 13.4 s to 0.76 s.
+#
+# It does nothing when they are present, which is 22 of 79 spaces on the
+# production database, and there the same shape measures 9.7 s. No fixture had
+# them: every generated space omits both predicates entirely, so every fixture
+# takes the folded path and the remaining half of the issue is unreachable.
+#
+# `--form-type-fraction` emits them, so the fold does NOT apply and the anti-join
+# runs per candidate frame — which is the case still to be fixed.
+FORM_TYPE_ASSERTION = "KGFormType_Assertion"
+FORM_TYPE_ASPECT = "KGFormType_Aspect"
+
 # Frame types — the wordnet-style criterion, kept so the two fixtures ask the
 # same question in the same way.
 FRAME_TYPES = ["Mentions", "WorksWith", "DerivedFrom", "LocatedIn"]
@@ -957,7 +978,8 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
              seed: int, shard_entities: int,
              rare_entity_fraction: float = 0.0,
              attribute_slot_fraction: float = 0.0,
-             mistyped_role_slot_fraction: float = 0.0) -> dict:
+             mistyped_role_slot_fraction: float = 0.0,
+             form_type_fraction: float = 0.0) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     for old in out_dir.glob("graph_syn_*.nt"):
         old.unlink()
@@ -976,6 +998,7 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
     n_rare_entities = 0
     n_attribute_slots = n_attribute_frames = 0
     n_mistyped_role_slots = 0
+    n_form_type_explicit = n_frame_graph_uri = 0
     if rare_entity_fraction > 0:
         for i in range(n_entities):
             if _is_rare(i, rare_entity_fraction):
@@ -1027,6 +1050,27 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
                 _lit(frame, f"{HALEY}hasKGFrameTypeDescription", ftype, f"{XSD}string"),
                 crit.triples(frame),
             ]
+            # An explicit form type on some frames, a frame-graph URI on some
+            # others, and NEITHER on the rest — the three states the Assertion
+            # filter has to tell apart (issues/088). Interleaved by index rather
+            # than drawn, so the split is reproducible from the manifest.
+            if form_type_fraction > 0:
+                _slot = fi % max(1, int(round(1.0 / form_type_fraction)))
+                if _slot == 0:
+                    buf.append(_t(frame, f"{HALEY}hasKGFormType",
+                                  f"{HALEY}{FORM_TYPE_ASSERTION}"))
+                    n_form_type_explicit += 1
+                elif _slot == 1:
+                    buf.append(_t(frame, f"{HALEY}hasKGFormType",
+                                  f"{HALEY}{FORM_TYPE_ASPECT}"))
+                    n_form_type_explicit += 1
+                elif _slot == 2:
+                    # No form type, but a frame graph URI: an Aspect by default,
+                    # and the row the Assertion anti-join must EXCLUDE.
+                    buf.append(_t(frame, f"{HALEY}hasFrameGraphURI",
+                                  f"{BASE}:framegraph:{fi % 97}"))
+                    n_frame_graph_uri += 1
+
             mistyped = (mistyped_role_slot_fraction > 0
                         and _is_rare(fi, mistyped_role_slot_fraction))
             for slot, edge, role, target in (
@@ -1162,6 +1206,9 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
         "attribute_slot_fraction": attribute_slot_fraction,
         # Role slots deliberately NOT KGEntitySlot, so the
         # tautology proof has something to refuse on (issues/048).
+        "form_type_fraction": form_type_fraction,
+        "n_form_type_explicit": n_form_type_explicit,
+        "n_frame_graph_uri": n_frame_graph_uri,
         "mistyped_role_slot_fraction": mistyped_role_slot_fraction,
         "mistyped_role_slot_class": (f"{HALEY}{MISTYPED_ROLE_SLOT_CLASS}"
                                     if mistyped_role_slot_fraction > 0 else None),
@@ -1282,6 +1329,13 @@ def main() -> int:
                          "KGEntitySlot, so a proof that the type check can "
                          "be dropped is never asked to refuse, and one that "
                          "always agreed would pass every test.")
+    ap.add_argument("--form-type-fraction", type=float, default=0.0,
+                    help="emit hasKGFormType / hasFrameGraphURI on a "
+                         "share of frames (issues/088). 0 disables it. "
+                         "Without them the predicates are absent from "
+                         "the space, fold_dead_not_exists removes the "
+                         "Assertion filter entirely, and the 9.7 s case "
+                         "that remains open cannot be reproduced.")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
@@ -1289,7 +1343,8 @@ def main() -> int:
              args.relation_fanout, args.seed, args.shard_entities,
              rare_entity_fraction=args.rare_entity_fraction,
              attribute_slot_fraction=args.attribute_slot_fraction,
-             mistyped_role_slot_fraction=args.mistyped_role_slot_fraction)
+             mistyped_role_slot_fraction=args.mistyped_role_slot_fraction,
+             form_type_fraction=args.form_type_fraction)
     return 0
 
 
