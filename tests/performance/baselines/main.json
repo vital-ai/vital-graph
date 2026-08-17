@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "env": {
-    "started_at": "2026-08-06T13:54:58.648054+00:00",
+    "started_at": "2026-08-16T23:44:15.820247+00:00",
     "git": {
-      "commit": "e0bd80832b2fd48492fa3d38d4d61c1074bdeedc",
-      "short": "e0bd808",
+      "commit": "a81270417c786c236aad106301367b0b16b7b458",
+      "short": "a812704",
       "branch": "main",
       "dirty": true
     },
@@ -13,18 +13,28 @@
       "platform": "macOS-14.6.1-arm64-arm-64bit",
       "machine": "arm64",
       "cpu_count": 10,
-      "python": "3.12.11"
+      "python": "3.12.2"
     },
     "runner": {
-      "class": "vg-test-docker-persist",
-      "persist": true,
-      "seeded": true,
+      "class": "host-pg-clean",
+      "persist": false,
+      "seeded": false,
       "pg_host": "localhost",
-      "pg_port": "5433",
+      "pg_port": "5432",
       "pg_database": "sparql_sql_graph"
     },
-    "pg": {},
-    "finished_at": "2026-08-06T13:55:04.007911+00:00"
+    "pg": {
+      "server_version": "18.4 (Homebrew)",
+      "shared_buffers": "16GB",
+      "work_mem": "64MB",
+      "maintenance_work_mem": "2GB",
+      "effective_cache_size": "48GB",
+      "max_parallel_workers_per_gather": "2",
+      "random_page_cost": "1",
+      "jit": "on",
+      "default_statistics_target": "100"
+    },
+    "finished_at": "2026-08-16T23:53:10.269157+00:00"
   },
   "benches": [
     {
@@ -32,9 +42,9 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "first_page_ms": 616.0,
-        "deep_page_ms": 547.1,
-        "deep_offset_ratio": 0.89,
+        "first_page_ms": 703.9,
+        "deep_page_ms": 658.5,
+        "deep_offset_ratio": 0.94,
         "offset": 375,
         "rows": 25
       },
@@ -46,12 +56,169 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 141.0,
-        "sorted_ms": 537.1,
+        "unsorted_ms": 295.1,
+        "sorted_ms": 649.3,
         "rows": 25
       },
       "dataset": "synthetic:400frames",
       "notes": "page 1 of 400 frames, page_size=25"
+    },
+    {
+      "bench_id": "query.aggregate.by_datatype[100k-Currency]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "agg_currency_min_ms": 361.4,
+        "agg_currency_avg_ms": 154.6,
+        "agg_currency_ratio": 2.34
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "MIN vs AVG on Currency \u2014 issues/029 sort-per-group"
+    },
+    {
+      "bench_id": "query.aggregate.by_datatype[100k-Double]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "agg_double_min_ms": 973.8,
+        "agg_double_avg_ms": 415.3,
+        "agg_double_ratio": 2.34
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "MIN vs AVG on Double \u2014 issues/029 sort-per-group"
+    },
+    {
+      "bench_id": "query.aggregate.by_datatype[100k-Integer]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "agg_integer_min_ms": 755.8,
+        "agg_integer_avg_ms": 374.8,
+        "agg_integer_ratio": 2.02
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "MIN vs AVG on Integer \u2014 issues/029 sort-per-group"
+    },
+    {
+      "bench_id": "query.aggregate.by_datatype[10k-Currency]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "agg_currency_min_ms": 36.6,
+        "agg_currency_avg_ms": 19.5,
+        "agg_currency_ratio": 1.88
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "MIN vs AVG on Currency \u2014 issues/029 sort-per-group"
+    },
+    {
+      "bench_id": "query.aggregate.by_datatype[10k-Double]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "agg_double_min_ms": 93.6,
+        "agg_double_avg_ms": 41.2,
+        "agg_double_ratio": 2.27
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "MIN vs AVG on Double \u2014 issues/029 sort-per-group"
+    },
+    {
+      "bench_id": "query.aggregate.by_datatype[10k-Integer]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "agg_integer_min_ms": 91.5,
+        "agg_integer_avg_ms": 37.1,
+        "agg_integer_ratio": 2.46
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "MIN vs AVG on Integer \u2014 issues/029 sort-per-group"
+    },
+    {
+      "bench_id": "query.aggregate.sort_per_group[100k-by_type]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "agg_min_ms": 1770.7,
+        "agg_max_ms": 1829.9,
+        "agg_avg_ms": 1156.0,
+        "agg_sum_ms": 1080.3,
+        "agg_count_ms": 476.3,
+        "min_over_avg": 1.53
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "aggregate cost, group_by=True \u2014 issues/029 sort-per-group"
+    },
+    {
+      "bench_id": "query.aggregate.sort_per_group[100k-one_group]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "agg_min_ms": 790.4,
+        "agg_max_ms": 739.8,
+        "agg_avg_ms": 361.8,
+        "agg_sum_ms": 363.0,
+        "agg_count_ms": 33.1,
+        "min_over_avg": 2.18
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "aggregate cost, group_by=False \u2014 issues/029 sort-per-group"
+    },
+    {
+      "bench_id": "query.aggregate.sort_per_group[10k-by_type]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "agg_min_ms": 156.1,
+        "agg_max_ms": 167.2,
+        "agg_avg_ms": 97.7,
+        "agg_sum_ms": 99.4,
+        "agg_count_ms": 37.6,
+        "min_over_avg": 1.6
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "aggregate cost, group_by=True \u2014 issues/029 sort-per-group"
+    },
+    {
+      "bench_id": "query.aggregate.sort_per_group[10k-one_group]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "agg_min_ms": 75.5,
+        "agg_max_ms": 82.9,
+        "agg_avg_ms": 41.9,
+        "agg_sum_ms": 37.6,
+        "agg_count_ms": 3.2,
+        "min_over_avg": 1.8
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "aggregate cost, group_by=False \u2014 issues/029 sort-per-group"
+    },
+    {
+      "bench_id": "query.aggregate.spill[100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "min_in_memory_ms": 763.0,
+        "min_spilled_ms": 833.2,
+        "spill_ratio": 1.09
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "MIN with and without a work_mem spill \u2014 issues/029"
+    },
+    {
+      "bench_id": "query.aggregate.spill[10k]",
+      "kind": "sql",
+      "status": "skipped",
+      "metrics": {
+        "min_in_memory_ms": 75.8,
+        "min_spilled_ms": 77.2,
+        "spill_ratio": 1.02
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "MIN with and without a work_mem spill \u2014 issues/029",
+      "reason": "Skipped: 10k: sort did not spill at 4MB (methods=['quicksort']) \u2014 too little data to test the cliff"
     },
     {
       "bench_id": "query.covering.advantage_growth",
@@ -73,14 +240,14 @@
       },
       "metrics": {
         "shared_buffers": 5,
-        "shared_read": 4,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 100,
         "max_actual_rows": 100,
         "estimated_rows": 100,
         "heap_fetches": 0,
-        "planning_ms": 0.228,
-        "execution_ms": 0.134,
+        "planning_ms": 0.173,
+        "execution_ms": 42.18,
         "matched_rows": 100
       },
       "dataset": "space_lead_dataset_test"
@@ -104,15 +271,15 @@
         "seq_scans": []
       },
       "metrics": {
-        "shared_buffers": 14860,
-        "shared_read": 13628,
+        "shared_buffers": 14774,
+        "shared_read": 6431,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 1025,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.13,
-        "execution_ms": 362.337
+        "planning_ms": 0.16,
+        "execution_ms": 2978.594
       },
       "dataset": "wordnet_frames"
     },
@@ -135,15 +302,15 @@
         "seq_scans": []
       },
       "metrics": {
-        "shared_buffers": 481,
-        "shared_read": 411,
+        "shared_buffers": 464,
+        "shared_read": 187,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.663,
-        "execution_ms": 12.848
+        "planning_ms": 4.853,
+        "execution_ms": 96.816
       },
       "dataset": "wordnet_frames"
     },
@@ -166,15 +333,15 @@
         "seq_scans": []
       },
       "metrics": {
-        "shared_buffers": 235,
-        "shared_read": 25,
+        "shared_buffers": 211,
+        "shared_read": 15,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.129,
-        "execution_ms": 0.766
+        "planning_ms": 0.23,
+        "execution_ms": 3.606
       },
       "dataset": "wordnet_frames"
     },
@@ -192,18 +359,194 @@
         "seq_scans": []
       },
       "metrics": {
-        "shared_buffers": 3,
+        "shared_buffers": 4,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 10,
         "max_actual_rows": 10,
         "estimated_rows": 10,
-        "heap_fetches": 0,
-        "planning_ms": 0.111,
-        "execution_ms": 0.013
+        "heap_fetches": 10,
+        "planning_ms": 0.241,
+        "execution_ms": 0.015
       },
       "dataset": "synthetic:edges",
       "notes": "forward hop (source\u2192dest)"
+    },
+    {
+      "bench_id": "query.generated_sql.plan[lead_entity_type]",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Limit",
+          "Nested Loop",
+          "Nested Loop",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_sql_lead_dataset_quad_ctx_pred",
+          "sp_sql_lead_dataset_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 154,
+        "shared_read": 0,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 25,
+        "estimated_rows": 25,
+        "heap_fetches": 0,
+        "planning_ms": 1.133,
+        "execution_ms": 6.345,
+        "sql_chars": 6702,
+        "joins": 0
+      },
+      "dataset": "sp_sql_lead_dataset",
+      "notes": "entity-type filter \u2014 the other object-bound listing shape"
+    },
+    {
+      "bench_id": "query.generated_sql.plan[lead_slot_value]",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Limit",
+          "Nested Loop",
+          "Index Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_sql_lead_dataset_quad_ps",
+          "sp_sql_lead_dataset_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 166,
+        "shared_read": 4,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 25,
+        "estimated_rows": 25,
+        "heap_fetches": 0,
+        "planning_ms": 4.226,
+        "execution_ms": 17.513,
+        "sql_chars": 3576,
+        "joins": 0
+      },
+      "dataset": "sp_sql_lead_dataset",
+      "notes": "slot-value filter \u2014 graph+predicate+object all bound (issues/039)"
+    },
+    {
+      "bench_id": "query.generated_sql.plan[predicate_scan]",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Limit",
+          "Nested Loop",
+          "Nested Loop",
+          "Index Only Scan",
+          "Index Scan",
+          "Memoize",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_wordnet_frames_quad_ctx_pred",
+          "wordnet_frames_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 201,
+        "shared_read": 91,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 25,
+        "estimated_rows": 25,
+        "heap_fetches": 0,
+        "planning_ms": 0.827,
+        "execution_ms": 26.849,
+        "sql_chars": 6687,
+        "joins": 0
+      },
+      "dataset": "wordnet_frames",
+      "notes": "single bound predicate with a variable object"
+    },
+    {
+      "bench_id": "query.generated_sql.plan[two_hop_join]",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Limit",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Index Only Scan",
+          "Memoize",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_wordnet_frames_quad_ctx_pred",
+          "wordnet_frames_rdf_quad_pkey",
+          "wordnet_frames_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 306,
+        "shared_read": 48,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 25,
+        "estimated_rows": 25,
+        "heap_fetches": 0,
+        "planning_ms": 1.048,
+        "execution_ms": 11.282,
+        "sql_chars": 6961,
+        "joins": 0
+      },
+      "dataset": "wordnet_frames",
+      "notes": "two bound predicates on one subject (join shape)"
+    },
+    {
+      "bench_id": "query.generated_sql.plan[typed_listing]",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Limit",
+          "Nested Loop",
+          "Index Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_wordnet_frames_quad_ps",
+          "wordnet_frames_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 464,
+        "shared_read": 0,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 25,
+        "estimated_rows": 25,
+        "heap_fetches": 0,
+        "planning_ms": 0.499,
+        "execution_ms": 2.397,
+        "sql_chars": 3566,
+        "joins": 0
+      },
+      "dataset": "wordnet_frames",
+      "notes": "typed subject page (the KGEntity listing shape)"
     },
     {
       "bench_id": "query.growth.entity_page_buffers",
@@ -218,48 +561,1126 @@
       "dataset": "synthetic:[50000, 150000, 450000]"
     },
     {
-      "bench_id": "query.lead.kgquery[hierarchical]",
-      "kind": "api",
+      "bench_id": "query.kgquery.deep_paging.curve[100k]",
+      "kind": "sql",
       "status": "ok",
       "metrics": {
-        "wall_ms": 42.6,
-        "results": 100
+        "page_ms_offset_0": 49.2,
+        "page_ms_offset_250": 369.2,
+        "page_ms_offset_1000": 342.4,
+        "deep_ratio": 7.0
       },
-      "dataset": "sp_sql_lead_dataset",
-      "notes": "Hierarchical frame query"
+      "dataset": "sp_lead_synth_100k",
+      "notes": "cost across offsets \u2014 issues/078; flat means fixed"
     },
     {
-      "bench_id": "query.lead.kgquery[high_rated]",
-      "kind": "api",
+      "bench_id": "query.kgquery.deep_paging.curve[10k]",
+      "kind": "sql",
       "status": "ok",
       "metrics": {
-        "wall_ms": 56.3,
-        "results": 73
+        "page_ms_offset_0": 22.4,
+        "page_ms_offset_250": 26.8,
+        "page_ms_offset_1000": 28.3,
+        "deep_ratio": 1.2
       },
-      "dataset": "sp_sql_lead_dataset",
-      "notes": "Find high-rated leads (MQLRating >= 65)"
+      "dataset": "sp_lead_synth_10k",
+      "notes": "cost across offsets \u2014 issues/078; flat means fixed"
     },
     {
-      "bench_id": "query.lead.kgquery[mql]",
-      "kind": "api",
-      "status": "ok",
-      "metrics": {
-        "wall_ms": 116.4,
-        "results": 99
-      },
-      "dataset": "sp_sql_lead_dataset",
-      "notes": "Find MQL leads"
+      "bench_id": "query.kgquery.deep_paging.monotonic[100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
     },
     {
-      "bench_id": "query.lead.kgquery[state_ca]",
-      "kind": "api",
+      "bench_id": "query.kgquery.deep_paging.monotonic[10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.duplicate_anchor_quads[generic]",
+      "status": "failed",
+      "reason": "assertion/error during call"
+    },
+    {
+      "bench_id": "query.kgquery.duplicate_anchor_quads[specific]",
+      "status": "failed",
+      "reason": "assertion/error during call"
+    },
+    {
+      "bench_id": "query.kgquery.entity_type_axis[100k]",
+      "kind": "query",
       "status": "ok",
       "metrics": {
-        "wall_ms": 43.9,
-        "results": 13
+        "generic_buffers": 35409,
+        "specific_buffers": 35409,
+        "ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "[100k] specific vs generic entity type, 25-row page"
+    },
+    {
+      "bench_id": "query.kgquery.entity_type_axis[10k]",
+      "kind": "query",
+      "status": "ok",
+      "metrics": {
+        "generic_buffers": 3969,
+        "specific_buffers": 3969,
+        "ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "[10k] specific vs generic entity type, 25-row page"
+    },
+    {
+      "bench_id": "query.kgquery.generated_sql.plan[high_rated]",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Sort",
+          "Bitmap Heap Scan",
+          "BitmapAnd",
+          "Bitmap Index Scan",
+          "Bitmap Index Scan",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Hash Join",
+          "Index Only Scan",
+          "Hash",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_sql_lead_dataset_edge_dst_src",
+          "idx_sp_sql_lead_dataset_quad_ctx_pred",
+          "idx_sp_sql_lead_dataset_quad_obj",
+          "idx_sp_sql_lead_dataset_quad_pred",
+          "sp_sql_lead_dataset_rdf_quad_pkey",
+          "sp_sql_lead_dataset_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 104037,
+        "shared_read": 0,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 38550,
+        "estimated_rows": 25,
+        "heap_fetches": 0,
+        "planning_ms": 40.599,
+        "execution_ms": 50.326,
+        "sparql_chars": 1872,
+        "sql_chars": 6301,
+        "joins": 0
       },
       "dataset": "sp_sql_lead_dataset",
-      "notes": "Find leads in California"
+      "notes": "double slot with a range comparator (gte)"
+    },
+    {
+      "bench_id": "query.kgquery.generated_sql.plan[mql]",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Sort",
+          "Bitmap Heap Scan",
+          "BitmapAnd",
+          "Bitmap Index Scan",
+          "Bitmap Index Scan",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Hash Join",
+          "Index Only Scan",
+          "Hash",
+          "Index Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_sql_lead_dataset_edge_src_dst",
+          "idx_sp_sql_lead_dataset_quad_ctx_pred",
+          "idx_sp_sql_lead_dataset_quad_obj",
+          "idx_sp_sql_lead_dataset_quad_pred",
+          "sp_sql_lead_dataset_rdf_quad_pkey",
+          "sp_sql_lead_dataset_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 13313,
+        "shared_read": 394,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 38550,
+        "estimated_rows": 25,
+        "heap_fetches": 0,
+        "planning_ms": 54.912,
+        "execution_ms": 137.105,
+        "sparql_chars": 1836,
+        "sql_chars": 6274,
+        "joins": 0
+      },
+      "dataset": "sp_sql_lead_dataset",
+      "notes": "MQL boolean slot under a nested frame"
+    },
+    {
+      "bench_id": "query.kgquery.generated_sql.plan[state_ca]",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Sort",
+          "Bitmap Heap Scan",
+          "BitmapAnd",
+          "Bitmap Index Scan",
+          "Bitmap Index Scan",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Hash Join",
+          "Index Only Scan",
+          "Hash",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_sql_lead_dataset_edge_dst_src",
+          "idx_sp_sql_lead_dataset_quad_ctx_pred",
+          "idx_sp_sql_lead_dataset_quad_obj",
+          "idx_sp_sql_lead_dataset_quad_pred",
+          "sp_sql_lead_dataset_rdf_quad_pkey",
+          "sp_sql_lead_dataset_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 21447,
+        "shared_read": 0,
+        "temp_written": 0,
+        "actual_rows": 13,
+        "max_actual_rows": 38550,
+        "estimated_rows": 25,
+        "heap_fetches": 0,
+        "planning_ms": 49.761,
+        "execution_ms": 13.59,
+        "sparql_chars": 1844,
+        "sql_chars": 6274,
+        "joins": 0
+      },
+      "dataset": "sp_sql_lead_dataset",
+      "notes": "text slot under a nested frame"
+    },
+    {
+      "bench_id": "query.kgquery.growth_curve.eq[CA-100k]",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Index Only Scan",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Index Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_lead_synth_100k_edge_src_dst",
+          "sp_lead_synth_100k_rdf_quad_pkey",
+          "sp_lead_synth_100k_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 54222,
+        "shared_read": 0,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 36,
+        "estimated_rows": 25,
+        "heap_fetches": 0,
+        "planning_ms": 40.92,
+        "execution_ms": 50.487,
+        "total_matches": 9220,
+        "page_size": 25,
+        "buffers_per_match": 5.881
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "[100k] CompanyStateCode = CA \u2014 9,220 matches, 25-row page"
+    },
+    {
+      "bench_id": "query.kgquery.growth_curve.eq[CA-10k]",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Index Only Scan",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Index Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_lead_synth_10k_edge_src_dst",
+          "sp_lead_synth_10k_rdf_quad_pkey",
+          "sp_lead_synth_10k_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 29287,
+        "shared_read": 0,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 25,
+        "estimated_rows": 25,
+        "heap_fetches": 0,
+        "planning_ms": 58.093,
+        "execution_ms": 33.621,
+        "total_matches": 908,
+        "page_size": 25,
+        "buffers_per_match": 32.254
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "[10k] CompanyStateCode = CA \u2014 908 matches, 25-row page"
+    },
+    {
+      "bench_id": "query.kgquery.growth_curve.eq[IL-100k]",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Sort",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Hash Join",
+          "Index Only Scan",
+          "Hash",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_lead_synth_100k_edge_dst_src",
+          "idx_sp_lead_synth_100k_quad_ctx_pred",
+          "sp_lead_synth_100k_rdf_quad_pkey",
+          "sp_lead_synth_100k_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 135033,
+        "shared_read": 16133,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 100000,
+        "estimated_rows": 1,
+        "heap_fetches": 0,
+        "planning_ms": 42.537,
+        "execution_ms": 4177.307,
+        "total_matches": 3713,
+        "page_size": 25,
+        "buffers_per_match": 36.368
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "[100k] CompanyStateCode = IL \u2014 3,713 matches, 25-row page"
+    },
+    {
+      "bench_id": "query.kgquery.growth_curve.eq[IL-10k]",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Sort",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_lead_synth_10k_edge_dst_src",
+          "idx_sp_lead_synth_10k_quad_ctx_pred",
+          "sp_lead_synth_10k_rdf_quad_pkey",
+          "sp_lead_synth_10k_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 14732,
+        "shared_read": 2077,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 365,
+        "estimated_rows": 1,
+        "heap_fetches": 0,
+        "planning_ms": 53.166,
+        "execution_ms": 390.294,
+        "total_matches": 365,
+        "page_size": 25,
+        "buffers_per_match": 40.362
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "[10k] CompanyStateCode = IL \u2014 365 matches, 25-row page"
+    },
+    {
+      "bench_id": "query.kgquery.growth_curve.eq[NY-100k]",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Index Only Scan",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Index Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_lead_synth_100k_edge_src_dst",
+          "sp_lead_synth_100k_rdf_quad_pkey",
+          "sp_lead_synth_100k_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 89168,
+        "shared_read": 225,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 37,
+        "estimated_rows": 25,
+        "heap_fetches": 0,
+        "planning_ms": 38.415,
+        "execution_ms": 206.122,
+        "total_matches": 5531,
+        "page_size": 25,
+        "buffers_per_match": 16.121
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "[100k] CompanyStateCode = NY \u2014 5,531 matches, 25-row page"
+    },
+    {
+      "bench_id": "query.kgquery.growth_curve.eq[NY-10k]",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Index Only Scan",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Index Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_lead_synth_10k_edge_src_dst",
+          "sp_lead_synth_10k_rdf_quad_pkey",
+          "sp_lead_synth_10k_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 45533,
+        "shared_read": 1632,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 25,
+        "estimated_rows": 25,
+        "heap_fetches": 0,
+        "planning_ms": 52.555,
+        "execution_ms": 276.289,
+        "total_matches": 547,
+        "page_size": 25,
+        "buffers_per_match": 83.241
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "[10k] CompanyStateCode = NY \u2014 547 matches, 25-row page"
+    },
+    {
+      "bench_id": "query.kgquery.growth_curve.eq[TX-100k]",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Index Only Scan",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Index Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_lead_synth_100k_edge_src_dst",
+          "sp_lead_synth_100k_rdf_quad_pkey",
+          "sp_lead_synth_100k_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 103060,
+        "shared_read": 12228,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 37,
+        "estimated_rows": 25,
+        "heap_fetches": 0,
+        "planning_ms": 37.983,
+        "execution_ms": 2582.062,
+        "total_matches": 7337,
+        "page_size": 25,
+        "buffers_per_match": 14.047
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "[100k] CompanyStateCode = TX \u2014 7,337 matches, 25-row page"
+    },
+    {
+      "bench_id": "query.kgquery.growth_curve.eq[TX-10k]",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Index Only Scan",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Index Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_lead_synth_10k_edge_src_dst",
+          "sp_lead_synth_10k_rdf_quad_pkey",
+          "sp_lead_synth_10k_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 38370,
+        "shared_read": 2419,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 25,
+        "estimated_rows": 25,
+        "heap_fetches": 0,
+        "planning_ms": 52.765,
+        "execution_ms": 386.94,
+        "total_matches": 765,
+        "page_size": 25,
+        "buffers_per_match": 50.157
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "[10k] CompanyStateCode = TX \u2014 765 matches, 25-row page"
+    },
+    {
+      "bench_id": "query.kgquery.growth_curve.eq[VT-100k]",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Sort",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_lead_synth_100k_edge_dst_src",
+          "idx_sp_lead_synth_100k_quad_ctx_pred",
+          "sp_lead_synth_100k_rdf_quad_pkey",
+          "sp_lead_synth_100k_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 35409,
+        "shared_read": 4078,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 878,
+        "estimated_rows": 1,
+        "heap_fetches": 0,
+        "planning_ms": 53.72,
+        "execution_ms": 1229.655,
+        "total_matches": 878,
+        "page_size": 25,
+        "buffers_per_match": 40.329
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "[100k] CompanyStateCode = VT \u2014 878 matches, 25-row page"
+    },
+    {
+      "bench_id": "query.kgquery.growth_curve.eq[VT-10k]",
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Sort",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_lead_synth_10k_edge_dst_src",
+          "idx_sp_lead_synth_10k_quad_ctx_pred",
+          "sp_lead_synth_10k_rdf_quad_pkey",
+          "sp_lead_synth_10k_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 3969,
+        "shared_read": 528,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 96,
+        "estimated_rows": 1,
+        "heap_fetches": 0,
+        "planning_ms": 57.881,
+        "execution_ms": 2657.92,
+        "total_matches": 96,
+        "page_size": 25,
+        "buffers_per_match": 41.344
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "[10k] CompanyStateCode = VT \u2014 96 matches, 25-row page"
+    },
+    {
+      "bench_id": "query.kgquery.growth_ratio[100k]",
+      "kind": "query",
+      "status": "ok",
+      "metrics": {
+        "growth_ratio": 0.12,
+        "match_spread": 10.5,
+        "growth_vs_matches": -0.092,
+        "buffers_smallest": 435228,
+        "buffers_largest": 54222
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "[100k] 25-row page, matches 878\u21929,220. O(page) predicts ~1.0; O(matches) predicts ~10.5"
+    },
+    {
+      "bench_id": "query.kgquery.growth_ratio[10k]",
+      "kind": "query",
+      "status": "ok",
+      "metrics": {
+        "growth_ratio": 0.04,
+        "match_spread": 9.46,
+        "growth_vs_matches": -0.113,
+        "buffers_smallest": 685156,
+        "buffers_largest": 29287
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "[10k] 25-row page, matches 96\u2192908. O(page) predicts ~1.0; O(matches) predicts ~9.5"
+    },
+    {
+      "bench_id": "query.kgquery.no_duplicate_rows[generic-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.no_duplicate_rows[generic-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.no_duplicate_rows[specific-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.no_duplicate_rows[specific-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.page_size_cliff[generic-100k]",
+      "kind": "query",
+      "status": "ok",
+      "metrics": {
+        "max_page_size_before_flip": 2000,
+        "flips_within_range": false
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "[100k] largest page still served by an ordered, early-terminating scan (entity_type=http://vital.ai/ontology/haley-ai-kg#KGEntity)"
+    },
+    {
+      "bench_id": "query.kgquery.page_size_cliff[generic-10k]",
+      "kind": "query",
+      "status": "ok",
+      "metrics": {
+        "max_page_size_before_flip": 1811,
+        "flips_within_range": true
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "[10k] largest page still served by an ordered, early-terminating scan (entity_type=http://vital.ai/ontology/haley-ai-kg#KGEntity)"
+    },
+    {
+      "bench_id": "query.kgquery.page_size_cliff[specific-100k]",
+      "kind": "query",
+      "status": "ok",
+      "metrics": {
+        "max_page_size_before_flip": 134,
+        "flips_within_range": true
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "[100k] largest page still served by an ordered, early-terminating scan (entity_type=urn:acme:kg:entity:Lead)"
+    },
+    {
+      "bench_id": "query.kgquery.page_size_cliff[specific-10k]",
+      "kind": "query",
+      "status": "skipped",
+      "metrics": {
+        "max_page_size_before_flip": 13,
+        "flips_within_range": true
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "[10k] largest page still served by an ordered, early-terminating scan (entity_type=urn:acme:kg:entity:Lead)"
+    },
+    {
+      "bench_id": "query.kgquery.range_penalty[100k]",
+      "kind": "query",
+      "status": "ok",
+      "metrics": {
+        "buffers_per_match_tightest": 7.0,
+        "equality_buffers_per_match": 5.9,
+        "range_vs_equality": 1.19,
+        "flatness": 12.87,
+        "tightest_matches": 9907,
+        "buffers_tightest": 69408
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "[100k] MQLRating >= 90 returns 9,907 rows and still reads 69,408 buffers \u2014 the candidate set, not the match set (issues/040)"
+    },
+    {
+      "bench_id": "query.kgquery.range_penalty[10k]",
+      "kind": "query",
+      "status": "ok",
+      "metrics": {
+        "buffers_per_match_tightest": 28.4,
+        "equality_buffers_per_match": 32.3,
+        "range_vs_equality": 0.88,
+        "flatness": 11.396,
+        "tightest_matches": 1031,
+        "buffers_tightest": 29232
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "[10k] MQLRating >= 90 returns 1,031 rows and still reads 29,232 buffers \u2014 the candidate set, not the match set (issues/040)"
+    },
+    {
+      "bench_id": "query.kgquery.sorted_paging.depth[100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "sorted_ms_offset_0": 567.8,
+        "sorted_ms_offset_250": 580.4,
+        "sorted_ms_offset_1000": 801.3,
+        "sorted_depth_ratio": 1.4
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "sorted page cost across offsets \u2014 issues/080"
+    },
+    {
+      "bench_id": "query.kgquery.sorted_paging.depth[10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "sorted_ms_offset_0": 90.9,
+        "sorted_ms_offset_250": 78.9,
+        "sorted_ms_offset_1000": 75.1,
+        "sorted_depth_ratio": 0.9
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "sorted page cost across offsets \u2014 issues/080"
+    },
+    {
+      "bench_id": "query.kgquery.sorted_paging.entity_property[100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "unsorted_ms": 52.4,
+        "sorted_ms": 636.3,
+        "sort_ratio": 12.1
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "entity_property sort vs the same query unsorted (issues/080)"
+    },
+    {
+      "bench_id": "query.kgquery.sorted_paging.entity_property[10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "unsorted_ms": 23.5,
+        "sorted_ms": 83.8,
+        "sort_ratio": 3.6
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "entity_property sort vs the same query unsorted (issues/080)"
+    },
+    {
+      "bench_id": "query.kgquery.sorted_paging.page_shape[100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.sorted_paging.page_shape[10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.lead.kgquery[hierarchical-p100-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[hierarchical-p100-10k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_10k not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[hierarchical-p100-real100]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_sql_lead_dataset not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[hierarchical-p25-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[hierarchical-p25-10k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_10k not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[hierarchical-p25-real100]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_sql_lead_dataset not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[high_rated-p100-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[high_rated-p100-10k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_10k not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[high_rated-p100-real100]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_sql_lead_dataset not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[high_rated-p25-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[high_rated-p25-10k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_10k not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[high_rated-p25-real100]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_sql_lead_dataset not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[mql-p100-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[mql-p100-10k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_10k not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[mql-p100-real100]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_sql_lead_dataset not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[mql-p25-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[mql-p25-10k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_10k not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[mql-p25-real100]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_sql_lead_dataset not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[state_ca-p100-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[state_ca-p100-10k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_10k not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[state_ca-p100-real100]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_sql_lead_dataset not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[state_ca-p25-100k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_100k not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[state_ca-p25-10k]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_lead_synth_10k not known to the API"
+    },
+    {
+      "bench_id": "query.lead.kgquery[state_ca-p25-real100]",
+      "status": "skipped",
+      "reason": "Skipped: space sp_sql_lead_dataset not known to the API"
     },
     {
       "bench_id": "query.partition.graph_scoped_pruning",
@@ -268,9 +1689,64 @@
       "metrics": {
         "partitions_scanned": 1,
         "partitions_total": 4,
-        "node_types": "Seq Scan"
+        "node_types": "Bitmap Heap Scan,Bitmap Index Scan"
       },
       "dataset": "synthetic:4part"
+    },
+    {
+      "bench_id": "query.relation.convergent_fan_in",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "convergent_ms": 5335.2,
+        "convergent_rows": 1313755
+      },
+      "dataset": "sp_kg_rel",
+      "notes": "convergent two-hop, quadratic in fan-in \u2014 relations"
+    },
+    {
+      "bench_id": "query.relation.direction_choice",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "worksfor_backward_safe": 0,
+        "worksfor_forward_safe": 1
+      },
+      "dataset": "sp_kg_rel",
+      "notes": "relation direction choice \u2014 issues/061"
+    },
+    {
+      "bench_id": "query.relation.single_hop[friendOf]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "rel_friendof_ms": 52.3,
+        "rel_friendof_rows": 14625
+      },
+      "dataset": "sp_kg_rel",
+      "notes": "complete single-hop friendOf traversal"
+    },
+    {
+      "bench_id": "query.relation.single_hop[reportsTo]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "rel_reportsto_ms": 27.8,
+        "rel_reportsto_rows": 4750
+      },
+      "dataset": "sp_kg_rel",
+      "notes": "complete single-hop reportsTo traversal"
+    },
+    {
+      "bench_id": "query.relation.single_hop[worksFor]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "rel_worksfor_ms": 28.5,
+        "rel_worksfor_rows": 4875
+      },
+      "dataset": "sp_kg_rel",
+      "notes": "complete single-hop worksFor traversal"
     },
     {
       "bench_id": "query.stats.correlated_leaf_estimate",
@@ -279,17 +1755,53 @@
       "metrics": {
         "actual_rows": 4170,
         "est_with_stats": 4170,
-        "est_without_stats": 126,
-        "underestimate_factor": 33.1
+        "est_without_stats": 92,
+        "underestimate_factor": 45.33
       },
       "dataset": "space_lead_dataset_test"
+    },
+    {
+      "bench_id": "query.values.list_growth[100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "values_1_ms": 0.2,
+        "values_20_ms": 2.78,
+        "values_growth": 14.3
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "VALUES cost against list length \u2014 issues/087"
+    },
+    {
+      "bench_id": "query.values.vs_literal_subject[100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "values_ms": 0.25,
+        "literal_subject_ms": 0.21,
+        "values_ratio": 1.2
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "VALUES vs an equivalent literal subject \u2014 issues/087"
+    },
+    {
+      "bench_id": "query.values.vs_literal_subject[10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "values_ms": 0.17,
+        "literal_subject_ms": 0.24,
+        "values_ratio": 0.7
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "VALUES vs an equivalent literal subject \u2014 issues/087"
     },
     {
       "bench_id": "query.wordnet.aggregate.entity_type_counts",
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 1504.1,
+        "wall_ms": 5052.0,
         "rows": 4
       },
       "dataset": "wordnet_frames",
@@ -300,7 +1812,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 326.4,
+        "wall_ms": 1611.8,
         "rows": 1
       },
       "dataset": "wordnet_frames",
@@ -311,7 +1823,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 66.3,
+        "wall_ms": 318.2,
         "rows": 425
       },
       "dataset": "wordnet_frames",
@@ -322,7 +1834,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 38.3,
+        "wall_ms": 249.7,
         "rows": 45
       },
       "dataset": "wordnet_frames",
@@ -333,12 +1845,12 @@
       "kind": "write",
       "status": "ok",
       "metrics": {
-        "executemany_quads_per_sec": 13813,
-        "copy_quads_per_sec": 91172,
-        "bulk_e2e_quads_per_sec": 45295,
-        "index_rebuild_s": 4.444,
-        "copy_speedup": 6.601,
-        "e2e_speedup": 3.279
+        "executemany_quads_per_sec": 7965,
+        "copy_quads_per_sec": 67887,
+        "bulk_e2e_quads_per_sec": 42539,
+        "index_rebuild_s": 3.511,
+        "copy_speedup": 8.523,
+        "e2e_speedup": 5.341
       },
       "dataset": "synthetic:400000q"
     },
@@ -348,9 +1860,9 @@
       "status": "ok",
       "metrics": {
         "growth_class": "flat",
-        "probe_ms_at_100000q": 28.29,
-        "probe_ms_at_300000q": 30.28,
-        "probe_ms_at_900000q": 30.11
+        "probe_ms_at_100000q": 62.44,
+        "probe_ms_at_300000q": 57.77,
+        "probe_ms_at_900000q": 57.45
       },
       "dataset": "synthetic:[50000, 150000, 450000]",
       "notes": "probe=300 quads, min of 3 rolled-back runs"
@@ -358,7 +1870,8 @@
   ],
   "baseline": {
     "name": "main",
-    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260806T135150Z-e0bd808.json",
-    "reason": ""
+    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260816T234414Z-a812704.json",
+    "reason": "re-promoted 2026-08-16 to carry a PostgreSQL stamp (issues/081). Previous baseline had env.pg == {} which silently disabled the configuration gate.",
+    "pg_stamped": true
   }
 }

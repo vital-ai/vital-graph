@@ -234,9 +234,26 @@ moment a run becomes the thing everything is later compared against.
 artifact, so an override leaves a trace instead of producing a baseline
 indistinguishable from a good one.
 
-The committed baseline still has `env.pg == {}` and is now REPORTED as such on
-every comparison. It should be re-promoted from a stamped run; until then the
-tooling says so rather than implying agreement.
+**Re-promoted 2026-08-16.** The baseline now carries
+`shared_buffers=16GB, effective_cache_size=48GB, server_version=18.4` and
+`baseline.pg_stamped: true`, and a comparison against a differently-configured
+run reports it:
+
+    pg.shared_buffers: baseline='16GB' run='1GB'
+
+Two caveats recorded rather than smoothed over, both visible in the artifact and
+printed by `perf_compare`:
+
+* **37 of its 105 benches are holes**, against 20 usable in the old one — so it
+  gates more, not less, but not everything. 18 of those holes are `issues/099`,
+  a fixture loaded from only part of its own data; the rest are skips and
+  unrecorded metrics.
+* **Recorded from a dirty working tree**, so the baseline commit will not
+  reproduce it exactly. Flagged in `env.git.dirty` and shown as
+  `[DIRTY WORKING TREE]` on every comparison.
+
+Neither is a reason to keep an unstamped baseline instead — an unstamped one
+cannot be shown comparable to anything, and that was the actual defect.
 
 Every ad-hoc timing script written during this investigation also lacked a
 stamp — including all of mine.

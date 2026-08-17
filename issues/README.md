@@ -69,6 +69,7 @@ All 15 are now run or declined in writing. 705 → **907 executed cases**.
 | 094 | FIXED | `xsd:float` rendered `33.33` as `33.33000183105469` — a binary32 value printed at binary64 width. All six cast cases pass; the "canonical form" second half I recorded turned out not to exist |
 | 095 | 3 of 4 FIXED | Grammar restrictions Jena parses but SPARQL forbids. `SELECT *` with `GROUP BY` has no defined answer, so accepting it returned something undefined. The fourth is declined with a reason |
 | 097 | FIXED | A non-JSON request body returned HTTP 500 on every endpoint |
+| 099 | OPEN | `sp_graph_synth_10k` loaded from only one of its two data files, so 18 traversal tests fail on missing data — and the fixture's own guard reads the MANIFEST, not the space |
 | 098 | FIXED | **Search input was interpolated into SPARQL unescaped — confirmed filter bypass.** Previously carried as "quotes break the query"; a balanced payload does not break it, it disables the FILTER and returns everything. Eight sites, including three that escaped the quote but not the backslash |
 
 Verified PASSING rather than assumed: `property-path` 33/33, `project-expression`
