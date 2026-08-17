@@ -49,17 +49,18 @@ import sys
 import time
 
 import asyncpg
+from vitalgraph_sparql_sql_dev.db import get_connection_params  # noqa: E402
 
 OLD_KEYS = "(context_uuid, predicate_uuid)"
 NEW_COLS = "(context_uuid, predicate_uuid, object_uuid) INCLUDE (subject_uuid)"
 
 
 def _dsn_from_env() -> str:
-    return (f"postgresql://{os.environ.get('VG_TEST_PG_USER', 'postgres')}:"
-            f"{os.environ.get('VG_TEST_PG_PASSWORD', '')}@"
-            f"{os.environ.get('VG_TEST_PG_HOST', 'localhost')}:"
-            f"{os.environ.get('VG_TEST_PG_PORT', '5432')}/"
-            f"{os.environ.get('VG_TEST_PG_DATABASE', 'sparql_sql_graph')}")
+    """The shared target as a DSN. See `add_pg_arguments` for why the
+    defaults are not spelled out here (issues/055)."""
+    p = get_connection_params()
+    return (f"postgresql://{p['user']}:{p['password']}@"
+            f"{p['host']}:{p['port']}/{p['dbname']}")
 
 
 async def find_targets(conn, only_space: str | None):

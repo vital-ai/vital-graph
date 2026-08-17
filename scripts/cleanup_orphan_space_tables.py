@@ -41,6 +41,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from vitalgraph_sparql_sql_dev.db import add_pg_arguments, describe_target  # noqa: E402
 
 def global_tables() -> set[str]:
     """Tables belonging to the GLOBAL registries, not to any space.
@@ -163,12 +164,9 @@ async def main():
     ap.add_argument("--dry-run", action="store_true",
                     help="explicit no-op form of the default, for symmetry "
                          "with the other migrate_* scripts")
-    ap.add_argument("--host", default=os.environ.get("VG_PG_HOST", "localhost"))
-    ap.add_argument("--port", type=int, default=int(os.environ.get("VG_PG_PORT", "5432")))
-    ap.add_argument("--database", default=os.environ.get("VG_PG_DATABASE", "sparql_sql_graph"))
-    ap.add_argument("--user", default=os.environ.get("VG_PG_USER", "hadfield"))
-    ap.add_argument("--password", default=os.environ.get("VG_PG_PASSWORD", ""))
+    add_pg_arguments(ap)
     a = ap.parse_args()
+    print(f"🗄  target: {describe_target(a)}", flush=True)
 
     import asyncpg
     conn = await asyncpg.connect(host=a.host, port=a.port, database=a.database,

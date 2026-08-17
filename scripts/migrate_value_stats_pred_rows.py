@@ -41,6 +41,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from vitalgraph_sparql_sql_dev.db import add_pg_arguments, describe_target  # noqa: E402
 
 logger = logging.getLogger("migrate_value_stats_pred_rows")
 
@@ -108,14 +109,9 @@ async def main():
     ap.add_argument("--resync", action="store_true",
                     help="rebuild the histograms instead of backfilling — exact "
                          "rather than approximate")
-    ap.add_argument("--host", default=os.environ.get("VG_TEST_PG_HOST", "localhost"))
-    ap.add_argument("--port", type=int,
-                    default=int(os.environ.get("VG_TEST_PG_PORT", "5432")))
-    ap.add_argument("--database",
-                    default=os.environ.get("VG_TEST_PG_DATABASE", "sparql_sql_graph"))
-    ap.add_argument("--user", default=os.environ.get("VG_TEST_PG_USER", "postgres"))
-    ap.add_argument("--password", default=os.environ.get("VG_TEST_PG_PASSWORD", ""))
+    add_pg_arguments(ap)
     args = ap.parse_args()
+    print(f"🗄  target: {describe_target(args)}", flush=True)
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     import asyncpg

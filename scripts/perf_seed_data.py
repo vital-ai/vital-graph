@@ -50,6 +50,7 @@ import time
 import asyncpg
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from vitalgraph_sparql_sql_dev.db import pg_kwargs  # noqa: E402
 
 from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema  # noqa: E402
 
@@ -86,11 +87,7 @@ DATASETS = {
 
 def pg_params() -> dict:
     return dict(
-        host=os.environ.get("VG_TEST_PG_HOST", "localhost"),
-        port=int(os.environ.get("VG_TEST_PG_PORT", "5433")),
-        database=os.environ.get("VG_TEST_PG_DATABASE", "sparql_sql_graph"),
-        user=os.environ.get("VG_TEST_PG_USER", "postgres"),
-        password=os.environ.get("VG_TEST_PG_PASSWORD", "testpass"),
+        **pg_kwargs(),
     )
 
 

@@ -26,6 +26,7 @@ import sys
 import asyncpg
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from vitalgraph_sparql_sql_dev.db import pg_kwargs  # noqa: E402
 
 from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema  # noqa: E402
 from vitalgraph.db.sparql_sql.sparql_sql_admin import _VITALGRAPH_TERM_UUID_DDL  # noqa: E402
@@ -42,11 +43,7 @@ async def connect_with_retry(timeout_s: int = 60):
     same TCP path the tests use is what actually proves readiness.
     """
     params = dict(
-        host=os.environ.get("VG_TEST_PG_HOST", "localhost"),
-        port=int(os.environ.get("VG_TEST_PG_PORT", "5432")),
-        database=os.environ.get("VG_TEST_PG_DATABASE", "sparql_sql_graph"),
-        user=os.environ.get("VG_TEST_PG_USER", "postgres"),
-        password=os.environ.get("VG_TEST_PG_PASSWORD", ""),
+        **pg_kwargs(),
     )
     deadline = timeout_s
     last: Exception | None = None

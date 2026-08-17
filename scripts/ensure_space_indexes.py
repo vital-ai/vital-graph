@@ -31,6 +31,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from vitalgraph_sparql_sql_dev.db import pg_kwargs  # noqa: E402
 
 _NAME_RE = re.compile(
     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?"
@@ -50,11 +51,7 @@ def _mentions_present_table(stmt: str, tables: set) -> bool:
 
 def pg_env() -> dict:
     return dict(
-        host=os.environ.get("VG_TEST_PG_HOST", "localhost"),
-        port=int(os.environ.get("VG_TEST_PG_PORT", "5432")),
-        database=os.environ.get("VG_TEST_PG_DATABASE", "sparql_sql_graph"),
-        user=os.environ.get("VG_TEST_PG_USER", "postgres"),
-        password=os.environ.get("VG_TEST_PG_PASSWORD", ""),
+        **pg_kwargs(),
     )
 
 

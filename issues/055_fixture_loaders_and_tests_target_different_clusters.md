@@ -1,6 +1,57 @@
 # 055 — fixture loaders and the tests that use them target different clusters
 
-## Status: OPEN — the port disagreement is still there, and it bit again 2026-08-14
+## Status: FIXED 2026-08-17 — one resolver, and the target is now announced
+
+The suites were unified earlier. The NINETEEN maintenance scripts were not, and
+that is where it kept biting: they carried their own copies of the five
+connection defaults across two env families that could not see each other.
+
+    VG_TEST_PG_*   10 scripts, all defaulting to port 5432
+    VG_PG_*         7 scripts, all defaulting to port 5432
+    the loaders     2 scripts, defaulting to 5433 — and the suites read 5433
+
+So exporting the variable the tests use left half the scripts pointed at the
+other cluster. Hit twice in one session on 2026-08-17: `migrate_space_schema.py`
+took `VG_TEST_PG_PORT=5433` and `repair_derived_tables.py` ignored it, needing
+`--port 5433` passed by hand.
+
+**For a migration script this is worse than for a loader.** A loader writes a
+fixture where nobody looks. A migration ALTERS whichever cluster it reached, and
+the host carries same-named spaces, so it succeeds and reports success — which
+is `issues/099` one layer up.
+
+### What changed
+
+* `vitalgraph_sparql_sql_dev.db.get_connection_params` learned the `VG_PG_*`
+  family, so folding the scripts onto it could not silently ignore a variable
+  someone already had set. Precedence is now `VG_TEST_PG_*` -> `VG_PG_*` ->
+  `PG*` -> `LOCAL_DB_*` -> the docker test stack, and it is decided rather than
+  incidental: with both families set, the one the suites use wins.
+* `add_pg_arguments(parser)` and `pg_kwargs()` give a script its five
+  connection settings from that one place. All 19 scripts use one or the other;
+  none reads `VG_*_PG_*` directly any more.
+* The default is 5433, which settles the question `issues/099` left open. It is
+  also the safe direction: an unset environment now reaches the disposable
+  cluster rather than the one with real data on it.
+* **The target is printed before any work.** `describe_target` names the host,
+  port, database AND which cluster that is — "docker test stack" or "host
+  cluster" — because the failure mode here is a script doing the right thing to
+  the wrong database and reporting success. Naming it is what makes that visible
+  without reading the code.
+
+  It prints with `flush=True`. These scripts log to stderr while `print`
+  block-buffers on stdout when piped, so without the flush the banner appeared
+  AFTER the work it announces — worse than not printing it, and it took a
+  second look to notice.
+
+### The guard
+
+`tests/unit/test_pg_target_is_shared.py` (46 cases) fails on any script that
+reads `VG_*_PG_*` directly, checks each env family can still override, pins the
+precedence and the 5433 default, and asserts the inventory is non-empty so a
+glob that matches nothing cannot pass as compliance. The next script will be
+written by copying an existing one; this is what stops it inheriting a private
+default.
 
 Loader split-brain fixed; the seed/test port disagreement remains by design and
 is the part that needs a decision.

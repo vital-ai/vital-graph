@@ -36,6 +36,7 @@ import time
 import psycopg
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from vitalgraph_sparql_sql_dev.db import pg_kwargs  # noqa: E402
 
 BLOCK = 1024 * 1024  # 1MB chunks — the block size the convert script uses
 
@@ -64,11 +65,7 @@ def pg_env() -> dict:
     with a longer fuse. One source, so the two cannot drift apart again.
     """
     return dict(
-        host=os.environ.get("VG_TEST_PG_HOST", "localhost"),
-        port=int(os.environ.get("VG_TEST_PG_PORT", "5433")),
-        database=os.environ.get("VG_TEST_PG_DATABASE", "sparql_sql_graph"),
-        user=os.environ.get("VG_TEST_PG_USER", "postgres"),
-        password=os.environ.get("VG_TEST_PG_PASSWORD", "testpass"),
+        **pg_kwargs(),
     )
 
 

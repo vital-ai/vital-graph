@@ -39,6 +39,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from vitalgraph_sparql_sql_dev.db import add_pg_arguments, describe_target  # noqa: E402
 
 logger = logging.getLogger("migrate_quad_pk_dedup")
 
@@ -127,12 +128,9 @@ async def main():
     g.add_argument("--space")
     g.add_argument("--all", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--host", default=os.environ.get("VG_PG_HOST", "localhost"))
-    ap.add_argument("--port", type=int, default=int(os.environ.get("VG_PG_PORT", "5432")))
-    ap.add_argument("--database", default=os.environ.get("VG_PG_DATABASE", "sparql_sql_graph"))
-    ap.add_argument("--user", default=os.environ.get("VG_PG_USER", "hadfield"))
-    ap.add_argument("--password", default=os.environ.get("VG_PG_PASSWORD", ""))
+    add_pg_arguments(ap)
     a = ap.parse_args()
+    print(f"🗄  target: {describe_target(a)}", flush=True)
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     import asyncpg

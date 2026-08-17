@@ -53,26 +53,87 @@ def get_connection_params() -> Dict[str, Any]:
     An explicit setting always wins; the DEFAULT is what had to stop
     disagreeing, since with nothing set each caller silently chose its own.
     """
-    def _pick(vg: str, pg: str, local: str, key: str) -> str:
-        for name in (vg, pg, local):
+    def _pick(*names_then_key: str) -> str:
+        *names, key = names_then_key
+        for name in names:
             value = os.environ.get(name)
             if value is not None and value != "":
                 return value
         return _STACK_DEFAULTS[key]
 
     return {
-        "host": _pick("VG_TEST_PG_HOST", "PGHOST", "LOCAL_DB_HOST", "host"),
-        "port": int(_pick("VG_TEST_PG_PORT", "PGPORT", "LOCAL_DB_PORT", "port")),
-        "dbname": _pick("VG_TEST_PG_DATABASE", "PGDATABASE", "LOCAL_DB_NAME", "dbname"),
-        "user": _pick("VG_TEST_PG_USER", "PGUSER", "LOCAL_DB_USERNAME", "user"),
+        "host": _pick("VG_TEST_PG_HOST", "VG_PG_HOST", "PGHOST",
+                      "LOCAL_DB_HOST", "host"),
+        "port": int(_pick("VG_TEST_PG_PORT", "VG_PG_PORT", "PGPORT",
+                          "LOCAL_DB_PORT", "port")),
+        "dbname": _pick("VG_TEST_PG_DATABASE", "VG_PG_DATABASE", "PGDATABASE",
+                        "LOCAL_DB_NAME", "dbname"),
+        "user": _pick("VG_TEST_PG_USER", "VG_PG_USER", "PGUSER",
+                      "LOCAL_DB_USERNAME", "user"),
         # Password is the one field where an empty string is a legitimate value
         # (trust auth), so it is read separately rather than through the
         # non-empty filter above.
         "password": next(
-            (os.environ[n] for n in ("VG_TEST_PG_PASSWORD", "PGPASSWORD",
-                                     "LOCAL_DB_PASSWORD") if n in os.environ),
+            (os.environ[n] for n in ("VG_TEST_PG_PASSWORD", "VG_PG_PASSWORD",
+                                     "PGPASSWORD", "LOCAL_DB_PASSWORD")
+             if n in os.environ),
             _STACK_DEFAULTS["password"]),
     }
+
+
+def pg_kwargs() -> Dict[str, Any]:
+    """The resolved target as asyncpg keyword arguments.
+
+    Same values as `get_connection_params`, with `dbname` spelled `database`,
+    which is what `asyncpg.connect` and `create_pool` take. Scripts connect
+    directly rather than through this module's pool, so they need the spelling
+    asyncpg uses and should not each convert it.
+    """
+    p = get_connection_params()
+    return {"host": p["host"], "port": p["port"], "database": p["dbname"],
+            "user": p["user"], "password": p["password"]}
+
+
+def add_pg_arguments(parser) -> None:
+    """Give an ops script its `--host/--port/--database/--user/--password`.
+
+    Every maintenance script had its own copy of these five defaults, and they
+    did not agree: seventeen defaulted to port 5432 while everything that READS
+    a fixture defaults to 5433, across TWO env families (`VG_TEST_PG_*` and
+    `VG_PG_*`) that did not see each other's variables. Setting the one the
+    tests use left half the scripts pointed at the other cluster.
+
+    For a migration script that is worse than for a loader. A loader writes a
+    fixture where nobody looks; a migration ALTERS whichever cluster it reached,
+    and the host carries same-named spaces, so it succeeds and says so
+    (`issues/055`, and `issues/099` one layer up).
+
+    The default is the docker test stack, which is also the safe direction: an
+    unset environment now reaches the disposable cluster rather than the one
+    with real data on it.
+    """
+    d = get_connection_params()
+    parser.add_argument("--host", default=d["host"])
+    parser.add_argument("--port", type=int, default=d["port"])
+    parser.add_argument("--database", default=d["dbname"])
+    parser.add_argument("--user", default=d["user"])
+    parser.add_argument("--password", default=d["password"])
+
+
+def describe_target(args_or_params) -> str:
+    """One line naming the cluster about to be touched, and which one it is.
+
+    Printed rather than logged at debug: the whole failure mode here is a script
+    doing the right thing to the wrong database and reporting success. Naming
+    the target is what makes that visible without reading the code.
+    """
+    g = (args_or_params.get if isinstance(args_or_params, dict)
+         else lambda k, _d=None: getattr(args_or_params, k, _d))
+    host, port = g("host", "?"), int(g("port", 0) or 0)
+    db = g("dbname", None) or g("database", "?")
+    known = {5433: "docker test stack", 5432: "host cluster"}
+    which = known.get(port, "unrecognised cluster")
+    return f"{host}:{port}/{db} — {which}"
 
 
 def get_connection_string(params: Optional[Dict[str, Any]] = None) -> str:
