@@ -2,7 +2,7 @@
 
 ## Status: FIXED 2026-08-07 — 24.5-32.3s → 2ms, verified against ground truth
 
-> **Buffer-pool review — see `issues/081`. LIKELY UNAFFECTED.** The re-run on a 16 GB pool left these warm timings unchanged; these queries read tens of thousands of buffers and fit in the old 1 GB pool. Original note follows.
+> **Buffer-pool review — see `issues/081`. NOT AFFECTED, by arithmetic and by measurement.** A 1 GB pool holds 131,072 pages; every comparator cell reads between 4,350 and 82,724 buffers, so all of them fit with room to spare. The re-run on a 16 GB pool confirms it: warm total 1,444 ms -> 1,745 ms, buffers 1,597,396 -> 1,597,348 (identical), no regressions across 39 cells. The queries that WERE destroyed read 453,180 buffers — 3.5x the whole pool — and none of them are here. Original note follows.
 >
 > _(superseded)_ At risk: semi-join magnitudes (24.5-32.3s -> 2ms). `shared_buffers` was 1 GB on a 64 GB machine against queries touching 400,000+ buffers; raising it to 16 GB moved a comparable query 16,411 ms -> 616 ms with no code change. Plan shapes, row counts and buffer counts are unaffected.
 

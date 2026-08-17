@@ -47,7 +47,10 @@ too broad.** Corrections:
 * **`053` and the comparator issues (`045`, `058`, `059`, `061`, `071`, `073`)
   are NOT at risk.** Their queries read tens of thousands of buffers, fit
   comfortably in the old pool, and the re-run confirms their warm timings are
-  unchanged. The banners added to those issues overstate the risk.
+  unchanged. Their banners were corrected in the same commit as this section
+  (`c8a0a92`), and sharpened again on 2026-08-16 from "LIKELY UNAFFECTED" to the
+  arithmetic — 4,350..82,724 buffers against a 131,072-buffer pool is not a
+  probability, it is a fit.
 * **`078` and `080` ARE at risk and were re-measured in full.** Both read far
   more than the pool.
 * **`047`, `072`** remain worth re-checking, but for a different reason:

@@ -2,7 +2,7 @@
 
 ## Status: LANDED locally; remaining work is non-local spaces — 2026-08-10
 
-> **MEASURED ON A 1 GB BUFFER POOL — see `issues/081`.** At risk: the 31x figure. `shared_buffers` was 1 GB on a 64 GB machine against queries touching 400,000+ buffers; raising it to 16 GB moved a comparable query 16,411 ms -> 616 ms with no code change. Plan shapes, row counts and buffer counts are unaffected.
+> **Buffer-pool review — see `issues/081`. UNRESOLVED, and deliberately not cleared.** The test is buffer count against pool size: a 1 GB pool holds 131,072 pages, and a measurement is at risk if and only if the query approaches or exceeds that. The comparator issues were cleared that way (4,350..82,724 buffers, all fitting). **This one has no recorded buffer count**, so it cannot be cleared by the same arithmetic and has not been re-measured. The 31x figure is a wall-clock timing taken on the 1 GB pool and should be treated as unverified until someone records buffers for it. The 24 GB join and the missing type column are structural and stand regardless.
 
 Verified on the local cluster:
 
