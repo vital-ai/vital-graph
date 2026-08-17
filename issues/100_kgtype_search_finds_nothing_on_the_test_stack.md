@@ -1,6 +1,32 @@
 # KGType Search Finds Nothing on the Test Stack
 
-## Status: OPEN — provenance NOT established, 2026-08-16
+## Status: NO LONGER REPRODUCES 2026-08-17 — cause still NOT established
+
+All eight `TestKGTypeSearch` cases pass, including the six that failed. Nothing
+was done to the search path; two things changed underneath it on 2026-08-17:
+
+* **`issues/102`** — the stack could not run a PARALLEL QUERY at all (Docker's
+  default 64 MB `/dev/shm`, no `shm_size`). Fixed with
+  `dynamic_shared_memory_type = sysv` and a `docker restart`, which also
+  restarted every connection.
+* **`issues/055`'s schema repair** — `sp_kg_types` was one of eight spaces
+  missing `{space}_entity_slot_sort`, created by `migrate_space_schema --all`.
+
+**Neither is a satisfying explanation and I am not claiming one.** The search path
+does not reference `entity_slot_sort` (grepped), and the table is still empty for
+this space, so that repair is unlikely to be it. A parallel-query failure raises
+`DiskFullError` rather than returning zero rows, which is what these tests saw —
+so `issues/102` does not obviously fit either. The postgres restart is the third
+candidate and the least falsifiable.
+
+What can be said: the symptom is gone, it was never attributed, and the original
+question — did this predate the move to the test stack — was never answered
+because the dev app was deliberately stopped.
+
+**Left open deliberately rather than closed.** A test that starts passing for
+unknown reasons can stop passing for the same unknown reasons. If these six fail
+again, the first thing to check is whether a parallel plan is involved, and the
+second is whether the app container was restarted since the space was created.
 
 Six `tests/api/test_kgtypes_api.py::TestKGTypeSearch` cases fail on the docker
 test stack:
