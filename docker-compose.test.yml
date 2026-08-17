@@ -74,8 +74,25 @@ services:
       POSTGRES_PASSWORD: testpass
     ports:
       - "5433:5432"
+    # Docker gives a container 64 MB of /dev/shm, and PostgreSQL puts parallel
+    # workers' shared memory there. On a fixture large enough for the planner to
+    # choose a parallel plan, every such query died with
+    #
+    #     could not resize shared memory segment "/PostgreSQL.888087048"
+    #     to 16777216 bytes: No space left on device
+    #
+    # so this stack could not run a parallel query AT ALL. It went unnoticed
+    # because the fixtures big enough to provoke one were not loaded here; the
+    # same query succeeds with max_parallel_workers_per_gather = 0.
+    #
+    # Turning parallelism off would have hidden it AND changed what the
+    # benchmarks measure — `perf_record` stamps that setting, so a run with it
+    # at 0 is not comparable to a baseline taken at 2.
+    shm_size: 1gb
     # No volumes: PGDATA lives in the container's writable layer, so it is
     # wiped when the CONTAINER is recreated — not when the image is rebuilt.
+    # Changing shm_size above therefore WIPES every loaded fixture: it needs a
+    # container recreate, and they must be reloaded afterwards.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 2s

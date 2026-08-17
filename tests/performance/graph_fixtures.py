@@ -303,15 +303,51 @@ def relation_hop(n: int, from_var: str, to_var: str, criterion: str = "") -> str
 
 
 def chain_query(fx: GraphFixture, start: int, depth: int, *,
-                criterion: str = "", hop=frame_hop) -> str:
-    """Follow `depth` hops from `start`, projecting the far end."""
+                criterion: str = "", hop=frame_hop, distinct: bool = True) -> str:
+    """Follow `depth` hops from `start`, projecting the far end.
+
+    `distinct` is not cosmetic — it SELECTS THE EMISSION. With a DISTINCT above
+    it, `dedup_feasible` allows the set-based chain of CTEs (35x on wordnet
+    depth 3) and that runs whatever the hop-wise gate decided. Without one, path
+    multiplicity is part of the answer, dedup refuses, and the query exercises
+    the flat-vs-hop-wise decision instead.
+
+    So a bench that means to measure hop-wise has to pass `distinct=False`, and
+    one that means to measure dedup has to leave it on. Defaulting to True keeps
+    every existing caller — all of which compare against manifest answer SETS —
+    unchanged.
+    """
+    head = f"SELECT DISTINCT ?e{depth}" if distinct else f"SELECT ?e0 ?e{depth}"
     hops = "".join(hop(i + 1, f"?e{i}", f"?e{i + 1}", criterion)
                    for i in range(depth))
     return f"""
-    SELECT DISTINCT ?e{depth} WHERE {{ GRAPH <{fx.graph}> {{
+    {head} WHERE {{ GRAPH <{fx.graph}> {{
         {hops}
         FILTER(?e0 = <{fx.entity_uri(start)}>)
     }} }}"""
+
+
+def kind_constrained_query(fx: GraphFixture, depth: int, end: str, kind: str, *,
+                           criterion: str = "", hop=frame_hop) -> str:
+    """A chain with one END restricted by entity kind, the other left OPEN.
+
+    The shape the direction gate exists for (`issues/090`): neither end is
+    pinned, so which end to drive from is a question, and `rdf_stats` can price
+    the constrained one. `chain_query` cannot express it — it pins the start,
+    which answers the question before it is asked.
+
+    `end` is "head" or "tail". Kept here rather than in a bench so the bench and
+    the correctness test walk the same graph the same way; a bench measuring a
+    query no test checks is measuring an answer nobody has verified.
+    """
+    hops = "".join(hop(i + 1, f"?e{i}", f"?e{i + 1}", criterion)
+                   for i in range(depth))
+    var = "?e0" if end == "head" else f"?e{depth}"
+    return f"""
+    SELECT ?e0 ?e{depth} WHERE {{ GRAPH <{fx.graph}> {{
+        {hops}
+        {var} <{HALEY}hasKGEntityType> <{kind_uri(kind)}> .
+    }} }} ORDER BY ?e0 ?e{depth}"""
 
 
 # Criterion templates, one per datatype. Each is paired with the manifest key
