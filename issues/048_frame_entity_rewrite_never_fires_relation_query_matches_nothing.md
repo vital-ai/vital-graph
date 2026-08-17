@@ -100,6 +100,50 @@ small factor of the unconstrained walk — not merely better than it was.
 
 ---
 
+## Which side of the hop the constraint sits on — the whole discrimination
+
+Added 2026-08-17, after asking whether Problem 1 had been fixed before and
+regressed. It had not. What was fixed was the FRAME side, and that still holds;
+the SLOT side was never touched. Measured on `sp_graph_synth_10k`, depth 2,
+start 1658, 1,085 rows in every case:
+
+    constraint on the hop                       collapse    buffers
+    none                                         2 joins     10,626
+    frame  a         KGFrame                     2 joins     10,626
+    frame  vitaltype KGFrame                     2 joins      9,826
+    slot NODE  a         KGEntitySlot            0 joins    542,012
+    slot NODE  vitaltype KGEntitySlot            0 joins    542,012
+    slot EDGE  vitaltype Edge_hasKGSlot          0 joins    690,949
+
+Both spellings behave identically on each side, so this is not an `a` versus
+`vitaltype` problem — `ce9d64c` absorbs a frame type into
+`frame_entity.frame_type_uuid` whichever way it is written, and no equivalent
+exists for the slot.
+
+The rewrite says so itself, in its recorded decline:
+
+> a variable would lose the binding that ties it to the frame while still being
+> bound by a surviving table
+
+**The last row is the one that raises the priority.** `kg_query_builder` emits
+`?slotEdge vital-core:vitaltype haley:Edge_hasKGSlot` — the slot EDGE, not the
+slot node — so the shape the PRODUCT generates is on the losing side of this
+line, and is the most expensive of the three. Scoping caveat, stated because it
+has not been established: that constraint was measured here placed on a
+multi-hop entity walk. Whether the product's own traversal path assembles that
+combination is a separate question and is not answered by this table.
+
+**Why the suite is green while this is true.**
+`tests/integration/test_frame_entity_collapse.py` documents the decline as the
+current contract — its own docstring says "the canonical reference query (which
+says `?sourceSlot a KGEntitySlot`) is exactly the case that declines. The table
+is therefore correct, populated, and unread." It asserts the CONTRACT rather
+than which branch is taken, deliberately, so a correct-but-slow plan passes.
+That is the right call for a correctness test and it is why nothing has ever
+gone red over this.
+
+Reproduce with `test_scripts/debug/remeasure_048.py`.
+
 ## Problem 1 — a slot-type constraint disables the collapse entirely
 
 **Price: ~28,000x at depth 3.** Adding `?slot a KGEntitySlot`, which the
