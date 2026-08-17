@@ -1,6 +1,6 @@
 # `NOT IN` Is Measured As Its Own Complement, and Inline Constants Are Not Measured At All
 
-## Status: `NOT IN` FIXED 2026-08-17. The inline-constant gap is OPEN.
+## Status: `NOT IN` FIXED 2026-08-17. The inline-constant gap is WON'T FIX — measured 2026-08-17, and it is not a gap.
 
 Found by surveying every criterion form through the real generator against a
 loaded space, rather than by reading the recognisers — the two answer different
@@ -79,7 +79,77 @@ entry and the inversion happens only where the total is in hand.
 Verified after the fix, on the same four queries: 1%, 99%, 44%, 56% — every one
 matching the true fraction, with the row counts unchanged.
 
-## Defect 2: a constant in the triple pattern is never a criterion — OPEN
+## Defect 2: a constant in the triple pattern is never a criterion — WON'T FIX
+
+**Measured before building it, and the premise was wrong.** The gate not seeing
+an inline constant costs nothing, because the PLANNER already exploits it.
+
+### The measurement
+
+`?f hasCategory "delta"` forced in as a measured criterion — exactly what wiring
+this would supply — against what ships today, same query, identical answers:
+
+    driving end   category   flat (today)   criterion wired
+    pinned        delta            1,229          2,641      2.1x WORSE
+    pinned        gamma            1,377          1,855      1.3x WORSE
+    pinned        alpha            3,595          4,091      1.1x WORSE
+    constrained   delta            1,623          2,443      1.5x WORSE
+    constrained   gamma            2,448          2,420      parity
+    constrained   alpha            4,376          4,523      parity
+
+Never better, in six of six. `theta` — the most selective category at 0.9% — was
+measured first and returns ZERO rows through two hops, so it compared two ways of
+finding nothing; the table above uses categories whose answers are non-empty.
+
+### The control, which is what actually explains it
+
+The same start and the same shape with a criterion the gate ALREADY measures:
+
+    FILTER(?sc >= 50)   pinned         3,479 hop-wise vs  17,629 flat   5.1x
+    FILTER(?sc >= 50)   constrained    4,404 hop-wise vs  17,237 flat   3.9x
+
+So hop-wise is a large win on this exact query shape — when the criterion is a
+range. And note the absolute numbers: the inline-criterion query costs 1,229
+buffers FLAT, less than the FILTER query costs hop-wise.
+
+On `sp_graph_synth_100k` (19.6M quads) the contrast is starker:
+
+    inline  hasCategory "alpha"          85 buffers, flat
+    FILTER  score >= 50                  42 hop-wise  vs  877,250 flat
+
+### Why
+
+An inline constant is an indexed `(predicate_uuid, object_uuid)` equality. The
+planner drives from it natively — that is what `rdf_stats` and the pair indexes
+are for. A range over term values is not something it can drive from, which is
+why fencing the walk is worth 5x there and worth nothing here.
+
+**The criterion gate exists to spot criteria the planner CANNOT exploit.** An
+inline constant is one it can. Wiring it in would enable hop-wise on queries
+where flat is already good, and hop-wise's nested-loop shape then costs slightly
+more — which is what the six rows above show.
+
+### The structural-leaf problem was real, and is now moot
+
+Confirmed with numbers while investigating, and recorded in case anyone revisits
+this. For a depth-2 walk the query's own constant leaves are only four:
+
+    rdf:type       = KGFrame               16,006          structural
+    hasKGSlotType  = hasSourceEntity         9,266  of 18,532   50%   structural
+    hasKGSlotType  = hasDestinationEntity    9,266  of 18,532   50%   structural
+    hasCategory    = "theta"                   193  of 20,423    1%   the criterion
+
+Taking the most selective leaf would find the criterion correctly here — and on
+a query with NO criterion would return `hasKGSlotType = hasSourceEntity` at 50%,
+handing every unfiltered walk exactly the bogus criterion this predicted.
+
+Also worth recording: `pair_rows` as passed to the gate is the whole preloaded
+`quad_stats` for the SPACE — 5,597 pairs on this fixture, mostly `hasName = <one
+entity name>` at 2 rows each. Ranking those by selectivity would pick a 2-row
+pair with no connection to the query at all. The candidate set was never the pair
+stats; it is `needed_pairs`, the query's own leaves.
+
+## Defect 2, as originally filed
 
 `?f <hasCategory> "theta"` is the most natural way to write a selective
 criterion, and `rdf_stats` already holds the answer — 193 rows, sitting there.
