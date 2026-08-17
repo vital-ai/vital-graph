@@ -724,7 +724,10 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
         # during push-down, after this gate runs.
         from .semijoin import needed_ins
         aliases.in_stats = {}
-        for p_uuid, values in needed_ins(plan, aliases):
+        for p_uuid, values, negated in needed_ins(plan, aliases):
+            # The cached fact is the POSITIVE sum — what rdf_stats answers —
+            # so both polarities share one cache entry and the inversion
+            # happens where the predicate total is known.
             ck = (space_id, p_uuid, values)
             # Distinct VALUES, not keys. A boolean contributes both of its
             # lexical forms and is the only key carrying a datatype, so it
@@ -732,7 +735,7 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
             n_typed = sum(1 for v in values if v[2])
             n_values = n_typed // 2 + (len(values) - n_typed)
             if ck in _pair_count_cache:
-                aliases.in_stats[(p_uuid, values)] = _pair_count_cache[ck]
+                aliases.in_stats[(p_uuid, values, negated)] = _pair_count_cache[ck]
                 continue
             # Resolve the values and sum their counts in ONE query. rdf_stats is
             # keyed by (predicate, object) and already holds these exactly —
@@ -779,7 +782,7 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                 continue
             n = rows[0]["total"]
             _pair_count_cache[ck] = n
-            aliases.in_stats[(p_uuid, values)] = n
+            aliases.in_stats[(p_uuid, values, negated)] = n
 
         # Text leaves: no constant object either, and the count is the whole
         # question. A substring matching 2.6M terms and one matching none want
@@ -1061,8 +1064,34 @@ async def _generate_sql(
                 _measured = list((getattr(aliases, "range_stats", None) or {}).items())
                 _measured += [((k[0], None, None), v) for k, v in
                               (getattr(aliases, "text_stats", None) or {}).items()]
-                _measured += [((k[0], None, None), v) for k, v in
-                              (getattr(aliases, "in_stats", None) or {}).items()]
+                # An IN contributes its sum; a NOT IN contributes the
+                # COMPLEMENT of that sum against the predicate total. Without
+                # the inversion `NOT IN ('theta')` — 99% of the frames — read
+                # as "admits 1%" (issues/101).
+                #
+                # That did NOT flip the hop-wise decision, because selectivity
+                # is reported rather than thresholded: any measured criterion
+                # qualifies. What it corrupted is the number itself — the
+                # reported selectivity, `Decision.criterion_rows`, and which
+                # criterion wins the most-selective contest below when a query
+                # carries several, where an inverted 1% beats a genuinely
+                # narrow range and gets reported in its place.
+                #
+                # No total means no complement: rdf_stats is a capped frequent
+                # value list, so its sum is an UNDERCOUNT, and an undercount of
+                # the positive side makes the complement an OVERCOUNT — which
+                # reads as less selective and declines. That is the safe
+                # direction, and it is why this drops the criterion rather than
+                # guessing at one.
+                _pred_stats = getattr(aliases, "pred_stats", None) or {}
+                for k, v in (getattr(aliases, "in_stats", None) or {}).items():
+                    _p = k[0]
+                    if len(k) > 2 and k[2]:
+                        _total = _pred_stats.get(_p)
+                        if not _total:
+                            continue
+                        v = max(_total - v, 0)
+                    _measured.append(((_p, None, None), v))
                 for (p_uuid, _op, _lit), n in _measured:
                     total = (getattr(aliases, "pred_stats", None) or {}).get(p_uuid)
                     if total and (_crit is None or n / total < _crit / _pred):

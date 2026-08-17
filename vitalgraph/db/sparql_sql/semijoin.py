@@ -276,7 +276,7 @@ def _stat_keys(node):
 
 
 def needed_ins(plan, aliases) -> set:
-    """(predicate_uuid, ((term_text, term_type), ...)) for each `?var IN (...)`.
+    """(predicate_uuid, ((term_text, term_type), ...), negated) per `?var IN (...)`.
 
     The third criterion family, and the cheapest to answer: every value is one
     TERM, so the counts are already in `rdf_stats` keyed by (predicate, object)
@@ -302,7 +302,12 @@ def needed_ins(plan, aliases) -> set:
                 continue
             ops = _in_operands(expr)
             if ops is not None:
-                var_name, _sql_op, _conds, nodes = ops
+                var_name, sql_op, _conds, nodes = ops
+                # NOT IN admits the COMPLEMENT of what these values count.
+                # Dropping the operator here reported `NOT IN ('theta')` — 99%
+                # of frames — as "criterion admits 1%". The caller inverts
+                # against the predicate total; this only has to say which it is.
+                negated = sql_op == "NOT IN"
             else:
                 # An equality is an IN of one value, and it needs the same
                 # answer. Only the FILTER form arrives here: a constant written
@@ -312,7 +317,9 @@ def needed_ins(plan, aliases) -> set:
                 eq = _equality_operands(expr)
                 if eq is None:
                     continue
-                var_name, nodes = eq[0], [eq[1]]
+                # `_equality_operands` matches `eq` only, so `!=` never arrives
+                # here — it declines further up and stays unmeasured.
+                var_name, nodes, negated = eq[0], [eq[1]], False
             # Every term equal to each value. A typed NUMERIC is still
             # declined — "5", "5.0" and "05" are three terms and one value, and
             # the range path owns that — but a boolean expands to both of its
@@ -336,7 +343,7 @@ def needed_ins(plan, aliases) -> set:
                     continue
                 p_uuid = _term_uuid(aliases, *pred)
                 if p_uuid:
-                    out.add((p_uuid, values))
+                    out.add((p_uuid, values, negated))
                     break
     return out
 

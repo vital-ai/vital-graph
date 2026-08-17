@@ -17,7 +17,9 @@ Audited against the traversal fixture, which carries all six datatypes:
     uri      =    tag = external              18,225
     string   CONTAINS  text stat
     string / boolean / uri written INLINE in the triple
-                  constant pair -- already counted by needed_pairs
+                  constant pair -- counted by needed_pairs, and NOT reachable
+                  as a criterion: the traversal gate reads range/text/in stats
+                  only, so `?f hasCategory "theta"` measures nothing (issues/101)
 
 Counts are against the current graph_synth_10k and each names its criterion; an
 earlier table gave bare numbers from a superseded generation of the fixture.
@@ -142,6 +144,65 @@ class TestInIsRecognised:
         ops = _in_operands(expr)
         assert ops is not None
         assert [_literal_term_key(n) for n in ops[3]] == [("alpha", "L"), ("beta", "L")]
+
+
+class TestNotInIsTheComplement:
+    """`NOT IN` admits everything the values do not, and was counted as if it
+    admitted exactly them (issues/101).
+
+    Measured on `sp_graph_skew_2k`, where `theta` is 1% of `hasCategory`:
+
+        FILTER(?ct IN     ("theta"))   reported "admits 1%"    true:  1%
+        FILTER(?ct NOT IN ("theta"))   reported "admits 1%"    true: 99%
+
+    `_IN_OPS` has always mapped both spellings; `needed_ins` unpacked the
+    operator into `_sql_op` and dropped it. Every other negation — `!=`,
+    `!(?v = x)`, `!(?v IN (x))` — declines further up and stays unmeasured, so
+    this one surface form was the whole of it.
+
+    It did not flip the hop-wise decision: selectivity is reported rather than
+    thresholded, so a measured criterion qualifies whatever its value. What it
+    corrupted is the number — the reported selectivity, `criterion_rows`, and
+    which criterion wins the most-selective contest when a query has several.
+    """
+
+    def test_in_and_not_in_are_distinguished(self):
+        for name, expected in (("in", "IN"), ("notin", "NOT IN")):
+            expr = ExprFunction(name=name, args=[
+                ExprVar(var="v"), _val(_plain("theta"))])
+            ops = _in_operands(expr)
+            assert ops is not None and ops[1] == expected
+
+    def test_the_values_are_identical_for_both(self):
+        """The count is of the same terms either way; only the polarity differs.
+        If these diverged, the inversion would be against the wrong number."""
+        pos, neg = (_in_operands(ExprFunction(name=n, args=[
+            ExprVar(var="v"), _val(_plain("alpha")), _val(_plain("beta"))]))
+            for n in ("in", "notin"))
+        assert [_stat_keys(n) for n in pos[3]] == [_stat_keys(n) for n in neg[3]]
+
+    def test_needed_ins_reports_the_polarity(self):
+        """The unpacking that dropped it. A three-tuple is the contract the
+        generator inverts on; a two-tuple silently means "positive"."""
+        import inspect
+        from vitalgraph.db.sparql_sql import semijoin
+        src = inspect.getsource(semijoin.needed_ins)
+        assert "negated = sql_op ==" in src
+        assert "out.add((p_uuid, values, negated))" in src
+
+    def test_the_generator_inverts_against_the_predicate_total(self):
+        """And DROPS the criterion when it has no total to invert against.
+
+        rdf_stats is a capped frequent-value list, so its sum is an undercount;
+        an undercount of the positive side makes the complement an overcount,
+        which reads as less selective and declines. Guessing instead would push
+        the error the other way, toward a criterion that is not there.
+        """
+        import inspect
+        from vitalgraph.db.sparql_sql import generator
+        src = inspect.getsource(generator._generate_sql)
+        assert "_total = _pred_stats.get(_p)" in src
+        assert "v = max(_total - v, 0)" in src
 
 
 class TestKnownLimits:
