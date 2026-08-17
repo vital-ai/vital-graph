@@ -22,10 +22,17 @@ walk, because the semi-join runs per surviving row and nothing narrows them. Wit
 a criterion present, few rows survive and it disappears. Worth revisiting only if
 a real query constrains slot types without any criterion.
 
-**Still declining: the slot EDGE** (`?slotEdge vitaltype Edge_hasKGSlot`, 691K
-buffers), which is what `kgframes_endpoint` emits. Specified below and cheaper
-than the node case — `{space}_edge` carries `edge_type_uuid`, so it needs no
-type-quad join at all.
+**The slot EDGE is fixed too** (`ee9e8bd`). `?slotEdge vitaltype
+Edge_hasKGSlot` — what `kgframes_endpoint` emits, and the more expensive decline
+of the two at 690,949 buffers — now reads **752**, because `{space}_edge` carries
+`edge_type_uuid` and the semi-join tests a column on a row it already visits:
+
+    ?se vitaltype Edge_hasKGSlot   -> 9,266   fe_joins=1   752 buffers
+    ?se vitaltype Edge_hasKGFrame  ->     0   fe_joins=1   681 buffers
+
+The second case is what makes the first meaningful — a slot edge is not a frame
+edge — and without it the assertion would pass on a check that matched any edge.
+Both forms share one recogniser (`_slot_type_quads_for`) and one decline rule.
 
 Re-measured 2026-08-17 on `sp_graph_synth_10k`, start 1658 (a start whose answer
 is NON-EMPTY at both depths — the first re-measurement used one returning zero
