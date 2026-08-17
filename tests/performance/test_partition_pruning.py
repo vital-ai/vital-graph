@@ -191,13 +191,38 @@ async def test_slim_pk_dedups_identical_quads(pg18_pool, part_space):
 
 async def test_migrate_nonpartitioned_space_preserves_data(pg18_pool, make_pg18_space):
     """Per-space migration: non-partitioned space -> partitioned, with set-parity
-    and correct (s,p,o,c) dedup."""
+    and correct (s,p,o,c) dedup.
+
+    THE SOURCE HAS TO BE A PRE-PK SPACE, which is the only kind that can hold the
+    duplicates this asserts are dropped. `rdf_quad` now carries a primary key on
+    exactly (subject, predicate, object, context) — added by
+    `scripts/migrate_quad_pk_dedup.py` — so on a current-schema space the INSERT
+    below fails and the migration never runs. That is what this test started
+    doing: `duplicate key value violates unique constraint "..._rdf_quad_pkey"`,
+    a failure in the setup rather than in the thing under test.
+
+    Deleting the duplicates would make it pass and would delete the assertion
+    with them. A space that predates the PK is exactly what this migration
+    exists to convert, and it can hold duplicates, so the fixture drops the
+    constraint to be that space rather than pretending the case is gone.
+    """
     from vitalgraph.db.sparql_sql.partition_migrate import (
         migrate_space_to_partitioned, distinct_quads)
 
     sid = await make_pg18_space(partition_quads=0)            # non-partitioned
     t = SparqlSQLSchema.get_table_names(sid)
     async with pg18_pool.acquire() as conn:
+        # Look the constraint up rather than assuming `{sid}_rdf_quad_pkey`: a
+        # renamed constraint would silently leave the PK in place, the insert
+        # would fail again, and the message would point back here.
+        pk = await conn.fetchval(
+            "SELECT conname FROM pg_constraint c JOIN pg_class r "
+            "ON r.oid = c.conrelid WHERE r.relname = $1 AND c.contype = 'p'",
+            t['rdf_quad'].split('.')[-1])
+        assert pk, (f"no primary key on {t['rdf_quad']} — if the PK is gone the "
+                    f"dedup this asserts is no longer reachable at all")
+        await conn.execute(f"ALTER TABLE {t['rdf_quad']} DROP CONSTRAINT {pk}")
+
         g = uuid.uuid4()
         rows = [(uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), g) for _ in range(300)]
         rows += [rows[0], rows[0]]                           # 2 duplicate quads
