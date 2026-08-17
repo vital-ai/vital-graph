@@ -52,6 +52,40 @@ space would answer, and answer emptily, which is what was seen. That is a
 hypothesis and it is untested — recorded so the next person starts there rather
 than at the port.
 
+### RULED OUT: the test datasets loaded on 2026-08-17
+
+`sp_lead_synth_10k` was loaded and `sp_graph_skew_2k` regenerated, so the obvious
+question is whether these tests simply found data they had been missing. They did
+not, and it is checkable rather than arguable: `search_env` CREATES its three
+types through the API into `SP_KG_TYPES` and searches for those. It reads no
+fixture. `sp_kg_types` was not among the spaces loaded — it received one empty
+`entity_slot_sort` table from the schema repair and nothing else.
+
+### A BETTER LEAD than the connection-pool guess above
+
+Checking that turned up the layer these searches actually depend on:
+
+    sp_kg_types_fts_index       2 rows
+    sp_kg_types_vector_index    2 rows
+    sp_kg_types_rdf_quad        0 quads
+
+The types are searched through `fts_index` and `vector_index`, which a background
+sync populates — and `search_env` sleeps 3.0 s waiting for exactly that. A sync
+that is slow, wedged or not running returns an EMPTY result rather than an error,
+which is the symptom, and it explains all six at once: keyword and FTS read
+`fts_index`, the three vector cases and the hybrid read `vector_index`. The
+earlier note reasoned that keyword search "needs no embeddings" and so could not
+be the vector sync — true, and it does need the FTS index, which the same worker
+class maintains.
+
+That is a better hypothesis than the connection recycle, and it is testable while
+the failure is live: check whether `fts_index` has a row for each created type
+before the search runs.
+
+**Not evidence:** the app log carries 46 `does not exist` warnings today, all from
+maintenance jobs chasing spaces dropped during this session's cleanup. They are a
+consequence of today, not a record of yesterday.
+
 **Left open deliberately rather than closed.** A test that starts passing for
 unknown reasons can stop passing for the same unknown reasons. If these six fail
 again, restart the app container FIRST and see whether that alone fixes it: that
