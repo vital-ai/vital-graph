@@ -114,6 +114,22 @@ DST_ROLE = "urn:hasDestinationEntity"
 # different axis from the criteria on the edges themselves.
 ENTITY_KINDS = ["Person", "Organization", "Product", "Topic", "Place"]
 
+# A RARE entity kind, on a small fraction of entities (issues/090).
+#
+# The traversal gate chooses which end of a chain to drive from by comparing how
+# many rows each end admits, and the ends of a chain are ENTITIES. The five kinds
+# above are drawn uniformly, so every kind-constrained end is ~20% of the entity
+# set and no end is meaningfully smaller than another. `--rare-entity-fraction`
+# adds a sixth kind at a few percent, which is what makes one end genuinely
+# small and the direction choice observable.
+#
+# The skew has to sit on the ENTITY, not on the slot: a rare SLOT TYPE was tried
+# first and does not chain. `hasKGSlotType` is how a hop is recognised as a
+# source/destination pair in the first place, so a third value there produces
+# hops of a different kind, which the chain builder reports as "no multi-hop
+# chain found (2 single hops)" and the whole rewrite declines.
+RARE_KIND = "Rare"
+
 # Frame types — the wordnet-style criterion, kept so the two fixtures ask the
 # same question in the same way.
 FRAME_TYPES = ["Mentions", "WorksWith", "DerivedFrom", "LocatedIn"]
@@ -867,8 +883,23 @@ def tally(edges):
     return out
 
 
+def _is_rare(index: int, fraction: float) -> bool:
+    """Deterministic membership of the rare minority.
+
+    Index arithmetic rather than a random draw, so the set is derivable from the
+    manifest without replaying the generator's rng state — a test that has to
+    reproduce the generator's stream to know what it built is a test that will
+    drift away from its fixture.
+    """
+    if fraction <= 0:
+        return False
+    every = max(1, int(round(1.0 / fraction)))
+    return index % every == 0
+
+
 def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
-             seed: int, shard_entities: int) -> dict:
+             seed: int, shard_entities: int,
+             rare_entity_fraction: float = 0.0) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     for old in out_dir.glob("graph_syn_*.nt"):
         old.unlink()
@@ -880,6 +911,16 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
 
     rng = random.Random(seed + 2)
     entity_kind = [rng.choice(ENTITY_KINDS) for _ in range(n_entities)]
+    # The rare minority, chosen by INDEX rather than by an rng draw so the set is
+    # derivable from the manifest alone. A test that has to replay the
+    # generator's rng stream to know which entities it built is a test that
+    # drifts away from its fixture the first time anything above it draws.
+    n_rare_entities = 0
+    if rare_entity_fraction > 0:
+        for i in range(n_entities):
+            if _is_rare(i, rare_entity_fraction):
+                entity_kind[i] = RARE_KIND
+                n_rare_entities += 1
 
     n_triples = 0
     shard_idx = 0
@@ -1006,6 +1047,14 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
         "n_nested_frames": len(nested),
         "n_relations": len(relation_edges),
         "n_triples": n_triples,
+        # The skew that makes the traversal direction choice observable
+        # (issues/090). `n_rare_entities` against n_entities is the ratio the
+        # gate compares, so a test asserts against the fixture's own description
+        # of itself rather than against a number someone typed.
+        "rare_entity_fraction": rare_entity_fraction,
+        "rare_entity_kind": (f"{BASE}:kind:{RARE_KIND}"
+                             if rare_entity_fraction > 0 else None),
+        "n_rare_entities": n_rare_entities,
         "triples_per_entity": round(n_triples / max(n_entities, 1), 1),
         "seed": seed,
         "fanout": fanout,
@@ -1086,11 +1135,20 @@ def main() -> int:
                     help="KG relations out of each entity")
     ap.add_argument("--seed", type=int, default=20260814)
     ap.add_argument("--shard-entities", type=int, default=5000)
+    ap.add_argument("--rare-entity-fraction", type=float, default=0.0,
+                    help="fraction of entities given a RARE sixth kind "
+                         "(issues/090). 0 disables it, leaving emitted triples "
+                         "byte for byte identical to the existing fixtures "
+                         "(the manifest gains three descriptive keys). ~0.02 "
+                         "gives a kind-constrained chain end far smaller than "
+                         "any of the five uniform kinds, which is what makes "
+                         "the traversal direction choice observable.")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
     generate(Path(args.out), args.entities, args.fanout,
-             args.relation_fanout, args.seed, args.shard_entities)
+             args.relation_fanout, args.seed, args.shard_entities,
+             rare_entity_fraction=args.rare_entity_fraction)
     return 0
 
 

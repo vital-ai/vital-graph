@@ -320,6 +320,36 @@ def emit_hop_wise(plan: PlanV2, chain: TraversalChain,
             head_constraint=chain.head_constraint,
             tail_constraint=chain.tail_constraint, direction=direction)
 
+    # A CONSTRAINED head is a driving set this emission cannot express, so it is
+    # declined here rather than emitted badly (issues/090).
+    #
+    # The two ends land in different places. A PIN is a literal predicate on the
+    # link itself, so the outer relation is one row and the walk really does
+    # start small. A CONSTRAINT is a join to a quad table, and `_place` puts it
+    # among the hop's criteria — inside the `OFFSET 0` fence, beneath the link.
+    # The outer relation is then the whole link table with the driving check
+    # applied per row, which is the opposite of driving from it.
+    #
+    # Measured on `sp_graph_skew_2k` (500k quads) and `sp_graph_synth_100k`
+    # (19.6M), depth 2, same answers on every arm:
+    #
+    #     driving end                 hop-wise vs as-is, shared buffers
+    #     pinned to one uri                490 vs  16,303      33x BETTER
+    #     kind-constrained, 40 entities 108,900 vs  17,237     6.3x WORSE
+    #     kind-constrained, 394           93,803 vs  37,220     2.5x WORSE
+    #     kind-constrained, 19.6M space  8.1M   vs   2.6M       3.7x WORSE
+    #
+    # Rarity does not rescue it: the 40-entity end is the WORST of the three,
+    # because the fence discards exactly the selectivity that makes it small.
+    # `choose_direction` is still right about which end to drive from, and its
+    # answer is what the hoist will need — the gap is the emission, not the
+    # decision, which is why this declines here and not in `decide`.
+    if not chain.pinned_head:
+        return HOP_WISE.decline(
+            "the driving end is constrained rather than pinned, and the "
+            "constraint cannot be hoisted out of the criteria fence yet",
+            head_constraint=chain.head_constraint, direction=direction)
+
     groups = partition_hops(plan, chain, quad_tables)
     if not groups:
         return None

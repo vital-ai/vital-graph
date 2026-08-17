@@ -74,12 +74,16 @@ def _plan(depth=3, criteria=True):
                   var_slots=slots)
 
 
-def _chain(depth=3, head=True, tail=False):
+def _chain(depth=3, head=True, tail=False, head_c=None, tail_c=None):
     return TraversalChain(
         links=[ChainLink(ref_id=f"femv{i}", kind="frame_entity",
                          source_col="source_entity_uuid",
                          dest_col="dest_entity_uuid") for i in range(depth)],
-        pinned_head=head, pinned_tail=tail)
+        pinned_head=head, pinned_tail=tail,
+        head_constraint=head_c, tail_constraint=tail_c)
+
+
+KIND = ("pred-hasKGEntityType", "obj-Rare")
 
 
 def _names(plan):
@@ -156,6 +160,60 @@ class TestItDeclines:
         got = emit_hop_wise(plan, _chain(3, head=False, tail=True),
                             plan.tables, _names(plan))
         assert got is None
+
+
+class TestAConstrainedDriveIsDeclined:
+    """`choose_direction` can price a constrained end; this cannot drive from one.
+
+    A PIN becomes a literal predicate on the link, so the outer relation is one
+    row. A CONSTRAINT is a join to a quad table, and `_place` puts it among the
+    hop's criteria — inside the `OFFSET 0` fence, BENEATH the link. The outer
+    relation is then the entire link table with the driving check applied per
+    row, which is not driving from it at all.
+
+    Measured on `sp_graph_skew_2k` and `sp_graph_synth_100k` at depth 2, all
+    arms returning identical answers:
+
+        pinned to one uri                490 vs  16,303 buffers   33x BETTER
+        kind-constrained, 40 entities 108,900 vs  17,237          6.3x WORSE
+        kind-constrained, 394 ents     93,803 vs  37,220          2.5x WORSE
+        kind-constrained, 19.6M space     8.1M vs    2.6M         3.7x WORSE
+
+    Rarity makes it worse, not better: the 40-entity end is the worst of the
+    three, because fencing discards exactly the selectivity that made it small.
+    Delete this class when the constraint can be hoisted out of the fence — the
+    decision layer already knows which end to hoist toward.
+    """
+
+    def test_a_constrained_head_declines(self):
+        plan = _plan(3)
+        got = emit_hop_wise(plan, _chain(3, head=False, head_c=KIND),
+                            plan.tables, _names(plan))
+        assert got is None
+
+    def test_a_constrained_tail_declines_after_reversal(self):
+        """Reversing makes the tail the head; it is still not a pin."""
+        plan = _plan(3)
+        got = emit_hop_wise(plan, _chain(3, head=False, tail_c=KIND),
+                            plan.tables, _names(plan), direction="tail")
+        assert got is None
+
+    def test_a_pin_still_emits_when_the_other_end_is_constrained(self):
+        """The decline must key off the DRIVING end, not the presence of any
+        constraint — a pinned drive with a constrained far end is the shape that
+        measured 33x better."""
+        plan = _plan(3)
+        sql = emit_hop_wise(plan, _chain(3, head=True, tail_c=KIND),
+                            plan.tables, _names(plan))
+        assert sql and "OFFSET 0" in sql
+
+    def test_a_tail_pin_emits_when_the_direction_says_so(self):
+        """The reversal itself still works — this decline is about pins vs
+        constraints, and must not quietly re-close the tail-pin case."""
+        plan = _plan(3)
+        sql = emit_hop_wise(plan, _chain(3, head=False, tail=True),
+                            plan.tables, _names(plan), direction="tail")
+        assert sql and "OFFSET 0" in sql
 
 
 class TestDepthOne:

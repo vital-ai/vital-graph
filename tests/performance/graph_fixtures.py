@@ -173,6 +173,33 @@ SYNTH = [
 SMALL = SYNTH[0]
 LARGE = SYNTH[1]
 
+# The SKEWED fixture (issues/090). Small on purpose — its job is a distribution,
+# not a size.
+#
+# The traversal gate chooses which end of a chain to drive from by pricing each
+# end from `rdf_stats`, and the ends of a chain are entities. Neither existing
+# fixture can pose that question: both draw the five entity kinds uniformly, so
+# every kind-constrained end is ~20% of the entity set and no end is meaningfully
+# smaller than the other. This one adds a sixth kind at 2%.
+#
+#     python scripts/generate_graph_dataset.py --entities 2000 \
+#         --rare-entity-fraction 0.02 --out internal_data/graph_skew_2k
+#     python scripts/convert_nt_to_csv.py internal_data/graph_skew_2k/*.nt \
+#         --out test_data/graph_skew_2k.csv --graph urn:sp_graph_skew_2k \
+#         --dataset graph_synth
+#     python scripts/load_wordnet_csv.py --space sp_graph_skew_2k \
+#         --quads-csv test_data/graph_skew_2k.csv \
+#         --terms-csv test_data/graph_skew_2k_terms.csv
+#
+# The space must exist first — `load_wordnet_csv.py` truncates, it does not
+# create. `scripts/perf_seed_data.ensure_space` / `ensure_graph` do that.
+SKEW = GraphFixture("sp_graph_skew_2k", "urn:sp_graph_skew_2k", "skew2k",
+                    "graph_skew_2k")
+
+
+def kind_uri(kind: str) -> str:
+    return f"{BASE}:kind:{kind}"
+
 
 # ---------------------------------------------------------------------------
 # Query construction — shared so a bench and a correctness test walk the graph

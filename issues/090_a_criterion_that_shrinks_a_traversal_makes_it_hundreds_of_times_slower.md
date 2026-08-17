@@ -588,6 +588,80 @@ original report is fixed too. Remaining slow shapes are recorded in
 `planning_performance/traversal_chain_plan.md`: filtered walks from a hub that
 decline dedup (1-3 s), tail-only pins, and branching/UNION traversals.
 
+## The direction gate, and what it turned out to reach
+
+Added 2026-08-17. The gate now prices BOTH ends of a chain from `rdf_stats` and
+picks the smaller, rather than recognising only a pinned end:
+
+    a PINNED end       1 by definition
+    a CONSTRAINED end  one `rdf_stats` lookup on its (predicate, object) pair
+    an OPEN end        unknown — and unknown must not be compared as if it were
+                       large, or an open end always loses and a direction gets
+                       chosen on no evidence
+
+`Decision` carries a `direction`, `TraversalChain.reversed()` re-orients the
+chain, and `GenerateResult.traversal_decision` carries the result out so it can
+be asserted on rather than re-derived.
+
+### The fixture that could ask the question
+
+None of the three existing fixtures could. `wordnet_frames`,
+`sp_graph_synth_10k` and `sp_graph_synth_100k` all draw their five entity kinds
+uniformly, so a kind-constrained end is ~20% of the entity set either way and
+"which end is smaller" has no interesting answer.
+
+`sp_graph_skew_2k` — `--rare-entity-fraction 0.02` — adds a sixth kind at 2%,
+giving 40 entities against ~390. Small on purpose: the question is a
+distribution, not a size.
+
+A rare SLOT TYPE was tried first and is the wrong axis. `hasKGSlotType` is how a
+hop is recognised as a source/destination pair, so a third value there produces
+hops of a different kind — "no multi-hop chain found (2 single hops)" — and the
+whole rewrite declines. The ends of a chain are ENTITIES, so the skew has to sit
+on the entity.
+
+### What the fixture then showed: decided, but not expressed
+
+The gate chooses the right end. `emit_hop_wise` cannot drive from it. Measured at
+depth 2, every arm returning identical answers:
+
+    driving end                         shared buffers, hop-wise vs flat
+    pinned to one uri                       490 vs  16,303      33x BETTER
+    kind-constrained, 40 entities        108,900 vs  17,237     6.3x WORSE
+    kind-constrained, 394 entities        93,803 vs  37,220     2.5x WORSE
+    kind-constrained, 19.6M-quad space      8.1M vs    2.6M     3.7x WORSE
+
+The two ends land in different places, which is the whole of it. A PIN becomes a
+literal predicate on the link, so the outer relation is one row. A CONSTRAINT is
+a join to a quad table, and `_place` puts it among the hop's criteria — inside
+the `OFFSET 0` fence, BENEATH the link. The outer relation is then the entire
+link table with the driving check applied per row, which is the opposite of
+driving from it.
+
+Rarity makes it worse rather than better: the 40-entity end is the worst of the
+three, because fencing discards exactly the selectivity that made it small.
+
+At depth 1 the direction is provably inert — reversing a one-link chain emits
+byte-identical SQL, which is how this was first noticed (two arms, 450,638
+buffers each).
+
+**So `emit_hop_wise` declines a constrained drive** rather than emitting it
+badly. Without that decline the extension shipped a 2.5-6.3x pessimisation on
+every shape measured. The decision layer keeps its direction: it is correct, it
+is asserted against real statistics, and it is what the hoist will need.
+
+### What is left
+
+**Hoist the driving end's constraint out of the criteria fence** and into the
+outer FROM beside the link. The criteria lateral nests INSIDE the body, so
+anything placed in the body stays in lexical scope for it — the move is
+mechanically available. What it needs is a rule for identifying which table
+carries the driving constraint, and `_place` currently assigns by hop, not by
+role.
+
+Delete `TestAConstrainedDriveIsDeclined` (unit and performance) when that lands,
+and put a timing assertion in its place.
+
 ## Related
 
 - `issues/048` — the parent plan. This is Problem 2 of the three priced there;

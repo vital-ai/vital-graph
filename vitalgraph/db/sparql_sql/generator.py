@@ -62,6 +62,13 @@ class GenerateResult:
     # by someone who has that query and not the log level that was set when it
     # ran.
     declines: Optional[Any] = None
+    # What the traversal gate decided for this query, if it saw a chain at all
+    # (`traversal_decision.Decision`). Carried for the same reason as `declines`:
+    # "which end is this walk driven from" is asked about ONE query, by someone
+    # holding that query rather than the log level it ran under. It is also the
+    # only way a test can assert the decision without re-deriving it, and a test
+    # that re-derives the thing under test asserts nothing (issues/090).
+    traversal_decision: Optional[Any] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1274,6 +1281,7 @@ async def _generate_sql(
             vector_requests=ctx.vector_requests,
             fuzzy_requests=ctx.fuzzy_requests,
             needs_ordered_scan=ctx.needs_ordered_scan,
+            traversal_decision=getattr(aliases, "traversal_decision", None),
         )
 
     except Exception as e:
