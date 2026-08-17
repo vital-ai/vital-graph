@@ -1,6 +1,21 @@
 # A Criterion That Shrinks a Traversal Makes It Hundreds of Times Slower
 
-## Status: OPEN — characterised 2026-08-14 on a purpose-built fixture
+## Status: FIXED 2026-08-17 — reported symptom fixed, direction gate and hoist shipped
+
+The original report — a criterion that shrinks a traversal making it hundreds of
+times slower — was fixed earlier, along with the unfiltered case that was never
+part of it. Since then the gate learned to price BOTH ends from `rdf_stats` and
+drive from the smaller, and `emit_hop_wise` learned to hoist a constrained
+driving end out of the criteria fence, without which that direction was decided
+and not expressed (2.5-6.3x WORSE than flat). Measured 3.7x better on a
+40-entity end, 4.6x through the reversal, parity at 20%.
+
+Covered by `tests/performance/test_traversal_bench.py`, which did not exist
+until the pessimisation above shipped green.
+
+Still open and tracked elsewhere: whether the driving end's SIZE should be a
+threshold and not only a direction (`planning_performance/unexplored_performance
+_surface.md`), and inline-constant criteria (`issues/101` defect 2).
 
 Following edges between entities is fast until you say which edges to follow.
 Adding a criterion — the thing that makes a traversal a query rather than a
