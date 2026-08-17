@@ -1,6 +1,40 @@
 # Frame/Entity Traversal: Three Priced Performance Problems
 
-## Status: OPEN — the collapse works; filtering it does not
+## Status: OPEN — Problem 2 FIXED; Problem 1 is now the whole of it
+
+Re-measured 2026-08-17 on `sp_graph_synth_10k`, start 1658 (a start whose answer
+is NON-EMPTY at both depths — the first re-measurement used one returning zero
+rows and made the criterion look free for the wrong reason):
+
+    depth 2, 1,085 rows open        buffers        ms      vs open   collapse
+      open walk                      10,626       7.2         1.0x    2 joins
+      + criterion       (P2)          3,534       3.2         0.4x    2 joins
+      + slot type       (P1)        554,977     264.5        37.0x    0 joins
+      + criterion AND slot type        >30 s   TIMED OUT              0 joins
+
+    depth 3, 16,408 rows open
+      open walk                     139,292     102.2         1.0x    3 joins
+      + criterion       (P2)          6,302      37.8         0.4x    3 joins
+      + slot type       (P1)      1,669,538     791.2         7.7x    0 joins
+      + criterion AND slot type        >30 s   TIMED OUT              0 joins
+
+**Problem 2 is fixed and then some.** Adding a criterion no longer costs 150x to
+5,700x — it now makes the walk 2.2x to 2.7x FASTER than leaving it open, which is
+the design goal this issue states. That came from `issues/090`: the criterion
+gate, the direction choice and the hoist.
+
+**Problem 1 is untouched and is now the dominant cost.** The headline said
+28,000x; measured here it is 37x at depth 2 and 7.7x at depth 3, with the
+collapse gone in both (`frame_entity joins=0`). The ratio is smaller than the old
+number and the absolute cost is not: half a million buffers for a query whose
+collapsed form reads ten thousand.
+
+**The combination is unbounded, and it is the realistic one.** A criterion AND a
+slot-type constraint together exceed 30 seconds at BOTH depths — the canonical
+reference query carries the slot type, and adding a criterion is the ordinary
+thing to do next. Every other row in those tables is a query that finishes.
+
+Reproduce with `test_scripts/debug/remeasure_048.py`.
 
 *(The filename says "never fires". That was the 2026-08-08 finding and it is
 wrong now — the rewrite fires, per hop, and delivers four orders of magnitude.
