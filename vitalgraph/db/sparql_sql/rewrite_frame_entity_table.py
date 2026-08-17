@@ -90,6 +90,41 @@ def _type_quads_for(plan, frame_var, quad_predicate, quad_obj_const,
     return out
 
 
+SLOT_TYPE_PREDICATES = (VITALTYPE_URI,
+                        "http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+
+
+def _slot_type_quads_for(plan, slot_var, quad_predicate, quad_obj_const,
+                         table_by_alias):
+    """Quad tables holding `<slot_var> a|vitaltype <constant>`.
+
+    BOTH spellings, unlike `_type_quads_for`, which matches vitaltype only.
+    Measured on `sp_graph_skew_2k`: `a KGEntitySlot` and `vitaltype KGEntitySlot`
+    reach the identical decline at 542,012 buffers, so absorbing one and not the
+    other would fix half the cases and leave the other half looking unfixed for
+    no visible reason.
+
+    A VARIABLE object is skipped for the same reason it is on frames: it binds
+    something the query may read, and nothing here can supply it.
+    """
+    slot = (plan.var_slots or {}).get(slot_var)
+    if not slot:
+        return []
+    out = []
+    for ref_id, col in (slot.positions or []):
+        if col != "subject_uuid":
+            continue
+        tbl = table_by_alias.get(ref_id)
+        if not tbl or tbl.kind != "quad":
+            continue
+        if quad_predicate.get(ref_id) not in SLOT_TYPE_PREDICATES:
+            continue
+        if not quad_obj_const.get(ref_id):
+            continue
+        out.append(ref_id)
+    return out
+
+
 def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
                                 space_id: str) -> PlanV2:
     """Rewrite a v2 plan to use the frame_entity table where possible.
@@ -108,6 +143,8 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
         return plan
 
     fe_table_name = f"{space_id}_frame_entity"
+    edge_table_name = f"{space_id}_edge"
+    quad_table_name = f"{space_id}_rdf_quad"
 
     # --- Step 1: Build constant reverse map ---
     const_to_uri: Dict[str, str] = {}
@@ -119,11 +156,13 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
     quad_predicate: Dict[str, str] = {}
     quad_obj_const: Dict[str, str] = {}
     quad_obj_token: Dict[str, str] = {}
+    quad_pred_token: Dict[str, str] = {}
 
     for _owner, sql in plan.tagged_constraints:
         m = _PRED_RE.search(sql)
         if m:
             quad_predicate[m.group(1)] = const_to_uri.get(m.group(2), "")
+            quad_pred_token[m.group(1)] = f"__CONST_{m.group(2)}__"
         m = _OBJ_RE.search(sql)
         if m:
             quad_obj_const[m.group(1)] = const_to_uri.get(m.group(2), "")
@@ -337,6 +376,51 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
             if tok:
                 absorbed_type.append(
                     (fe_alias, f"{fe_alias}.frame_type_uuid = {tok}"))
+
+        # A type constraint on a SLOT node becomes a role-scoped semi-join back
+        # through the edge (issues/048 Problem 1).
+        #
+        # `frame_entity` has no slot column, so this constraint used to leave the
+        # slot variable bound by a surviving table with its tie to the frame gone
+        # — the `issues/051` cross-product shape — and the whole rewrite declined.
+        # Measured cost of that decline: 542,012 buffers where the unconstrained
+        # walk reads 10,626.
+        #
+        # THE ROLE JOIN IS THE CORRECTNESS. Without `st_x` this reads "the frame
+        # has SOME slot of type T" rather than "the ROLE-scoped slot is of type
+        # T". Those agreed on every fixture until `--attribute-slot-fraction`
+        # existed, because every slot was a KGEntitySlot; on the regenerated
+        # `sp_graph_skew_2k` they are 0 and 2,317.
+        for g in (src_g, dst_g):
+            role_pred = quad_pred_token.get(g.type_quad)
+            role_obj = quad_obj_token.get(g.type_quad)
+            if not (role_pred and role_obj):
+                continue
+            for stq in _slot_type_quads_for(plan, g.slot_var, quad_predicate,
+                                            quad_obj_const, table_by_alias):
+                ty_pred = quad_pred_token.get(stq)
+                ty_obj = quad_obj_token.get(stq)
+                if not (ty_pred and ty_obj):
+                    continue
+                ex = aliases.next("slotchk")
+                removed_aliases.add(stq)
+                type_quad_owned.add(stq)
+                alias_map[stq] = (fe_alias, {
+                    "subject_uuid": None, "predicate_uuid": None,
+                    "object_uuid": None, "context_uuid": "context_uuid",
+                })
+                absorbed_type.append((fe_alias, (
+                    f"EXISTS (SELECT 1 FROM {edge_table_name} AS e_{ex}"
+                    f" JOIN {quad_table_name} AS st_{ex}"
+                    f" ON st_{ex}.subject_uuid = e_{ex}.dest_node_uuid"
+                    f" AND st_{ex}.predicate_uuid = {role_pred}"
+                    f" AND st_{ex}.object_uuid = {role_obj}"
+                    f" JOIN {quad_table_name} AS ty_{ex}"
+                    f" ON ty_{ex}.subject_uuid = e_{ex}.dest_node_uuid"
+                    f" AND ty_{ex}.predicate_uuid = {ty_pred}"
+                    f" AND ty_{ex}.object_uuid = {ty_obj}"
+                    f" WHERE e_{ex}.source_node_uuid = {fe_alias}.frame_uuid"
+                    f" AND e_{ex}.context_uuid = {fe_alias}.context_uuid)")))
 
     # --- Rewrite tables ---
     new_tables: List[TableRef] = []

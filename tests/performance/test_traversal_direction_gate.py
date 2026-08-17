@@ -324,6 +324,38 @@ class TestTheFixtureCanCatchADroppedSlotConstraint:
                 assert n > 0, f"{cls} matched nothing, so the query proves nothing"
 
 
+class TestASlotTypeConstraintNoLongerKillsTheCollapse:
+    """`issues/048` Problem 1, fixed by absorbing the constraint as a role-scoped
+    semi-join. It used to decline the whole rewrite: 0 frame_entity joins and
+    542,012 buffers where the unconstrained walk reads 10,626.
+
+    The zero cases are the ones that matter. A fix that dropped the constraint
+    would answer 9,266 for all three; one that dropped only the ROLE join would
+    answer 2,317 for the text and boolean cases.
+    """
+
+    @pytest.mark.parametrize("cls,want", [
+        ("KGEntitySlot", 9266), ("KGTextSlot", 0), ("KGBooleanSlot", 0)])
+    async def test_the_answers_are_right(self, perf_conn, cls, want):
+        await _require(perf_conn)
+        gen = await _generate(perf_conn, f"""
+            SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH <{SKEW.graph}> {{
+                ?se <{VITAL}hasEdgeSource> ?f .
+                ?se <{VITAL}hasEdgeDestination> ?ss .
+                ?ss <{HALEY}hasKGSlotType> <urn:hasSourceEntity> .
+                ?ss <{HALEY}hasEntitySlotValue> ?e0 .
+                ?de <{VITAL}hasEdgeSource> ?f .
+                ?de <{VITAL}hasEdgeDestination> ?ds .
+                ?ds <{HALEY}hasKGSlotType> <urn:hasDestinationEntity> .
+                ?ds <{HALEY}hasEntitySlotValue> ?e1 .
+                ?ss a <{HALEY}{cls}> .
+            }} }}""")
+        assert f"{SKEW.space}_frame_entity" in gen.sql, (
+            "the rewrite declined again — a slot type constraint is back to "
+            "costing the whole collapse (issues/048)")
+        assert (await perf_conn.fetch(gen.sql))[0][0] == want
+
+
 class TestTheConstrainedDriveIsHoisted:
     """The end the gate chose has to reach the outer FROM, or it is not driving.
 
