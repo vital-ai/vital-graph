@@ -67,6 +67,40 @@ from `rdf_stats`, 3 ms) — so what is missing is not a measurement but the gate
 end like `hasKGSlotType = CompanyName` (1.9% of its predicate) does not count.
 Nothing reads the decision in any case.
 
+### RE-MEASURED 2026-08-16 on the test stack — the asymmetry holds, and is bigger
+
+The numbers above were taken on the host cluster before the lateral-join work
+landed, and `096` then removed the query that produced them. Re-measured on a
+copy of that data loaded into the docker test cluster as `sp_slot_skew`, five
+interleaved passes, medians, both arms verified to return the same 2,863 rows:
+
+| | buffers | exec |
+|---|---:|---:|
+| **entity end UNPINNED** (2,863 entities, 5,726 slots of the type) | | |
+| anchor-driven (ships today) | 2,452,092 | 537.1 ms |
+| end-driven (selective end fenced first) | **338,252** | **58.4 ms** |
+| **entity pinned to ONE uri** | | |
+| anchor-driven (ships today) | **542** | **0.2 ms** |
+| end-driven | 601 | 1.0 ms |
+
+**9.2x the right way round, 4.2x the wrong way** — against 2.9x / 87x recorded
+before. The direction still has to be chosen per query; the win for choosing
+correctly is larger than recorded and the penalty for choosing wrongly is
+smaller.
+
+**A join reorder is NOT a direction.** The first attempt at this measurement
+wrote the two arms as different join orders and got IDENTICAL buffer counts —
+2,452,092 both — because the planner normalises them to the same plan. Direction
+only exists once it is expressed as an optimisation fence; the end-driven arm
+above is `WITH sel AS MATERIALIZED (...)`. Anything the gate emits has to be a
+fence, not an ordering hint, or it will do nothing at all and measure as a
+no-op.
+
+**Only one of the two changes `096` asked for remains.** It says the decision
+must be acted on and "today nothing reads the decision" — `emit_bgp.py:168`
+reads it now and chooses the hop-wise shape. What is left is the first: a
+type-constrained end has to count as a driving set.
+
 **This is not a reopening of the symptom below, which is fixed.** It belongs to
 the shapes handed on to `traversal_chain_plan.md` in "Where this leaves
 issues/090" — specifically the tail-only pin, here with both arms priced. It is
