@@ -506,9 +506,37 @@ The exact check is cheap and is an anti-join with a LIMIT:
 Empty means the constraint excludes nothing IN THIS SPACE and can be dropped.
 
 **The prize is measured: 7.4x**, 627,418 buffers to 84,573, on identical rows —
-the `dropped` arm above IS the tautology case, since every slot in
-`sp_graph_synth_10k` is a `KGEntitySlot`. That is now the only route left to it,
-which makes this direction worth building rather than one of two options.
+the `dropped` arm above IS the tautology case. Confirmed independently rather
+than inferred: the anti-join above finds ZERO counterexamples on
+`sp_graph_synth_10k`, so the constraint genuinely excludes nothing there and the
+matching row counts are a consequence rather than a coincidence.
+
+### PREREQUISITE: no fixture can exercise the check REFUSING
+
+Run on every connection-frame space we have:
+
+    sp_graph_synth_10k    0 counterexamples
+    sp_graph_skew_2k      0
+    wordnet_frames        0
+
+All three say "safe to drop". So a check that always answered "safe to drop" —
+an inverted comparison, a query that silently returns empty, a cache that never
+invalidates — would pass every test, and a space where a source-role slot is NOT
+a `KGEntitySlot` would then get WRONG ANSWERS rather than slow ones.
+
+This is the same gap as the one `--attribute-slot-fraction` closed, one level up:
+there the tautology made a dropped CONSTRAINT undetectable, here it makes a
+broken PROOF undetectable.
+
+What is needed is a generator option typing a few SOURCE/DEST-role slots as
+something other than `KGEntitySlot` — not the attribute-role slots that option
+already adds, which carry their own roles and so never reach this check. Such a
+slot is representable and stays in `frame_entity`, because
+`sync_frame_entity_table` requires a role and `hasEntitySlotValue` and never
+looks at the type. With it present, `?slot a KGEntitySlot` genuinely excludes
+those frames, the drop becomes unsound, and the check must be seen to refuse.
+
+Build that before building the proof.
 It is per space and it goes stale on write, so it belongs with the other cached
 statistics and their freshness check, not in the rewrite. Use the count
 comparison as the pre-filter — unequal counts skip the query entirely.
