@@ -209,7 +209,10 @@ def _try_hop_wise(plan: PlanV2, ctx: EmitContext, quad_tables,
 
         if not decision.hop_wise:
             return None
-        return emit_hop_wise(plan, decision.chain, quad_tables, sql_names)
+        # The direction is the decision's, not the emitter's: it is chosen
+        # from statistics loaded at an earlier stage (issues/090).
+        return emit_hop_wise(plan, decision.chain, quad_tables, sql_names,
+                             direction=getattr(decision, 'direction', None))
     except Exception as exc:
         logger.warning("hop-wise emission failed, using the flat join: %s", exc)
         return None

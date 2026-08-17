@@ -284,7 +284,8 @@ def _place(groups: List[HopGroup], tagged, known: set,
 
 def emit_hop_wise(plan: PlanV2, chain: TraversalChain,
                   quad_tables: Sequence[TableRef],
-                  sql_names: Dict[str, str]) -> Optional[str]:
+                  sql_names: Dict[str, str],
+                  direction: Optional[str] = None) -> Optional[str]:
     """The inner BGP query as nested per-hop laterals, or None to decline.
 
     Replaces only the inner (uuid-level) query of `emit_bgp`. The outer term
@@ -295,14 +296,29 @@ def emit_hop_wise(plan: PlanV2, chain: TraversalChain,
         return HOP_WISE.decline("chain is too shallow",
                                 depth=getattr(chain, "depth", None),
                                 min_depth=MIN_EMIT_DEPTH)
-    if not chain.pinned_head:
-        # A tail pin is as good in principle and needs the chain walked in
-        # reverse — a different emission, and one nothing has measured. The
-        # decision reports tail pins as eligible; this declines them for now
-        # rather than emitting a forward walk that drives from the wrong end.
+    # ORIENT the chain so the driving end is the head.
+    #
+    # This used to decline anything not head-pinned, calling a reverse walk "a
+    # different emission". It is not: `partition_hops` keys off `link.ref_id`
+    # and nothing below reads the link columns, while `_place` assigns each
+    # constraint to the HIGHEST hop it mentions — a rule already indifferent to
+    # which way the numbering runs. Reversing the link order is the whole of it.
+    #
+    # `direction` comes from `traversal_decision.choose_direction`, which picks
+    # the smaller end from statistics. Measured on a 5.1M-quad space, driving
+    # from the wrong end costs 9.2x when the constrained end is smaller and
+    # 4.2x the other way when one end is a single uri (issues/090).
+    if direction == "tail":
+        chain = chain.reversed()
+
+    # A head that is neither pinned nor constrained has no driving set, and a
+    # forward walk from it materialises the whole relation at every hop.
+    if not (chain.pinned_head or chain.head_constraint):
         return HOP_WISE.decline(
-            "head is not pinned (tail-pinned reverse walk is not implemented)",
-            pinned_head=chain.pinned_head, pinned_tail=chain.pinned_tail)
+            "the driving end is neither pinned nor constrained",
+            pinned_head=chain.pinned_head, pinned_tail=chain.pinned_tail,
+            head_constraint=chain.head_constraint,
+            tail_constraint=chain.tail_constraint, direction=direction)
 
     groups = partition_hops(plan, chain, quad_tables)
     if not groups:

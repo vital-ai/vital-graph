@@ -108,6 +108,28 @@ class TraversalChain:
     head_constraint: Optional[tuple] = None
     tail_constraint: Optional[tuple] = None
 
+    def reversed(self) -> "TraversalChain":
+        """The same chain walked from the other end.
+
+        Only the ORDER matters to emission: `partition_hops` keys off
+        `link.ref_id` and nothing downstream reads `source_col`/`dest_col`, and
+        `_place` assigns each constraint to the highest hop it mentions — a rule
+        that is already indifferent to which way the numbering runs. So driving
+        from the tail is this list reversed, not a second emitter.
+
+        The columns are swapped anyway so the object stays truthful about which
+        end a hop arrives on; a later reader of `source_col` would otherwise get
+        a chain that lies about its own direction.
+        """
+        return TraversalChain(
+            links=[ChainLink(ref_id=l.ref_id, kind=l.kind,
+                             source_col=l.dest_col, dest_col=l.source_col)
+                   for l in reversed(self.links)],
+            pinned_head=self.pinned_tail,
+            pinned_tail=self.pinned_head,
+            head_constraint=self.tail_constraint,
+            tail_constraint=self.head_constraint)
+
     @property
     def depth(self) -> int:
         return len(self.links)
@@ -131,6 +153,32 @@ def _traversal_tables(bgp: PlanV2) -> Dict[str, ChainLink]:
             out[tbl.ref_id] = ChainLink(ref_id=tbl.ref_id, kind=tbl.kind,
                                         source_col=cols[0], dest_col=cols[1])
     return out
+
+
+def _as_uuid_pair(pred, obj):
+    """(predicate, object) as TERM UUIDs, or None.
+
+    `leaf_terms` records constants as `(term_text, term_type)`; `rdf_stats` —
+    which prices a constrained end — is keyed by term UUID. Returning the raw
+    text pair looks right and silently never matches a statistic, so the end
+    prices as unknown and the direction is never chosen. Converted here, with
+    the same deterministic UUIDv5 the writer uses, so the two agree by
+    construction rather than by luck.
+    """
+    if not pred or not obj:
+        return None
+    try:
+        from .emit_update import _generate_term_uuid
+        p_text, p_type = pred[0], pred[1]
+        o_text, o_type = obj[0], obj[1]
+    except Exception:
+        return None
+    # A typed or language-tagged object hashes with those in the key, and
+    # leaf_terms does not carry them here — so only plain URIs are priced.
+    if p_type != "U" or o_type != "U":
+        return None
+    return (_generate_term_uuid(p_text, p_type),
+            _generate_term_uuid(o_text, o_type))
 
 
 def _pinned_vars(plan: PlanV2, out: set, depth: int = 0) -> set:
@@ -259,23 +307,23 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set) -> List[TraversalChain]:
                 continue
             if col_var.get((alias, "subject_uuid")) != end_var:
                 continue
-            pred = leaf_terms.get((alias, "predicate_uuid"))
-            obj = leaf_terms.get((alias, "object_uuid"))
-            if pred is not None and obj is not None:
-                return (pred, obj)
-        # The end variable may instead be the subject of a table whose subject
-        # is NOT a leaf term — the ordinary case, where subject is the join
-        # variable and predicate/object are the constants.
+            pair = _as_uuid_pair(leaf_terms.get((alias, "predicate_uuid")),
+                                 leaf_terms.get((alias, "object_uuid")))
+            if pair:
+                return pair
+        # The ordinary case: the end variable is the SUBJECT of a table whose
+        # predicate and object are the constants.
         for (alias, c) in list(leaf_terms):
             if c != "predicate_uuid":
                 continue
             if col_var.get((alias, "subject_uuid")) != end_var:
                 continue
-            pred = leaf_terms.get((alias, "predicate_uuid"))
-            obj = leaf_terms.get((alias, "object_uuid"))
-            if pred is not None and obj is not None:
-                return (pred, obj)
+            pair = _as_uuid_pair(leaf_terms.get((alias, "predicate_uuid")),
+                                 leaf_terms.get((alias, "object_uuid")))
+            if pair:
+                return pair
         return None
+
 
     chains: List[TraversalChain] = []
     seen: set = set()

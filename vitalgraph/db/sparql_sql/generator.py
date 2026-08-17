@@ -1064,8 +1064,46 @@ async def _generate_sql(
                 # it to choose the hop-wise shape. Stage order matters here and
                 # has bitten before — this runs at 2d.2, AFTER the stats it
                 # reads are loaded at 2d.1, and before emit at stage 3.
+                # quad_stats is keyed exactly as a constrained end is recorded
+                # — (predicate_uuid, object_uuid) -> row_count — so it prices the
+                # driving sets the direction choice compares (issues/090).
+                # Without it a constrained end cannot be priced and the gate
+                # falls back to "no driving set".
+                # BOTH stats sources. `quad_stats` caps at the 10,000
+                # LEAST-common pairs, so a constrained end of any size is
+                # usually absent from it — the measured one holds 5,726 rows in
+                # a space whose rdf_stats has 13,139 entries, and was simply not
+                # loaded. `extra_quad_stats` is the on-demand lookup that exists
+                # for this exact reason, and reading only the preload made a
+                # priced end look unknown (issues/090).
+                _pairs = dict(getattr(aliases, "quad_stats", None) or {})
+                _pairs.update(getattr(aliases, "extra_quad_stats", None) or {})
+                # The chain's own constraint pairs, fetched if neither source
+                # has them. `needed_pairs` serves the semijoin gate and gathers
+                # a narrower set, so a chain end can be constrained, priced in
+                # rdf_stats, and still unknown here. At most two lookups per
+                # chain against a primary key.
+                _want = {c for ch in _chains
+                         for c in (ch.head_constraint, ch.tail_constraint)
+                         if c and (c not in _pairs
+                                   and (str(c[0]), str(c[1])) not in _pairs)}
+                if _want:
+                    try:
+                        _vals = ", ".join(f"('{pr}'::uuid, '{ob}'::uuid)"
+                                          for pr, ob in _want)
+                        _rows = await db.execute_query(
+                            f"SELECT predicate_uuid::text, object_uuid::text, "
+                            f"row_count FROM {space_id}_rdf_stats "
+                            f"WHERE (predicate_uuid, object_uuid) IN ({_vals})",
+                            conn=conn, conn_params=conn_params)
+                        for r in _rows:
+                            _pairs[(r["predicate_uuid"], r["object_uuid"])] = \
+                                r["row_count"]
+                    except Exception as exc:
+                        logger.debug("traversal: pair stat lookup failed: %s", exc)
+
                 aliases.traversal_decision = decide_for_plan(
-                    _chains, _crit, _pred)
+                    _chains, _crit, _pred, pair_rows=_pairs)
                 # Whether rows may be deduplicated BETWEEN hops depends on what
                 # the operators ABOVE the traversal do with path multiplicity,
                 # which `emit_bgp` cannot see — so the ROOT is handed to it and

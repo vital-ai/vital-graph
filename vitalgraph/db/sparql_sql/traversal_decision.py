@@ -145,7 +145,13 @@ def _end_sizes(chain, pair_rows):
         if pinned:
             return 1
         if constraint and pair_rows:
-            return pair_rows.get(constraint)
+            # Two producers key these differently — `_load_quad_stats` uses UUID
+            # objects, `_load_missing_pair_stats` selects `::text` and so uses
+            # strings. A lookup that knows only one of them silently misses, and
+            # a missing price reads as "unknown end", which is exactly how this
+            # gate fails closed and does nothing.
+            return (pair_rows.get(constraint)
+                    or pair_rows.get((str(constraint[0]), str(constraint[1]))))
         return None
     return (size(chain.pinned_head, chain.head_constraint),
             size(chain.pinned_tail, chain.tail_constraint))
