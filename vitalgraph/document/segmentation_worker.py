@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import asyncpg
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -66,6 +67,14 @@ class SegmentationWorker:
         self._jobs_processed: int = 0
         self._jobs_failed: int = 0
         self._listen_status: Dict[str, str] = {}  # space_id → "connected" | error msg
+
+        # Spaces observed to have no segmentation_jobs table. Skipped so a
+        # deleted space is not re-polled every cycle. CLEARED whenever the
+        # active-space set changes, because a space id can be reused — the
+        # ephemeral test spaces do exactly that — and a permanent skip would
+        # silently stop segmenting a space that came back.
+        self._skip_spaces: set = set()
+        self._skip_basis: frozenset = frozenset()
 
     def stop(self) -> None:
         """Signal the worker to stop after the current poll cycle."""
@@ -249,7 +258,16 @@ class SegmentationWorker:
         if not self._space_manager:
             return False
 
-        space_ids = self._get_active_space_ids()
+        active = self._get_active_space_ids()
+
+        # Forget the skip list when the space set changes: a reused id must be
+        # polled again rather than staying invisible for the worker's lifetime.
+        basis = frozenset(active)
+        if basis != self._skip_basis:
+            self._skip_spaces.clear()
+            self._skip_basis = basis
+
+        space_ids = [s for s in active if s not in self._skip_spaces]
         if not space_ids:
             return False
 
@@ -285,6 +303,23 @@ class SegmentationWorker:
                 async with self._semaphore:
                     await self._process_job(space_id, job, manager)
                 return True
+            except asyncpg.exceptions.UndefinedTableError:
+                # The space went away between listing and polling. Routine, not
+                # an error: `list_active_spaces` reads an in-memory set that
+                # cannot know a space was dropped mid-cycle, and ephemeral test
+                # spaces are created and deleted constantly.
+                #
+                # It was logged at ERROR with a full traceback, several times
+                # per deleted space. That is the kind of noise that trains
+                # people to skim tracebacks, which is how a real one gets
+                # missed. Recorded once per space at debug, and the space is
+                # dropped from the poll set so the next cycle does not repeat
+                # it.
+                logger.debug(
+                    "Space %s has no segmentation_jobs table — deleted, or "
+                    "created before that table existed. Skipping.", space_id)
+                self._skip_spaces.add(space_id)
+                return False
             except Exception as e:
                 logger.error(f"Error in poll_space({space_id}): {e}", exc_info=True)
                 return False
