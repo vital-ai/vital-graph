@@ -1,6 +1,23 @@
 # The Docker Test Stack Cannot Run a Parallel Query
 
-## Status: DIAGNOSED, fix committed, NOT APPLIED — it needs a stack rebuild
+## Status: FIXED 2026-08-17, with no rebuild and no data loss
+
+`shm_size` needs a container recreate. `dynamic_shared_memory_type` does not —
+it moves parallel workers off `/dev/shm` onto System V shared memory, and a
+`docker restart` applies it while preserving the writable layer:
+
+    ALTER SYSTEM SET dynamic_shared_memory_type = 'sysv';
+    docker restart vitalgraph-test-pg
+
+Checked first: `shmmax`/`shmall` in the container are effectively unbounded and
+`shmmni` is 4096, so SysV had room. Recovery path if the postmaster had failed to
+start: `docker commit` on the STOPPED container still captures the writable
+layer, so the 22GB was retrievable either way.
+
+Result — 22GB intact, 11 spaces intact, 19,632,351 quads in `sp_graph_synth_100k`
+before and after, `Workers Launched: 2` on the query that used to die, and the
+perf suite went from **89 passed / 5 failed** to **125 passed / 0 failed**, with
+36 benches that had been skipping now measured.
 
 Found 2026-08-17 while loading `sp_lead_synth_10k` onto the test stack to close
 the perf baseline's coverage holes.
@@ -37,7 +54,32 @@ It also means the committed perf baseline was taken somewhere this constraint di
 not apply, which is consistent with it having been recorded against the host
 cluster.
 
-## The fix, and why it is not applied
+## The much larger thing this uncovered
+
+`postgresql.auto.conf` in the container's writable layer held the stack's ENTIRE
+performance tuning:
+
+    shared_buffers = '16GB'
+    effective_cache_size = '48GB'
+    work_mem = '64MB'
+
+None of it was in the image or in compose. So the recreate this issue was
+originally going to require would have reverted `shared_buffers` from 16GB to
+PostgreSQL's 128MB default, silently — which is `issues/081` verbatim: a 1GB
+buffer pool on a 64GB machine sent four implementation attempts chasing a
+query-shape explanation for a memory setting.
+
+It is now in `docker-compose.test.yml` as `command: -c ...`, which beats both
+`postgresql.conf` and `postgresql.auto.conf`, so a freshly created container runs
+the same configuration as the one running now. `dynamic_shared_memory_type=sysv`
+is set there too, so the two agree rather than one using sysv and the other posix
+with a larger `/dev/shm`.
+
+That divergence would have been nearly invisible: `perf_record.PG_SETTINGS`
+stamps `shared_buffers`, so a comparison WOULD flag it — but only for someone who
+ran a comparison, and only after the numbers were already wrong.
+
+## The original fix, and why it was not the one applied
 
 `shm_size: 1gb` on the `postgres` service, committed in
 `docker-compose.test.yml`. It takes effect only when the CONTAINER is recreated —

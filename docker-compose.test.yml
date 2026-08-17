@@ -89,10 +89,42 @@ services:
     # benchmarks measure — `perf_record` stamps that setting, so a run with it
     # at 0 is not comparable to a baseline taken at 2.
     shm_size: 1gb
+    # THE TUNING LIVES HERE, not in postgresql.auto.conf.
+    #
+    # It used to live only in auto.conf, written by ALTER SYSTEM into the
+    # container's writable layer — so recreating the container silently reverted
+    # shared_buffers from 16GB to PostgreSQL's 128MB default. That is `issues/081`
+    # exactly: a 1GB buffer pool on a machine with 64GB sent four implementation
+    # attempts chasing a query-shape explanation for a memory setting. A stack
+    # whose tuning evaporates on recreate will do it again.
+    #
+    # Command-line `-c` beats both postgresql.conf and postgresql.auto.conf, so
+    # these are what the server runs with regardless of what a previous ALTER
+    # SYSTEM left behind.
+    #
+    # `dynamic_shared_memory_type=sysv` keeps parallel workers off /dev/shm
+    # entirely (issues/102). `shm_size` above would be enough on its own for a
+    # FRESH container, but the running one was fixed with sysv — because sysv
+    # can be applied with a restart and shm_size cannot, and a restart preserves
+    # 22GB of loaded fixtures that a recreate destroys. Setting both means the
+    # running stack and a freshly created one are configured the same way, which
+    # is the property that matters: a benchmark is only comparable to one taken
+    # on the same configuration.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=16GB
+      - -c
+      - effective_cache_size=48GB
+      - -c
+      - work_mem=64MB
+      - -c
+      - dynamic_shared_memory_type=sysv
     # No volumes: PGDATA lives in the container's writable layer, so it is
     # wiped when the CONTAINER is recreated — not when the image is rebuilt.
-    # Changing shm_size above therefore WIPES every loaded fixture: it needs a
-    # container recreate, and they must be reloaded afterwards.
+    # A recreate therefore costs every loaded fixture (~22GB, about an hour to
+    # reload). Prefer `docker restart` plus ALTER SYSTEM where a setting allows
+    # it; only shm_size genuinely requires the recreate.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 2s
