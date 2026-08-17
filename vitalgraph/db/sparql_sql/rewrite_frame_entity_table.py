@@ -391,11 +391,51 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
         # T". Those agreed on every fixture until `--attribute-slot-fraction`
         # existed, because every slot was a KGEntitySlot; on the regenerated
         # `sp_graph_skew_2k` they are 0 and 2,317.
+        # The edge VARIABLE, for the slot-EDGE form below. `?slotEdge` binds at
+        # the edge table's `edge_uuid`, which the collapse maps to None.
+        edge_var_of = {}
+        for _v, _s in (plan.var_slots or {}).items():
+            for _ref, _col in (_s.positions or []):
+                if _col == "edge_uuid":
+                    edge_var_of[_ref] = _v
+
         for g in (src_g, dst_g):
             role_pred = quad_pred_token.get(g.type_quad)
             role_obj = quad_obj_token.get(g.type_quad)
             if not (role_pred and role_obj):
                 continue
+
+            # `?slotEdge vitaltype Edge_hasKGSlot` — the form `kgframes_endpoint`
+            # emits, and the more expensive of the two when it declines (691K
+            # buffers). CHEAPER to absorb than the slot-node form: `{space}_edge`
+            # carries `edge_type_uuid`, so this is a column test on the row the
+            # semi-join already visits, with no second quad join.
+            #
+            # The role join stays. Without it this reads "the frame has SOME edge
+            # of this type", which is true of every connection frame.
+            e_var = edge_var_of.get(g.edge_alias)
+            if e_var:
+                for etq in _slot_type_quads_for(plan, e_var, quad_predicate,
+                                                quad_obj_const, table_by_alias):
+                    e_tok = quad_obj_token.get(etq)
+                    if not e_tok:
+                        continue
+                    ex = aliases.next("edgechk")
+                    removed_aliases.add(etq)
+                    type_quad_owned.add(etq)
+                    alias_map[etq] = (fe_alias, {
+                        "subject_uuid": None, "predicate_uuid": None,
+                        "object_uuid": None, "context_uuid": "context_uuid",
+                    })
+                    absorbed_type.append((fe_alias, (
+                        f"EXISTS (SELECT 1 FROM {edge_table_name} AS e_{ex}"
+                        f" JOIN {quad_table_name} AS st_{ex}"
+                        f" ON st_{ex}.subject_uuid = e_{ex}.dest_node_uuid"
+                        f" AND st_{ex}.predicate_uuid = {role_pred}"
+                        f" AND st_{ex}.object_uuid = {role_obj}"
+                        f" WHERE e_{ex}.source_node_uuid = {fe_alias}.frame_uuid"
+                        f" AND e_{ex}.context_uuid = {fe_alias}.context_uuid"
+                        f" AND e_{ex}.edge_type_uuid = {e_tok})")))
             for stq in _slot_type_quads_for(plan, g.slot_var, quad_predicate,
                                             quad_obj_const, table_by_alias):
                 ty_pred = quad_pred_token.get(stq)

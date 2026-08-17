@@ -356,6 +356,38 @@ class TestASlotTypeConstraintNoLongerKillsTheCollapse:
         assert (await perf_conn.fetch(gen.sql))[0][0] == want
 
 
+class TestASlotEdgeTypeConstraintIsAbsorbedToo:
+    """The form `kgframes_endpoint` emits, and the more expensive decline of the
+    two: 690,949 buffers before, 752 after. Cheaper to absorb than the slot-node
+    form because `{space}_edge` carries `edge_type_uuid`, so the semi-join tests
+    a column on a row it already visits.
+
+    `Edge_hasKGFrame` must answer 0: a slot edge is not a frame edge. Without
+    that case the assertion could pass on a check that matched any edge.
+    """
+
+    @pytest.mark.parametrize("etype,want", [
+        ("Edge_hasKGSlot", 9266), ("Edge_hasKGFrame", 0)])
+    async def test_the_answers_are_right(self, perf_conn, etype, want):
+        await _require(perf_conn)
+        gen = await _generate(perf_conn, f"""
+            SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH <{SKEW.graph}> {{
+                ?se <{VITAL}hasEdgeSource> ?f .
+                ?se <{VITAL}hasEdgeDestination> ?ss .
+                ?ss <{HALEY}hasKGSlotType> <urn:hasSourceEntity> .
+                ?ss <{HALEY}hasEntitySlotValue> ?e0 .
+                ?de <{VITAL}hasEdgeSource> ?f .
+                ?de <{VITAL}hasEdgeDestination> ?ds .
+                ?ds <{HALEY}hasKGSlotType> <urn:hasDestinationEntity> .
+                ?ds <{HALEY}hasEntitySlotValue> ?e1 .
+                ?se <{VITAL}vitaltype> <{HALEY}{etype}> .
+            }} }}""")
+        assert f"{SKEW.space}_frame_entity" in gen.sql, (
+            "the rewrite declined — a slot EDGE type constraint is back to "
+            "costing the whole collapse (issues/048)")
+        assert (await perf_conn.fetch(gen.sql))[0][0] == want
+
+
 class TestTheConstrainedDriveIsHoisted:
     """The end the gate chose has to reach the outer FROM, or it is not driving.
 
