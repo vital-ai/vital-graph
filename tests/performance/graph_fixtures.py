@@ -183,7 +183,17 @@ LARGE = SYNTH[1]
 # smaller than the other. This one adds a sixth kind at 2%.
 #
 #     python scripts/generate_graph_dataset.py --entities 2000 \
-#         --rare-entity-fraction 0.02 --out internal_data/graph_skew_2k
+#         --rare-entity-fraction 0.02 --attribute-slot-fraction 0.25 \
+#         --out internal_data/graph_skew_2k
+#
+# `--attribute-slot-fraction` is the second thing this fixture carries and
+# nothing else does: typed attribute slots (KGInteger / KGDouble / KGText /
+# KGBoolean) beside the two KGEntitySlot endpoints of a connection frame.
+# Without them every slot on every connection frame is a KGEntitySlot,
+# `?slot a KGEntitySlot` is a tautology, and a rewrite that drops it passes
+# every differential (`issues/048` Problem 1). They stay OUT of
+# `frame_entity` — verified, 9,266 rows before and after — because they
+# carry `hasKGSlotType` but not `hasEntitySlotValue`.
 #     python scripts/convert_nt_to_csv.py internal_data/graph_skew_2k/*.nt \
 #         --out test_data/graph_skew_2k.csv --graph urn:sp_graph_skew_2k \
 #         --dataset graph_synth
