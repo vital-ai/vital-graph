@@ -107,6 +107,14 @@ class TraversalChain:
     # loaded at a later stage than chain detection.
     head_constraint: Optional[tuple] = None
     tail_constraint: Optional[tuple] = None
+    # WHICH table carries each end's constraint. The emitter has to hoist that
+    # table out of the criteria fence to drive from it, and identifying it again
+    # downstream is not reliable: by emit time the constants are still
+    # `__CONST_c_N__` tokens — `substitute_constants` resolves them at the very
+    # end — so matching the pair's uuids against the constraint SQL finds
+    # nothing. Recorded here, where the alias is already in hand (issues/090).
+    head_constraint_alias: Optional[str] = None
+    tail_constraint_alias: Optional[str] = None
 
     def reversed(self) -> "TraversalChain":
         """The same chain walked from the other end.
@@ -128,7 +136,9 @@ class TraversalChain:
             pinned_head=self.pinned_tail,
             pinned_tail=self.pinned_head,
             head_constraint=self.tail_constraint,
-            tail_constraint=self.head_constraint)
+            tail_constraint=self.head_constraint,
+            head_constraint_alias=self.tail_constraint_alias,
+            tail_constraint_alias=self.head_constraint_alias)
 
     @property
     def depth(self) -> int:
@@ -287,7 +297,7 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set) -> List[TraversalChain]:
         return (ref_id, col) in leaf_terms
 
     def _constrained(ref_id: str, col: str):
-        """A type-ish constraint sitting on this end, as (pred_uuid, obj_uuid).
+        """A type-ish constraint on this end, as ((pred_uuid, obj_uuid), alias).
 
         The end's variable must also be the SUBJECT of some quad table whose
         predicate and object are both constants. `leaf_terms` records the
@@ -295,13 +305,13 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set) -> List[TraversalChain]:
         for a table where subject is the chain end's variable and both other
         columns are known.
 
-        Returns None when the end is open, or when the constraint cannot be
-        priced (a variable predicate or object), because an unpriceable
-        constraint is no basis for choosing a direction.
+        Returns (None, None) when the end is open, or when the constraint
+        cannot be priced (a variable predicate or object), because an
+        unpriceable constraint is no basis for choosing a direction.
         """
         end_var = col_var.get((ref_id, col))
         if end_var is None:
-            return None
+            return None, None
         for (alias, c), term in leaf_terms.items():
             if c != "subject_uuid":
                 continue
@@ -310,7 +320,7 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set) -> List[TraversalChain]:
             pair = _as_uuid_pair(leaf_terms.get((alias, "predicate_uuid")),
                                  leaf_terms.get((alias, "object_uuid")))
             if pair:
-                return pair
+                return pair, alias
         # The ordinary case: the end variable is the SUBJECT of a table whose
         # predicate and object are the constants.
         for (alias, c) in list(leaf_terms):
@@ -321,8 +331,8 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set) -> List[TraversalChain]:
             pair = _as_uuid_pair(leaf_terms.get((alias, "predicate_uuid")),
                                  leaf_terms.get((alias, "object_uuid")))
             if pair:
-                return pair
-        return None
+                return pair, alias
+        return None, None
 
 
     chains: List[TraversalChain] = []
@@ -337,24 +347,28 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set) -> List[TraversalChain]:
             ordered.append(links[cur])
             cur = successor.get(cur)
         if ordered:
+            _head = _constrained(ordered[0].ref_id, ordered[0].source_col)
+            _tail = _constrained(ordered[-1].ref_id, ordered[-1].dest_col)
             chains.append(TraversalChain(
                 links=ordered,
                 pinned_head=_pinned(ordered[0].ref_id, ordered[0].source_col),
                 pinned_tail=_pinned(ordered[-1].ref_id, ordered[-1].dest_col),
-                head_constraint=_constrained(ordered[0].ref_id, ordered[0].source_col),
-                tail_constraint=_constrained(ordered[-1].ref_id, ordered[-1].dest_col)))
+                head_constraint=_head[0], head_constraint_alias=_head[1],
+                tail_constraint=_tail[0], tail_constraint_alias=_tail[1]))
 
     # A cycle has no head, so the walk above never starts on it. Emit each
     # remaining link rather than dropping it silently.
     for ref_id, link in links.items():
         if ref_id not in seen:
             seen.add(ref_id)
+            _head = _constrained(ref_id, link.source_col)
+            _tail = _constrained(ref_id, link.dest_col)
             chains.append(TraversalChain(
                 links=[link],
                 pinned_head=_pinned(ref_id, link.source_col),
                 pinned_tail=_pinned(ref_id, link.dest_col),
-                head_constraint=_constrained(ref_id, link.source_col),
-                tail_constraint=_constrained(ref_id, link.dest_col)))
+                head_constraint=_head[0], head_constraint_alias=_head[1],
+                tail_constraint=_tail[0], tail_constraint_alias=_tail[1]))
     return chains
 
 

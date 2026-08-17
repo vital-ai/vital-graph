@@ -20,13 +20,16 @@ kind at 2%. It is small because the question is a distribution, not a size.
 
 WHAT IS NOT ASSERTED HERE, AND WHY
 
-That hop-wise emission is faster. On this shape it is not — a constrained
-driving end measured 2.5x to 6.3x WORSE than the flat plan, because the
-constraint lands inside the criteria fence and the outer relation stays the whole
-link table. `emit_hop_wise` therefore declines a constrained drive, and the
-numbers are in the decline's own comment. A test asserting a speedup here would
-be asserting something false; a test asserting the decline is asserting the
-truth, and will fail the day the hoist lands, which is when it should be reread.
+A timing. The gate's job is to pick the end and the emitter's is to drive from
+it; both are checked by shape and by answer equality. Buffer counts belong in a
+bench with a baseline, not in a correctness suite where a busy machine turns a
+real property into a flake.
+
+For the record, at depth 2 on this fixture, all arms returning identical answers:
+
+    driving end             flat      fenced        HOISTED
+    constrained, 40 ents  17,237     106,040    4,717   3.7x BETTER
+    constrained, 394      37,220      93,803   39,949   parity
 """
 
 from __future__ import annotations
@@ -220,19 +223,67 @@ class TestTheGateReadsRealStatistics:
                       "proves nothing — the query or the fixture has drifted")
 
 
-class TestAConstrainedDriveIsStillDeclined:
-    """Delete this when the hoist lands; it records today's limit, not a goal.
+class TestTheConstrainedDriveIsHoisted:
+    """The end the gate chose has to reach the outer FROM, or it is not driving.
 
-    A constrained driving end is priced correctly and then NOT emitted, because
-    the constraint lands inside the criteria fence and the outer relation stays
-    the whole link table. Measured at depth 2 on this fixture: 108,900 shared
-    buffers hop-wise against 17,237 flat, for identical answers.
+    Fenced, the outer relation stays the whole link table with the driving check
+    applied per row — and rarity made that WORSE, not better, because the fence
+    discards the selectivity that made the end small. These assert the SHAPE
+    against real generated SQL, which is where the hoist can silently stop
+    happening: the identification runs off an alias the chain records, and the
+    first version matched constant uuids that do not exist yet at emit time and
+    declined every hoist without a word.
     """
 
-    async def test_the_emitted_sql_is_the_flat_plan(self, perf_conn):
+    @pytest.mark.parametrize("end", ["head", "tail"])
+    async def test_hop_wise_fires_for_a_constrained_end(self, perf_conn, end):
         await _require(perf_conn)
-        gen = await _generate(perf_conn, _query(2, "head", RARE))
-        assert "OFFSET 0\n)" not in gen.sql, (
-            "hop-wise fired for a constrained driving end. If the hoist has "
-            "landed, this class should be deleted and a timing assertion put "
-            "in its place — see issues/090.")
+        gen = await _generate(perf_conn, _query(2, end, RARE))
+        assert "OFFSET 0\n)" in gen.sql, (
+            "a constrained driving end no longer emits hop-wise — check "
+            "`_driving_alias`, which declines silently by design")
+
+    @pytest.mark.parametrize("end", ["head", "tail"])
+    async def test_the_driving_constraint_is_outside_the_fence(self, perf_conn, end):
+        """The whole of the hoist, and invisible in results — a fenced plan
+        returns exactly the same rows, several times slower."""
+        await _require(perf_conn)
+        gen = await _generate(perf_conn, _query(2, end, RARE))
+        outer = gen.sql.split("CROSS JOIN LATERAL")[0]
+        assert f"{HALEY}hasKGEntityType" not in outer, "sanity: uuids, not text"
+        assert "JOIN " in outer and "_rdf_quad" in outer, (
+            f"no quad table joined beside the link:\n{outer[-600:]}")
+
+    async def test_it_reads_fewer_buffers_than_the_flat_plan(self, perf_conn):
+        """Not a timing — a count, which is stable on a busy machine.
+
+        Asserted only for the RARE end, where the margin is 3.7x. At 20% the
+        two are at parity and an assertion either way would be noise.
+        """
+        await _require(perf_conn)
+        from vitalgraph.db.sparql_sql import traversal_decision as td
+
+        sparql = _query(2, "head", RARE)
+        hoisted = await _generate(perf_conn, sparql)
+        original = td.decide
+        try:
+            td.decide = lambda *a, **k: td.Decision(hop_wise=False, reason="off")
+            flat = await _generate(perf_conn, sparql)
+        finally:
+            td.decide = original
+
+        async def _buffers(sql):
+            import json
+            await perf_conn.fetch("EXPLAIN (ANALYZE, BUFFERS) " + sql)
+            rows = await perf_conn.fetch(
+                "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + sql)
+            doc = rows[0][0]
+            doc = json.loads(doc) if isinstance(doc, str) else doc
+            plan = doc[0]["Plan"]
+            return (plan.get("Shared Hit Blocks", 0)
+                    + plan.get("Shared Read Blocks", 0))
+
+        hoisted_b, flat_b = await _buffers(hoisted.sql), await _buffers(flat.sql)
+        assert hoisted_b < flat_b, (
+            f"hoisted {hoisted_b:,} buffers vs flat {flat_b:,} — the driving "
+            f"end is not driving")

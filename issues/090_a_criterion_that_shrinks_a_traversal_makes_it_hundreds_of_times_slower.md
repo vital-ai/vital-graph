@@ -650,7 +650,56 @@ badly. Without that decline the extension shipped a 2.5-6.3x pessimisation on
 every shape measured. The decision layer keeps its direction: it is correct, it
 is asserted against real statistics, and it is what the hoist will need.
 
-### What is left: the hoist, and it is now measured rather than assumed
+### The hoist — IMPLEMENTED 2026-08-17
+
+Shipped. The generated SQL now matches the hand-built variant exactly (4,717
+buffers on the rare end, 39,949 on the common one), and the tail-constrained
+case works through the reversal: 2,998 against 13,743 flat, 4.6x.
+
+Two things it needed, and the second was not visible from reading the code.
+
+**Which table carries the driving constraint.** `_place` assigns by hop, not by
+role, so the emitter has to be told. `partition_hops` now asks `_driving_alias`
+before `_place` and orders that table first among its hop's non-link tables,
+which puts its conditions in `crit_where` — exactly the constraints whose
+deepest table is that one, its own predicate and object checks plus the
+correlation back to the link. Those become its JOIN ON in the body. Whatever
+table then opens the lateral takes its conditions from `on_map` to `crit_where`,
+by the same rule `_place` used to put them there.
+
+**The alias has to come from the CHAIN, not from the SQL.** The first version
+looked for the `head_constraint` pair's uuids in the constraint text and found
+nothing, every time, silently — at emit time the constants are still
+`__CONST_c_N__` tokens, because `substitute_constants` resolves them at the very
+end of generation. So `TraversalChain` now records `head_constraint_alias` /
+`tail_constraint_alias` where `_constrained` already had the alias in hand, and
+`reversed()` swaps them with the pairs.
+
+The recorded alias is still VERIFIED at emit: it must be a non-link table of the
+driving hop, and it must correlate to the link's driving column. A constraint on
+the same pair elsewhere in the query never bounded this end, and hoisting it
+would move a table that restricts nothing.
+
+Re-measured after implementation, all arms returning identical answers:
+
+    fixture / driving end        flat     hoisted
+    2k,    Rare on head        17,237       4,717   3.7x
+    2k,    Rare on tail        13,743       2,998   4.6x
+    2k,    Person (394)        37,220      39,949   parity
+    19.6M, Person (~20%)     2,598,155   2,424,29x  parity, 6.7% fewer buffers
+
+Wall time on the last one straddles: 2,902-3,158 ms flat against 2,614-3,305 ms
+hoisted over three runs. The buffer count is the stable number and it is
+consistently better; one 3,982 ms reading was an outlier, not a regression.
+
+Left open: whether the driving end's SIZE should become a threshold rather than
+only a direction. At 20% the hoisted form is parity, so there is nothing to lose
+today, and a gate that cannot lose is not urgent. It wants its own measurement
+rather than a guess — and note this is a different question from criterion
+selectivity, which was tried as a threshold and was wrong (see the correction
+above).
+
+### How it was measured before it was built
 
 **Hoist the driving end's constraint out of the criteria fence** and into the
 outer FROM beside the link. The criteria lateral nests INSIDE the body, so
@@ -679,13 +728,7 @@ is nothing to lose today; the question is worth its own measurement rather than
 a guess. Note this is a different question from criterion selectivity, which was
 tried as a threshold and was wrong (see the correction above).
 
-What the fix needs is a rule for identifying which table carries the driving
-constraint. The hand-built version keys off "the quad table joined to the outer
-link's driving column from inside the first lateral", which is exactly right for
-this shape and is not yet a general rule — `_place` assigns by hop, not by role.
-
-Delete `TestAConstrainedDriveIsDeclined` (unit and performance) when that lands,
-and put a timing assertion in its place.
+What the fix needed is above.
 
 ## Related
 
