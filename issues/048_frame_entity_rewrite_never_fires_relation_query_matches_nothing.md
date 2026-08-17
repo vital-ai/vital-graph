@@ -490,6 +490,9 @@ same 16,408 rows, `sp_graph_synth_10k` depth 3:
     fenced (MATERIALIZED CTE)        840,863 buf   60,013 ms     149x SLOWER
     dropped (no check at all)         84,573 buf      116 ms      7.4x better
 
+Reproduce with `test_scripts/debug/measure_p4_options.py`, which builds all three
+arms from the SQL the generator actually emits.
+
 Building the qualifying set once means building it for the WHOLE SPACE — every
 frame with a role-slot of that type — where the correlated form probes only the
 16,408 rows the walk actually reached. And the materialised set carries no index,
