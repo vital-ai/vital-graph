@@ -458,9 +458,24 @@ traversal join order (`issues/090`): rewriting the SQL text does not change the
 plan — only a fence does. Reverted, because the IN form also has NULL semantics
 that differ from EXISTS and it bought nothing to pay for them.
 
-What is left of this direction is a MATERIALIZED fence, the mechanism that did
-work for the traversal. Untried, and not obviously right: fencing forces the set
-to be built even when the criterion means three rows would have probed it.
+The MATERIALIZED fence was then tried too, and it is far worse. Same query,
+same 16,408 rows, `sp_graph_synth_10k` depth 3:
+
+    baseline (correlated EXISTS)     627,418 buf      403 ms
+    fenced (MATERIALIZED CTE)        840,863 buf   60,013 ms     149x SLOWER
+    dropped (no check at all)         84,573 buf      116 ms      7.4x better
+
+Building the qualifying set once means building it for the WHOLE SPACE — every
+frame with a role-slot of that type — where the correlated form probes only the
+16,408 rows the walk actually reached. And the materialised set carries no index,
+so each probe against it is a scan. Sixty seconds against four hundred
+milliseconds.
+
+**Direction 1 is closed.** Neither an uncorrelated form nor a fence helps: the
+first is normalised back to the same plan, the second replaces a bounded per-row
+probe with an unbounded whole-space build. The correlated EXISTS that ships is
+the right shape for this check; what is wrong is doing it at all when it cannot
+exclude anything.
 ### Direction 2 — prove the tautology from the data. Sound, but NOT from counts.
 
 Measured on `sp_graph_skew_2k`, which is the fixture built to break exactly this
@@ -489,6 +504,11 @@ The exact check is cheap and is an anti-join with a LIMIT:
      LIMIT 1
 
 Empty means the constraint excludes nothing IN THIS SPACE and can be dropped.
+
+**The prize is measured: 7.4x**, 627,418 buffers to 84,573, on identical rows —
+the `dropped` arm above IS the tautology case, since every slot in
+`sp_graph_synth_10k` is a `KGEntitySlot`. That is now the only route left to it,
+which makes this direction worth building rather than one of two options.
 It is per space and it goes stale on write, so it belongs with the other cached
 statistics and their freshness check, not in the rewrite. Use the count
 comparison as the pre-filter — unequal counts skip the query entirely.
