@@ -1,65 +1,79 @@
-# `sp_graph_synth_10k` Is Loaded From Only Part of Its Own Fixture
+# The Fixture Loader and the Perf Tests Default to Different Clusters
 
-## Status: OPEN — found 2026-08-16 while re-promoting the perf baseline
+## Status: FIXED 2026-08-16 (data reloaded, guard added); ONE DECISION LEFT
 
-18 tests in `tests/performance/test_nested_frame_traversal.py` fail, all with the
-same shape: a query for nested frames returns 0 rows where the manifest says
-there should be 1.
+18 tests in `tests/performance/test_nested_frame_traversal.py` failed, all the
+same shape: a query for nested frames returned 0 rows where the manifest said 1.
 
     frame 0 at nesting depth 1: got 0, manifest says 1
 
-## Not a code defect — the space is missing the data
+## The cause
 
-The queries filter on `?e <vitaltype> <haley-ai-kg#Edge_hasKGFrame>`. That URI is
-**not in the space's term table at all**:
+`VG_TEST_PG_PORT` has TWO different defaults across 21 files:
 
-    term_text LIKE '%Edge_hasKGFrame%' in sp_graph_synth_10k_term   ->  0 rows
+    scripts/load_wordnet_csv.py     default 5433   <- writes the fixture
+    scripts/perf_seed_data.py       default 5433
+    tests/performance/conftest.py   default 5432   <- reads it
+    tests/integration/conftest.py   default 5432
+    tests/api/conftest.py           default 5432
 
-    edge vitaltypes the space DOES hold:
-      Edge_hasKGSlot        91,286
-      Edge_hasKGRelation    21,203
+With no override the fixture is seeded into the container cluster and the tests
+read the host cluster. Measured:
 
-So the query genuinely matches nothing, and the generator is right to
-short-circuit it. Verified by stripping the `LIMIT 0` wrapper and running the
-full plan: still 0 rows. The optimisation is not hiding anything.
+    port 5433:  8 spaces, sp_graph_synth_10k = 2,425,530 quads   (correct)
+    port 5432: 99 spaces, sp_graph_synth_10k = 1,889,439 quads   (stale)
 
-## Where the data is
+The host cluster carries a same-named space left over from earlier work, so the
+tests found *something* and produced plausible wrong answers instead of failing
+to connect. `Edge_hasKGFrame` — the edge the traversal queries filter on —
+existed in neither the stale space nor its term table.
 
-The fixture's own data files DO contain it, in the second file:
+`load_wordnet_csv.py`'s own docstring says it "reads the same `VG_TEST_PG_*`
+variables as `tests/performance/conftest.py` ... so a fixture lands in the
+cluster the tests that use it will look in". It reads the same VARIABLE; it does
+not share the same DEFAULT, and with the variable unset that sentence is false.
+The docstring also records that a near-identical split (COPY to 5433, resync to
+5432) was found and fixed once before — inside that one script.
 
-    internal_data/graph_synth_10k/graph_syn_0001.nt    3.8 MB     0 occurrences
-    internal_data/graph_synth_10k/graph_syn_0002.nt    293 MB    64,218 occurrences
+## Corrections to the first version of this issue
 
-64,218 is 2 x 32,109, which is exactly the `n_nested_frames` the manifest
-records. The manifest and the data files agree with each other. **The loaded
-space was populated from the first file only** — or from an earlier generation —
-and never received the second.
+Two, both from measuring the wrong cluster:
 
-## Why it matters beyond the 18 tests
+* I reported the space as "loaded from only the first of its two data files".
+  It was not — it was a different, older space entirely, in a different
+  cluster.
+* I reported the `.nt` files as using `rdf:type` where the query wants
+  `vital-core#vitaltype`, implying a generator mismatch. They carry BOTH:
+  318,636 of each. There was no generator problem.
 
-* `test_the_fixture_actually_contains_nesting` is meant to be the guard against
-  precisely this ("a suite that skips its own subject passes by asking
-  nothing"). It passes, because it reads the MANIFEST rather than the space. A
-  fixture check that consults the description instead of the data cannot detect
-  a partial load.
-* The 18 failures are indistinguishable at a glance from a traversal regression.
-  They cost a real investigation during the `issues/081` baseline work —
-  including a worktree comparison that proved nothing, because the worktree had
-  no `internal_data/` and skipped all 24 tests silently.
-* They are now holes in the promoted perf baseline, so those benches gate
-  nothing until the space is reloaded.
+Every `psql` in that investigation went to 5432 while the loader wrote 5433 —
+the same mistake the tests were making, made again while investigating it.
 
-## Fix
+## Fixed
 
-Reload `sp_graph_synth_10k` from BOTH data files, then re-run the suite and
-re-promote the baseline.
+* Fixture reloaded into BOTH clusters from the CSVs. The 18 tests pass, and
+  `Edge_hasKGFrame` is present at 32,109 — exactly the manifest's
+  `n_nested_frames`.
+* **`test_the_space_holds_the_nesting_the_manifest_describes`** asks the SPACE
+  for the edge count and compares it with the manifest. The existing guard,
+  written so "a suite that skips its own subject" could not pass by asking
+  nothing, read the manifest at both ends and so compared it with itself. The
+  new one fails with a message naming the port split, because "0 nested edges"
+  is not self-explanatory and cost a long investigation once.
 
-Then make the guard check the space rather than the manifest: assert that the
-edge type the queries filter on is present in the term table, so a partial load
-fails loudly at the first test instead of as 18 confusing row-count mismatches.
+## Left open — a decision, not a fix
+
+**Which cluster should `VG_TEST_PG_PORT` default to?** Aligning them is right;
+which way is a call about how this environment is meant to work:
+
+* make the loaders default to 5432, matching all three test conftests; or
+* make the perf conftest default to 5433, matching the seeders, keeping perf
+  fixtures in the isolated container cluster.
+
+Not decided here. A wrong guess silently moves where everyone's fixtures land,
+which is the same failure with the arrow reversed.
 
 ## Related
 
-- `issues/081` — found while re-promoting its baseline; these are 18 of the 37
-  holes that baseline now carries
-- `issues/090` — uses the same fixture family for the traversal-direction work
+- `issues/081` — found while re-promoting its baseline; these were 18 of the 37
+  holes it carries. Worth re-promoting once this is settled.

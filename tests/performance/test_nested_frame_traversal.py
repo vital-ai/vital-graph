@@ -34,8 +34,8 @@ from __future__ import annotations
 import pytest
 
 from .conftest import skip_no_pg, space_exists
-from .graph_fixtures import (NESTED_CRITERIA, SMALL, chain_query,
-                             entity_indexes, nested_path_query)
+from .graph_fixtures import (NESTED_CRITERIA, NESTED_EDGE_TYPE, SMALL,
+                             chain_query, entity_indexes, nested_path_query)
 
 pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
@@ -78,6 +78,40 @@ async def _run(conn, sparql):
     gen = await generate_sql(cr, SMALL.space, conn=conn)
     assert gen.ok, f"SQL generation failed: {gen.error}\n{sparql}"
     return await conn.fetch(gen.sql), gen
+
+
+async def test_the_space_holds_the_nesting_the_manifest_describes(perf_conn):
+    """The guard that failed to guard (issues/099).
+
+    `test_the_fixture_actually_contains_nesting` below reads the MANIFEST, which
+    describes what the generator produced — not what the database under test
+    holds. When the two disagreed, it passed and eighteen row-count assertions
+    failed instead, looking exactly like a traversal regression.
+
+    They disagreed because the fixture LOADER and this suite default to
+    different PostgreSQL clusters (`VG_TEST_PG_PORT` 5433 vs 5432), so the
+    fixture was seeded into one and read from the other, which happened to hold
+    a stale space of the same name.
+
+    This asks the space directly, and names the likely cause when it is wrong —
+    because "0 nested edges" is not self-explanatory and cost a long
+    investigation once.
+    """
+    await _require(perf_conn)
+    expected = SMALL.nesting()["n_nested_frames"]
+    actual = await perf_conn.fetchval(f"""
+        SELECT count(*) FROM {SMALL.space}_rdf_quad q
+        JOIN {SMALL.space}_term p ON q.predicate_uuid = p.term_uuid
+        JOIN {SMALL.space}_term o ON q.object_uuid = o.term_uuid
+        WHERE p.term_text = 'http://vital.ai/ontology/vital-core#vitaltype'
+          AND o.term_text = '{NESTED_EDGE_TYPE}'
+    """)
+    assert actual == expected, (
+        f"{SMALL.space} holds {actual} nested-frame edges, manifest says "
+        f"{expected}. The space and the manifest describe different data — "
+        f"most likely the fixture was loaded into a different cluster from the "
+        f"one these tests read (VG_TEST_PG_PORT defaults to 5433 in the loaders "
+        f"and 5432 here). Reload it into this one; see issues/099.")
 
 
 async def test_the_fixture_actually_contains_nesting(perf_conn):
