@@ -421,6 +421,58 @@ keeping two copies of the same numbers in step is how they stop being in step.
 The headline above is enough to rank the work; 090 is what to read before
 starting it.
 
+## Problem 4 — an UNFILTERED slot-type constraint pays ~3 index probes per row
+
+OPEN, added 2026-08-17 after fixing Problems 1 and 2. Lower priority than either
+was, and recorded so it is not rediscovered as a surprise.
+
+The absorbed semi-join is correlated, so it runs once per surviving
+`frame_entity` row. With a criterion few rows survive and it disappears — 7.4 ms
+at depth 2, and at depth 3 it costs 0.2x the open walk. With NO criterion every
+row survives and the per-row cost is the whole cost:
+
+    depth 2   50,924 buffers vs 10,626 open    4.2x    1,085 rows survive
+    depth 3  754,169 buffers vs 139,292 open   5.2x   16,408 rows survive
+
+The plan is healthy in itself — no sequential scans, three index lookups per row:
+
+    Index Scan  ..._edge_src_dst        Index Cond: source_node_uuid = femv0.frame_uuid   Index Searches: 200
+    Index Only  ..._rdf_quad_pkey       (the type quad)                                   Index Searches: 337
+    Index Only  ..._rdf_quad_pkey       (the role quad)                                   Index Searches: 294
+
+So this is not a bad plan, it is a plan asked the same question once per row.
+
+### Two directions, neither attempted
+
+* **Let it become a hash semi-join.** The `EXISTS` is written correlated to
+  `femv0.frame_uuid`, which forces the nested loop. An uncorrelated form — the
+  qualifying frame set built once and probed — is the same answer with one pass
+  instead of N. Whether the planner will take it depends on how the constraint is
+  expressed, and `absorbed_type` currently emits one SQL string with no choice in
+  it.
+* **Prove the constraint is a tautology FROM THE DATA and drop it.** Every slot
+  reached by a source/dest role in these spaces IS a `KGEntitySlot`, and
+  `rdf_stats` can say so: compare the count of `(hasKGSlotType, role)` with the
+  count of slots of that role carrying `(vitaltype, KGEntitySlot)`. Equal means
+  the check cannot exclude anything.
+
+  **This must be proven per space, never assumed.** `issues/048` previously
+  proposed exactly this on ONTOLOGY grounds — "a slot reached through
+  `hasEntitySlotValue` from a `frame_entity` row IS a `KGEntitySlot`" — and that
+  is false as an invariant: `sync_frame_entity_table` requires only an edge, a
+  source/dest role and `hasEntitySlotValue`, and never checks the slot's type. A
+  space CAN hold a differently-typed slot with those predicates, and
+  `--attribute-slot-fraction` now builds one that does. Dropping the constraint
+  on ontology grounds would silently return rows for `?slot a KGTextSlot`, which
+  `test_traversal_direction_gate` asserts must be zero.
+
+### Why it may not be worth doing
+
+No query found so far constrains a slot type without also carrying a criterion:
+the wordnet/happy-words pair carries neither type constraint, and
+`kgframes_endpoint` carries the type constraint on a single-frame shape with no
+chain to walk. This is the shape to fix if one turns up, not before.
+
 ## Problem 3 — a constant-valued slot end is not recognised as a group
 
 **Price: not measurable.** Lowest priority, recorded so it is not rediscovered.
