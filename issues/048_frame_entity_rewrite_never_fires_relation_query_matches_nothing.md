@@ -1,6 +1,31 @@
 # Frame/Entity Traversal: Three Priced Performance Problems
 
-## Status: OPEN — Problem 2 FIXED; Problem 1 is now the whole of it
+## Status: Problems 1 and 2 FIXED 2026-08-17. Problem 3 open (tidiness only).
+
+Problem 1 fixed by absorbing a slot type constraint as a ROLE-SCOPED semi-join
+(`63dbb58`). Re-measured on `sp_graph_synth_10k`, start 1658, row counts
+identical to before in every case:
+
+                              BEFORE                    AFTER
+    d2 + slot type       554,977 buf  264 ms  0 joins   50,924  28.4 ms  2 joins
+    d2 + criterion+slot     >30 s  TIMED OUT  0 joins   12,274   7.4 ms  2 joins
+    d3 + slot type     1,669,538 buf  791 ms  0 joins  754,169 430.3 ms  3 joins
+    d3 + criterion+slot     >30 s  TIMED OUT  0 joins   22,333  13.3 ms  3 joins
+
+**The unbounded case is gone.** Criterion AND slot type together — the realistic
+combination, and the one that exceeded 30 seconds at both depths — is now 7.4 ms
+and 13.3 ms, and at depth 3 costs 0.2x the OPEN walk. That is the design goal
+this issue states: adding a criterion never costs orders of magnitude.
+
+Left: the slot type alone still costs 4.2x (d2) and 5.2x (d3) against the open
+walk, because the semi-join runs per surviving row and nothing narrows them. With
+a criterion present, few rows survive and it disappears. Worth revisiting only if
+a real query constrains slot types without any criterion.
+
+**Still declining: the slot EDGE** (`?slotEdge vitaltype Edge_hasKGSlot`, 691K
+buffers), which is what `kgframes_endpoint` emits. Specified below and cheaper
+than the node case — `{space}_edge` carries `edge_type_uuid`, so it needs no
+type-quad join at all.
 
 Re-measured 2026-08-17 on `sp_graph_synth_10k`, start 1658 (a start whose answer
 is NON-EMPTY at both depths — the first re-measurement used one returning zero
