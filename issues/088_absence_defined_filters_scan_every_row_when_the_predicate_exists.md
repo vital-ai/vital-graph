@@ -43,8 +43,55 @@ The remaining cost is the OUTER term join. Every one of them sits BEFORE the
 `LIMIT`, so a page of 25 still resolves URI text for every candidate frame — the
 plan shows a `Parallel Seq Scan` over 442,167 term rows for 25 output rows. That
 is the late-materialisation shape `emit_slice` already reasons about for deep
-pages, and applying it here is blocked by the `DISTINCT` over a `UNION`. That is
-the next piece, and it is larger than this one.
+pages. **Attempted 2026-08-17 and REVERTED** — the measurements stand, and the
+two hazards it exposed are what the next attempt has to survive.
+
+### The prize, priced by hand
+
+The ideal plan, written directly against the tables: page the uuids, resolve text
+for the page only.
+
+    text resolved BEFORE the LIMIT (ships)   66,589 buffers   578 ms
+    hand-written, text after                  3,215 buffers   277 ms   20.7x
+
+`_emit_two_phase` cannot reach it: it needs a semi-join or a foldable EXISTS over
+a two-child JOIN, and a DISTINCT over a UNION is neither.
+
+### The attempt
+
+A general `_emit_late_text` in the `emit_slice` strategy chain — emit the child
+with `text_needed_vars` empty, LIMIT it, join the term table outside. It reached
+**28,336 buffers, 169 ms**: 2.35x, not 20.7x, because the child still computes
+the whole DISTINCT UNION and only the text moved.
+
+### Two hazards, both of which it hit
+
+1. **The synthesized ORDER BY is not the caller's.** Declining every buried order
+   made the path never fire — an unordered SLICE always carries the pipeline's
+   synthesized `ORDER BY <anchor>__uuid`, which is the whole population this
+   targets. `_buried_order_is_synthesized` is the discriminator, and that order
+   must go INSIDE the subquery before the LIMIT or consecutive pages overlap.
+
+2. **The registry then describes a projection that is not emitted.** The child
+   registers every BGP variable it binds, so `var_map` advertised
+   `{e0, f, se, ss}` where the final SELECT carries one column — `issues/083`
+   with the sign flipped: not an empty var_map naming nothing, but a full one
+   naming what is not there.
+
+   Pruning `ctx.types` to the projected variable fixed that and **broke five
+   paging tests** in `test_kgquery_deep_paging` and `test_kgquery_sorted_paging`.
+   `ctx.types` is shared; clearing it is not local to this emission. Reverted
+   there.
+
+### What the next attempt should do differently
+
+Emit the child into a CHILD context with its own `TypeRegistry` — as
+`emit_expressions` already does for an EXISTS body — rather than emitting into
+the shared registry and pruning afterwards. Carrying the column names across that
+boundary is the part that needs designing.
+
+Those five tests only RUN because `sp_lead_synth_10k` was loaded on 2026-08-17.
+Before that they skipped, and nothing would have caught this.
 
 The frames "Assertion" tab took **13.4 seconds** on a 1.1M-frame graph. It is now
 **0.76 s cold, 0.03 s warm**. But the fix only reaches the case where the predicates are
