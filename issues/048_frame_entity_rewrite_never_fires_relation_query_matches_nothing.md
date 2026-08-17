@@ -442,19 +442,56 @@ The plan is healthy in itself — no sequential scans, three index lookups per r
 
 So this is not a bad plan, it is a plan asked the same question once per row.
 
-### Two directions, neither attempted
+### Direction 1 — an uncorrelated form. TRIED, MEASURED, REJECTED.
 
-* **Let it become a hash semi-join.** The `EXISTS` is written correlated to
-  `femv0.frame_uuid`, which forces the nested loop. An uncorrelated form — the
-  qualifying frame set built once and probed — is the same answer with one pass
-  instead of N. Whether the planner will take it depends on how the constraint is
-  expressed, and `absorbed_type` currently emits one SQL string with no choice in
-  it.
-* **Prove the constraint is a tautology FROM THE DATA and drop it.** Every slot
-  reached by a source/dest role in these spaces IS a `KGEntitySlot`, and
-  `rdf_stats` can say so: compare the count of `(hasKGSlotType, role)` with the
-  count of slots of that role carrying `(vitaltype, KGEntitySlot)`. Equal means
-  the check cannot exclude anything.
+The `EXISTS` is correlated to `femv0.frame_uuid`, which is what forces the nested
+loop, so the obvious move is to remove the outer reference and let the qualifying
+set be built once. Implemented as a row-wise IN with context carried INSIDE the
+tuple, which makes the subquery genuinely uncorrelated:
+
+    (fe.frame_uuid, fe.context_uuid) IN
+      (SELECT e.source_node_uuid, e.context_uuid FROM ... )
+
+**Identical buffer counts. 50,924 and 754,169, to the block.** PostgreSQL
+normalises it straight back to the same semi-join. This is the same lesson as the
+traversal join order (`issues/090`): rewriting the SQL text does not change the
+plan — only a fence does. Reverted, because the IN form also has NULL semantics
+that differ from EXISTS and it bought nothing to pay for them.
+
+What is left of this direction is a MATERIALIZED fence, the mechanism that did
+work for the traversal. Untried, and not obviously right: fencing forces the set
+to be built even when the criterion means three rows would have probed it.
+### Direction 2 — prove the tautology from the data. Sound, but NOT from counts.
+
+Measured on `sp_graph_skew_2k`, which is the fixture built to break exactly this
+kind of reasoning:
+
+    vitaltype = KGEntitySlot          18,532
+    hasKGSlotType = hasSourceEntity    9,266
+    hasKGSlotType = hasDestinationEntity 9,266   -> sum 18,532, EQUAL
+
+So a count comparison says "every source/dest-role slot is a KGEntitySlot" — and
+here that happens to be true. **It is still not a proof.** Two sets of equal size
+are not the same set: one source-role slot typed `KGTextSlot` plus one
+`KGEntitySlot` carrying no role leaves the counts identical and the conclusion
+false. `rdf_stats` gives a NECESSARY condition and nothing more, and this issue
+has already published one unsound tautology argument (see Problem 1's original
+"redundant by construction" claim, retracted above).
+
+The exact check is cheap and is an anti-join with a LIMIT:
+
+    SELECT 1 FROM quad st
+     WHERE st.predicate_uuid = <hasKGSlotType> AND st.object_uuid IN (<src>,<dst>)
+       AND NOT EXISTS (SELECT 1 FROM quad ty
+                        WHERE ty.subject_uuid = st.subject_uuid
+                          AND ty.predicate_uuid = <vitaltype>
+                          AND ty.object_uuid = <KGEntitySlot>)
+     LIMIT 1
+
+Empty means the constraint excludes nothing IN THIS SPACE and can be dropped.
+It is per space and it goes stale on write, so it belongs with the other cached
+statistics and their freshness check, not in the rewrite. Use the count
+comparison as the pre-filter — unequal counts skip the query entirely.
 
   **This must be proven per space, never assumed.** `issues/048` previously
   proposed exactly this on ONTOLOGY grounds — "a slot reached through
