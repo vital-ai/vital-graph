@@ -536,7 +536,28 @@ slot is representable and stays in `frame_entity`, because
 looks at the type. With it present, `?slot a KGEntitySlot` genuinely excludes
 those frames, the drop becomes unsound, and the check must be seen to refuse.
 
-Build that before building the proof.
+**BUILT 2026-08-17.** `--mistyped-role-slot-fraction` types a fraction of
+SOURCE-role slots as `KGURISlot` — a real slot class carrying a URI value, so a
+slot typed that way holding an entity URI is heterogeneity real data has and the
+schema does not forbid. Destination-role slots are left alone, so a proof that
+refused for the wrong reason would have to refuse on both.
+
+On `sp_graph_skew_2k` at 0.05, 464 of 9,266:
+
+    frame_entity rows                9,266   unchanged, as the sync implies
+    anti-join counterexamples            1   was 0 on every space
+    ?ss a KGEntitySlot               8,802   was 9,266 — now EXCLUDES something
+    ?ss a KGURISlot                    464   8,802 + 464 = 9,266, a partition
+
+The middle row is the one that matters: while every role slot was a
+`KGEntitySlot`, a rewrite that dropped this constraint answered 9,266 and looked
+correct. It now answers 9,266 where the truth is 8,802, and the existing test
+catches it.
+
+Pinned by `TestTheTautologyProofCanBeMadeToRefuse` — the proof's own anti-join
+must find a counterexample, and the two classes must PARTITION the frames, which
+is what distinguishes a fixture that excludes something from one that has simply
+lost rows.
 It is per space and it goes stale on write, so it belongs with the other cached
 statistics and their freshness check, not in the rewrite. Use the count
 comparison as the pre-filter — unequal counts skip the query entirely.

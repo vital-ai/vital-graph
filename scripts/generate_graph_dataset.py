@@ -162,6 +162,30 @@ ATTRIBUTE_SLOTS = [
     ("KGBooleanSlot",  "hasActiveSlot",   "hasBooleanSlotValue",  "boolean",  "active"),
 ]
 
+# A source/dest-role slot typed as something OTHER than KGEntitySlot
+# (issues/048 Problem 4).
+#
+# `--attribute-slot-fraction` made a slot TYPE constraint non-tautological, which
+# is what lets a dropped constraint be caught. This is the level above: it makes
+# the PROOF that the constraint is droppable non-trivial.
+#
+# The proposed optimisation asks, per space, whether any role-slot lacks the
+# type — an anti-join with a LIMIT 1 — and drops the check when none does. Every
+# connection-frame space answers "none": synth_10k, skew_2k and wordnet_frames
+# all return 0 counterexamples. So a proof that ALWAYS answered "safe to drop"
+# passes every test that can be written, and the first space with a
+# differently-typed role slot silently gets WRONG ANSWERS.
+#
+# One such slot makes the proof refuse. It stays in `frame_entity` —
+# `sync_frame_entity_table` requires a role and `hasEntitySlotValue` and never
+# looks at the type — so the frame is still reachable, and `?slot a KGEntitySlot`
+# now genuinely EXCLUDES it.
+#
+# KGURISlot rather than a fabricated class: it is a real slot class carrying a
+# URI value, so a slot typed that way holding an entity URI is the sort of
+# heterogeneity real data has and the schema does not forbid.
+MISTYPED_ROLE_SLOT_CLASS = "KGURISlot"
+
 # Frame types — the wordnet-style criterion, kept so the two fixtures ask the
 # same question in the same way.
 FRAME_TYPES = ["Mentions", "WorksWith", "DerivedFrom", "LocatedIn"]
@@ -932,7 +956,8 @@ def _is_rare(index: int, fraction: float) -> bool:
 def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
              seed: int, shard_entities: int,
              rare_entity_fraction: float = 0.0,
-             attribute_slot_fraction: float = 0.0) -> dict:
+             attribute_slot_fraction: float = 0.0,
+             mistyped_role_slot_fraction: float = 0.0) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     for old in out_dir.glob("graph_syn_*.nt"):
         old.unlink()
@@ -950,6 +975,7 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
     # drifts away from its fixture the first time anything above it draws.
     n_rare_entities = 0
     n_attribute_slots = n_attribute_frames = 0
+    n_mistyped_role_slots = 0
     if rare_entity_fraction > 0:
         for i in range(n_entities):
             if _is_rare(i, rare_entity_fraction):
@@ -1001,12 +1027,21 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
                 _lit(frame, f"{HALEY}hasKGFrameTypeDescription", ftype, f"{XSD}string"),
                 crit.triples(frame),
             ]
+            mistyped = (mistyped_role_slot_fraction > 0
+                        and _is_rare(fi, mistyped_role_slot_fraction))
             for slot, edge, role, target in (
                     (s_slot, s_edge, SRC_ROLE, ent(src)),
                     (d_slot, d_edge, DST_ROLE, ent(dst))):
+                # The SOURCE role only, so the destination stays a clean control:
+                # a proof that refused for the wrong reason would have to refuse
+                # on both.
+                cls = (MISTYPED_ROLE_SLOT_CLASS
+                       if mistyped and role == SRC_ROLE else "KGEntitySlot")
+                if cls != "KGEntitySlot":
+                    n_mistyped_role_slots += 1
                 buf += [
-                    _t(slot, RDF_TYPE, f"{HALEY}KGEntitySlot"),
-                    _t(slot, f"{VITAL}vitaltype", f"{HALEY}KGEntitySlot"),
+                    _t(slot, RDF_TYPE, f"{HALEY}{cls}"),
+                    _t(slot, f"{VITAL}vitaltype", f"{HALEY}{cls}"),
                     _t(slot, f"{VITAL}URIProp", slot),
                     _t(slot, f"{HALEY}hasKGSlotType", role),
                     _t(slot, f"{HALEY}hasEntitySlotValue", target),
@@ -1125,6 +1160,12 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
         # rather than a number someone typed, and so "this fixture predates the
         # mixed-slot work" is answerable without regenerating it.
         "attribute_slot_fraction": attribute_slot_fraction,
+        # Role slots deliberately NOT KGEntitySlot, so the
+        # tautology proof has something to refuse on (issues/048).
+        "mistyped_role_slot_fraction": mistyped_role_slot_fraction,
+        "mistyped_role_slot_class": (f"{HALEY}{MISTYPED_ROLE_SLOT_CLASS}"
+                                    if mistyped_role_slot_fraction > 0 else None),
+        "n_mistyped_role_slots": n_mistyped_role_slots,
         "attribute_slot_classes": [c for c, _r, _v, _d, _a in ATTRIBUTE_SLOTS]
                                   if attribute_slot_fraction > 0 else [],
         "attribute_slot_roles": [f"{BASE}:{r}" for _c, r, _v, _d, _a in ATTRIBUTE_SLOTS]
@@ -1233,13 +1274,22 @@ def main() -> int:
                          "connection-frame fixture is a KGEntitySlot, so a slot "
                          "type constraint is a tautology and a rewrite that "
                          "drops it cannot be caught.")
+    ap.add_argument("--mistyped-role-slot-fraction", type=float, default=0.0,
+                    help="fraction of connection frames whose SOURCE-role "
+                         "slot is typed KGURISlot instead of KGEntitySlot "
+                         "(issues/048 Problem 4). 0 disables it. Without "
+                         "it every role slot in every space is a "
+                         "KGEntitySlot, so a proof that the type check can "
+                         "be dropped is never asked to refuse, and one that "
+                         "always agreed would pass every test.")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
     generate(Path(args.out), args.entities, args.fanout,
              args.relation_fanout, args.seed, args.shard_entities,
              rare_entity_fraction=args.rare_entity_fraction,
-             attribute_slot_fraction=args.attribute_slot_fraction)
+             attribute_slot_fraction=args.attribute_slot_fraction,
+             mistyped_role_slot_fraction=args.mistyped_role_slot_fraction)
     return 0
 
 

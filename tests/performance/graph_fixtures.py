@@ -184,7 +184,14 @@ LARGE = SYNTH[1]
 #
 #     python scripts/generate_graph_dataset.py --entities 2000 \
 #         --rare-entity-fraction 0.02 --attribute-slot-fraction 0.25 \
+#         --mistyped-role-slot-fraction 0.05 \
 #         --out internal_data/graph_skew_2k
+#
+# `--mistyped-role-slot-fraction` is the third: 464 SOURCE-role slots typed
+# KGURISlot rather than KGEntitySlot. Without them `?slot a KGEntitySlot`
+# excludes nothing on any space we have, so the per-space proof that it can
+# be DROPPED (`issues/048` Problem 4, worth 7.4x) could never be seen to
+# refuse — and one that always agreed would pass every test.
 #
 # `--attribute-slot-fraction` is the second thing this fixture carries and
 # nothing else does: typed attribute slots (KGInteger / KGDouble / KGText /

@@ -335,7 +335,12 @@ class TestASlotTypeConstraintNoLongerKillsTheCollapse:
     """
 
     @pytest.mark.parametrize("cls,want", [
-        ("KGEntitySlot", 9266), ("KGTextSlot", 0), ("KGBooleanSlot", 0)])
+        # 8,802 not 9,266: `--mistyped-role-slot-fraction` types 464 source-role
+        # slots as KGURISlot, so this constraint now EXCLUDES something. That is
+        # the point of it — while every role slot was a KGEntitySlot, a rewrite
+        # that dropped the constraint answered 9,266 and looked correct.
+        ("KGEntitySlot", 8802), ("KGURISlot", 464),
+        ("KGTextSlot", 0), ("KGBooleanSlot", 0)])
     async def test_the_answers_are_right(self, perf_conn, cls, want):
         await _require(perf_conn)
         gen = await _generate(perf_conn, f"""
@@ -386,6 +391,74 @@ class TestASlotEdgeTypeConstraintIsAbsorbedToo:
             "the rewrite declined — a slot EDGE type constraint is back to "
             "costing the whole collapse (issues/048)")
         assert (await perf_conn.fetch(gen.sql))[0][0] == want
+
+
+class TestTheTautologyProofCanBeMadeToRefuse:
+    """`issues/048` Problem 4 needs a per-space proof that the slot type check
+    excludes nothing, and dropping it then buys 7.4x. Every connection-frame
+    space answered "excludes nothing" — synth_10k, skew_2k and wordnet_frames all
+    returned 0 counterexamples — so a proof that ALWAYS agreed would have passed
+    every test that could be written, and the first space with a differently
+    typed role slot would get wrong answers rather than slow ones.
+
+    `--mistyped-role-slot-fraction` puts 464 KGURISlot source-role slots in this
+    space. These assert the fixture can now say NO.
+    """
+
+    async def test_the_anti_join_finds_a_counterexample(self, perf_conn):
+        """The proof's own query, run against the space. Empty here would mean
+        the refusal path is untestable again."""
+        await _require(perf_conn)
+        n = await perf_conn.fetchval(
+            f"""SELECT count(*) FROM (
+                  SELECT 1 FROM {SKEW.space}_rdf_quad q
+                  JOIN {SKEW.space}_term p ON p.term_uuid = q.predicate_uuid
+                   AND p.term_text = $1
+                  JOIN {SKEW.space}_term o ON o.term_uuid = q.object_uuid
+                   AND o.term_text IN ('urn:hasSourceEntity','urn:hasDestinationEntity')
+                  WHERE NOT EXISTS (
+                    SELECT 1 FROM {SKEW.space}_rdf_quad ty
+                    JOIN {SKEW.space}_term tp ON tp.term_uuid = ty.predicate_uuid
+                     AND tp.term_text = $2
+                    JOIN {SKEW.space}_term t2 ON t2.term_uuid = ty.object_uuid
+                     AND t2.term_text = $3
+                    WHERE ty.subject_uuid = q.subject_uuid)
+                  LIMIT 1) x""",
+            f"{HALEY}hasKGSlotType", f"{VITAL}vitaltype", f"{HALEY}KGEntitySlot")
+        assert n > 0, (
+            "no role slot lacks KGEntitySlot, so the tautology proof would "
+            "answer 'safe to drop' and could never be seen to refuse. "
+            "Regenerate with --mistyped-role-slot-fraction.")
+
+    async def test_the_constraint_actually_excludes_frames(self, perf_conn):
+        """Selectivity through SPARQL: the two classes must PARTITION the frames.
+        If they summed to more or less than the unconstrained count, the fixture
+        would be describing something other than what it claims."""
+        await _require(perf_conn)
+
+        async def count(extra):
+            gen = await _generate(perf_conn, f"""
+                SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH <{SKEW.graph}> {{
+                    ?se <{VITAL}hasEdgeSource> ?f .
+                    ?se <{VITAL}hasEdgeDestination> ?ss .
+                    ?ss <{HALEY}hasKGSlotType> <urn:hasSourceEntity> .
+                    ?ss <{HALEY}hasEntitySlotValue> ?e0 .
+                    ?de <{VITAL}hasEdgeSource> ?f .
+                    ?de <{VITAL}hasEdgeDestination> ?ds .
+                    ?ds <{HALEY}hasKGSlotType> <urn:hasDestinationEntity> .
+                    ?ds <{HALEY}hasEntitySlotValue> ?e1 .
+                    {extra} }} }}""")
+            return (await perf_conn.fetch(gen.sql))[0][0]
+
+        total = await count("")
+        entity = await count(f"?ss a <{HALEY}KGEntitySlot> .")
+        uri = await count(f"?ss a <{HALEY}KGURISlot> .")
+        assert entity < total, (
+            f"the constraint excludes nothing ({entity} of {total}) — dropping "
+            f"it would be undetectable")
+        assert entity + uri == total, (
+            f"{entity} + {uri} != {total}: the two classes do not partition the "
+            f"source-role slots, so this fixture is not what it claims")
 
 
 class TestTheConstrainedDriveIsHoisted:
