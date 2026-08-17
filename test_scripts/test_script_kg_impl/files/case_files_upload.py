@@ -58,11 +58,12 @@ class FilesUploadTester:
             upload_file = create_upload_file("2502.16143v1.pdf", pdf_content, "application/pdf")
             
             current_user = {"username": "test_user", "user_id": "test_user_123"}
-            response = await self.endpoint._upload_file_content(
+            response = await self.endpoint._upload_file_stream(
                 space_id=self.space_id,
                 graph_id=self.graph_id,
                 uri=test_uri,
                 file=upload_file,
+                chunk_size=8192,
                 current_user=current_user
             )
             
@@ -110,11 +111,12 @@ class FilesUploadTester:
             upload_file = create_upload_file("vampire_queen_baby.png", png_content, "image/png")
             
             current_user = {"username": "test_user", "user_id": "test_user_123"}
-            response = await self.endpoint._upload_file_content(
+            response = await self.endpoint._upload_file_stream(
                 space_id=self.space_id,
                 graph_id=self.graph_id,
                 uri=test_uri,
                 file=upload_file,
+                chunk_size=8192,
                 current_user=current_user
             )
             
@@ -161,11 +163,12 @@ class FilesUploadTester:
             upload_file = create_upload_file("large_file.txt", large_content, "text/plain")
             
             current_user = {"username": "test_user", "user_id": "test_user_123"}
-            response = await self.endpoint._upload_file_content(
+            response = await self.endpoint._upload_file_stream(
                 space_id=self.space_id,
                 graph_id=self.graph_id,
                 uri=test_uri,
                 file=upload_file,
+                chunk_size=8192,
                 current_user=current_user
             )
             
@@ -210,11 +213,12 @@ class FilesUploadTester:
             upload_file = create_upload_file("nonexistent.txt", content, "text/plain")
             
             current_user = {"username": "test_user", "user_id": "test_user_123"}
-            response = await self.endpoint._upload_file_content(
+            response = await self.endpoint._upload_file_stream(
                 space_id=self.space_id,
                 graph_id=self.graph_id,
                 uri=nonexistent_uri,
                 file=upload_file,
+                chunk_size=8192,
                 current_user=current_user
             )
             
@@ -253,11 +257,12 @@ class FilesUploadTester:
             upload_file = create_upload_file("empty_file.txt", empty_content, "text/plain")
             
             current_user = {"username": "test_user", "user_id": "test_user_123"}
-            response = await self.endpoint._upload_file_content(
+            response = await self.endpoint._upload_file_stream(
                 space_id=self.space_id,
                 graph_id=self.graph_id,
                 uri=test_uri,
                 file=upload_file,
+                chunk_size=8192,
                 current_user=current_user
             )
             
@@ -305,11 +310,12 @@ class FilesUploadTester:
             upload_file = create_upload_file("unknown_file.xyz", content, "application/unknown")
             
             current_user = {"username": "test_user", "user_id": "test_user_123"}
-            response = await self.endpoint._upload_file_content(
+            response = await self.endpoint._upload_file_stream(
                 space_id=self.space_id,
                 graph_id=self.graph_id,
                 uri=test_uri,
                 file=upload_file,
+                chunk_size=8192,
                 current_user=current_user
             )
             
@@ -357,11 +363,12 @@ class FilesUploadTester:
             upload_file = create_upload_file("byte_array_test.bin", byte_content, "application/octet-stream")
             
             current_user = {"username": "test_user", "user_id": "test_user_123"}
-            response = await self.endpoint._upload_file_content(
+            response = await self.endpoint._upload_file_stream(
                 space_id=self.space_id,
                 graph_id=self.graph_id,
                 uri=test_uri,
                 file=upload_file,
+                chunk_size=8192,
                 current_user=current_user
             )
             
@@ -408,11 +415,12 @@ class FilesUploadTester:
             upload_file = create_upload_file("stream_test.txt", stream_content, "text/plain")
             
             current_user = {"username": "test_user", "user_id": "test_user_123"}
-            response = await self.endpoint._upload_file_content(
+            response = await self.endpoint._upload_file_stream(
                 space_id=self.space_id,
                 graph_id=self.graph_id,
                 uri=test_uri,
                 file=upload_file,
+                chunk_size=8192,
                 current_user=current_user
             )
             

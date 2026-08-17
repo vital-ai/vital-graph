@@ -118,8 +118,7 @@ _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # for a transfer whose whole job is to take as long as the data needs:
 #
 #   GET /export/download        FileResponse        (export_endpoint.py:170)
-#   GET /files/download         StreamingResponse   (files_endpoint.py:182)
-#   GET /files/stream/download  StreamingResponse   (files_endpoint.py:212)
+#   GET /files/stream/download  StreamingResponse   (files_endpoint.py)
 #
 # The deadline is time-to-first-byte (see `__call__`), so a long transfer is
 # already safe and this list is DEFENCE IN DEPTH, not the thing holding them up.
@@ -129,7 +128,6 @@ _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # all six chunks under a 0.4 s deadline.
 _LONG_TRANSFER_PATHS = (
     re.compile(r"/export/download(?:/|$)"),
-    re.compile(r"/files/(?:stream/)?download(?:/|$)"),
     re.compile(r"/files/stream(?:/|$)"),
 )
 
@@ -213,7 +211,7 @@ class RequestBoundsMiddleware:
          would race for the same message.
 
     Buffering is why the allowlist stays query endpoints only — small criteria
-    JSON. `/files/upload` is excluded and tested for; buffering a file here
+    JSON. `/files/stream/upload` is excluded and tested for; buffering a file here
     would hold it in memory. Long transfers are excluded too
     (`_LONG_TRANSFER_PATHS`): the old base class returned at first byte so a
     stream outran the deadline by accident, and nothing here inherits that.

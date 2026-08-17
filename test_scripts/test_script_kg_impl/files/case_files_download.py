@@ -38,10 +38,11 @@ class FilesDownloadTester:
             test_uri = self.test_file_uris[0] if self.test_file_uris else "http://vital.ai/test/file/download_test"
             
             current_user = {"username": "test_user", "user_id": "test_user_123"}
-            response = await self.endpoint._download_file_content(
+            response = await self.endpoint._download_file_stream(
                 space_id=self.space_id,
                 graph_id=self.graph_id,
                 uri=test_uri,
+                chunk_size=8192,
                 current_user=current_user
             )
             
@@ -85,10 +86,11 @@ class FilesDownloadTester:
             nonexistent_uri = "http://vital.ai/test/file/nonexistent_download"
             
             current_user = {"username": "test_user", "user_id": "test_user_123"}
-            response = await self.endpoint._download_file_content(
+            response = await self.endpoint._download_file_stream(
                 space_id=self.space_id,
                 graph_id=self.graph_id,
                 uri=nonexistent_uri,
+                chunk_size=8192,
                 current_user=current_user
             )
             
@@ -127,10 +129,11 @@ class FilesDownloadTester:
             invalid_uri = "not_a_valid_uri"
             
             current_user = {"username": "test_user", "user_id": "test_user_123"}
-            response = await self.endpoint._download_file_content(
+            response = await self.endpoint._download_file_stream(
                 space_id=self.space_id,
                 graph_id=self.graph_id,
                 uri=invalid_uri,
+                chunk_size=8192,
                 current_user=current_user
             )
             
@@ -177,10 +180,11 @@ class FilesDownloadTester:
             
             for uri in test_uris:
                 try:
-                    response = await self.endpoint._download_file_content(
+                    response = await self.endpoint._download_file_stream(
                         space_id=self.space_id,
                         graph_id=self.graph_id,
                         uri=uri,
+                        chunk_size=8192,
                         current_user=current_user
                     )
                     
@@ -223,10 +227,11 @@ class FilesDownloadTester:
             test_uri = self.test_file_uris[0] if self.test_file_uris else "http://vital.ai/test/file/content_validation"
             
             current_user = {"username": "test_user", "user_id": "test_user_123"}
-            response = await self.endpoint._download_file_content(
+            response = await self.endpoint._download_file_stream(
                 space_id=self.space_id,
                 graph_id=self.graph_id,
                 uri=test_uri,
+                chunk_size=8192,
                 current_user=current_user
             )
             
@@ -280,10 +285,11 @@ class FilesDownloadTester:
             test_uri = self.test_file_uris[-1] if self.test_file_uris else "http://vital.ai/test/file/large_download"
             
             current_user = {"username": "test_user", "user_id": "test_user_123"}
-            response = await self.endpoint._download_file_content(
+            response = await self.endpoint._download_file_stream(
                 space_id=self.space_id,
                 graph_id=self.graph_id,
                 uri=test_uri,
+                chunk_size=8192,
                 current_user=current_user
             )
             
@@ -327,10 +333,11 @@ class FilesDownloadTester:
             test_uri = self.test_file_uris[0] if self.test_file_uris else "http://vital.ai/test/file/download_bytes"
             
             current_user = {"username": "test_user", "user_id": "test_user_123"}
-            response = await self.endpoint._download_file_content(
+            response = await self.endpoint._download_file_stream(
                 space_id=self.space_id,
                 graph_id=self.graph_id,
                 uri=test_uri,
+                chunk_size=8192,
                 current_user=current_user
             )
             
@@ -375,10 +382,11 @@ class FilesDownloadTester:
             test_uri = self.test_file_uris[1] if len(self.test_file_uris) > 1 else "http://vital.ai/test/file/download_stream"
             
             current_user = {"username": "test_user", "user_id": "test_user_123"}
-            response = await self.endpoint._download_file_content(
+            response = await self.endpoint._download_file_stream(
                 space_id=self.space_id,
                 graph_id=self.graph_id,
                 uri=test_uri,
+                chunk_size=8192,
                 current_user=current_user
             )
             

@@ -164,35 +164,6 @@ class FilesEndpoint:
                 deleted_uris=[]
             )
         
-        @self.router.post("/files/upload", response_model=FileUploadResponse, tags=["Files", "Deprecated"], deprecated=True)
-        async def upload_file_content(
-            space_id: str = Query(..., description="Space ID"),
-            graph_id: Optional[str] = Query(None, description="Graph ID"),
-            uri: str = Query(..., description="File URI to upload content to"),
-            file: UploadFile = File(..., description="File content to upload"),
-            current_user: Dict = Depends(self.auth_dependency)
-        ):
-            """
-            [DEPRECATED] Upload binary file content to existing file node.
-            Use POST /files/stream/upload instead — it streams without buffering the entire file in memory.
-            """
-            require_space_write(current_user, space_id)
-            return await self._upload_file_content(space_id, graph_id, uri, file, current_user)
-        
-        @self.router.get("/files/download", tags=["Files", "Deprecated"], deprecated=True)
-        async def download_file_content(
-            space_id: str = Query(..., description="Space ID"),
-            graph_id: Optional[str] = Query(None, description="Graph ID"),
-            uri: str = Query(..., description="File URI to download content from"),
-            current_user: Dict = Depends(self.auth_dependency)
-        ):
-            """
-            [DEPRECATED] Download binary file content by URI.
-            Use GET /files/stream/download instead — it streams without buffering the entire file in memory.
-            """
-            require_space_read(current_user, space_id)
-            return await self._download_file_content(space_id, graph_id, uri, current_user)
-        
         @self.router.post("/files/stream/upload", response_model=FileUploadResponse, tags=["Files", "Streaming"])
         async def upload_file_stream(
             space_id: str = Query(..., description="Space ID"),
@@ -456,146 +427,6 @@ class FilesEndpoint:
                 deleted_uris=[]
             )
     
-    async def _upload_file_content(self, space_id: str, graph_id: Optional[str], uri: str, file: UploadFile, current_user: Dict) -> FileUploadResponse:
-        """Upload binary file content to existing file node."""
-        
-        # Read file content
-        content = await file.read()
-        file_size = len(content)
-        
-        # Determine content type using mimetypes library
-        content_type = file.content_type or mimetypes.guess_type(file.filename or "")[0] or "application/octet-stream"
-        
-        # Upload to MinIO/S3 if file manager is available
-        if self.file_manager:
-            try:
-                # Create object key from URI (sanitize for S3)
-                object_key = uri.replace(':', '_').replace('/', '_')
-                
-                # Upload to MinIO/S3
-                result = self.file_manager.upload_file(
-                    file_data=io.BytesIO(content),
-                    object_key=object_key,
-                    content_type=content_type,
-                    metadata={
-                        'file_uri': uri,
-                        'space_id': space_id,
-                        'graph_id': graph_id or '',
-                        'original_filename': file.filename or 'unknown'
-                    }
-                )
-                
-                # Get S3 URL for the uploaded file
-                s3_url = self.file_manager.get_file_url(object_key)
-                
-                # Update FileNode with hasFileURL and hasFileType properties
-                try:
-                    # Get the existing FileNode GraphObject
-                    file_node = await self.files_impl.get_file_by_uri(
-                        space_id=space_id,
-                        uri=uri,
-                        graph_id=graph_id
-                    )
-                    
-                    # Update the FileNode properties using VitalSigns
-                    file_node.fileURL = s3_url
-                    file_node.fileType = content_type
-                    
-                    # Update the FileNode in the database (pass as list)
-                    await self.files_impl.update_files(
-                        space_id=space_id,
-                        file_nodes=[file_node],
-                        graph_id=graph_id or "default"
-                    )
-                    
-                    self.logger.debug(f"Updated FileNode {uri} with hasFileURL={s3_url} and hasFileType={content_type}")
-                except Exception as update_error:
-                    self.logger.error(f"Failed to update FileNode properties: {update_error}", exc_info=True)
-                    # Continue anyway - file was uploaded successfully
-                
-                return FileUploadResponse(
-                    status=OperationStatus.CREATED,
-                    message=f"Successfully uploaded file content to MinIO",
-                    file_uri=uri,
-                    file_size=file_size,
-                    content_type=content_type,
-                    storage_path=result.get('object_key')
-                )
-            except Exception as e:
-                return FileUploadResponse(
-                    status=OperationStatus.STORE_FAILED,
-                    message=f"Error uploading to MinIO: {str(e)}",
-                    file_uri=uri,
-                    file_size=file_size,
-                    content_type=content_type
-                )
-        else:
-            # Fallback: simulate upload without storage
-            return FileUploadResponse(
-                status=OperationStatus.CREATED,
-                message=f"Successfully uploaded file content (no storage configured)",
-                file_uri=uri,
-                file_size=file_size,
-                content_type=content_type
-            )
-    
-    async def _download_file_content(self, space_id: str, graph_id: Optional[str], uri: str, current_user: Dict):
-        """Download binary file content by URI."""
-        
-        # First verify FileNode exists in database
-        try:
-            file_node = await self.files_impl.get_file_by_uri(
-                space_id=space_id,
-                uri=uri,
-                graph_id=graph_id
-            )
-            if not file_node:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"File not found: {uri}"
-                )
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(
-                status_code=404,
-                detail=f"File not found: {uri}"
-            )
-        
-        # Download from MinIO/S3 if file manager is available
-        if self.file_manager:
-            # Create object key from URI (sanitize for S3)
-            object_key = uri.replace(':', '_').replace('/', '_')
-            
-            # Download from MinIO/S3
-            content = self.file_manager.download_file(object_key)
-            
-            # Get metadata to determine content type
-            try:
-                metadata = self.file_manager.get_file_metadata(object_key)
-                content_type = metadata.get('content_type', 'application/octet-stream')
-            except:
-                content_type = 'application/octet-stream'
-            
-            # Determine filename from URI
-            filename = uri.split('/')[-1] if '/' in uri else uri
-            
-            return StreamingResponse(
-                io.BytesIO(content),
-                media_type=content_type,
-                headers={
-                    "Content-Disposition": f"attachment; filename={filename}",
-                    "Content-Length": str(len(content))
-                }
-            )
-        else:
-            # Return fallback response
-            return StreamingResponse(
-                io.BytesIO(b"File content not available"),
-                media_type="application/octet-stream",
-                headers={"Content-Disposition": f"attachment; filename=unknown"}
-            )
-    
     async def _upload_file_stream(self, space_id: str, graph_id: Optional[str], uri: str, 
                                    file: UploadFile, chunk_size: int, current_user: Dict) -> FileUploadResponse:
         """Upload binary file content using true streaming (chunk-based)."""
@@ -650,7 +481,7 @@ class FilesEndpoint:
                     status=OperationStatus.CREATED,
                     message=f"Successfully streamed file upload to MinIO",
                     file_uri=uri,
-                    file_size=0,  # Size unknown in streaming mode
+                    file_size=result.get('size', 0),  # counted as it streamed past
                     content_type=content_type,
                     storage_path=result.get('object_key')
                 )
@@ -659,7 +490,7 @@ class FilesEndpoint:
                     status=OperationStatus.STORE_FAILED,
                     message=f"Error streaming upload to MinIO: {str(e)}",
                     file_uri=uri,
-                    file_size=0,
+                    file_size=0,   # the upload failed; no size to report
                     content_type=content_type
                 )
         else:

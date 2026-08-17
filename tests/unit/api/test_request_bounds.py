@@ -82,8 +82,7 @@ class TestPolicy:
         ("POST", "/api/kgentities"),          # create, not query
         ("POST", "/api/kgframes"),            # create, not query
         ("POST", "/api/sparql/update"),
-        ("POST", "/api/files/upload"),          # buffering a file would OOM
-        ("POST", "/api/files/stream/upload"),
+        ("POST", "/api/files/stream/upload"),    # buffering a file would OOM
         ("PUT", "/api/entities/e1"),
         ("PATCH", "/api/entities/e1"),
         ("DELETE", "/api/spaces/s1"),
@@ -304,14 +303,14 @@ class TestStalledTransfersAreReclaimed:
         app = FastAPI()
         app.add_middleware(RequestBoundsMiddleware)
 
-        @app.post("/api/files/upload")
+        @app.post("/api/files/stream/upload")
         async def up(request: Request):
             await request.body()                   # body fully received
             await asyncio.sleep(1.2)               # 4x the stall, committing
             return {"committed": True}
 
         with TestClient(app) as c:
-            r = c.post("/api/files/upload", content=b"x" * 4096)
+            r = c.post("/api/files/stream/upload", content=b"x" * 4096)
         assert r.status_code == 200, "a committing upload was cancelled"
         assert r.json() == {"committed": True}
 
@@ -426,7 +425,7 @@ class TestClientThatSendsNothing:
                 cancelled.set()
                 raise
 
-        asyncio.run(self._run("/api/files/upload", "POST", budget=5, app=upload))
+        asyncio.run(self._run("/api/files/stream/upload", "POST", budget=5, app=upload))
         assert cancelled.is_set(), "silent uploader was never reclaimed"
 
 
@@ -436,7 +435,6 @@ class TestLongTransfersAreNeverBounded:
     The safe-method rule would otherwise sweep them in:
 
         GET /export/download        FileResponse
-        GET /files/download         StreamingResponse
         GET /files/stream/download  StreamingResponse
 
     They used to survive by accident: BaseHTTPMiddleware's call_next returned
@@ -448,7 +446,6 @@ class TestLongTransfersAreNeverBounded:
 
     @pytest.mark.parametrize("path", [
         "/api/export/download",
-        "/api/files/download",
         "/api/files/stream/download",
         "/api/files/stream/abc123",
     ])
@@ -484,7 +481,6 @@ class TestLongTransfersAreNeverBounded:
         stay outside the allowlist — a constraint on that design, not an
         accident of this one.
         """
-        assert is_cancellable_read("POST", "/api/files/upload") is False
         assert is_cancellable_read("POST", "/api/files/stream/upload") is False
 
 
