@@ -130,6 +130,38 @@ ENTITY_KINDS = ["Person", "Organization", "Product", "Topic", "Place"]
 # chain found (2 single hops)" and the whole rewrite declines.
 RARE_KIND = "Rare"
 
+# ATTRIBUTE SLOTS on a connection frame (issues/048 Problem 1).
+#
+# Until this existed, every slot in every connection-frame fixture was a
+# `KGEntitySlot` — so `?slot a KGEntitySlot` was a TAUTOLOGY, and a rewrite that
+# wrongly dropped it returned identical answers on all of them. That is the same
+# trap `issues/090` recorded for the frame type: "every frame in both fixtures IS
+# a KGFrame and the constraint is a tautology there."
+#
+# The failure it leaves undetectable is specific. A fix for Problem 1 has to
+# re-express a slot constraint against the collapsed row, and the natural way to
+# do that reaches the slot through the frame — which loses WHICH slot unless the
+# role is carried too. With one slot class everywhere:
+#
+#     correct   "the SOURCE-role slot of this frame is a KGTextSlot"  -> 0 rows
+#     buggy     "this frame has SOME slot that is a KGTextSlot"       -> 0 rows
+#
+# Identical. Give the frame a text slot beside its two entity slots and they
+# separate immediately.
+#
+# The value predicates are the ones `kg_query_builder` maps each class to, so a
+# query written against this fixture is written the way the product writes one.
+# `lead_synth` already carries these classes — on ATTRIBUTE frames, which have no
+# `frame_entity` row, so the collapse never runs there. The gap was the
+# intersection, not either half.
+ATTRIBUTE_SLOTS = [
+    # (slot class, slot-type role, value predicate, datatype, attr)
+    ("KGIntegerSlot",  "hasScoreSlot",    "hasIntegerSlotValue",  "integer",  "score"),
+    ("KGDoubleSlot",   "hasWeightSlot",   "hasDoubleSlotValue",   "double",   "weight"),
+    ("KGTextSlot",     "hasLabelSlot",    "hasTextSlotValue",     "string",   "label"),
+    ("KGBooleanSlot",  "hasActiveSlot",   "hasBooleanSlotValue",  "boolean",  "active"),
+]
+
 # Frame types — the wordnet-style criterion, kept so the two fixtures ask the
 # same question in the same way.
 FRAME_TYPES = ["Mentions", "WorksWith", "DerivedFrom", "LocatedIn"]
@@ -899,7 +931,8 @@ def _is_rare(index: int, fraction: float) -> bool:
 
 def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
              seed: int, shard_entities: int,
-             rare_entity_fraction: float = 0.0) -> dict:
+             rare_entity_fraction: float = 0.0,
+             attribute_slot_fraction: float = 0.0) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     for old in out_dir.glob("graph_syn_*.nt"):
         old.unlink()
@@ -916,6 +949,7 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
     # generator's rng stream to know which entities it built is a test that
     # drifts away from its fixture the first time anything above it draws.
     n_rare_entities = 0
+    n_attribute_slots = n_attribute_frames = 0
     if rare_entity_fraction > 0:
         for i in range(n_entities):
             if _is_rare(i, rare_entity_fraction):
@@ -982,6 +1016,41 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
                     _t(edge, f"{VITAL}hasEdgeSource", frame),
                     _t(edge, f"{VITAL}hasEdgeDestination", slot),
                 ]
+
+            # Typed ATTRIBUTE slots beside the two entity slots, on a
+            # deterministic minority of frames (issues/048 Problem 1).
+            #
+            # They carry `hasKGSlotType` — so the collapse sees them as
+            # slots — but NOT `hasEntitySlotValue`, which is what keeps
+            # them out of `frame_entity`: `sync_frame_entity_table` inner
+            # joins BOTH predicates on the same slot and filters the role
+            # to source/dest, so an attribute slot contributes nothing to
+            # the aggregate and the table is unchanged. Checked against
+            # that SQL rather than assumed — a fixture that quietly moved
+            # frame_entity would invalidate every traversal number ever
+            # measured against it.
+            if attribute_slot_fraction > 0 and _is_rare(fi, attribute_slot_fraction):
+                for si, (cls, role_, vpred, dt, attr) in enumerate(ATTRIBUTE_SLOTS):
+                    a_slot = _uri("slot", fi, f"a{si}")
+                    a_edge = _uri("edge", fi, f"a{si}")
+                    value = getattr(crit, attr)
+                    buf += [
+                        _t(a_slot, RDF_TYPE, f"{HALEY}{cls}"),
+                        _t(a_slot, f"{VITAL}vitaltype", f"{HALEY}{cls}"),
+                        _t(a_slot, f"{VITAL}URIProp", a_slot),
+                        _t(a_slot, f"{HALEY}hasKGSlotType", f"{BASE}:{role_}"),
+                        _lit(a_slot, f"{HALEY}{vpred}",
+                             str(value).lower() if dt == "boolean" else value,
+                             f"{XSD}{dt}"),
+                        _t(a_edge, RDF_TYPE, f"{HALEY}Edge_hasKGSlot"),
+                        _t(a_edge, f"{VITAL}vitaltype", f"{HALEY}Edge_hasKGSlot"),
+                        _t(a_edge, f"{VITAL}URIProp", a_edge),
+                        _t(a_edge, f"{VITAL}hasEdgeSource", frame),
+                        _t(a_edge, f"{VITAL}hasEdgeDestination", a_slot),
+                    ]
+                n_attribute_slots += len(ATTRIBUTE_SLOTS)
+                n_attribute_frames += 1
+
             block = "".join(buf)
             fh.write(block)
             n_triples += block.count("\n")
@@ -1051,6 +1120,17 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
         # (issues/090). `n_rare_entities` against n_entities is the ratio the
         # gate compares, so a test asserts against the fixture's own description
         # of itself rather than against a number someone typed.
+        # Typed attribute slots on connection frames (issues/048 Problem 1).
+        # Recorded so a test asserts against the fixture's own description
+        # rather than a number someone typed, and so "this fixture predates the
+        # mixed-slot work" is answerable without regenerating it.
+        "attribute_slot_fraction": attribute_slot_fraction,
+        "attribute_slot_classes": [c for c, _r, _v, _d, _a in ATTRIBUTE_SLOTS]
+                                  if attribute_slot_fraction > 0 else [],
+        "attribute_slot_roles": [f"{BASE}:{r}" for _c, r, _v, _d, _a in ATTRIBUTE_SLOTS]
+                                if attribute_slot_fraction > 0 else [],
+        "n_attribute_slots": n_attribute_slots,
+        "n_frames_with_attribute_slots": n_attribute_frames,
         "rare_entity_fraction": rare_entity_fraction,
         "rare_entity_kind": (f"{BASE}:kind:{RARE_KIND}"
                              if rare_entity_fraction > 0 else None),
@@ -1143,12 +1223,23 @@ def main() -> int:
                          "gives a kind-constrained chain end far smaller than "
                          "any of the five uniform kinds, which is what makes "
                          "the traversal direction choice observable.")
+    ap.add_argument("--attribute-slot-fraction", type=float, default=0.0,
+                    help="fraction of CONNECTION frames that also carry typed "
+                         "attribute slots — KGIntegerSlot, KGDoubleSlot, "
+                         "KGTextSlot, KGBooleanSlot — beside their two "
+                         "KGEntitySlot endpoints (issues/048). 0 disables it, "
+                         "leaving emitted triples byte for byte identical to "
+                         "the existing fixtures. Without it every slot in every "
+                         "connection-frame fixture is a KGEntitySlot, so a slot "
+                         "type constraint is a tautology and a rewrite that "
+                         "drops it cannot be caught.")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
     generate(Path(args.out), args.entities, args.fanout,
              args.relation_fanout, args.seed, args.shard_entities,
-             rare_entity_fraction=args.rare_entity_fraction)
+             rare_entity_fraction=args.rare_entity_fraction,
+             attribute_slot_fraction=args.attribute_slot_fraction)
     return 0
 
 

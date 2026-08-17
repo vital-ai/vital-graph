@@ -223,6 +223,107 @@ class TestTheGateReadsRealStatistics:
                       "proves nothing — the query or the fixture has drifted")
 
 
+class TestTheFixtureCanCatchADroppedSlotConstraint:
+    """The property `issues/048` Problem 1 cannot be fixed safely without.
+
+    Every connection-frame fixture used to carry ONE slot class, so
+    `?slot a KGEntitySlot` was a tautology and a rewrite that dropped it returned
+    identical answers everywhere. Worse, the failure a fix is actually prone to
+    was invisible: reaching the slot through the frame loses WHICH slot unless
+    the role is carried too, and with one class
+
+        correct  "the SOURCE-role slot of this frame is a KGTextSlot"  -> 0
+        buggy    "this frame has SOME slot that is a KGTextSlot"       -> 0
+
+    are indistinguishable. `--attribute-slot-fraction` puts typed attribute slots
+    beside the two entity endpoints, and they separate: 0 against 2,317.
+
+    These assert the FIXTURE, not the engine. They are what makes a later test of
+    the engine meaningful, and they fail if the space is regenerated without the
+    flag — which would otherwise look like everything still passing.
+    """
+
+    async def test_connection_frames_carry_more_than_one_slot_class(self, perf_conn):
+        await _require(perf_conn)
+        rows = await perf_conn.fetch(
+            f"""SELECT DISTINCT o.term_text
+                FROM {SKEW.space}_frame_entity fe
+                JOIN {SKEW.space}_edge e ON e.source_node_uuid = fe.frame_uuid
+                JOIN {SKEW.space}_rdf_quad ty ON ty.subject_uuid = e.dest_node_uuid
+                JOIN {SKEW.space}_term p ON p.term_uuid = ty.predicate_uuid
+                 AND p.term_text = $1
+                JOIN {SKEW.space}_term o ON o.term_uuid = ty.object_uuid
+                WHERE o.term_text LIKE '%Slot'
+                  AND EXISTS (SELECT 1 FROM {SKEW.space}_rdf_quad st
+                              JOIN {SKEW.space}_term sp ON sp.term_uuid = st.predicate_uuid
+                              WHERE st.subject_uuid = ty.subject_uuid
+                                AND sp.term_text = $2)""",
+            f"{VITAL}vitaltype", f"{HALEY}hasKGSlotType")
+        classes = {r["term_text"].rsplit("#", 1)[-1] for r in rows}
+        assert len(classes) > 1, (
+            f"every slot on a connection frame is {classes} — a slot type "
+            f"constraint is a tautology here, so a rewrite that drops it cannot "
+            f"be caught. Regenerate with --attribute-slot-fraction.")
+        assert f"KGEntitySlot" in classes
+
+    async def test_a_role_scoped_type_constraint_separates_from_an_unscoped_one(
+            self, perf_conn):
+        """The discriminator itself, stated as the two SQL forms a fix chooses
+        between. If these ever return the same number the fixture has stopped
+        doing its job, whatever the engine does."""
+        await _require(perf_conn)
+        scoped = await perf_conn.fetchval(
+            f"""SELECT count(*) FROM {SKEW.space}_frame_entity fe WHERE EXISTS (
+                  SELECT 1 FROM {SKEW.space}_edge e
+                  JOIN {SKEW.space}_rdf_quad st ON st.subject_uuid = e.dest_node_uuid
+                  JOIN {SKEW.space}_term sp ON sp.term_uuid = st.predicate_uuid
+                   AND sp.term_text = $1
+                  JOIN {SKEW.space}_term so ON so.term_uuid = st.object_uuid
+                   AND so.term_text = 'urn:hasSourceEntity'
+                  JOIN {SKEW.space}_rdf_quad ty ON ty.subject_uuid = e.dest_node_uuid
+                  JOIN {SKEW.space}_term tp ON tp.term_uuid = ty.predicate_uuid
+                   AND tp.term_text = $2
+                  JOIN {SKEW.space}_term t2 ON t2.term_uuid = ty.object_uuid
+                   AND t2.term_text = $3
+                  WHERE e.source_node_uuid = fe.frame_uuid)""",
+            f"{HALEY}hasKGSlotType", f"{VITAL}vitaltype", f"{HALEY}KGTextSlot")
+        unscoped = await perf_conn.fetchval(
+            f"""SELECT count(*) FROM {SKEW.space}_frame_entity fe WHERE EXISTS (
+                  SELECT 1 FROM {SKEW.space}_edge e
+                  JOIN {SKEW.space}_rdf_quad ty ON ty.subject_uuid = e.dest_node_uuid
+                  JOIN {SKEW.space}_term tp ON tp.term_uuid = ty.predicate_uuid
+                   AND tp.term_text = $1
+                  JOIN {SKEW.space}_term t2 ON t2.term_uuid = ty.object_uuid
+                   AND t2.term_text = $2
+                  WHERE e.source_node_uuid = fe.frame_uuid)""",
+            f"{VITAL}vitaltype", f"{HALEY}KGTextSlot")
+        assert scoped == 0, "a source-role slot is an entity slot, never a text one"
+        assert unscoped > 0, (
+            "no connection frame carries a text slot, so the role-scoped and "
+            "unscoped forms agree and the fixture cannot separate them")
+
+    async def test_the_engine_answers_the_role_scoped_form_correctly(self, perf_conn):
+        """Through SPARQL, which is the contract. A constraint naming a class the
+        source slot does not have must match NOTHING — the assertion a fix that
+        drops slot constraints wholesale has to fail."""
+        await _require(perf_conn)
+        for cls, want_zero in ((f"{HALEY}KGEntitySlot", False),
+                               (f"{HALEY}KGTextSlot", True)):
+            gen = await _generate(perf_conn, f"""
+                SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH <{SKEW.graph}> {{
+                    ?se <{VITAL}hasEdgeSource> ?f .
+                    ?se <{VITAL}hasEdgeDestination> ?ss .
+                    ?ss <{HALEY}hasKGSlotType> <urn:hasSourceEntity> .
+                    ?ss <{HALEY}hasEntitySlotValue> ?e0 .
+                    ?ss a <{cls}> .
+                }} }}""")
+            n = (await perf_conn.fetch(gen.sql))[0][0]
+            if want_zero:
+                assert n == 0, f"{cls} matched {n} source-role slots; it has none"
+            else:
+                assert n > 0, f"{cls} matched nothing, so the query proves nothing"
+
+
 class TestTheConstrainedDriveIsHoisted:
     """The end the gate chose has to reach the outer FROM, or it is not driving.
 
