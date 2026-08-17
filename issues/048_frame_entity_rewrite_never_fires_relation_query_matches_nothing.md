@@ -138,10 +138,45 @@ is no second entity hop anywhere in it, so these frames never enter
 it carries is on the losing side of the table above, but it is attached to a
 shape the collapse never sees.
 
+### Correction: a product site DOES emit the constraint, on a shape with no chain
+
+The paragraph above originally said no product path emits it. That was wrong and
+came from grepping `kg_query_builder` only. `kgframes_endpoint.py` builds the
+frames-UI list-slots query and its connection branch is:
+
+    { ?slot a <haley:KGEntitySlot> .
+      ?_slotEdge hasEdgeDestination ?slot .
+      ?_slotEdge hasEdgeSource <frame_uri> . }
+
+Measured on `wordnet_frames` against a real frame: **22 buffers, 0.06 ms, 2 rows,
+0 frame_entity joins.** The collapse not firing costs nothing here because there
+is nothing to collapse — the query is anchored on ONE constant frame and lists
+its slots. No entity-to-entity chain exists to lose.
+
+### What the real connection-frame application queries do
+
+`happy_words_v2` — the wordnet relationship queries, the closest thing here to a
+production traversal — walks entity -> frame -> entity and carries slot
+constraints. They collapse and they are fast:
+
+    RELATIONSHIPS (happy words)   frame_entity joins=1   1,632 buffers   1.7 ms   45 rows
+    FRAME_UNION   (happy words)   frame_entity joins=2   5,813 buffers   6.5 ms  425 rows
+
+Because the slot constraints they carry are `hasKGSlotType <urn:hasSourceEntity>`
+plus `hasEntitySlotValue ?entity` — which IS the collapse's input, the pattern it
+recognises a slot group by. Not a slot TYPE constraint.
+
+**That is the whole discrimination.** Problem 1 needs a query that BOTH walks
+connection frames AND adds a type constraint on top of the role-plus-value
+pattern. No product path and no case query does both;
+`test_frame_entity_collapse.py` with `slot_typed=True` constructs exactly that
+combination, and is the only place it exists today.
+
 **So Problem 1 costs nothing to any query the product or the portal issues
-today.** It costs hand-written SPARQL over a connection-frame dataset — which is
-a first-class use of a SPARQL endpoint, and is what every fixture and benchmark
-here does, but is not a live production regression.
+today.** It costs hand-written SPARQL that adds a slot or edge type constraint to
+a connection-frame walk — a first-class use of a SPARQL endpoint, and reachable
+by anyone writing the reference pattern defensively, but not a live production
+regression.
 
 This is a re-pricing, not a dismissal: 690,949 buffers where the collapsed form
 reads 10,626 is real, and a customer writing the canonical reference query hits
