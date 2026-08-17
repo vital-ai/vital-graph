@@ -461,6 +461,56 @@ class TestTheTautologyProofCanBeMadeToRefuse:
             f"source-role slots, so this fixture is not what it claims")
 
 
+class TestLateTextPagingPartitions:
+    """A page whose text is resolved AFTER the LIMIT must still partition
+    (issues/088).
+
+    `_emit_late_text` applies to OFFSET 0 only, so page 1 takes it and later
+    pages take the ordinary path. Two paths serving one paged query is how pages
+    come to overlap or skip, and it is invisible in a row count — both return 25.
+    """
+
+    async def _page(self, conn, off):
+        gen = await _generate(conn, f"""
+            SELECT DISTINCT ?e0 WHERE {{ GRAPH <{SKEW.graph}> {{
+                ?se <{VITAL}hasEdgeSource> ?f .
+                ?se <{VITAL}hasEdgeDestination> ?ss .
+                ?ss <{HALEY}hasKGSlotType> <urn:hasSourceEntity> .
+                ?ss <{HALEY}hasEntitySlotValue> ?e0 .
+            }} }} LIMIT 25 OFFSET {off}""")
+        rows = await conn.fetch(gen.sql)
+        col = next(k for k in rows[0].keys() if "__" not in k)
+        return [r[col] for r in rows], gen
+
+    async def test_three_pages_partition(self, perf_conn):
+        await _require(perf_conn)
+        seen = []
+        for off in (0, 25, 50):
+            page, _ = await self._page(perf_conn, off)
+            assert len(page) == 25
+            seen += page
+        assert len(set(seen)) == len(seen), (
+            f"{len(seen) - len(set(seen))} row(s) appear on more than one page — "
+            f"the paths serving page 1 and page 2 disagree about the order")
+
+    async def test_the_binding_is_named_the_same_on_every_page(self, perf_conn):
+        """The two paths alias the column differently in SQL, and `var_map` is
+        what reconciles them.
+
+        It also guards the hazard that sank the first attempt: emitting the child
+        into the SHARED registry left every BGP variable it bound registered, so
+        var_map advertised four bindings where the SELECT carries one column —
+        `issues/083` with the sign flipped. A child registry keeps it to the
+        projected variable.
+        """
+        await _require(perf_conn)
+        maps = []
+        for off in (0, 25):
+            _, gen = await self._page(perf_conn, off)
+            maps.append(set(gen.var_map.values()))
+        assert maps[0] == maps[1] == {"e0"}, maps
+
+
 class TestTheTautologyProofDecidesPerSpace:
     """`issues/048` Problem 4. The check is dropped where the DATA proves it
     excludes nothing, and kept where it does not — decided per space, not by

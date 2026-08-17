@@ -132,6 +132,105 @@ def _register_projection(ctx: EmitContext, var: str, sn: str,
     info.sql_name = sn
 
 
+def _find_project(node, depth: int = 0):
+    """The nearest PROJECT below `node`, or None."""
+    from .ir import KIND_PROJECT
+    if node is None or depth > 6:
+        return None
+    if node.kind == KIND_PROJECT:
+        return node
+    for c in (node.children or []):
+        found = _find_project(c, depth + 1)
+        if found is not None:
+            return found
+    return None
+
+
+def _emit_late_text(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
+    """Page on uuids, resolve the projected variable's text afterwards.
+
+    The general form of what `_emit_two_phase` does for one shape. That one needs
+    a semi-join or a foldable EXISTS over a two-child JOIN; a DISTINCT over a
+    UNION — what the Assertion filter compiles to — has neither, so it fell
+    through and resolved URI text for EVERY candidate before the LIMIT discarded
+    all but a page. Measured on `sp_graph_forms_20k`, 91,631 frames, LIMIT 25
+    (`issues/088`): 66,589 buffers against 28,336.
+
+    THE CHILD GETS ITS OWN REGISTRY. Emitting into the shared one leaves every
+    BGP variable the child bound registered, and `generate_sql` builds `var_map`
+    from that — so the query advertised bindings for columns this SELECT does not
+    carry. Pruning the shared registry afterwards fixed the symptom and broke
+    five paging tests, because it is shared with more than this emission. A child
+    registry never pollutes it. Aliases are still SHARED, because the constants
+    the child references live there and a fresh generator would not have them.
+
+    DEDUPLICATION IS UNAFFECTED. A DISTINCT above compares the projected columns;
+    with text suppressed it compares uuids. Term uuid and term are one-to-one, so
+    the two partition identically — and uuid is the canonical one, since terms
+    differing only in datatype have different uuids and must not collapse.
+    """
+    from .emit import emit
+    from .sql_type_generation import TypeRegistry
+    from .emit_bgp import _NUMERIC_DATATYPES, _BOOLEAN_DT, _DATETIME_DATATYPES
+
+    if plan.limit < 0 or plan.offset > 0:
+        return None
+    # A REQUESTED ORDER BY needs its text resolved before the slice. The
+    # SYNTHESIZED one does not — the pipeline adds `ORDER BY <anchor>__uuid` to
+    # an unordered SLICE for stable paging, and that key is a uuid column.
+    # Declining both is what made the first version never fire: every unordered
+    # page carries the synthesized order.
+    buried = _find_buried_order(plan.child)
+    if buried and not _buried_order_is_synthesized(plan.child):
+        return None
+    if getattr(plan, "order_by", None):
+        return None
+    proj = _find_project(plan.child)
+    if proj is None or len(proj.project_vars or []) != 1:
+        return None
+    var = proj.project_vars[0]
+
+    child_ctx = ctx.child(types=TypeRegistry(aliases=ctx.aliases))
+    child_ctx.text_needed_vars = set()
+    try:
+        child_sql = emit(plan.child, child_ctx)
+    except Exception as exc:
+        ctx.log("slice", f"late-text declined: child would not emit ({exc})")
+        return None
+    if not child_sql:
+        return None
+    if getattr(child_ctx, "needs_ordered_scan", False):
+        ctx.needs_ordered_scan = True
+
+    info = child_ctx.types.get(var)
+    sn = info.sql_name if info and info.sql_name else None
+    if not sn or f"{sn}__uuid" not in child_sql:
+        ctx.log("slice", "late-text declined: the child does not expose a uuid "
+                         f"column for {var}")
+        return None
+
+    r_alias, t_alias = ctx.aliases.next("r"), ctx.aliases.next("t")
+    cols = TypeRegistry.term_table_columns(
+        sn, t_alias, r_alias, "",
+        dt_case_sql=ctx.dt_case_expr(t_alias),
+        numeric_dt_id_list=ctx.dt_ids_for_uris(_NUMERIC_DATATYPES),
+        boolean_dt_id=ctx.dt_ids_for_uris([_BOOLEAN_DT]),
+        datetime_dt_id_list=ctx.dt_ids_for_uris(_DATETIME_DATATYPES),
+    )
+    _register_projection(ctx, var, sn, r_alias, t_alias)
+    ctx.log("slice", f"late-text page: uuid-only LIMIT {plan.limit}, text "
+                     f"resolved for the page only")
+    # The uuid order goes INSIDE, before the LIMIT, or the page is a
+    # nondeterministic 25 of the match set and consecutive pages overlap. It is
+    # repeated outside because a join does not preserve input order.
+    return (f"SELECT {', '.join(cols)}\n"
+            f"FROM (\nSELECT * FROM (\n{child_sql}\n) AS {r_alias}_i\n"
+            f"ORDER BY {r_alias}_i.{sn}__uuid\nLIMIT {plan.limit}\n) AS {r_alias}\n"
+            f"JOIN {ctx.term_table} AS {t_alias} "
+            f"ON {r_alias}.{sn}__uuid = {t_alias}.term_uuid\n"
+            f"ORDER BY {r_alias}.{sn}__uuid")
+
+
 def _emit_two_phase(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
     """Page uuids first, resolve text for the page afterwards.
 
@@ -702,6 +801,12 @@ def emit_slice(plan: PlanV2, ctx: EmitContext) -> str:
         two_phase = _try_selective_driven(plan, ctx)
     if two_phase is not None:
         return two_phase
+
+    # Last: page on uuids and resolve text for the page only. After every shape
+    # above, so none of their behaviour changes (issues/088).
+    late = _emit_late_text(plan, ctx)
+    if late is not None:
+        return late
 
     child_sql = emit(plan.child, ctx)
 

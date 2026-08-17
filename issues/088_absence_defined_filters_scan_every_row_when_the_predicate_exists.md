@@ -43,8 +43,8 @@ The remaining cost is the OUTER term join. Every one of them sits BEFORE the
 `LIMIT`, so a page of 25 still resolves URI text for every candidate frame — the
 plan shows a `Parallel Seq Scan` over 442,167 term rows for 25 output rows. That
 is the late-materialisation shape `emit_slice` already reasons about for deep
-pages. **Attempted 2026-08-17 and REVERTED** — the measurements stand, and the
-two hazards it exposed are what the next attempt has to survive.
+pages. **Implemented 2026-08-17**, after one reverted attempt whose hazards are
+recorded below because they are what the design had to answer.
 
 ### The prize, priced by hand
 
@@ -83,15 +83,39 @@ the whole DISTINCT UNION and only the text moved.
    `ctx.types` is shared; clearing it is not local to this emission. Reverted
    there.
 
-### What the next attempt should do differently
+### What shipped
 
-Emit the child into a CHILD context with its own `TypeRegistry` — as
-`emit_expressions` already does for an EXISTS body — rather than emitting into
-the shared registry and pruning afterwards. Carrying the column names across that
-boundary is the part that needs designing.
+`ctx.child(types=TypeRegistry(...))` — a child context with its own registry, as
+`emit_expressions` already does for an EXISTS body. Aliases stay SHARED, because
+the constants the child references live there and a fresh generator would not
+have them. The parent registry is never touched, so nothing needs pruning.
 
-Those five tests only RUN because `sp_lead_synth_10k` was loaded on 2026-08-17.
-Before that they skipped, and nothing would have caught this.
+    text resolved BEFORE the LIMIT   66,589 buffers   578 ms
+    after                            40,781 buffers   146 ms    4.0x on time
+
+Pinned by `TestLateTextPagingPartitions`: three pages partition 75 of 75, and
+`var_map` names exactly the projected variable on both the late-text page and the
+ordinary one.
+
+### A correction: the five paging failures were never this
+
+They were blamed on the pruning and prompted the revert. They fail with the
+change STASHED, in a full-suite run, and pass when their own files run alone —
+`ModuleNotFoundError: No module named 'scripts.perf_shape_matrix'`.
+`tests/unit/test_perf_baseline_stamping` inserts `<repo>/scripts` at
+`sys.path[0]`, which binds `scripts` to a namespace rooted inside that directory,
+and every later `from scripts.X import ...` looks for `scripts/scripts/X.py`.
+Adding `scripts/__init__.py` fixes it: 5 failures to 1, and the survivor is a
+known-flaky index-only-scan assertion that passes on re-run.
+
+So the first attempt was probably sound and was reverted for the wrong reason.
+The child-registry design is better regardless — pruning a SHARED registry is
+wrong whether or not a test catches it — but the reasoning that reached it was
+not.
+
+Those tests only RUN because `sp_lead_synth_10k` was loaded on 2026-08-17. Before
+that they skipped, which is also why an order-dependent import failure had gone
+unnoticed.
 
 The frames "Assertion" tab took **13.4 seconds** on a 1.1M-frame graph. It is now
 **0.76 s cold, 0.03 s warm**. But the fix only reaches the case where the predicates are
