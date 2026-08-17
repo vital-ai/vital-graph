@@ -125,6 +125,31 @@ def _slot_type_quads_for(plan, slot_var, quad_predicate, quad_obj_const,
     return out
 
 
+def slot_type_constants(plan: PlanV2, aliases: AliasGenerator):
+    """(type_predicate_uri, type_object_uri) for every slot type constraint here.
+
+    The generator needs these BEFORE the rewrite runs, to price each one against
+    the data while it still has a connection. Duplicating the scan is deliberate:
+    the alternative is making the rewrite async, and it is called from three
+    places that are not.
+    """
+    const_to_uri = {c: text for (text, ttype), c in aliases.constants.items()
+                    if ttype == "U"}
+    pred_of, obj_of = {}, {}
+    for _owner, sql in (plan.tagged_constraints or []):
+        m = _PRED_RE.search(sql)
+        if m:
+            pred_of[m.group(1)] = const_to_uri.get(m.group(2), "")
+        m = _OBJ_RE.search(sql)
+        if m:
+            obj_of[m.group(1)] = const_to_uri.get(m.group(2), "")
+    out = {(pred_of[a], obj_of[a]) for a in pred_of
+           if pred_of[a] in SLOT_TYPE_PREDICATES and obj_of.get(a)}
+    for child in (plan.children or []):
+        out.update(slot_type_constants(child, aliases))
+    return sorted(out)
+
+
 def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
                                 space_id: str) -> PlanV2:
     """Rewrite a v2 plan to use the frame_entity table where possible.
@@ -442,6 +467,31 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
                 ty_obj = quad_obj_token.get(stq)
                 if not (ty_pred and ty_obj):
                     continue
+
+                # If the data says this type excludes no role slot in this
+                # space, the check cannot change the answer and the semi-join is
+                # pure cost — 7.4x of it on an unfiltered walk (issues/048
+                # Problem 4). Drop the quad and emit nothing.
+                #
+                # `True` only. None means unanswered — no connection, a missing
+                # term, a failed query — and unanswered must keep the check: the
+                # risk is one-sided, since dropping a constraint that DOES
+                # exclude something returns rows that should not be there.
+                verdict = (getattr(aliases, "slot_type_tautology", None) or {}).get(
+                    (quad_predicate.get(stq), quad_obj_const.get(stq)))
+                if verdict is True:
+                    removed_aliases.add(stq)
+                    type_quad_owned.add(stq)
+                    alias_map[stq] = (fe_alias, {
+                        "subject_uuid": None, "predicate_uuid": None,
+                        "object_uuid": None, "context_uuid": "context_uuid",
+                    })
+                    logger.info(
+                        "frame_entity: slot type %s excludes nothing in %s — "
+                        "dropped rather than checked per row (issues/048)",
+                        quad_obj_const.get(stq), space_id)
+                    continue
+
                 ex = aliases.next("slotchk")
                 removed_aliases.add(stq)
                 type_quad_owned.add(stq)

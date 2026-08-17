@@ -974,6 +974,32 @@ async def _generate_sql(
             frame_entity_ready = await ensure_frame_entity_table(
                 space_id, conn=conn, conn_params=conn_params)
             if frame_entity_ready:
+                # Whether a slot TYPE constraint this query carries can exclude
+                # anything in this space (issues/048 Problem 4). Answered HERE
+                # because the rewrite is synchronous and has no connection, and
+                # prefetched per type because the rewrite is what knows which
+                # types matter — so the plan is scanned for them first.
+                #
+                # A failure to answer leaves the entry absent, and the rewrite
+                # keeps the check. The risk is entirely one-sided: dropping a
+                # constraint that does exclude something returns WRONG rows.
+                try:
+                    from .slot_type_tautology import (
+                        excludes_nothing, RDF_TYPE_URI, VITALTYPE_URI)
+                    from .rewrite_frame_entity_table import (
+                        SOURCE_ENTITY_URI, DEST_ENTITY_URI, slot_type_constants)
+                    aliases.slot_type_tautology = {}
+                    for _tp, _tu in slot_type_constants(plan, aliases):
+                        if _tp not in (RDF_TYPE_URI, VITALTYPE_URI):
+                            continue
+                        aliases.slot_type_tautology[(_tp, _tu)] = \
+                            await excludes_nothing(
+                                space_id, _tu,
+                                (SOURCE_ENTITY_URI, DEST_ENTITY_URI), _tp,
+                                conn)
+                except Exception as exc:
+                    logger.debug("slot-type tautology prefetch skipped: %s", exc)
+
                 from .rewrite_frame_entity_table import rewrite_frame_entity_table
                 plan = rewrite_frame_entity_table(plan, aliases, space_id)
 

@@ -421,7 +421,32 @@ keeping two copies of the same numbers in step is how they stop being in step.
 The headline above is enough to rank the work; 090 is what to read before
 starting it.
 
-## Problem 4 — an UNFILTERED slot-type constraint pays ~3 index probes per row
+## Problem 4 — FIXED 2026-08-17 by proving the check redundant per space
+
+The semi-join is kept where it can exclude something and DROPPED where the data
+proves it cannot. On `sp_graph_synth_10k`, where every role slot is a
+`KGEntitySlot`, the constraint now costs exactly what the open walk costs:
+
+    depth 2   50,924 buffers -> 10,626   (the open walk reads 10,626)
+    depth 3  754,169 buffers -> 139,292  (the open walk reads 139,292)
+
+Row counts unchanged: 1,085 and 16,408. And on `sp_graph_skew_2k`, which has 464
+source-role slots typed `KGURISlot`, the check is KEPT and the answer is 8,802
+against 9,266 unconstrained — the number a wrongly-dropped check would get wrong.
+
+`slot_type_tautology.excludes_nothing` answers it with the anti-join, cached per
+space and keyed on the slot-type predicate's `rdf_pred_stats` row count so it is
+discarded when that predicate changes size. The generator prefetches a verdict
+per slot type the query carries, because the rewrite is synchronous and has no
+connection; the rewrite tests `verdict is True`, so an unanswered verdict — no
+connection, missing term, failed query — keeps the check. The risk is one-sided.
+
+Documented limit: the freshness signal is a row COUNT, so an in-place update that
+introduces the first differently-typed role slot without changing the count would
+leave a stale "safe to drop" cached. Stated in the module rather than discovered
+later.
+
+## Problem 4, as originally characterised — an unfiltered constraint pays per row
 
 OPEN, added 2026-08-17 after fixing Problems 1 and 2. Lower priority than either
 was, and recorded so it is not rediscovered as a surprise.

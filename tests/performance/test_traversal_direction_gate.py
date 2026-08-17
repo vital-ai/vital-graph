@@ -461,6 +461,58 @@ class TestTheTautologyProofCanBeMadeToRefuse:
             f"source-role slots, so this fixture is not what it claims")
 
 
+class TestTheTautologyProofDecidesPerSpace:
+    """`issues/048` Problem 4. The check is dropped where the DATA proves it
+    excludes nothing, and kept where it does not — decided per space, not by
+    reasoning, because this issue twice reasoned it wrong.
+
+    Two spaces are needed and both are asserted here, because a proof that always
+    said "drop" would pass the first case alone and return wrong rows on the
+    second.
+
+        sp_graph_synth_10k   every role slot a KGEntitySlot   -> DROP
+        sp_graph_skew_2k     464 typed KGURISlot              -> KEEP
+    """
+
+    async def test_it_keeps_the_check_where_a_counterexample_exists(self, perf_conn):
+        await _require(perf_conn)
+        gen = await _generate(perf_conn, self._q(SKEW.graph, keep=True))
+        assert "slotchk" in gen.sql, (
+            "the check was dropped on a space that HAS a differently typed role "
+            "slot — this returns rows that should be excluded")
+        assert (await perf_conn.fetch(gen.sql))[0][0] == 8802
+
+    async def test_the_kept_check_still_excludes(self, perf_conn):
+        """The number the drop would get wrong: 9,266 unconstrained against
+        8,802 constrained."""
+        await _require(perf_conn)
+        gen = await _generate(perf_conn, self._q(SKEW.graph, keep=False))
+        assert (await perf_conn.fetch(gen.sql))[0][0] == 9266
+
+    @staticmethod
+    def _q(graph, keep):
+        extra = f"?ss a <{HALEY}KGEntitySlot> ." if keep else ""
+        return f"""SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH <{graph}> {{
+            ?se <{VITAL}hasEdgeSource> ?f . ?se <{VITAL}hasEdgeDestination> ?ss .
+            ?ss <{HALEY}hasKGSlotType> <urn:hasSourceEntity> .
+            ?ss <{HALEY}hasEntitySlotValue> ?e0 .
+            ?de <{VITAL}hasEdgeSource> ?f . ?de <{VITAL}hasEdgeDestination> ?ds .
+            ?ds <{HALEY}hasKGSlotType> <urn:hasDestinationEntity> .
+            ?ds <{HALEY}hasEntitySlotValue> ?e1 .
+            {extra} }} }}"""
+
+    async def test_an_unanswered_verdict_keeps_the_check(self):
+        """None must never mean drop. No connection, a missing term or a failed
+        query all produce None, and the risk is one-sided: dropping a constraint
+        that DOES exclude something returns rows that should not be there."""
+        import inspect
+        from vitalgraph.db.sparql_sql import rewrite_frame_entity_table as r
+        src = inspect.getsource(r.rewrite_frame_entity_table)
+        assert "if verdict is True:" in src, (
+            "the drop must test `is True`; a truthiness test would drop on any "
+            "non-empty value and an identity slip would drop on None")
+
+
 class TestTheConstrainedDriveIsHoisted:
     """The end the gate chose has to reach the outer FROM, or it is not driving.
 
