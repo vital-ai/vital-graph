@@ -7,6 +7,7 @@ doing real work, which no optimisation removes.
 """
 import asyncio, os, statistics, sys, time
 sys.path.insert(0, "/Users/hadfield/Local/vital-git/vital-graph")
+from devtools.target import sidecar_url  # noqa: E402
 os.chdir("/Users/hadfield/Local/vital-git/vital-graph")
 import asyncpg
 from tests.performance.graph_fixtures import LARGE, CRITERIA, chain_query
@@ -19,7 +20,7 @@ _real = emit_traversal.dedup_feasible
 def _nodedup(*a, **kw): return None
 
 async def gen(conn, q):
-    c = AsyncSidecarClient("http://localhost:7071")
+    c = AsyncSidecarClient(sidecar_url())
     raw = await c.compile(q)
     cl = getattr(c,"aclose",None) or getattr(c,"close",None)
     if cl:

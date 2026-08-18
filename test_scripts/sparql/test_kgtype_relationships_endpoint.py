@@ -9,6 +9,7 @@ import asyncio
 import sys
 import time
 import logging
+from devtools.target import sidecar_url  # noqa: E402
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -21,7 +22,7 @@ PG_CONFIG = {
     "user": "postgres",
     "password": "password",
 }
-SIDECAR_URL = "http://localhost:7070"
+SIDECAR_URL = sidecar_url()
 
 SPACE_ID = "framenet_kgtypes_test"
 GRAPH_URI = "urn:vitalgraph:framenet_kgtypes_test:kg_types"

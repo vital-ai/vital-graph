@@ -6,6 +6,7 @@ hop-wise arms cost the same, the direction was decided but not expressed.
 """
 import asyncio, os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from devtools.target import sidecar_url  # noqa: E402
 
 import pathlib
 import asyncpg
@@ -76,7 +77,7 @@ async def build(conn, client, mode):
 async def main():
     conn = await asyncpg.connect(host="localhost", port=5433, user="postgres",
                                  password="testpass", database="sparql_sql_graph")
-    client = AsyncSidecarClient("http://localhost:7071")
+    client = AsyncSidecarClient(sidecar_url())
     try:
         answers, sqls = {}, {}
         for mode in ("as-is", "tail", "head"):

@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from devtools.target import sidecar_url  # noqa: E402
 os.chdir(str(Path(__file__).parent.parent))
 
 logging.basicConfig(level=logging.WARNING, format="%(name)s - %(message)s")
@@ -57,7 +58,7 @@ async def main():
     db_user = os.environ.get("LOCAL_DB_USERNAME", "postgres")
     db_pass = os.environ.get("LOCAL_DB_PASSWORD", "")
     db_url = f"postgresql://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
-    sidecar_url = os.environ.get("SIDECAR_URL", "http://localhost:7070")
+    sidecar_url = sidecar_url()
 
     pool = await asyncpg.create_pool(db_url, min_size=1, max_size=2)
 

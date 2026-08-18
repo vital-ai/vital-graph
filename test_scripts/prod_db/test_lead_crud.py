@@ -3,7 +3,7 @@
 Direct Lead Entity CRUD Test — Production RDS via sparql_sql Backend
 
 Bypasses the REST API. Uses SparqlSQLSpaceImpl directly against the
-production RDS with the local Jena sidecar (Docker, localhost:7070).
+production RDS with the local Jena sidecar (Docker, VG_TEST_SIDECAR_URL, default localhost:7071).
 
 Lifecycle per lead file:
   1. Load .nt → RDFLib triples → quads → bulk insert
@@ -32,6 +32,7 @@ from rdflib import Graph as RDFGraph, URIRef
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(Path(__file__).parent))
+from devtools.target import sidecar_url  # noqa: E402
 
 from db_connect import get_prod_connection_params, print_connection_info
 from vitalgraph.db.sparql_sql.sparql_sql_space_impl import SparqlSQLSpaceImpl
@@ -59,7 +60,7 @@ TEST_GRAPH_URI = "urn:prod_lead_crud"
 LEAD_DATA_DIR = PROJECT_ROOT / "internal_data" / "lead_test_data"
 LEAD_FILE_LIMIT = 3
 DELETE_SPACE_AT_END = True
-SIDECAR_URL = "http://localhost:7070"
+SIDECAR_URL = sidecar_url()
 
 
 def get_lead_files(limit: int = None) -> List[Path]:

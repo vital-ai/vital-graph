@@ -2,7 +2,7 @@
 Live integration test: full SPARQL → SQL → PostgreSQL execution.
 
 Requires:
-  - Jena sidecar running at localhost:7070
+  - Jena sidecar at VG_TEST_SIDECAR_URL (default localhost:7071)
   - PostgreSQL with RDF data (lead_test space)
 """
 

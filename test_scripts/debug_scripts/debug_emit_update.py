@@ -3,6 +3,7 @@
 import asyncio
 import sys
 sys.path.insert(0, '/Users/hadfield/Local/vital-git/vital-graph')
+from devtools.target import sidecar_url  # noqa: E402
 
 import asyncpg
 from vitalgraph.db.sparql_sql.emit_update import update_to_sql
@@ -32,7 +33,7 @@ CONN = {'host': 'localhost', 'port': 5432, 'database': 'sparql_sql_graph', 'user
 
 
 async def main():
-    client = AsyncSidecarClient(base_url='http://localhost:7070')
+    client = AsyncSidecarClient(base_url=sidecar_url())
     cache = SparqlCompileCache(maxsize=16)
     raw = await cache.compile(SPARQL, client)
     cr = map_compile_response(raw)

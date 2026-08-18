@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from devtools.target import sidecar_url  # noqa: E402
 logging.basicConfig(level=logging.WARNING, format="%(name)s - %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -104,7 +105,7 @@ async def main():
     db_pass = os.environ.get("LOCAL_DB_PASSWORD", "")
     db_url = f"postgresql://{db_user}:{db_pass}@localhost:{db_port}/{db_name}"
     pool = await asyncpg.create_pool(db_url, min_size=1, max_size=2)
-    sidecar_url = os.environ.get("SIDECAR_URL", "http://localhost:7070")
+    sidecar_url = sidecar_url()
 
     queries = {
         "1_Simple": f"""SELECT ?predicate ?object WHERE {{

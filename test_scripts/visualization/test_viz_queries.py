@@ -10,7 +10,7 @@ Tests the queries that the frontend will use:
   5. Client-side frame simplification logic
 
 Requires:
-  - Jena sidecar running at localhost:7070
+  - Jena sidecar at VG_TEST_SIDECAR_URL (default localhost:7071)
   - PostgreSQL with WordNet data in wordnet_exp_* tables
 
 Usage:

@@ -3,7 +3,7 @@
 Direct Lead Entity Dataset Test — Production RDS via sparql_sql Backend
 
 Bypasses the REST API. Uses SparqlSQLSpaceImpl directly against the
-production RDS with the local Jena sidecar (Docker, localhost:7070).
+production RDS with the local Jena sidecar (Docker, VG_TEST_SIDECAR_URL, default localhost:7071).
 
 Adapted from vitalgraph_client_test/test_sparql_sql_lead_dataset.py.
 
@@ -33,6 +33,7 @@ from rdflib import Graph as RDFGraph, URIRef
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(Path(__file__).parent))
+from devtools.target import sidecar_url  # noqa: E402
 
 from db_connect import get_prod_connection_params, print_connection_info
 from vitalgraph.db.sparql_sql.sparql_sql_space_impl import SparqlSQLSpaceImpl
@@ -63,7 +64,7 @@ TEST_GRAPH_URI = "urn:prod_lead_dataset"
 LEAD_DATA_DIR = PROJECT_ROOT / "internal_data" / "lead_test_data"
 MAX_FILES = 100
 SAMPLE_SIZE = 5
-SIDECAR_URL = "http://localhost:7070"
+SIDECAR_URL = sidecar_url()
 
 # Set to True to skip bulk load and use previously loaded data
 SKIP_LOAD = False

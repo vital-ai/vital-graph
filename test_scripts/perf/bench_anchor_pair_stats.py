@@ -31,6 +31,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
+from devtools.target import sidecar_url  # noqa: E402
 
 import asyncpg  # noqa: E402
 
@@ -40,7 +41,7 @@ from vitalgraph.db.jena_sparql.jena_ast_mapper import map_compile_response  # no
 from vitalgraph.db.jena_sparql.jena_sidecar_client import AsyncSidecarClient  # noqa: E402
 from vitalgraph.db.sparql_sql import generator
 
-SIDECAR = os.environ.get("VG_TEST_SIDECAR_URL", "http://localhost:7071")
+SIDECAR = sidecar_url()
 REPS = 7
 SPACE = LARGE.space
 

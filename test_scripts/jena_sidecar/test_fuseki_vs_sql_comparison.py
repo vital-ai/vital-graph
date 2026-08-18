@@ -9,7 +9,7 @@ Compares: result counts, result values (normalized), and timing.
 
 Requires:
   - Fuseki running at localhost:3030 with vitalgraph_space_lead_test dataset
-  - Jena sidecar running at localhost:7070
+  - Jena sidecar at VG_TEST_SIDECAR_URL (default localhost:7071)
   - PostgreSQL with lead_test space data
 
 Usage:

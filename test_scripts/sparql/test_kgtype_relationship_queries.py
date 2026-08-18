@@ -17,7 +17,7 @@ Queries tested:
 
 Requirements:
   - PostgreSQL with sparql_sql_graph database (FrameNet data loaded)
-  - Jena sidecar running at localhost:7070
+  - Jena sidecar at VG_TEST_SIDECAR_URL (default localhost:7071)
 
 Usage:
   python test_scripts/sparql/test_kgtype_relationship_queries.py
@@ -32,6 +32,7 @@ from typing import List, Dict, Any, Optional
 
 # Add project root
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from devtools.target import sidecar_url  # noqa: E402
 
 from vitalgraph.db.sparql_sql.sparql_sql_space_impl import SparqlSQLSpaceImpl
 
@@ -41,7 +42,7 @@ logger = logging.getLogger(__name__)
 # ── Configuration ──────────────────────────────────────────────────────────
 SPACE_ID = "framenet_kgtypes_test"
 GRAPH_URI = "urn:vitalgraph:framenet_kgtypes_test:kg_types"
-SIDECAR_URL = "http://localhost:7070"
+SIDECAR_URL = sidecar_url()
 
 PG_CONFIG = {
     "host": "localhost",

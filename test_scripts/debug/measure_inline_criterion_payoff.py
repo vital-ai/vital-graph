@@ -21,6 +21,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
+from devtools.target import sidecar_url  # noqa: E402
 
 import asyncpg
 from vitalgraph.db.jena_sparql.jena_ast_mapper import map_compile_response
@@ -104,7 +105,7 @@ async def price(conn, sql):
 async def main():
     conn = await asyncpg.connect(host="localhost", port=5433, user="postgres",
                                  password="testpass", database="sparql_sql_graph")
-    client = AsyncSidecarClient("http://localhost:7071")
+    client = AsyncSidecarClient(sidecar_url())
     try:
         for end in ("pinned", "constrained"):
             sparql = query(end)

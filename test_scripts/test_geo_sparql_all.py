@@ -13,7 +13,7 @@ Tests ALL vg: geo SPARQL functions against a real database:
 
 Prerequisites:
   - PostgreSQL with PostGIS extension
-  - Jena sidecar running at SIDECAR_URL (default: http://localhost:7070)
+  - Jena sidecar at VG_TEST_SIDECAR_URL (default: http://localhost:7071)
   - Geo test data loaded (run: python test_scripts/data/generate_geo_test_data.py --load)
 
 Usage:
@@ -27,6 +27,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from devtools.target import sidecar_url  # noqa: E402
 
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
@@ -457,7 +458,7 @@ async def main():
     db_name = os.environ.get("LOCAL_DB_NAME", "sparql_sql_graph")
     db_user = os.environ.get("LOCAL_DB_USERNAME", "postgres")
     db_pass = os.environ.get("LOCAL_DB_PASSWORD", "")
-    sidecar_url = os.environ.get("SIDECAR_URL", "http://localhost:7070")
+    sidecar_url = sidecar_url()
 
     db_url = f"postgresql://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
     logger.info("Connecting to %s (sidecar: %s)", db_url.split("@")[1], sidecar_url)

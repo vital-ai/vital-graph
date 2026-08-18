@@ -29,6 +29,7 @@ must reach the test stack.
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -60,10 +61,30 @@ DSN_DEFAULT = re.compile(
     r"(?:os\.environ\.get\([^)]*,\s*|default\s*=\s*)[\"']postgresql://")
 
 
+def _tracked() -> set:
+    """Files git knows about.
+
+    The sweep asserts a property of the REPOSITORY, so it must not read the
+    developer's untracked scratch — those fail here and do not exist in CI,
+    which is a difference that teaches people to ignore the test. A new file is
+    caught the moment it is added to git, which is when it becomes repo content.
+    """
+    try:
+        out = subprocess.run(["git", "ls-files", "-z"], cwd=REPO,
+                             capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):   # pragma: no cover
+        return set()
+    return {(REPO / n).resolve() for n in out.split("\0") if n}
+
+
+_TRACKED = _tracked()
+
+
 def _sources(root: str):
     """Shell counts: `probe_semijoin_entity_query.sh` exported the dev sidecar,
     and a Python-only sweep never looked at it."""
-    return sorted([p for pat in ("*.py", "*.sh") for p in (REPO / root).rglob(pat)])
+    found = [p for pat in ("*.py", "*.sh") for p in (REPO / root).rglob(pat)]
+    return sorted(p for p in found if not _TRACKED or p.resolve() in _TRACKED)
 
 
 def _text(path: Path) -> str:
@@ -89,7 +110,13 @@ NAME_FILES = sorted((p for p in _sources("tests") if _sidecar_vars(p)),
 # matches itself. Excluded by identity rather than by name so a rename cannot
 # quietly reintroduce the self-match.
 _SELF = Path(__file__).resolve()
+# `test_scripts/` is the scratch tree, and it was excluded here at first on the
+# grounds that it is ad-hoc. That was wrong: 33 of its files carried their own
+# `SIDECAR_URL` name defaulting to the DEV sidecar on 7070, which made it the
+# only tree still disagreeing with everything else. Scratch scripts are the ones
+# most likely to be copied into something permanent.
 PORT_FILES = sorted((p for p in _sources("tests") + _sources("scripts")
+                     + _sources("test_scripts")
                      if p.resolve() != _SELF),
                     key=lambda p: p.relative_to(REPO).as_posix())
 

@@ -8,6 +8,7 @@ Ground truth is a hand-written anchored closure in SQL, independent of both.
 """
 import asyncio, os, statistics, sys, time
 sys.path.insert(0, "/Users/hadfield/Local/vital-git/vital-graph")
+from devtools.target import sidecar_url  # noqa: E402
 os.chdir("/Users/hadfield/Local/vital-git/vital-graph")
 import asyncpg
 from tests.performance.graph_fixtures import SMALL, EDGE_SOURCE, EDGE_DEST
@@ -22,7 +23,7 @@ def _noseed(*a, **kw):
     return _real(*a, **kw)
 
 async def gen(conn, q):
-    c = AsyncSidecarClient("http://localhost:7071")
+    c = AsyncSidecarClient(sidecar_url())
     raw = await c.compile(q)
     cl = getattr(c,"aclose",None) or getattr(c,"close",None)
     if cl:

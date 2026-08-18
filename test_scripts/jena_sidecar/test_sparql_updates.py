@@ -5,7 +5,7 @@ Tests INSERT DATA, DELETE DATA, DELETE/INSERT WHERE, INSERT WHERE,
 CLEAR, DROP, CREATE, COPY, MOVE, ADD against crud_test_exp tables.
 
 Requires:
-  - Jena sidecar running at localhost:7070
+  - Jena sidecar at VG_TEST_SIDECAR_URL (default localhost:7071)
   - PostgreSQL with crud_test_exp_rdf_quad / crud_test_exp_term tables
 """
 
