@@ -23,11 +23,19 @@ the server log for a request that succeeded.
 
 These tests break the table the write depends on, which is the real failure from
 `issues/100` rather than a mocked one, and assert the failure survives each layer.
+
+THE SPACE IS THIS FILE'S OWN. An earlier version renamed a table inside
+`sp_kg_types`, which `test_new_space_matches_schema` and two API suites also
+read — a rename is global, so the window was visible to anything touching that
+space. One run failed with "relation does not exist" in the HEALTHY-write test
+and did not reproduce in five more; rather than call a shared-state hazard a
+flake, the fixture space is now created per module by `make_space`.
 """
 
 from __future__ import annotations
 
 import pytest
+import pytest_asyncio
 
 from .conftest import skip_no_infra
 
@@ -37,10 +45,21 @@ pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
 ]
 
-SPACE = "sp_kg_types"
-# The table `add_rdf_quads_batch_bulk` maintains, and the one that was missing.
-DEPENDENCY = f"{SPACE}_entity_slot_sort"
-QUADS = [("urn:issues105:s", "urn:issues105:p", "urn:issues105:o", f"urn:{SPACE}")]
+# The table `add_rdf_quads_batch_bulk` maintains, and the one that was missing on
+# `sp_kg_types` when issues/100 was traced.
+DEPENDENCY_SUFFIX = "_entity_slot_sort"
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
+async def write_space(make_space):
+    """A space this file owns, so breaking its schema cannot reach another test."""
+    return await make_space()
+
+
+@pytest.fixture
+def quads(write_space):
+    return [("urn:issues105:s", "urn:issues105:p", "urn:issues105:o",
+             f"urn:{write_space}")]
 
 
 async def _space_impl(pg_conn):
@@ -61,40 +80,41 @@ async def _space_impl(pg_conn):
 class _BreakDependency:
     """Rename the maintained table away, and always put it back."""
 
-    def __init__(self, conn):
+    def __init__(self, conn, space_id):
         self._conn = conn
-        self._hidden = f"{DEPENDENCY}_hidden_105"
+        self._table = f"{space_id}{DEPENDENCY_SUFFIX}"
+        self._hidden = f"{self._table}_hidden_105"
 
     async def __aenter__(self):
         exists = await self._conn.fetchval(
-            "SELECT 1 FROM pg_tables WHERE tablename = $1", DEPENDENCY)
+            "SELECT 1 FROM pg_tables WHERE tablename = $1", self._table)
         if not exists:
-            pytest.skip(f"{DEPENDENCY} is not present on this stack")
+            pytest.skip(f"{self._table} is not present on this stack")
         await self._conn.execute(
-            f'ALTER TABLE {DEPENDENCY} RENAME TO {self._hidden}')
+            f'ALTER TABLE {self._table} RENAME TO {self._hidden}')
         return self
 
     async def __aexit__(self, *exc):
         await self._conn.execute(
-            f'ALTER TABLE {self._hidden} RENAME TO {DEPENDENCY}')
+            f'ALTER TABLE {self._hidden} RENAME TO {self._table}')
         return False
 
 
-async def test_the_write_raises_rather_than_returning_zero(pg_conn):
+async def test_the_write_raises_rather_than_returning_zero(pg_conn, write_space, quads):
     impl = await _space_impl(pg_conn)
     try:
-        async with _BreakDependency(pg_conn):
+        async with _BreakDependency(pg_conn, write_space):
             with pytest.raises(Exception) as caught:
-                await impl.add_rdf_quads_batch_bulk(SPACE, QUADS)
+                await impl.add_rdf_quads_batch_bulk(write_space, quads)
         # The point is not merely that it raised, but that the CAUSE survives.
         # A returned 0 carried no cause at all.
-        assert DEPENDENCY in str(caught.value), (
+        assert f"{write_space}{DEPENDENCY_SUFFIX}" in str(caught.value), (
             f"the exception should name what was missing, got: {caught.value}")
     finally:
         await impl.disconnect()
 
 
-async def test_update_quads_reports_false(pg_conn):
+async def test_update_quads_reports_false(pg_conn, write_space, quads):
     """Layer 2: it discarded the count and returned True unconditionally.
 
     No change was needed there — its `except -> return False` was already
@@ -104,15 +124,15 @@ async def test_update_quads_reports_false(pg_conn):
 
     impl = await _space_impl(pg_conn)
     try:
-        async with _BreakDependency(pg_conn):
+        async with _BreakDependency(pg_conn, write_space):
             adapter = SparqlSQLBackendAdapter(impl)
-            ok = await adapter.update_quads(SPACE, f"urn:{SPACE}", [], QUADS)
+            ok = await adapter.update_quads(write_space, f"urn:{write_space}", [], quads)
         assert ok is False, "a failed write was reported as a successful update"
     finally:
         await impl.disconnect()
 
 
-async def test_a_healthy_write_still_returns_a_count(pg_conn):
+async def test_a_healthy_write_still_returns_a_count(pg_conn, write_space, quads):
     """The guard has to stay quiet on the working path.
 
     Without this, "always raise" and "raise only on failure" both pass, and the
@@ -120,10 +140,10 @@ async def test_a_healthy_write_still_returns_a_count(pg_conn):
     """
     impl = await _space_impl(pg_conn)
     try:
-        n = await impl.add_rdf_quads_batch_bulk(SPACE, QUADS)
-        assert n == len(QUADS), f"expected {len(QUADS)} written, got {n}"
-        empty = await impl.add_rdf_quads_batch_bulk(SPACE, [])
+        n = await impl.add_rdf_quads_batch_bulk(write_space, quads)
+        assert n == len(quads), f"expected {len(quads)} written, got {n}"
+        empty = await impl.add_rdf_quads_batch_bulk(write_space, [])
         assert empty == 0, "an empty write must still be a legitimate zero"
     finally:
-        await impl.remove_rdf_quads_batch_bulk(SPACE, QUADS)
+        await impl.remove_rdf_quads_batch_bulk(write_space, quads)
         await impl.disconnect()

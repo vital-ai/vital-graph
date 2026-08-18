@@ -19,6 +19,36 @@ class ConfigurationError(Exception):
     pass
 
 
+def load_dotenv_files() -> Optional[str]:
+    """Put `.env` into the environment, if one can be found.
+
+    Lifted from `admin_cmd`, which was the ONLY place doing this. The config
+    loader's docstring has always claimed "Supports profile-specific .env files"
+    while never loading one, so a host-run process silently used the built-in
+    defaults even with a correct `.env` sitting in the repo root.
+
+    Search the working directory and its parents first, then the source checkout.
+    The package-relative path only resolves in a checkout — installed via pip it
+    points into site-packages, where no `.env` exists.
+
+    `override=False`: a real environment variable always beats the file, so
+    docker-compose and CI keep winning.
+
+    Returns the path loaded, or None.
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:            # pragma: no cover - optional dependency
+        return None
+    candidates = [p / ".env" for p in (Path.cwd(), *Path.cwd().parents)]
+    candidates.append(Path(__file__).resolve().parent.parent.parent / ".env")
+    for env_path in candidates:
+        if env_path.exists():
+            load_dotenv(env_path, override=False)
+            return str(env_path)
+    return None
+
+
 class VitalGraphConfig:
     """
     VitalGraphDB configuration loader and manager.
@@ -33,11 +63,41 @@ class VitalGraphConfig:
         Uses VITALGRAPH_ENVIRONMENT to determine which profile prefix to use.
         Example: VITALGRAPH_ENVIRONMENT=local uses LOCAL_* variables
         """
+        # Before anything reads the environment: without this, a correct .env
+        # in the repo root was ignored and the defaults below took over.
+        loaded = load_dotenv_files()
         self.environment = os.getenv('VITALGRAPH_ENVIRONMENT', 'local').upper()
+        if loaded:
+            logger.info("Loaded environment from %s", loaded)
         self.config_data: Dict[str, Any] = self._load_from_env()
         self.config_path: Optional[str] = None  # No file path
         logger.info(f"Loaded configuration from {self.environment}_* environment variables")
     
+    def _require_profile_env(self, key: str) -> str:
+        """A setting that NAMES THE TARGET has no default.
+
+        Defaulting host/port/database/username means a process with nothing
+        configured connects to `vitalgraph@localhost:5432` as `postgres`. On a
+        machine where that exists, it succeeds against the wrong database and
+        reports success — `issues/055`, where fixtures were written to one
+        cluster and read from another because same-named spaces existed on both.
+        This machine carries `sparql_sql_graph` on BOTH 5432 and 5433, so the
+        trap is one env var away.
+
+        The password is NOT required: an empty password is legitimate under
+        trust authentication, and getting it wrong fails loudly at the server
+        rather than silently redirecting anywhere.
+        """
+        value = self._get_profile_env(key, '')
+        if value == '':
+            raise ValueError(
+                f"{key} is not set. Looked for {self.environment}_{key} and "
+                f"{key} in the environment, and no .env file supplied either. "
+                f"Settings that name the database have no default, because one "
+                f"would connect somewhere nobody configured."
+            )
+        return value
+
     def _get_profile_env(self, key: str, default: str = '') -> str:
         """
         Get environment variable with profile prefix.
@@ -87,10 +147,12 @@ class VitalGraphConfig:
                 'type': self._get_profile_env('BACKEND_TYPE', 'sparql_sql')
             },
             'database': {
-                'host': self._get_profile_env('DB_HOST', 'localhost'),
-                'port': int(self._get_profile_env('DB_PORT', '5432')),
-                'database': self._get_profile_env('DB_NAME', 'vitalgraph'),
-                'username': self._get_profile_env('DB_USERNAME', 'postgres'),
+                'host': self._require_profile_env('DB_HOST'),
+                'port': int(self._require_profile_env('DB_PORT')),
+                'database': self._require_profile_env('DB_NAME'),
+                'username': self._require_profile_env('DB_USERNAME'),
+                # Not required — see `_require_profile_env`: an empty password is
+                # legitimate, and a wrong one fails at the server, loudly.
                 'password': self._get_profile_env('DB_PASSWORD', ''),
                 # Key names must match what vitalgraph/db/pool.py reads. The former
                 # SQLAlchemy-style pool_size/max_overflow/pool_timeout/pool_recycle

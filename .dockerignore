@@ -62,6 +62,12 @@ debug_scripts/
 *_tests.py
 
 # Environment files (will be handled separately)
+# Plain .env too. The config loader now READS .env (it always claimed to and
+# never did), so a copy inside the image would supply LOCAL_DB_* — and the
+# profile-prefixed lookup beats compose's unprefixed DB_*, silently pointing
+# the container at the host cluster. The Dockerfile copies specific paths, so
+# this cannot happen today; this keeps it that way.
+.env
 .env.local
 .env.development
 .env.test
