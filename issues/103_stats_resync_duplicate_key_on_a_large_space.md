@@ -1,6 +1,48 @@
 # The Stats Resync Fails With a Duplicate Key on a Large Space
 
-## Status: OPEN — reproduced, worked around, mechanism NOT established
+## Status: FIXED 2026-08-18 — two concurrent rebuilds, serialised by an advisory lock
+
+The mechanism is concurrency, not parallelism, and it is SELF-TRIGGERING.
+
+`resync_stats_tables` is a TRUNCATE followed by an INSERT that takes minutes on a
+large space. `maintenance_job._audit_stats`, running in the app container, samples
+the largest recorded pairs and rebuilds any space whose counts disagree with the
+quad table. Mid-rebuild they always disagree — the TRUNCATE is what makes them
+disagree — so a load's own resync invites the maintenance job to start a
+competing one, and the second INSERT meets rows the first has already written.
+
+That accounts for every observation: the differing key each run (whichever row
+the two collided on), why only the 50M-quad space showed it (a seconds-long
+window on smaller spaces never overlaps), and why running the statement by hand
+always worked (nothing else was rebuilding at that moment).
+
+**Both earlier hypotheses were wrong and are struck through below.** Parallelism
+is not involved: the same statement with `max_parallel_workers_per_gather = 2`
+succeeds. The clue that broke it open was a row count that CHANGED between two
+runs minutes apart — 16,644,422 then 16,644,597 — which meant something else was
+writing.
+
+### The fix
+
+A per-space advisory lock (`pg_advisory_lock(hashtext('vitalgraph.stats.<space>'))`)
+around the whole rebuild. It BLOCKS rather than skipping: skipping would return
+while another rebuild is in flight, and that rebuild may have started before this
+caller's writes landed, leaving stats silently stale rather than merely late.
+Waiting costs one redundant rebuild and is always correct.
+
+Verified both ways on `sp_graph_forms_20k`, three concurrent resyncs:
+
+    without the lock   A FAILED, B ok, C FAILED   (the exact duplicate key)
+    with the lock      15.9s / 29.4s / 41.2s, all ok, identical 1,488,108 rows
+
+### Still worth doing separately
+
+The load reports failure with the quads already committed and the stats table
+empty. Nothing checks for that, so the space stays silently degraded — which is
+how this was noticed at all. A resync failure should leave a mark the next reader
+trips over.
+
+### Superseded reasoning, kept because it was wrong in a useful way
 
 Loading `sp_lead_synth_100k` (50,436,200 quads, 10,467,403 terms) on 2026-08-17
 completed its COPY and index rebuild, then died in the auxiliary resync:
@@ -13,7 +55,7 @@ completed its COPY and index rebuild, then died in the auxiliary resync:
 **the reported key is DIFFERENT every time** — three runs, three pairs. That is
 what makes it look like a plan-level effect rather than bad data.
 
-## What is established
+#### What was established at the time
 
 * **Serial succeeds.** The same full-rebuild statement, run with
   `max_parallel_workers_per_gather = 0`:
@@ -35,7 +77,7 @@ what makes it look like a plan-level effect rather than bad data.
   executed with workers here, and the largest space is the first to provoke a
   parallel plan.
 
-## What is NOT established
+#### What was not established at the time
 
 **Which statement raises it.** `sync_stats_tables` has three inserts into
 `rdf_stats`: the full rebuild after a TRUNCATE (no `ON CONFLICT`, and the one

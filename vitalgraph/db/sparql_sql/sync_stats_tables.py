@@ -208,6 +208,41 @@ async def resync_stats_tables(conn, space_id: str) -> Dict[str, int]:
     t_pred = f"{space_id}_rdf_pred_stats"
     t_stats = f"{space_id}_rdf_stats"
 
+    # ONE rebuild per space at a time, or two of them corrupt each other.
+    #
+    # This is a TRUNCATE followed by an INSERT that takes minutes on a large
+    # space. Run twice concurrently, the second INSERT meets rows the first has
+    # already written and dies on the primary key:
+    #
+    #     duplicate key value violates unique constraint "…_rdf_stats_pkey"
+    #
+    # and the reported pair differs every run, because it is whichever row the
+    # two happened to collide on (issues/103).
+    #
+    # It is SELF-TRIGGERING, which is why it took a 50M-quad load to surface.
+    # `maintenance_job._audit_stats` samples the largest recorded pairs and
+    # rebuilds a space whose counts disagree with the quad table. Mid-rebuild
+    # they always disagree — the TRUNCATE above is what makes them disagree — so
+    # a load's own resync invites the maintenance job to start a competing one.
+    # On a small space the window is seconds and nothing collides; here it was
+    # minutes.
+    #
+    # The lock BLOCKS rather than skipping. Skipping would return while another
+    # rebuild is in flight, and that rebuild may have started before this
+    # caller's writes landed — leaving stats that are silently stale rather than
+    # merely late. Waiting costs one redundant rebuild and is always correct.
+    lock_key = f"vitalgraph.stats.{space_id}"
+    await conn.execute("SELECT pg_advisory_lock(hashtext($1))", lock_key)
+    try:
+        return await _resync_stats_locked(conn, space_id, t_quad, t_pred, t_stats)
+    finally:
+        await conn.execute("SELECT pg_advisory_unlock(hashtext($1))", lock_key)
+
+
+async def _resync_stats_locked(conn, space_id: str, t_quad: str, t_pred: str,
+                               t_stats: str) -> Dict[str, int]:
+    """The rebuild itself. Callers go through `resync_stats_tables`, which holds
+    the per-space advisory lock this body assumes."""
     # Predicate cardinality
     await conn.execute(f"TRUNCATE {t_pred}")
     result = await conn.execute(f"""
