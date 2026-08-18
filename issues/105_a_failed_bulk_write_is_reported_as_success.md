@@ -1,6 +1,56 @@
 # A Failed Bulk Write Is Reported As Success
 
-## Status: OPEN — traced end to end, not yet fixed
+## Status: FIXED 2026-08-18 — the write raises; five methods had this, not one
+
+`return 0` became `raise`, keeping the log line. The callers were already written
+for it, which is why this was the right shape and not the result-object
+alternative below.
+
+**Five methods, not the one this issue named.** `add_rdf_quads_batch`,
+`add_rdf_quads_batch_bulk`, `delete_entity_graph_bulk`,
+`remove_rdf_quads_batch_bulk`, `remove_rdf_quads_batch` all had the identical
+swallow. Fixing only the named one would have left DELETES silently failing, and
+`update_quads` calls both a remove and an add.
+
+**Nothing above needed changing.** `update_quads` already had
+`try -> return True / except -> return False`; the `except` was simply
+unreachable. It now returns False.
+
+**The stalled-queue worry was unfounded**, and that was checked rather than
+assumed: `segmentation_worker._process_job` catches `Exception`, increments
+`_jobs_failed` and calls `manager.fail(job_id, reason)`. A raised exception
+becomes a failed job with a recorded cause, not a stuck queue.
+
+**Blast radius, by AST rather than by grep:** 8 of 34 call sites are not inside a
+`try`. Six are thin delegating wrappers or the fuseki backend. The other two —
+`kgdocuments_endpoint._store_segmentation_output` and
+`kgrelations_endpoint._store_relations_in_space` — are DEAD: their enclosing
+chains (`_handle_segment_sync`, `_execute_segmentation`) have no callers. Every
+live call site was already wrapped.
+
+**A second lie, one layer out.** Three callers logged `"Stored {len(quads)}
+quads"` with the count they handed IN, immediately after the call — so a failed
+or partial write printed a success line. They now log what the write returned.
+
+**Verified against the real failure**, by renaming `sp_kg_types_entity_slot_sort`
+away — the actual `issues/100` condition, not a mock:
+
+    before   returned 0        update_quads -> True
+    after    raises            update_quads -> False
+             UndefinedTableError naming the missing table
+
+`tests/integration/test_failed_write_is_not_success.py`. Both failure tests fail
+on the pre-fix code; a third asserts the healthy path still returns a count and
+that an empty write is still a legitimate zero — without it, "always raise" would
+also pass.
+
+### Still open, deliberately
+
+`get_rdf_quad_count` has the same swallow and returns 0, where 0 means "the space
+is empty" to every reader. It is a READ, so it is a different risk from a write
+reporting success, and it has 7 call sites that were not reviewed here.
+
+## The original report
 
 `add_rdf_quads_batch_bulk` catches every exception, logs it, and returns 0:
 

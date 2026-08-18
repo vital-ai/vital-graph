@@ -1,6 +1,13 @@
 # KGType Search Finds Nothing on the Test Stack
 
-## Status: ROOT CAUSE FOUND 2026-08-18 — the WRITE failed, not the search
+## Status: ROOT CAUSE FOUND 2026-08-18, and the CAUSE IS NOW FIXED — the WRITE
+failed, not the search
+
+The swallow that made this invisible is fixed in `issues/105`: the write now
+raises, `update_quads` returns False, and `create_kgtype` — which always
+checked — finally receives the failure it was written to catch. A repeat of
+this would surface as a failed request naming the missing table, instead of
+six searches returning nothing.
 
 `sp_kg_types` was one of the eight spaces missing `{space}_entity_slot_sort`, and
 `add_rdf_quads_batch_bulk` maintains that table. The app log for the exact window:
