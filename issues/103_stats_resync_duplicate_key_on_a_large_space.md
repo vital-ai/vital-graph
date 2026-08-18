@@ -35,12 +35,30 @@ Verified both ways on `sp_graph_forms_20k`, three concurrent resyncs:
     without the lock   A FAILED, B ok, C FAILED   (the exact duplicate key)
     with the lock      15.9s / 29.4s / 41.2s, all ok, identical 1,488,108 rows
 
-### Still worth doing separately
+### The half-state, also fixed
 
-The load reports failure with the quads already committed and the stats table
-empty. Nothing checks for that, so the space stays silently degraded — which is
-how this was noticed at all. A resync failure should leave a mark the next reader
-trips over.
+The load reported failure with the quads already committed and the stats table
+empty, and nothing checked for it. Two changes, because neither alone is enough:
+
+**The rebuild is now ATOMIC.** Each `execute` autocommits, so the TRUNCATE
+committed and a failing INSERT left the table with nothing in it — the worst
+available state rather than a neutral one, since absence means ZERO to every
+consumer. Wrapped in one transaction, a failure rolls the TRUNCATE back. Verified
+by failing the rebuild deliberately: 5,738 rows before, 5,738 after.
+
+**And there is now a mark.** Atomicity does not cover the case that started this:
+on a FRESH load the previous contents are empty, so a failed first rebuild still
+leaves nothing behind to preserve.
+`tests/performance/test_loaded_spaces_have_stats.py` asserts that every
+registered space holding quads holds predicate statistics for them. Verified to
+fire: truncating `sp_kg_rel_rdf_pred_stats` produces
+
+    sp_kg_rel: 279,886 quads, 0 predicate stats
+
+with the repair command in the message. It checks `rdf_pred_stats`, not
+`rdf_stats` — the former has one row per predicate with no threshold, while the
+latter is capped and legitimately empty for a space whose every pair exceeds
+`STATS_MAX_ROW_COUNT`, which would fire on healthy data.
 
 ### Superseded reasoning, kept because it was wrong in a useful way
 

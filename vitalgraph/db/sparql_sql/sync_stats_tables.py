@@ -75,7 +75,7 @@ async def sync_stats_after_insert(
     # a stored count of 1 after a single write (issues/062), and a
     # wrong-but-present row is worse than an absent one: the reader trusts what
     # it finds and only counts what it does not.
-    #
+        #
     # So for pruned predicates this degrades to UPDATE-only. Existing rows stay
     # accurate — their base is right and the delta is right — and absent ones
     # stay absent, which sends the reader to the bounded count that answers
@@ -243,32 +243,47 @@ async def _resync_stats_locked(conn, space_id: str, t_quad: str, t_pred: str,
                                t_stats: str) -> Dict[str, int]:
     """The rebuild itself. Callers go through `resync_stats_tables`, which holds
     the per-space advisory lock this body assumes."""
-    # Predicate cardinality
-    await conn.execute(f"TRUNCATE {t_pred}")
-    result = await conn.execute(f"""
-        INSERT INTO {t_pred} (predicate_uuid, row_count)
-        SELECT predicate_uuid, COUNT(*)
-        FROM {t_quad}
-        GROUP BY predicate_uuid
-    """)
-    pred_count = int(result.split()[-1]) if result else 0
-
-    # Predicate+object co-occurrence, excluding extremely common pairs.
+    # ONE TRANSACTION, so a failure cannot leave the tables EMPTY.
     #
-    # The bound is STATS_MAX_ROW_COUNT, not a literal. It was written out here
-    # as 200000 while the `pruned` update below has to use exactly the same
-    # threshold to decide which predicates this rebuild covered — two copies of
-    # a constant that must agree, where disagreement silently mislabels a
-    # predicate as fully covered and re-opens the delta-only bug.
-    await conn.execute(f"TRUNCATE {t_stats}")
-    result = await conn.execute(f"""
-        INSERT INTO {t_stats} (predicate_uuid, object_uuid, row_count)
-        SELECT predicate_uuid, object_uuid, COUNT(*)
-        FROM {t_quad}
-        GROUP BY predicate_uuid, object_uuid
-        HAVING COUNT(*) <= {STATS_MAX_ROW_COUNT}
-    """)
-    stats_count = int(result.split()[-1]) if result else 0
+    # Each `execute` autocommits on its own, so the TRUNCATE committed and a
+    # failing INSERT left the table with nothing in it. That is the worst
+    # available state rather than a neutral one: absence means ZERO to every
+    # consumer of these tables — the criterion gate reads pairs as unmeasured,
+    # `semijoin._selective_enough` divides by an understated anchor — so a
+    # half-finished rebuild makes the planner confidently wrong where a stale one
+    # only makes it out of date. Observed: a load died here and left 50M quads
+    # against a 136-row stats table (issues/103).
+    #
+    # TRUNCATE is transactional in PostgreSQL, so rolling back restores the
+    # previous contents. ANALYZE stays outside; it is not part of the swap and
+    # does not need to be.
+    async with conn.transaction():
+        # Predicate cardinality
+        await conn.execute(f"TRUNCATE {t_pred}")
+        result = await conn.execute(f"""
+            INSERT INTO {t_pred} (predicate_uuid, row_count)
+            SELECT predicate_uuid, COUNT(*)
+            FROM {t_quad}
+            GROUP BY predicate_uuid
+        """)
+        pred_count = int(result.split()[-1]) if result else 0
+
+        # Predicate+object co-occurrence, excluding extremely common pairs.
+        #
+        # The bound is STATS_MAX_ROW_COUNT, not a literal. It was written out here
+        # as 200000 while the `pruned` update below has to use exactly the same
+        # threshold to decide which predicates this rebuild covered — two copies of
+        # a constant that must agree, where disagreement silently mislabels a
+        # predicate as fully covered and re-opens the delta-only bug.
+        await conn.execute(f"TRUNCATE {t_stats}")
+        result = await conn.execute(f"""
+            INSERT INTO {t_stats} (predicate_uuid, object_uuid, row_count)
+            SELECT predicate_uuid, object_uuid, COUNT(*)
+            FROM {t_quad}
+            GROUP BY predicate_uuid, object_uuid
+            HAVING COUNT(*) <= {STATS_MAX_ROW_COUNT}
+        """)
+        stats_count = int(result.split()[-1]) if result else 0
 
     await conn.execute(f"ANALYZE {t_pred}")
     await conn.execute(f"ANALYZE {t_stats}")
