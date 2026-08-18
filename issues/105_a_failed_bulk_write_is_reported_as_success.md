@@ -44,11 +44,33 @@ on the pre-fix code; a third asserts the healthy path still returns a count and
 that an empty write is still a legitimate zero — without it, "always raise" would
 also pass.
 
-### Still open, deliberately
+### `get_rdf_quad_count` should NOT be changed — reviewed 2026-08-18
 
-`get_rdf_quad_count` has the same swallow and returns 0, where 0 means "the space
-is empty" to every reader. It is a READ, so it is a different risk from a write
-reporting success, and it has 7 call sites that were not reviewed here.
+It has the same swallow, and leaving it was recorded here as unfinished work.
+Having reviewed the call sites, changing it would be a no-op at best and a
+regression at worst.
+
+**Both product call sites already treat a failure as zero, by their own choice.**
+`list_graphs` (:280) and `get_graph` (:303) each wrap the call in
+`try/except Exception: pass` around `triple_count = 0`. If the count raised, they
+would still display 0 — the same output — except the exception would be
+discarded by a bare `except: pass` with NO log, where today the impl logs the
+cause. Raising would delete the only record of what went wrong.
+
+**The count is a display field, not a decision input.** It reaches
+`sparql_graph_endpoint` as `triple_count` on the graph listing. A wrong 0 is an
+inaccurate number on a page, not a wrong plan or a lost write. Contrast the bulk
+write, where the same shape cost `issues/100` two days and six broken searches.
+
+**The persistent form of the risk is already guarded.**
+`tests/unit/test_count_caching.py` asserts a failed count is NOT cached, with the
+reason in the test: "a failed count was cached as 0 — an outage now looks like an
+empty graph for the life of the entry". Someone reached this conclusion already
+and handled the part that actually bites.
+
+If the display accuracy ever matters, the fix is at the call sites — report
+"unknown" rather than 0 — not at the impl. That is an API contract change and is
+not proposed here.
 
 ## The original report
 
