@@ -46,10 +46,10 @@ import sys
 from datetime import datetime
 
 sys.path.insert(0, os.getcwd())
+from vitalgraph_sparql_sql_dev.db import dsn, sidecar_url  # noqa: E402
 import asyncpg  # noqa: E402
 
-DSN = os.environ.get("TDSN",
-                     "postgresql://hadfield@localhost:5432/sparql_sql_graph")
+DSN = dsn()
 # EVERY dataset lives in a graph. No size threshold and no exclusions.
 #
 # An earlier version of this script skipped spaces under 1,000 quads and any

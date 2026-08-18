@@ -48,19 +48,18 @@ import os
 import sys
 import time
 
-import asyncpg
-from vitalgraph_sparql_sql_dev.db import get_connection_params  # noqa: E402
+# The repo root, ahead of site-packages. Without this the INSTALLED copy of
+# `vitalgraph_sparql_sql_dev` wins, and that copy still resolves port 5432 with
+# an empty password — the pre-issues/055 defaults. This script ALTERS whichever
+# cluster it reaches, and the host carries same-named spaces, so it would have
+# migrated the dev cluster and reported success.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import asyncpg  # noqa: E402
+from vitalgraph_sparql_sql_dev.db import dsn  # noqa: E402
 
 OLD_KEYS = "(context_uuid, predicate_uuid)"
 NEW_COLS = "(context_uuid, predicate_uuid, object_uuid) INCLUDE (subject_uuid)"
-
-
-def _dsn_from_env() -> str:
-    """The shared target as a DSN. See `add_pg_arguments` for why the
-    defaults are not spelled out here (issues/055)."""
-    p = get_connection_params()
-    return (f"postgresql://{p['user']}:{p['password']}@"
-            f"{p['host']}:{p['port']}/{p['dbname']}")
 
 
 async def find_targets(conn, only_space: str | None):
@@ -225,7 +224,7 @@ def main() -> int:
                          "quad count (the index cannot pay for itself on "
                          "a tiny space)")
     a = ap.parse_args()
-    return asyncio.run(run(a.dsn or _dsn_from_env(), a.space, a.dry_run,
+    return asyncio.run(run(a.dsn or dsn(), a.space, a.dry_run,
                            a.create_missing, a.min_quads))
 
 

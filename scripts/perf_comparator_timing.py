@@ -37,14 +37,14 @@ import time
 
 sys.path.insert(0, os.getcwd())
 sys.path.insert(0, os.path.join(os.getcwd(), "scripts"))
+from vitalgraph_sparql_sql_dev.db import dsn, sidecar_url  # noqa: E402
 import asyncpg
 from perf_shape_matrix import build_criteria, sql_for, COMPARATORS, KGENTITY
 
 SP = os.environ.get("TSPACE", "sp_lead_synth_100k")
 GR = os.environ.get("TGRAPH", "urn:sp_lead_synth_100k")
-DSN = os.environ.get("TDSN", "postgresql://hadfield@localhost:5432/sparql_sql_graph")
-SIDE = (os.environ.get("TSIDE")
-        or os.environ.get("VG_TEST_SIDECAR_URL", "http://localhost:7071"))
+DSN = dsn()
+SIDE = sidecar_url()
 BUDGET = float(os.environ.get("TBUDGET", "60"))
 WANT_COLD = os.environ.get("TCOLD", "1") != "0"
 

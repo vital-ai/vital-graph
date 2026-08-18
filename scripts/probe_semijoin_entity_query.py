@@ -21,7 +21,11 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from vitalgraph_sparql_sql_dev.db import sidecar_url  # noqa: E402
 
+# REQUIRED, with no default, and deliberately not `db.dsn()`: this probe runs
+# against a restored dump whose database name is discovered per restore
+# (see the .sh), not against the configured test stack.
 DSN = os.environ["PROBE_DSN"]
 SPACE = os.environ["PROBE_SPACE"]
 GRAPH = os.environ["PROBE_GRAPH"]
@@ -34,11 +38,7 @@ SLOT_VALUE = os.environ["PROBE_SLOT_VALUE"]
 PARENT_FRAME = os.environ.get("PROBE_PARENT_FRAME_TYPE") or None
 SLOT_CLASS = os.environ.get("PROBE_SLOT_CLASS") or None
 COMPARATOR = os.environ.get("PROBE_COMPARATOR", "eq")
-# 7071 is the test stack; the container maps it to its own 7070. Defaulting
-# to 7070 pointed this probe at a HOST-run dev sidecar while its DSN was
-# free to name the test cluster — the issues/055 split, one service over.
-SIDECAR = (os.environ.get("PROBE_SIDECAR")
-           or os.environ.get("VG_TEST_SIDECAR_URL", "http://localhost:7071"))
+SIDECAR = sidecar_url()
 PAGE_SIZE = int(os.environ.get("PROBE_PAGE_SIZE", "50"))
 
 KGURI_SLOT = "http://vital.ai/ontology/haley-ai-kg#KGURISlot"

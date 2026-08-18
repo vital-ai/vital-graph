@@ -136,6 +136,43 @@ def describe_target(args_or_params) -> str:
     return f"{host}:{port}/{db} — {which}"
 
 
+# The sidecar belongs here for the same reason the database does. It is a
+# STATELESS COMPILER, so reaching the wrong one returns a plausible AST rather
+# than an error, and version skew between two instances lands as a query-shape
+# mystery rather than a connection failure. Six scripts and one test had their
+# own default and four of them named 7070 — the dev sidecar, which is also the
+# test container's OWN internal port, which is how that value gets copied.
+_SIDECAR_DEFAULT = "http://localhost:7071"   # test stack; 7070 is the dev one
+
+
+def sidecar_url() -> str:
+    """The configured Jena sidecar, resolved in one place.
+
+    `VG_TEST_SIDECAR_URL` is the selector the suites share. A script must not
+    carry its own default: with nothing set, every caller has to land on the
+    same instance or the disagreement is invisible.
+    """
+    return (os.environ.get("VG_TEST_SIDECAR_URL") or _SIDECAR_DEFAULT).rstrip("/")
+
+
+def dsn() -> str:
+    """The configured target as a `postgresql://` URL.
+
+    `get_connection_string` below returns the libpq keyword form and is for
+    DISPLAY — it carries no password and cannot be connected with. This one is
+    what `asyncpg.connect(dsn)` takes.
+
+    Scripts hardcoded this string. Five of them defaulted to
+    `postgresql://<user>@localhost:5432/sparql_sql_graph` — the host cluster,
+    with a username baked in — while the suites and the fixture loaders used
+    5433. The host carries same-named spaces, so those scripts connected,
+    answered, and reported success against stale data (issues/055, issues/099).
+    """
+    p = get_connection_params()
+    return (f"postgresql://{p['user']}:{p['password']}@"
+            f"{p['host']}:{p['port']}/{p['dbname']}")
+
+
 def get_connection_string(params: Optional[Dict[str, Any]] = None) -> str:
     """Build a DSN-style connection string (for logging / display only)."""
     p = params or get_connection_params()

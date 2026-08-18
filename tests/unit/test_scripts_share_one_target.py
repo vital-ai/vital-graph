@@ -1,4 +1,4 @@
-"""Every suite resolves the SAME sidecar, and nothing defaults to another one.
+"""Nothing chooses its own target — one resolver owns the stack.
 
 The sibling of `test_pg_target_is_shared` (issues/055), for the other service a
 test can silently point somewhere else. The database case was found because a
@@ -50,6 +50,15 @@ SIDECAR_VAR = re.compile(r"[\"']([A-Z][A-Z0-9_]*SIDECAR[A-Z0-9_]*)[\"']")
 # correct and must NOT be flagged.
 LOCAL_7070 = re.compile(r"https?://(?:localhost|127\.0\.0\.1):7070")
 
+# A target written as a FALLBACK — `os.environ.get(X, "postgresql://...")` or an
+# argparse `default=`. This is the shape that misroutes: the variable is never
+# exported, the literal wins, and the script connects to whatever its author had
+# running. Five scripts defaulted to the host cluster this way while the suites
+# used the test stack, and the host carries same-named spaces, so they answered.
+# A DSN built from a value discovered at runtime is NOT this and is not matched.
+DSN_DEFAULT = re.compile(
+    r"(?:os\.environ\.get\([^)]*,\s*|default\s*=\s*)[\"']postgresql://")
+
 
 def _sources(root: str):
     """Shell counts: `probe_semijoin_entity_query.sh` exported the dev sidecar,
@@ -76,7 +85,12 @@ def _dev_sidecar_urls(path: Path):
 
 NAME_FILES = sorted((p for p in _sources("tests") if _sidecar_vars(p)),
                     key=lambda p: p.relative_to(REPO).as_posix())
-PORT_FILES = sorted(_sources("tests") + _sources("scripts"),
+# This file spells the forbidden patterns in order to search for them, so it
+# matches itself. Excluded by identity rather than by name so a rename cannot
+# quietly reintroduce the self-match.
+_SELF = Path(__file__).resolve()
+PORT_FILES = sorted((p for p in _sources("tests") + _sources("scripts")
+                     if p.resolve() != _SELF),
                     key=lambda p: p.relative_to(REPO).as_posix())
 
 
@@ -112,3 +126,68 @@ class TestTheDefaultTarget:
             f"{TEST_SIDECAR_PORT} (7070 is also the container's OWN port, which "
             "is why it gets copied):\n" + "\n".join(
                 f"  {f}\n    " + "\n    ".join(v) for f, v in sorted(offenders.items())))
+
+
+class TestNoScriptOwnsItsTarget:
+    """The database half of the same rule (issues/055).
+
+    `vitalgraph_sparql_sql_dev.db` resolves the stack — `dsn()`, `pg_kwargs()`,
+    `add_pg_arguments()`. A script that writes its own fallback opts out of that
+    silently, and the failure is a successful run against the wrong cluster.
+    """
+
+    @pytest.mark.parametrize("path", PORT_FILES,
+                             ids=[p.relative_to(REPO).as_posix() for p in PORT_FILES])
+    def test_no_hardcoded_connection_default(self, path):
+        # Searched over the WHOLE file, not line by line. The first version
+        # matched single lines and stayed silent on
+        #     DSN = os.environ.get("TDSN",
+        #                          "postgresql://...")
+        # which is how `register_dataset_graphs.py` actually spelled it — the
+        # check missed the very file that motivated it, and was only caught by
+        # reintroducing the original two-line form to see whether it fired.
+        text = _text(path)
+        hits = [f"line {text.count(chr(10), 0, m.start()) + 1}: "
+                f"{m.group(0).split(chr(10))[0].strip()}"
+                for m in DSN_DEFAULT.finditer(text)]
+        assert not hits, (
+            f"{path.relative_to(REPO)} defaults its own connection string; use "
+            f"`vitalgraph_sparql_sql_dev.db.dsn()` so one place owns the target:\n"
+            + "\n".join(f"    {h}" for h in hits))
+
+
+REPO_IMPORT = re.compile(r"^\s*(?:from|import)\s+(?:vitalgraph|vitalgraph_sparql_sql_dev)\b",
+                         re.MULTILINE)
+
+SCRIPTS = [p for p in sorted((REPO / "scripts").glob("*.py"))
+           if REPO_IMPORT.search(_text(p))]
+
+
+class TestScriptsImportTheRepoNotTheInstalledCopy:
+    """A stale `pip install` of this package is a THIRD way to reach the wrong
+    stack, and the one the other checks cannot see.
+
+    `migrate_quad_ctx_pred_index.py` had no `sys.path` insert, so it imported
+    `vitalgraph_sparql_sql_dev` from site-packages. That copy still resolves
+    port 5432 with an empty password — the pre-issues/055 defaults — while the
+    repo resolves 5433. Nothing about the script's own text was wrong; it read a
+    DIFFERENT RESOLVER. For a MIGRATION script this is the worst case in
+    `test_pg_target_is_shared`'s docstring made real: it alters whichever cluster
+    it reaches, and the host carries same-named spaces, so it succeeds.
+    """
+
+    def test_the_inventory_is_not_empty(self):
+        assert SCRIPTS, "no script imports the repo packages — the sweep is broken"
+
+    @pytest.mark.parametrize("path", SCRIPTS,
+                             ids=[p.relative_to(REPO).as_posix() for p in SCRIPTS])
+    def test_the_repo_root_is_put_ahead_of_site_packages(self, path):
+        text = _text(path)
+        insert = text.find("sys.path.insert")
+        assert insert != -1, (
+            f"{path.relative_to(REPO)} imports the repo packages with no "
+            f"sys.path insert, so an installed copy shadows the repo")
+        first_import = REPO_IMPORT.search(text).start()
+        assert insert < first_import, (
+            f"{path.relative_to(REPO)} inserts the repo root AFTER importing "
+            f"from it, which is too late to matter")

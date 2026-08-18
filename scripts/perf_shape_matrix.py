@@ -59,6 +59,7 @@ import time
 from dataclasses import dataclass, field
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from vitalgraph_sparql_sql_dev.db import dsn, sidecar_url  # noqa: E402
 
 NS = "urn:acme:kg"
 KGENTITY = "http://vital.ai/ontology/haley-ai-kg#KGEntity"
@@ -301,9 +302,8 @@ async def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--space", required=True)
     ap.add_argument("--graph", required=True)
-    ap.add_argument("--dsn", default="postgresql://hadfield@localhost:5432/sparql_sql_graph")
-    ap.add_argument("--sidecar", default=os.environ.get("VG_TEST_SIDECAR_URL",
-                                                        "http://localhost:7071"))
+    ap.add_argument("--dsn", default=dsn())
+    ap.add_argument("--sidecar", default=sidecar_url())
     ap.add_argument("--out", default="/tmp/shape_matrix.md")
     ap.add_argument("--no-execute", action="store_true",
                     help="classify plans only; skip the differential check")
