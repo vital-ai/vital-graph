@@ -15,12 +15,24 @@ failure modes while `frame_entity_drift` reports healthy:
     reloaded data    orphan 100%    drift 9266 = 9266   <- counts still agree
     renamed graph    orphan 100%    drift 9266 = 9266   <- counts still agree
 
-**It is anchored on `hasEdgeSource`, not `vitaltype`.** The first version asked
-whether the frame still carried a type quad and read 100% on
-`prolog_spike_frames` — a space with **zero** vitaltype quads whose rows all
-resolve perfectly. Nothing obliges a frame to carry a type, and
-`edge_table_untyped_rate` documents that same trap one table over. The probe now
-asks about the quad that CREATES the row.
+**It is anchored on `hasEdgeSource`, not on the type quad** — and the first
+explanation given for that was wrong, corrected here after review.
+
+The first version asked whether the frame still carried a `vitaltype` quad and
+read 100% on `prolog_spike_frames`. That was NOT because frames may be untyped —
+a frame is defined by its type. It was because that space writes the type as
+`rdf:type` (1,200 quads), the other spelling, which `generator.py` and
+`slot_type_tautology` already treat as equivalent. The probe was asking a
+narrower question than it appeared to.
+
+The deeper reason the type is the wrong anchor at either spelling: the builder
+LEFT JOINs it, so `frame_type_uuid` is nullable and a row is created without one.
+A staleness probe has to ask about what the builder REQUIRES — the inner join,
+`hasEdgeSource`.
+
+Proven rather than argued: resyncing `prolog_spike_frames` rebuilds all 200 rows
+byte-identical, so the table the type-anchored probe called 100% stale was not
+stale, and the repair it recommended would have changed nothing.
 
 ### 2. The repair an operator is told to run now repairs this
 

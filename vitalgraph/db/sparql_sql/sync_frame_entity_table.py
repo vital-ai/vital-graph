@@ -477,14 +477,30 @@ async def frame_entity_orphan_rate(conn, space_id: str, sample: int = 200) -> fl
     identical across both exports, while the edge table referenced the edge
     nodes, which were regenerated. A rename of the GRAPH hits both.
 
-    ANCHORED ON `hasEdgeSource`, NOT ON `vitaltype`. The first version asked
-    whether the frame still had a vitaltype quad, and read 100% on
-    `prolog_spike_frames` — a space with 0 vitaltype quads whose frame_entity
-    rows all resolve perfectly well. Nothing obliges a frame to carry a type,
-    and `edge_table_untyped_rate` documents that same trap one table over. The
-    quad this asks about is the one that CREATES the row: the frame is the
-    object of a `hasEdgeSource` quad, so if that is gone, the row is derived
-    from something that no longer exists.
+    ANCHORED ON `hasEdgeSource`, NOT ON THE TYPE QUAD. The first version asked
+    whether the frame still carried a `vitaltype` quad and read 100% on
+    `prolog_spike_frames`. Two things were wrong with that, and the first is the
+    less interesting one:
+
+      * That space types its objects with `rdf:type`, not `vitaltype` — 1,200
+        quads of it. The two are alternative spellings the generator already
+        treats as equivalent (`generator.py`, `slot_type_tautology`), so a probe
+        that checks only one of them is asking a narrower question than it
+        looks. A frame IS defined by its type; the probe was wrong about where
+        the type is written, not about whether frames have one.
+
+      * More fundamentally, the type is the wrong anchor at any spelling. The
+        builder LEFT JOINs it — `frame_type_uuid` is nullable and a row is
+        created without it — so a row can be perfectly current with no type quad
+        at all. A staleness probe must ask about what the builder REQUIRES,
+        which is the inner join: the frame is the object of a `hasEdgeSource`
+        quad. If that is gone, the row derives from something that no longer
+        exists.
+
+    Proven rather than argued: resyncing `prolog_spike_frames` rebuilds all 200
+    rows byte-identical, so the table the type-anchored probe called 100% stale
+    was not stale at all — it would have sent an operator to a repair that
+    changes nothing.
 
     Bounded by `sample`: one index probe each, so cost is independent of table
     size. Returns 0.0 for an empty table — nothing sampled is not evidence of
