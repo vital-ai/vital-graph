@@ -1,6 +1,34 @@
 # KGType Search Finds Nothing on the Test Stack
 
-## Status: NO LONGER REPRODUCES 2026-08-17 — cause still NOT established
+## Status: NOT REPRODUCING — narrowed to the SYNC layer, root cause still open
+
+Attributed to a class on 2026-08-18, which the issue previously could not do.
+
+Sampling the index tables once a second while the fixture runs:
+
+    t=0-2s   quads=0   fts=0  vec=0     types not created yet
+    t=3-5s   quads=21  fts=3  vec=3     created AND indexed inside one second
+    t=6s+    quads=0   fts=0  vec=0     fixture cleaned up
+
+`fts=3, vec=3` is exactly the three types created. When healthy, indexing
+completes in about a second — well inside the fixture's 3-second wait, with no
+race worth speaking of.
+
+**So a search returning zero means the index was EMPTY, not that the search was
+wrong.** The search path returns results whenever rows are present, and the rows
+appear almost immediately. That exonerates the query side and puts the failure in
+the sync that populates `_fts_kgtype_default` / `_vec_kgtype_default`.
+
+What is still unknown is why the sync would not have run on 2026-08-16. Worth
+noting alongside: the app container was logging `_poll_space` errors for spaces
+that had been deleted, repeatedly and with tracebacks, and that worker was given
+a skip list the same day. Whether the kgtype auto-sync shares that machinery, and
+whether a wedged worker stops it, has NOT been checked — it is the first thing to
+look at if this returns, and it is checkable now that the fixture reports index
+counts.
+
+The `4722c78` timeline still rules out the port confusion and a stale image; see
+below.
 
 All eight `TestKGTypeSearch` cases pass, including the six that failed. Nothing
 was done to the search path; two things changed underneath it on 2026-08-17:
