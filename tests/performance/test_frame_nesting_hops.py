@@ -48,6 +48,27 @@ async def _seed_edges(pool, n_sources=1000, fanout=10):
             t["edge"].split(".")[-1], records=rows,
             columns=["edge_uuid", "source_node_uuid", "dest_node_uuid", "context_uuid"])
         await conn.execute(f"VACUUM (ANALYZE) {t['edge']}")   # set visibility map
+
+        # DID the VACUUM actually set it? It cannot mark a page all-visible
+        # while an older snapshot is open anywhere in the cluster, and this
+        # suite shares a database with the app container's background jobs.
+        # Without the map an Index Only Scan is unavailable and the planner
+        # takes a Bitmap Heap Scan — the assertion below then fails with
+        # "expected an Index Only Scan", which reads as a query-shape
+        # regression and is nothing of the sort.
+        #
+        # Confirmed rather than guessed: holding one idle-in-transaction
+        # snapshot in another session makes this test fail every time, and it
+        # passes every time without one. It had been recorded as "flaky" twice
+        # on the strength of passing when re-run alone.
+        allvisible = await conn.fetchval(
+            "SELECT relallvisible FROM pg_class WHERE relname = $1",
+            t["edge"].split(".")[-1])
+    if not allvisible:
+        pytest.skip(
+            "the visibility map could not be set — another session holds an "
+            "older snapshot, so an Index Only Scan is unavailable and this "
+            "test would be measuring that rather than the index")
     return _uuid.uuid5(_NS, "src:0"), _uuid.uuid5(_NS, "dst:0:0")
 
 
