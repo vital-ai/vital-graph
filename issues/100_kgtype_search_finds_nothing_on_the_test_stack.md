@@ -1,6 +1,54 @@
 # KGType Search Finds Nothing on the Test Stack
 
-## Status: NOT REPRODUCING — narrowed to the SYNC layer, root cause still open
+## Status: ROOT CAUSE FOUND 2026-08-18 — the WRITE failed, not the search
+
+`sp_kg_types` was one of the eight spaces missing `{space}_entity_slot_sort`, and
+`add_rdf_quads_batch_bulk` maintains that table. The app log for the exact window:
+
+    01:02:28.558  add_rdf_quads_batch_bulk(sp_kg_types) failed:
+                  relation "sp_kg_types_entity_slot_sort" does not exist
+    01:02:32.677  (same)
+    01:04:24.287  (same)
+    01:05:34.872  (same)
+
+Four failures between 01:02:28 and 01:05:34 UTC — 21:02 to 21:05 EDT — and this
+issue was filed at 21:06. Nothing was stored, so every search found nothing:
+keyword, FTS and vector alike, which is exactly why all six failed together and
+why the "keyword needs no embeddings" observation never narrowed anything.
+
+It stopped reproducing because `migrate_space_schema --all`, run on 2026-08-17 to
+close the schema-drift gap, created the missing table. There have been no such
+errors since.
+
+### The reasoning that missed it, twice
+
+**"The search path does not reference `entity_slot_sort` (grepped), and the table
+is still empty for this space, so that repair is unlikely to be it."** Both halves
+true, and the conclusion wrong: the WRITE path references it. I grepped the side
+that reads and concluded about the side that writes. The table being empty was
+consistent with the failure, not evidence against it.
+
+The later narrowing — "search returning zero means the index was empty, so the
+failure is in the sync" — was right about the search and wrong about the sync.
+The index was empty because the quads were never written, one layer below.
+
+### A related defect, NOT this one
+
+`add_rdf_quads_batch_bulk` catches the exception, logs it, and `return 0`. One
+caller in `kg_backend_utils.store_objects` checks for that — `if inserted == 0
+and len(quads) > 0` — and returns `success=False`. That check never fired here:
+there is no "store_objects: 0 quads inserted" line in the log, so the kgtypes
+create reaches a caller that does not check. A write that fails and returns 0 is
+indistinguishable from a write of nothing, and only one caller tells them apart.
+Worth its own investigation.
+
+### What this says about the earlier eliminations
+
+They were right and now have a cause to point at. The port confusion and stale
+image were ruled out on timestamps; the search path is exonerated because it was
+never reached. The instrumentation added on 2026-08-18 would have found this in
+one run — it asserts the index is populated before searching, and the index was
+empty because the write failed.
 
 Attributed to a class on 2026-08-18, which the issue previously could not do.
 
