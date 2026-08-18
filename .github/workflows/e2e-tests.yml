@@ -78,6 +78,10 @@ jobs:
             tests/conformance/test_dawg_update_sql_v2.py \
             --tb=short -q
         env:
+          # Without this the suite SKIPS when the stack is unreachable and the
+          # job passes — the whole point of running it here is that the stack
+          # exists, so absence must be a failure, not a quiet zero.
+          VG_REQUIRE_INFRA: "1"
           VG_TEST_SIDECAR_URL: http://localhost:7071
           VG_TEST_PG_HOST: localhost
           VG_TEST_PG_PORT: "5433"

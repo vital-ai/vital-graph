@@ -23,7 +23,7 @@ Both are collected here.
 parsing federation we cannot execute is a real and separable property, and
 these three cases are the only thing in the corpus that checks it.
 
-Requires the Jena sidecar on localhost:7070. Skips without it.
+Requires the Jena sidecar (VG_TEST_SIDECAR_URL, default 7071).
 """
 
 from __future__ import annotations
@@ -78,28 +78,16 @@ _POSITIVE = {"PositiveSyntax", "PositiveUpdateSyntax"}
 _NEGATIVE = {"NegativeSyntax", "NegativeUpdateSyntax"}
 
 
-def _check_infrastructure() -> bool:
-    try:
-        req = urllib.request.Request(
-            SIDECAR_COMPILE,
-            data=b'{"sparql":"SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"}',
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=2) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
 
-
-HAS_INFRASTRUCTURE = _check_infrastructure()
+# Gated by the shared `dawg_infrastructure` fixture in conftest: skip
+# locally, FAIL under VG_REQUIRE_INFRA so CI cannot pass by measuring
+# nothing. The module's own probe is gone; there were three and they
+# disagreed with each other and with the port they actually used.
+DAWG_NEEDS_PG = False
 
 pytestmark = [
     pytest.mark.dawg,
-    pytest.mark.skipif(
-        not HAS_INFRASTRUCTURE,
-        reason="Requires the Jena sidecar (localhost:7070)",
-    ),
+    pytest.mark.usefixtures("dawg_infrastructure"),
 ]
 
 

@@ -70,49 +70,17 @@ SIDECAR_URL = os.environ.get("VG_TEST_SIDECAR_URL", "http://localhost:7071")
 # Infrastructure
 # ---------------------------------------------------------------------------
 
-def _check_sidecar() -> bool:
-    import urllib.request
-    try:
-        req = urllib.request.Request(
-            f"{SIDECAR_URL}/v1/sparql/compile",
-            data=b'{"sparql":"SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"}',
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
 
-
-def _check_pg() -> bool:
-    try:
-        import asyncpg
-        from vitalgraph_sparql_sql_dev import db as devdb
-
-        async def _try():
-            conn = await asyncpg.connect(**devdb._asyncpg_connect_kwargs())
-            await conn.close()
-            return True
-
-        loop = asyncio.new_event_loop()
-        try:
-            return loop.run_until_complete(_try())
-        finally:
-            loop.close()
-    except Exception:
-        return False
-
-
-HAS_INFRASTRUCTURE = _check_sidecar() and _check_pg()
+# Gated by the shared `dawg_infrastructure` fixture in conftest: skip
+# locally, FAIL under VG_REQUIRE_INFRA so CI cannot pass by measuring
+# nothing. The module's own probe is gone; there were three and they
+# disagreed with each other and with the port they actually used.
+DAWG_NEEDS_PG = True
 
 pytestmark = [
     pytest.mark.dawg,
     pytest.mark.sql_v2,
-    pytest.mark.skipif(
-        not HAS_INFRASTRUCTURE,
-        reason="Requires PostgreSQL + Jena sidecar (localhost:7070)",
-    ),
+    pytest.mark.usefixtures("dawg_infrastructure"),
 ]
 
 

@@ -5,7 +5,7 @@ comparing results against pyoxigraph as the oracle.
 
 Requires:
   - PostgreSQL running with dawg_test space provisioned
-  - Jena sidecar running on localhost:7070
+  - Jena sidecar (VG_TEST_SIDECAR_URL, default 7071)
 
 Skip these tests in CI without infrastructure:
     pytest tests/conformance/test_dawg_sql_v2.py  # auto-skips if no DB
@@ -101,31 +101,16 @@ KNOWN_FAILURES = {
 }
 
 
-def _check_infrastructure() -> bool:
-    """Check if DB + sidecar are available."""
-    try:
-        import urllib.request
-        req = urllib.request.Request(
-            os.environ.get("VG_TEST_SIDECAR_URL", "http://localhost:7071")
-            + "/v1/sparql/compile",
-            data=b'{"sparql":"SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"}',
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=2) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
 
-
-HAS_INFRASTRUCTURE = _check_infrastructure()
+# Gated by the shared `dawg_infrastructure` fixture in conftest: skip
+# locally, FAIL under VG_REQUIRE_INFRA so CI cannot pass by measuring
+# nothing. The module's own probe is gone; there were three and they
+# disagreed with each other and with the port they actually used.
+DAWG_NEEDS_PG = True
 
 pytestmark = [
     pytest.mark.sql_v2,
-    pytest.mark.skipif(
-        not HAS_INFRASTRUCTURE,
-        reason="Requires PostgreSQL + Jena sidecar (localhost:7070)",
-    ),
+    pytest.mark.usefixtures("dawg_infrastructure"),
 ]
 
 
