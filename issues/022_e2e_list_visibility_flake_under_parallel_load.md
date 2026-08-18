@@ -1,6 +1,40 @@
 # E2E: intermittent "X appears in the list" failures under full parallel load
 
-## Status: PARTIALLY RESOLVED — flake fixed, one class not swept
+## Status: RESOLVED 2026-08-18 — the last class is swept
+
+The writer-isolation follow-on under "Remaining work" is done:
+`kgframes-sorting`, `kgrelations-sorting`, `kgrelations-crud` and `files-crud`
+now create and drop their own spaces via `tests/space-fixtures.ts`. Readers keep
+sharing the seeded fixture, per the rule the evidence supported.
+
+Verified all four use only `ADMIN_USER`/`ADMIN_PASS`/`SPACE_ID`/`GRAPH_ID` from
+seed-constants and none of the seeded entities or frames, so the "cheap to
+isolate" claim held.
+
+**`files-crud` needed a space PER DESCRIBE.** Its two blocks are `serial`
+internally but run in separate workers under `fullyParallel`, and a file-level
+`beforeAll` runs once per worker — so one worker's `createSpace` dropped the
+space the other was using, surfacing as `400 Failed to add space with tables`,
+which names nothing about the race. `indexes-crud` documents this exact hazard
+and it was reproduced anyway.
+
+Three full runs, measured rather than assumed:
+
+    baseline          3 failed / 270 passed
+    with the change   3 failed / 270 passed   (twice)
+
+**One intermittent, recorded not claimed.** An earlier run showed a fourth
+failure — `spaces-crud` "create a new space via the UI" — which did not recur in
+two subsequent full runs and passes both alone and alongside all four isolated
+specs. If it returns, the suspect is the isolated spaces appearing and
+disappearing in the spaces list under load, which is this issue's shape moved
+from object lists to the spaces list.
+
+**The three constant failures are environmental, not this issue.** `global-setup`
+warns that 15 foreign spaces are present (this machine's perf fixtures) and that
+`apitest_37a59eb5` sorts before `e2e_test_space` — which is what pushes it off
+the dashboard summary the two dashboard tests assert on. The guard added under
+item 3 did its job; it named the cause on line 3 of the run log.
 
 **278/278 twice, including on a cold build.** Every *observed* failure has been
 traced and fixed across four passes; the header below is the first pass only,
