@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "env": {
-    "started_at": "2026-08-18T04:22:24.648375+00:00",
+    "started_at": "2026-08-18T14:13:09.772191+00:00",
     "git": {
-      "commit": "9cdf79611dbd83892fa87a2b01ab67668a1f1a0b",
-      "short": "9cdf796",
+      "commit": "a8a0509a2251bb2478e8343c02687985509fbfa9",
+      "short": "a8a0509",
       "branch": "main",
       "dirty": true
     },
@@ -34,7 +34,7 @@
       "jit": "on",
       "default_statistics_target": "100"
     },
-    "finished_at": "2026-08-18T04:33:14.614211+00:00"
+    "finished_at": "2026-08-18T14:24:22.996458+00:00"
   },
   "benches": [
     {
@@ -42,9 +42,9 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "first_page_ms": 33.8,
-        "deep_page_ms": 41.2,
-        "deep_offset_ratio": 1.22,
+        "first_page_ms": 807.9,
+        "deep_page_ms": 753.2,
+        "deep_offset_ratio": 0.93,
         "offset": 375,
         "rows": 25
       },
@@ -56,8 +56,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 259.6,
-        "sorted_ms": 1006.1,
+        "unsorted_ms": 194.7,
+        "sorted_ms": 847.2,
         "rows": 25
       },
       "dataset": "synthetic:400frames",
@@ -68,9 +68,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_currency_min_ms": 455.8,
-        "agg_currency_avg_ms": 188.6,
-        "agg_currency_ratio": 2.42
+        "agg_currency_min_ms": 387.9,
+        "agg_currency_avg_ms": 184.0,
+        "agg_currency_ratio": 2.11
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN vs AVG on Currency \u2014 issues/029 sort-per-group"
@@ -80,8 +80,8 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_double_min_ms": 1327.4,
-        "agg_double_avg_ms": 7062.0,
+        "agg_double_min_ms": 840.9,
+        "agg_double_avg_ms": 4367.0,
         "agg_double_ratio": 0.19
       },
       "dataset": "sp_lead_synth_100k",
@@ -92,9 +92,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_integer_min_ms": 916.0,
-        "agg_integer_avg_ms": 4668.5,
-        "agg_integer_ratio": 0.2
+        "agg_integer_min_ms": 896.2,
+        "agg_integer_avg_ms": 2606.7,
+        "agg_integer_ratio": 0.34
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN vs AVG on Integer \u2014 issues/029 sort-per-group"
@@ -104,9 +104,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_currency_min_ms": 269.1,
-        "agg_currency_avg_ms": 220.4,
-        "agg_currency_ratio": 1.22
+        "agg_currency_min_ms": 266.8,
+        "agg_currency_avg_ms": 217.3,
+        "agg_currency_ratio": 1.23
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Currency \u2014 issues/029 sort-per-group"
@@ -116,9 +116,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_double_min_ms": 269.3,
-        "agg_double_avg_ms": 157.3,
-        "agg_double_ratio": 1.71
+        "agg_double_min_ms": 247.9,
+        "agg_double_avg_ms": 235.0,
+        "agg_double_ratio": 1.05
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Double \u2014 issues/029 sort-per-group"
@@ -128,9 +128,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_integer_min_ms": 189.2,
-        "agg_integer_avg_ms": 173.7,
-        "agg_integer_ratio": 1.09
+        "agg_integer_min_ms": 202.7,
+        "agg_integer_avg_ms": 186.9,
+        "agg_integer_ratio": 1.08
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Integer \u2014 issues/029 sort-per-group"
@@ -140,12 +140,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 2006.1,
-        "agg_max_ms": 1861.9,
-        "agg_avg_ms": 1346.4,
-        "agg_sum_ms": 1555.5,
-        "agg_count_ms": 840.6,
-        "min_over_avg": 1.49
+        "agg_min_ms": 1973.9,
+        "agg_max_ms": 2170.3,
+        "agg_avg_ms": 1547.1,
+        "agg_sum_ms": 1352.8,
+        "agg_count_ms": 766.4,
+        "min_over_avg": 1.28
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "aggregate cost, group_by=True \u2014 issues/029 sort-per-group"
@@ -155,12 +155,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 994.1,
-        "agg_max_ms": 883.7,
-        "agg_avg_ms": 5062.2,
-        "agg_sum_ms": 3600.8,
-        "agg_count_ms": 49.9,
-        "min_over_avg": 0.2
+        "agg_min_ms": 927.8,
+        "agg_max_ms": 927.1,
+        "agg_avg_ms": 2529.3,
+        "agg_sum_ms": 3588.2,
+        "agg_count_ms": 52.1,
+        "min_over_avg": 0.37
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "aggregate cost, group_by=False \u2014 issues/029 sort-per-group"
@@ -170,12 +170,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 178.7,
-        "agg_max_ms": 176.5,
-        "agg_avg_ms": 126.9,
-        "agg_sum_ms": 122.8,
-        "agg_count_ms": 88.5,
-        "min_over_avg": 1.41
+        "agg_min_ms": 171.7,
+        "agg_max_ms": 180.2,
+        "agg_avg_ms": 120.3,
+        "agg_sum_ms": 127.7,
+        "agg_count_ms": 70.2,
+        "min_over_avg": 1.43
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "aggregate cost, group_by=True \u2014 issues/029 sort-per-group"
@@ -185,12 +185,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 225.4,
-        "agg_max_ms": 192.1,
-        "agg_avg_ms": 156.8,
-        "agg_sum_ms": 232.5,
-        "agg_count_ms": 3.5,
-        "min_over_avg": 1.44
+        "agg_min_ms": 223.5,
+        "agg_max_ms": 193.1,
+        "agg_avg_ms": 148.5,
+        "agg_sum_ms": 153.7,
+        "agg_count_ms": 3.4,
+        "min_over_avg": 1.5
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "aggregate cost, group_by=False \u2014 issues/029 sort-per-group"
@@ -200,9 +200,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "min_in_memory_ms": 966.7,
-        "min_spilled_ms": 922.5,
-        "spill_ratio": 0.95
+        "min_in_memory_ms": 923.9,
+        "min_spilled_ms": 897.9,
+        "spill_ratio": 0.97
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN with and without a work_mem spill \u2014 issues/029"
@@ -212,9 +212,9 @@
       "kind": "sql",
       "status": "skipped",
       "metrics": {
-        "min_in_memory_ms": 221.3,
-        "min_spilled_ms": 255.8,
-        "spill_ratio": 1.16
+        "min_in_memory_ms": 296.5,
+        "min_spilled_ms": 239.5,
+        "spill_ratio": 0.81
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN with and without a work_mem spill \u2014 issues/029",
@@ -246,8 +246,8 @@
         "max_actual_rows": 100,
         "estimated_rows": 100,
         "heap_fetches": 0,
-        "planning_ms": 0.268,
-        "execution_ms": 0.204,
+        "planning_ms": 0.266,
+        "execution_ms": 2.27,
         "matched_rows": 100
       },
       "dataset": "space_lead_dataset_test"
@@ -272,14 +272,14 @@
       },
       "metrics": {
         "shared_buffers": 989,
-        "shared_read": 850,
+        "shared_read": 854,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 1025,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.161,
-        "execution_ms": 18.765
+        "planning_ms": 0.181,
+        "execution_ms": 26.512
       },
       "dataset": "wordnet_frames"
     },
@@ -303,14 +303,14 @@
       },
       "metrics": {
         "shared_buffers": 127,
-        "shared_read": 0,
+        "shared_read": 2,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 1.158,
-        "execution_ms": 0.705
+        "planning_ms": 1.374,
+        "execution_ms": 3.029
       },
       "dataset": "wordnet_frames"
     },
@@ -340,15 +340,37 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.138,
-        "execution_ms": 0.306
+        "planning_ms": 0.184,
+        "execution_ms": 0.827
       },
       "dataset": "wordnet_frames"
     },
     {
       "bench_id": "query.frame_nesting.edge_hops_index_only",
-      "status": "failed",
-      "reason": "assertion/error during call"
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Index Only Scan"
+        ],
+        "indexes": [
+          "idx_perf_edgehop_edge_src_dst"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 3,
+        "shared_read": 0,
+        "temp_written": 0,
+        "actual_rows": 10,
+        "max_actual_rows": 10,
+        "estimated_rows": 10,
+        "heap_fetches": 0,
+        "planning_ms": 0.248,
+        "execution_ms": 0.026
+      },
+      "dataset": "synthetic:edges",
+      "notes": "forward hop (source\u2192dest)"
     },
     {
       "bench_id": "query.generated_sql.plan[lead_entity_type]",
@@ -377,8 +399,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.803,
-        "execution_ms": 0.676,
+        "planning_ms": 0.937,
+        "execution_ms": 0.881,
         "sql_chars": 6702,
         "joins": 0
       },
@@ -405,15 +427,15 @@
         "seq_scans": []
       },
       "metrics": {
-        "shared_buffers": 97,
-        "shared_read": 19,
+        "shared_buffers": 96,
+        "shared_read": 39,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 1649,
         "estimated_rows": 25,
-        "heap_fetches": 1,
-        "planning_ms": 2.011,
-        "execution_ms": 1.543,
+        "heap_fetches": 0,
+        "planning_ms": 2.442,
+        "execution_ms": 7.817,
         "sql_chars": 3811,
         "joins": 0
       },
@@ -449,8 +471,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.733,
-        "execution_ms": 11.293,
+        "planning_ms": 0.665,
+        "execution_ms": 10.755,
         "sql_chars": 6687,
         "joins": 0
       },
@@ -488,8 +510,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 1.165,
-        "execution_ms": 11.495,
+        "planning_ms": 0.977,
+        "execution_ms": 10.584,
         "sql_chars": 6961,
         "joins": 0
       },
@@ -504,7 +526,6 @@
         "node_types": [
           "Nested Loop",
           "Limit",
-          "Gather Merge",
           "Sort",
           "Index Only Scan",
           "Memoize",
@@ -517,15 +538,15 @@
         "seq_scans": []
       },
       "metrics": {
-        "shared_buffers": 1265,
+        "shared_buffers": 1248,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
-        "max_actual_rows": 36581,
+        "max_actual_rows": 109745,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.512,
-        "execution_ms": 40.206,
+        "planning_ms": 0.485,
+        "execution_ms": 39.006,
         "sql_chars": 3801,
         "joins": 0
       },
@@ -549,10 +570,10 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "page_ms_offset_0": 78.0,
-        "page_ms_offset_250": 348.9,
-        "page_ms_offset_1000": 321.1,
-        "deep_ratio": 4.1
+        "page_ms_offset_0": 101.0,
+        "page_ms_offset_250": 251.9,
+        "page_ms_offset_1000": 247.5,
+        "deep_ratio": 2.5
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "cost across offsets \u2014 issues/078; flat means fixed"
@@ -562,33 +583,264 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "page_ms_offset_0": 32.3,
-        "page_ms_offset_250": 28.3,
-        "page_ms_offset_1000": 23.0,
-        "deep_ratio": 0.9
+        "page_ms_offset_0": 36.9,
+        "page_ms_offset_250": 45.9,
+        "page_ms_offset_1000": 39.4,
+        "deep_ratio": 1.2
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "cost across offsets \u2014 issues/078; flat means fixed"
     },
     {
       "bench_id": "query.kgquery.deep_paging.monotonic[100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Subquery Scan",
+          "Unique",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Gather Merge",
+          "Sort",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Hash Join",
+          "Index Only Scan",
+          "Hash",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_lead_synth_100k_edge_dst_src",
+          "idx_sp_lead_synth_100k_quad_ctx_pred",
+          "sp_lead_synth_100k_rdf_quad_pkey",
+          "sp_lead_synth_100k_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 174345,
+        "shared_read": 0,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 33333,
+        "estimated_rows": 1,
+        "heap_fetches": 0,
+        "planning_ms": 40.257,
+        "execution_ms": 237.582,
+        "min_ratio": 0.981,
+        "offsets_measured": 3,
+        "deepest_offset": 1000
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "cost must not drop with depth (issues/080)"
     },
     {
       "bench_id": "query.kgquery.deep_paging.monotonic[10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Subquery Scan",
+          "Unique",
+          "Sort",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Hash Join",
+          "Index Only Scan",
+          "Hash",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_lead_synth_10k_edge_dst_src",
+          "idx_sp_lead_synth_10k_quad_ctx_pred",
+          "sp_lead_synth_10k_rdf_quad_pkey",
+          "sp_lead_synth_10k_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 32934,
+        "shared_read": 0,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 10000,
+        "estimated_rows": 1,
+        "heap_fetches": 0,
+        "planning_ms": 73.574,
+        "execution_ms": 41.397,
+        "min_ratio": 1.031,
+        "offsets_measured": 2,
+        "deepest_offset": 250
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "cost must not drop with depth (issues/080)"
     },
     {
       "bench_id": "query.kgquery.duplicate_anchor_quads[generic]",
-      "status": "skipped",
-      "reason": "Skipped: space sp_lead_dup does not exist \u2014 build it with scripts/load_duplicate_quad_dataset.sh"
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Sort",
+          "Bitmap Heap Scan",
+          "BitmapAnd",
+          "Bitmap Index Scan",
+          "Bitmap Index Scan",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Hash Join",
+          "Index Only Scan",
+          "Hash",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_lead_dup_edge_dst_src",
+          "idx_sp_lead_dup_quad_ctx_pred",
+          "idx_sp_lead_dup_quad_obj",
+          "idx_sp_lead_dup_quad_pred",
+          "idx_sp_lead_dup_quad_sp",
+          "idx_sp_lead_dup_quad_subj",
+          "sp_lead_dup_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 790388,
+        "shared_read": 0,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 50469,
+        "estimated_rows": 25,
+        "heap_fetches": 0,
+        "planning_ms": 44.651,
+        "execution_ms": 292.006,
+        "rows": 25,
+        "distinct": 25,
+        "duplicate_anchors": 398
+      },
+      "dataset": "sp_lead_dup",
+      "notes": "KGEntity: the only fixture where a reintroduced DISTINCT elision shows up (issues/046)"
     },
     {
       "bench_id": "query.kgquery.duplicate_anchor_quads[specific]",
-      "status": "skipped",
-      "reason": "Skipped: space sp_lead_dup does not exist \u2014 build it with scripts/load_duplicate_quad_dataset.sh"
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Sort",
+          "Bitmap Heap Scan",
+          "BitmapAnd",
+          "Bitmap Index Scan",
+          "Bitmap Index Scan",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Hash Join",
+          "Index Only Scan",
+          "Hash",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_lead_dup_edge_dst_src",
+          "idx_sp_lead_dup_quad_ctx_pred",
+          "idx_sp_lead_dup_quad_obj",
+          "idx_sp_lead_dup_quad_pred",
+          "idx_sp_lead_dup_quad_sp",
+          "idx_sp_lead_dup_quad_subj",
+          "sp_lead_dup_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 790351,
+        "shared_read": 0,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 699,
+        "estimated_rows": 25,
+        "heap_fetches": 0,
+        "planning_ms": 44.006,
+        "execution_ms": 291.874,
+        "rows": 25,
+        "distinct": 25,
+        "duplicate_anchors": 398
+      },
+      "dataset": "sp_lead_dup",
+      "notes": "urn:acme:kg:entity:Lead: the only fixture where a reintroduced DISTINCT elision shows up (issues/046)"
     },
     {
       "bench_id": "query.kgquery.entity_type_axis[100k]",
@@ -670,8 +922,8 @@
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 49.784,
-        "execution_ms": 65.894,
+        "planning_ms": 64.929,
+        "execution_ms": 119.367,
         "sparql_chars": 1872,
         "sql_chars": 6301,
         "joins": 0
@@ -729,14 +981,14 @@
       },
       "metrics": {
         "shared_buffers": 14163,
-        "shared_read": 34,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 69.506,
-        "execution_ms": 32.951,
+        "planning_ms": 54.982,
+        "execution_ms": 39.926,
         "sparql_chars": 1836,
         "sql_chars": 6274,
         "joins": 0
@@ -798,8 +1050,8 @@
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 42.923,
-        "execution_ms": 13.168,
+        "planning_ms": 84.613,
+        "execution_ms": 32.529,
         "sparql_chars": 1844,
         "sql_chars": 6274,
         "joins": 0
@@ -853,8 +1105,8 @@
         "max_actual_rows": 36,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 45.398,
-        "execution_ms": 74.055,
+        "planning_ms": 53.401,
+        "execution_ms": 108.275,
         "total_matches": 9220,
         "page_size": 25,
         "buffers_per_match": 5.918
@@ -909,8 +1161,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 55.249,
-        "execution_ms": 39.271,
+        "planning_ms": 64.019,
+        "execution_ms": 75.919,
         "total_matches": 908,
         "page_size": 25,
         "buffers_per_match": 32.797
@@ -936,13 +1188,14 @@
           "Nested Loop",
           "Nested Loop",
           "Nested Loop",
-          "Nested Loop",
+          "Hash Join",
           "Index Only Scan",
+          "Hash",
           "Index Only Scan",
           "Index Scan",
           "Index Only Scan",
-          "Index Scan",
           "Index Only Scan",
+          "Index Scan",
           "Index Only Scan",
           "Index Scan",
           "Index Only Scan",
@@ -959,18 +1212,18 @@
         "seq_scans": []
       },
       "metrics": {
-        "shared_buffers": 148839,
-        "shared_read": 18087,
+        "shared_buffers": 135033,
+        "shared_read": 13686,
         "temp_written": 0,
         "actual_rows": 25,
-        "max_actual_rows": 3713,
+        "max_actual_rows": 100000,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 49.19,
-        "execution_ms": 4823.088,
+        "planning_ms": 64.852,
+        "execution_ms": 3817.238,
         "total_matches": 3713,
         "page_size": 25,
-        "buffers_per_match": 40.086
+        "buffers_per_match": 36.368
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "[100k] CompanyStateCode = IL \u2014 3,713 matches, 25-row page"
@@ -993,8 +1246,9 @@
           "Nested Loop",
           "Nested Loop",
           "Nested Loop",
-          "Nested Loop",
+          "Hash Join",
           "Index Only Scan",
+          "Hash",
           "Index Only Scan",
           "Index Scan",
           "Index Only Scan",
@@ -1016,18 +1270,18 @@
         "seq_scans": []
       },
       "metrics": {
-        "shared_buffers": 14732,
-        "shared_read": 434,
+        "shared_buffers": 13380,
+        "shared_read": 119,
         "temp_written": 0,
         "actual_rows": 25,
-        "max_actual_rows": 365,
+        "max_actual_rows": 10000,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 55.017,
-        "execution_ms": 136.429,
+        "planning_ms": 64.969,
+        "execution_ms": 61.523,
         "total_matches": 365,
         "page_size": 25,
-        "buffers_per_match": 40.362
+        "buffers_per_match": 36.658
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "[10k] CompanyStateCode = IL \u2014 365 matches, 25-row page"
@@ -1072,14 +1326,14 @@
       },
       "metrics": {
         "shared_buffers": 89717,
-        "shared_read": 60,
+        "shared_read": 55,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 37,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 52.345,
-        "execution_ms": 287.437,
+        "planning_ms": 51.363,
+        "execution_ms": 231.92,
         "total_matches": 5531,
         "page_size": 25,
         "buffers_per_match": 16.221
@@ -1128,14 +1382,14 @@
       },
       "metrics": {
         "shared_buffers": 46244,
-        "shared_read": 1,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 56.932,
-        "execution_ms": 82.64,
+        "planning_ms": 60.024,
+        "execution_ms": 103.837,
         "total_matches": 547,
         "page_size": 25,
         "buffers_per_match": 84.541
@@ -1183,14 +1437,14 @@
       },
       "metrics": {
         "shared_buffers": 103671,
-        "shared_read": 166,
+        "shared_read": 153,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 37,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 48.383,
-        "execution_ms": 458.337,
+        "planning_ms": 54.368,
+        "execution_ms": 434.674,
         "total_matches": 7337,
         "page_size": 25,
         "buffers_per_match": 14.13
@@ -1245,8 +1499,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 58.223,
-        "execution_ms": 128.844,
+        "planning_ms": 64.575,
+        "execution_ms": 71.587,
         "total_matches": 765,
         "page_size": 25,
         "buffers_per_match": 51.031
@@ -1296,14 +1550,14 @@
       },
       "metrics": {
         "shared_buffers": 35409,
-        "shared_read": 461,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 878,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 46.32,
-        "execution_ms": 277.962,
+        "planning_ms": 70.718,
+        "execution_ms": 231.271,
         "total_matches": 878,
         "page_size": 25,
         "buffers_per_match": 40.329
@@ -1359,8 +1613,8 @@
         "max_actual_rows": 96,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 60.74,
-        "execution_ms": 14.688,
+        "planning_ms": 61.979,
+        "execution_ms": 27.102,
         "total_matches": 96,
         "page_size": 25,
         "buffers_per_match": 41.344
@@ -1398,23 +1652,229 @@
     },
     {
       "bench_id": "query.kgquery.no_duplicate_rows[generic-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Sort",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_lead_synth_100k_edge_dst_src",
+          "idx_sp_lead_synth_100k_quad_ctx_pred",
+          "sp_lead_synth_100k_rdf_quad_pkey",
+          "sp_lead_synth_100k_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 35409,
+        "shared_read": 0,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 878,
+        "estimated_rows": 1,
+        "heap_fetches": 0,
+        "planning_ms": 47.782,
+        "execution_ms": 46.814,
+        "rows": 25,
+        "distinct": 25
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "KGEntity: multiplicity, not just membership (issues/046)"
     },
     {
       "bench_id": "query.kgquery.no_duplicate_rows[generic-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Sort",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_lead_synth_10k_edge_dst_src",
+          "idx_sp_lead_synth_10k_quad_ctx_pred",
+          "sp_lead_synth_10k_rdf_quad_pkey",
+          "sp_lead_synth_10k_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 3969,
+        "shared_read": 0,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 96,
+        "estimated_rows": 1,
+        "heap_fetches": 0,
+        "planning_ms": 56.922,
+        "execution_ms": 4.671,
+        "rows": 25,
+        "distinct": 25
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "KGEntity: multiplicity, not just membership (issues/046)"
     },
     {
       "bench_id": "query.kgquery.no_duplicate_rows[specific-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Sort",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_lead_synth_100k_edge_dst_src",
+          "idx_sp_lead_synth_100k_quad_ctx_pred",
+          "sp_lead_synth_100k_rdf_quad_pkey",
+          "sp_lead_synth_100k_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 35409,
+        "shared_read": 0,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 878,
+        "estimated_rows": 1,
+        "heap_fetches": 0,
+        "planning_ms": 32.221,
+        "execution_ms": 49.252,
+        "rows": 25,
+        "distinct": 25
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "urn:acme:kg:entity:Lead: multiplicity, not just membership (issues/046)"
     },
     {
       "bench_id": "query.kgquery.no_duplicate_rows[specific-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Nested Loop",
+          "Limit",
+          "Unique",
+          "Sort",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_lead_synth_10k_edge_dst_src",
+          "idx_sp_lead_synth_10k_quad_ctx_pred",
+          "sp_lead_synth_10k_rdf_quad_pkey",
+          "sp_lead_synth_10k_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 3969,
+        "shared_read": 0,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 96,
+        "estimated_rows": 1,
+        "heap_fetches": 0,
+        "planning_ms": 32.278,
+        "execution_ms": 4.95,
+        "rows": 25,
+        "distinct": 25
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "urn:acme:kg:entity:Lead: multiplicity, not just membership (issues/046)"
     },
     {
       "bench_id": "query.kgquery.page_size_cliff[generic-100k]",
@@ -1432,7 +1892,7 @@
       "kind": "query",
       "status": "ok",
       "metrics": {
-        "max_page_size_before_flip": 1678,
+        "max_page_size_before_flip": 1775,
         "flips_within_range": true
       },
       "dataset": "sp_lead_synth_10k",
@@ -1443,7 +1903,7 @@
       "kind": "query",
       "status": "ok",
       "metrics": {
-        "max_page_size_before_flip": 118,
+        "max_page_size_before_flip": 106,
         "flips_within_range": true
       },
       "dataset": "sp_lead_synth_100k",
@@ -1454,7 +1914,7 @@
       "kind": "query",
       "status": "skipped",
       "metrics": {
-        "max_page_size_before_flip": 11,
+        "max_page_size_before_flip": 13,
         "flips_within_range": true
       },
       "dataset": "sp_lead_synth_10k",
@@ -1495,10 +1955,10 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "sorted_ms_offset_0": 607.5,
-        "sorted_ms_offset_250": 642.6,
-        "sorted_ms_offset_1000": 666.1,
-        "sorted_depth_ratio": 1.1
+        "sorted_ms_offset_0": 496.0,
+        "sorted_ms_offset_250": 488.4,
+        "sorted_ms_offset_1000": 496.5,
+        "sorted_depth_ratio": 1.0
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "sorted page cost across offsets \u2014 issues/080"
@@ -1508,9 +1968,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "sorted_ms_offset_0": 77.8,
-        "sorted_ms_offset_250": 79.9,
-        "sorted_ms_offset_1000": 77.3,
+        "sorted_ms_offset_0": 86.6,
+        "sorted_ms_offset_250": 85.3,
+        "sorted_ms_offset_1000": 82.5,
         "sorted_depth_ratio": 1.0
       },
       "dataset": "sp_lead_synth_10k",
@@ -1521,9 +1981,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 62.5,
-        "sorted_ms": 677.2,
-        "sort_ratio": 10.8
+        "unsorted_ms": 79.5,
+        "sorted_ms": 539.4,
+        "sort_ratio": 6.8
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "entity_property sort vs the same query unsorted (issues/080)"
@@ -1533,30 +1993,154 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 24.1,
-        "sorted_ms": 79.9,
-        "sort_ratio": 3.3
+        "unsorted_ms": 30.7,
+        "sorted_ms": 80.1,
+        "sort_ratio": 2.6
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "entity_property sort vs the same query unsorted (issues/080)"
     },
     {
       "bench_id": "query.kgquery.sorted_paging.page_shape[100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Limit",
+          "Sort",
+          "Unique",
+          "Sort",
+          "Sort",
+          "Subquery Scan",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Gather Merge",
+          "Sort",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Hash Join",
+          "Index Only Scan",
+          "Hash",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan"
+        ],
+        "indexes": [
+          "idx_sp_lead_synth_100k_edge_dst_src",
+          "idx_sp_lead_synth_100k_quad_ctx_pred",
+          "idx_sp_lead_synth_100k_quad_sp",
+          "sp_lead_synth_100k_rdf_quad_pkey",
+          "sp_lead_synth_100k_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 478542,
+        "shared_read": 0,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 33333,
+        "estimated_rows": 1,
+        "heap_fetches": 0,
+        "planning_ms": 44.589,
+        "execution_ms": 511.772,
+        "rows": 25,
+        "sorted_values": 25
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "a sorted page must be ordered whatever it costs (issues/080)"
     },
     {
       "bench_id": "query.kgquery.sorted_paging.page_shape[10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Limit",
+          "Sort",
+          "Unique",
+          "Sort",
+          "Sort",
+          "Subquery Scan",
+          "Sort",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Hash Join",
+          "Index Only Scan",
+          "Hash",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_lead_synth_10k_edge_dst_src",
+          "idx_sp_lead_synth_10k_quad_ctx_pred",
+          "sp_lead_synth_10k_rdf_quad_pkey",
+          "sp_lead_synth_10k_term_pkey"
+        ],
+        "seq_scans": []
+      },
+      "metrics": {
+        "shared_buffers": 43733,
+        "shared_read": 0,
+        "temp_written": 0,
+        "actual_rows": 25,
+        "max_actual_rows": 10000,
+        "estimated_rows": 1,
+        "heap_fetches": 0,
+        "planning_ms": 66.8,
+        "execution_ms": 81.907,
+        "rows": 25,
+        "sorted_values": 25
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "a sorted page must be ordered whatever it costs (issues/080)"
     },
     {
       "bench_id": "query.lead.kgquery[hierarchical-p100-100k]",
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 23.7,
-        "min_ms": 20.3,
+        "wall_ms": 20.9,
+        "min_ms": 20.7,
         "page_size": 100,
         "results": 100
       },
@@ -1568,8 +2152,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 16.1,
-        "min_ms": 14.1,
+        "wall_ms": 19.1,
+        "min_ms": 17.5,
         "page_size": 100,
         "results": 100
       },
@@ -1581,8 +2165,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 22.2,
-        "min_ms": 21.3,
+        "wall_ms": 27.2,
+        "min_ms": 26.4,
         "page_size": 100,
         "results": 100
       },
@@ -1594,8 +2178,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 12.4,
-        "min_ms": 12.0,
+        "wall_ms": 20.5,
+        "min_ms": 17.2,
         "page_size": 25,
         "results": 25
       },
@@ -1607,8 +2191,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 16.0,
-        "min_ms": 13.1,
+        "wall_ms": 12.1,
+        "min_ms": 11.2,
         "page_size": 25,
         "results": 25
       },
@@ -1620,8 +2204,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 16.0,
-        "min_ms": 16.0,
+        "wall_ms": 18.1,
+        "min_ms": 14.4,
         "page_size": 25,
         "results": 25
       },
@@ -1633,8 +2217,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 368.6,
-        "min_ms": 151.9,
+        "wall_ms": 129.8,
+        "min_ms": 118.1,
         "page_size": 100,
         "results": 100
       },
@@ -1646,8 +2230,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 42.2,
-        "min_ms": 40.1,
+        "wall_ms": 47.1,
+        "min_ms": 45.1,
         "page_size": 100,
         "results": 100
       },
@@ -1659,8 +2243,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 68.1,
-        "min_ms": 63.3,
+        "wall_ms": 111.8,
+        "min_ms": 96.7,
         "page_size": 100,
         "results": 73
       },
@@ -1672,8 +2256,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 44.5,
-        "min_ms": 42.9,
+        "wall_ms": 68.0,
+        "min_ms": 54.2,
         "page_size": 25,
         "results": 25
       },
@@ -1685,8 +2269,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 22.2,
-        "min_ms": 21.4,
+        "wall_ms": 20.6,
+        "min_ms": 20.3,
         "page_size": 25,
         "results": 25
       },
@@ -1698,8 +2282,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 45.2,
-        "min_ms": 37.6,
+        "wall_ms": 34.4,
+        "min_ms": 32.2,
         "page_size": 25,
         "results": 25
       },
@@ -1711,8 +2295,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 90.0,
-        "min_ms": 88.5,
+        "wall_ms": 105.9,
+        "min_ms": 100.8,
         "page_size": 100,
         "results": 100
       },
@@ -1724,8 +2308,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 44.7,
-        "min_ms": 41.7,
+        "wall_ms": 49.3,
+        "min_ms": 48.5,
         "page_size": 100,
         "results": 100
       },
@@ -1737,8 +2321,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 28.7,
-        "min_ms": 27.3,
+        "wall_ms": 34.7,
+        "min_ms": 30.1,
         "page_size": 100,
         "results": 99
       },
@@ -1750,8 +2334,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 33.8,
-        "min_ms": 32.8,
+        "wall_ms": 37.4,
+        "min_ms": 36.2,
         "page_size": 25,
         "results": 25
       },
@@ -1763,8 +2347,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 21.1,
-        "min_ms": 20.9,
+        "wall_ms": 21.9,
+        "min_ms": 21.1,
         "page_size": 25,
         "results": 25
       },
@@ -1776,8 +2360,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 23.4,
-        "min_ms": 18.3,
+        "wall_ms": 25.9,
+        "min_ms": 25.3,
         "page_size": 25,
         "results": 25
       },
@@ -1789,8 +2373,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 476.9,
-        "min_ms": 381.6,
+        "wall_ms": 440.7,
+        "min_ms": 427.3,
         "page_size": 100,
         "results": 100
       },
@@ -1802,8 +2386,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 132.7,
-        "min_ms": 122.6,
+        "wall_ms": 139.7,
+        "min_ms": 131.2,
         "page_size": 100,
         "results": 100
       },
@@ -1815,8 +2399,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 31.9,
-        "min_ms": 29.2,
+        "wall_ms": 30.1,
+        "min_ms": 29.6,
         "page_size": 100,
         "results": 13
       },
@@ -1828,8 +2412,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 77.5,
-        "min_ms": 74.1,
+        "wall_ms": 97.0,
+        "min_ms": 84.3,
         "page_size": 25,
         "results": 25
       },
@@ -1841,8 +2425,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 35.7,
-        "min_ms": 34.0,
+        "wall_ms": 46.2,
+        "min_ms": 43.6,
         "page_size": 25,
         "results": 25
       },
@@ -1854,8 +2438,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 28.2,
-        "min_ms": 27.8,
+        "wall_ms": 35.0,
+        "min_ms": 32.5,
         "page_size": 25,
         "results": 13
       },
@@ -1878,7 +2462,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "convergent_ms": 6352.5,
+        "convergent_ms": 7189.6,
         "convergent_rows": 1313755
       },
       "dataset": "sp_kg_rel",
@@ -1900,7 +2484,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_friendof_ms": 84.9,
+        "rel_friendof_ms": 73.1,
         "rel_friendof_rows": 14625
       },
       "dataset": "sp_kg_rel",
@@ -1911,7 +2495,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_reportsto_ms": 55.2,
+        "rel_reportsto_ms": 42.7,
         "rel_reportsto_rows": 4750
       },
       "dataset": "sp_kg_rel",
@@ -1922,7 +2506,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_worksfor_ms": 63.8,
+        "rel_worksfor_ms": 45.3,
         "rel_worksfor_rows": 4875
       },
       "dataset": "sp_kg_rel",
@@ -1945,9 +2529,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "values_1_ms": 0.55,
-        "values_20_ms": 5.21,
-        "values_growth": 9.4
+        "values_1_ms": 0.37,
+        "values_20_ms": 6.95,
+        "values_growth": 18.9
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "VALUES cost against list length \u2014 issues/087"
@@ -1957,9 +2541,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "values_ms": 0.45,
-        "literal_subject_ms": 0.37,
-        "values_ratio": 1.2
+        "values_ms": 0.49,
+        "literal_subject_ms": 0.39,
+        "values_ratio": 1.3
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "VALUES vs an equivalent literal subject \u2014 issues/087"
@@ -1969,9 +2553,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "values_ms": 0.4,
-        "literal_subject_ms": 0.43,
-        "values_ratio": 0.9
+        "values_ms": 0.35,
+        "literal_subject_ms": 0.35,
+        "values_ratio": 1.0
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "VALUES vs an equivalent literal subject \u2014 issues/087"
@@ -1981,7 +2565,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 2129.3,
+        "wall_ms": 2448.0,
         "rows": 4
       },
       "dataset": "wordnet_frames",
@@ -1992,7 +2576,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 604.1,
+        "wall_ms": 407.4,
         "rows": 1
       },
       "dataset": "wordnet_frames",
@@ -2003,7 +2587,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 455.7,
+        "wall_ms": 426.0,
         "rows": 425
       },
       "dataset": "wordnet_frames",
@@ -2014,7 +2598,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 191.3,
+        "wall_ms": 177.9,
         "rows": 45
       },
       "dataset": "wordnet_frames",
@@ -2075,10 +2659,10 @@
         "temp_written": 0,
         "actual_rows": 70,
         "max_actual_rows": 9266,
-        "estimated_rows": 215,
+        "estimated_rows": 230,
         "heap_fetches": 0,
-        "planning_ms": 2.395,
-        "execution_ms": 32.495,
+        "planning_ms": 2.576,
+        "execution_ms": 23.981,
         "rows": 70
       },
       "dataset": "sp_graph_skew_2k",
@@ -2139,10 +2723,10 @@
         "temp_written": 0,
         "actual_rows": 21,
         "max_actual_rows": 9266,
-        "estimated_rows": 20,
+        "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 2.557,
-        "execution_ms": 4.346,
+        "planning_ms": 2.562,
+        "execution_ms": 4.246,
         "rows": 21
       },
       "dataset": "sp_graph_skew_2k",
@@ -2203,10 +2787,10 @@
         "temp_written": 0,
         "actual_rows": 7,
         "max_actual_rows": 9266,
-        "estimated_rows": 20,
+        "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 2.362,
-        "execution_ms": 2.836,
+        "planning_ms": 2.445,
+        "execution_ms": 3.024,
         "rows": 7
       },
       "dataset": "sp_graph_skew_2k",
@@ -2253,8 +2837,8 @@
           "CTE Scan",
           "Index Scan",
           "Index Only Scan",
-          "Index Only Scan",
           "Index Scan",
+          "Index Only Scan",
           "Index Only Scan",
           "Index Scan"
         ],
@@ -2269,15 +2853,15 @@
         "seq_scans": []
       },
       "metrics": {
-        "shared_buffers": 8838,
+        "shared_buffers": 8163,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 17,
         "max_actual_rows": 2022,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 5.637,
-        "execution_ms": 5.458,
+        "planning_ms": 6.192,
+        "execution_ms": 5.344,
         "rows": 17
       },
       "dataset": "sp_graph_skew_2k",
@@ -2333,8 +2917,8 @@
         "max_actual_rows": 27,
         "estimated_rows": 15,
         "heap_fetches": 0,
-        "planning_ms": 2.11,
-        "execution_ms": 0.585,
+        "planning_ms": 1.722,
+        "execution_ms": 0.58,
         "rows": 1
       },
       "dataset": "sp_graph_skew_2k",
@@ -2377,10 +2961,10 @@
         "temp_written": 0,
         "actual_rows": 17029,
         "max_actual_rows": 17029,
-        "estimated_rows": 27,
+        "estimated_rows": 28,
         "heap_fetches": 0,
-        "planning_ms": 5.763,
-        "execution_ms": 100.624,
+        "planning_ms": 6.034,
+        "execution_ms": 105.587,
         "rows": 17029
       },
       "dataset": "sp_graph_skew_2k",
@@ -2391,12 +2975,12 @@
       "kind": "write",
       "status": "ok",
       "metrics": {
-        "executemany_quads_per_sec": 6904,
-        "copy_quads_per_sec": 70570,
-        "bulk_e2e_quads_per_sec": 41716,
-        "index_rebuild_s": 3.92,
-        "copy_speedup": 10.222,
-        "e2e_speedup": 6.043
+        "executemany_quads_per_sec": 5475,
+        "copy_quads_per_sec": 45630,
+        "bulk_e2e_quads_per_sec": 30080,
+        "index_rebuild_s": 4.532,
+        "copy_speedup": 8.335,
+        "e2e_speedup": 5.494
       },
       "dataset": "synthetic:400000q"
     },
@@ -2406,9 +2990,9 @@
       "status": "ok",
       "metrics": {
         "growth_class": "flat",
-        "probe_ms_at_100000q": 68.3,
-        "probe_ms_at_300000q": 72.45,
-        "probe_ms_at_900000q": 79.02
+        "probe_ms_at_100000q": 67.63,
+        "probe_ms_at_300000q": 90.73,
+        "probe_ms_at_900000q": 67.32
       },
       "dataset": "synthetic:[50000, 150000, 450000]",
       "notes": "probe=300 quads, min of 3 rolled-back runs"
@@ -2416,8 +3000,8 @@
   ],
   "baseline": {
     "name": "main",
-    "promoted_from": "/tmp/perf_last.json",
-    "reason": "All loadable fixtures present: sp_lead_synth_10k/100k, sp_sql_lead_dataset, sp_kg_rel, sp_graph_forms_20k, sp_graph_skew_2k. 97 of 111 benches measured, up from 60. Stamped, on the docker test stack with parallel query working (issues/102).",
+    "promoted_from": "/tmp/perf_v5.json",
+    "reason": "108 of 111 benches measured. The ten that ran but recorded no metrics now record plan metrics; only three conditional skips remain.",
     "pg_stamped": true
   }
 }

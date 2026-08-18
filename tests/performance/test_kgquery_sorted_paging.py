@@ -53,6 +53,7 @@ import time
 
 import pytest
 
+from .harness import explain_json
 from .lead_fixtures import SYNTH, require_usable
 from .test_kgquery_growth_curve import skip_no_pg
 from .test_kgquery_growth_curve import (
@@ -211,6 +212,21 @@ async def test_a_sorted_page_is_actually_ordered(perf_conn, perf_record, fx):
     if not names:
         pytest.skip("could not identify the sort column in the projection")
     ordered = [n for n in names if n is not None]
+
+    # Recorded as well as asserted. This took `perf_record` and never called it,
+    # so the baseline held it as `unrecorded` — a bench that cannot regress.
+    # The fix it guards moves WHERE the ordering happens, from above the full
+    # projection into a narrow phase 1, so the plan's buffer count is exactly
+    # the number that would move if that changed.
+    async with perf_conn.transaction():
+        if fence:
+            await perf_conn.execute("SET LOCAL enable_sort = off")
+        plan = await explain_json(perf_conn, sql)
+    perf_record(plan=plan, dataset=fx.space,
+                metrics={"rows": len(rows), "sorted_values": len(ordered)},
+                notes="a sorted page must be ordered whatever it costs "
+                      "(issues/080)")
+
     assert ordered == sorted(ordered), "the sorted page came back out of order"
 
 

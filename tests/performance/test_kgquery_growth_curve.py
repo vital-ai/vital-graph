@@ -456,7 +456,8 @@ async def test_specific_entity_type_still_pages_cheaply(perf_conn, perf_record, 
 @pytest.mark.parametrize("fx", FIXTURES, ids=[f.label for f in FIXTURES])
 @pytest.mark.parametrize("entity_type", [KGENTITY, SPECIFIC_ENTITY_TYPE],
                          ids=["generic", "specific"])
-async def test_page_has_no_duplicate_entities(perf_conn, fx, entity_type):
+async def test_page_has_no_duplicate_entities(perf_conn, perf_record, fx,
+                                             entity_type):
     """Row multiplicity, not just membership (issues/046).
 
     The original verification for issues/040 checked that a page was a SUBSET of
@@ -474,6 +475,19 @@ async def test_page_has_no_duplicate_entities(perf_conn, fx, entity_type):
     assert col, f"no entity uuid column in {list(rows[0].keys()) if rows else []}"
 
     seen = [str(r[col]) for r in rows]
+
+    # Record the SHAPE as well as asserting the property. This carried a @bench
+    # marker and called nothing, so it sat in the baseline as `unrecorded`: it
+    # could pass forever and never flag a regression, which is the same
+    # not-guarding shape it exists to catch. `shared_buffers` is what
+    # thresholds.toml gates on, so the plan is what has to be recorded — the row
+    # counts alone are ungated context.
+    plan = await explain_json(perf_conn, sql)
+    perf_record(plan=plan, dataset=fx.space,
+                metrics={"rows": len(seen), "distinct": len(set(seen))},
+                notes=f"{entity_type.rsplit('#', 1)[-1]}: multiplicity, not just "
+                      f"membership (issues/046)")
+
     assert len(seen) == len(set(seen)), (
         f"page repeats {len(seen) - len(set(seen))} entit(y/ies) — DISTINCT was "
         f"elided or weakened somewhere below (issues/046)")
@@ -482,7 +496,8 @@ async def test_page_has_no_duplicate_entities(perf_conn, fx, entity_type):
 @pytest.mark.bench("query.kgquery.duplicate_anchor_quads")
 @pytest.mark.parametrize("entity_type", [KGENTITY, SPECIFIC_ENTITY_TYPE],
                          ids=["generic", "specific"])
-async def test_duplicate_anchor_quads_do_not_reach_the_result(perf_conn, entity_type):
+async def test_duplicate_anchor_quads_do_not_reach_the_result(
+        perf_conn, perf_record, entity_type):
     """The regression test for issues/046, on data that can actually regress it.
 
     `test_page_has_no_duplicate_entities` above runs against the generated
@@ -513,6 +528,24 @@ async def test_duplicate_anchor_quads_do_not_reach_the_result(perf_conn, entity_
 
     seen = [str(r[col]) for r in rows]
     assert seen, "criteria matched nothing — a page of zero rows has no duplicates"
+
+    # `duplicate_anchors` is the number that makes this bench meaningful: the
+    # fixture's 200 duplicated quads, counted from the space rather than assumed.
+    # If a future schema change makes duplicates unrepresentable again the count
+    # falls to zero and the comparison says so, instead of the bench passing
+    # against data that cannot fail it (issues/104).
+    plan = await explain_json(perf_conn, sql)
+    perf_record(plan=plan, dataset=DUP.space,
+                metrics={"rows": len(seen), "distinct": len(set(seen)),
+                         # int(): `duplicate_anchor_rows` returns a Decimal
+                         # (SUM over a count), and the run document is JSON —
+                         # a Decimal there fails the whole write at
+                         # sessionfinish, losing every bench in the run, not
+                         # just this metric.
+                         "duplicate_anchors": int(extra)},
+                notes=f"{entity_type.rsplit('#', 1)[-1]}: the only fixture where "
+                      f"a reintroduced DISTINCT elision shows up (issues/046)")
+
     assert len(seen) == len(set(seen)), (
         f"{len(seen) - len(set(seen))} duplicate entit(y/ies) in a "
         f"{len(seen)}-row page against a fixture with {extra} duplicate anchor "

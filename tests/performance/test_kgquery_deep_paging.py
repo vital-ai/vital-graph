@@ -50,6 +50,7 @@ import time
 
 import pytest
 
+from .harness import explain_json
 from .lead_fixtures import SYNTH, require_usable
 from .test_kgquery_growth_curve import (
     KGENTITY, PAGE_SIZE, SIDECAR_URL, skip_no_pg,
@@ -203,6 +204,24 @@ async def test_deeper_pages_are_never_cheaper(perf_conn, perf_record, fx):
         pytest.skip(f"{fx.label}: match set too small for a depth curve")
 
     OFFSETS_USED = offs
+
+    # The bench had a `perf_record` parameter and never called it, so it sat in
+    # the baseline as `unrecorded` — passing forever without ever flagging a
+    # regression. The assertion is a RATIO, so record that: `min_ratio` below 1
+    # is the non-monotonic curve this exists to catch, and the deepest page's
+    # plan carries the shared_buffers that thresholds.toml actually gates.
+    ratios = [ms[i] / ms[i - 1] for i in range(1, len(ms)) if ms[i - 1] > 0]
+    sql_deep, fence_deep = await _sql_at(perf_conn, fx, offs[-1])
+    async with perf_conn.transaction():
+        if fence_deep:
+            await perf_conn.execute("SET LOCAL enable_sort = off")
+        plan = await explain_json(perf_conn, sql_deep)
+    perf_record(plan=plan, dataset=fx.space,
+                metrics={"min_ratio": round(min(ratios), 3) if ratios else None,
+                         "offsets_measured": len(offs),
+                         "deepest_offset": offs[-1]},
+                notes="cost must not drop with depth (issues/080)")
+
     for i in range(1, len(ms)):
         assert ms[i] >= ms[i - 1] * 0.5, (
             f"offset {OFFSETS_USED[i]} ({ms[i]:.0f}ms) is much cheaper than "
