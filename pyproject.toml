@@ -191,6 +191,13 @@ vitalgraph = "vitalgraph.client.cmd.vitalgraph_repl:main"
 [tool.setuptools.packages.find]
 include = ["vitalgraph*"]
 exclude = [
+    # Matches the `vitalgraph*` include glob, so it shipped — six subpackages,
+    # including the DAWG harness and the W3C test corpus. Production imports it
+    # ZERO times; it is an experimental pipeline plus test tooling. Shipping it
+    # was also actively harmful: the installed copy shadowed the repo for any
+    # script without a sys.path insert, and that copy still resolved the host
+    # cluster with an empty password (issues/055).
+    "vitalgraph_sparql_sql_dev*",
     "test*",
     "test_scripts*",
     "test_script_kg_impl*",

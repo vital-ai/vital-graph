@@ -131,7 +131,7 @@ class TestTheDefaultTarget:
 class TestNoScriptOwnsItsTarget:
     """The database half of the same rule (issues/055).
 
-    `vitalgraph_sparql_sql_dev.db` resolves the stack — `dsn()`, `pg_kwargs()`,
+    `devtools.target` resolves the stack — `dsn()`, `pg_kwargs()`,
     `add_pg_arguments()`. A script that writes its own fallback opts out of that
     silently, and the failure is a successful run against the wrong cluster.
     """
@@ -152,12 +152,15 @@ class TestNoScriptOwnsItsTarget:
                 for m in DSN_DEFAULT.finditer(text)]
         assert not hits, (
             f"{path.relative_to(REPO)} defaults its own connection string; use "
-            f"`vitalgraph_sparql_sql_dev.db.dsn()` so one place owns the target:\n"
+            f"`devtools.target.dsn()` so one place owns the target:\n"
             + "\n".join(f"    {h}" for h in hits))
 
 
-REPO_IMPORT = re.compile(r"^\s*(?:from|import)\s+(?:vitalgraph|vitalgraph_sparql_sql_dev)\b",
-                         re.MULTILINE)
+# `devtools` counts too: the resolver moved there precisely so it could not be
+# reached through a stale install, and that only holds if the repo root wins.
+REPO_IMPORT = re.compile(
+    r"^\s*(?:from|import)\s+(?:vitalgraph|vitalgraph_sparql_sql_dev|devtools)\b",
+    re.MULTILINE)
 
 SCRIPTS = [p for p in sorted((REPO / "scripts").glob("*.py"))
            if REPO_IMPORT.search(_text(p))]

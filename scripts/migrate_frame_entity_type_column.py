@@ -52,7 +52,7 @@ import sys
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from vitalgraph_sparql_sql_dev.db import add_pg_arguments, describe_target  # noqa: E402
+from devtools.target import add_pg_arguments, describe_target  # noqa: E402
 
 logger = logging.getLogger("migrate_frame_entity_type_column")
 

@@ -46,7 +46,7 @@ import sys
 from datetime import datetime
 
 sys.path.insert(0, os.getcwd())
-from vitalgraph_sparql_sql_dev.db import dsn, sidecar_url  # noqa: E402
+from devtools.target import dsn, sidecar_url  # noqa: E402
 import asyncpg  # noqa: E402
 
 DSN = dsn()

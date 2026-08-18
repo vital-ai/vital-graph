@@ -56,7 +56,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import asyncpg  # noqa: E402
-from vitalgraph_sparql_sql_dev.db import dsn  # noqa: E402
+from devtools.target import dsn  # noqa: E402
 
 OLD_KEYS = "(context_uuid, predicate_uuid)"
 NEW_COLS = "(context_uuid, predicate_uuid, object_uuid) INCLUDE (subject_uuid)"

@@ -39,7 +39,7 @@ import time
 
 sys.path.insert(0, os.getcwd())
 sys.path.insert(0, os.path.join(os.getcwd(), "scripts"))
-from vitalgraph_sparql_sql_dev.db import dsn, sidecar_url  # noqa: E402
+from devtools.target import dsn, sidecar_url  # noqa: E402
 
 from perf_shape_matrix import build_criteria, sql_for, KGENTITY  # noqa: E402
 

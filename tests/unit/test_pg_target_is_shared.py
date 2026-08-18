@@ -67,7 +67,7 @@ class TestNoScriptKeepsItsOwnDefault:
         assert not hits, (
             f"{path.name} reads VG_*_PG_* directly ({len(hits)} site(s)). Use "
             f"`add_pg_arguments(parser)` or `pg_kwargs()` from "
-            f"vitalgraph_sparql_sql_dev.db, so this script cannot disagree "
+            f"devtools.target, so this script cannot disagree "
             f"with the suites about which cluster it is touching.")
 
 
@@ -87,21 +87,21 @@ class TestTheResolverHonoursBothFamilies:
             monkeypatch.delenv(n, raising=False)
 
     def test_the_default_is_the_docker_test_stack(self):
-        from vitalgraph_sparql_sql_dev.db import get_connection_params
+        from devtools.target import get_connection_params
         assert get_connection_params()["port"] == 5433, (
             "the default must match what the test conftests read, or an unset "
             "environment splits fixtures across two clusters again")
 
     @pytest.mark.parametrize("var", ["VG_TEST_PG_PORT", "VG_PG_PORT", "PGPORT"])
     def test_each_family_can_override(self, monkeypatch, var):
-        from vitalgraph_sparql_sql_dev.db import get_connection_params
+        from devtools.target import get_connection_params
         monkeypatch.setenv(var, "5999")
         assert get_connection_params()["port"] == 5999
 
     def test_the_test_family_wins_over_the_script_family(self, monkeypatch):
         """Precedence has to be decided rather than incidental: with both set,
         the one the suites use is the more specific statement of intent."""
-        from vitalgraph_sparql_sql_dev.db import get_connection_params
+        from devtools.target import get_connection_params
         monkeypatch.setenv("VG_PG_PORT", "5432")
         monkeypatch.setenv("VG_TEST_PG_PORT", "5433")
         assert get_connection_params()["port"] == 5433
@@ -110,7 +110,7 @@ class TestTheResolverHonoursBothFamilies:
         """Trust auth is a real configuration, so "" must not fall through to
         the default the way an empty host would."""
         import os
-        from vitalgraph_sparql_sql_dev.db import get_connection_params
+        from devtools.target import get_connection_params
         os.environ["VG_PG_PASSWORD"] = ""
         try:
             assert get_connection_params()["password"] == ""
@@ -128,7 +128,7 @@ class TestTheTargetIsNamed:
         (6000, "unrecognised cluster"),
     ])
     def test_it_says_which_cluster(self, port, expected):
-        from vitalgraph_sparql_sql_dev.db import describe_target
+        from devtools.target import describe_target
         got = describe_target({"host": "localhost", "port": port,
                                "dbname": "sparql_sql_graph"})
         assert expected in got and str(port) in got
@@ -137,7 +137,7 @@ class TestTheTargetIsNamed:
         """Scripts hold one or the other; a helper that only takes one gets
         reimplemented in the scripts that hold the other."""
         import argparse
-        from vitalgraph_sparql_sql_dev.db import describe_target
+        from devtools.target import describe_target
         ns = argparse.Namespace(host="h", port=5433, database="d")
         assert "docker test stack" in describe_target(ns)
         assert "docker test stack" in describe_target(

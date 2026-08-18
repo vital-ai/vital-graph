@@ -21,7 +21,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from vitalgraph_sparql_sql_dev.db import sidecar_url  # noqa: E402
+from devtools.target import sidecar_url  # noqa: E402
 
 # REQUIRED, with no default, and deliberately not `db.dsn()`: this probe runs
 # against a restored dump whose database name is discovered per restore
