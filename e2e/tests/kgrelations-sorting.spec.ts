@@ -1,5 +1,13 @@
 import { test, expect, request } from '@playwright/test';
-import { ADMIN_USER, ADMIN_PASS, SPACE_ID, GRAPH_ID } from '../seed-constants';
+import { ADMIN_USER, ADMIN_PASS } from '../seed-constants';
+import { createSpace, dropSpace } from './space-fixtures';
+
+// Isolated space: this spec WRITES, and writes into the shared seeded space are
+// what pushed other specs' fixtures off page 1 (issues/022). Readers keep
+// sharing the seeded fixture — isolating them would multiply the expensive ONNX
+// index seeding for a problem the writers cause.
+const SPACE_ID = 'e2e_kgrelations_sorting_space';
+const GRAPH_ID = 'urn:e2e:kgrelations-sorting:graph';
 
 /**
  * Tier 7 — KG Relations sorting and paging through the UI.
@@ -197,6 +205,13 @@ async function selectLargestPageSize(page: import('@playwright/test').Page) {
   await expectRowCount(page, INDEXED_COUNT + UNINDEXED_COUNT);
 
 }
+
+test.beforeAll(async () => {
+  await createSpace(SPACE_ID, GRAPH_ID, { name: 'E2E KG Relations Sorting' });
+});
+test.afterAll(async () => {
+  await dropSpace(SPACE_ID);
+});
 
 test.describe('KG Relations sorting and paging', () => {
   test.describe.configure({ mode: 'serial' });

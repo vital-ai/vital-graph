@@ -1,6 +1,27 @@
 import { test, expect, request } from '@playwright/test';
 import * as crypto from 'crypto';
-import { ADMIN_USER, ADMIN_PASS, SPACE_ID, GRAPH_ID } from '../seed-constants';
+import { ADMIN_USER, ADMIN_PASS } from '../seed-constants';
+import { createSpace, dropSpace } from './space-fixtures';
+
+// Isolated spaces: this spec WRITES, and writes into the shared seeded space are
+// what pushed other specs' fixtures off page 1 (issues/022). Readers keep
+// sharing the seeded fixture — isolating them would multiply the expensive ONNX
+// index seeding for a problem the writers cause.
+//
+// ONE SPACE PER DESCRIBE, for the reason indexes-crud already documents: the two
+// blocks are `serial` internally but run in SEPARATE WORKERS under
+// fullyParallel, and a file-level beforeAll runs once per worker — so a single
+// shared space had one worker's createSpace drop the space the other was using.
+// That failed as `400 Failed to add space with tables`, not as anything naming
+// the race.
+const STREAM_SPACE_ID = 'e2e_files_stream_space';
+const UI_SPACE_ID = 'e2e_files_ui_space';
+const GRAPH_ID = 'urn:e2e:files-crud:graph';
+
+// The module-level helpers below read this, so each block sets it in its
+// beforeAll. It is safe as a mutable because the two blocks run in separate
+// workers (separate module instances), and within a worker they are `serial`.
+let SPACE_ID = STREAM_SPACE_ID;
 
 /**
  * Tier 7 — Files CRUD via streaming endpoints
@@ -119,6 +140,14 @@ async function cleanupUris(uris: string[]) {
 test.describe('Files streaming — byte-level round-trip', () => {
   test.describe.configure({ mode: 'serial' });
 
+  test.beforeAll(async () => {
+    SPACE_ID = STREAM_SPACE_ID;
+    await createSpace(SPACE_ID, GRAPH_ID, { name: 'E2E Files Streaming' });
+  });
+  test.afterAll(async () => {
+    await dropSpace(SPACE_ID);
+  });
+
   // This block's own files. Blocks run in parallel, so cleanup must never
   // reach beyond what this block created.
   const streamUris: string[] = [];
@@ -156,6 +185,14 @@ test.describe('Files streaming — byte-level round-trip', () => {
 
 test.describe('Files CRUD — UI lifecycle', () => {
   test.describe.configure({ mode: 'serial' });
+
+  test.beforeAll(async () => {
+    SPACE_ID = UI_SPACE_ID;
+    await createSpace(SPACE_ID, GRAPH_ID, { name: 'E2E Files UI' });
+  });
+  test.afterAll(async () => {
+    await dropSpace(SPACE_ID);
+  });
 
   const uiUris: string[] = [];
   let crudFileUri = '';
