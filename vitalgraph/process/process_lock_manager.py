@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 from typing import Dict, Optional
 
 import asyncpg
+from ..db.connection_config import require
 
 logger = logging.getLogger(__name__)
 
@@ -71,11 +72,11 @@ class ProcessLockManager:
     async def connect(self):
         """Establish dedicated lock connection."""
         self._conn = await asyncpg.connect(
-            host=self._config.get("host", "localhost"),
-            port=self._config.get("port", 5432),
-            database=self._config.get("database", "vitalgraph"),
-            user=self._config.get("username", "vitalgraph_user"),
-            password=self._config.get("password", "vitalgraph_pass"),
+            host=require(self._config, 'host'),
+            port=require(self._config, 'port'),
+            database=require(self._config, 'database'),
+            user=require(self._config, 'username'),
+            password=require(self._config, 'password'),
             command_timeout=60,
         )
         logger.info("ProcessLockManager: dedicated lock connection established")

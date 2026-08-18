@@ -22,6 +22,7 @@ from ..model.kgentities_model import EntityCreateResponse, EntityUpdateResponse
 
 # Graph retrieval utilities
 from .kg_graph_retrieval_utils import GraphObjectRetriever
+from ..db.connection_config import require
 
 
 # ---------------------------------------------------------------------------
@@ -970,11 +971,11 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         cfg = self._pg_config
         assert cfg is not None, "_sync_analyze_tables requires _pg_config"
         conn = psycopg.connect(
-            host=cfg.get('host', 'localhost'),
-            port=cfg.get('port', 5432),
-            dbname=cfg.get('database', 'vitalgraph'),
-            user=cfg.get('username', 'vitalgraph_user'),
-            password=cfg.get('password', 'vitalgraph_pass'),
+            host=require(cfg, 'host'),
+            port=require(cfg, 'port'),
+            dbname=require(cfg, 'database'),
+            user=require(cfg, 'username'),
+            password=require(cfg, 'password'),
             autocommit=True,
         )
         completed = 0

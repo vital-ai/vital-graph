@@ -18,6 +18,7 @@ import asyncio
 import os
 import sys
 import time
+from ..db.connection_config import require
 
 # ---------------------------------------------------------------------------
 # Connection helpers
@@ -29,11 +30,11 @@ async def _create_pool(config):
 
     db_cfg = config.get_database_config()
     pool = await asyncpg.create_pool(
-        host=db_cfg.get('host', 'localhost'),
-        port=int(db_cfg.get('port', 5432)),
-        database=db_cfg.get('database', 'vitalgraph'),
-        user=db_cfg.get('username', 'vitalgraph_user'),
-        password=db_cfg.get('password', 'vitalgraph_pass'),
+        host=require(db_cfg, 'host'),
+        port=int(require(db_cfg, 'port')),
+        database=require(db_cfg, 'database'),
+        user=require(db_cfg, 'username'),
+        password=require(db_cfg, 'password'),
         min_size=2,
         max_size=6,
     )

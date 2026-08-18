@@ -14,6 +14,7 @@ import asyncio
 import logging
 import time
 from typing import Any, Dict, List, Optional
+from ..connection_config import require
 
 logger = logging.getLogger(__name__)
 
@@ -80,11 +81,11 @@ def _sync_analyze(tables: List[str], pg_config: Dict[str, Any]) -> int:
     from psycopg import sql as psql
 
     conn = psycopg.connect(
-        host=pg_config.get('host', 'localhost'),
-        port=pg_config.get('port', 5432),
-        dbname=pg_config.get('database', 'vitalgraph'),
-        user=pg_config.get('username', 'vitalgraph_user'),
-        password=pg_config.get('password', 'vitalgraph_pass'),
+        host=require(pg_config, 'host'),
+        port=require(pg_config, 'port'),
+        dbname=require(pg_config, 'database'),
+        user=require(pg_config, 'username'),
+        password=require(pg_config, 'password'),
         autocommit=True,
     )
     completed = 0

@@ -5,6 +5,7 @@ import logging
 import asyncpg
 from asyncio import Task
 from typing import Dict, List, Optional, Callable, Set, Awaitable
+from ..db.connection_config import require
 
 logger = logging.getLogger(__name__)
 
@@ -192,11 +193,11 @@ class SignalManager:
         """Create a dedicated asyncpg connection (not from the pool) for signal operations."""
         db_config = self._get_db_config()
         return await asyncpg.connect(
-            host=db_config.get('host', 'localhost'),
-            port=db_config.get('port', 5432),
-            database=db_config.get('database', 'vitalgraph'),
-            user=db_config.get('username', 'vitalgraph_user'),
-            password=db_config.get('password', 'vitalgraph_pass'),
+            host=require(db_config, 'host'),
+            port=require(db_config, 'port'),
+            database=require(db_config, 'database'),
+            user=require(db_config, 'username'),
+            password=require(db_config, 'password'),
             command_timeout=60,
         )
 

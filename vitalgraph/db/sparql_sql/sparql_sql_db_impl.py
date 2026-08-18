@@ -18,6 +18,7 @@ import asyncpg
 from ..db_inf import DbImplInterface
 from ..user_management import UserManagementMixin
 from ...utils.resource_manager import track_pool
+from ..connection_config import require
 
 logger = logging.getLogger(__name__)
 
@@ -127,11 +128,11 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
             acquire_timeout = self.config.get('acquire_timeout', DEFAULT_ACQUIRE_TIMEOUT)
 
             self.connection_pool = await create_pool(
-                host=self.config.get('host', 'localhost'),
-                port=self.config.get('port', 5432),
-                database=self.config.get('database', 'vitalgraph'),
-                user=self.config.get('username', 'vitalgraph_user'),
-                password=self.config.get('password', 'vitalgraph_pass'),
+                host=require(self.config, 'host'),
+                port=require(self.config, 'port'),
+                database=require(self.config, 'database'),
+                user=require(self.config, 'username'),
+                password=require(self.config, 'password'),
                 min_size=min_size,
                 max_size=max_size,
                 max_inactive_connection_lifetime=120.0,
@@ -164,6 +165,14 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
                     logger.error("sparql_sql PostgreSQL connection test failed")
                     return False
 
+        except ValueError:
+            # A missing connection setting is a MISCONFIGURATION, not a
+            # connectivity failure. `return False` is the right answer to "the
+            # database is unreachable" — callers retry or degrade. It is the
+            # wrong answer to "this config cannot name a database", which no
+            # amount of retrying fixes, so that one propagates.
+            self.connected = False
+            raise
         except Exception as e:
             logger.error(f"Failed to connect sparql_sql PostgreSQL: {e}")
             self.connected = False
@@ -338,9 +347,12 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
         return {
             'type': 'postgresql',
             'backend': 'sparql_sql',
-            'host': self.config.get('host', 'localhost'),
-            'port': self.config.get('port', 5432),
-            'database': self.config.get('database', 'vitalgraph'),
+            # '?' rather than a plausible default: this is a DIAGNOSTIC, and
+            # printing localhost:5432/vitalgraph for a config that never said so
+            # is how a misconfiguration reads as normal.
+            'host': self.config.get('host', '?'),
+            'port': self.config.get('port', '?'),
+            'database': self.config.get('database', '?'),
             'connected': self.connected,
             'pool_size': self.connection_pool.get_size() if self.connection_pool else 0,
             'pool_max_size': self.connection_pool.get_max_size() if self.connection_pool else 0,

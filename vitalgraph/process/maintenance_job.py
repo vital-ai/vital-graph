@@ -21,6 +21,7 @@ import socket
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
+from ..db.connection_config import require
 
 logger = logging.getLogger(__name__)
 
@@ -1121,11 +1122,11 @@ class MaintenanceJob:
         cfg = self._pg_config
         assert cfg is not None, "_make_sync_connection requires postgresql_config"
         return psycopg.connect(
-            host=cfg.get('host', 'localhost'),
-            port=cfg.get('port', 5432),
-            dbname=cfg.get('database', 'vitalgraph'),
-            user=cfg.get('username', 'vitalgraph_user'),
-            password=cfg.get('password', 'vitalgraph_pass'),
+            host=require(cfg, 'host'),
+            port=require(cfg, 'port'),
+            dbname=require(cfg, 'database'),
+            user=require(cfg, 'username'),
+            password=require(cfg, 'password'),
             autocommit=True,
         )
 
