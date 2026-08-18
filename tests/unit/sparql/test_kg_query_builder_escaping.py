@@ -96,7 +96,7 @@ def _swap(node, old: str, new: str):
 # with a healthy sidecar. Hence the narrow except: a bug in this probe must fail
 # loudly rather than read as "the sidecar is down".
 _SIDECAR = os.environ.get(
-    "VG_SIDECAR_URL", "http://localhost:7071").rstrip("/") + "/v1/sparql/compile"
+    "VG_TEST_SIDECAR_URL", "http://localhost:7071").rstrip("/") + "/v1/sparql/compile"
 
 
 def _sidecar_up() -> bool:

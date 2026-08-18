@@ -303,7 +303,7 @@ async def main() -> int:
     ap.add_argument("--graph", required=True)
     ap.add_argument("--dsn", default="postgresql://hadfield@localhost:5432/sparql_sql_graph")
     ap.add_argument("--sidecar", default=os.environ.get("VG_TEST_SIDECAR_URL",
-                                                        "http://localhost:7070"))
+                                                        "http://localhost:7071"))
     ap.add_argument("--out", default="/tmp/shape_matrix.md")
     ap.add_argument("--no-execute", action="store_true",
                     help="classify plans only; skip the differential check")

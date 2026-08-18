@@ -27,7 +27,7 @@ export PROBE_ENTITY_TYPE="${PROBE_ENTITY_TYPE:-$(term '%:kg:entity:NurtureAction
 export PROBE_FRAME_TYPE="$(term '%:kg:frame:NurtureActionInfoFrame')"
 export PROBE_SLOT_TYPE="$(term '%:kg:slot:NurtureCampaignURI')"
 export PROBE_SLOT_VALUE="$(term '%:campaign:nurture_lead')"
-export PROBE_SIDECAR="${PROBE_SIDECAR:-http://localhost:7070}"
+export PROBE_SIDECAR="${PROBE_SIDECAR:-${VG_TEST_SIDECAR_URL:-http://localhost:7071}}"
 
 for v in PROBE_GRAPH PROBE_ENTITY_TYPE PROBE_FRAME_TYPE PROBE_SLOT_TYPE PROBE_SLOT_VALUE; do
   [ -n "${!v}" ] || { echo "$v not found in $DB" >&2; exit 1; }

@@ -43,7 +43,8 @@ from perf_shape_matrix import build_criteria, sql_for, COMPARATORS, KGENTITY
 SP = os.environ.get("TSPACE", "sp_lead_synth_100k")
 GR = os.environ.get("TGRAPH", "urn:sp_lead_synth_100k")
 DSN = os.environ.get("TDSN", "postgresql://hadfield@localhost:5432/sparql_sql_graph")
-SIDE = os.environ.get("TSIDE", "http://localhost:7070")
+SIDE = (os.environ.get("TSIDE")
+        or os.environ.get("VG_TEST_SIDECAR_URL", "http://localhost:7071"))
 BUDGET = float(os.environ.get("TBUDGET", "60"))
 WANT_COLD = os.environ.get("TCOLD", "1") != "0"
 

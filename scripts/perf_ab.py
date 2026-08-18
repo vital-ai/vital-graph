@@ -44,7 +44,10 @@ from perf_shape_matrix import build_criteria, sql_for, KGENTITY  # noqa: E402
 
 SPACE = os.environ.get("TSPACE", "sp_lead_synth_100k")
 GRAPH = os.environ.get("TGRAPH", "urn:sp_lead_synth_100k")
-SIDECAR = os.environ.get("TSIDE", "http://localhost:7070")
+# 7071 is the test stack; 7070 is a host-run dev sidecar AND the test
+# container's own internal port, which is how that value gets copied.
+SIDECAR = (os.environ.get("TSIDE")
+           or os.environ.get("VG_TEST_SIDECAR_URL", "http://localhost:7071"))
 BUDGET = float(os.environ.get("TBUDGET", "60"))
 REPS = int(os.environ.get("TREPS", "3"))
 

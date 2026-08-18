@@ -34,7 +34,11 @@ SLOT_VALUE = os.environ["PROBE_SLOT_VALUE"]
 PARENT_FRAME = os.environ.get("PROBE_PARENT_FRAME_TYPE") or None
 SLOT_CLASS = os.environ.get("PROBE_SLOT_CLASS") or None
 COMPARATOR = os.environ.get("PROBE_COMPARATOR", "eq")
-SIDECAR = os.environ.get("PROBE_SIDECAR", "http://localhost:7070")
+# 7071 is the test stack; the container maps it to its own 7070. Defaulting
+# to 7070 pointed this probe at a HOST-run dev sidecar while its DSN was
+# free to name the test cluster — the issues/055 split, one service over.
+SIDECAR = (os.environ.get("PROBE_SIDECAR")
+           or os.environ.get("VG_TEST_SIDECAR_URL", "http://localhost:7071"))
 PAGE_SIZE = int(os.environ.get("PROBE_PAGE_SIZE", "50"))
 
 KGURI_SLOT = "http://vital.ai/ontology/haley-ai-kg#KGURISlot"
