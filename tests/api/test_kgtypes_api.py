@@ -7,6 +7,7 @@ keyword/fts/vector/hybrid search, type relationships, and type documentation.
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 
 import pytest
@@ -196,6 +197,50 @@ async def search_env(vg_client):
 
     # Allow time for kgtype_default auto-sync to vectorize the new types
     await asyncio.sleep(3.0)
+
+    # Then CHECK it happened, rather than trusting the sleep (issues/100).
+    #
+    # Six of these searches once returned zero for reasons never established.
+    # They read `sp_kg_types_fts_index` and `sp_kg_types_vector_index`, which a
+    # background sync populates and which this sleep waits for — so "search
+    # found nothing" and "nothing was ever indexed" are the same symptom and
+    # only one of them is a search defect. Distinguishing them takes one query,
+    # and it has to run while the failure is live: by the time anyone looks, the
+    # fixture has cleaned up and the evidence is gone.
+    #
+    # A warning rather than an assertion. Keyword search reads the FTS index and
+    # the vector cases read the other, so a partial sync should still let some
+    # of them speak for themselves — and turning a diagnostic into a hard
+    # failure would replace six informative failures with one uninformative
+    # error.
+    try:
+        import asyncpg as _asyncpg
+        from .conftest import PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD
+        _c = await _asyncpg.connect(host=PG_HOST, port=PG_PORT,
+                                    database=PG_DATABASE, user=PG_USER,
+                                    password=PG_PASSWORD)
+        try:
+            # `_fts_index` / `_vector_index` are the index DEFINITIONS —
+            # (index_id, index_name, languages, created_time), two rows here
+            # for `document_segments` and `kgtype_default`. Counting those
+            # measures how many indexes are configured, not how many types were
+            # indexed, and warns on perfectly healthy data. The rows live in the
+            # per-index tables named after them.
+            fts = await _c.fetchval(
+                f"SELECT count(*) FROM {SP_KG_TYPES}_fts_kgtype_default")
+            vec = await _c.fetchval(
+                f"SELECT count(*) FROM {SP_KG_TYPES}_vec_kgtype_default")
+            if fts < 3 or vec < 3:
+                logging.getLogger(__name__).warning(
+                    "kgtype search fixture: after %.1fs the indexes hold "
+                    "fts=%s vector=%s for 3 created types. A search returning "
+                    "zero below is the SYNC not having run, not the search "
+                    "(issues/100).", 3.0, fts, vec)
+        finally:
+            await _c.close()
+    except Exception as _exc:      # never fail the fixture for a diagnostic
+        logging.getLogger(__name__).debug(
+            "kgtype index check skipped: %s", _exc)
 
     yield {
         "person": person,

@@ -86,6 +86,32 @@ before the search runs.
 maintenance jobs chasing spaces dropped during this session's cleanup. They are a
 consequence of today, not a record of yesterday.
 
+### The lead is now instrumented (2026-08-18)
+
+`search_env` checks, after its 3-second wait, that the created types actually
+reached the index, and warns naming this issue if they did not. That is the one
+question that has to be asked WHILE the failure is live: by the time anyone
+looks, the fixture has cleaned up and the evidence is gone.
+
+Measured while building it, and it corrected the guess in the section above:
+
+    sp_kg_types_fts_index        2 rows   — the index DEFINITIONS
+                                            (document_segments, kgtype_default)
+    sp_kg_types_fts_kgtype_default        — where the indexed rows actually live
+    sp_kg_types_vec_kgtype_default        — likewise for vectors
+
+The first version of the check counted `_fts_index` and would have warned on
+every healthy run, because two rows there means two indexes are CONFIGURED, not
+that two types were indexed. The per-index tables hold 0 rows at rest and at
+least 3 during the fixture, which is also the first positive evidence that the
+sync is running at all — something this issue could never establish while the
+failure was live.
+
+A warning rather than an assertion: keyword search reads the FTS index and the
+vector cases read the other, so a partial sync should still let some of the six
+speak for themselves, and a hard failure would replace six informative failures
+with one uninformative error.
+
 **Left open deliberately rather than closed.** A test that starts passing for
 unknown reasons can stop passing for the same unknown reasons. If these six fail
 again, restart the app container FIRST and see whether that alone fixes it: that
