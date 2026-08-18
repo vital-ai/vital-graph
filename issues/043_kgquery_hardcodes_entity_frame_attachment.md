@@ -1,6 +1,68 @@
 # KGQuery Hardcodes How Entities Attach to Frames
 
-## Status: OPEN — whole datasets are unqueryable THROUGH KGQUERY, silently
+## Status: FIXED 2026-08-18 — attachment topology is now a criteria option
+
+`EntityQueryCriteria.frame_attachment` selects the TOPOLOGY, which is a separate
+axis from `use_edge_pattern`'s SPELLING; all four combinations emit:
+
+    "contains"    entity --hasEntityKGFrame--> frame          (default, unchanged)
+    "slot_value"  frame --hasKGSlot--> slot --hasEntitySlotValue--> entity
+
+`attachment_slot_type` optionally restricts which slot role attaches the entity;
+omitted, it matches any role. An unrecognised value raises rather than falling
+back to the topology that returns zero. Both hops now go through
+`_entity_frame_clauses` / `_frame_slot_clauses`, so no call site chooses either
+axis for itself.
+
+Verified on `wordnet_frames` against counts computed independently in SQL, for
+`urn:Edge_WordnetHyponym`:
+
+    role                       builder    data
+    urn:hasSourceEntity         20,008    20,008
+    urn:hasDestinationEntity    87,597    87,597
+    unconstrained               87,943    87,943   (= the union)
+
+Before: 0 rows in both spellings. The role constraint is not inert — 346 entities
+are source-only and 67,935 destination-only — and rows equal distinct entities, so
+the two-hop path does not fan out (which would have corrupted every page
+boundary, since paging is built on row counts).
+
+`tests/unit/test_frame_attachment_topology.py` (13 cases) and
+`tests/performance/test_slot_value_attachment_on_wordnet.py` (5 cases, exact
+counts against the real data). Both were run against the pre-fix builder to
+confirm they fire: 9 of the 13 unit cases fail there, and the four that pass are
+exactly the "contains is unchanged" ones.
+
+### Two claims in this issue were wrong, and are corrected below
+
+**The sub-fix was real but mislocated.** This issue placed it at the frame->slot
+hop in `slot_criteria` "~:745, :760, :774". Those three branches already checked
+`use_edge_pattern` correctly. The live leak was the *entity->frame* hop in the
+**standalone** `slot_criteria` block (:817, :832, :846), where all three branches
+hardcoded BOTH hops as edges with no check at all — so a caller selecting
+direct-property mode got edge-pattern SPARQL, and on a direct-property dataset
+the same silent zero rows. Fixed and covered by the six parametrised cases in the
+unit file; confirmed all three leaked before the change.
+
+**A fourth hardcoded site is unreachable.** `_build_grouped_slot_criteria`
+(:1683) hardcodes both hops too, but its only occurrence in the repository is its
+own `def` — it is dead code. Left in place rather than "fixed", since editing it
+would suggest it is on a path something executes. It is a live trap for whoever
+calls it next.
+
+### Found while verifying, unrelated to this issue
+
+`tests/unit/sparql/test_kg_query_builder_escaping.py` referenced `_SIDECAR`
+without ever defining it, so `_sidecar_up()` raised `NameError`, its bare
+`except Exception` swallowed it, and all 8 injection tests skipped on every run —
+including on a machine with a healthy sidecar. Defined the constant against the
+real `/v1/sparql/compile` endpoint and narrowed the except to `URLError`/`OSError`
+so a bug in the probe fails loudly instead of reading as "sidecar down". All 22
+now pass.
+
+## The original report
+
+
 
 Scope corrected 2026-08-11. An earlier revision of this line said "unqueryable"
 without qualification, which overstates it: **raw SPARQL queries this data

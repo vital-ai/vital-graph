@@ -25,6 +25,8 @@ without it.
 from __future__ import annotations
 
 import json
+import os
+import urllib.error
 import urllib.request
 
 import pytest
@@ -88,6 +90,15 @@ def _swap(node, old: str, new: str):
     return node
 
 
+# The sidecar's compile endpoint. This was previously referenced without ever
+# being defined, so `_sidecar_up` raised NameError, the except swallowed it, and
+# every sidecar-marked test below skipped on every run — including on a machine
+# with a healthy sidecar. Hence the narrow except: a bug in this probe must fail
+# loudly rather than read as "the sidecar is down".
+_SIDECAR = os.environ.get(
+    "VG_SIDECAR_URL", "http://localhost:7071").rstrip("/") + "/v1/sparql/compile"
+
+
 def _sidecar_up() -> bool:
     try:
         req = urllib.request.Request(
@@ -96,7 +107,7 @@ def _sidecar_up() -> bool:
             headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=2) as r:
             return r.status == 200
-    except Exception:
+    except (urllib.error.URLError, OSError):
         return False
 
 

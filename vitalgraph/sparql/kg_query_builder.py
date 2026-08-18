@@ -306,6 +306,18 @@ class EntityQueryCriteria:
     filters: Optional[List[QueryFilter]] = None  # Property-based filters
     entity_property_filters: Optional[List[EntityPropertyFilter]] = None  # Direct entity property filters
     use_edge_pattern: bool = True  # Use edge-based pattern (Edge_hasEntityKGFrame) vs direct property (hasFrame)
+    # How an entity attaches to a frame. `use_edge_pattern` selects the SPELLING
+    # of a link (reified edge node vs direct property); this selects its
+    # TOPOLOGY, which is a separate axis:
+    #   "contains"   entity --hasEntityKGFrame--> frame     (the default)
+    #   "slot_value" frame --hasKGSlot--> slot --hasEntitySlotValue--> entity
+    # Datasets like wordnet_frames model relations as frames whose slots point at
+    # the entities, so they have no attachment edge at all in either spelling and
+    # every "contains" query over them returns zero rows. See issues/043.
+    frame_attachment: str = "contains"
+    # Restricts which slot role attaches the entity under "slot_value" — e.g.
+    # <urn:hasSourceEntity>. None matches any role.
+    attachment_slot_type: Optional[str] = None
     vector_criteria: Optional[VectorCriteria] = None  # Vector similarity search
     multi_vector_criteria: Optional[MultiVectorCriteria] = None  # Multi-vector weighted fusion
     geo_criteria: Optional[GeoCriteria] = None  # Geographic proximity search
@@ -722,19 +734,9 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.searc
                 frame_var = f"frame_{i}"
                 frame_edge_var = f"frame_edge_{i}"
                 
-                # Build entity -> frame path (mode-aware)
-                if criteria.use_edge_pattern:
-                    # Edge-based mode: Use Edge_hasEntityKGFrame
-                    frame_clauses = [
-                        f"?{frame_edge_var} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame> .",
-                        f"?{frame_edge_var} vital-core:hasEdgeSource ?entity .",
-                        f"?{frame_edge_var} vital-core:hasEdgeDestination ?{frame_var} ."
-                    ]
-                else:
-                    # Direct property mode: Use vg-direct:hasEntityFrame
-                    frame_clauses = [
-                        f"?entity vg-direct:hasEntityFrame ?{frame_var} ."
-                    ]
+                # Build entity -> frame path (topology- and mode-aware)
+                frame_clauses = self._entity_frame_clauses(
+                    frame_var, frame_edge_var, criteria)
                 
                 if frame_criterion.frame_type:
                     frame_clauses.append(f"?{frame_var} haley:hasKGFrameType <{frame_criterion.frame_type}> .")
@@ -813,14 +815,9 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.searc
                 
                 if slot_criterion.comparator == "not_exists":
                     # Negate entire entity->frame->slot path
-                    inner = [
-                        f"?{frame_edge_var} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame> .",
-                        f"?{frame_edge_var} vital-core:hasEdgeSource ?entity .",
-                        f"?{frame_edge_var} vital-core:hasEdgeDestination ?{frame_var} .",
-                        f"?{slot_edge_var} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .",
-                        f"?{slot_edge_var} vital-core:hasEdgeSource ?{frame_var} .",
-                        f"?{slot_edge_var} vital-core:hasEdgeDestination ?{slot_var} ."
-                    ]
+                    inner = (self._entity_frame_clauses(frame_var, frame_edge_var, criteria)
+                        + self._frame_slot_clauses(frame_var, slot_var, slot_edge_var,
+                                                   criteria.use_edge_pattern))
                     if slot_criterion.slot_type:
                         inner.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
                     if slot_criterion.value is not None:
@@ -828,28 +825,18 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.searc
                     where_clauses.append(f"FILTER NOT EXISTS {{ {' '.join(inner)} }}")
                 elif slot_criterion.comparator == "is_empty":
                     # Slot connection mandatory, value check via OPTIONAL + !BOUND
-                    slot_clauses = [
-                        f"?{frame_edge_var} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame> .",
-                        f"?{frame_edge_var} vital-core:hasEdgeSource ?entity .",
-                        f"?{frame_edge_var} vital-core:hasEdgeDestination ?{frame_var} .",
-                        f"?{slot_edge_var} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .",
-                        f"?{slot_edge_var} vital-core:hasEdgeSource ?{frame_var} .",
-                        f"?{slot_edge_var} vital-core:hasEdgeDestination ?{slot_var} ."
-                    ]
+                    slot_clauses = (self._entity_frame_clauses(frame_var, frame_edge_var, criteria)
+                        + self._frame_slot_clauses(frame_var, slot_var, slot_edge_var,
+                                                   criteria.use_edge_pattern))
                     if slot_criterion.slot_type:
                         slot_clauses.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
                     slot_clauses.append(self._build_empty_value_pattern(slot_var, slot_criterion, f"val_entity_{i}"))
                     where_clauses.append(" ".join(slot_clauses))
                 else:
                     # Build entity -> frame -> slot path
-                    slot_clauses = [
-                        f"?{frame_edge_var} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame> .",
-                        f"?{frame_edge_var} vital-core:hasEdgeSource ?entity .",
-                        f"?{frame_edge_var} vital-core:hasEdgeDestination ?{frame_var} .",
-                        f"?{slot_edge_var} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .",
-                        f"?{slot_edge_var} vital-core:hasEdgeSource ?{frame_var} .",
-                        f"?{slot_edge_var} vital-core:hasEdgeDestination ?{slot_var} ."
-                    ]
+                    slot_clauses = (self._entity_frame_clauses(frame_var, frame_edge_var, criteria)
+                        + self._frame_slot_clauses(frame_var, slot_var, slot_edge_var,
+                                                   criteria.use_edge_pattern))
                     
                     if slot_criterion.slot_type:
                         slot_clauses.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
@@ -1197,6 +1184,61 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.searc
                         "Cannot nest a negated frame criterion inside another negated frame criterion. "
                         "Double negation is not supported."
                     )
+
+    ATTACHMENT_CONTAINS = "contains"
+    ATTACHMENT_SLOT_VALUE = "slot_value"
+    VALID_ATTACHMENTS = (ATTACHMENT_CONTAINS, ATTACHMENT_SLOT_VALUE)
+
+    def _entity_frame_clauses(self, frame_var: str, frame_edge_var: str, criteria) -> List[str]:
+        """The entity->frame hop, in the topology and spelling `criteria` asks for.
+
+        Both axes are honoured here so no call site has to remember either one.
+        Under "slot_value" the link runs the other way — the frame reaches the
+        entity through a slot — but the two variables it binds are the same, so
+        callers append their frame and slot constraints unchanged.
+        """
+        attachment = getattr(criteria, "frame_attachment", self.ATTACHMENT_CONTAINS)
+        if attachment not in self.VALID_ATTACHMENTS:
+            raise ValueError(
+                f"frame_attachment must be one of {self.VALID_ATTACHMENTS}, got {attachment!r}")
+
+        if attachment == self.ATTACHMENT_SLOT_VALUE:
+            # Distinct from any slot_N_M the caller emits for its own criteria:
+            # this slot exists only to carry the attachment.
+            attach_slot = f"attach_slot_{frame_var}"
+            attach_edge = f"attach_edge_{frame_var}"
+            if criteria.use_edge_pattern:
+                clauses = [
+                    f"?{attach_edge} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .",
+                    f"?{attach_edge} vital-core:hasEdgeSource ?{frame_var} .",
+                    f"?{attach_edge} vital-core:hasEdgeDestination ?{attach_slot} .",
+                ]
+            else:
+                clauses = [f"?{frame_var} vg-direct:hasSlot ?{attach_slot} ."]
+            if getattr(criteria, "attachment_slot_type", None):
+                clauses.append(
+                    f"?{attach_slot} haley:hasKGSlotType <{criteria.attachment_slot_type}> .")
+            clauses.append(f"?{attach_slot} haley:hasEntitySlotValue ?entity .")
+            return clauses
+
+        if criteria.use_edge_pattern:
+            return [
+                f"?{frame_edge_var} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame> .",
+                f"?{frame_edge_var} vital-core:hasEdgeSource ?entity .",
+                f"?{frame_edge_var} vital-core:hasEdgeDestination ?{frame_var} .",
+            ]
+        return [f"?entity vg-direct:hasEntityFrame ?{frame_var} ."]
+
+    def _frame_slot_clauses(self, frame_var: str, slot_var: str, slot_edge_var: str,
+                            use_edge_pattern: bool) -> List[str]:
+        """The frame->slot hop, in the spelling requested."""
+        if use_edge_pattern:
+            return [
+                f"?{slot_edge_var} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .",
+                f"?{slot_edge_var} vital-core:hasEdgeSource ?{frame_var} .",
+                f"?{slot_edge_var} vital-core:hasEdgeDestination ?{slot_var} .",
+            ]
+        return [f"?{frame_var} vg-direct:hasSlot ?{slot_var} ."]
 
     def _build_negated_slot_pattern(self, slot_var: str, slot_edge_var: str, frame_var: str,
                                      slot_criterion, use_edge_pattern: bool) -> str:
