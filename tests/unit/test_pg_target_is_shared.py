@@ -92,6 +92,28 @@ class TestTheResolverHonoursBothFamilies:
             "the default must match what the test conftests read, or an unset "
             "environment splits fixtures across two clusters again")
 
+    def test_dotenv_does_not_retarget_the_test_tooling(self, monkeypatch):
+        """Loading the app's `.env` must not move the tooling's cluster.
+
+        The check above deletes LOCAL_DB_* before asserting the default, so it
+        measures a cleanroom rather than the environment tests actually run in.
+        That is why it stayed green when `config_loader` began loading `.env`:
+        `load_dotenv` put `LOCAL_DB_PORT=5432` into os.environ process-wide, this
+        resolver preferred it, and the tooling silently retargeted from the
+        docker stack to the host cluster — issues/055, from inside the fix for
+        issues/055.
+
+        It surfaced as an integration fixture whose space had no tables: created
+        on one cluster, looked for on the other.
+        """
+        from vitalgraph.config.config_loader import load_dotenv_files
+        from devtools.target import get_connection_params
+
+        # Whatever `.env` holds, and it holds LOCAL_DB_PORT=5432 in this repo.
+        load_dotenv_files()
+        assert get_connection_params()["port"] == 5433, (
+            "loading .env moved the tooling off the docker test stack")
+
     @pytest.mark.parametrize("var", ["VG_TEST_PG_PORT", "VG_PG_PORT", "PGPORT"])
     def test_each_family_can_override(self, monkeypatch, var):
         from devtools.target import get_connection_params

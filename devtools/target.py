@@ -47,6 +47,26 @@ _STACK_DEFAULTS = {
 }
 
 
+# LOCAL_DB_* IS DELIBERATELY NOT CONSULTED, and it used to be.
+#
+# It is the APPLICATION's development profile, read from `.env`. That was
+# harmless while nothing loaded `.env` — the variables only existed if someone
+# exported them deliberately, which is a choice. Then `config_loader` started
+# loading `.env` (it had always claimed to), `load_dotenv` put LOCAL_DB_* into
+# os.environ process-wide, and this chain silently preferred them: the test
+# tooling retargeted from the docker stack on 5433 to `host.docker.internal:5432`
+# the moment any code touched the app config.
+#
+# That is issues/055 exactly — fixtures created on one cluster and read from
+# another — reintroduced by the change that was meant to prevent it. It surfaced
+# as an integration fixture whose space had no tables, because the space was made
+# on one cluster and the tables looked for on the other.
+#
+# The existing default test did not catch it: it scrubs LOCAL_DB_* before
+# asserting 5433, so it measured a cleanroom rather than the environment tests
+# actually run in. `test_dotenv_does_not_retarget_the_test_tooling` covers that.
+
+
 def get_connection_params() -> Dict[str, Any]:
     """Build connection parameters for the configured stack.
 
@@ -54,7 +74,7 @@ def get_connection_params() -> Dict[str, Any]:
 
       1. ``VG_TEST_PG_*``   — the stack selector the test suites share
       2. ``PGHOST``/``PGPORT``/...  — standard libpq variables
-      3. ``LOCAL_DB_*``     — the .env development profile
+      3. (nothing else — see below)
       4. the docker test stack
 
     An explicit setting always wins; the DEFAULT is what had to stop
@@ -70,19 +90,19 @@ def get_connection_params() -> Dict[str, Any]:
 
     return {
         "host": _pick("VG_TEST_PG_HOST", "VG_PG_HOST", "PGHOST",
-                      "LOCAL_DB_HOST", "host"),
+                      "host"),
         "port": int(_pick("VG_TEST_PG_PORT", "VG_PG_PORT", "PGPORT",
-                          "LOCAL_DB_PORT", "port")),
+                          "port")),
         "dbname": _pick("VG_TEST_PG_DATABASE", "VG_PG_DATABASE", "PGDATABASE",
-                        "LOCAL_DB_NAME", "dbname"),
+                        "dbname"),
         "user": _pick("VG_TEST_PG_USER", "VG_PG_USER", "PGUSER",
-                      "LOCAL_DB_USERNAME", "user"),
+                      "user"),
         # Password is the one field where an empty string is a legitimate value
         # (trust auth), so it is read separately rather than through the
         # non-empty filter above.
         "password": next(
             (os.environ[n] for n in ("VG_TEST_PG_PASSWORD", "VG_PG_PASSWORD",
-                                     "PGPASSWORD", "LOCAL_DB_PASSWORD")
+                                     "PGPASSWORD")
              if n in os.environ),
             _STACK_DEFAULTS["password"]),
     }
