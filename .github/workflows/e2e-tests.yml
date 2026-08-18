@@ -62,6 +62,29 @@ jobs:
         env:
           VITAL_HOME: /tmp/vitalhome
 
+      # ── DAWG conformance that needs the stack ───────────────────────
+      # test_dawg_syntax needs the Jena sidecar; the two sql_v2 suites need
+      # PostgreSQL as well. They cannot run in unit-tests.yml, which has
+      # neither, so they run here where compose has already brought both up.
+      # Without this, the only DAWG tests in CI were the pyoxigraph ones.
+      - name: Install test dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run DAWG conformance against the stack
+        run: |
+          python -m pytest \
+            tests/conformance/test_dawg_syntax.py \
+            tests/conformance/test_dawg_sql_v2.py \
+            tests/conformance/test_dawg_update_sql_v2.py \
+            --tb=short -q
+        env:
+          VG_TEST_SIDECAR_URL: http://localhost:7071
+          VG_TEST_PG_HOST: localhost
+          VG_TEST_PG_PORT: "5433"
+          VG_TEST_PG_DATABASE: sparql_sql_graph
+          VG_TEST_PG_USER: postgres
+          VG_TEST_PG_PASSWORD: testpass
+
       # ── Node.js + Playwright ────────────────────────────────────────
       - name: Set up Node.js
         uses: actions/setup-node@v4

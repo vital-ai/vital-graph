@@ -38,9 +38,21 @@ jobs:
         run: |
           python -m pytest tests/unit/ -v --tb=short -q
 
-      - name: Run Tier 2 DAWG conformance (pyoxigraph)
+      # The corpus is committed under tests/conformance/dawg_data/. It used to
+      # be gitignored, so this step collected two tests, skipped both and passed
+      # — conformance never ran here. The guard below fails if the data is
+      # missing, because an empty parametrisation is reported as a SKIP.
+      - name: Check the DAWG corpus is present
         run: |
-          python -m pytest tests/conformance/test_dawg_pyoxigraph.py -v --tb=short -q
+          python -m pytest tests/conformance/test_dawg_corpus_present.py --tb=short -q
+
+      - name: Run Tier 2 DAWG conformance (no infrastructure required)
+        run: |
+          python -m pytest \
+            tests/conformance/test_dawg_pyoxigraph.py \
+            tests/conformance/test_dawg_protocol.py \
+            tests/conformance/test_dawg_coverage.py \
+            -v --tb=short -q
 
       - name: Run pglast SQL validation (if available)
         run: |
