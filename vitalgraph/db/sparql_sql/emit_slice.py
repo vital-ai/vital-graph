@@ -209,6 +209,21 @@ def _emit_late_text(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
                          f"column for {var}")
         return None
 
+    # A variable bound by BIND has no term row to come back to. The child still
+    # emits the COLUMN — as `NULL::uuid AS v0__uuid` — so the name check above
+    # passes, and the text join then matches nothing and the query returns zero
+    # rows instead of its answer.
+    #
+    # This is how `_frame_exists_in_backend` broke:
+    #     SELECT ?s WHERE { GRAPH <g> { <f> vitaltype <KGFrame> . BIND(<f> AS ?s) } }
+    # went from 1 row to 0, so every frame looked absent and DELETE reported
+    # "Frame not found". Fourteen API tests failed and the cause was a perf
+    # change to an unrelated-looking path.
+    if f"NULL::uuid AS {sn}__uuid" in child_sql:
+        ctx.log("slice", f"late-text declined: {var} is bound by an expression, "
+                         f"so it has no term row to resolve")
+        return None
+
     r_alias, t_alias = ctx.aliases.next("r"), ctx.aliases.next("t")
     cols = TypeRegistry.term_table_columns(
         sn, t_alias, r_alias, "",
