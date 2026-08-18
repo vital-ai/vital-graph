@@ -19,10 +19,18 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 export VG_TEST_PG_HOST="${VG_TEST_PG_HOST:-localhost}"
-export VG_TEST_PG_PORT="${VG_TEST_PG_PORT:-5432}"
+# Defaults to 5433, the docker test stack, matching every Python entry
+# point (`vitalgraph_sparql_sql_dev.db`) and all three test conftests.
+# It defaulted to 5432 and this script REPORTED SUCCESS while loading the
+# host cluster, where nothing reads it — the perf suite then skipped its
+# five relation benches saying "sp_kg_rel not loaded" (issues/055).
+export VG_TEST_PG_PORT="${VG_TEST_PG_PORT:-5433}"
 export VG_TEST_PG_DATABASE="${VG_TEST_PG_DATABASE:-sparql_sql_graph}"
 export VG_TEST_PG_USER="${VG_TEST_PG_USER:-postgres}"
-export VG_TEST_PG_PASSWORD="${VG_TEST_PG_PASSWORD-}"
+# testpass, because the port above now defaults to the docker stack and
+# an empty password is refused there. The two defaults have to move
+# together or the script trades a silent wrong target for a hard failure.
+export VG_TEST_PG_PASSWORD="${VG_TEST_PG_PASSWORD-testpass}"
 
 SPACE="${REL_SPACE:-sp_kg_rel}"
 GRAPH="${REL_GRAPH:-urn:sp_kg_rel}"
