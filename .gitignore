@@ -293,6 +293,9 @@ registry_output
 registry_generated_vectors
 
 # W3C DAWG SPARQL test suite (cloned separately)
+# The SPARQL suite moved to tests/conformance/dawg_data/ and IS committed:
+# CI depends on it, and a gitignored corpus made the conformance step
+# collect nothing and pass. What remains here is the unused rdf/ subtree.
 vitalgraph_sparql_sql_dev/dawg_tests/
 
 jena/jena-main-source

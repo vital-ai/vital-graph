@@ -25,7 +25,7 @@ from vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_result_comparator import (
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 CSV_TSV = (
     _PROJECT_ROOT
-    / "vitalgraph_sparql_sql_dev" / "dawg_tests" / "sparql" / "sparql11" / "csv-tsv-res"
+    / "tests" / "conformance" / "dawg_data" / "sparql" / "sparql11" / "csv-tsv-res"
 )
 
 XSD = "http://www.w3.org/2001/XMLSchema#"

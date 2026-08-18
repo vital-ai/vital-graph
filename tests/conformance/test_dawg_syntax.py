@@ -47,7 +47,7 @@ from vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_manifest_parser import (
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DAWG_ROOT = _PROJECT_ROOT / "vitalgraph_sparql_sql_dev" / "dawg_tests"
+DAWG_ROOT = _PROJECT_ROOT / "tests" / "conformance" / "dawg_data"
 
 # The TEST-stack sidecar (vitalgraph-test-sidecar, host 7071 -> 7070 in the
 # container), not the dev one on 7070. tests/performance already defaulted

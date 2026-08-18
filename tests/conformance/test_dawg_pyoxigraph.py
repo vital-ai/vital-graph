@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DAWG_ROOT = _PROJECT_ROOT / "vitalgraph_sparql_sql_dev" / "dawg_tests"
+DAWG_ROOT = _PROJECT_ROOT / "tests" / "conformance" / "dawg_data"
 JENA_ARQ_ROOT = _PROJECT_ROOT / "jena-main-source" / "jena-arq" / "testing" / "ARQ"
 
 # ---------------------------------------------------------------------------

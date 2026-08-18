@@ -112,7 +112,7 @@ def _project_root() -> Path:
 
 def _dawg_root() -> Path:
     """Return the path to the DAWG test suite."""
-    return _project_root() / "vitalgraph_sparql_sql_dev" / "dawg_tests"
+    return _project_root() / "tests" / "conformance" / "dawg_data"
 
 
 def _jena_arq_root() -> Path:

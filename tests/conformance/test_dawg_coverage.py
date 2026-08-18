@@ -30,7 +30,7 @@ import pytest
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SPARQL11_ROOT = (
-    _PROJECT_ROOT / "vitalgraph_sparql_sql_dev" / "dawg_tests" / "sparql" / "sparql11"
+    _PROJECT_ROOT / "tests" / "conformance" / "dawg_data" / "sparql" / "sparql11"
 )
 
 # Categories deliberately NOT run, each with the reason. An entry here is a

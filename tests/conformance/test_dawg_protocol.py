@@ -49,7 +49,7 @@ from vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_protocol_runner import (
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = (
-    _PROJECT_ROOT / "vitalgraph_sparql_sql_dev" / "dawg_tests" / "sparql"
+    _PROJECT_ROOT / "tests" / "conformance" / "dawg_data" / "sparql"
     / "sparql11" / "protocol" / "manifest.ttl"
 )
 

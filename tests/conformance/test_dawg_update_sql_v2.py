@@ -40,7 +40,7 @@ from vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_update_test import (
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DAWG_ROOT = _PROJECT_ROOT / "vitalgraph_sparql_sql_dev" / "dawg_tests"
+DAWG_ROOT = _PROJECT_ROOT / "tests" / "conformance" / "dawg_data"
 
 # Mirrors dawg_test_runner.UPDATE_CATEGORIES — every category whose manifest
 # holds mf:UpdateEvaluationTest entries.
