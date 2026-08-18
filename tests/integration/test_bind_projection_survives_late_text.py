@@ -1,4 +1,8 @@
-"""A variable bound by BIND must still come back from a paged query.
+"""Late text resolution must not strip text an expression still reads.
+
+Two regressions from the same commit (`af10e5f`), which moved text resolution
+after the LIMIT. Both returned no rows from a query that has rows, and neither
+named the cause.
 
 `af10e5f` moved text resolution after the LIMIT: the page is chosen by uuid and
 the term text is joined for those rows only. That is right for a variable whose
@@ -96,3 +100,36 @@ async def test_text_still_comes_back_for_a_quad_bound_variable(space_impl, make_
         }} }} LIMIT 1""")
     assert len(rows) == 1
     assert rows[0]["name"]["value"] == "bind projection fixture"
+
+
+async def test_a_filter_over_text_still_generates(space_impl, make_space, graph_uri):
+    """The frames list: `total_count: 3` above an empty table.
+
+    `_emit_late_text` set `text_needed_vars` to the EMPTY SET, suppressing text
+    for every variable in the child — including ones a FILTER inside that child
+    reads. The scope guard caught the resulting NULL comparison and REFUSED to
+    generate (issues/023, issues/027), which is the right call:
+
+        Variable(s) lost their value while in scope: ?name
+        (text-not-materialised, depth 1) ... silently weakening the enclosing
+        constraint
+
+    The endpoint's count query is a different, simpler shape, so it kept working.
+    The list therefore reported a result count above no results — the search box
+    said "3" and showed nothing.
+
+    Bisected: this query returns 3 rows at `af10e5f~1` and fails to generate at
+    `af10e5f`.
+    """
+    space_id = await make_space()
+    await _seed(space_impl, space_id, graph_uri)
+    rows = await _rows(space_impl, space_id, f"""
+        SELECT DISTINCT ?frame WHERE {{ GRAPH <{graph_uri}> {{
+            ?frame <{CORE}vitaltype> <{KG}KGFrame> .
+            OPTIONAL {{ ?frame <{KG}hasName> ?name }}
+            FILTER(CONTAINS(LCASE(STR(?name)), "fixture"))
+        }} }} LIMIT 25""")
+    assert len(rows) == 1, (
+        "a paged query whose FILTER reads text returned nothing — late text "
+        "resolution stripped the variable the filter needs")
+    assert rows[0]["frame"]["value"] == FRAME

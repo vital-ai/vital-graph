@@ -1091,6 +1091,19 @@ class KGFramesEndpoint:
         Note: the count companion counts matching *frames*, while this returns
         frames AND slots as subjects — a pre-existing mismatch in what
         ``total_count`` means for this endpoint, not introduced here.
+
+        THE SLOT EDGE IS OPTIONAL IN BRANCH 1, and used to be required. A frame
+        with no slots was therefore COUNTED by the companion query and never
+        LISTED by this one: the endpoint answered `total_count: 3, objects: []`,
+        which reads as "three results" above an empty table. A newly created
+        frame has no slots yet, so it was invisible in the list it had just been
+        added to.
+
+        Branch 1 never projects `?slot` — it selects `?subject`, the frame — so
+        the pattern was only ever reachability, and requiring it silently made
+        "has at least one slot" part of the search. Branch 2 still requires the
+        edge, because there `?subject` IS the slot and without the edge there is
+        nothing to return.
         """
         if hasattr(backend, '_get_space_graph_uri'):
             full_graph_uri = backend._get_space_graph_uri(space_id, graph_id)
@@ -1134,9 +1147,11 @@ class KGFramesEndpoint:
                 GRAPH <{full_graph_uri}> {{
                     ?subject a haley:KGFrame .
                     {frame_filter.replace('?frame', '?subject') if frame_filter else ''}
-                    ?slot_edge vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .
-                    ?slot_edge vital-core:hasEdgeSource ?subject .
-                    ?slot_edge vital-core:hasEdgeDestination ?slot .
+                    OPTIONAL {{
+                        ?slot_edge vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .
+                        ?slot_edge vital-core:hasEdgeSource ?subject .
+                        ?slot_edge vital-core:hasEdgeDestination ?slot .
+                    }}
                     {frame_search}
                 }}
             }} UNION {{

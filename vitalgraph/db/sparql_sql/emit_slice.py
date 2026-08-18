@@ -146,6 +146,9 @@ def _find_project(node, depth: int = 0):
     return None
 
 
+from .var_scope import compute_text_needed_vars
+
+
 def _emit_late_text(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
     """Page on uuids, resolve the projected variable's text afterwards.
 
@@ -191,7 +194,18 @@ def _emit_late_text(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
     var = proj.project_vars[0]
 
     child_ctx = ctx.child(types=TypeRegistry(aliases=ctx.aliases))
-    child_ctx.text_needed_vars = set()
+    # NOT `set()`. Emptying it suppresses text for EVERY variable in the child,
+    # including ones an expression inside the child still reads — and a FILTER
+    # over `?name` then compiles against a column that was never materialised.
+    # The scope guard catches it and REFUSES the query (issues/023, issues/027),
+    # so the frames list answered `total_count: 3, objects: []`: a count query
+    # that still worked above a page query that would not generate at all.
+    #
+    # `compute_text_needed_vars(projection_discarded=True)` is the function
+    # issues/088 already built for exactly this distinction — the projection's
+    # text is what moves after the LIMIT, expressions keep theirs.
+    child_ctx.text_needed_vars = compute_text_needed_vars(
+        plan.child, projection_discarded=True)
     try:
         child_sql = emit(plan.child, child_ctx)
     except Exception as exc:
@@ -372,7 +386,7 @@ def _emit_two_phase(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
     # on is in scope.
     extra_conds = None
     if exists_expr is not None:
-        from .var_scope import compute_scope
+        from .var_scope import compute_text_needed_vars, compute_scope
         from .emit_expressions import expr_to_sql_exists_with_overrides
 
         # SOUNDNESS: every variable the body shares with the outer query must be
