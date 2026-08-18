@@ -791,8 +791,8 @@ class KGDocumentsEndpoint:
         # Convert to quads and store
         quads = self._properties_to_quads(all_objects, graph_id)
         if quads:
-            await backend_impl.add_rdf_quads_batch_bulk(space_id, quads)
-            logger.info(f"Stored {len(quads)} quads for segmentation output")
+            stored = await backend_impl.add_rdf_quads_batch_bulk(space_id, quads)
+            logger.info(f"Stored {stored} of {len(quads)} quads for segmentation output")
 
     def _properties_to_quads(self, objects: list, graph_id: str) -> list:
         """

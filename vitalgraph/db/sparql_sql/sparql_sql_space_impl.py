@@ -1246,7 +1246,14 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             return inserted
         except Exception as e:
             logger.error("add_rdf_quads_batch(%s) failed: %s", space_id, e)
-            return 0
+            # RAISE, do not return 0. A count of 0 is a truthful answer to
+            # "how many were written" only when nothing was ASKED for; on a
+            # failure it is indistinguishable from a no-op, and every caller
+            # above has to guess. issues/100 spent two days on six searches
+            # that returned nothing because this returned 0 here, a caller
+            # discarded it, and the API reported success. The callers already
+            # have `except Exception` blocks written for this.
+            raise
 
     async def add_rdf_quads_batch_bulk(self, space_id: str,
                                        quads: List[Tuple[Identifier, Identifier, Identifier, Identifier]],
@@ -1520,7 +1527,14 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
         except Exception as e:
             logger.error("add_rdf_quads_batch_bulk(%s) failed: %s", space_id, e)
-            return 0
+            # RAISE, do not return 0. A count of 0 is a truthful answer to
+            # "how many were written" only when nothing was ASKED for; on a
+            # failure it is indistinguishable from a no-op, and every caller
+            # above has to guess. issues/100 spent two days on six searches
+            # that returned nothing because this returned 0 here, a caller
+            # discarded it, and the API reported success. The callers already
+            # have `except Exception` blocks written for this.
+            raise
 
     async def check_subjects_exist(self, space_id: str, graph_id: str,
                                     uris: List[str]) -> List[str]:
@@ -1639,7 +1653,14 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             return deleted
         except Exception as e:
             logger.error("delete_entity_graph_bulk(%s, %s) failed: %s", space_id, entity_uri, e)
-            return 0
+            # RAISE, do not return 0. A count of 0 is a truthful answer to
+            # "how many were written" only when nothing was ASKED for; on a
+            # failure it is indistinguishable from a no-op, and every caller
+            # above has to guess. issues/100 spent two days on six searches
+            # that returned nothing because this returned 0 here, a caller
+            # discarded it, and the API reported success. The callers already
+            # have `except Exception` blocks written for this.
+            raise
 
     async def remove_rdf_quads_batch_bulk(self, space_id: str,
                                            quads: List[tuple],
@@ -1740,7 +1761,14 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             return count
         except Exception as e:
             logger.error("remove_rdf_quads_batch_bulk(%s) failed: %s", space_id, e)
-            return 0
+            # RAISE, do not return 0. A count of 0 is a truthful answer to
+            # "how many were written" only when nothing was ASKED for; on a
+            # failure it is indistinguishable from a no-op, and every caller
+            # above has to guess. issues/100 spent two days on six searches
+            # that returned nothing because this returned 0 here, a caller
+            # discarded it, and the API reported success. The callers already
+            # have `except Exception` blocks written for this.
+            raise
 
     async def remove_rdf_quads_batch(self, space_id: str,
                                       quads: List[tuple]) -> int:
@@ -1812,7 +1840,14 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             return removed
         except Exception as e:
             logger.error("remove_rdf_quads_batch(%s) failed: %s", space_id, e)
-            return 0
+            # RAISE, do not return 0. A count of 0 is a truthful answer to
+            # "how many were written" only when nothing was ASKED for; on a
+            # failure it is indistinguishable from a no-op, and every caller
+            # above has to guess. issues/100 spent two days on six searches
+            # that returned nothing because this returned 0 here, a caller
+            # discarded it, and the API reported success. The callers already
+            # have `except Exception` blocks written for this.
+            raise
 
     async def quads(self, space_id: str, quad_pattern: tuple,
                     context: Optional[Any] = None):

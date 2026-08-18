@@ -706,8 +706,10 @@ class SegmentationWorker:
                 triples = vs_objects[0].to_triples_list(vs_objects)
 
             quads = [(s, p, o, graph_uri_ref) for s, p, o in triples]
-            await backend_impl.add_rdf_quads_batch_bulk(space_id, quads)
-            logger.info(f"Stored {len(quads)} quads for segmentation output")
+            # The count the write reports, not the count we handed it: a
+            # partial write used to log the full number either way.
+            stored = await backend_impl.add_rdf_quads_batch_bulk(space_id, quads)
+            logger.info(f"Stored {stored} of {len(quads)} quads for segmentation output")
 
         except Exception as e:
             logger.error(f"Error storing segmentation output: {e}")
