@@ -1,6 +1,48 @@
 # The Duplicate-Quad Fixture Can No Longer Be Built
 
-## Status: OPEN — a correctness guard has silently lost its fixture
+## Status: FIXED 2026-08-18 — and it was worse than filed
+
+The loader now DROPS the quad primary key before the COPY, for this space only,
+and then ASSERTS the duplicates survived. `sp_lead_dup` holds 251,686 quads
+including **200 duplicated ones**, and both benches run:
+
+    test_duplicate_anchor_quads_do_not_reach_the_result[generic]  PASSED
+    test_duplicate_anchor_quads_do_not_reach_the_result[specific] PASSED
+
+### Worse than filed: the host copy had already lost its duplicates
+
+The issue asked whether `sp_lead_dup` on the host cluster predated the PK and
+still held them. It does not:
+
+    5433 (test stack)   0 quads            — the failed load left it empty
+    5432 (host)         252,850 quads      — but ZERO duplicate groups
+
+So the migration that added the PK **deduplicated the one fixture whose entire
+purpose is duplicates**, and the space kept answering afterwards. The benches did
+not skip there; they ran, against data that could no longer fail them. That is
+strictly worse than the test-stack state, where at least the skip was visible.
+
+The source data was never affected — `internal_data/lead_dup/lead_syn_0001.nt`
+still carries its 200 duplicate lines. Only the loaded copies lost them.
+
+### Why drop rather than never create
+
+`ensure_space` builds the current schema, and a fixture that quietly used a
+different table definition would be harder to reason about than one that visibly
+removes a constraint. It is the same move
+`test_migrate_nonpartitioned_space_preserves_data` makes for the same reason: a
+pre-PK space is precisely what is being modelled.
+
+The constraint is NOT restored. Re-adding it would fail on the rows the fixture
+exists to hold — or delete them if it succeeded, which is exactly what happened
+on the host.
+
+### The verification is part of the loader
+
+The load ends by counting duplicate groups and failing loudly if there are none.
+Without it, the next schema change that makes duplicates unrepresentable would
+produce a green load and a silently vacuous guard — which is the failure this
+issue is about, and it has now happened twice.
 
 `sp_lead_dup` exists for one reason: to hold entities carrying DUPLICATE anchor
 quads, so that a rewrite dropping the `DISTINCT` above a semi-join is caught.
