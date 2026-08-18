@@ -914,7 +914,8 @@ class MaintenanceJob:
                 "edge table for %s is STALE, not merely behind: %.0f%% of "
                 "sampled rows reference quads that no longer exist. Every frame "
                 "traversal on this space returns zero rows with no error. "
-                "Backfill cannot fix this; run resync_edge_table(%s). "
+                "Backfill cannot fix this; repair with:\n"
+                "    python scripts/rebuild_edge_tables.py --space %s\n"
                 "See issues/041.", sid, rate * 100, sid)
 
         if not worst_space:
@@ -980,20 +981,48 @@ class MaintenanceJob:
         table, so this runs after the edge integrity step.
         """
         from ..db.sparql_sql.sync_frame_entity_table import (
-            frame_entity_drift, backfill_frame_entity_table)
+            frame_entity_drift, frame_entity_orphan_rate,
+            backfill_frame_entity_table)
 
         worst_space = None
         worst_drift = 0
+        stale_space = None
         for space_id in space_ids:
             try:
                 async with self._pool.acquire() as conn:
                     expected, actual = await frame_entity_drift(conn, space_id)
+                    # Counts agreeing does not mean the rows are RIGHT. A space
+                    # reloaded in place — or under a new graph URI — leaves this
+                    # table a faithful materialisation of the PREVIOUS contents:
+                    # same size, disjoint set, drift 0, every traversal empty
+                    # (issues/041). Only a referential probe sees that, and
+                    # until now only the edge table had one.
+                    orphan_rate = await frame_entity_orphan_rate(conn, space_id)
             except Exception:
                 continue  # no frame_entity table (e.g. non-KG) — skip
+            if orphan_rate > EDGE_ORPHAN_STALE_PCT:
+                stale_space = stale_space or (space_id, orphan_rate)
+                continue
             drift = expected - actual
             if drift > max(EDGE_DRIFT_MIN_ABS, int(EDGE_DRIFT_MIN_PCT * expected)):
                 if drift > worst_drift:
                     worst_drift, worst_space = drift, space_id
+
+        if stale_space:
+            # Backfill only ADDS rows, so it cannot repair a table whose rows are
+            # all wrong; that needs a resync, which TRUNCATEs and takes ACCESS
+            # EXCLUSIVE. Unattended on a tick that is a worse outage than the
+            # fault, so: log loudly, name the exact command, leave it to an
+            # operator. Same reasoning as the edge table.
+            sid, rate = stale_space
+            logger.error(
+                "frame_entity for %s is STALE, not merely behind: %.0f%% of "
+                "sampled rows derive from quads that no longer exist in their "
+                "context. Frame traversals on this space return zero rows with "
+                "no error, and the drift check reads healthy because the counts "
+                "agree. Backfill cannot fix it; repair with:\n"
+                "    python scripts/repair_derived_tables.py --space %s\n"
+                "See issues/041.", sid, rate * 100, sid)
 
         if not worst_space:
             return None

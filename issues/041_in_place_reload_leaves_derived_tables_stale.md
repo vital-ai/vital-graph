@@ -1,6 +1,60 @@
 # Reloading a Space In Place Leaves Derived Tables Stale, Undetectably
 
-## Status: DETECTION ADDED 2026-08-08 — repair still manual
+## Status: CLOSED 2026-08-18 — frame_entity now has a probe, and repair works
+
+The two things this issue left open are done.
+
+### 1. `frame_entity` has the equivalent probe
+
+`frame_entity_orphan_rate` mirrors the edge one, context included. Measured on
+the seven spaces here with a populated table: **0% on all of them**, so it does
+not false-positive. Against a deliberately staled table it reads 100% for BOTH
+failure modes while `frame_entity_drift` reports healthy:
+
+    healthy          orphan   0%    drift 9266 = 9266
+    reloaded data    orphan 100%    drift 9266 = 9266   <- counts still agree
+    renamed graph    orphan 100%    drift 9266 = 9266   <- counts still agree
+
+**It is anchored on `hasEdgeSource`, not `vitaltype`.** The first version asked
+whether the frame still carried a type quad and read 100% on
+`prolog_spike_frames` — a space with **zero** vitaltype quads whose rows all
+resolve perfectly. Nothing obliges a frame to carry a type, and
+`edge_table_untyped_rate` documents that same trap one table over. The probe now
+asks about the quad that CREATES the row.
+
+### 2. The repair an operator is told to run now repairs this
+
+The maintenance job's message named `resync_edge_table(space)` — a Python
+function, not something anyone can run. Both messages now name a command.
+
+More importantly, the named command did not work. `repair_derived_tables.py`
+only ever repaired an **empty** table (`if fe is not None and not fe`), so the
+one fault it could not fix was the one that most needs it — a populated table
+that is entirely wrong. Verified end to end: staling `sp_graph_skew_2k` gave
+
+    before repair   orphan_rate 100%   ->   0 space(s) repaired of 1 examined
+
+and after teaching it to consult the probe:
+
+    before repair   orphan_rate 100%   ->   1 space(s) repaired, 9,266 rows
+    after  repair   orphan_rate   0%,  drift 9266 = 9266
+    healthy space   ->   0 repaired (no pointless resync)
+
+Resync still TRUNCATEs and takes ACCESS EXCLUSIVE, so the maintenance tick still
+refuses to do it unattended — that reasoning is unchanged. The difference is that
+the operator it defers to now has a command that works.
+
+`tests/integration/test_frame_entity_staleness_is_detected.py` covers both
+staleness modes and the repair, and was checked to fail when the context is
+dropped from the probe — which is precisely the bug the edge probe shipped with.
+
+### Found while doing this, and fixed separately
+
+Running the unit and integration suites TOGETHER (each is clean alone) exposed
+that `.env` loading had retargeted `devtools.target` from 5433 to 5432 — this
+issue's own family, reintroduced that morning. See `de5333a`.
+
+## The original report
 
 `sync_edge_table.edge_table_orphan_rate` samples edge rows and asks whether each
 still corresponds to a `hasEdgeSource` quad. The maintenance job calls it

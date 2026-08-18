@@ -67,6 +67,12 @@ logger = logging.getLogger("repair_derived_tables")
 # The honest test is whether the space uses the pattern, which is exactly what
 # `_resolve_uuids` checks before doing any work: all four URIs present in the
 # term table. Absent, frame_entity is not applicable rather than empty.
+# Above this fraction of sampled rows failing the referential probe, the table
+# is STALE rather than merely behind, and only a resync fixes it. Matches
+# EDGE_ORPHAN_STALE_PCT in the maintenance job so the two agree about what
+# 'stale' means — a healthy table reads 0%, not 'a bit'.
+STALE_ORPHAN_PCT = 0.5
+
 CONNECTOR_URIS = (
     "http://vital.ai/ontology/haley-ai-kg#hasKGSlotType",
     "http://vital.ai/ontology/haley-ai-kg#hasEntitySlotValue",
@@ -111,8 +117,26 @@ async def survey_space(conn, space_id: str) -> dict | None:
     uses_connectors = present == len(CONNECTOR_URIS)
 
     need = []
+    stale = []
     if fe is not None and not fe and uses_connectors:
         need.append("frame_entity")
+    elif fe:
+        # POPULATED IS NOT THE SAME AS CORRECT. This script only ever repaired an
+        # EMPTY table, so the one failure it could not fix was the one that most
+        # needs it: a space reloaded in place — or under a new graph URI — leaves
+        # frame_entity a faithful materialisation of the PREVIOUS contents. Same
+        # row count, disjoint set, drift zero, every traversal returning nothing
+        # (issues/041). The maintenance job now names this script for exactly
+        # that fault, so it has to be able to repair it.
+        #
+        # Resync TRUNCATEs and holds ACCESS EXCLUSIVE, which is why the
+        # maintenance tick will not do it unattended. Here an operator asked.
+        from vitalgraph.db.sparql_sql.sync_frame_entity_table import (
+            frame_entity_orphan_rate)
+        rate = await frame_entity_orphan_rate(conn, space_id)
+        if rate > STALE_ORPHAN_PCT:
+            need.append("frame_entity")
+            stale.append(f"frame_entity {rate * 100:.0f}% orphaned")
     # entity_fanout is rebuilt FROM frame_entity, so it is only meaningful where
     # frame_entity has rows — AND only where some entity actually clears
     # min_fanout. It is a HUB list, not a copy: a space whose busiest entity has
@@ -174,7 +198,7 @@ async def survey_space(conn, space_id: str) -> dict | None:
 
     if not need:
         return None
-    return {"space": space_id, "quads": quads, "need": need,
+    return {"space": space_id, "quads": quads, "need": need, "stale": stale,
             "frame_entity": fe, "uses_connectors": uses_connectors,
             "edge": edge, "value_stats": vs, "entity_slot_sort": ess}
 

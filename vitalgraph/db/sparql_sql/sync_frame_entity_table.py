@@ -33,6 +33,11 @@ _SV_UUID = uuid.uuid5(_VITALGRAPH_NS, f"{SLOT_VALUE_URI}\x00U")
 _SRC_UUID = uuid.uuid5(_VITALGRAPH_NS, f"{SOURCE_ENTITY_URI}\x00U")
 _DST_UUID = uuid.uuid5(_VITALGRAPH_NS, f"{DEST_ENTITY_URI}\x00U")
 _VT_UUID = uuid.uuid5(_VITALGRAPH_NS, f"{VITALTYPE_URI}\x00U")
+# `hasEdgeSource` is what MAKES a frame_entity row: the frame is the object
+# of that quad. Used by the orphan probe, which must not assume a predicate
+# the data is not obliged to carry.
+EDGE_SOURCE_URI = "http://vital.ai/ontology/vital-core#hasEdgeSource"
+_ES_UUID = uuid.uuid5(_VITALGRAPH_NS, f"{EDGE_SOURCE_URI}\x00U")
 
 
 async def _resolve_uuids(conn, space_id: str):
@@ -443,6 +448,66 @@ async def backfill_frame_entity_table(conn, space_id: str) -> int:
         await conn.execute(f"ANALYZE {t_fe}")
     logger.info("backfill_frame_entity_table(%s): %d rows inserted", space_id, inserted)
     return inserted
+
+
+async def frame_entity_orphan_rate(conn, space_id: str, sample: int = 200) -> float:
+    """Fraction of sampled `frame_entity` rows that no longer refer to anything.
+
+    `frame_entity_drift` compares COUNTS, and the failure this exists for has
+    identical counts. `issues/041`: a space reloaded in place leaves a derived
+    table that is a faithful materialisation of the PREVIOUS contents — same
+    size, disjoint set, every count check green, and every traversal returning
+    nothing. Only a referential probe sees it.
+
+    That issue closed the gap for `{space}_edge` and recorded that the same
+    argument applies here, with no equivalent probe. This is that probe.
+
+    THE CONTEXT IS PART OF THE CHECK, and it is the half that matters most.
+    Reloading a space under a different graph URI leaves every row pointing at
+    the old context: the frame uuids still resolve, so an identity-only probe
+    reports a healthy 0% while every query filters on the new context and
+    matches none of them. That is exactly how the edge probe was wrong when
+    first written — `sp_lead_synth_100k`, reloaded from `urn:lead_synth_100k` to
+    `urn:sp_lead_synth_100k`, read 0% while a criterion with 9,220 expected
+    matches returned 0 rows in 154 seconds.
+
+    Note the asymmetry with the edge table, because it explains why this probe
+    was not obviously needed: on the wordnet reload, `frame_entity` was
+    UNAFFECTED — it references only frames and entities, whose URIs were
+    identical across both exports, while the edge table referenced the edge
+    nodes, which were regenerated. A rename of the GRAPH hits both.
+
+    ANCHORED ON `hasEdgeSource`, NOT ON `vitaltype`. The first version asked
+    whether the frame still had a vitaltype quad, and read 100% on
+    `prolog_spike_frames` — a space with 0 vitaltype quads whose frame_entity
+    rows all resolve perfectly well. Nothing obliges a frame to carry a type,
+    and `edge_table_untyped_rate` documents that same trap one table over. The
+    quad this asks about is the one that CREATES the row: the frame is the
+    object of a `hasEdgeSource` quad, so if that is gone, the row is derived
+    from something that no longer exists.
+
+    Bounded by `sample`: one index probe each, so cost is independent of table
+    size. Returns 0.0 for an empty table — nothing sampled is not evidence of
+    staleness, and `frame_entity_drift` is what reports an unpopulated one.
+    """
+    t_fe = f"{space_id}_frame_entity"
+    t_quad = f"{space_id}_rdf_quad"
+    orphans = await conn.fetchval(
+        f"""
+        SELECT count(*) FROM (
+            SELECT frame_uuid, context_uuid FROM {t_fe} LIMIT {int(sample)}
+        ) s
+        WHERE NOT EXISTS (
+            SELECT 1 FROM {t_quad} q
+            WHERE q.object_uuid = s.frame_uuid AND q.predicate_uuid = $1
+              AND q.context_uuid = s.context_uuid
+        )
+        """, _ES_UUID)
+    checked = await conn.fetchval(
+        f"SELECT count(*) FROM (SELECT 1 FROM {t_fe} LIMIT {int(sample)}) s")
+    if not checked:
+        return 0.0
+    return float(orphans or 0) / float(checked)
 
 
 async def frame_entity_drift(conn, space_id: str) -> tuple[int, int]:
