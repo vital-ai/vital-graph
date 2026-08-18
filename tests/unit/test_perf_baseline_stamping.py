@@ -32,9 +32,20 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO / "scripts"))
 
-from perf_compare import compare_env  # noqa: E402
+# `scripts.perf_compare`, NOT a bare `perf_compare` off an inserted path.
+#
+# This line used to be `sys.path.insert(0, str(REPO / "scripts"))`, which bound
+# the name `scripts` to a namespace package rooted INSIDE that directory. Every
+# later `from scripts.X import ...` then looked for `scripts/scripts/X.py` and
+# raised ModuleNotFoundError — five paging tests failed in full-suite runs and
+# passed when their own files ran alone, and the failures were briefly blamed on
+# an unrelated change (issues/088).
+#
+# Importing through the package also keeps ONE module object. With the path
+# inserted, `perf_compare` and `scripts.perf_compare` are two distinct modules
+# with separate module-level state, and a cache in one is invisible to the other.
+from scripts.perf_compare import compare_env  # noqa: E402
 
 STAMPED = {
     "server_version": "18.4",
