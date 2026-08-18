@@ -15,18 +15,48 @@ test.describe('Dashboard', () => {
     await expect(page.locator('[data-testid="stats-row"]')).toBeVisible();
   });
 
-  test('shows seeded space in space summaries', async ({ page }) => {
+  // The dashboard renders `spaces.slice(0, 5)` — a TOP-FIVE summary, not a list.
+  // Both tests below used to assert that the seeded space appeared there by name,
+  // which holds only while fewer than five spaces sort ahead of it. On a machine
+  // carrying perf fixtures (`apitest_*`, `kg_load_test`, `sp_*`) it does not, and
+  // they failed for a reason that had nothing to do with the dashboard.
+  //
+  // Same remedy as the object lists in issues/022: assert the STRUCTURE where the
+  // view is capped, and scope the identity assertion to a view that can be
+  // narrowed. `global-setup` already warns when foreign spaces are present.
+
+  test('space summaries list spaces as links', async ({ page }) => {
     await page.goto('/');
     await expect(page.locator('[data-testid="home-page"]')).toBeVisible({ timeout: 10_000 });
-    // The seeded space should appear as a link
-    await expect(page.locator(`[data-testid="space-link-${SPACE_ID}"]`)).toBeVisible({ timeout: 10_000 });
+    const links = page.locator('[data-testid^="space-link-"]');
+    await expect(links.first()).toBeVisible({ timeout: 10_000 });
+    // Capped at five by Home.tsx; asserting the cap is what makes the
+    // "not on page 1" failure impossible to reintroduce here.
+    expect(await links.count()).toBeGreaterThan(0);
+    expect(await links.count()).toBeLessThanOrEqual(5);
   });
 
-  test('space link navigates to space detail', async ({ page }) => {
+  test('the seeded space is listed and reachable, found by search', async ({ page }) => {
+    await page.goto('/spaces');
+    await expect(page.locator('[data-testid="spaces-page"]')).toBeVisible({ timeout: 10_000 });
+    // Narrow to the space under test rather than hoping it is on screen.
+    await page.getByPlaceholder('Search spaces...').fill(SPACE_ID);
+    const card = page.locator(`[data-testid="space-card-${SPACE_ID}"]`);
+    await expect(card).toBeVisible({ timeout: 10_000 });
+    await expect(card).toContainText(SPACE_NAME);
+  });
+
+  test('a space link navigates to that space detail', async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator(`[data-testid="space-link-${SPACE_ID}"]`)).toBeVisible({ timeout: 10_000 });
-    await page.locator(`[data-testid="space-link-${SPACE_ID}"]`).click();
-    await expect(page).toHaveURL(new RegExp(`/space/${SPACE_ID}`));
+    const link = page.locator('[data-testid^="space-link-"]').first();
+    await expect(link).toBeVisible({ timeout: 10_000 });
+    // Whichever space the summary happens to show: the behaviour under test is
+    // that the link goes to ITS detail page, not that a particular space is on it.
+    const testId = await link.getAttribute('data-testid');
+    const spaceId = (testId || '').replace('space-link-', '');
+    expect(spaceId).toBeTruthy();
+    await link.click();
+    await expect(page).toHaveURL(new RegExp(`/space/${spaceId}`));
   });
 });
 

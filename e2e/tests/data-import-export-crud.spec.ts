@@ -1,6 +1,21 @@
 import { test, expect, request } from '@playwright/test';
 import * as fs from 'fs';
-import { ADMIN_USER, ADMIN_PASS, SPACE_ID, GRAPH_ID } from '../seed-constants';
+import { ADMIN_USER, ADMIN_PASS } from '../seed-constants';
+import { SPACE_ID, GRAPH_ID } from '../seed-constants';
+import { createSpace, dropSpace } from './space-fixtures';
+
+// The import half WRITES, the export half READS the seeded fixture, so they use
+// different spaces — writers isolate, readers share (issues/022).
+//
+// Isolated space: the import half WRITES — it imports N-Triples and never removes the
+// quads, only the job row. Against the shared seeded space that succeeds exactly
+// once; every later run hits
+//   duplicate key value violates unique constraint "e2e_test_space_rdf_quad_pkey"
+// and the job fails, which surfaced as "import job completes successfully"
+// timing out on a `completed` badge that was never coming. Same rule as
+// issues/022: writers isolate, readers share.
+const IMPORT_SPACE_ID = 'e2e_data_import_space';
+const IMPORT_GRAPH_ID = 'urn:e2e:data-import:graph';
 
 /**
  * Tier 8 — Data Import/Export Functional Tests
@@ -33,6 +48,13 @@ async function cleanupJob(jobType: 'import' | 'export', jobId: string) {
   await ctx.dispose();
 }
 
+test.beforeAll(async () => {
+  await createSpace(IMPORT_SPACE_ID, IMPORT_GRAPH_ID, { name: 'E2E Data Import' });
+});
+test.afterAll(async () => {
+  await dropSpace(IMPORT_SPACE_ID);
+});
+
 test.describe('Data Import/Export CRUD', () => {
   test.describe.configure({ mode: 'serial' });
 
@@ -50,10 +72,10 @@ test.describe('Data Import/Export CRUD', () => {
     await expect(page.locator('[data-testid="data-import-detail-page"]')).toBeVisible({ timeout: 10_000 });
 
     // Select the E2E test space
-    await page.locator('#space').selectOption(SPACE_ID);
+    await page.locator('#space').selectOption(IMPORT_SPACE_ID);
 
     // Optionally set the graph URI
-    await page.locator('#graph_uri').fill(GRAPH_ID);
+    await page.locator('#graph_uri').fill(IMPORT_GRAPH_ID);
 
     // Set file format to N-Triples
     await page.locator('#file_format').selectOption('nt');
@@ -104,7 +126,7 @@ test.describe('Data Import/Export CRUD', () => {
     await expect(page.locator('[data-testid="sparql-page"]')).toBeVisible({ timeout: 10_000 });
 
     // Select the E2E test space
-    await page.locator('select').first().selectOption(SPACE_ID);
+    await page.locator('select').first().selectOption(IMPORT_SPACE_ID);
 
     // Enter a SPARQL query that looks for the imported triple
     const editor = page.getByPlaceholder(/enter your sparql query/i);
