@@ -138,6 +138,26 @@ jobs:
       run: |
         twine check dist/*
     
+    - name: Wheel does not contain dev or test trees
+      run: |
+        python - <<'EOF'
+        import glob, sys, zipfile
+        # The ARTIFACT, not the config. Two settings decide what ships
+        # (packages.find and MANIFEST.in) and either alone keeps a tree out, so
+        # reading the config gives a confident wrong answer — a unit test
+        # asserting on find_packages passed while MANIFEST.in was the thing
+        # actually doing the work. v0.0.38 shipped 106 files of
+        # vitalgraph_sparql_sql_dev, and that stale install shadowed the repo
+        # for scripts without a sys.path insert (issues/055).
+        names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
+        bad = sorted({n.split("/")[0] for n in names
+                      if n.startswith(("vitalgraph_sparql_sql_dev/", "devtools/",
+                                       "tests/", "test_scripts/", "e2e/"))})
+        if bad:
+            sys.exit(f"::error::wheel ships development trees: {', '.join(bad)}")
+        print(f"OK - {len(names)} files, no dev or test trees")
+        EOF
+
     - name: Test wheel installation
       run: |
         pip install dist/*.whl

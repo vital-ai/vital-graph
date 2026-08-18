@@ -1,20 +1,33 @@
 """The wheel must not ship development or test trees.
 
-`vitalgraph_sparql_sql_dev` shipped for as long as the include glob has been
-`vitalgraph*`, because it matches that glob and the seventeen-entry exclude list
-names every OTHER test tree explicitly. Six subpackages went into the wheel,
-including the DAWG harness and the W3C test corpus.
+TWO GATES DECIDE THIS, AND ONLY ONE IS OBVIOUS. `[tool.setuptools.packages.find]`
+lists what is a package; `MANIFEST.in` decides which files are collected. Either
+one alone keeps a tree out, so reading only one gives a confident wrong answer.
 
-That was not merely untidy. The package installs, so a stale copy sits in
-site-packages, and any script without a `sys.path` insert imports THAT rather
-than the repo — `migrate_quad_ctx_pred_index.py` did, and the installed copy
-still resolves the host cluster with an empty password, so a migration would
-have altered the wrong database and reported success (issues/055).
+That is not hypothetical — it is how this file was first written. The reasoning
+was: `vitalgraph_sparql_sql_dev` matches the `vitalgraph*` include glob and is
+absent from the exclude list, therefore it ships. `find_packages` agrees: it
+returns six dev subpackages. But the built wheel contains ZERO of them, because
+`MANIFEST.in` has carried `recursive-exclude vitalgraph_sparql_sql_dev *` since
+v0.0.33 (2026-06-28). Removing only that line puts 55 files back into the wheel.
+So a test asserting on `find_packages` alone would pass while the package
+shipped — it would check the gate that was already shut and ignore the one doing
+the work.
 
-The exclusion is a glob interaction, not a typo: adding a new `vitalgraph_*_dev`
-or `vitalgraph_*_test` tree re-creates it silently, since the include glob will
-pick it up and nobody edits the exclude list for a directory they just made.
-Hence a rule about the SHAPE of the name rather than a list of known offenders.
+Both are asserted here, and the ARTIFACT is the ground truth: `test-packaging`
+inspects the built wheel, because a third mechanism nobody thought of would
+defeat both static checks.
+
+IT REALLY DID SHIP ONCE. The v0.0.38 wheel installed on a developer machine
+lists 106 dev-package entries, and that stale copy is what shadowed the repo for
+`migrate_quad_ctx_pred_index.py`, which had no `sys.path` insert — the installed
+resolver still points at the host cluster with an empty password, so a migration
+would have altered the wrong database and reported success (issues/055).
+
+The exclusion is a glob interaction, not a typo: a new `vitalgraph_*_dev` tree
+re-creates it silently, since the include glob picks it up and nobody edits the
+exclude list for a directory they just made. Hence a rule about the SHAPE of the
+name rather than a list of known offenders.
 """
 
 from __future__ import annotations
@@ -42,10 +55,25 @@ def test_the_inventory_is_not_empty():
     assert "vitalgraph" in PACKAGED, f"core package missing from {PACKAGED[:5]}"
 
 
+MANIFEST = (REPO / "MANIFEST.in").read_text()
+
+
 def test_the_experimental_sparql_package_is_not_shipped():
     shipped = [p for p in PACKAGED if p.startswith("vitalgraph_sparql_sql_dev")]
     assert not shipped, (
-        "the experimental package is back in the wheel: " + ", ".join(shipped))
+        "the experimental package is back in the packages list: " + ", ".join(shipped))
+
+
+def test_the_manifest_still_excludes_the_experimental_package():
+    """The gate that was actually doing the work, and the one easiest to delete.
+
+    `MANIFEST.in` is edited by people adding data files, not by people thinking
+    about packages, so this line can go without anyone connecting it to what
+    ships.
+    """
+    assert "recursive-exclude vitalgraph_sparql_sql_dev *" in MANIFEST, (
+        "MANIFEST.in no longer excludes the experimental package; on its own the "
+        "packages.find exclude has never been what kept it out of the wheel")
 
 
 @pytest.mark.parametrize("pkg", [p for p in PACKAGED if "." not in p])
