@@ -110,8 +110,23 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
                 rbgp, right_ctx, (v, f"{l_alias}.{l_info.sql_name}__uuid"))
 
     if exists_sql is not None:
+        # Only variables the LEFT CHILD ACTUALLY PRODUCED. A missing registry
+        # entry means the child does not emit that column, and `_child_sn` falls
+        # back to the raw SPARQL name — so the projection asked for
+        # `j2._seg_idx`, a column nothing had created, and PostgreSQL rejected
+        # the whole query with `column j2._seg_idx does not exist`.
+        #
+        # The comment below already names this failure for ORDER BY. It is the
+        # same fabrication one step earlier, and it only surfaces where the
+        # semi-join gate fires, so it is data-dependent: the same document query
+        # is fine on a space whose statistics do not select this path.
+        semi_vars = [v2 for v2 in sorted(left_vars) if left_ctx.types.get(v2)]
+        missing = sorted(set(left_vars) - set(semi_vars))
+        if missing:
+            ctx.log("join", f"SEMI JOIN: left child does not produce {missing}; "
+                            f"not projected")
         semi_cols = []
-        for v2 in sorted(left_vars):
+        for v2 in semi_vars:
             semi_cols.extend(
                 TypeRegistry.passthrough_columns(_child_sn(v2, left_ctx), l_alias))
         if semi_cols:
@@ -119,7 +134,7 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
             # output — without this an ORDER BY above cannot resolve them and
             # emits the raw SPARQL name as a column. Drop the probed side's
             # private variables for the same reason, in reverse.
-            for v2 in sorted(left_vars):
+            for v2 in semi_vars:
                 ci = left_ctx.types.get(v2)
                 ctx.types.register(ColumnInfo.simple_output(
                     v2, ci.sql_name if ci else v2,
@@ -254,7 +269,19 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
     # fill in NULLs from the left (SPARQL compatible-mapping semantics).
     select_cols = []
     values_shared = shared if (left_is_table or right_is_table or is_left) else set()
-    for v in sorted(all_vars):
+    # A variable NEITHER CHILD REGISTERED is not produced by either side, and
+    # `_child_sn` falls back to the raw SPARQL name — so the projection asks for
+    # a column nothing created and PostgreSQL rejects the whole query
+    # (`column j2._seg_idx does not exist`). Skip it: an absent column cannot be
+    # projected, and inventing a name turns a missing variable into a syntax
+    # error a long way from its cause.
+    producible = [v for v in sorted(all_vars)
+                  if (left_ctx.types.get(v) if v in left_vars
+                      else right_ctx.types.get(v))]
+    dropped = sorted(set(all_vars) - set(producible))
+    if dropped:
+        ctx.log("join", f"neither child produces {dropped}; not projected")
+    for v in producible:
         if v in left_vars:
             sn = _child_sn(v, left_ctx)
             if v in values_shared and v in right_vars:
@@ -269,16 +296,16 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
 
     # Register output variables — reuse child sql_names (globally unique)
     # Propagate from_triple so downstream JOINs know the variable has a UUID.
-    for v in sorted(all_vars):
+    for v in producible:
         child_info = left_ctx.types.get(v) if v in left_vars else right_ctx.types.get(v)
-        sn = child_info.sql_name if child_info else v
+        sn = child_info.sql_name
         lane = child_info.typed_lane if child_info else None
         ft = child_info.from_triple if child_info else False
         tm = child_info.text_materialized if child_info else True
         ctx.types.register(ColumnInfo.simple_output(
             v, sn, typed_lane=lane, from_triple=ft, text_materialized=tm))
 
-    ctx.log("join", f"output map: {{{', '.join(f'?{v}→{ctx.types.get(v).sql_name}' for v in sorted(all_vars))}}}")
+    ctx.log("join", f"output map: {{{', '.join(f'?{v}→{ctx.types.get(v).sql_name}' for v in producible)}}}")
     ctx.log_scope("join", defined=left_vars | right_vars,
                   optional=right_vars - left_vars if is_left else None)
 
