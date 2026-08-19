@@ -37,7 +37,41 @@ Both were live for a day and neither was caught by a suite. The test-stack
 container was 43 hours old, so no request had executed the new code; a green
 `tests/api` says nothing about code the running image does not contain.
 
-### The unresolved part: the fix costs the saving
+### RESOLVED 2026-08-18 — the demand was traced and removed
+
+The section below described this as open, with three narrowings tried and none
+working. Instrumenting the call instead of reasoning about it found the answer
+immediately, and the guesses had missed it because they were aimed at the wrong
+nodes.
+
+`compute_late_text_vars` asks only what an EXPRESSION reads. Two sources were
+demanding the projected variable's text:
+
+  1. **`var_scope:475` — DISTINCT/REDUCED mark every visible variable.** They do
+     not need to. A term's uuid is `uuid5` of the term including its type, so
+     deduplicating on uuid is the same partition as deduplicating on the value —
+     which `af10e5f` had already demonstrated by returning identical rows with
+     all text suppressed.
+
+  2. **`vars_in_expr` descends into an EXISTS body.** The emitted probe
+     correlates on `__uuid`, so a variable mentioned there needs no text. The
+     Assertion shape is two `FILTER NOT EXISTS` over the projected variable, so
+     this alone was enough.
+
+    HEAD before   16,043 buffers   195.9 ms
+    HEAD after     1,744 buffers    43.4 ms
+    af10e5f         1,744 buffers    45.2 ms   (the reference)
+
+Both regressions stay fixed. Unit, integration, conformance and performance
+suites at 0 failures.
+
+**The saving now has a guard, and never had one** — which is why it was lost
+twice with every test green. It asserts the SHAPE (exactly one term join,
+outside the LIMIT) rather than a buffer count, and was verified to fail against
+the previous computation. A paired test asserts a FILTER over text still gets
+it, so the two cannot both be satisfied by never resolving text at all.
+
+### Superseded: "the fix costs the saving"
 
 `9d9b071` keeps text for variables an expression reads, which is what makes the
 FILTER case correct. It also asks for the PROJECTED variable's text, and moving
