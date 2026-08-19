@@ -1,6 +1,42 @@
 # A Stale Test-Stack Image Hides Regressions for Days
 
-## Status: OPEN — the mechanism is understood; the fix is a decision, not a patch
+## Status: option 1 DONE 2026-08-19 — the suite now refuses; options 2-4 still open
+
+`tests/shared/image_freshness.py`, called from `tests/api/conftest.py` at
+`pytest_sessionstart`. It compares `vitalgraph/**/*.py` in the working tree
+against the same files in the container and exits with the differing paths.
+
+**It caught its own author, the same day.** The text-needle change
+(`issues/070`) was reported as "unit, integration, api and performance all
+pass". The container was missing `text_needle.py` entirely and still carried the
+`(term_text || '')` hack the change removed:
+
+    CHANGED (5):  db/sparql_sql/filter_pushdown.py, generator.py, ir.py,
+                  semijoin.py, model/kgentities_model.py
+    ONLY IN TREE — never built (1):  db/sparql_sql/text_needle.py
+
+Rebuilding then exposed a second defect the API had been hiding: a REFUSED
+generation returned an ordinary empty result set, because only `cr.ok` was
+checked and never `gen.ok`. See the commit "report a refused generation instead
+of answering empty" — a refusal indistinguishable from "no matches", found only
+because the code was finally executed through the API.
+
+Four decisions in the implementation, each guarding a way it could have become
+noise:
+
+* the hash algorithm is SENT as a `python -c` literal, never imported from the
+  image — an imported hasher is the stale copy, and changing it would report a
+  mismatch that is not staleness;
+* per-file rather than one tree hash, so the failure separates "rebuild" from
+  "you edited something the image does not contain";
+* it FAILS, it does not skip — a skip in a suite read as coverage is this same
+  defect, and this repo has shipped that twice;
+* the absent-container path fails when the target is localhost. "Docker is not
+  here, so pass" makes the guard a no-op exactly where nobody is looking. A
+  non-local target is exempt, because a remote stack builds from the commit
+  under test. `VG_ALLOW_STALE_IMAGE=1` escapes and still prints what it skips.
+
+It cannot rebuild for you. Options 2-4 below remain a decision.
 
 Two correctness regressions shipped on 2026-08-17 and were found on 2026-08-18,
 both by the same accident: someone rebuilt the container.
