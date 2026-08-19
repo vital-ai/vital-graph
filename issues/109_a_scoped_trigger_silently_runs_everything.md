@@ -1,6 +1,6 @@
 # A Scoped Trigger Silently Runs Everything
 
-## Status: two instances FIXED 2026-08-19; the DISPATCH that produces them is open
+## Status: FIXED 2026-08-19 — refuse at request time, declare at registration
 
 `POST /api/processes/trigger` takes `space_id`, documented as
 "Target space (omit for auto-select)". `ProcessScheduler.trigger_now` honours it
@@ -40,18 +40,43 @@ only because a test timed out. The fallback is silent BY CONSTRUCTION:
   `tests/api::test_trigger_maintenance` behaved;
 * `triggered: true` is returned for both outcomes, so no caller can detect it.
 
-**Options, none applied yet:**
+## The fix — options 1 and 3, because neither alone is enough
 
-1. **Refuse.** If `space_id` is given and no `trigger_<type>` exists, return
-   `triggered: false` naming the types that support scoping. Honest, and it
-   turns a silent 227-second sweep into an immediate answer.
-2. **Report.** Run the sweep but say so — `scoped: false` in the response — so a
-   caller can tell what happened.
-3. **Require by convention.** A registration-time check that every job exposes
-   `trigger_<its process_type>`, failing at startup rather than per request.
+**Refuse, at request time.** `space_id` with no `trigger_<type>` now raises
+`ProcessScheduler.ScopingUnsupported` and the endpoint answers `triggered: false`
+with the reason and the way out:
 
-Option 3 is the only one that catches the NEXT job before it ships; options 1
-and 2 make the current behaviour honest.
+    process_type='metrics' cannot be scoped to a space: its handler has no
+    trigger_metrics(space_id). Omit space_id to run it for every space.
+
+Option 2 (run the sweep, report `scoped: false`) was rejected: a caller that
+named one space out of 17 is not asking for a best-effort superset, and the
+227-second version of that superset is what made this visible. Refusing costs
+7 ms and cannot be misread.
+
+**Declare, at registration.** `register_job` records `supports_scope` and LOGS
+the jobs that lack it, so the next job to gain a process type is stated at
+startup rather than discovered by a caller:
+
+    ProcessScheduler: job 'metrics_rollup' (process_type=metrics) has no
+    trigger_metrics(space_id) — requests naming a space will be REFUSED
+    rather than silently run against every space
+
+It logs rather than failing startup, because a missing method is legitimate: a
+job may have nothing per-space to do, and `register_job`'s own documented usage
+passes a bound `job.run`, which cannot carry `trigger_*` at all. Failing hard
+would force every such job to grow a stub whose only purpose is to satisfy the
+check — and a stub that sweeps is this defect with extra steps.
+
+Verified end to end on the test stack, the three answers now distinct:
+
+    maintenance + space_id   0.54 s   triggered=true    (honoured)
+    metrics     + space_id   0.008 s  triggered=false   ScopingUnsupported
+    bogus       + space_id   0.006 s  triggered=false   UnknownProcessType
+
+`tests/unit/test_scoped_trigger_is_honoured_or_refused.py` pins the registration
+declaration for all three handler shapes, and that the two refusals stay separate
+types — conflating them is the mistake documented directly below.
 
 ## A second, related conflation — FIXED 2026-08-19
 

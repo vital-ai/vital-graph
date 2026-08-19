@@ -32,6 +32,9 @@ class _RegisteredJob:
     interval_seconds: float
     handler: Any  # Callable or object with async .run() method
     process_type: str = "maintenance"
+    # Whether the handler exposes `trigger_<process_type>(space_id)`. Decided at
+    # registration so a scoped request gets an answer rather than a full sweep.
+    supports_scope: bool = False
     task: Optional[asyncio.Task] = field(default=None, repr=False)
     run_count: int = 0
     last_run: Optional[float] = None
@@ -90,11 +93,34 @@ class ProcessScheduler:
         """
         if name in self._jobs:
             raise ValueError(f"Job '{name}' already registered")
+
+        # SCOPING IS DECLARED AT REGISTRATION, not discovered per request.
+        #
+        # `trigger_now` honours `space_id` by looking for `trigger_<process_type>`
+        # on the handler and FELL THROUGH to the full sweep when it was absent —
+        # silently, with `triggered: true` either way. Two jobs shipped that way
+        # and the cost was found only when a test timed out: `maintenance` ran
+        # 109 s for a request scoped to one space, `analytics` 227 s. See
+        # issues/109.
+        #
+        # A missing method is not an error — a job may legitimately have nothing
+        # per-space to do. What is not acceptable is DISCOVERING that per request
+        # and answering as though the request had been honoured. Recording it
+        # here lets `trigger_now` say so.
+        supports_scope = callable(getattr(handler, f"trigger_{process_type}", None))
+        if not supports_scope:
+            logger.info(
+                "ProcessScheduler: job '%s' (process_type=%s) has no "
+                "trigger_%s(space_id) — requests naming a space will be "
+                "REFUSED rather than silently run against every space",
+                name, process_type, process_type)
+
         self._jobs[name] = _RegisteredJob(
             name=name,
             interval_seconds=interval_seconds,
             handler=handler,
             process_type=process_type,
+            supports_scope=supports_scope,
         )
         logger.info("ProcessScheduler: registered job '%s' (every %ds)", name, interval_seconds)
 
@@ -141,6 +167,16 @@ class ProcessScheduler:
     # ------------------------------------------------------------------
     # On-demand trigger
     # ------------------------------------------------------------------
+
+    class ScopingUnsupported(ValueError):
+        """`space_id` was given for a process type that cannot honour it.
+
+        Distinct from both other refusals: the type EXISTS and the lock is free,
+        but scoping is not available. Silently running the whole sweep instead
+        was the defect in issues/109 — 109 s and 227 s for requests naming one
+        space, answered `triggered: true`.
+        """
+
 
     class UnknownProcessType(ValueError):
         """No handler is registered for this process type.
@@ -204,6 +240,14 @@ class ProcessScheduler:
                 trigger_method = getattr(handler, f"trigger_{process_type}", None)
                 if callable(trigger_method):
                     return await trigger_method(space_id)  # type: ignore[misc]
+                # REFUSE rather than fall through. Running the full sweep for a
+                # request that named ONE space is not a degraded version of what
+                # was asked for — it is different work, of a different order,
+                # reported as success. issues/109.
+                raise ProcessScheduler.ScopingUnsupported(
+                    f"process_type={process_type!r} cannot be scoped to a space: "
+                    f"its handler has no trigger_{process_type}(space_id). "
+                    f"Omit space_id to run it for every space.")
 
             # Fallback: call the handler's run()
             if hasattr(handler, "run") and callable(handler.run):

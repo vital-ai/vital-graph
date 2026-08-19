@@ -120,6 +120,11 @@ class ProcessEndpoint:
                 result = await scheduler.trigger_now(body.process_type, body.space_id)
             except scheduler.UnknownProcessType as exc:
                 return TriggerResponse(triggered=False, message=str(exc))
+            except scheduler.ScopingUnsupported as exc:
+                # The request named a space this process type cannot honour.
+                # Running everything instead would be different work reported as
+                # what was asked for (issues/109).
+                return TriggerResponse(triggered=False, message=str(exc))
             if result is None:
                 return TriggerResponse(
                     triggered=False,
