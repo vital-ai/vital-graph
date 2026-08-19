@@ -89,21 +89,23 @@ class TestPatternShape:
         assert _conds(out) == ["term_text ILIKE '%cat%'"]
 
     @pytest.mark.parametrize("needle", ["X", "XQ"])
-    def test_a_short_needle_is_kept_away_from_the_trigram_index(self, needle):
+    def test_a_short_needle_is_not_measured_at_all(self, needle):
         """Under 3 characters there is no usable trigram for an INFIX match.
 
         show_trgm('XQ') is {"  x"," xq","xq "} — every one of them PADDED, and
         padding only holds at a word boundary. An infix match may land mid-word,
         so none can be required, and the GIN index degenerates into scanning
         itself: 10,467,626 index rows and 12,613ms to find nothing on a 10.4M-row
-        term table. Concatenating '' keeps the answer and takes the index out of
-        the picture. Measured end to end: 11,151ms -> 210ms.
+        term table.
 
-        The estimate must use the SAME form as the query, or this probe pays
-        that 12.6s itself.
+        This used to emit `(term_text || '')`, a no-op concatenation that takes
+        the index out of the picture so the planner picks a sequential scan
+        instead. That made the scan cheaper; it did not stop it being a scan.
+        Such a needle is no longer PUSHED (`text_needle`), so there is nothing
+        here to estimate — and probing it would pay the very cost the decline
+        exists to avoid.
         """
-        out = needed_texts(_plan(_fn("contains", "x", needle)), _Aliases())
-        assert _conds(out) == [f"(term_text || '') LIKE '%{needle}%'"]
+        assert needed_texts(_plan(_fn("contains", "x", needle)), _Aliases()) == set()
 
     @pytest.mark.parametrize("op,expected", [
         ("strstarts", "term_text LIKE 'XQ%'"),
@@ -121,7 +123,7 @@ class TestPatternShape:
 
     def test_the_predicate_is_carried(self):
         """The count is over (predicate, matching terms), not terms alone."""
-        out = needed_texts(_plan(_fn("contains", "x", "CA")), _Aliases())
+        out = needed_texts(_plan(_fn("contains", "x", "CAL")), _Aliases())
         assert [p for p, _ in out] == ["pred-uuid-1"]
 
 

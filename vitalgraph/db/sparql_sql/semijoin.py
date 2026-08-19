@@ -384,17 +384,18 @@ def needed_texts(plan, aliases) -> set:
             # Built exactly as `filter_pushdown` builds it, so the count is over
             # the set the query will actually match. Diverging here would
             # estimate one predicate and run another.
+            # An unservable needle is not pushed at all (see `text_needle`), so
+            # there is nothing here to estimate — and probing it would pay the
+            # very scan the decline exists to avoid. The gate and the emitter
+            # must accept EXACTLY the same expressions; this is that agreement,
+            # in the direction issues/054 and issues/058 got wrong.
+            from .text_needle import is_servable
+            if not is_servable(name, literal):
+                continue
             esc = _esc(_like_escape(literal))
             like = "ILIKE" if ci else "LIKE"
             if name == "contains":
-                # Same short-needle rule as `filter_pushdown` — see the note
-                # there. It matters twice: the estimate must be over the set the
-                # query will match, AND this probe pays the same 12.6s
-                # degenerate index scan if it gets it wrong.
-                from .filter_pushdown import _MIN_TRIGRAM_NEEDLE
-                col = ("term_text" if len(literal) >= _MIN_TRIGRAM_NEEDLE
-                       else "(term_text || '')")
-                cond = f"{col} {like} '%{esc}%'"
+                cond = f"term_text {like} '%{esc}%'"
             elif name == "strstarts":
                 cond = f"term_text {like} '{esc}%'"
             else:
@@ -423,6 +424,32 @@ def _filters(node, depth: int = 0):
         yield node
     for c in (node.children or []):
         yield from _filters(c, depth + 1)
+
+
+def has_unservable_text(plan) -> bool:
+    """Does any text-search FILTER carry a needle the trigram index cannot serve?
+
+    Asked before emit, to decide whether measuring the term table is worth a
+    round trip. It cannot decide the REFUSAL — `bgp_is_unbounded` reads
+    `tagged_constraints`, which `push_filters` has not written yet — so it
+    deliberately over-answers, and the cost of a false yes is one `reltuples`
+    lookup.
+    """
+    from .filter_pushdown import _text_search_operands
+    from .text_needle import is_servable
+    from ..jena_sparql.jena_types import ExprFunction
+
+    for filt in _filters(plan):
+        for expr in (filt.filter_exprs or []):
+            if not isinstance(expr, ExprFunction):
+                continue
+            ops = _text_search_operands(expr)
+            if ops is None:
+                continue
+            _var, name, literal, _ci, _flags = ops
+            if literal is not None and not is_servable(name, literal):
+                return True
+    return False
 
 
 def needed_pairs(plan, aliases) -> set:

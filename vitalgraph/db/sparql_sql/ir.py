@@ -31,6 +31,10 @@ class AliasGenerator:
         self._const_counter: int = 0
         # Resolved after materialize phase: col_name → uuid string
         self.resolved_constants: Dict[str, str] = {}
+        # Estimated rows in this space's term table, or None when unmeasured.
+        # Read by the unservable-text refusal (`text_needle`), which runs during
+        # emit and so cannot query for it itself. None means DO NOT REFUSE.
+        self.term_rows: Optional[int] = None
         # Graph lock: when set, every quad table is constrained to this context_uuid
         self.graph_lock_uri: Optional[str] = None
         # Default graph: applied to outer BGPs only (not inside GRAPH clauses).

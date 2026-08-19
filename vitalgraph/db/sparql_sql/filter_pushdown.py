@@ -41,6 +41,14 @@ from ..jena_sparql.jena_types import (
 from .ir import (PlanV2, KIND_BGP, KIND_FILTER, KIND_EXTEND, KIND_JOIN,
                  KIND_LEFT_JOIN, KIND_UNION, KIND_MINUS)
 from .collect import _esc, _like_escape
+from .declines import Rule
+from .text_needle import (UnindexableTextSearch, bgp_is_unbounded, is_servable,
+                          unbounded_scan_error)
+
+# A text search the trigram index cannot serve is not pushed. `push_filters` is
+# the stage; the rule reads only the lexical form and the BGP's other
+# constraints, both available then.
+TEXT_PUSH = Rule("text_push", stage="push_filters", reads=("collect",))
 
 logger = logging.getLogger(__name__)
 
@@ -292,6 +300,27 @@ def _try_text_filter(
 
     uuid_col = f"{ref_id}.{col_name}"
 
+    # Can the trigram index require a trigram for this needle? If not, pushing
+    # it emits `?v IN (SELECT term_uuid FROM term WHERE term_text ILIKE
+    # '%XQ%')`, which reads every term in the space no matter how selective the
+    # rest of the query is — the opposite of what a push-down is for. Declining
+    # leaves the same FILTER above the join, over rows the query already
+    # produced: identical answers, bounded by the result set. See `text_needle`.
+    if name in _TEXT_SEARCH_OPS and not is_servable(name, literal_value):
+        # ...unless nothing else bounds the BGP, in which case "above the join"
+        # is the whole graph and declining trades a term scan for something
+        # worse. That case is refused rather than silently made slower.
+        if bgp_is_unbounded(bgp):
+            term_rows = getattr(getattr(ctx, "aliases", None), "term_rows", None)
+            msg = unbounded_scan_error(name, literal_value, var_name, term_rows)
+            if msg:
+                raise UnindexableTextSearch(msg)
+        logger.debug("Text filter NOT pushed (unservable): %s(%s, '%s')",
+                     name, var_name, literal_value)
+        return TEXT_PUSH.decline("needle yields no requirable trigram, so a "
+                                 "push-down would scan every term",
+                                 op=name, needle=literal_value, var=var_name)
+
     # Build the term table condition
     escaped = _esc(literal_value)
     # For the LIKE-based operators the needle must also have its LIKE
@@ -304,9 +333,9 @@ def _try_text_filter(
     # changes only where the predicate is evaluated, never what it answers.
     like = "ILIKE" if ci else "LIKE"
     if name == "contains":
-        col = ("term_text" if len(literal_value) >= _MIN_TRIGRAM_NEEDLE
-               else "(term_text || '')")
-        term_cond = f"{col} {like} '%{like_esc}%'"
+        # Unconditionally `term_text`: an unservable needle never reaches here,
+        # so there is no longer a case that wants the index disabled.
+        term_cond = f"term_text {like} '%{like_esc}%'"
     elif name == "strstarts":
         term_cond = f"term_text {like} '{like_esc}%'"
     elif name == "strends":
@@ -356,22 +385,9 @@ def _try_text_filter(
 # as `term_text = '5'`, which misses `"5.0"^^xsd:double` — the same lexical-vs-
 # value trap that made uuid inequality unsound in issues/058. Widening the gate
 # to cover `eq` would turn that latent bug into a reachable one.
-# A needle shorter than 3 characters cannot yield a trigram for an INFIX match,
-# and the GIN index then degenerates into scanning itself: `term_text ILIKE
-# '%XQ%'` on a 10.4M-row term table returns 10,467,626 index rows and takes
-# 12,613 ms to find nothing.
-#
-# The trigrams for a short string are all PADDED — show_trgm('XQ') is
-# {"  x"," xq","xq "} — and padding only holds at a word boundary. An infix
-# match may land mid-word, so none of them can be REQUIRED, leaving no usable
-# trigram. That is why this applies to `contains` alone: anchored patterns keep
-# the padding and stay fast at any length ('XQ%' 1.0 ms, '%XQ' 0.03 ms).
-#
-# Concatenating an empty string keeps the answer identical while making the
-# expression something the index on `term_text` cannot serve, so the planner
-# takes a sequential scan instead: 12,613 ms -> 4,041 ms.
-_MIN_TRIGRAM_NEEDLE = 3
-
+# Which needles the index can actually serve, and what happens to the ones it
+# cannot, is stated once in `text_needle` — including why the answer is no longer
+# `(term_text || '')`, the no-op concatenation that used to sit here.
 _TEXT_SEARCH_OPS = ("contains", "strstarts", "strends", "regex")
 _FOLD_FNS = ("lcase", "ucase")
 

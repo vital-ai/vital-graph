@@ -303,14 +303,16 @@ class TestCaseFoldedTextSearch:
         bgp = _make_bgp_with_var("x")
         expr = ExprFunction(name="contains", args=[
             _lcase(ExprVar(var="x")),
-            _lcase(ExprValue(node=LiteralNode(value="Ca"))),
+            _lcase(ExprValue(node=LiteralNode(value="Cal"))),
         ])
         plan = _make_filter(bgp, expr)
         push_text_filters(plan, SPACE, _FakeCtx())
 
         assert len(bgp.tagged_constraints) == 1
         _, sql = bgp.tagged_constraints[0]
-        assert "ILIKE '%Ca%'" in sql
+        # Three characters, because a shorter needle is now DECLINED and this
+        # test is about the fold pair, not about needle length.
+        assert "ILIKE '%Cal%'" in sql
 
     def test_asymmetric_fold_is_declined(self):
         """LCASE(?v) against an UNFOLDED needle is not case-insensitive.
@@ -329,11 +331,11 @@ class TestCaseFoldedTextSearch:
 
     def test_unfolded_contains_still_pushes_case_sensitively(self):
         bgp = _make_bgp_with_var("x")
-        plan = _make_filter(bgp, _contains_expr("x", "Ca"))
+        plan = _make_filter(bgp, _contains_expr("x", "Cal"))
         push_text_filters(plan, SPACE, _FakeCtx())
 
         _, sql = bgp.tagged_constraints[0]
-        assert "LIKE '%Ca%'" in sql and "ILIKE" not in sql
+        assert "LIKE '%Cal%'" in sql and "ILIKE" not in sql
 
 
 class TestEqualityConditionDispatchesOnDatatype:

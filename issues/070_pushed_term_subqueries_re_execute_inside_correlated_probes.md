@@ -1,7 +1,7 @@
 # Pushed Term Subqueries Re-Execute Per Row Inside Correlated Probes
 
-## Status: `has_any` FIXED; `contains` FIXED and now ENFORCED AT EVERY ENTRY
-## POINT (2026-08-19). The scaling caveat stands and is the only open part.
+## Status: `has_any` FIXED; `contains` FIXED IN THE LAYER (2026-08-19, revised
+## later the same day). The scaling caveat stands and is the only open part.
 
 Three things landed on 2026-08-19, after this document had been read twice as
 "contains is still ~11 s" — a figure superseded within the document itself:
@@ -10,10 +10,67 @@ Three things landed on 2026-08-19, after this document had been read twice as
    handlers that accept free text, not just the KGQuery criteria path.
 2. The selectivity probe is bounded by WORK rather than by matches when the index
    cannot serve the needle: **78,991 ms -> 45 ms** on the shape that reaches it.
+   **Superseded — see below. It optimised the wrong end.**
 3. Rejecting a short needle in the SPARQL layer was considered and REFUSED: it
    breaks conformance (`sparql11/functions/contains01.rq` IS
    `CONTAINS(?str, "a")`) and would refuse queries that cost 159 ms on a small
    space. An API may define what it accepts; a query language may not.
+   **Right about a blanket rejection, and it hid the answer — see below.**
+
+## The revision, later the same day: decline the PUSH, refuse only the unbounded
+
+Points 2 and 3 both treated "keep the scan" as settled and argued only about
+where to complain. Two things were being conflated:
+
+* the **operator**, which is spec-legal at any needle length, and
+* the **push-down**, which is a performance decision this layer owns.
+
+`(term_text || '')` — a value-preserving concatenation chosen to make the index
+INAPPLICABLE so the planner takes a sequential scan (12,613 ms -> 4,041 ms) — is
+a push-down that cannot be selective. Pushing a text filter exists to narrow the
+quad scan; a needle with no requirable trigram narrows nothing and reads every
+term. And the sampling in point 2 made it cheap to PRICE that scan while leaving
+the scan itself in place: the query still read the whole term table.
+
+So an unservable needle is no longer pushed. The same FILTER is evaluated above
+the join, over rows the query already produced — identical answers, bounded by
+the result set rather than by the corpus. Measured on `sp_lead_synth_100k`
+(10.4M terms), 2-character needles:
+
+    shape                          before        after
+    'XQ' + bound predicate       ~4,041 ms      231 ms   declined, join drives
+    'CA' + bound predicate       ~6,095 ms      142 ms   declined
+    'XQZ' + bound predicate          5.6 ms      15 ms   still pushed, unchanged
+    'XQ' alone (no other constraint)  >60 s       14 ms   REFUSED
+
+Declining is not free in one case: when the text search is the query's ONLY
+selective constraint, "above the join" is the whole graph. That case is refused
+with a message naming `STRSTARTS` and what the scan would have cost, and the
+refusal is gated on the term table actually being large (`reltuples`, so it costs
+no scan) — because an error that fires in production and not on a fixture is
+worse than the scan it prevents.
+
+Point 3's conformance objection was correct and is now tested rather than
+argued: `TestConformanceShapesSurvive` in
+`tests/unit/sparql_sql/test_unindexable_text_search.py` runs the exact shapes a
+lexical rule would have rejected — `CONTAINS(?str,"a")`, `regex(?val,"a.c")`,
+`regex(?val,"ab*c")`, `regex(?val,"a[^b]c")` — and the full DAWG suite passes.
+Declining a push-down is invisible to an answer; refusing a query is not.
+
+**It also closed a hole the endpoint checks could not see.** `validate_search_text`
+measures the length of a `search` box. It cannot read a regex, so
+`FILTER(regex(?o,"ab"))` reached `term_text ~ 'ab'` — the same degeneration
+through a door nothing was watching. Servability is now decided from the pattern
+(longest REQUIRED literal run, with `^` treated like an anchor), so regex is
+covered by the same rule as `contains`.
+
+**The bug this nearly shipped with.** A GRAPH clause binds `context_uuid` at
+every leaf, and it arrives three ways — a `leaf_terms` entry and
+`q0.context_uuid = ...` in both constraint lists. Counting any of them as
+narrowing made every BGP inside a named graph read as BOUNDED, so the refusal
+never fired: the unbounded case above was merely declined and ran past 60 s. A
+graph lock says which graph, not which rows. Found by measuring the four shapes
+rather than by reading the gate.
 
 The header table below is the FIRST measurement and is superseded by this
 document's own later sections: `'XQ'` was 11,151 ms there and was fixed to 210 ms

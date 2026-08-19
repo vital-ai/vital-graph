@@ -78,10 +78,16 @@ class FrameCriteria(BaseModel):
 # them. The GIN index then scans itself — measured at 10,467,626 index rows and
 # 12,613 ms to find nothing on a 10.4M-row term table (`issues/070`).
 #
-# The emitter has a backstop that keeps such a needle away from the index, but
-# that only buys a sequential scan: still seconds, and O(term table) on the
-# table projected to grow 10x. Rejecting the query is the honest answer — it
-# tells the caller the limit instead of silently charging them for it.
+# The SPARQL->SQL layer now enforces this itself and does not need help: such a
+# needle is never PUSHED (`db/sparql_sql/text_needle.py`), so it is evaluated
+# above the join instead of scanning the term table, and it is REFUSED outright
+# when nothing else bounds the scan. That covers every route in, including the
+# raw-SPARQL and regex ones a `search`-box length check cannot see.
+#
+# This check is kept anyway, for one reason: it answers a UI input immediately,
+# naming the field and the limit, without compiling a query first. It is a
+# better message, not the protection — and it must stay in step with
+# `text_needle.MIN_TRIGRAM_NEEDLE`, which is the value that actually decides.
 #
 # `contains` ONLY. Anchored matches keep the padding and stay fast at any
 # length: measured on the same 2-character needle, 'XQ%' is 1.0 ms and '%XQ' is
@@ -94,16 +100,20 @@ def validate_search_text(text: Optional[str]) -> Optional[str]:
 
     The list endpoints take a `search` box and compile it to
     `CONTAINS(LCASE(...), "<needle>")`, which becomes an infix `ILIKE '%x%'` —
-    the same shape `validate_contains_criteria` guards on the KGQuery path, and
-    the same cost. It was guarded there and nowhere else, so a two-character
-    search from a UI input still paid it. Measured on `sp_lead_synth_100k`
-    (2.2M frames, 10.4M terms):
+    the same shape `validate_contains_criteria` guards on the KGQuery path.
+
+    When this was the only guard, both halves of the query were charged for a
+    short needle — the estimate scanned the term table to prove absence, then the
+    query scanned it again. Measured on `sp_lead_synth_100k` (2.2M frames, 10.4M
+    terms):
 
         frames search "XQ"    generation 5,487 ms + execution 7,917 ms
         frames search "XQZ"   generation    40 ms + execution 3,503 ms
 
-    BOTH halves are charged: the estimate scans the term table to prove absence,
-    then the query scans it again.
+    Neither half is charged now: `text_needle` declines the push-down, so the
+    same filter is evaluated over rows the query already produced. This check
+    survives to give the caller a direct answer about the input they typed,
+    rather than a slower query they did not ask for.
 
     Returns an error message, or None when the needle is acceptable. An empty or
     absent search is fine — it means "no filter", not "match everything short".
