@@ -133,3 +133,48 @@ async def test_a_filter_over_text_still_generates(space_impl, make_space, graph_
         "a paged query whose FILTER reads text returned nothing — late text "
         "resolution stripped the variable the filter needs")
     assert rows[0]["frame"]["value"] == FRAME
+
+
+async def test_the_page_does_not_materialise_the_projected_text(space_impl, make_space,
+                                                                graph_uri):
+    """The SAVING, not just the answer — this had no guard and was lost twice.
+
+    Late text resolution exists to keep the projected variable's term join OUT of
+    the page. Nothing asserted that, so a correctness fix silently reverted the
+    optimisation to its pre-`af10e5f` cost (1,744 buffers back to 16,000+) while
+    every test stayed green — an empty-or-slow result satisfies every
+    upper-bound assertion, which is the trap issues/041 documents.
+
+    Asserted on the SHAPE rather than a timing: exactly one term join, the one
+    outside the LIMIT. A buffer count would be a machine-dependent number in a
+    correctness suite.
+    """
+    space_id = await make_space()
+    await _seed(space_impl, space_id, graph_uri)
+    res = await space_impl.execute_sparql_query(space_id, f"""
+        SELECT DISTINCT ?frame WHERE {{ GRAPH <{graph_uri}> {{
+            ?frame <{CORE}vitaltype> <{KG}KGFrame> .
+            FILTER NOT EXISTS {{ ?frame <{KG}hasKGFormType> ?ft }}
+        }} }} LIMIT 25""")
+    sql = res.get("sql") or ""
+    assert sql, "the impl no longer reports the SQL it ran"
+    joins = sql.count(f"{space_id}_term")
+    assert joins == 1, (
+        f"expected ONE term join (outside the LIMIT), found {joins} — the "
+        f"projected variable's text is being resolved inside the page again")
+
+
+async def test_a_filter_over_text_still_forces_materialisation(space_impl, make_space,
+                                                               graph_uri):
+    """The other side of the same coin, so the two cannot both be satisfied by
+    simply never resolving text: a FILTER that reads text must still get it."""
+    space_id = await make_space()
+    await _seed(space_impl, space_id, graph_uri)
+    res = await space_impl.execute_sparql_query(space_id, f"""
+        SELECT DISTINCT ?frame WHERE {{ GRAPH <{graph_uri}> {{
+            ?frame <{CORE}vitaltype> <{KG}KGFrame> .
+            OPTIONAL {{ ?frame <{KG}hasName> ?name }}
+            FILTER(CONTAINS(LCASE(STR(?name)), "fixture"))
+        }} }} LIMIT 25""")
+    bindings = res.get("results", {}).get("bindings", [])
+    assert len(bindings) == 1, "the filter's variable lost its text again"

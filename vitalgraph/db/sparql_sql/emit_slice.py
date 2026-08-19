@@ -146,7 +146,7 @@ def _find_project(node, depth: int = 0):
     return None
 
 
-from .var_scope import compute_text_needed_vars
+from .var_scope import compute_late_text_vars
 
 
 def _emit_late_text(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
@@ -204,8 +204,7 @@ def _emit_late_text(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
     # `compute_text_needed_vars(projection_discarded=True)` is the function
     # issues/088 already built for exactly this distinction — the projection's
     # text is what moves after the LIMIT, expressions keep theirs.
-    child_ctx.text_needed_vars = compute_text_needed_vars(
-        plan.child, projection_discarded=True)
+    child_ctx.text_needed_vars = compute_late_text_vars(plan.child)
     try:
         child_sql = emit(plan.child, child_ctx)
     except Exception as exc:
@@ -386,7 +385,7 @@ def _emit_two_phase(plan: PlanV2, ctx: EmitContext) -> Optional[str]:
     # on is in scope.
     extra_conds = None
     if exists_expr is not None:
-        from .var_scope import compute_text_needed_vars, compute_scope
+        from .var_scope import compute_late_text_vars, compute_scope
         from .emit_expressions import expr_to_sql_exists_with_overrides
 
         # SOUNDNESS: every variable the body shares with the outer query must be

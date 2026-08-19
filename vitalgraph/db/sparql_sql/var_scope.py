@@ -400,16 +400,82 @@ def _counts_a_bare_var(agg_expr) -> bool:
     return isinstance(agg_expr.expr, ExprVar)
 
 
-def _collect_referenced_vars(plan: PlanV2, refs: Set[str]) -> None:
+def _late_text_vars_in_expr(expr) -> Set[str]:
+    """Variables whose TEXT an expression reads, for the late-text page.
+
+    An EXISTS body correlates on IDENTITY — the emitted probe compares
+    `__uuid` — so a variable mentioned inside it does not need term text. The
+    Assertion shape is two `FILTER NOT EXISTS` clauses over the projected
+    variable, so counting them kept `?frame` materialised and cancelled the
+    optimisation.
+
+    `CONTAINS`, `STR`, `LCASE` and the rest are ordinary ExprFunctions and are
+    still collected — that is the demand the frames-list regression proved real.
+    """
+    if isinstance(expr, ExprExists):
+        return set()
+    if isinstance(expr, ExprVar):
+        return {expr.var}
+    if isinstance(expr, ExprFunction):
+        out: Set[str] = set()
+        for arg in (expr.args or []):
+            out |= _late_text_vars_in_expr(arg)
+        return out
+    if isinstance(expr, ExprAggregator) and expr.expr:
+        return _late_text_vars_in_expr(expr.expr)
+    return set()
+
+
+def compute_late_text_vars(plan: PlanV2) -> Set[str]:
+    """Variables whose TEXT must stay inside a page that resolves text late.
+
+    `_emit_late_text` selects a page by uuid and joins the term table outside the
+    LIMIT. Everything hinges on which variables genuinely need their text
+    materialised INSIDE that page.
+
+    `compute_text_needed_vars(projection_discarded=True)` answers a different
+    question and cancels the optimisation. Traced rather than guessed: it returns
+    `{frame}` for the issues/088 Assertion shape, and the demand comes from
+
+        if kind in (KIND_DISTINCT, KIND_REDUCED):
+            refs.update(compute_scope(plan.children[0]).all_visible)
+
+    DISTINCT marks EVERY visible variable as needing text. It does not need to:
+    a term's uuid is `uuid5` of the term including its type, so deduplicating on
+    uuid is the same partition as deduplicating on the value. `af10e5f` proved
+    it in practice — it suppressed all text and returned the same 25 rows at
+    1,744 buffers against 16,098.
+
+    So this asks only what an EXPRESSION reads:
+
+      * PROJECT is excluded — its text is exactly what moves outside the LIMIT.
+      * DISTINCT/REDUCED are excluded — they dedup on uuid.
+      * ORDER is excluded — the caller only proceeds when the buried order is
+        the pipeline's SYNTHESIZED `ORDER BY <anchor>__uuid`, which is a uuid
+        column; it declines on a caller's own ORDER BY.
+      * FILTER, EXTEND, HAVING and LEFT JOIN conditions are KEPT, because those
+        do read text — a `FILTER(CONTAINS(...))` against a column that was never
+        materialised is what made the frames list return nothing (issues/088).
+    """
+    refs: Set[str] = set()
+    _collect_referenced_vars(plan, refs, late_text=True)
+    bgp_vars: Set[str] = set()
+    _collect_all_bgp_vars(plan, bgp_vars)
+    return bgp_vars & refs
+
+
+def _collect_referenced_vars(plan: PlanV2, refs: Set[str],
+                             late_text: bool = False) -> None:
     """Collect all variables referenced by any modifier in the plan tree."""
     kind = plan.kind
 
-    if kind == KIND_PROJECT and plan.project_vars:
+    if kind == KIND_PROJECT and plan.project_vars and not late_text:
         refs.update(plan.project_vars)
 
     if kind == KIND_FILTER and plan.filter_exprs:
         for expr in plan.filter_exprs:
-            refs.update(vars_in_expr(expr))
+            refs.update(_late_text_vars_in_expr(expr) if late_text
+                        else vars_in_expr(expr))
 
     if kind == KIND_EXTEND:
         if plan.extend_var:
@@ -417,7 +483,7 @@ def _collect_referenced_vars(plan: PlanV2, refs: Set[str]) -> None:
         if plan.extend_expr:
             refs.update(vars_in_expr(plan.extend_expr))
 
-    if kind == KIND_ORDER and plan.order_conditions:
+    if kind == KIND_ORDER and plan.order_conditions and not late_text:
         for expr, _dir in plan.order_conditions:
             refs.update(vars_in_expr(expr))
 
@@ -472,7 +538,7 @@ def _collect_referenced_vars(plan: PlanV2, refs: Set[str]) -> None:
     # not ALL descendant BGP vars.  DISTINCT sits above PROJECT, so only
     # the projected columns need deduplication — internal join variables
     # have already been eliminated.
-    if kind in (KIND_DISTINCT, KIND_REDUCED) and plan.children:
+    if kind in (KIND_DISTINCT, KIND_REDUCED) and plan.children and not late_text:
         child_scope = compute_scope(plan.children[0])
         refs.update(child_scope.all_visible)
 
@@ -489,4 +555,4 @@ def _collect_referenced_vars(plan: PlanV2, refs: Set[str]) -> None:
 
     # Recurse into children
     for child in (plan.children or []):
-        _collect_referenced_vars(child, refs)
+        _collect_referenced_vars(child, refs, late_text)
