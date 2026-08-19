@@ -41,12 +41,29 @@ Note the 3-character case is still 3.5 s on this fixture. That is a different
 problem — the frames list shape, not the short-needle one — and is not what this
 issue is about.
 
-**Not fixed here because it is a product decision**, and the same one already
-made for KGQuery: refusing a 2-character search in the frames list changes what
-the UI accepts. The mechanism exists and is one call
-(`validate_contains_criteria` returns the message naming `starts_with` /
-`ends_with`); what is needed is the decision to apply it to the other three
-paths.
+**CLOSED 2026-08-19 — the rule is now enforced at every entry point.**
+
+The decision was taken: no search under `MIN_CONTAINS_LENGTH` characters, refused
+by the backend. `validate_search_text` is called from all nine handlers that
+accept free text — frames (2), entities (3), documents, triples
+(`object_filter`), kgtypes and objects — returning INVALID_REQUEST in the body at
+HTTP 200, the convention these endpoints already use.
+
+An empty or absent search stays legal: it means "no filter", not "match
+everything short".
+
+**Two of the nine were found by the test, not by inspection.** The guarded set
+was enumerated by hand and missed `kgtypes_endpoint` and `objects_endpoint`; a
+sweep keyed on the SHAPE — a handler taking `search: Optional[str] = Query(...)`
+with no guard — caught both. That sweep is the durable part: a validator called
+from one place is a property of that place, not a rule. The tests also assert
+each guard sits above its handler's first `await`, so a refusal cannot arrive
+after the work it was meant to prevent.
+
+What remains genuinely open is unchanged and is not a code problem: the
+`(term_text || '')` backstop buys a sequential scan, which is O(term table) and
+will not hold as that table grows. `pg_bigm` indexes 2-grams and would close it,
+and is not available on this install — a deployment decision.
 
 ### Superseded first measurement
 
