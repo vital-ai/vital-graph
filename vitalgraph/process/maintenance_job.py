@@ -229,6 +229,63 @@ class MaintenanceJob:
     # On-demand triggers (bypass freshness checks)
     # ------------------------------------------------------------------
 
+    async def trigger_maintenance(self, space_id: str) -> Optional[Dict]:
+        """Run the whole maintenance pass against ONE space.
+
+        `ProcessScheduler.trigger_now` scopes a request by looking for
+        `trigger_<process_type>` on the handler. There was no
+        `trigger_maintenance`, so `process_type="maintenance"` with a `space_id`
+        fell through to `run()` — the full sweep — and the parameter documented
+        as "Target space (omit for auto-select)" was accepted and DISCARDED. A
+        caller who scoped the request got no error and no scoping.
+
+        Measured on a stack with 17 spaces:
+
+            analyze     + space_id     0.16 s
+            vacuum      + space_id     0.14 s
+            maintenance + space_id     109 s     <- ignored the space entirely
+
+        The 109 s is not the work for one space. `run()` scores every space and
+        the six integrity phases each sweep all of them; that cost tracks the
+        NUMBER OF SPACES, which is why it grows as fixtures are loaded and why
+        `tests/api::test_trigger_maintenance` timed out here and not on a fresh
+        stack.
+
+        This runs the same phases in the same order, over `[space_id]` alone.
+        It deliberately does NOT skip the freshness checks the way
+        `trigger_analyze` does — "maintenance for this space" should mean what
+        the tick would do for it, not more.
+        """
+        summary: Dict = {"space_id": space_id}
+        try:
+            summary["analyze"] = await self._run_analyze(space_id)
+            summary["vacuum"] = await self._run_vacuum(space_id)
+            one = [space_id]
+            for key, phase in (
+                ("edge_integrity", self._run_edge_integrity),
+                ("frame_entity_integrity", self._run_frame_entity_integrity),
+                ("entity_slot_sort_integrity", self._run_entity_slot_sort_integrity),
+                ("grouping_self_link", self._run_grouping_self_link_check),
+                ("stats_integrity", self._run_stats_integrity),
+                ("stats_prune", self._run_stats_prune),
+            ):
+                try:
+                    result = await phase(one)
+                except Exception as exc:
+                    # One phase failing must not hide the others, and the caller
+                    # asked about a single space — say which phase, not just
+                    # that "maintenance" failed.
+                    logger.error("trigger_maintenance(%s): %s failed: %s",
+                                 space_id, key, exc)
+                    summary[key] = {"error": str(exc)[:200]}
+                    continue
+                if result:
+                    summary[key] = result
+        except Exception as exc:
+            logger.error("trigger_maintenance(%s) failed: %s", space_id, exc)
+            summary["error"] = str(exc)[:200]
+        return summary
+
     async def trigger_analyze(self, space_id: str) -> Optional[Dict]:
         """Run ANALYZE on a specific space immediately."""
         return await self._run_analyze(space_id)

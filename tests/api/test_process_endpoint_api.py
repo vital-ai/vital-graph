@@ -52,11 +52,42 @@ class TestProcessEndpoint:
         assert resp.offset == 0
         assert len(resp.processes) <= 2
 
-    async def test_trigger_maintenance(self, vg_client):
-        """Trigger maintenance returns triggered boolean and a message string."""
-        resp = await vg_client.processes.trigger(process_type="maintenance")
+    async def test_trigger_maintenance(self, vg_client, test_space):
+        """Trigger maintenance for ONE space returns triggered + a message.
+
+        SCOPED deliberately. The unscoped form runs the whole pass — it scores
+        every space and each of the six integrity phases sweeps all of them — so
+        its cost tracks the NUMBER OF SPACES on the stack, not the work this
+        assertion needs. Measured here: 148 s unscoped against 0.8 s for one
+        space, and the client's read timeout expires long before the former.
+
+        That made this test fail on a machine carrying perf fixtures and pass on
+        a fresh one, which is a property of the stack rather than of the code
+        under test. The contract asserted below is identical either way.
+        """
+        resp = await vg_client.processes.trigger(
+            process_type="maintenance", space_id=test_space)
         assert isinstance(resp.triggered, bool)
         assert isinstance(resp.message, str) and len(resp.message) > 0
+
+    async def test_trigger_maintenance_honours_the_space(self, vg_client, test_space):
+        """`space_id` must actually scope the work.
+
+        It was accepted and DISCARDED: `ProcessScheduler.trigger_now` scopes by
+        looking up `trigger_<process_type>` on the handler, and `MaintenanceJob`
+        had `trigger_analyze`/`trigger_vacuum`/... but no `trigger_maintenance`,
+        so the request fell through to `run()`. No error, no scoping — the
+        parameter was documented as "Target space (omit for auto-select)" and did
+        nothing.
+        """
+        resp = await vg_client.processes.trigger(
+            process_type="maintenance", space_id=test_space)
+        assert resp.triggered
+        result = getattr(resp, "result", None)
+        assert result, "no result payload — cannot tell what was acted on"
+        assert result.get("space_id") == test_space, (
+            f"maintenance reported on {result.get('space_id')!r} for a request "
+            f"scoped to {test_space!r} — the parameter is being ignored")
 
     async def test_get_nonexistent_process(self, vg_client):
         """Get non-existent process returns 404."""
