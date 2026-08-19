@@ -59,13 +59,24 @@ def emit_bgp(plan: PlanV2, ctx: EmitContext) -> str:
     if not plan.var_slots:
         # All-constant BGP: still need to verify the pattern exists
         if quad_tables and plan.constraints:
-            parts = [f"SELECT 1 AS _dummy"]
+            # The `LIMIT 1` is a short-circuit: this pattern has no variables, so
+            # one matching row settles it and scanning further is waste.
+            #
+            # It lives INSIDE a subquery because a parent may append clauses to
+            # whatever this returns. It used to terminate the string, so a query
+            # with its own LIMIT emitted `... LIMIT 1 LIMIT 1` — malformed SQL
+            # that reached PostgreSQL as `syntax error at or near "LIMIT"`.
+            # `SELECT * WHERE { GRAPH <g> { <s> <p> <o> } } LIMIT 1` was enough
+            # to produce it. Every emitter here returns composable SQL; this one
+            # quietly did not.
+            parts = ["SELECT 1"]
             parts.append(f"FROM {quad_tables[0].table_name} AS {quad_tables[0].alias}")
             for qt in quad_tables[1:]:
                 parts.append(f"JOIN {qt.table_name} AS {qt.alias} ON TRUE")
             parts.append("WHERE " + " AND ".join(plan.constraints))
             parts.append("LIMIT 1")
-            return "\n".join(parts)
+            inner = "\n".join(parts)
+            return f"SELECT 1 AS _dummy FROM (\n{inner}\n) _exists"
         return "SELECT 1 AS _dummy"
 
     # Allocate opaque SQL names for each SPARQL variable
