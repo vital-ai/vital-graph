@@ -494,6 +494,30 @@ _pair_count_cache: Dict[tuple, int] = {}
 _TEXT_TERM_CAP = 200
 _TEXT_COUNT_CAP = 10_000
 
+# A needle under three characters cannot be served by the trigram index, so the
+# term probe becomes a sequential scan — and the probe is bounded by MATCHES, so
+# a needle matching NOTHING must read every row to prove it. Measured on
+# sp_lead_synth_100k (10.4M terms): 17,696 ms for `'%XQ%'` against 0.2 ms for a
+# three-character needle the index can serve.
+#
+# The answer is not to skip the probe. It is load-bearing: an unmeasured text
+# leaf reads as "keep the current plan", which is the probe-per-candidate walk
+# this whole issue is about (issues/070), and it is what took `'XQ'` from
+# 11,151 ms to 210 ms. Length tells you the INDEX cannot help; it tells you
+# nothing about selectivity — `'CA'` matches 2.6M terms and `'XQ'` matches none,
+# and those want opposite plans.
+#
+# So for a short needle the probe is bounded by WORK instead: sample a fixed
+# fraction of the table and scale. Measured, same fixture:
+#
+#     exact, bounded by matches    17,696 ms
+#     TABLESAMPLE SYSTEM (1)          363 ms   ('XQ' -> 0 in sample)
+#                                     219 ms   ('CA' -> 26,181 in sample)
+#
+# The discrimination that matters survives: nothing versus millions. The error
+# mode is conflating small values with zero, and those take the same branch.
+_TEXT_SAMPLE_PCT = 1
+
 
 def _has_deep_page(plan, depth: int = 0) -> bool:
     """Does this plan page past the first page? See the note at the call site."""
@@ -796,15 +820,35 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
             if ck in _pair_count_cache:
                 aliases.text_stats[(p_uuid, cond)] = _pair_count_cache[ck]
                 continue
-            trows = await db.execute_query(
-                f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_term "
-                f"WHERE {cond} LIMIT {_TEXT_TERM_CAP}) s",
-                conn=conn, conn_params=conn_params)
-            t_n = trows[0]["n"] if trows else 0
+            # `cond` carries the `(term_text || '')` form for a short needle,
+            # which is how we know the index is out of play and the exact probe
+            # would be a full scan. Sample instead — see _TEXT_SAMPLE_PCT.
+            sampled = "term_text || ''" in cond
+            if sampled:
+                trows = await db.execute_query(
+                    f"SELECT count(*) AS n FROM {space_id}_term "
+                    f"TABLESAMPLE SYSTEM ({_TEXT_SAMPLE_PCT}) WHERE {cond}",
+                    conn=conn, conn_params=conn_params)
+                # Scale back to whole-table terms, then clamp to the cap the
+                # exact probe would have stopped at, so both paths hand the gate
+                # a number on the same scale.
+                raw = (trows[0]["n"] if trows else 0) * (100 // _TEXT_SAMPLE_PCT)
+                t_n = min(raw, _TEXT_TERM_CAP)
+            else:
+                trows = await db.execute_query(
+                    f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_term "
+                    f"WHERE {cond} LIMIT {_TEXT_TERM_CAP}) s",
+                    conn=conn, conn_params=conn_params)
+                t_n = trows[0]["n"] if trows else 0
             if t_n >= _TEXT_TERM_CAP:
                 # Common. Record it as saturated-large so the gate reads it as
                 # "not selective" without a second, expensive count.
                 n = _TEXT_COUNT_CAP
+            elif sampled:
+                # The quad count would re-run the same full scan inside its IN
+                # subquery, to refine a number the gate only reads as "tiny".
+                # The sampled term estimate is already that answer.
+                n = t_n
             else:
                 crows = await db.execute_query(
                     f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_rdf_quad q "
