@@ -176,6 +176,17 @@ class KGEntitiesEndpoint:
             """
             
             require_space_read(current_user, space_id)
+            # A search needle under MIN_CONTAINS_LENGTH cannot use the text
+            # index and scans the whole term table — twice, because the estimate
+            # pays it too (issues/070). Guarded on the KGQuery path since
+            # 2026-08-11 and nowhere else, so a UI search box still paid it.
+            from ..model.kgentities_model import validate_search_text
+            search_err = validate_search_text(search)
+            if search_err:
+                return QuadResponse(
+                    status=OperationStatus.INVALID_REQUEST, message=search_err,
+                    results=[], total_count=0, page_size=page_size, offset=offset,
+                )
             
             # Validate mutually exclusive parameters
             uri_params_used = bool(uri or uri_list)
@@ -292,6 +303,16 @@ class KGEntitiesEndpoint:
         ):
             """Return only the count of entities matching the given filters."""
             require_space_read(current_user, space_id)
+            # A needle under MIN_CONTAINS_LENGTH cannot use the text index and
+            # scans the whole term table — twice, since the estimate pays it too
+            # (issues/070). Guarded on the KGQuery path only until 2026-08-19.
+            from ..model.kgentities_model import validate_search_text
+            search_err = validate_search_text(search)
+            if search_err:
+                return EntityCountResponse(
+                    status=OperationStatus.INVALID_REQUEST, message=search_err,
+                    total_count=0,
+                )
             return await self._count_entities(
                 space_id, graph_id, entity_type_uri, search, sort_by,
                 status=status, exclude_status=exclude_status,
@@ -364,6 +385,17 @@ class KGEntitiesEndpoint:
                 Dictionary with entity frames data or N quad-format documents if frame_uris provided
             """
             require_space_read(current_user, space_id)
+            # A search needle under MIN_CONTAINS_LENGTH cannot use the text
+            # index and scans the whole term table — twice, because the estimate
+            # pays it too (issues/070). Guarded on the KGQuery path since
+            # 2026-08-11 and nowhere else, so a UI search box still paid it.
+            from ..model.kgentities_model import validate_search_text
+            search_err = validate_search_text(search)
+            if search_err:
+                return QuadResponse(
+                    status=OperationStatus.INVALID_REQUEST, message=search_err,
+                    results=[], total_count=0, page_size=page_size, offset=offset,
+                )
             from ..model.kgframes_model import (
                 _FRAME_SORT_PROPERTIES, validate_sort_params)
             err = validate_sort_params(sort_by, sort_order, _FRAME_SORT_PROPERTIES)

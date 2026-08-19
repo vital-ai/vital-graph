@@ -615,6 +615,17 @@ class KGFramesEndpoint:
             """
             
             require_space_read(current_user, space_id)
+            # A search needle under MIN_CONTAINS_LENGTH cannot use the text
+            # index and scans the whole term table — twice, because the estimate
+            # pays it too (issues/070). Guarded on the KGQuery path since
+            # 2026-08-11 and nowhere else, so a UI search box still paid it.
+            from ..model.kgentities_model import validate_search_text
+            search_err = validate_search_text(search)
+            if search_err:
+                return QuadResponse(
+                    status=OperationStatus.INVALID_REQUEST, message=search_err,
+                    results=[], total_count=0, page_size=page_size, offset=offset,
+                )
             
             # Handle single URI retrieval
             if uri:
@@ -752,6 +763,17 @@ class KGFramesEndpoint:
             Ordering IS stable here (step 1 added ORDER BY ?subject).
             """
             require_space_read(current_user, space_id)
+            # A search needle under MIN_CONTAINS_LENGTH cannot use the text
+            # index and scans the whole term table — twice, because the estimate
+            # pays it too (issues/070). Guarded on the KGQuery path since
+            # 2026-08-11 and nowhere else, so a UI search box still paid it.
+            from ..model.kgentities_model import validate_search_text
+            search_err = validate_search_text(search)
+            if search_err:
+                return QuadResponse(
+                    status=OperationStatus.INVALID_REQUEST, message=search_err,
+                    results=[], total_count=0, page_size=page_size, offset=offset,
+                )
             return await self._get_kgframes_with_slots(space_id, graph_id, frame_uri, page_size, offset, entity_uri, parent_uri, search, kGSlotType, current_user)
         
         # Registered on the KGFrames router but served under /kgentities/... so

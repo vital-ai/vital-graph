@@ -54,6 +54,16 @@ class TriplesEndpoint:
             current_user: Dict = Depends(self.auth_dependency)
         ):
             require_space_read(current_user, space_id)
+            # An object_filter needle under MIN_CONTAINS_LENGTH cannot use the text index and
+            # scans the whole term table — twice, since the estimate pays it too
+            # (issues/070). Guarded on the KGQuery path only until 2026-08-19.
+            from ..model.kgentities_model import validate_search_text
+            search_err = validate_search_text(object_filter)
+            if search_err:
+                return TripleListResponse(
+                    status=OperationStatus.INVALID_REQUEST, message=search_err,
+                    results=[], total_count=0, page_size=page_size, offset=offset,
+                )
             return await self._list_triples(
                 space_id, graph_id, page_size, offset, subject, predicate, object, object_filter, current_user
             )

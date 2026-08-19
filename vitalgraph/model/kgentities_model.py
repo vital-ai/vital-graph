@@ -89,6 +89,39 @@ class FrameCriteria(BaseModel):
 MIN_CONTAINS_LENGTH = 3
 
 
+def validate_search_text(text: Optional[str]) -> Optional[str]:
+    """Reject a free-text SEARCH needle too short to be served by an index.
+
+    The list endpoints take a `search` box and compile it to
+    `CONTAINS(LCASE(...), "<needle>")`, which becomes an infix `ILIKE '%x%'` —
+    the same shape `validate_contains_criteria` guards on the KGQuery path, and
+    the same cost. It was guarded there and nowhere else, so a two-character
+    search from a UI input still paid it. Measured on `sp_lead_synth_100k`
+    (2.2M frames, 10.4M terms):
+
+        frames search "XQ"    generation 5,487 ms + execution 7,917 ms
+        frames search "XQZ"   generation    40 ms + execution 3,503 ms
+
+    BOTH halves are charged: the estimate scans the term table to prove absence,
+    then the query scans it again.
+
+    Returns an error message, or None when the needle is acceptable. An empty or
+    absent search is fine — it means "no filter", not "match everything short".
+    """
+    if text is None:
+        return None
+    needle = text.strip()
+    if not needle:
+        return None
+    if len(needle) < MIN_CONTAINS_LENGTH:
+        return (
+            f"search needs at least {MIN_CONTAINS_LENGTH} characters; got "
+            f"{needle!r}. A shorter needle cannot use the text index and would "
+            f"scan the whole term table."
+        )
+    return None
+
+
 def validate_contains_criteria(criteria) -> Optional[str]:
     """Reject a `contains` needle too short to be served by an index.
 

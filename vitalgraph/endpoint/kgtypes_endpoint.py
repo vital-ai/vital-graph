@@ -121,6 +121,16 @@ class KGTypesEndpoint:
             current_user: Dict = Depends(self.auth_dependency),
         ):
             require_space_read(current_user, space_id)
+            # A needle under MIN_CONTAINS_LENGTH cannot use the text index and
+            # scans the whole term table — twice, since the estimate pays it too
+            # (issues/070).
+            from ..model.kgentities_model import validate_search_text
+            search_err = validate_search_text(search)
+            if search_err:
+                return QuadResponse(
+                    status=OperationStatus.INVALID_REQUEST, message=search_err,
+                    results=[], total_count=0, page_size=page_size, offset=offset,
+                )
             graph_id = self._types_graph(space_id)
             # Handle specific URI request
             if uri:

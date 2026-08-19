@@ -49,6 +49,16 @@ class GraphObjectsEndpoint:
             current_user: Dict = Depends(self.auth_dependency),
         ):
             require_space_read(current_user, space_id)
+            # A needle under MIN_CONTAINS_LENGTH cannot use the text index and
+            # scans the whole term table — twice, since the estimate pays it too
+            # (issues/070).
+            from ..model.kgentities_model import validate_search_text
+            search_err = validate_search_text(search)
+            if search_err:
+                return QuadResponse(
+                    status=OperationStatus.INVALID_REQUEST, message=search_err,
+                    results=[], total_count=0, page_size=page_size, offset=offset,
+                )
             return await self.list_or_get_objects(space_id, graph_id, page_size, offset, uri, uri_list, vitaltype_filter, search, current_user)
         
         @self.router.post("/objects", response_model=ObjectCreateResponse, tags=["Objects"])
