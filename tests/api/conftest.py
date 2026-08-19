@@ -65,6 +65,33 @@ pytestmark = pytest.mark.api
 
 
 # ---------------------------------------------------------------------------
+# The image behind SERVER_URL must contain this working tree
+# ---------------------------------------------------------------------------
+
+def pytest_sessionstart(session):
+    """Refuse to report coverage of code the running container does not have.
+
+    `issues/108`. This suite talks to :8002 over HTTP, so it measures whatever
+    the image contains — and passes identically whether that is today's code or
+    Tuesday's. Two correctness regressions lived a day behind exactly that, and
+    it recurred on 2026-08-19 when this suite was reported green for a generator
+    change the container did not contain.
+
+    A session-start hook rather than a fixture, so it fires once, before any
+    test runs, whether or not anything requested a client.
+    """
+    from pathlib import Path
+    from tests.shared.image_freshness import check, ImageStale
+
+    try:
+        check(SERVER_URL, Path(__file__).resolve().parents[2])
+    except ImageStale as exc:
+        # `exit` rather than an exception: this is not a failing test, it is a
+        # statement that the run cannot mean what it would appear to mean.
+        pytest.exit(f"\n{exc}", returncode=1)
+
+
+# ---------------------------------------------------------------------------
 # Client fixtures
 # ---------------------------------------------------------------------------
 
