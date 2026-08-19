@@ -1,6 +1,68 @@
 # Absence-Defined Filters Scan Every Row Once the Predicate Actually Exists
 
-## Status: IMPROVED 9.6x 2026-08-17 for the case that remained — not yet closed
+## Status: the late-text work SHIPPED and is not clean — restated 2026-08-18
+
+The old status said "not yet closed" with the outer term join listed as still
+open. That was stale in a way that misled twice over: the work was implemented
+the same day (`af10e5f`), and it shipped **two correctness regressions** that took
+a container rebuild to notice. Anyone reading the previous status would have
+thought the change was pending and the code sound.
+
+### What shipped, and what it cost
+
+`af10e5f` moved text resolution after the LIMIT. On the Assertion shape it is a
+large win — measured today on `sp_graph_forms_20k`, `LIMIT 25`:
+
+    af10e5f~1  (before)       16,098 buffers   206.6 ms
+    af10e5f    (as shipped)    1,744 buffers    56.9 ms      ~9x fewer buffers
+
+It reached that by emptying `text_needed_vars` for the whole child, which
+suppresses text for EVERY variable in it — including ones the child still reads.
+
+**Regression 1 — a BIND-projected variable returned nothing** (`f3068d8`). The
+child emits `NULL::uuid AS v0__uuid` for an expression-bound variable, so the
+guard that checks the uuid COLUMN exists passed, and the text join then matched
+nothing. `_frame_exists_in_backend` asks exactly that shape, so every frame
+looked absent, DELETE answered "Frame not found", and 14 API tests failed.
+
+**Regression 2 — a FILTER over text stopped generating at all** (`9d9b071`). With
+the text suppressed, a `FILTER(CONTAINS(...))` compiled against a column that was
+never materialised. The scope guard caught it and REFUSED the query
+(`issues/023`, `issues/027`) — correct, and invisible: the frames list count
+query is a simpler shape and kept working, so the endpoint answered
+`total_count: 3, objects: []`. The search box said "3 results" above an empty
+table.
+
+Both were live for a day and neither was caught by a suite. The test-stack
+container was 43 hours old, so no request had executed the new code; a green
+`tests/api` says nothing about code the running image does not contain.
+
+### The unresolved part: the fix costs the saving
+
+`9d9b071` keeps text for variables an expression reads, which is what makes the
+FILTER case correct. It also asks for the PROJECTED variable's text, and moving
+exactly that outside the LIMIT is the entire optimisation. Measured at HEAD, same
+query and fixture as above:
+
+    HEAD (both fixes)         ~16-18k buffers   ~210 ms
+
+i.e. back at the pre-optimisation number. The Assertion shape currently gets
+correctness and no speed.
+
+Three narrowings were tried and none restored it: excluding EXISTS bodies (an
+EXISTS correlates on uuid, not text), excluding the synthesized `ORDER BY`
+(it orders by a uuid column), and excluding a bare `GROUP`/`DISTINCT` variable
+(the uuid is `uuid5` of the term, so it is the same partition). The demand for
+`?frame`'s text survives all three and its source was not identified. Reverted
+rather than left in — unmeasured complexity in a path that has already produced
+two silent wrong answers is worse than a slow query.
+
+**So what is open is no longer "implement late text". It is: make late text keep
+the projected variable's text OUT of the page while a filter that reads other
+variables still works.** That needs the demand traced properly rather than
+narrowed by guesswork.
+
+### Superseded status, kept because the measurements are still good
 
 The `fold_dead_not_exists` fix only reached spaces where the predicates are
 ABSENT. Where they exist — 22 of 79 production spaces — the anti-join runs, and
