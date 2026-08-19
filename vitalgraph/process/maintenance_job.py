@@ -306,6 +306,47 @@ class MaintenanceJob:
     # Scoring
     # ------------------------------------------------------------------
 
+    async def _only_registered(self, stats: Dict[str, Dict]) -> Dict[str, Dict]:
+        """Drop space-shaped tables that no live space owns."""
+        registered = await self._registered_space_ids()
+        if registered is None:
+            return stats
+        kept = {sid: v for sid, v in stats.items() if sid in registered}
+        dropped = len(stats) - len(kept)
+        if dropped:
+            logger.info("MaintenanceJob: ignoring %d space-shaped table group(s) "
+                        "with no row in `space` (scored %d, maintaining %d)",
+                        dropped, len(stats), len(kept))
+        return kept
+
+    async def _registered_space_ids(self):
+        """The spaces that actually exist, per the `space` registry.
+
+        Stats discovery pattern-matches `pg_stat_user_tables` for `%_rdf_quad`
+        and `%_term`, which finds every table that LOOKS like a space —
+        including orphans from dropped or half-created spaces. On this stack
+        that is **58 scored against 17 registered**, and every integrity phase
+        then sweeps all 58. The cost of a cycle tracked a number nobody manages.
+
+        Spaces are explicitly created and dropped through the space manager, so
+        the registry is the authority on which ones are live. Orphan TABLES are
+        a separate problem with their own tool
+        (`scripts/cleanup_orphan_space_tables.py`); this just stops maintaining
+        them.
+
+        Returns None when the registry cannot be read — the caller then keeps
+        every space rather than silently maintaining nothing, because "the
+        registry is unavailable" and "there are no spaces" must not look alike.
+        """
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch("SELECT space_id FROM space")
+            return {r["space_id"] for r in rows}
+        except Exception as exc:
+            logger.warning("MaintenanceJob: cannot read the space registry (%s); "
+                           "scoring every space-shaped table this cycle", exc)
+            return None
+
     async def _fetch_space_stats(self) -> Dict[str, Dict]:
         """Query pg_stat_user_tables for space tables, grouped by space_id.
 
@@ -316,10 +357,11 @@ class MaintenanceJob:
             {space_id: {n_mod_since_analyze, last_analyze, n_dead_tup, last_vacuum, ...}}
         """
         if self._pg_config:
-            return await asyncio.to_thread(self._sync_fetch_space_stats)
+            stats = await asyncio.to_thread(self._sync_fetch_space_stats)
+            return await self._only_registered(stats)
 
         # Fallback: use the asyncpg pool directly
-        return await self._async_fetch_space_stats()
+        return await self._only_registered(await self._async_fetch_space_stats())
 
     async def _async_fetch_space_stats(self) -> Dict[str, Dict]:
         """asyncpg-based stats fetch (original implementation)."""
