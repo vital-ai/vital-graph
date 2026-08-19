@@ -1,6 +1,54 @@
 # Pushed Term Subqueries Re-Execute Per Row Inside Correlated Probes
 
-## Status: `has_any` FIXED; `contains` LARGELY FIXED — 2026-08-11
+## Status: `has_any` FIXED; `contains` FIXED on the KGQuery path. One UNGUARDED
+## path found 2026-08-19, and the scaling caveat stands.
+
+The header table below is the FIRST measurement and is superseded by this
+document's own later sections: `'XQ'` was 11,151 ms there and was fixed to 210 ms
+in the same document. Reading the header as current is how this issue kept being
+described as "contains 'XQ' still ~11 s" — it is not, on the path that was fixed.
+
+### What is actually true today, re-measured 2026-08-19
+
+The index pathology is unchanged and is a property of PostgreSQL, not this code
+— `sp_lead_synth_100k_term`, 10.4M rows:
+
+    term_text ILIKE '%XQ%'    10,274 ms      2 chars: no usable trigram
+    term_text ILIKE '%XQZ%'        5.6 ms    3 chars: index serves it
+    term_text ILIKE '%CA%'     6,095 ms      2 chars, common needle
+
+The protections that exist: `MIN_CONTAINS_LENGTH = 3` rejects a short needle at
+`kgquery_endpoint`, and the `(term_text || '')` form keeps the estimate off the
+degenerate index.
+
+### THE GAP: the guard covers one endpoint, and it is not the only one
+
+`validate_contains_criteria` is called ONLY from `kgquery_endpoint`. Three other
+places build a `CONTAINS` from arbitrary user text — `kgframes_endpoint`,
+`triples_endpoint` and `kg_connection_query_builder` — and the frames list search
+box is a UI-facing input with no minimum length. Measured on
+`sp_lead_synth_100k` (2.2M frames):
+
+    frames search "XQ"    gen 5,487 ms + exec 7,917 ms   ~13.4 s
+    frames search "XQZ"   gen    40 ms + exec 3,503 ms   ~3.5 s
+
+The 2-character case pays both halves of the pathology: the ESTIMATE scans the
+term table to prove absence (the documented ~6 s caveat) and the query then does
+it again. This is the same cost `MIN_CONTAINS_LENGTH` was introduced to prevent,
+reachable from a search box.
+
+Note the 3-character case is still 3.5 s on this fixture. That is a different
+problem — the frames list shape, not the short-needle one — and is not what this
+issue is about.
+
+**Not fixed here because it is a product decision**, and the same one already
+made for KGQuery: refusing a 2-character search in the frames list changes what
+the UI accepts. The mechanism exists and is one call
+(`validate_contains_criteria` returns the message naming `starts_with` /
+`ends_with`); what is needed is the decision to apply it to the other three
+paths.
+
+### Superseded first measurement
 
     sp_lead_synth_100k, 25-row page, warm:
 
