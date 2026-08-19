@@ -1,6 +1,18 @@
 # Absence-Defined Filters Scan Every Row Once the Predicate Actually Exists
 
-## Status: the late-text work SHIPPED and is not clean — restated 2026-08-18
+## Status: RESOLVED 2026-08-19 — the optimisation is in, at 1,744 buffers, and
+## both regressions it shipped are fixed and guarded.
+
+    predicates PRESENT, before any of this   639,843 buffers   536.7 ms
+    after the EXISTS-body fix                 66,589 buffers
+    after late text (af10e5f)                  1,744 buffers    56.9 ms
+    HEAD                                       1,744 buffers    43.4 ms
+
+The two correctness regressions af10e5f shipped — a BIND-projected variable
+returning nothing (`f3068d8`) and a FILTER over text failing to generate
+(`9d9b071`) — are fixed, and the saving now has a SHAPE guard it never had, which
+is why it was lost twice with every suite green. The history below is kept
+because the wrong turns are the useful part.
 
 The old status said "not yet closed" with the outer term join listed as still
 open. That was stale in a way that misled twice over: the work was implemented

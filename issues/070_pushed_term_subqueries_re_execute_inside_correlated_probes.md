@@ -1,7 +1,19 @@
 # Pushed Term Subqueries Re-Execute Per Row Inside Correlated Probes
 
-## Status: `has_any` FIXED; `contains` FIXED on the KGQuery path. One UNGUARDED
-## path found 2026-08-19, and the scaling caveat stands.
+## Status: `has_any` FIXED; `contains` FIXED and now ENFORCED AT EVERY ENTRY
+## POINT (2026-08-19). The scaling caveat stands and is the only open part.
+
+Three things landed on 2026-08-19, after this document had been read twice as
+"contains is still ~11 s" — a figure superseded within the document itself:
+
+1. `validate_search_text` refuses a needle under three characters at all nine
+   handlers that accept free text, not just the KGQuery criteria path.
+2. The selectivity probe is bounded by WORK rather than by matches when the index
+   cannot serve the needle: **78,991 ms -> 45 ms** on the shape that reaches it.
+3. Rejecting a short needle in the SPARQL layer was considered and REFUSED: it
+   breaks conformance (`sparql11/functions/contains01.rq` IS
+   `CONTAINS(?str, "a")`) and would refuse queries that cost 159 ms on a small
+   space. An API may define what it accepts; a query language may not.
 
 The header table below is the FIRST measurement and is superseded by this
 document's own later sections: `'XQ'` was 11,151 ms there and was fixed to 210 ms
