@@ -83,6 +83,22 @@ class AnalyticsJob:
             logger.error("AnalyticsJob: cycle error: %s", e, exc_info=True)
         return results
 
+    async def trigger_analytics(self, space_id: str) -> Optional[Dict[str, Any]]:
+        """Compute analytics for ONE space.
+
+        Named for the PROCESS TYPE, which is what `ProcessScheduler.trigger_now`
+        dispatches on: it looks up `trigger_<process_type>` and falls through to
+        `run()` when there is none. `trigger_compute` did the right work under a
+        name the dispatch never looks for, so `process_type="analytics"` with a
+        `space_id` ran every space and discarded the parameter — no error, and
+        `triggered: true` either way. Measured on a stack with 17 spaces:
+        **227 s**, against 0.9 s once scoped.
+
+        Same defect `maintenance` had, and the reason the dispatch is the thing
+        to fix rather than each job in turn — see issues/109.
+        """
+        return await self.trigger_compute(space_id)
+
     async def trigger_compute(self, space_id: str, graph_uri: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """On-demand computation for a single space, optionally scoped to one graph."""
         return await self._compute_and_store(space_id, graph_uri=graph_uri)

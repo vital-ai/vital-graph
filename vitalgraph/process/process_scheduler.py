@@ -142,6 +142,17 @@ class ProcessScheduler:
     # On-demand trigger
     # ------------------------------------------------------------------
 
+    class UnknownProcessType(ValueError):
+        """No handler is registered for this process type.
+
+        Distinct from a busy lock, and the distinction is the point: a busy lock
+        means TRY AGAIN SHORTLY, an unknown type means THIS WILL NEVER WORK.
+        Both returned None, so the endpoint answered "Lock busy or no handler
+        registered for this process type" — one message for a transient
+        condition and a permanent one, leaving the caller no way to choose
+        between retrying and fixing the request.
+        """
+
     async def trigger_now(
         self,
         process_type: str,
@@ -174,8 +185,12 @@ class ProcessScheduler:
                     handler = j.handler
                     break
         if handler is None:
-            logger.warning("ProcessScheduler: no handler for process_type='%s'", process_type)
-            return None
+            known = sorted({j.process_type for j in self._jobs.values()})
+            logger.warning("ProcessScheduler: no handler for process_type='%s' "
+                           "(registered: %s)", process_type, ", ".join(known))
+            raise ProcessScheduler.UnknownProcessType(
+                f"no handler registered for process_type={process_type!r}; "
+                f"registered types are: {', '.join(known) or '(none)'}")
 
         lock_subtype = f"{process_type}:{space_id}" if space_id else process_type
         acquired = await self._lock_manager.try_acquire(process_type, lock_subtype)

@@ -112,11 +112,19 @@ class ProcessEndpoint:
             if scheduler is None:
                 raise HTTPException(status_code=503, detail="Process scheduler not available")
 
-            result = await scheduler.trigger_now(body.process_type, body.space_id)
+            # Two different answers, and they used to share one message: a busy
+            # lock is TRANSIENT (retry), an unknown process type is PERMANENT
+            # (fix the request). A caller told "Lock busy or no handler
+            # registered" cannot choose between them.
+            try:
+                result = await scheduler.trigger_now(body.process_type, body.space_id)
+            except scheduler.UnknownProcessType as exc:
+                return TriggerResponse(triggered=False, message=str(exc))
             if result is None:
                 return TriggerResponse(
                     triggered=False,
-                    message="Lock busy or no handler registered for this process type",
+                    message=(f"{body.process_type} is already running; "
+                             f"another trigger holds the lock"),
                 )
             return TriggerResponse(
                 triggered=True,
