@@ -1939,6 +1939,17 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     cr, space_id, conn=conn,
                     multi_vector_config=kwargs.get('multi_vector_config'),
                 )
+                if not gen.ok:
+                    # Only `cr.ok` was checked, so a REFUSED generation fell
+                    # through with sql=None and the caller received an ordinary
+                    # empty result set — a refusal indistinguishable from "no
+                    # matches", which is strictly worse than the cost it
+                    # avoided. Observed end to end: the generator logged
+                    # "refused: CONTAINS(?o, 'XQ') cannot be served" while the
+                    # API answered 200 with 0 bindings and no message.
+                    logger.warning("SPARQL generation failed: %s", gen.error)
+                    return {'results': {'bindings': []}, 'success': False,
+                            'error': gen.error}
                 sql = gen.sql
                 var_map = gen.var_map or {}
                 t_gen = _time.monotonic()
@@ -2207,6 +2218,12 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
             async with self._db._pool.acquire() as conn:
                 gen = await generate_sql(cr, space_id, conn=conn)
+                if not gen.ok:
+                    # `if sql:` treated a refused generation as nothing to do
+                    # and fell through to the success return — a write that
+                    # never happened, reported as one (issues/105).
+                    logger.error("SPARQL update generation failed: %s", gen.error)
+                    return False
                 sql = gen.sql
                 if sql:
                     # Atomic write: run the generated (multi-statement) update
