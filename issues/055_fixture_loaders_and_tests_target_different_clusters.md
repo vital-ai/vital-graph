@@ -1,6 +1,39 @@
 # 055 — fixture loaders and the tests that use them target different clusters
 
-## Status: FIXED 2026-08-17 — one resolver, and the target is now announced
+## Status: FIXED 2026-08-17 — one resolver, and the target is now an explicit
+## choice. RECURRED AND RE-FIXED 2026-08-19 by a new mechanism; see below.
+
+### It came back, from inside its own fix
+
+`devtools.target` consulted `LOCAL_DB_*` as a last fallback. That was
+harmless while nothing loaded `.env` — those variables existed only if
+someone exported them, which is a choice. Then `config_loader` began loading
+`.env` (b55fa84, because it had always claimed to and never did),
+`load_dotenv` put `LOCAL_DB_PORT=5432` into `os.environ` process-wide, and
+this resolver preferred it. The tooling retargeted from the docker stack on
+5433 to `host.docker.internal:5432` the moment any code touched the app
+config.
+
+Same failure as the original: fixtures created on one cluster, read from the
+other. It surfaced as an integration fixture whose space had **no tables and
+no `space` row** — created on 5432, looked for on 5433 — failing two tests
+with an error naming the wrong missing table.
+
+**Only visible when unit and integration ran TOGETHER.** Each suite is clean
+alone; only the combination loads the app config before the integration
+fixtures resolve their target.
+
+**The existing guard could not catch it, and that is the lesson.**
+`test_the_default_is_the_docker_test_stack` DELETES `LOCAL_DB_*` before
+asserting 5433 — it measures a cleanroom, not the environment the tests run
+in. A test that scrubs the variable it is protecting against will pass
+through the failure it exists for.
+`test_dotenv_does_not_retarget_the_test_tooling` calls `load_dotenv_files()`
+FIRST and then asserts the target is unmoved; verified by reintroducing the
+fallback. Fixed in `de5333a` by removing `LOCAL_DB_*` from the chain: it is
+the APPLICATION's development profile, and the test tooling's target is
+`VG_TEST_PG_*` / `VG_PG_*` / `PG*` with the docker stack as its default.
+
 
 The suites were unified earlier. The NINETEEN maintenance scripts were not, and
 that is where it kept biting: they carried their own copies of the five
