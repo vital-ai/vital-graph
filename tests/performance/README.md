@@ -8,8 +8,8 @@ Design and rationale: `planning/planning_performance/performance_regression_trac
 
 ```bash
 # run against a clean, ephemeral PG 18 and compare to the promoted baseline
-./scripts/check.sh perf        # query benches vs baselines/query.json  (~5.5m)
-./scripts/check.sh ingest      # the 20s+ benches vs baselines/slow.json (~6.5m)
+./scripts/check.sh perf        # ALL query benches vs baselines/query.json (~7.5m)
+./scripts/check.sh ingest      # data-building benches vs baselines/ingest.json (~4m)
 
 # record only (no comparison) — e.g. to capture a "before" point
 ./scripts/run-perf-tests.sh --record -- tests/performance -m performance
@@ -17,7 +17,7 @@ Design and rationale: `planning/planning_performance/performance_regression_trac
 # make a reviewed run the new reference
 # promote a tier, each independently:
 python scripts/perf_compare.py <run.json> --promote query
-python scripts/perf_compare.py <run.json> --promote slow
+python scripts/perf_compare.py <run.json> --promote ingest
 ```
 
 The runner brings up `docker-compose.test.yml` (PostgreSQL 18 on :5433, Jena sidecar
@@ -126,13 +126,21 @@ plain pytest run.
   are *absolute floors*: catastrophic-regression detectors that hold at any scale.
   They fail the build on their own.
 <!-- TIERED BASELINES -->
-There is no `main` baseline. `query.json` and `slow.json` each cover one tier
+There is no `main` baseline. `query.json` and `ingest.json` each cover one tier
 COMPLETELY, so neither run has holes and both promote independently. A single
 combined baseline forced every promotion to pay the full 16 minutes and made a
 query-tier run report eleven "regressions" for benches it never ran — measured:
 0 failing against its own baseline, 12 against the combined one.
 
-- **The baselines** (`tests/performance/baselines/{query,slow}.json` + `thresholds.toml`)
+The split is BUILDS-DATA vs READS-RESIDENT-DATA, not fast vs slow. Only three
+benches build a throwaway space and drop it (ingest_throughput, per_write_curve,
+growth_curve — 238s together), and nothing in the query tier depends on them: it
+reads fixtures that are already loaded. Everything else, including the expensive
+reads, stays in the query tier, because those are the most demanding QUERY cases
+in the suite — the deep-paging bench is where issues/112's bistable plan lives,
+and a query baseline without it has exactly the hole this file argues against.
+
+- **The baselines** (`tests/performance/baselines/{query,ingest}.json` + `thresholds.toml`)
   is the *drift detector*: it compares against what was actually measured, so a
   40% degradation that still clears the floor is caught.
 

@@ -1,0 +1,91 @@
+{
+  "schema": 1,
+  "env": {
+    "started_at": "2026-08-20T17:21:11.273777+00:00",
+    "git": {
+      "commit": "d0ba0373c759138dee72196e6df2e5e4604b9d54",
+      "short": "d0ba037",
+      "branch": "main",
+      "dirty": true
+    },
+    "machine": {
+      "host": "ip-192-168-1-153.ec2.internal",
+      "platform": "macOS-14.6.1-arm64-arm-64bit",
+      "machine": "arm64",
+      "cpu_count": 10,
+      "python": "3.12.2"
+    },
+    "runner": {
+      "class": "vg-test-docker-clean",
+      "persist": false,
+      "seeded": false,
+      "pg_host": "localhost",
+      "pg_port": "5433",
+      "pg_database": "sparql_sql_graph"
+    },
+    "pg": {
+      "server_version": "18.4 (Debian 18.4-1.pgdg13+1)",
+      "shared_buffers": "16GB",
+      "work_mem": "64MB",
+      "maintenance_work_mem": "64MB",
+      "effective_cache_size": "48GB",
+      "max_parallel_workers_per_gather": "2",
+      "random_page_cost": "4",
+      "jit": "on",
+      "default_statistics_target": "100"
+    },
+    "stats": {
+      "fixture_tables": 260,
+      "fixture_live_tuples": 126221181,
+      "fixture_last_analyze": "2026-08-20T16:50:18.695202+00:00"
+    },
+    "finished_at": "2026-08-20T17:25:07.877882+00:00"
+  },
+  "benches": [
+    {
+      "bench_id": "query.growth.entity_page_buffers",
+      "kind": "query",
+      "status": "ok",
+      "metrics": {
+        "growth_class": "flat",
+        "buffers_at_50000": 107,
+        "buffers_at_150000": 104,
+        "buffers_at_450000": 128
+      },
+      "dataset": "synthetic:[50000, 150000, 450000]"
+    },
+    {
+      "bench_id": "write.ingest.bulk_vs_executemany",
+      "kind": "write",
+      "status": "ok",
+      "metrics": {
+        "executemany_quads_per_sec": 5842,
+        "copy_quads_per_sec": 60607,
+        "bulk_e2e_quads_per_sec": 36557,
+        "index_rebuild_s": 4.342,
+        "copy_speedup": 10.375,
+        "e2e_speedup": 6.258
+      },
+      "dataset": "synthetic:400000q"
+    },
+    {
+      "bench_id": "write.per_write_curve.incremental_probe",
+      "kind": "write",
+      "status": "ok",
+      "metrics": {
+        "growth_class": "flat",
+        "probe_ms_at_100000q": 65.13,
+        "probe_ms_at_300000q": 68.09,
+        "probe_ms_at_900000q": 71.28
+      },
+      "dataset": "synthetic:[50000, 150000, 450000]",
+      "notes": "probe=300 quads, min of 3 rolled-back runs"
+    }
+  ],
+  "baseline": {
+    "name": "ingest",
+    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260820T172110Z-d0ba037-ingest.json",
+    "reason": "",
+    "pg_stamped": true
+  }
+}

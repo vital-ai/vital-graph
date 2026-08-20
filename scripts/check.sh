@@ -19,17 +19,29 @@
 #
 #   ./scripts/check.sh              # fast:  unit + conformance      ~40s
 #   ./scripts/check.sh pre-commit   # + integration + api            ~6m
-#   ./scripts/check.sh perf         # + query benchmarks             ~5.5m
-#   ./scripts/check.sh ingest       # the slow/ingest benchmarks     ~6.5m
+#   ./scripts/check.sh perf         # + ALL query benchmarks         ~10m
+#   ./scripts/check.sh ingest       # only the data-building benches ~4m
 #   ./scripts/check.sh full         # both                           ~16m
 #   ./scripts/check.sh unit sparql  # any pytest path/-k, straight through
 #
-# WHY `perf` IS NOT `full`. Across 111 recorded benches the suite measures only
-# ~16 SECONDS of execution_ms — 99% of a 15-minute run is building and scanning
-# data, not the plans being measured. Eight benches at 20s+ account for 388s of
-# it, and they are marked `slow_bench`. Dropping them: 900s -> 330s.
+# THE SPLIT IS BUILDS-DATA vs READS-RESIDENT-DATA, not fast vs slow.
 #
-# TWO BASELINES, one per tier: `baselines/query.json` and `baselines/slow.json`.
+# Three benches BUILD a throwaway space and drop it again — ingest_throughput,
+# per_write_curve, growth_curve, ~234s between them. Their cost is the data they
+# create, and NOTHING in the query tier depends on them: that tier reads the
+# resident fixtures (sp_lead_synth_*, wordnet_frames, ...) which are already
+# loaded. So they get their own baseline and their own schedule.
+#
+# An earlier version of this split also excluded four EXPENSIVE READS
+# (aggregate_growth, slot_value_attachment_on_wordnet, deep_paging,
+# relation_traversal, ~247s) purely for being slow, and called the tier
+# "ingest". That was wrong twice: they build nothing, and they are the most
+# demanding QUERY cases in the suite — the deep-paging bench is where the
+# bistable plan in issues/112 lives. A query baseline without them has exactly
+# the holes this file argues against, so they are back in the query tier and the
+# tier is ~10m rather than ~5.5m.
+#
+# TWO BASELINES, one per tier: `baselines/query.json` and `baselines/ingest.json`.
 # Each is COMPLETE for its own tier, so neither run has holes and BOTH are
 # promotable independently — which is the point. A single `main` baseline forced
 # every promotion to pay the full 16 minutes, and made a query-tier run look like
@@ -69,17 +81,17 @@ case "$TIER" in
     ;;
   perf)
     "$0" pre-commit
-    run tests/performance -m "not slow_bench"
+    run tests/performance -m "not ingest_bench"
     ;;
   ingest)
-    # The 20s+ benches, which are dominated by building and scanning data.
-    # Their own baseline, promoted on their own schedule.
-    run tests/performance -m "slow_bench"
+    # The benches that build their own data. Their own baseline, promoted on
+    # their own schedule; the query tier never needs them.
+    run tests/performance -m "ingest_bench"
     ;;
   full)
     "$0" pre-commit
-    run tests/performance -m "not slow_bench"
-    run tests/performance -m "slow_bench"
+    run tests/performance -m "not ingest_bench"
+    run tests/performance -m "ingest_bench"
     ;;
   *)
     # Anything else is passed through, so `check.sh tests/unit/sparql_sql -k foo`

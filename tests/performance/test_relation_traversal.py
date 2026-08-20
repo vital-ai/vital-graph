@@ -179,12 +179,6 @@ async def test_a_complete_single_hop_traversal(perf_conn, perf_record, rel):
 
 
 @pytest.mark.bench("query.relation.convergent_fan_in")
-# SLOW BENCH. 20s+, nearly all of it building or scanning data rather than
-# the plan being measured — the whole suite records only ~16s of
-# execution_ms across 111 benches, so the cost here is setup, not signal.
-# Excluded from `check.sh perf`; REQUIRED for a promotable baseline,
-# because a partial run promotes holes (issues/081).
-@pytest.mark.slow_bench
 async def test_convergent_two_hop_is_quadratic_in_fan_in(perf_conn, perf_record):
     """Two edges CONVERGING on one destination — "who shares my employer".
 

@@ -73,12 +73,11 @@ async def _probe_latency(pool, sid, term_args, quad_rows, subjects, repeats=3):
 
 
 @pytest.mark.bench("write.per_write_curve.incremental_probe")
-# SLOW BENCH. 20s+, nearly all of it building or scanning data rather than
-# the plan being measured — the whole suite records only ~16s of
-# execution_ms across 111 benches, so the cost here is setup, not signal.
-# Excluded from `check.sh perf`; REQUIRED for a promotable baseline,
-# because a partial run promotes holes (issues/081).
-@pytest.mark.slow_bench
+# INGEST BENCH. Builds its own throwaway space and drops it again, so its
+# cost is the data it creates, not the plan it measures — and nothing in
+# the query tier depends on it, because that tier reads RESIDENT fixtures.
+# Its own baseline (`baselines/ingest.json`), promoted on its own schedule.
+@pytest.mark.ingest_bench
 async def test_per_write_cost_stays_flat(perf_pool, perf_record):
     term_args, quad_rows, subjects = _probe_rows()
     sid = f"perf_perwrite_{uuid.uuid4().hex[:8]}"
