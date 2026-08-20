@@ -126,6 +126,22 @@ EQ_GROWTH_VS_MATCHES_MAX = 1.25
 # The invariant that survives: at similar selectivity a range should cost about
 # what equality costs. Before the push-down it cost ~700x more.
 RANGE_VS_EQUALITY_MAX = 8.0
+
+# The same comparison at the EXTREME threshold, which `RANGE_VS_EQUALITY_MAX`
+# deliberately does not judge — it picks a threshold of comparable selectivity to
+# the equality baseline, because the two ends take different plans and comparing
+# across that boundary compares two plans rather than two costs.
+#
+# That reasoning is sound and it left the most expensive query in the suite
+# watched by nothing. `issues/111`: the extreme sat at 3,705 buffers per match
+# against equality's 5.9 — 628x — while this file reported 1.2x and passed, and
+# it was not filtering at all.
+#
+# So the extreme gets its own bound, deliberately loose. Fewer matches amortise
+# the fixed cost of a page over fewer rows, so some penalty is real and not a
+# defect. Measured after the fix: 9.8x at 100k and 1.9x at 10k. 20.0 clears both
+# with headroom and still catches the 628x by a factor of thirty.
+EXTREME_VS_EQUALITY_MAX = 20.0
 # A specific entity type is a *more* selective anchor than the generic
 # vitaltype, so it should never cost materially more. It measured 646x
 # worse before issues/045.
@@ -422,9 +438,25 @@ async def test_range_comparator_pays_for_every_candidate(perf_conn, perf_record,
     print(f"  equality baseline {eq_per_match:.1f} buf/match ({eq_state}) "
           f"→ range is {vs_equality:.1f}x that")
 
+    # The EXTREME threshold, recorded whether or not it is the one judged above.
+    # Every metric here used to be taken at `tight`, the comparable-selectivity
+    # threshold, so a 118x improvement at the extreme changed no recorded number
+    # and no baseline would have noticed it regressing (issues/111).
+    extreme = RANGE_THRESHOLDS[0]
+    extreme_matches = counts[str(extreme)]
+    per_match_extreme = measured[extreme] / max(extreme_matches, 1)
+    extreme_vs_equality = per_match_extreme / max(eq_per_match, 1e-9)
+    print(f"  extreme t={extreme}: {extreme_matches:,} matches, "
+          f"{measured[extreme]:,} buffers, {per_match_extreme:.1f} buf/match "
+          f"→ {extreme_vs_equality:.1f}x equality")
+
     perf_record(
         dataset=fx.space,
         metrics={"buffers_per_match_tightest": round(per_match_tight, 1),
+                 "buffers_extreme": measured[extreme],
+                 "extreme_matches": extreme_matches,
+                 "buffers_per_match_extreme": round(per_match_extreme, 1),
+                 "extreme_vs_equality": round(extreme_vs_equality, 2),
                  "equality_buffers_per_match": round(eq_per_match, 1),
                  "range_vs_equality": round(vs_equality, 2),
                  "flatness": round(flatness, 3),
@@ -433,6 +465,13 @@ async def test_range_comparator_pays_for_every_candidate(perf_conn, perf_record,
         notes=(f"[{fx.label}] MQLRating >= {tight} returns {tight_matches:,} rows and still "
                f"reads {measured[tight]:,} buffers — the candidate set, not the "
                f"match set (issues/040)"))
+
+    assert extreme_vs_equality <= EXTREME_VS_EQUALITY_MAX, (
+        f"[{fx.label}] the MOST selective range ({extreme_matches:,} matches at "
+        f"t={extreme}) cost {per_match_extreme:,.1f} buffers per match against "
+        f"equality's {eq_per_match:,.1f} — {extreme_vs_equality:.1f}x, limit "
+        f"{EXTREME_VS_EQUALITY_MAX}. This is the end the gate below does NOT "
+        f"judge, and the end that sat at 628x unnoticed. See issues/111.")
 
     assert vs_equality <= RANGE_VS_EQUALITY_MAX, (
         f"a range comparator matching {tight_matches:,} rows cost "
