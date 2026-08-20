@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import Counter
 import os
 import sys
 import tomllib
@@ -219,13 +220,51 @@ def compare_bench(bench_id: str, base: Dict[str, Any], cur: Optional[Dict[str, A
                  "detail": "now measured (was a hole in the baseline) — "
                            "promote a new baseline to gate it"}]
 
-    # Plan shape: exact match. A flip index->seq scan is always a regression.
+    # Plan shape. A flip index->seq scan is always a regression; a flip in the
+    # ORDER of two siblings is not one at all.
+    #
+    # `issues/113`: this compared the flattened pre-order walk elementwise, so
+    # `traversal.skew2k.dedup.depth3` failed with 39 nodes before and after, an
+    # identical multiset of node types, identical rows, and cost within noise —
+    # one `Index Only Scan` had moved position. Sibling order carries no meaning:
+    # PostgreSQL may emit a hash join's inputs either way round.
+    #
+    # That matters because this metric is what catches REAL flips — `issues/112`
+    # was diagnosed from `Gather Merge` becoming a `Sort` above a `Gather` — and
+    # one that also fires on noise is one people skim past, taking the next real
+    # flip with it.
+    #
+    # So the COUNTS gate and the ORDER reports. A multiset alone would miss a
+    # genuine parent/child swap that preserves it (a `Sort` above a `Gather`
+    # versus the reverse), which is why the order difference is still surfaced
+    # rather than dropped — as information, at the level a reordering deserves.
     b_shape, c_shape = base.get("shape"), cur.get("shape")
     if b_shape and c_shape:
         for field in ("node_types", "indexes", "seq_scans"):
-            if b_shape.get(field) != c_shape.get(field):
-                out.append({"bench": bench_id, "metric": f"shape.{field}", "level": FAIL,
-                            "detail": f"{b_shape.get(field)} → {c_shape.get(field)}"})
+            b_val, c_val = b_shape.get(field), c_shape.get(field)
+            if b_val == c_val:
+                continue
+            if isinstance(b_val, list) and isinstance(c_val, list):
+                b_count, c_count = Counter(b_val), Counter(c_val)
+                if b_count == c_count:
+                    moved = sorted({n for i, n in enumerate(c_val)
+                                    if i < len(b_val) and b_val[i] != n})
+                    out.append({
+                        "bench": bench_id, "metric": f"shape.{field}",
+                        "level": INFO,
+                        "detail": f"same {len(c_val)} entries, different order "
+                                  f"({', '.join(moved[:3]) or 'positions shifted'}"
+                                  f") — sibling order is not meaningful "
+                                  f"(issues/113)"})
+                    continue
+                gained = sorted((c_count - b_count).elements())
+                lost = sorted((b_count - c_count).elements())
+                out.append({
+                    "bench": bench_id, "metric": f"shape.{field}", "level": FAIL,
+                    "detail": f"gained {gained or '-'}, lost {lost or '-'}"})
+                continue
+            out.append({"bench": bench_id, "metric": f"shape.{field}", "level": FAIL,
+                        "detail": f"{b_val} → {c_val}"})
 
     b_metrics = base.get("metrics", {}) or {}
     c_metrics = cur.get("metrics", {}) or {}

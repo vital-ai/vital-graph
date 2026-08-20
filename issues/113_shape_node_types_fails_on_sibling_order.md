@@ -1,6 +1,30 @@
 # `shape.node_types` Reports a Regression When Two Siblings Swap Places
 
-## Status: OPEN — diagnosed, not fixed
+## Status: FIXED 2026-08-20 — the counts gate, the order reports
+
+`perf_compare` now compares the node-type MULTISET for the gate and surfaces an
+order-only difference as information:
+
+    a pure sibling reorder      ℹ️  same 39 entries, different order
+                                    (Index Only Scan, Index Scan) — sibling
+                                    order is not meaningful (issues/113)
+    an index scan -> seq scan   ❌  gained ['Seq Scan'], lost ['Index Only Scan']
+
+Both verified against the real baseline, and the historical case confirms it: the
+run that produced this finding reports 0 failing, and against the 2026-08-18
+baseline where the difference first appeared it now reads as informational with
+the moved nodes named.
+
+The failure message is also readable now. It used to print both 39-element lists;
+it prints the difference.
+
+**Option 1 was taken, with option 3's objection kept visible.** A multiset cannot
+see a parent/child swap that preserves it — a `Sort` above a `Gather` versus the
+reverse. That is exactly why the order difference is REPORTED rather than
+dropped, and it is pinned as a known limit in
+`tests/unit/test_shape_comparison_ignores_sibling_order.py::TestWhatThisCannotSee`
+so it is a stated trade rather than a surprise. If it ever needs to gate, the fix
+is the structural tree comparison, not a return to elementwise.
 
 `traversal.skew2k.dedup.depth3` fails the baseline comparison on
 `shape.node_types`. Measured against the run that produced the alert:
