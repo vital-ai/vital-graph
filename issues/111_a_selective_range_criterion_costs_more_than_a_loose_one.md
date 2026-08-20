@@ -8,10 +8,18 @@ appeared anywhere in the generated SQL. The buffer curve below is what an
 unfiltered scan costs; "3,705 buffers per match" divided real work by a match
 count the query never honoured.
 
-    before   60,000 rows returned, 1,017 match, 3,768,476 buffers
-    after     1,017 rows returned, 1,017 match, 1,496,324 buffers
+    before   60,000 rows returned, 1,017 match, 3,769,467 buf, 1,944 ms
+    after     1,017 rows returned, 1,017 match, 1,496,337 buf, 1,663 ms
+    (t=90)     9,907 rows match,   page correct,    70,471 buf,    77 ms
 
-Correct AND 60% cheaper. 10k the same: 326,985 -> 141,918 buffers.
+**Correct, and 60% fewer buffers — but only 14% faster.** The commit message
+says "60% cheaper", which is true of buffers and misleading about time. These are
+cache hits in a 16 GB `shared_buffers`, so the buffer count overstates the
+latency impact; warm, best of three, the page went 1,944 ms -> 1,663 ms.
+
+The number that matters is the last row. A page returning 1,017 matches takes
+**21x longer than one returning 9,907** (1,663 ms against 77 ms). The correctness
+fix did not touch that, and it is the real remaining problem.
 
 ### The cause
 
@@ -49,10 +57,17 @@ neither the push nor the check.
 
 ### What remains
 
-1,496,324 buffers for 1,017 rows is still the "pays for every candidate" shape
-`issues/archive/040` documented. That number is now honest, and it is what the
-archive's fix family (make the selectivity visible to the planner) would address.
-The correctness half is done.
+1.66 seconds and 1,496,337 buffers for 1,017 rows — against 77 ms for the
+threshold returning ten times more — is still the "pays for every candidate"
+shape `issues/archive/040` documented. Those numbers are now honest, and they are
+what the archive's fix family (make the selectivity visible to the planner)
+would address. Only the correctness half is done.
+
+**The bench cannot catch the correctness half.** `test_range_comparator_*` takes
+its match counts from a manifest and never checks what the query returns, which
+is how an unfiltered page was measured precisely for days. Any growth-curve bench
+that reports buffers-per-match should assert the row count first, or it is
+dividing real work by a number the query never honoured.
 
 ---
 
