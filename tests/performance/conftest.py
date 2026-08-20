@@ -126,6 +126,35 @@ async def perf_pool():
     await pool.close()
 
 
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def perf_space_manager():
+    """SpaceManager over the perf backend — the sanctioned way to make a space.
+
+    `SparqlSQLSchema.create_space` builds the per-space TABLES and no `space`
+    catalog row, which `tests/integration/conftest.py` documents as the call
+    never to make: quad inserts then hit `graph_space_id_fkey`. A benchmark that
+    only COPYs into `{space}_edge` gets away with it, one foreign key away from
+    not doing so — and it leaves a table group that every reconciliation of
+    tables against the registry reports as debris. `perf_edgehop` was exactly
+    that, and `scripts/cleanup_orphan_space_tables.py --apply` would have dropped
+    it as an empty orphan.
+
+    Mirrors `test_partition_pruning.pg18_space_manager`, which already does this.
+    """
+    from vitalgraph.db.sparql_sql.sparql_sql_space_impl import SparqlSQLSpaceImpl
+    from vitalgraph.space.space_manager import SpaceManager
+    impl = SparqlSQLSpaceImpl(
+        postgresql_config={"host": PG_HOST, "port": PG_PORT,
+                           "database": PG_DATABASE, "username": PG_USER,
+                           "password": PG_PASSWORD,
+                           "min_pool_size": 1, "max_pool_size": 4},
+        sidecar_config={"url": os.environ.get("VG_TEST_SIDECAR_URL",
+                                              "http://localhost:7071")})
+    await impl.connect()
+    yield SpaceManager(db_impl=getattr(impl, "db_impl", None), space_backend=impl)
+    await impl.disconnect()
+
+
 @pytest_asyncio.fixture(loop_scope="session")
 async def perf_conn(perf_pool):
     async with perf_pool.acquire() as conn:

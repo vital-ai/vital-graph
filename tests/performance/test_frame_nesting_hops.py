@@ -28,8 +28,16 @@ SPACE = "perf_edgehop"
 _NS = _uuid.UUID("6ba7b814-9dad-11d1-80b4-00c04fd430c8")
 
 
-async def _seed_edges(pool, n_sources=1000, fanout=10):
-    """Create the space and COPY n_sources*fanout edge rows (frame->frame style)."""
+async def _seed_edges(pool, space_manager, n_sources=1000, fanout=10):
+    """Create the space and COPY n_sources*fanout edge rows (frame->frame style).
+
+    Through the SPACE MANAGER, so the space gets its registry row as well as its
+    tables. Calling `SparqlSQLSchema.create_space` directly left a table group
+    with no row in `space` — which is what every reconciliation reports as
+    orphaned debris, and what `cleanup_orphan_space_tables --apply` drops once it
+    is empty. This benchmark never inserts a quad, so it was permanently empty
+    and permanently eligible.
+    """
     g = _uuid.uuid5(_NS, "ctx")
     rows = []
     for s in range(n_sources):
@@ -37,12 +45,10 @@ async def _seed_edges(pool, n_sources=1000, fanout=10):
         for d in range(fanout):
             dst = _uuid.uuid5(_NS, f"dst:{s}:{d}")
             rows.append((_uuid.uuid5(_NS, f"e:{s}:{d}"), src, dst, g))
+    await space_manager.delete_space_with_tables(SPACE)
+    ok = await space_manager.create_space_with_tables(SPACE, SPACE)
+    assert ok, f"space manager failed to create {SPACE}"
     async with pool.acquire() as conn:
-        try:
-            await SparqlSQLSchema.drop_space(conn, SPACE)
-        except Exception:
-            pass
-        await SparqlSQLSchema.create_space(conn, SPACE)
         t = SparqlSQLSchema.get_table_names(SPACE)
         await conn.copy_records_to_table(
             t["edge"].split(".")[-1], records=rows,
@@ -73,8 +79,9 @@ async def _seed_edges(pool, n_sources=1000, fanout=10):
 
 
 @pytest.mark.bench("query.frame_nesting.edge_hops_index_only")
-async def test_edge_hops_are_index_only_both_directions(perf_pool, perf_record):
-    src, dst = await _seed_edges(perf_pool)
+async def test_edge_hops_are_index_only_both_directions(
+        perf_pool, perf_space_manager, perf_record):
+    src, dst = await _seed_edges(perf_pool, perf_space_manager)
     try:
         async with perf_pool.acquire() as conn:
             # The invariant is the plan shape: an Index Only Scan on the covering
@@ -99,8 +106,11 @@ async def test_edge_hops_are_index_only_both_directions(perf_pool, perf_record):
                         notes="forward hop (source→dest)")
             print(f"\nedge hops: fwd={node_types(p1)} rev={node_types(p2)}")
     finally:
-        async with perf_pool.acquire() as conn:
-            try:
-                await SparqlSQLSchema.drop_space(conn, SPACE)
-            except Exception:
-                pass
+        # Through the manager too, so the registry row goes with the tables.
+        # `SparqlSQLSchema.drop_space` removes only the tables, which would leave
+        # a `space` row pointing at nothing — the mirror-image residue of what
+        # creating outside the manager left.
+        try:
+            await perf_space_manager.delete_space_with_tables(SPACE)
+        except Exception:
+            pass
