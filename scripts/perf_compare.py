@@ -434,7 +434,7 @@ def main() -> int:
     ap.add_argument("--promote", metavar="NAME", help="promote this run to a named baseline")
     ap.add_argument("--partial", action="store_true",
                     help="this run deliberately covers a SUBSET (e.g. "
-                         "`-m 'not slow_bench'`), so a bench absent from it is "
+                         "`-k something`), so a bench absent from it is "
                          "not-run rather than lost. Never promote a partial run: "
                          "it bakes the missing benches in as holes (issues/081)")
     ap.add_argument("--force-unstamped", action="store_true",
