@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "env": {
-    "started_at": "2026-08-18T14:13:09.772191+00:00",
+    "started_at": "2026-08-20T15:34:02.759119+00:00",
     "git": {
-      "commit": "a8a0509a2251bb2478e8343c02687985509fbfa9",
-      "short": "a8a0509",
+      "commit": "672643403dfec7ee393e12be7c6702e9b899a439",
+      "short": "6726434",
       "branch": "main",
       "dirty": true
     },
@@ -34,7 +34,12 @@
       "jit": "on",
       "default_statistics_target": "100"
     },
-    "finished_at": "2026-08-18T14:24:22.996458+00:00"
+    "stats": {
+      "fixture_tables": 260,
+      "fixture_live_tuples": 126221181,
+      "fixture_last_analyze": "2026-08-20T15:30:20.668066+00:00"
+    },
+    "finished_at": "2026-08-20T15:45:30.388791+00:00"
   },
   "benches": [
     {
@@ -42,8 +47,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "first_page_ms": 807.9,
-        "deep_page_ms": 753.2,
+        "first_page_ms": 836.6,
+        "deep_page_ms": 780.7,
         "deep_offset_ratio": 0.93,
         "offset": 375,
         "rows": 25
@@ -56,8 +61,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 194.7,
-        "sorted_ms": 847.2,
+        "unsorted_ms": 154.2,
+        "sorted_ms": 640.9,
         "rows": 25
       },
       "dataset": "synthetic:400frames",
@@ -68,9 +73,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_currency_min_ms": 387.9,
-        "agg_currency_avg_ms": 184.0,
-        "agg_currency_ratio": 2.11
+        "agg_currency_min_ms": 373.3,
+        "agg_currency_avg_ms": 168.7,
+        "agg_currency_ratio": 2.21
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN vs AVG on Currency \u2014 issues/029 sort-per-group"
@@ -80,9 +85,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_double_min_ms": 840.9,
-        "agg_double_avg_ms": 4367.0,
-        "agg_double_ratio": 0.19
+        "agg_double_min_ms": 823.5,
+        "agg_double_avg_ms": 2255.7,
+        "agg_double_ratio": 0.37
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN vs AVG on Double \u2014 issues/029 sort-per-group"
@@ -92,9 +97,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_integer_min_ms": 896.2,
-        "agg_integer_avg_ms": 2606.7,
-        "agg_integer_ratio": 0.34
+        "agg_integer_min_ms": 1249.1,
+        "agg_integer_avg_ms": 2740.5,
+        "agg_integer_ratio": 0.46
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN vs AVG on Integer \u2014 issues/029 sort-per-group"
@@ -104,9 +109,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_currency_min_ms": 266.8,
-        "agg_currency_avg_ms": 217.3,
-        "agg_currency_ratio": 1.23
+        "agg_currency_min_ms": 234.5,
+        "agg_currency_avg_ms": 203.7,
+        "agg_currency_ratio": 1.15
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Currency \u2014 issues/029 sort-per-group"
@@ -116,9 +121,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_double_min_ms": 247.9,
-        "agg_double_avg_ms": 235.0,
-        "agg_double_ratio": 1.05
+        "agg_double_min_ms": 246.9,
+        "agg_double_avg_ms": 178.1,
+        "agg_double_ratio": 1.39
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Double \u2014 issues/029 sort-per-group"
@@ -128,9 +133,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_integer_min_ms": 202.7,
-        "agg_integer_avg_ms": 186.9,
-        "agg_integer_ratio": 1.08
+        "agg_integer_min_ms": 249.3,
+        "agg_integer_avg_ms": 180.6,
+        "agg_integer_ratio": 1.38
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Integer \u2014 issues/029 sort-per-group"
@@ -140,12 +145,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 1973.9,
-        "agg_max_ms": 2170.3,
-        "agg_avg_ms": 1547.1,
-        "agg_sum_ms": 1352.8,
-        "agg_count_ms": 766.4,
-        "min_over_avg": 1.28
+        "agg_min_ms": 2932.9,
+        "agg_max_ms": 2696.0,
+        "agg_avg_ms": 1743.3,
+        "agg_sum_ms": 1667.1,
+        "agg_count_ms": 871.6,
+        "min_over_avg": 1.68
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "aggregate cost, group_by=True \u2014 issues/029 sort-per-group"
@@ -155,12 +160,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 927.8,
-        "agg_max_ms": 927.1,
-        "agg_avg_ms": 2529.3,
-        "agg_sum_ms": 3588.2,
-        "agg_count_ms": 52.1,
-        "min_over_avg": 0.37
+        "agg_min_ms": 885.1,
+        "agg_max_ms": 890.8,
+        "agg_avg_ms": 3049.5,
+        "agg_sum_ms": 2288.5,
+        "agg_count_ms": 68.1,
+        "min_over_avg": 0.29
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "aggregate cost, group_by=False \u2014 issues/029 sort-per-group"
@@ -170,12 +175,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 171.7,
-        "agg_max_ms": 180.2,
-        "agg_avg_ms": 120.3,
-        "agg_sum_ms": 127.7,
-        "agg_count_ms": 70.2,
-        "min_over_avg": 1.43
+        "agg_min_ms": 213.6,
+        "agg_max_ms": 178.6,
+        "agg_avg_ms": 135.3,
+        "agg_sum_ms": 134.5,
+        "agg_count_ms": 153.5,
+        "min_over_avg": 1.58
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "aggregate cost, group_by=True \u2014 issues/029 sort-per-group"
@@ -185,12 +190,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 223.5,
-        "agg_max_ms": 193.1,
-        "agg_avg_ms": 148.5,
-        "agg_sum_ms": 153.7,
-        "agg_count_ms": 3.4,
-        "min_over_avg": 1.5
+        "agg_min_ms": 196.6,
+        "agg_max_ms": 202.8,
+        "agg_avg_ms": 158.6,
+        "agg_sum_ms": 158.5,
+        "agg_count_ms": 3.5,
+        "min_over_avg": 1.24
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "aggregate cost, group_by=False \u2014 issues/029 sort-per-group"
@@ -200,8 +205,8 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "min_in_memory_ms": 923.9,
-        "min_spilled_ms": 897.9,
+        "min_in_memory_ms": 1209.5,
+        "min_spilled_ms": 1176.0,
         "spill_ratio": 0.97
       },
       "dataset": "sp_lead_synth_100k",
@@ -212,9 +217,9 @@
       "kind": "sql",
       "status": "skipped",
       "metrics": {
-        "min_in_memory_ms": 296.5,
-        "min_spilled_ms": 239.5,
-        "spill_ratio": 0.81
+        "min_in_memory_ms": 251.0,
+        "min_spilled_ms": 253.9,
+        "spill_ratio": 1.01
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN with and without a work_mem spill \u2014 issues/029",
@@ -246,8 +251,8 @@
         "max_actual_rows": 100,
         "estimated_rows": 100,
         "heap_fetches": 0,
-        "planning_ms": 0.266,
-        "execution_ms": 2.27,
+        "planning_ms": 0.284,
+        "execution_ms": 0.172,
         "matched_rows": 100
       },
       "dataset": "space_lead_dataset_test"
@@ -272,14 +277,14 @@
       },
       "metrics": {
         "shared_buffers": 989,
-        "shared_read": 854,
+        "shared_read": 4,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 1025,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.181,
-        "execution_ms": 26.512
+        "planning_ms": 0.155,
+        "execution_ms": 28.952
       },
       "dataset": "wordnet_frames"
     },
@@ -309,8 +314,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 1.374,
-        "execution_ms": 3.029
+        "planning_ms": 1.564,
+        "execution_ms": 1.941
       },
       "dataset": "wordnet_frames"
     },
@@ -340,8 +345,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.184,
-        "execution_ms": 0.827
+        "planning_ms": 0.154,
+        "execution_ms": 0.628
       },
       "dataset": "wordnet_frames"
     },
@@ -366,8 +371,8 @@
         "max_actual_rows": 10,
         "estimated_rows": 10,
         "heap_fetches": 0,
-        "planning_ms": 0.248,
-        "execution_ms": 0.026
+        "planning_ms": 0.425,
+        "execution_ms": 0.021
       },
       "dataset": "synthetic:edges",
       "notes": "forward hop (source\u2192dest)"
@@ -393,14 +398,14 @@
       },
       "metrics": {
         "shared_buffers": 154,
-        "shared_read": 0,
+        "shared_read": 9,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.937,
-        "execution_ms": 0.881,
+        "planning_ms": 0.823,
+        "execution_ms": 2.7,
         "sql_chars": 6702,
         "joins": 0
       },
@@ -428,14 +433,14 @@
       },
       "metrics": {
         "shared_buffers": 96,
-        "shared_read": 39,
+        "shared_read": 42,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 1649,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 2.442,
-        "execution_ms": 7.817,
+        "planning_ms": 3.436,
+        "execution_ms": 9.359,
         "sql_chars": 3811,
         "joins": 0
       },
@@ -465,14 +470,14 @@
       },
       "metrics": {
         "shared_buffers": 205,
-        "shared_read": 21,
+        "shared_read": 25,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.665,
-        "execution_ms": 10.755,
+        "planning_ms": 0.913,
+        "execution_ms": 14.464,
         "sql_chars": 6687,
         "joins": 0
       },
@@ -504,14 +509,14 @@
       },
       "metrics": {
         "shared_buffers": 306,
-        "shared_read": 43,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.977,
-        "execution_ms": 10.584,
+        "planning_ms": 2.032,
+        "execution_ms": 2.771,
         "sql_chars": 6961,
         "joins": 0
       },
@@ -539,14 +544,14 @@
       },
       "metrics": {
         "shared_buffers": 1248,
-        "shared_read": 0,
+        "shared_read": 1146,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 109745,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.485,
-        "execution_ms": 39.006,
+        "planning_ms": 0.829,
+        "execution_ms": 56.978,
         "sql_chars": 3801,
         "joins": 0
       },
@@ -570,10 +575,10 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "page_ms_offset_0": 101.0,
-        "page_ms_offset_250": 251.9,
-        "page_ms_offset_1000": 247.5,
-        "deep_ratio": 2.5
+        "page_ms_offset_0": 69.3,
+        "page_ms_offset_250": 329.8,
+        "page_ms_offset_1000": 304.5,
+        "deep_ratio": 4.4
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "cost across offsets \u2014 issues/078; flat means fixed"
@@ -583,10 +588,10 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "page_ms_offset_0": 36.9,
-        "page_ms_offset_250": 45.9,
-        "page_ms_offset_1000": 39.4,
-        "deep_ratio": 1.2
+        "page_ms_offset_0": 35.7,
+        "page_ms_offset_250": 40.4,
+        "page_ms_offset_1000": 30.8,
+        "deep_ratio": 1.1
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "cost across offsets \u2014 issues/078; flat means fixed"
@@ -602,15 +607,15 @@
           "Unique",
           "Subquery Scan",
           "Unique",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Gather Merge",
           "Sort",
           "Nested Loop",
           "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Gather",
           "Nested Loop",
           "Nested Loop",
           "Hash Join",
@@ -619,10 +624,10 @@
           "Index Only Scan",
           "Index Scan",
           "Index Only Scan",
-          "Index Scan",
+          "Index Only Scan",
           "Index Scan",
           "Index Only Scan",
-          "Index Only Scan",
+          "Index Scan",
           "Index Only Scan",
           "Index Only Scan",
           "Index Only Scan",
@@ -637,16 +642,16 @@
         "seq_scans": []
       },
       "metrics": {
-        "shared_buffers": 174345,
+        "shared_buffers": 333414,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 33333,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 40.257,
-        "execution_ms": 237.582,
-        "min_ratio": 0.981,
+        "planning_ms": 62.91,
+        "execution_ms": 378.49,
+        "min_ratio": 1.017,
         "offsets_measured": 3,
         "deepest_offset": 1000
       },
@@ -680,8 +685,8 @@
           "Index Only Scan",
           "Index Scan",
           "Index Only Scan",
-          "Index Scan",
           "Index Only Scan",
+          "Index Scan",
           "Index Only Scan",
           "Index Scan",
           "Index Only Scan",
@@ -705,9 +710,9 @@
         "max_actual_rows": 10000,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 73.574,
-        "execution_ms": 41.397,
-        "min_ratio": 1.031,
+        "planning_ms": 43.537,
+        "execution_ms": 37.327,
+        "min_ratio": 1.096,
         "offsets_measured": 2,
         "deepest_offset": 250
       },
@@ -769,8 +774,8 @@
         "max_actual_rows": 50469,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 44.651,
-        "execution_ms": 292.006,
+        "planning_ms": 45.438,
+        "execution_ms": 291.901,
         "rows": 25,
         "distinct": 25,
         "duplicate_anchors": 398
@@ -833,8 +838,8 @@
         "max_actual_rows": 699,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 44.006,
-        "execution_ms": 291.874,
+        "planning_ms": 43.916,
+        "execution_ms": 295.668,
         "rows": 25,
         "distinct": 25,
         "duplicate_anchors": 398
@@ -916,14 +921,14 @@
       },
       "metrics": {
         "shared_buffers": 104030,
-        "shared_read": 0,
+        "shared_read": 117,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 64.929,
-        "execution_ms": 119.367,
+        "planning_ms": 55.338,
+        "execution_ms": 76.62,
         "sparql_chars": 1872,
         "sql_chars": 6301,
         "joins": 0
@@ -981,14 +986,14 @@
       },
       "metrics": {
         "shared_buffers": 14163,
-        "shared_read": 0,
+        "shared_read": 232,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 54.982,
-        "execution_ms": 39.926,
+        "planning_ms": 58.672,
+        "execution_ms": 70.644,
         "sparql_chars": 1836,
         "sql_chars": 6274,
         "joins": 0
@@ -1044,14 +1049,14 @@
       },
       "metrics": {
         "shared_buffers": 21444,
-        "shared_read": 0,
+        "shared_read": 41,
         "temp_written": 0,
         "actual_rows": 13,
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 84.613,
-        "execution_ms": 32.529,
+        "planning_ms": 44.879,
+        "execution_ms": 20.751,
         "sparql_chars": 1844,
         "sql_chars": 6274,
         "joins": 0
@@ -1105,8 +1110,8 @@
         "max_actual_rows": 36,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 53.401,
-        "execution_ms": 108.275,
+        "planning_ms": 48.357,
+        "execution_ms": 63.418,
         "total_matches": 9220,
         "page_size": 25,
         "buffers_per_match": 5.918
@@ -1161,8 +1166,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 64.019,
-        "execution_ms": 75.919,
+        "planning_ms": 54.308,
+        "execution_ms": 55.442,
         "total_matches": 908,
         "page_size": 25,
         "buffers_per_match": 32.797
@@ -1213,14 +1218,14 @@
       },
       "metrics": {
         "shared_buffers": 135033,
-        "shared_read": 13686,
+        "shared_read": 24366,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 100000,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 64.852,
-        "execution_ms": 3817.238,
+        "planning_ms": 52.227,
+        "execution_ms": 6326.202,
         "total_matches": 3713,
         "page_size": 25,
         "buffers_per_match": 36.368
@@ -1246,9 +1251,8 @@
           "Nested Loop",
           "Nested Loop",
           "Nested Loop",
-          "Hash Join",
+          "Nested Loop",
           "Index Only Scan",
-          "Hash",
           "Index Only Scan",
           "Index Scan",
           "Index Only Scan",
@@ -1270,18 +1274,18 @@
         "seq_scans": []
       },
       "metrics": {
-        "shared_buffers": 13380,
-        "shared_read": 119,
+        "shared_buffers": 14732,
+        "shared_read": 466,
         "temp_written": 0,
         "actual_rows": 25,
-        "max_actual_rows": 10000,
+        "max_actual_rows": 365,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 64.969,
-        "execution_ms": 61.523,
+        "planning_ms": 52.286,
+        "execution_ms": 182.89,
         "total_matches": 365,
         "page_size": 25,
-        "buffers_per_match": 36.658
+        "buffers_per_match": 40.362
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "[10k] CompanyStateCode = IL \u2014 365 matches, 25-row page"
@@ -1326,14 +1330,14 @@
       },
       "metrics": {
         "shared_buffers": 89717,
-        "shared_read": 55,
+        "shared_read": 255,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 37,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 51.363,
-        "execution_ms": 231.92,
+        "planning_ms": 44.937,
+        "execution_ms": 191.34,
         "total_matches": 5531,
         "page_size": 25,
         "buffers_per_match": 16.221
@@ -1382,14 +1386,14 @@
       },
       "metrics": {
         "shared_buffers": 46244,
-        "shared_read": 0,
+        "shared_read": 163,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 60.024,
-        "execution_ms": 103.837,
+        "planning_ms": 57.264,
+        "execution_ms": 158.591,
         "total_matches": 547,
         "page_size": 25,
         "buffers_per_match": 84.541
@@ -1437,14 +1441,14 @@
       },
       "metrics": {
         "shared_buffers": 103671,
-        "shared_read": 153,
+        "shared_read": 10534,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 37,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 54.368,
-        "execution_ms": 434.674,
+        "planning_ms": 46.914,
+        "execution_ms": 3135.784,
         "total_matches": 7337,
         "page_size": 25,
         "buffers_per_match": 14.13
@@ -1493,14 +1497,14 @@
       },
       "metrics": {
         "shared_buffers": 39039,
-        "shared_read": 0,
+        "shared_read": 221,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 64.575,
-        "execution_ms": 71.587,
+        "planning_ms": 52.406,
+        "execution_ms": 123.278,
         "total_matches": 765,
         "page_size": 25,
         "buffers_per_match": 51.031
@@ -1550,14 +1554,14 @@
       },
       "metrics": {
         "shared_buffers": 35409,
-        "shared_read": 0,
+        "shared_read": 6240,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 878,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 70.718,
-        "execution_ms": 231.271,
+        "planning_ms": 54.401,
+        "execution_ms": 2133.868,
         "total_matches": 878,
         "page_size": 25,
         "buffers_per_match": 40.329
@@ -1607,14 +1611,14 @@
       },
       "metrics": {
         "shared_buffers": 3969,
-        "shared_read": 0,
+        "shared_read": 119,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 96,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 61.979,
-        "execution_ms": 27.102,
+        "planning_ms": 66.446,
+        "execution_ms": 49.192,
         "total_matches": 96,
         "page_size": 25,
         "buffers_per_match": 41.344
@@ -1698,8 +1702,8 @@
         "max_actual_rows": 878,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 47.782,
-        "execution_ms": 46.814,
+        "planning_ms": 47.581,
+        "execution_ms": 41.478,
         "rows": 25,
         "distinct": 25
       },
@@ -1754,8 +1758,8 @@
         "max_actual_rows": 96,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 56.922,
-        "execution_ms": 4.671,
+        "planning_ms": 63.875,
+        "execution_ms": 7.827,
         "rows": 25,
         "distinct": 25
       },
@@ -1811,8 +1815,8 @@
         "max_actual_rows": 878,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 32.221,
-        "execution_ms": 49.252,
+        "planning_ms": 29.723,
+        "execution_ms": 40.268,
         "rows": 25,
         "distinct": 25
       },
@@ -1868,8 +1872,8 @@
         "max_actual_rows": 96,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 32.278,
-        "execution_ms": 4.95,
+        "planning_ms": 29.928,
+        "execution_ms": 4.543,
         "rows": 25,
         "distinct": 25
       },
@@ -1892,7 +1896,7 @@
       "kind": "query",
       "status": "ok",
       "metrics": {
-        "max_page_size_before_flip": 1775,
+        "max_page_size_before_flip": 1725,
         "flips_within_range": true
       },
       "dataset": "sp_lead_synth_10k",
@@ -1903,7 +1907,7 @@
       "kind": "query",
       "status": "ok",
       "metrics": {
-        "max_page_size_before_flip": 106,
+        "max_page_size_before_flip": 104,
         "flips_within_range": true
       },
       "dataset": "sp_lead_synth_100k",
@@ -1914,7 +1918,7 @@
       "kind": "query",
       "status": "skipped",
       "metrics": {
-        "max_page_size_before_flip": 13,
+        "max_page_size_before_flip": 12,
         "flips_within_range": true
       },
       "dataset": "sp_lead_synth_10k",
@@ -1926,6 +1930,10 @@
       "status": "ok",
       "metrics": {
         "buffers_per_match_tightest": 7.1,
+        "buffers_extreme": 8425,
+        "extreme_matches": 145,
+        "buffers_per_match_extreme": 58.1,
+        "extreme_vs_equality": 9.82,
         "equality_buffers_per_match": 5.9,
         "range_vs_equality": 1.2,
         "flatness": 12.867,
@@ -1941,6 +1949,10 @@
       "status": "ok",
       "metrics": {
         "buffers_per_match_tightest": 28.8,
+        "buffers_extreme": 978,
+        "extreme_matches": 16,
+        "buffers_per_match_extreme": 61.1,
+        "extreme_vs_equality": 1.86,
         "equality_buffers_per_match": 32.8,
         "range_vs_equality": 0.88,
         "flatness": 11.131,
@@ -1955,10 +1967,10 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "sorted_ms_offset_0": 496.0,
-        "sorted_ms_offset_250": 488.4,
-        "sorted_ms_offset_1000": 496.5,
-        "sorted_depth_ratio": 1.0
+        "sorted_ms_offset_0": 750.3,
+        "sorted_ms_offset_250": 846.2,
+        "sorted_ms_offset_1000": 659.1,
+        "sorted_depth_ratio": 0.9
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "sorted page cost across offsets \u2014 issues/080"
@@ -1968,10 +1980,10 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "sorted_ms_offset_0": 86.6,
-        "sorted_ms_offset_250": 85.3,
-        "sorted_ms_offset_1000": 82.5,
-        "sorted_depth_ratio": 1.0
+        "sorted_ms_offset_0": 87.6,
+        "sorted_ms_offset_250": 81.1,
+        "sorted_ms_offset_1000": 86.0,
+        "sorted_depth_ratio": 0.9
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "sorted page cost across offsets \u2014 issues/080"
@@ -1981,9 +1993,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 79.5,
-        "sorted_ms": 539.4,
-        "sort_ratio": 6.8
+        "unsorted_ms": 65.8,
+        "sorted_ms": 648.9,
+        "sort_ratio": 9.9
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "entity_property sort vs the same query unsorted (issues/080)"
@@ -1993,9 +2005,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 30.7,
-        "sorted_ms": 80.1,
-        "sort_ratio": 2.6
+        "unsorted_ms": 42.2,
+        "sorted_ms": 84.7,
+        "sort_ratio": 2.0
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "entity_property sort vs the same query unsorted (issues/080)"
@@ -2012,10 +2024,6 @@
           "Sort",
           "Sort",
           "Subquery Scan",
-          "Nested Loop",
-          "Nested Loop",
-          "Nested Loop",
-          "Gather Merge",
           "Sort",
           "Nested Loop",
           "Nested Loop",
@@ -2024,6 +2032,10 @@
           "Nested Loop",
           "Nested Loop",
           "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Gather",
           "Nested Loop",
           "Nested Loop",
           "Hash Join",
@@ -2038,10 +2050,10 @@
           "Index Scan",
           "Index Scan",
           "Index Scan",
-          "Index Scan",
           "Index Only Scan",
           "Index Only Scan",
-          "Index Only Scan"
+          "Index Only Scan",
+          "Index Scan"
         ],
         "indexes": [
           "idx_sp_lead_synth_100k_edge_dst_src",
@@ -2053,15 +2065,15 @@
         "seq_scans": []
       },
       "metrics": {
-        "shared_buffers": 478542,
+        "shared_buffers": 453167,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 33333,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 44.589,
-        "execution_ms": 511.772,
+        "planning_ms": 33.296,
+        "execution_ms": 739.38,
         "rows": 25,
         "sorted_values": 25
       },
@@ -2099,8 +2111,8 @@
           "Index Only Scan",
           "Index Scan",
           "Index Only Scan",
-          "Index Scan",
           "Index Only Scan",
+          "Index Scan",
           "Index Only Scan",
           "Index Scan",
           "Index Scan",
@@ -2126,8 +2138,8 @@
         "max_actual_rows": 10000,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 66.8,
-        "execution_ms": 81.907,
+        "planning_ms": 49.048,
+        "execution_ms": 54.329,
         "rows": 25,
         "sorted_values": 25
       },
@@ -2139,8 +2151,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 20.9,
-        "min_ms": 20.7,
+        "wall_ms": 17.5,
+        "min_ms": 17.0,
         "page_size": 100,
         "results": 100
       },
@@ -2152,8 +2164,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 19.1,
-        "min_ms": 17.5,
+        "wall_ms": 18.1,
+        "min_ms": 16.4,
         "page_size": 100,
         "results": 100
       },
@@ -2165,8 +2177,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 27.2,
-        "min_ms": 26.4,
+        "wall_ms": 21.0,
+        "min_ms": 20.6,
         "page_size": 100,
         "results": 100
       },
@@ -2178,8 +2190,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 20.5,
-        "min_ms": 17.2,
+        "wall_ms": 12.4,
+        "min_ms": 11.8,
         "page_size": 25,
         "results": 25
       },
@@ -2191,8 +2203,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 12.1,
-        "min_ms": 11.2,
+        "wall_ms": 13.0,
+        "min_ms": 11.7,
         "page_size": 25,
         "results": 25
       },
@@ -2204,8 +2216,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 18.1,
-        "min_ms": 14.4,
+        "wall_ms": 12.8,
+        "min_ms": 11.8,
         "page_size": 25,
         "results": 25
       },
@@ -2217,8 +2229,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 129.8,
-        "min_ms": 118.1,
+        "wall_ms": 115.0,
+        "min_ms": 105.4,
         "page_size": 100,
         "results": 100
       },
@@ -2230,8 +2242,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 47.1,
-        "min_ms": 45.1,
+        "wall_ms": 54.8,
+        "min_ms": 49.7,
         "page_size": 100,
         "results": 100
       },
@@ -2243,8 +2255,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 111.8,
-        "min_ms": 96.7,
+        "wall_ms": 78.8,
+        "min_ms": 77.2,
         "page_size": 100,
         "results": 73
       },
@@ -2256,8 +2268,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 68.0,
-        "min_ms": 54.2,
+        "wall_ms": 46.7,
+        "min_ms": 44.8,
         "page_size": 25,
         "results": 25
       },
@@ -2269,8 +2281,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 20.6,
-        "min_ms": 20.3,
+        "wall_ms": 27.1,
+        "min_ms": 24.3,
         "page_size": 25,
         "results": 25
       },
@@ -2282,8 +2294,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 34.4,
-        "min_ms": 32.2,
+        "wall_ms": 42.0,
+        "min_ms": 38.7,
         "page_size": 25,
         "results": 25
       },
@@ -2295,8 +2307,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 105.9,
-        "min_ms": 100.8,
+        "wall_ms": 88.4,
+        "min_ms": 83.0,
         "page_size": 100,
         "results": 100
       },
@@ -2308,8 +2320,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 49.3,
-        "min_ms": 48.5,
+        "wall_ms": 54.6,
+        "min_ms": 53.7,
         "page_size": 100,
         "results": 100
       },
@@ -2321,8 +2333,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 34.7,
-        "min_ms": 30.1,
+        "wall_ms": 56.5,
+        "min_ms": 43.6,
         "page_size": 100,
         "results": 99
       },
@@ -2334,8 +2346,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 37.4,
-        "min_ms": 36.2,
+        "wall_ms": 34.8,
+        "min_ms": 32.2,
         "page_size": 25,
         "results": 25
       },
@@ -2347,8 +2359,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 21.9,
-        "min_ms": 21.1,
+        "wall_ms": 25.1,
+        "min_ms": 23.7,
         "page_size": 25,
         "results": 25
       },
@@ -2360,8 +2372,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 25.9,
-        "min_ms": 25.3,
+        "wall_ms": 18.3,
+        "min_ms": 17.8,
         "page_size": 25,
         "results": 25
       },
@@ -2373,8 +2385,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 440.7,
-        "min_ms": 427.3,
+        "wall_ms": 398.2,
+        "min_ms": 378.6,
         "page_size": 100,
         "results": 100
       },
@@ -2386,8 +2398,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 139.7,
-        "min_ms": 131.2,
+        "wall_ms": 146.2,
+        "min_ms": 130.5,
         "page_size": 100,
         "results": 100
       },
@@ -2399,8 +2411,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 30.1,
-        "min_ms": 29.6,
+        "wall_ms": 29.8,
+        "min_ms": 27.9,
         "page_size": 100,
         "results": 13
       },
@@ -2412,8 +2424,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 97.0,
-        "min_ms": 84.3,
+        "wall_ms": 87.0,
+        "min_ms": 82.7,
         "page_size": 25,
         "results": 25
       },
@@ -2425,8 +2437,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 46.2,
-        "min_ms": 43.6,
+        "wall_ms": 45.4,
+        "min_ms": 44.6,
         "page_size": 25,
         "results": 25
       },
@@ -2438,8 +2450,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 35.0,
-        "min_ms": 32.5,
+        "wall_ms": 28.6,
+        "min_ms": 28.2,
         "page_size": 25,
         "results": 13
       },
@@ -2462,7 +2474,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "convergent_ms": 7189.6,
+        "convergent_ms": 5821.2,
         "convergent_rows": 1313755
       },
       "dataset": "sp_kg_rel",
@@ -2484,7 +2496,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_friendof_ms": 73.1,
+        "rel_friendof_ms": 62.1,
         "rel_friendof_rows": 14625
       },
       "dataset": "sp_kg_rel",
@@ -2495,7 +2507,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_reportsto_ms": 42.7,
+        "rel_reportsto_ms": 38.6,
         "rel_reportsto_rows": 4750
       },
       "dataset": "sp_kg_rel",
@@ -2506,7 +2518,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_worksfor_ms": 45.3,
+        "rel_worksfor_ms": 40.7,
         "rel_worksfor_rows": 4875
       },
       "dataset": "sp_kg_rel",
@@ -2530,8 +2542,8 @@
       "status": "ok",
       "metrics": {
         "values_1_ms": 0.37,
-        "values_20_ms": 6.95,
-        "values_growth": 18.9
+        "values_20_ms": 3.19,
+        "values_growth": 8.5
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "VALUES cost against list length \u2014 issues/087"
@@ -2541,9 +2553,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "values_ms": 0.49,
-        "literal_subject_ms": 0.39,
-        "values_ratio": 1.3
+        "values_ms": 0.5,
+        "literal_subject_ms": 0.47,
+        "values_ratio": 1.1
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "VALUES vs an equivalent literal subject \u2014 issues/087"
@@ -2553,9 +2565,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "values_ms": 0.35,
-        "literal_subject_ms": 0.35,
-        "values_ratio": 1.0
+        "values_ms": 0.41,
+        "literal_subject_ms": 0.31,
+        "values_ratio": 1.3
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "VALUES vs an equivalent literal subject \u2014 issues/087"
@@ -2565,7 +2577,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 2448.0,
+        "wall_ms": 1760.1,
         "rows": 4
       },
       "dataset": "wordnet_frames",
@@ -2576,7 +2588,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 407.4,
+        "wall_ms": 296.1,
         "rows": 1
       },
       "dataset": "wordnet_frames",
@@ -2587,7 +2599,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 426.0,
+        "wall_ms": 351.4,
         "rows": 425
       },
       "dataset": "wordnet_frames",
@@ -2598,7 +2610,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 177.9,
+        "wall_ms": 144.6,
         "rows": 45
       },
       "dataset": "wordnet_frames",
@@ -2654,15 +2666,15 @@
         ]
       },
       "metrics": {
-        "shared_buffers": 37045,
+        "shared_buffers": 37018,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 70,
         "max_actual_rows": 9266,
-        "estimated_rows": 230,
+        "estimated_rows": 190,
         "heap_fetches": 0,
-        "planning_ms": 2.576,
-        "execution_ms": 23.981,
+        "planning_ms": 3.119,
+        "execution_ms": 24.929,
         "rows": 70
       },
       "dataset": "sp_graph_skew_2k",
@@ -2718,15 +2730,15 @@
         ]
       },
       "metrics": {
-        "shared_buffers": 4404,
+        "shared_buffers": 4405,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 21,
         "max_actual_rows": 9266,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 2.562,
-        "execution_ms": 4.246,
+        "planning_ms": 2.54,
+        "execution_ms": 4.197,
         "rows": 21
       },
       "dataset": "sp_graph_skew_2k",
@@ -2789,8 +2801,8 @@
         "max_actual_rows": 9266,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 2.445,
-        "execution_ms": 3.024,
+        "planning_ms": 2.517,
+        "execution_ms": 3.375,
         "rows": 7
       },
       "dataset": "sp_graph_skew_2k",
@@ -2826,8 +2838,8 @@
           "CTE Scan",
           "Index Scan",
           "Index Only Scan",
-          "Index Scan",
           "Index Only Scan",
+          "Index Scan",
           "Unique",
           "Sort",
           "Nested Loop",
@@ -2837,8 +2849,8 @@
           "CTE Scan",
           "Index Scan",
           "Index Only Scan",
-          "Index Scan",
           "Index Only Scan",
+          "Index Scan",
           "Index Only Scan",
           "Index Scan"
         ],
@@ -2853,15 +2865,15 @@
         "seq_scans": []
       },
       "metrics": {
-        "shared_buffers": 8163,
+        "shared_buffers": 9064,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 17,
         "max_actual_rows": 2022,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 6.192,
-        "execution_ms": 5.344,
+        "planning_ms": 6.256,
+        "execution_ms": 9.576,
         "rows": 17
       },
       "dataset": "sp_graph_skew_2k",
@@ -2910,15 +2922,15 @@
         "seq_scans": []
       },
       "metrics": {
-        "shared_buffers": 453,
+        "shared_buffers": 454,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 1,
         "max_actual_rows": 27,
         "estimated_rows": 15,
         "heap_fetches": 0,
-        "planning_ms": 1.722,
-        "execution_ms": 0.58,
+        "planning_ms": 1.459,
+        "execution_ms": 0.584,
         "rows": 1
       },
       "dataset": "sp_graph_skew_2k",
@@ -2956,15 +2968,15 @@
         "seq_scans": []
       },
       "metrics": {
-        "shared_buffers": 138852,
+        "shared_buffers": 144695,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 17029,
         "max_actual_rows": 17029,
-        "estimated_rows": 28,
+        "estimated_rows": 29,
         "heap_fetches": 0,
-        "planning_ms": 6.034,
-        "execution_ms": 105.587,
+        "planning_ms": 6.273,
+        "execution_ms": 118.522,
         "rows": 17029
       },
       "dataset": "sp_graph_skew_2k",
@@ -2975,12 +2987,12 @@
       "kind": "write",
       "status": "ok",
       "metrics": {
-        "executemany_quads_per_sec": 5475,
-        "copy_quads_per_sec": 45630,
-        "bulk_e2e_quads_per_sec": 30080,
-        "index_rebuild_s": 4.532,
-        "copy_speedup": 8.335,
-        "e2e_speedup": 5.494
+        "executemany_quads_per_sec": 6731,
+        "copy_quads_per_sec": 69886,
+        "bulk_e2e_quads_per_sec": 41309,
+        "index_rebuild_s": 3.959,
+        "copy_speedup": 10.383,
+        "e2e_speedup": 6.137
       },
       "dataset": "synthetic:400000q"
     },
@@ -2990,9 +3002,9 @@
       "status": "ok",
       "metrics": {
         "growth_class": "flat",
-        "probe_ms_at_100000q": 67.63,
-        "probe_ms_at_300000q": 90.73,
-        "probe_ms_at_900000q": 67.32
+        "probe_ms_at_100000q": 87.44,
+        "probe_ms_at_300000q": 73.69,
+        "probe_ms_at_900000q": 73.54
       },
       "dataset": "synthetic:[50000, 150000, 450000]",
       "notes": "probe=300 quads, min of 3 rolled-back runs"
@@ -3000,8 +3012,8 @@
   ],
   "baseline": {
     "name": "main",
-    "promoted_from": "/tmp/perf_v5.json",
-    "reason": "108 of 111 benches measured. The ten that ran but recorded no metrics now record plan metrics; only three conditional skips remain.",
+    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260820T153401Z-6726434-stable.json",
+    "reason": "",
     "pg_stamped": true
   }
 }
