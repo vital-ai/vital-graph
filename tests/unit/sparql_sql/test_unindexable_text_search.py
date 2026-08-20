@@ -280,3 +280,53 @@ class TestTheSizeGateIsReadOnlyWhereItIsWritten:
     def test_aliases_default_to_unmeasured(self):
         from vitalgraph.db.sparql_sql.ir import AliasGenerator
         assert AliasGenerator().term_rows is None
+
+
+class TestBothEndsAgreeOnServability:
+    """`semijoin` and the emitter must accept EXACTLY the same expressions.
+
+    `semijoin` asks `_text_search_var` whether a variable is pushable and, when
+    it is, skips that variable's term JOIN — on the grounds that the filter will
+    consume it. `_try_text_filter` DECLINES an unservable needle, so the FILTER
+    stays above the join and needs its value materialised after all. With only
+    the emitter taught the servability rule the two ends disagreed and the query
+    stopped generating:
+
+        Variable(s) lost their value while in scope: ?val_0_0_0
+
+    `_text_search_operands`' docstring names this exact hazard — "see issues/054
+    and issues/058 for what happens when the two ends drift" — and it drifted
+    anyway, because the rule was added in one place.
+
+    It shipped green: every bench that would have caught it
+    (`test_comparator_coverage`, 26 cases, whose `contains` needle is the
+    two-character "CA") was SKIPPING on a fixture nobody had loaded.
+    """
+
+    def _contains(self, needle):
+        return ExprFunction(name="contains", args=[
+            ExprVar(var="v"), ExprValue(node=LiteralNode(value=needle))])
+
+    def test_an_unservable_needle_is_not_pushable(self):
+        from vitalgraph.db.sparql_sql.filter_pushdown import _text_search_var
+        assert _text_search_var(self._contains("CA")) is None, (
+            "saying pushable here skips the term join, and the declined filter "
+            "then has no value to compare")
+
+    def test_a_servable_needle_still_is(self):
+        from vitalgraph.db.sparql_sql.filter_pushdown import _text_search_var
+        assert _text_search_var(self._contains("CAL")) == "v"
+
+    def test_an_anchored_needle_is_pushable_at_any_length(self):
+        from vitalgraph.db.sparql_sql.filter_pushdown import _text_search_var
+        expr = ExprFunction(name="strstarts", args=[
+            ExprVar(var="v"), ExprValue(node=LiteralNode(value="C"))])
+        assert _text_search_var(expr) == "v"
+
+    def test_the_two_ends_agree_on_every_needle(self):
+        """The property, not three examples: whatever `_try_text_filter` will
+        decline, the gate must not call pushable."""
+        from vitalgraph.db.sparql_sql.filter_pushdown import _text_search_var
+        for needle in ("a", "CA", "CAL", "hello", "50%_", ""):
+            pushable = _text_search_var(self._contains(needle)) is not None
+            assert pushable == is_servable("contains", needle), needle

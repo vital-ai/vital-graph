@@ -447,9 +447,35 @@ def _text_search_operands(expr):
 
 
 def _text_search_var(expr) -> Optional[str]:
-    """Variable of a pushable text-search FILTER, or None."""
+    """Variable of a pushable text-search FILTER, or None.
+
+    SERVABILITY IS PART OF PUSHABILITY. `semijoin` reads this to decide a
+    variable's term JOIN can be skipped, on the grounds that the filter will
+    consume it. An unservable needle is declined by `_try_text_filter`, so the
+    FILTER stays above the join and needs its value materialised after all —
+    saying "pushable" here skips the join and the query then fails to generate:
+
+        Variable(s) lost their value while in scope: ?val_0_0_0
+
+    That is the drift this function exists to prevent, and the docstring on
+    `_text_search_operands` names it: "the gate in `semijoin` and the emitter
+    must accept EXACTLY the same expressions ... this states the shape once".
+    The servability rule was added to the emitter (`issues/070`) and not here,
+    so the two ends disagreed for exactly the needles it declines.
+
+    It shipped green because every bench that would have caught it —
+    `test_comparator_coverage`, 26 cases, whose `contains` needle is the
+    two-character "CA" — was SKIPPING on a fixture nobody had loaded.
+    """
     ops = _text_search_operands(expr)
-    return ops[0] if ops else None
+    if not ops:
+        return None
+    var, name, literal, _ci, _flags = ops
+    if name in _TEXT_SEARCH_OPS and literal is not None:
+        from .text_needle import is_servable
+        if not is_servable(name, literal):
+            return None
+    return var
 
 
 def _try_text_search(expr, bgp, term_table: str, quad_aliases: set, ctx):
