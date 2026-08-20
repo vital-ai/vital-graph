@@ -139,6 +139,11 @@ def _event_entity(
     if action_types:
         ent.kGActionTypeList = action_types
     ent.kGProvenanceType = provenance
+    # The event is a member of its own graph — the frame, edges and slots below
+    # all take `kGGraphURI = str(event.URI)`, and omitting the owner left all 11
+    # events in `customer_journey_test` outside the group they root
+    # (`issues/091`). Same omission as the graph_viz generator, same effect.
+    ent.kGGraphURI = str(ent.URI)
     return ent
 
 

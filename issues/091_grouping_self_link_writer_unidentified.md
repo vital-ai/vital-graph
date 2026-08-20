@@ -1,6 +1,49 @@
 # 619 Grouping URIs Lost Their Self-Link, and the Writer Was Never Found
 
-## Status: OPEN — data repaired, cause unidentified, and reads now depend on it
+## Status: WRITERS IDENTIFIED AND FIXED 2026-08-19 — three of them, found from
+## the data's URI prefixes
+
+Not one writer but three, and the affected spaces name them:
+
+    urn:vitalgraph:graphviz:entity:*   generate_graph_viz_test_data._entity
+    urn:vitalgraph:journey:event:*     generate_customer_journey_events._event_entity
+    .../app/KGDocument/<hex>           kgdocuments_endpoint._create
+
+All three had the identical shape: every MEMBER object took
+`kGGraphURI = <root URI>` and the root itself took none. In the two generators it
+is visible in a single function — `_entity` builds the KGEntity and returns it,
+while the twelve lines that follow set `kGGraphURI` on every frame, edge and slot.
+
+**The document one is shipped code, and it is the one that mattered.** The
+segmentation path ALREADY elects the document as the grouping root:
+
+    kg_graph_uri = original_properties.get("kGGraphURI", original_uri)
+    # kgdocument_segmentation_processor.py:164, auto_segmentation.py:132
+
+So a document created with no grouping URI still gets segments and edges grouped
+under it — it is simply absent from the group it roots. That is why `doc_test`
+was 500 of 500 while `prod_kg`, populated through the entity create path, was 1
+of 8,752. `_create` now calls `_set_document_grouping_uris`, which fills the value
+ONLY when absent and only with the object's own URI: a caller may legitimately
+group a document elsewhere, and a segment is `KGDocument`-typed too but arrives
+carrying its parent's URI. That is the same rule line 164 uses, so the two agree
+by construction rather than by coincidence.
+
+Verified end to end against the rebuilt image: `POST /api/graphs/kgdocuments`
+with three quads and no grouping URI now stores
+`hasKGGraphURI = <the document's own URI>`.
+
+`_upload_document` routes through `_create`, so both entry points are covered.
+
+### How they were found
+
+By looking at the data rather than reading the candidate list. The grouping-URI
+values in each affected space carry a distinctive prefix, and each prefix is
+built by exactly one function — `_BASE = "urn:vitalgraph:graphviz"` at
+`generate_graph_viz_test_data.py:61`, `URI_PREFIX` at
+`generate_kgdocuments_test_data.py:55`. The candidate list below had the document
+path at #1 and the fixture loaders at #2; both were right, and neither needed the
+reload experiment it proposed.
 
 Every object in an entity's graph carries `hasKGGraphURI` pointing at the
 entity, the entity included: it is a member of its own graph. On 2026-08-16,

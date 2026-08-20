@@ -87,6 +87,55 @@ def _literal_term(value: str) -> str:
     return f'"{_escape_nquads_string(value)}"'
 
 
+def _set_document_grouping_uris(graph_objects) -> int:
+    """Make each new KGDocument a member of its own graph. Returns how many.
+
+    `issues/091`. Every object in a grouping graph carries `hasKGGraphURI`
+    pointing at the root, THE ROOT INCLUDED — it is a member of its own graph.
+    `kgentities_endpoint` does this via
+    `set_dual_grouping_uris_with_frame_separation`; this path did not, and
+    documents arrived with no grouping URI at all.
+
+    It did not look broken because the SEGMENTATION path elects the document as
+    the root anyway:
+
+        kg_graph_uri = original_properties.get("kGGraphURI", original_uri)
+        # kgdocument_segmentation_processor.py:164, auto_segmentation.py:132
+
+    So every segment and edge is grouped under the document while the document
+    itself is absent from that group. Measured on `doc_test`: 500 of 500
+    documents, versus 1 of 8,752 in a space populated through the entity create
+    path. The read path used to compensate — `get_entity_graph` re-fetched the
+    root by pinning its URI — and no longer does, so a root missing from its own
+    group now reads as an EMPTY graph rather than a complete-looking one.
+
+    ONLY WHEN ABSENT, and only to the object's own URI. A caller may legitimately
+    group a document under something else, and a SEGMENT is `KGDocument`-typed
+    too — segments arrive carrying the parent's URI, so "absent" is what
+    distinguishes a root from a member here. That is the same rule line 164 uses,
+    which is why the two agree by construction rather than by coincidence.
+    """
+    try:
+        from ai_haley_kg_domain.model.KGDocument import KGDocument
+    except ImportError:          # domain model unavailable; nothing to classify
+        return 0
+
+    n = 0
+    for obj in graph_objects:
+        if not isinstance(obj, KGDocument):
+            continue
+        uri = str(getattr(obj, "URI", "") or "")
+        if not uri:
+            continue
+        if str(getattr(obj, "kGGraphURI", "") or ""):
+            continue
+        obj.kGGraphURI = uri
+        n += 1
+    if n:
+        logger.debug("KGDocuments create: set self grouping URI on %d document(s)", n)
+    return n
+
+
 class KGDocumentsEndpoint:
     """KGDocument CRUD and segmentation management endpoint."""
 
@@ -1428,6 +1477,8 @@ class KGDocumentsEndpoint:
                     message="No valid objects in payload",
                     total_count=0, results=[],
                 )
+
+            _set_document_grouping_uris(graph_objects)
 
             # Store objects
             result = await backend_adapter.store_objects(space_id, graph_id, graph_objects)

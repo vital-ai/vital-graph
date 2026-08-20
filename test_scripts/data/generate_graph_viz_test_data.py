@@ -77,6 +77,14 @@ def _entity(name: str, entity_type: str = "Person") -> KGEntity:
     ent.name = name
     ent.kGEntityType = f"urn:vitalgraph:type:{entity_type}"
     ent.kGEntityTypeDescription = entity_type
+    # The entity is a member of its OWN graph. Every other object below gets
+    # `kGGraphURI = str(owner_entity.URI)`; leaving the owner out of that made
+    # all 30 entities in `graph_viz_a` — and every one in the other five
+    # graph_viz spaces — invisible to a read that selects by grouping URI
+    # (`issues/091`). It went unnoticed because the read path used to re-fetch
+    # the root by pinning its URI; it no longer does, so this now reads as an
+    # EMPTY entity graph rather than a complete-looking one.
+    ent.kGGraphURI = str(ent.URI)
     return ent
 
 
