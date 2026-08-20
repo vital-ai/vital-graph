@@ -124,3 +124,45 @@ report_only = true
 #   warn_pct = 15
 #   fail_pct = 30
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Per-bench overrides
+# ---------------------------------------------------------------------------
+
+# BISTABLE PLAN — issues/112. This query sits on a planner cost tie between
+# `Gather Merge` and a `Sort` above a `Gather`. Which side it lands on is decided
+# by the sampled statistics, so it is STABLE within a statistics epoch and flips
+# across one. Measured on sp_lead_synth_100k, same commit, same settings, same
+# rows:
+#
+#     no ANALYZE between runs      333,407 / 333,407 / 333,407   stable
+#     an ANALYZE between runs      174,341 / 333,407             alternating
+#     execution_ms at each         184 ms  /  483 ms
+#
+# So an absolute buffer count here gates a coin flip, and whichever value is
+# promoted makes the other side read as a ±91% regression. It cost a day of
+# misattribution once already, including a bisect over every commit before anyone
+# asked whether the code was involved at all.
+#
+# The bench's own claim is NOT this number — it asserts that cost does not DROP
+# with depth, as a ratio (`min_ratio`), and that assertion is unaffected by which
+# plan runs. So the ratio keeps gating and the absolute buffers become context.
+#
+# This is a statement about ONE query's plan, not a general relaxation:
+# `shared_buffers` still gates every other bench at 5%/15%.
+[bench."query.kgquery.deep_paging.monotonic"]
+shared_buffers = { report_only = true }
+shared_read = { report_only = true }
+
+# ...and gate what the bench actually claims instead. `min_ratio` is the cheapest
+# page divided by the one before it: below 1.0 the curve is NON-MONOTONIC, which
+# is the plan changing with depth — `issues/080` measured a sorted page getting
+# FASTER with depth (13.5s -> 5.6s -> 2.7s) because the planner abandoned a
+# nested loop it should never have chosen. A win-shaped defect.
+#
+# It had no rule at all, so the drift detector said nothing about this bench
+# except the coin-flip buffer count. Lower is worse, hence direction=decrease.
+[metrics.min_ratio]
+direction = "decrease"
+warn_pct = 20
+fail_pct = 40

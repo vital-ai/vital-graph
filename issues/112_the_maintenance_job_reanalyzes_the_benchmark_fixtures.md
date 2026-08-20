@@ -51,11 +51,36 @@ Three values, one commit. So the "+91% regression" that blocked promotion for a
 day was a coin flip, and chasing it — including the forty minutes spent excluding
 every commit — was chasing noise that the bench presents as a number.
 
-**That is the thing worth fixing, and it is not fixed.** A bench asserting an
-absolute buffer count on a plan that is one sample away from flipping will keep
-reporting regressions forever. It needs to either pin the plan for the
-measurement, assert a ratio that survives the flip, or declare itself bistable.
-Recorded as open below.
+**FIXED 2026-08-20 by gating the claim instead of the cost.**
+
+The bench's own assertion was never the problem: it asserts that cost does not
+DROP with depth, as a RATIO, and that survives the flip untouched. What gated the
+coin flip was the recorded `shared_buffers`, taken from a single EXPLAIN of the
+deepest page.
+
+    [bench."query.kgquery.deep_paging.monotonic"]
+    shared_buffers = { report_only = true }
+    shared_read    = { report_only = true }
+
+And `min_ratio` — the metric that carries the claim — **had no threshold rule at
+all**, so the drift detector had nothing to say about this bench except the coin
+flip. It is now gated, `direction = "decrease"`, because below 1.0 the curve is
+non-monotonic: `issues/080` measured a sorted page getting FASTER with depth
+(13.5s -> 5.6s -> 2.7s) as the planner abandoned a nested loop it should never
+have chosen. A win-shaped defect.
+
+Verified both ways against the real baseline:
+
+    the coin flip (333,402 -> 174,341)   0 failing, 1 informational
+    a non-monotonic curve (ratio 0.4)    1 failing
+
+This is scoped to one query's plan, not a relaxation: `shared_buffers` still
+gates every other bench at 5%/15%.
+
+The underlying tie is NOT fixed and probably should not be — the two plans are
+genuinely within noise of each other, and forcing one would be pinning a planner
+decision on the basis of a benchmark. What is fixed is that the suite no longer
+reports the tie as a regression.
 
 `query.kgquery.deep_paging.monotonic[100k]` against the 2026-08-18 baseline:
 
