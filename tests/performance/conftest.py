@@ -156,55 +156,24 @@ async def perf_space_manager():
     await impl.disconnect()
 
 
-@pytest_asyncio.fixture(scope="session", loop_scope="session", autouse=True)
-async def _fresh_statistics(perf_pool):
-    """ANALYZE the benchmark fixtures once, before a RECORDED run.
-
-    `issues/112`. The application ANALYZEs these fixtures on its own schedule —
-    `MaintenanceJob` scores each space and runs ANALYZE/VACUUM from inside the
-    container — so two runs of identical code can plan differently. That is not
-    hypothetical: `deep_paging.monotonic[100k]` moved 174,345 -> 333,408 buffers
-    and 237 -> 474 ms with the same commit, the same settings and the same rows,
-    because a background ANALYZE turned a `Gather Merge` into a `Sort` above a
-    `Gather`.
-
-    Starting every recorded run from FRESH statistics makes the two sides
-    comparable. It does not make the effect go away — stale statistics are a real
-    production condition and `env.stats` still records when the fixtures were
-    last analyzed, so a comparison can say which it is.
-
-    RECORDED RUNS ONLY. An ordinary `pytest tests/performance` is a feedback
-    loop, and this costs a fixed price for a property only a baseline comparison
-    needs. Skipped silently when there is nothing to compare.
-    """
-    if _RUN is None:
-        yield
-        return
-    from .perf_record import STATS_FIXTURE_PREFIXES
-    t0 = time.perf_counter()
-    n = 0
-    try:
-        async with perf_pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT relname FROM pg_stat_user_tables ORDER BY relname")
-            for r in rows:
-                name = r["relname"]
-                if not any(name.startswith(p) for p in STATS_FIXTURE_PREFIXES):
-                    continue
-                try:
-                    await conn.execute(f'ANALYZE "{name}"')
-                    n += 1
-                except Exception:
-                    pass          # a table that vanished mid-run is not fatal
-    except Exception as exc:
-        print(f"\n  perf: could not refresh statistics ({exc}) — this run is "
-              f"comparable only to one taken on the same statistics (issues/112)")
-        yield
-        return
-    print(f"\n  perf: ANALYZEd {n} fixture table(s) in "
-          f"{time.perf_counter() - t0:.1f}s so this run starts from known "
-          f"statistics (issues/112)")
-    yield
+# A DETERMINISTIC ANALYZE BEFORE A RECORDED RUN WAS TRIED AND REVERTED.
+#
+# `issues/112` proposed it to make two recorded runs start from the same
+# statistics. Measured, it makes comparisons WORSE on two counts:
+#
+#   * ANALYZE RESAMPLES. `deep_paging.monotonic[100k]` sits on a planner cost tie
+#     between `Gather Merge` and a `Sort` above a `Gather`. With an ANALYZE
+#     before each run it alternated 174,341 / 333,407 buffers (184 / 483 ms);
+#     with no ANALYZE it returned 333,407 three times running. The refresh does
+#     not stabilise the measurement, it randomises it.
+#   * IT EMPTIES THE CACHE. Analyzing 260 tables and 126M live tuples evicts the
+#     working set, and the fixtures are 45 GB against a 16 GB `shared_buffers`,
+#     so nothing can warm them back. `shared_read` went 0 -> 233 across six
+#     benches purely from that.
+#
+# What survives is `perf_record.stats_stamp`, which records WHEN the fixtures
+# were last analyzed. That is what the forty-minute investigation actually
+# needed — attribution, not control.
 
 
 @pytest_asyncio.fixture(loop_scope="session")

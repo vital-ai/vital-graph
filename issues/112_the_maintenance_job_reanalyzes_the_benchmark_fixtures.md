@@ -17,15 +17,45 @@ Both landed:
   A baseline with no stamp says so, in the same terms `issues/081` established:
   absence is not agreement.
 
-* **Recorded runs start from known statistics.** A session fixture ANALYZEs the
-  benchmark tables once before a run that is being recorded — measured at
-  **144.5s for 260 tables** — and is skipped entirely otherwise, because an
-  ordinary `pytest tests/performance` is a feedback loop and should not pay for a
-  property only a baseline comparison needs.
+* **Option 2 was BUILT, MEASURED, AND REVERTED.** A deterministic ANALYZE before
+  each recorded run makes comparisons WORSE on two counts:
 
-Stamping and refreshing compose deliberately. The refresh makes two recorded runs
-comparable; the stamp still says WHEN, so a run against deliberately stale
-statistics — a real production condition — remains legible rather than hidden.
+      with an ANALYZE before each run   174,341 / 333,407 buffers, alternating
+      with no ANALYZE                   333,407 / 333,407 / 333,407
+
+  **ANALYZE resamples.** `deep_paging.monotonic[100k]` sits on a planner cost tie
+  between `Gather Merge` and a `Sort` above a `Gather`, and a fresh sample tips
+  it either way. The refresh does not stabilise the measurement, it RANDOMISES
+  it — 184 ms or 483 ms, by coin flip.
+
+  **And it empties the cache.** Analyzing 260 tables and 126M live tuples evicts
+  the working set, and the fixtures are 45 GB against a 16 GB `shared_buffers`,
+  so nothing warms them back — `pg_prewarm` cannot help with a working set three
+  times the pool. `shared_read` went 0 -> 233 across six benches from that alone,
+  and `shared_read` is gated, so the run read as a broad regression.
+
+  The reverting commit keeps the reasoning at the call site so it is not retried.
+
+## The bigger correction: the 91% was never a regression
+
+The original finding above — "the maintenance job's ANALYZE changed the plan" —
+was half right and drew the wrong conclusion. The plan is **BISTABLE**. It is not
+that fresh statistics are worse than stale ones; it is that this query has two
+plans within noise of each other and ANY resampling picks between them.
+
+    old baseline (08-18)                  174,345
+    a run recorded after an ANALYZE       174,340
+    the next run, same code and procedure 333,414
+
+Three values, one commit. So the "+91% regression" that blocked promotion for a
+day was a coin flip, and chasing it — including the forty minutes spent excluding
+every commit — was chasing noise that the bench presents as a number.
+
+**That is the thing worth fixing, and it is not fixed.** A bench asserting an
+absolute buffer count on a plan that is one sample away from flipping will keep
+reporting regressions forever. It needs to either pin the plan for the
+measurement, assert a ratio that survives the flip, or declare itself bistable.
+Recorded as open below.
 
 `query.kgquery.deep_paging.monotonic[100k]` against the 2026-08-18 baseline:
 
@@ -84,6 +114,8 @@ compared against an unrecorded CONFIGURATION is meaningless, and added
 is not recorded and which the application mutates on its own schedule.
 
 ## Options
+
+*(1 done, 2 tried and reverted, 3 open — kept for the reasoning.)*
 
 1. **Stamp the statistics state.** Record `last_analyze` / `last_autoanalyze` and
    `reltuples` per fixture table in `perf_record.env`, so `perf_compare` can say
