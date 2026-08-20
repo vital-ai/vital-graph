@@ -141,7 +141,37 @@ Measured against the same criterion the edge walk takes 1,877 ms to answer:
   would page through the wrong population". Using the table to FILTER is the
   opposite direction and does not inherit that objection.
 
-#### What building it involves — NOT DONE
+#### Built 2026-08-20 — `slot_sort_range.py`
+
+    >= 99.9    145 matches   1,886 ms ->  16 ms   118x
+    >= 99    1,017 matches   1,877 ms ->  61 ms    31x
+    >= 90    9,907 matches      77 ms ->  81 ms   unchanged, the gate declines
+
+Row counts exact against the manifest at all four thresholds.
+
+**It anchors on the SLOT, not the entity, which removed the risky part.**
+`entity_slot_sort` is keyed on `(slot_uuid, context_uuid)` and that row carries
+the slot's type and value, so "slots of type T with value >= L" is exactly what
+the chain already requires of `?slot`. Nothing is replaced and the answer cannot
+change — the constraint only hands PostgreSQL a small indexed set to start from.
+No `frame_type_path` matching is involved, so the near-miss that returns wrong
+rows is not reachable.
+
+**The gate is the whole thing, and it was wrong twice before it was right.**
+Ungated, the loose threshold went from 77 ms to a TIMEOUT — a 9,907-row IN list
+destroys a plan that already worked. Gated on `MIN_SELECTIVITY` it still timed
+out, because the first denominator was `pred_stats[hasDoubleSlotValue]`, which
+counts every double-valued slot in the space (3.9M) rather than MQLRating's
+100,000: 9,907 read as 0.25% and sailed through. Against its own slot type it is
+9.9% and declines. The denominator is now the `quad_stats` pair count for
+(hasKGSlotType, T).
+
+`MIN_SELECTIVITY = 0.05` is `semijoin`'s existing threshold, reused rather than
+invented — its comment describes this same cliff ("a criterion matching 9% of
+entities went to 0.77x the baseline while one matching 0.96% went to 889x"), and
+1.0% and 9.9% here straddle it.
+
+#### What was NOT built
 
 The hook is clean: `rewrite_edge_table` and `rewrite_frame_entity_table` are both
 `rewrite_*(plan, aliases, space_id)` applied in sequence in `generator.py`

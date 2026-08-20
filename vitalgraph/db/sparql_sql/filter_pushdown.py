@@ -592,6 +592,20 @@ def _try_numeric_filter(
     # Record structurally so the selectivity gate can estimate this leaf.
     bgp.range_leaves[(ref_id, col_name)] = (op, literal)
 
+    # ADDITIONALLY narrow the slot itself against `entity_slot_sort`, when this
+    # range is a KGQuery slot criterion. The term semi-join above is correct and
+    # leaves the planner nothing selective to drive from — half the query becomes
+    # one Hash Join and a fifth a sequential scan of the whole edge table. The
+    # derived table answers the same question with an Index Only Scan in 2 ms.
+    # Adds a constraint the surrounding chain already implies; see
+    # `slot_sort_range` for why it anchors on the slot and not the entity.
+    if ctx is not None:
+        from .slot_sort_range import slot_range_constraint
+        extra = slot_range_constraint(bgp, ctx.aliases, ctx.space_id,
+                                      var_name, op, literal, value_sql)
+        if extra and extra not in bgp.tagged_constraints:
+            bgp.tagged_constraints.append(extra)
+
     logger.debug("Numeric filter pushdown: %s %s %s -> %s",
                  var_name, op, literal, constraint_sql[:80])
     return (ref_id, constraint_sql)
