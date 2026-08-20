@@ -1,6 +1,31 @@
 # `shape.node_types` Reports a Regression When Two Siblings Swap Places
 
-## Status: FIXED 2026-08-20 — the counts gate, the order reports
+## Status: FIXED 2026-08-20 — option 3, a structural tree comparison
+
+Went through option 1 first (gate on the node-type multiset) and then took
+option 3, because option 1 bought the fix by giving up a real signal.
+
+`shape.tree` records `[node_type, [children...]]` with children sorted by their
+own subtree, so sibling order normalises away and parent/child survives:
+
+    Sort above Gather    ["Sort",   [["Gather", []]]]
+    Gather above Sort    ["Gather", [["Sort",   []]]]
+
+    sibling swap                 no finding at all
+    index scan -> seq scan       FAIL  gained ['NL>Seq Scan'], lost [...]
+    Sort/Gather vs Gather/Sort   FAIL  <- the case a multiset cannot see
+    reparenting a grandchild     FAIL
+
+`node_types` stops gating where a tree is present — comparing both would
+reintroduce the false positive — and a baseline predating tree recording says so
+rather than silently falling back.
+
+The comparison canonicalises both sides rather than trusting how they were
+recorded, so an older recorder or a different sort key still compares as the same
+plan. That was found by a test which shuffled a STORED tree and watched it fail:
+an artificial input, but the same shape as a future recorder change.
+
+Both baselines re-promoted carrying trees.
 
 `perf_compare` now compares the node-type MULTISET for the gate and surfaces an
 order-only difference as information:
@@ -18,13 +43,12 @@ the moved nodes named.
 The failure message is also readable now. It used to print both 39-element lists;
 it prints the difference.
 
-**Option 1 was taken, with option 3's objection kept visible.** A multiset cannot
-see a parent/child swap that preserves it — a `Sort` above a `Gather` versus the
-reverse. That is exactly why the order difference is REPORTED rather than
-dropped, and it is pinned as a known limit in
-`tests/unit/test_shape_comparison_ignores_sibling_order.py::TestWhatThisCannotSee`
-so it is a stated trade rather than a surprise. If it ever needs to gate, the fix
-is the structural tree comparison, not a return to elementwise.
+**The intermediate step is worth recording.** Option 1 shipped first and was
+correct about the false positive; the limit it accepted — blindness to a
+parent/child swap — was written down as a passing test named
+`TestWhatThisCannotSee`. That test is what made the case for finishing the job:
+a stated limit is easy to re-read and act on, where an unstated one is
+rediscovered by whoever the metric misleads next.
 
 `traversal.skew2k.dedup.depth3` fails the baseline comparison on
 `shape.node_types`. Measured against the run that produced the alert:
