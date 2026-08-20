@@ -731,10 +731,15 @@ class KGDocumentsEndpoint:
         try:
             from vitalgraph.vectorization import get_local_provider
             provider = get_local_provider()
-            embedder = getattr(provider, "_embedder", None) if provider else None
-            tokenizer = getattr(embedder, "tokenizer", None) if embedder else None
-            if tokenizer is not None:
-                return lambda text: len(tokenizer.encode(text))
+            # Through the provider, NOT through `provider._embedder.tokenizer`.
+            # That reach-through handed the caller the shared Rust tokenizer and
+            # it was then used for segment sizing on the segmentation thread
+            # while auto_sync embedded on another — `RuntimeError: Already
+            # borrowed`, 11 times in one cold full-suite run, failing a job
+            # outright and losing an 83-text batch (`issues/110`).
+            counter = getattr(provider, "count_tokens", None) if provider else None
+            if callable(counter):
+                return counter
         except Exception as e:
             logger.debug("Model tokenizer unavailable, using whitespace count: %s", e)
         return None  # Falls back to whitespace tokenizer

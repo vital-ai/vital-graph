@@ -27,6 +27,7 @@ issues a model-info API call that fails under HF_HUB_OFFLINE=1.
 """
 
 import asyncio
+import threading
 import logging
 import os
 from pathlib import Path
@@ -113,6 +114,8 @@ class ParaphraseMultilingualMiniLMProvider(VectorizationProvider):
             model_name=self._model_source, device=device,
         )
         self._dim = int(self._vectorizer.dim)
+        # Guards the shared vectorizer — see the note on `_vectorize_sync`.
+        self._embed_lock = threading.Lock()
         logger.info(
             f"ParaphraseMultilingualMiniLMProvider initialized: "
             f"model={self._model_name_str}, source={self._model_source}, "
@@ -169,8 +172,20 @@ class ParaphraseMultilingualMiniLMProvider(VectorizationProvider):
             return []
         return await asyncio.to_thread(self._vectorize_batch_sync, texts)
 
+    # Same shared-tokenizer hazard as `vitalsigns_provider`, for the same
+    # reason: `registry._provider_cache` hands one instance to every caller and
+    # both entry points offload to `asyncio.to_thread`, so concurrent work
+    # touches one HuggingFace tokenizer from two threads and it raises
+    # `RuntimeError: Already borrowed`. Fixed there after it failed a
+    # segmentation job and lost an 83-text batch (`issues/110`); fixed here
+    # because nothing about that was specific to the ONNX backend, and this
+    # provider is the one the wiki fixture names by model.
     def _vectorize_sync(self, text: str) -> List[float]:
-        return self._vectorizer.vectorize_text(text).tolist()
+        with self._embed_lock:
+            return self._vectorizer.vectorize_text(text).tolist()
 
     def _vectorize_batch_sync(self, texts: List[str]) -> List[List[float]]:
-        return [self._vectorizer.vectorize_text(t).tolist() for t in texts]
+        # One acquisition for the whole batch: re-acquiring per text interleaves
+        # this batch with every other caller and multiplies the contention.
+        with self._embed_lock:
+            return [self._vectorizer.vectorize_text(t).tolist() for t in texts]

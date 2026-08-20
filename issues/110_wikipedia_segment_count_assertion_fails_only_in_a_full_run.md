@@ -1,6 +1,71 @@
 # A Wikipedia Segment-Count Assertion Fails Only in a Full API Run
 
-## Status: OPEN — reproduced twice, never with the assertion captured
+## Status: FIXED 2026-08-19 — a shared tokenizer, not a flaky test
+
+    AssertionError: Completed job 2 has unexpected error: Already borrowed
+
+`RuntimeError: Already borrowed` is the PyO3 RefCell refusing re-entry: one
+HuggingFace tokenizer used from two threads. `registry._instance_by_signature`
+hands every caller the SAME provider, and its tokenizer was reachable and
+unguarded from two directions at once — auto_sync embedding in an
+`asyncio.to_thread` worker, and document segmentation counting tokens.
+
+Not a test problem. 11 occurrences in one run, which failed a segmentation job
+outright (`_process_job - ERROR - Job 2 failed: Already borrowed`) and lost an
+83-text auto_sync batch. `vectorization_failed` records that as **status
+completed with an error message**, on the argument that segments are still
+searchable via FTS — so the visible outcome is a completed job and vectors that
+silently are not there. One assertion in the Wikipedia end-to-end test was the
+only thing that ever complained.
+
+### Two fixes, because the first one was not enough
+
+**1. A lock around embedding.** `threading.Lock`, not asyncio: the collision is
+between worker THREADS and the provider is reachable from more than one event
+loop. Held across a whole batch rather than per text, since re-acquiring 83 times
+interleaves the batch with every other caller.
+
+**That did not fix it**, and the cold run failed again with the lock in place.
+The log showed every survivor was an auto_sync embed racing a segmentation job.
+
+**2. The TOKENIZER is the shared object, not just the embed call.** Two callers
+reached straight into `provider._embedder.tokenizer` for segment sizing —
+`segmentation_worker._get_tokenizer` and `kgdocuments_endpoint._get_tokenizer`,
+each returning `lambda text: len(tokenizer.encode(text))`. They now call
+`provider.count_tokens`, which takes the same lock, and `max_input_tokens` takes
+it too because reading `model_max_length` borrows the same cell.
+
+Removing the reach-through is worth it on its own: it had already caused a bug,
+looking for a `_tokenizer` attribute the provider does not have, getting None,
+and silently falling back to whitespace counting.
+
+    before   1 cold full-suite run   11 occurrences, 3 tests failed
+    after    4 cold full-suite runs   0 occurrences, 0 failures
+
+### How it was found, after two wrong turns
+
+**The repeat-until-it-fires loop could never have caught it.** Six warm runs were
+queued; the failure only happens on a COLD container, because it needs
+segmentation and vectorization to overlap while nothing is cached. The pattern
+was in the timestamps all along:
+
+    18:28 FAILED   first run after a rebuild+restart
+    18:43 clean    warm rerun
+    21:48 FAILED   first run after a rebuild+restart
+    22:03 clean    warm rerun
+    22:11-22:18 clean   three warm runs
+
+Two cold runs, two failures; seven warm runs, none. Restarting the container
+before each run reproduced it on the second attempt.
+
+**The module alone passes even cold** — it needs the full suite's load as well,
+which is why the isolated rerun was never evidence of anything.
+
+**And an early hypothesis was disconfirmed by its own evidence.** Vectorization
+failure was suspected first and dismissed after grepping the log for it and
+finding nothing — the grep was right, the dismissal was wrong: the error arrives
+as `Already borrowed`, not as anything naming vectorization. It was the right
+suspect under a name nobody searched for.
 
 `tests/api/test_wikipedia_document_e2e.py::TestWikipediaVectorization::test_completed_jobs_have_segments`
 failed in 2 of 5 full `tests/api` runs on 2026-08-19, and passed every time it

@@ -9,6 +9,7 @@ HuggingFace downloads needed — the model weights are bundled in the
 
 import asyncio
 import logging
+import threading
 from typing import Any, Dict, List, Optional
 
 from vital_ai_vitalsigns.embedding.embedding_model import EmbeddingModel
@@ -33,6 +34,27 @@ class VitalSignsProvider(VectorizationProvider):
 
     def __init__(self, cache_size: int = 1000):
         self._embedder = EmbeddingModel(cache_size=cache_size)
+        # ONE embedder, shared by every caller: `registry._provider_cache`
+        # hands the same instance to all of them. Its HuggingFace tokenizer is a
+        # Rust object behind a RefCell, and both vectorize entry points offload
+        # to `asyncio.to_thread`, so two concurrent callers touch it from two
+        # threads and it raises
+        #
+        #     RuntimeError: Already borrowed
+        #
+        # That is not hypothetical and not rare enough to ignore: 11 occurrences
+        # in one API run, which failed a segmentation job outright
+        # (`_process_job - ERROR - Job 2 failed: Already borrowed`) and lost an
+        # 83-text auto_sync batch. It only appears when work overlaps — a cold
+        # container running the full suite, where segmentation-worker
+        # vectorization and auto_sync fire together — which is why it read as a
+        # flaky test for days (`issues/110`).
+        #
+        # A threading.Lock, not an asyncio one: the collision happens in worker
+        # THREADS, and the provider is reachable from more than one event loop.
+        # It serialises embedding, which is the cost of a model that cannot be
+        # shared; the alternative is losing vectors silently.
+        self._embed_lock = threading.Lock()
         self._dim = _ONNX_DIMS
         self._model_name = self._embedder.get_model_id()
         logger.info(
@@ -44,11 +66,39 @@ class VitalSignsProvider(VectorizationProvider):
     def dimensions(self) -> int:
         return self._dim
 
+    def count_tokens(self, text: str) -> int:
+        """Token count for `text`, under the embed lock.
+
+        THE TOKENIZER IS THE SHARED OBJECT, not just the embed call. Two callers
+        reached straight into `provider._embedder.tokenizer` and used it for
+        segment sizing — `segmentation_worker._get_tokenizer` and
+        `kgdocuments_endpoint._get_tokenizer`, both returning
+        `lambda text: len(tokenizer.encode(text))` — so document segmentation
+        tokenized on one thread while auto_sync embedded on another, through the
+        same Rust RefCell, and it raised `RuntimeError: Already borrowed`.
+
+        Locking only `vectorize` did NOT fix it, which is how this was found:
+        the lock landed, the cold full-suite run still failed, and the log showed
+        the survivors were all auto_sync embeds racing a segmentation job.
+
+        Exposed as a method so callers stop reaching through a private
+        attribute. That reach-through has already caused one bug: the previous
+        version looked for a `_tokenizer` the provider does not have, silently
+        got None, and fell back to whitespace counting.
+        """
+        with self._embed_lock:
+            return len(self._embedder.tokenizer.encode(text))
+
     @property
     def max_input_tokens(self) -> Optional[int]:
-        """Read from the bundled model's tokenizer rather than hardcoded."""
+        """Read from the bundled model's tokenizer rather than hardcoded.
+
+        Under the lock too: reading `model_max_length` borrows the same RefCell
+        an in-flight encode holds.
+        """
         try:
-            limit = int(self._embedder.tokenizer.model_max_length)
+            with self._embed_lock:
+                limit = int(self._embedder.tokenizer.model_max_length)
             # Some tokenizers use a sentinel (very large int) for "no limit".
             return limit if 0 < limit < 1_000_000 else None
         except Exception:
@@ -98,7 +148,8 @@ class VitalSignsProvider(VectorizationProvider):
     def _vectorize_sync(self, text: str) -> List[float]:
         """Synchronous vectorization of a single text."""
         import numpy as np
-        result = self._embedder.vectorize(text)  # type: ignore[arg-type]
+        with self._embed_lock:
+            result = self._embedder.vectorize(text)  # type: ignore[arg-type]
         # EmbeddingModel returns numpy ndarray for single string
         if isinstance(result, np.ndarray):
             return result.tolist()
@@ -114,10 +165,14 @@ class VitalSignsProvider(VectorizationProvider):
         """
         import numpy as np
         out: List[List[float]] = []
-        for t in texts:
-            result = self._embedder.vectorize(t)  # single string → single array
-            if isinstance(result, np.ndarray):
-                out.append(result.tolist())
-            else:
-                out.append(list(result))  # type: ignore[arg-type]
+        # Held across the whole batch rather than per text: re-acquiring 83
+        # times interleaves this batch with every other caller and multiplies
+        # the contention it exists to remove.
+        with self._embed_lock:
+            for t in texts:
+                result = self._embedder.vectorize(t)  # single string → single array
+                if isinstance(result, np.ndarray):
+                    out.append(result.tolist())
+                else:
+                    out.append(list(result))  # type: ignore[arg-type]
         return out
