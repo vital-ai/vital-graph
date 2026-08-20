@@ -274,6 +274,7 @@ asyncio_mode = "auto"
 markers = [
     "integration: Tier 3 integration tests (require PG + Jena sidecar)",
     "api: Tier 4 API end-to-end tests (require running VitalGraph server)",
+    "serial: must not run under pytest-xdist - measures a shared resource (pool capacity, timing) that parallel workers change",
 ]
 
 [tool.check-manifest]

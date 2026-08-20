@@ -118,6 +118,12 @@ async def test_concurrent_insert_data_shared_terms_read_after_write(raw_impl, ra
     assert not misses, f"{len(misses)} writes not visible to their own read-back: {misses[:5]}"
 
 
+# SERIAL. This measures how many connections the pool can hand out before it
+# blocks, so anything else holding connections changes the answer — and under
+# `pytest-xdist -n 4` the other three workers are doing exactly that. It failed
+# in parallel and passed alone, which is the signature of a test measuring a
+# shared resource rather than a flaky one.
+@pytest.mark.serial
 @pytest.mark.asyncio(loop_scope="session")
 async def test_concurrent_writers_do_not_exhaust_pool(raw_impl, raw_space):
     """A committed write must never vanish from a concurrent independent reader,

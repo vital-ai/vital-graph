@@ -66,7 +66,12 @@ gate that exposes it fires on statistics, not on code.
 
 ## What makes it likely rather than unlucky
 
-* The image takes ~8 minutes to build, so nobody rebuilds casually.
+* ~~The image takes ~8 minutes to build, so nobody rebuilds casually.~~
+  **WRONG, and it shaped a whole day's behaviour.** Measured 2026-08-20 across
+  six consecutive rebuilds: **21-24 seconds**. Docker layer caching means only
+  the source COPY and the layers after it are redone. The ~8 minutes is a COLD
+  build. Believing the stale figure is why changes got batched to avoid
+  rebuilding — the opposite of what this issue asks for.
 * `docker compose up -d` does NOT rebuild on source changes; it recreates only
   when the compose config or image changes.
 * The generator is the most-changed component in this repo and is entirely
