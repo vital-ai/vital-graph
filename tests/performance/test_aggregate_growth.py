@@ -162,10 +162,11 @@ async def test_min_max_sort_per_group_stays_bounded(
 async def test_min_survives_spilling_to_disk(perf_conn, perf_record, fx):
     """The cliff the plan warned about: `external merge` instead of `quicksort`.
 
-    Measured at 4MB work_mem, where this sort does spill. It costs nothing
-    detectable (897 ms against 876 ms in memory), so the constant factor does
-    NOT become a cliff — which is the specific thing the scaling plan flagged
-    and could not evaluate.
+    Measured at the LARGEST work_mem that actually spills, found by stepping
+    down — 4MB reaches it on 100k, 1MB on 10k. It costs nothing detectable
+    (897 ms against 876 ms in memory), so the constant factor does NOT become a
+    cliff, which is the specific thing the scaling plan flagged and could not
+    evaluate.
 
     Gated loosely and on the RATIO to the in-memory run, because the point is
     "spilling is not catastrophic", not a particular millisecond count.
@@ -197,17 +198,30 @@ async def test_min_survives_spilling_to_disk(perf_conn, perf_record, fx):
         return ms, methods
 
     mem_ms, mem_methods = await at_work_mem("64MB")
-    disk_ms, disk_methods = await at_work_mem("4MB")
+
+    # FIND the spill rather than assuming a setting reaches it. A fixed 4MB
+    # spills on 100k and does NOT on 10k — measured, `quicksort` at 4MB and
+    # `external merge` at 1MB — so the 10k case skipped with "too little data to
+    # test the cliff", which was not true: the data was fine, the threshold was
+    # too generous. A bench that cannot falsify its claim on half its fixtures is
+    # a hole that reads as coverage.
+    disk_ms = disk_methods = None
+    for setting in ("4MB", "1MB", "256kB", "64kB"):
+        ms, methods = await at_work_mem(setting)
+        if any("external" in m for m in methods):
+            disk_ms, disk_methods, spill_at = ms, methods, setting
+            break
+    if disk_ms is None:
+        pytest.skip(f"{fx.label}: the sort did not spill even at 64kB "
+                    f"(PostgreSQL's minimum work_mem), so this fixture genuinely "
+                    f"cannot reach the cliff")
 
     perf_record(kind="sql", dataset=fx.space,
                 metrics={"min_in_memory_ms": round(mem_ms, 1),
                          "min_spilled_ms": round(disk_ms, 1),
                          "spill_ratio": round(disk_ms / mem_ms, 2) if mem_ms else 0},
-                notes="MIN with and without a work_mem spill — issues/029")
-
-    if not any("external" in m for m in disk_methods):
-        pytest.skip(f"{fx.label}: sort did not spill at 4MB "
-                    f"(methods={disk_methods}) — too little data to test the cliff")
+                notes=f"MIN with and without a work_mem spill at {spill_at} "
+                      f"— issues/029")
 
     assert disk_ms < mem_ms * 10, (
         f"spilling to disk cost {disk_ms / mem_ms:.1f}x the in-memory sort "

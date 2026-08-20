@@ -179,6 +179,46 @@ def metrics_from_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
     return m
 
 
+def canonical_tree(node: Dict[str, Any]) -> List[Any]:
+    """`[node_type, [children...]]`, children sorted so sibling order normalises.
+
+    `issues/113`. A flat pre-order walk cannot tell a meaningless reordering from
+    a real restructuring: PostgreSQL may emit a hash join's inputs either way
+    round, and comparing the list elementwise failed a bench whose plan had 39
+    identical nodes, identical rows and identical cost.
+
+    Comparing the MULTISET fixed that and gave up something in exchange — a
+    `Sort` above a `Gather` and a `Gather` above a `Sort` have the same counts
+    and are different plans. This keeps both properties: children are sorted by
+    their own canonical form, so a sibling swap is erased, while PARENT/CHILD
+    relationships survive:
+
+        Sort above Gather    ["Sort",   [["Gather", []]]]
+        Gather above Sort    ["Gather", [["Sort",   []]]]
+
+    Sorted by `repr` rather than by node type alone, so two children of the same
+    type are ordered by their whole subtree and the result is stable.
+    """
+    kids = [canonical_tree(c) for c in (node.get("Plans") or [])]
+    return [node.get("Node Type", ""), sorted(kids, key=repr)]
+
+
+def tree_edges(tree: List[Any], parent: str = "") -> List[str]:
+    """`parent>child` for every edge, for a difference a human can read.
+
+    The tree itself is what gates; this is what the failure message says. Two
+    nested lists printed side by side are unreadable at terminal width, which is
+    the state the elementwise comparison left its messages in.
+    """
+    out = []
+    node_type, kids = tree[0], tree[1]
+    if parent:
+        out.append(f"{parent}>{node_type}")
+    for k in kids:
+        out.extend(tree_edges(k, node_type))
+    return out
+
+
 def shape_from_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
     """The size-independent structural fingerprint — gated on exact match."""
     root = plan["Plan"] if "Plan" in plan else plan
@@ -188,6 +228,9 @@ def shape_from_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
         "indexes": sorted({n["Index Name"] for n in nodes if n.get("Index Name")}),
         "seq_scans": sorted({n.get("Relation Name", "") for n in nodes
                              if n.get("Node Type") == "Seq Scan"}),
+        # The structural fingerprint proper. `node_types` is kept because it is
+        # what the assertion helpers print and what a reader recognises.
+        "tree": canonical_tree(root),
     }
 
 

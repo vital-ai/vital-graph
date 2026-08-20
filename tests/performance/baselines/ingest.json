@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "env": {
-    "started_at": "2026-08-20T17:21:11.273777+00:00",
+    "started_at": "2026-08-20T18:34:20.113846+00:00",
     "git": {
-      "commit": "d0ba0373c759138dee72196e6df2e5e4604b9d54",
-      "short": "d0ba037",
+      "commit": "b8ab22c8b9d5e21b778987ca454e79e2a15bb2b9",
+      "short": "b8ab22c",
       "branch": "main",
       "dirty": true
     },
@@ -37,9 +37,9 @@
     "stats": {
       "fixture_tables": 260,
       "fixture_live_tuples": 126221181,
-      "fixture_last_analyze": "2026-08-20T16:50:18.695202+00:00"
+      "fixture_last_analyze": "2026-08-20T18:29:21.365413+00:00"
     },
-    "finished_at": "2026-08-20T17:25:07.877882+00:00"
+    "finished_at": "2026-08-20T18:38:18.304805+00:00"
   },
   "benches": [
     {
@@ -50,7 +50,7 @@
         "growth_class": "flat",
         "buffers_at_50000": 107,
         "buffers_at_150000": 104,
-        "buffers_at_450000": 128
+        "buffers_at_450000": 104
       },
       "dataset": "synthetic:[50000, 150000, 450000]"
     },
@@ -59,12 +59,12 @@
       "kind": "write",
       "status": "ok",
       "metrics": {
-        "executemany_quads_per_sec": 5842,
-        "copy_quads_per_sec": 60607,
-        "bulk_e2e_quads_per_sec": 36557,
-        "index_rebuild_s": 4.342,
-        "copy_speedup": 10.375,
-        "e2e_speedup": 6.258
+        "executemany_quads_per_sec": 7133,
+        "copy_quads_per_sec": 70238,
+        "bulk_e2e_quads_per_sec": 40918,
+        "index_rebuild_s": 4.081,
+        "copy_speedup": 9.847,
+        "e2e_speedup": 5.737
       },
       "dataset": "synthetic:400000q"
     },
@@ -73,10 +73,10 @@
       "kind": "write",
       "status": "ok",
       "metrics": {
-        "growth_class": "flat",
-        "probe_ms_at_100000q": 65.13,
-        "probe_ms_at_300000q": 68.09,
-        "probe_ms_at_900000q": 71.28
+        "growth_class": "log",
+        "probe_ms_at_100000q": 70.15,
+        "probe_ms_at_300000q": 79.22,
+        "probe_ms_at_900000q": 98.94
       },
       "dataset": "synthetic:[50000, 150000, 450000]",
       "notes": "probe=300 quads, min of 3 rolled-back runs"
@@ -84,7 +84,7 @@
   ],
   "baseline": {
     "name": "ingest",
-    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260820T172110Z-d0ba037-ingest.json",
+    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260820T182612Z-c2dc83e-i2.json",
     "reason": "",
     "pg_stamped": true
   }

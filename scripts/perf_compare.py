@@ -83,6 +83,37 @@ def rule_for(thresholds: Dict[str, Any], bench_id: str, metric: str) -> Optional
     return merged
 
 
+def canon(tree):
+    """Re-sort a shape tree's children before comparing.
+
+    The recorder already writes a canonical tree, so in normal use this is a
+    no-op. It is applied anyway because the gate should not depend on HOW the
+    baseline was produced: a tree written by an older recorder, or by a future
+    one with a different sort key, must still compare as the same plan. Without
+    it, a baseline and a run that agree about the plan can disagree about the
+    bytes — which is the whole class of false positive this metric exists to
+    stop having (issues/113).
+    """
+    return [tree[0], sorted((canon(k) for k in tree[1]), key=repr)]
+
+
+def tree_edges(tree, parent: str = "") -> List[str]:
+    """`parent>child` for every edge of a recorded shape tree.
+
+    Deliberately a local copy of `perf_record.tree_edges` rather than an import:
+    a script in `scripts/` reaching into `tests/` inverts the dependency, and
+    this is eight lines of pure structure. `test_shape_comparison_*` asserts the
+    two stay in agreement.
+    """
+    out: List[str] = []
+    node_type, kids = tree[0], tree[1]
+    if parent:
+        out.append(f"{parent}>{node_type}")
+    for k in kids:
+        out.extend(tree_edges(k, node_type))
+    return out
+
+
 def pct_change(baseline: float, current: float) -> Optional[float]:
     if baseline == 0:
         return None if current == 0 else float("inf")
@@ -239,8 +270,43 @@ def compare_bench(bench_id: str, base: Dict[str, Any], cur: Optional[Dict[str, A
     # versus the reverse), which is why the order difference is still surfaced
     # rather than dropped — as information, at the level a reordering deserves.
     b_shape, c_shape = base.get("shape"), cur.get("shape")
+
+    # STRUCTURAL COMPARISON when both sides recorded a tree (issues/113 option
+    # 3). The tree has sibling order normalised away and parent/child preserved,
+    # so it decides both cases the flat list could not: a reordering is not a
+    # change, and a `Sort` above a `Gather` is not a `Gather` above a `Sort`.
+    #
+    # When the tree is present it REPLACES the node_types gate — comparing both
+    # would reintroduce the false positive it exists to remove. `indexes` and
+    # `seq_scans` still gate, because those are sets already.
+    b_tree = (b_shape or {}).get("tree")
+    c_tree = (c_shape or {}).get("tree")
+    tree_gated = False
+    if b_shape and c_shape and b_tree and c_tree:
+        tree_gated = True
+        if canon(b_tree) != canon(c_tree):
+            b_e, c_e = (Counter(tree_edges(canon(b_tree))),
+                        Counter(tree_edges(canon(c_tree))))
+            gained = sorted((c_e - b_e).elements())
+            lost = sorted((b_e - c_e).elements())
+            out.append({
+                "bench": bench_id, "metric": "shape.tree", "level": FAIL,
+                "detail": (f"gained {gained or '-'}, lost {lost or '-'}"
+                           if (gained or lost)
+                           else "the same edges in a different arrangement")})
+    elif b_shape and c_shape and (b_tree or c_tree):
+        # One side predates tree recording. Say so rather than silently falling
+        # back — issues/081's rule: absence is not agreement.
+        out.append({
+            "bench": bench_id, "metric": "shape.tree", "level": INFO,
+            "detail": ("baseline predates structural shape recording, so this "
+                       "bench is gated on node COUNTS only — re-promote to gate "
+                       "the tree (issues/113)")})
+
     if b_shape and c_shape:
-        for field in ("node_types", "indexes", "seq_scans"):
+        fields = ("indexes", "seq_scans") if tree_gated else (
+            "node_types", "indexes", "seq_scans")
+        for field in fields:
             b_val, c_val = b_shape.get(field), c_shape.get(field)
             if b_val == c_val:
                 continue
