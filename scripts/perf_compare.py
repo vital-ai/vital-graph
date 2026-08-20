@@ -135,6 +135,33 @@ def compare_env(run: Dict[str, Any], base: Dict[str, Any]) -> List[str]:
             continue
         if a != b:
             problems.append(f"{section}.{key}: baseline={a!r} run={b!r}")
+
+    # The STATISTICS state, reported separately and as a NOTE rather than a
+    # mismatch. A refreshed ANALYZE does not invalidate the run — it explains
+    # it. Saying so is the whole point: `deep_paging.monotonic[100k]` moved 91%
+    # with identical code, settings and rows, and the comparison offered no
+    # candidate but "the last commit". Forty minutes went into excluding the
+    # commits before anyone asked whether the statistics had changed
+    # (issues/112).
+    base_st = base.get("env", {}).get("stats") or {}
+    run_st = run.get("env", {}).get("stats") or {}
+    if base_st and run_st:
+        b_at, r_at = base_st.get("fixture_last_analyze"), run_st.get("fixture_last_analyze")
+        if b_at and r_at and b_at != r_at:
+            problems.append(
+                f"NOTE stats.fixture_last_analyze: baseline={b_at} run={r_at} — "
+                f"the fixtures were re-ANALYZEd between these runs, so a plan "
+                f"flip here is not necessarily a code change (issues/112)")
+        b_n, r_n = base_st.get("fixture_live_tuples"), run_st.get("fixture_live_tuples")
+        if b_n and r_n and b_n != r_n:
+            problems.append(
+                f"NOTE stats.fixture_live_tuples: baseline={b_n:,} run={r_n:,} — "
+                f"the fixture data itself changed size")
+    elif run_st and not base_st:
+        problems.append(
+            "NOTE the baseline records no fixture statistics state, so a plan "
+            "flip caused by a background ANALYZE cannot be told apart from a "
+            "code regression (issues/112)")
     return problems
 
 

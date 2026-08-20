@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 
 import pytest
 import pytest_asyncio
@@ -155,6 +156,57 @@ async def perf_space_manager():
     await impl.disconnect()
 
 
+@pytest_asyncio.fixture(scope="session", loop_scope="session", autouse=True)
+async def _fresh_statistics(perf_pool):
+    """ANALYZE the benchmark fixtures once, before a RECORDED run.
+
+    `issues/112`. The application ANALYZEs these fixtures on its own schedule —
+    `MaintenanceJob` scores each space and runs ANALYZE/VACUUM from inside the
+    container — so two runs of identical code can plan differently. That is not
+    hypothetical: `deep_paging.monotonic[100k]` moved 174,345 -> 333,408 buffers
+    and 237 -> 474 ms with the same commit, the same settings and the same rows,
+    because a background ANALYZE turned a `Gather Merge` into a `Sort` above a
+    `Gather`.
+
+    Starting every recorded run from FRESH statistics makes the two sides
+    comparable. It does not make the effect go away — stale statistics are a real
+    production condition and `env.stats` still records when the fixtures were
+    last analyzed, so a comparison can say which it is.
+
+    RECORDED RUNS ONLY. An ordinary `pytest tests/performance` is a feedback
+    loop, and this costs a fixed price for a property only a baseline comparison
+    needs. Skipped silently when there is nothing to compare.
+    """
+    if _RUN is None:
+        yield
+        return
+    from .perf_record import STATS_FIXTURE_PREFIXES
+    t0 = time.perf_counter()
+    n = 0
+    try:
+        async with perf_pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT relname FROM pg_stat_user_tables ORDER BY relname")
+            for r in rows:
+                name = r["relname"]
+                if not any(name.startswith(p) for p in STATS_FIXTURE_PREFIXES):
+                    continue
+                try:
+                    await conn.execute(f'ANALYZE "{name}"')
+                    n += 1
+                except Exception:
+                    pass          # a table that vanished mid-run is not fatal
+    except Exception as exc:
+        print(f"\n  perf: could not refresh statistics ({exc}) — this run is "
+              f"comparable only to one taken on the same statistics (issues/112)")
+        yield
+        return
+    print(f"\n  perf: ANALYZEd {n} fixture table(s) in "
+          f"{time.perf_counter() - t0:.1f}s so this run starts from known "
+          f"statistics (issues/112)")
+    yield
+
+
 @pytest_asyncio.fixture(loop_scope="session")
 async def perf_conn(perf_pool):
     async with perf_pool.acquire() as conn:
@@ -234,6 +286,10 @@ async def perf_record(request, perf_pool):
     if _RUN is not None and not _RUN.env["pg"]:
         async with perf_pool.acquire() as conn:
             _RUN.env["pg"] = await perf_record_mod.pg_stamp(conn)
+            # And the STATISTICS state, for the same reason. The application
+            # ANALYZEs these fixtures on its own schedule, so two runs of
+            # identical code are not necessarily comparable (issues/112).
+            _RUN.env["stats"] = await perf_record_mod.stats_stamp(conn)
 
     def _record(plan=None, metrics=None, *, bench_id=None, kind="query",
                 dataset=None, notes=None, **extra):

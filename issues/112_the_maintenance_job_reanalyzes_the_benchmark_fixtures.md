@@ -1,6 +1,31 @@
 # A Perf "Regression" With Identical Code: the App Re-ANALYZEs the Fixtures
 
-## Status: EXPLAINED 2026-08-20 — not a code regression; the mitigation is a decision
+## Status: EXPLAINED and MITIGATED 2026-08-20 (options 1 and 2). Option 3 open.
+
+Both landed:
+
+* **The statistics state is stamped.** `perf_record.stats_stamp` records
+  `fixture_tables`, `fixture_live_tuples` and `fixture_last_analyze` into
+  `env.stats`, beside the `env.pg` settings that `issues/081` added for the same
+  reason one level up. `perf_compare` reports a change as a NOTE rather than a
+  mismatch — a refreshed ANALYZE does not invalidate a run, it EXPLAINS it:
+
+      NOTE stats.fixture_last_analyze: baseline=... run=... — the fixtures were
+      re-ANALYZEd between these runs, so a plan flip here is not necessarily a
+      code change
+
+  A baseline with no stamp says so, in the same terms `issues/081` established:
+  absence is not agreement.
+
+* **Recorded runs start from known statistics.** A session fixture ANALYZEs the
+  benchmark tables once before a run that is being recorded — measured at
+  **144.5s for 260 tables** — and is skipped entirely otherwise, because an
+  ordinary `pytest tests/performance` is a feedback loop and should not pay for a
+  property only a baseline comparison needs.
+
+Stamping and refreshing compose deliberately. The refresh makes two recorded runs
+comparable; the stamp still says WHEN, so a run against deliberately stale
+statistics — a real production condition — remains legible rather than hidden.
 
 `query.kgquery.deep_paging.monotonic[100k]` against the 2026-08-18 baseline:
 

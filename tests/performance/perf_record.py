@@ -101,6 +101,56 @@ def runner_stamp() -> Dict[str, Any]:
     }
 
 
+# The tables whose STATISTICS decide the plans this suite measures. Prefix
+# match, so every per-space table of a benchmark fixture is covered.
+STATS_FIXTURE_PREFIXES = ("sp_lead_synth_", "sp_graph_synth_", "sp_graph_skew_",
+                          "sp_graph_forms_", "sp_lead_types", "wordnet_frames",
+                          "sp_sql_lead_dataset", "space_lead_dataset_test")
+
+
+async def stats_stamp(conn) -> Dict[str, Any]:
+    """When the benchmark fixtures were last ANALYZEd, and how big they are.
+
+    `issues/112`. `PG_SETTINGS` above exists because a benchmark compared against
+    an unrecorded CONFIGURATION is meaningless (`issues/081`). The STATISTICS
+    STATE is exactly as load-bearing and was not recorded — and unlike the
+    settings, THE APPLICATION MUTATES IT ON A SCHEDULE: `MaintenanceJob` scores
+    each space and runs ANALYZE/VACUUM from inside the running container.
+
+    That produced a 91% "regression" with identical code, identical settings and
+    identical rows — `deep_paging.monotonic[100k]` went 174,345 -> 333,408
+    buffers and 237 -> 474 ms because fresh statistics turned a `Gather Merge`
+    into a `Sort` above a `Gather`. Attributing it took about forty minutes and
+    began by suspecting the day's commits, because the comparison reports the
+    delta against the last commit and offers no other candidate.
+
+    Recorded as an aggregate rather than per-table: the question a comparison
+    needs to answer is "were these two runs taken on the same statistics?", and
+    a single latest-analyze timestamp plus a row total answers it without
+    bloating the file with several hundred rows.
+    """
+    out: Dict[str, Any] = {}
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT relname, n_live_tup,
+                   greatest(coalesce(last_analyze, 'epoch'::timestamptz),
+                            coalesce(last_autoanalyze, 'epoch'::timestamptz)) AS analyzed
+            FROM pg_stat_user_tables
+            """)
+    except Exception:
+        return out
+    picked = [r for r in rows
+              if any(r["relname"].startswith(p) for p in STATS_FIXTURE_PREFIXES)]
+    if not picked:
+        return out
+    latest = max(r["analyzed"] for r in picked)
+    out["fixture_tables"] = len(picked)
+    out["fixture_live_tuples"] = sum(int(r["n_live_tup"] or 0) for r in picked)
+    out["fixture_last_analyze"] = latest.isoformat() if latest else None
+    return out
+
+
 async def pg_stamp(conn) -> Dict[str, Any]:
     settings: Dict[str, Any] = {}
     for name in PG_SETTINGS:
@@ -153,6 +203,7 @@ class PerfRun:
             "machine": machine_stamp(),
             "runner": runner_stamp(),
             "pg": {},
+            "stats": {},
         }
 
     def add(self, bench_id: str, **fields: Any) -> None:
