@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "env": {
-    "started_at": "2026-08-20T15:34:02.759119+00:00",
+    "started_at": "2026-08-20T16:47:56.235612+00:00",
     "git": {
-      "commit": "672643403dfec7ee393e12be7c6702e9b899a439",
-      "short": "6726434",
+      "commit": "5d68c0fff451e17b3c128b8f8c0407409029aa41",
+      "short": "5d68c0f",
       "branch": "main",
       "dirty": true
     },
@@ -37,9 +37,9 @@
     "stats": {
       "fixture_tables": 260,
       "fixture_live_tuples": 126221181,
-      "fixture_last_analyze": "2026-08-20T15:30:20.668066+00:00"
+      "fixture_last_analyze": "2026-08-20T16:21:18.052327+00:00"
     },
-    "finished_at": "2026-08-20T15:45:30.388791+00:00"
+    "finished_at": "2026-08-20T16:52:52.891706+00:00"
   },
   "benches": [
     {
@@ -47,9 +47,9 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "first_page_ms": 836.6,
-        "deep_page_ms": 780.7,
-        "deep_offset_ratio": 0.93,
+        "first_page_ms": 1302.5,
+        "deep_page_ms": 1135.8,
+        "deep_offset_ratio": 0.87,
         "offset": 375,
         "rows": 25
       },
@@ -61,8 +61,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 154.2,
-        "sorted_ms": 640.9,
+        "unsorted_ms": 245.7,
+        "sorted_ms": 1468.6,
         "rows": 25
       },
       "dataset": "synthetic:400frames",
@@ -73,9 +73,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_currency_min_ms": 373.3,
-        "agg_currency_avg_ms": 168.7,
-        "agg_currency_ratio": 2.21
+        "agg_currency_min_ms": 564.4,
+        "agg_currency_avg_ms": 171.0,
+        "agg_currency_ratio": 3.3
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN vs AVG on Currency \u2014 issues/029 sort-per-group"
@@ -85,9 +85,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_double_min_ms": 823.5,
-        "agg_double_avg_ms": 2255.7,
-        "agg_double_ratio": 0.37
+        "agg_double_min_ms": 882.0,
+        "agg_double_avg_ms": 4358.3,
+        "agg_double_ratio": 0.2
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN vs AVG on Double \u2014 issues/029 sort-per-group"
@@ -97,9 +97,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_integer_min_ms": 1249.1,
-        "agg_integer_avg_ms": 2740.5,
-        "agg_integer_ratio": 0.46
+        "agg_integer_min_ms": 949.8,
+        "agg_integer_avg_ms": 2795.9,
+        "agg_integer_ratio": 0.34
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN vs AVG on Integer \u2014 issues/029 sort-per-group"
@@ -109,9 +109,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_currency_min_ms": 234.5,
-        "agg_currency_avg_ms": 203.7,
-        "agg_currency_ratio": 1.15
+        "agg_currency_min_ms": 210.4,
+        "agg_currency_avg_ms": 192.2,
+        "agg_currency_ratio": 1.09
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Currency \u2014 issues/029 sort-per-group"
@@ -121,9 +121,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_double_min_ms": 246.9,
-        "agg_double_avg_ms": 178.1,
-        "agg_double_ratio": 1.39
+        "agg_double_min_ms": 204.7,
+        "agg_double_avg_ms": 157.7,
+        "agg_double_ratio": 1.3
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Double \u2014 issues/029 sort-per-group"
@@ -133,81 +133,21 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_integer_min_ms": 249.3,
-        "agg_integer_avg_ms": 180.6,
-        "agg_integer_ratio": 1.38
+        "agg_integer_min_ms": 215.0,
+        "agg_integer_avg_ms": 163.6,
+        "agg_integer_ratio": 1.31
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Integer \u2014 issues/029 sort-per-group"
-    },
-    {
-      "bench_id": "query.aggregate.sort_per_group[100k-by_type]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "agg_min_ms": 2932.9,
-        "agg_max_ms": 2696.0,
-        "agg_avg_ms": 1743.3,
-        "agg_sum_ms": 1667.1,
-        "agg_count_ms": 871.6,
-        "min_over_avg": 1.68
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "aggregate cost, group_by=True \u2014 issues/029 sort-per-group"
-    },
-    {
-      "bench_id": "query.aggregate.sort_per_group[100k-one_group]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "agg_min_ms": 885.1,
-        "agg_max_ms": 890.8,
-        "agg_avg_ms": 3049.5,
-        "agg_sum_ms": 2288.5,
-        "agg_count_ms": 68.1,
-        "min_over_avg": 0.29
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "aggregate cost, group_by=False \u2014 issues/029 sort-per-group"
-    },
-    {
-      "bench_id": "query.aggregate.sort_per_group[10k-by_type]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "agg_min_ms": 213.6,
-        "agg_max_ms": 178.6,
-        "agg_avg_ms": 135.3,
-        "agg_sum_ms": 134.5,
-        "agg_count_ms": 153.5,
-        "min_over_avg": 1.58
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "aggregate cost, group_by=True \u2014 issues/029 sort-per-group"
-    },
-    {
-      "bench_id": "query.aggregate.sort_per_group[10k-one_group]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "agg_min_ms": 196.6,
-        "agg_max_ms": 202.8,
-        "agg_avg_ms": 158.6,
-        "agg_sum_ms": 158.5,
-        "agg_count_ms": 3.5,
-        "min_over_avg": 1.24
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "aggregate cost, group_by=False \u2014 issues/029 sort-per-group"
     },
     {
       "bench_id": "query.aggregate.spill[100k]",
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "min_in_memory_ms": 1209.5,
-        "min_spilled_ms": 1176.0,
-        "spill_ratio": 0.97
+        "min_in_memory_ms": 1214.4,
+        "min_spilled_ms": 1041.3,
+        "spill_ratio": 0.86
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN with and without a work_mem spill \u2014 issues/029"
@@ -217,9 +157,9 @@
       "kind": "sql",
       "status": "skipped",
       "metrics": {
-        "min_in_memory_ms": 251.0,
-        "min_spilled_ms": 253.9,
-        "spill_ratio": 1.01
+        "min_in_memory_ms": 260.6,
+        "min_spilled_ms": 243.1,
+        "spill_ratio": 0.93
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN with and without a work_mem spill \u2014 issues/029",
@@ -245,14 +185,14 @@
       },
       "metrics": {
         "shared_buffers": 5,
-        "shared_read": 1,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 100,
         "max_actual_rows": 100,
         "estimated_rows": 100,
         "heap_fetches": 0,
-        "planning_ms": 0.284,
-        "execution_ms": 0.172,
+        "planning_ms": 0.63,
+        "execution_ms": 0.104,
         "matched_rows": 100
       },
       "dataset": "space_lead_dataset_test"
@@ -277,14 +217,14 @@
       },
       "metrics": {
         "shared_buffers": 989,
-        "shared_read": 4,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 1025,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.155,
-        "execution_ms": 28.952
+        "planning_ms": 0.231,
+        "execution_ms": 94.903
       },
       "dataset": "wordnet_frames"
     },
@@ -308,14 +248,14 @@
       },
       "metrics": {
         "shared_buffers": 127,
-        "shared_read": 2,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 1.564,
-        "execution_ms": 1.941
+        "planning_ms": 2.195,
+        "execution_ms": 1.513
       },
       "dataset": "wordnet_frames"
     },
@@ -345,37 +285,15 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.154,
-        "execution_ms": 0.628
+        "planning_ms": 0.204,
+        "execution_ms": 1.687
       },
       "dataset": "wordnet_frames"
     },
     {
       "bench_id": "query.frame_nesting.edge_hops_index_only",
-      "kind": "query",
-      "status": "ok",
-      "shape": {
-        "node_types": [
-          "Index Only Scan"
-        ],
-        "indexes": [
-          "idx_perf_edgehop_edge_src_dst"
-        ],
-        "seq_scans": []
-      },
-      "metrics": {
-        "shared_buffers": 3,
-        "shared_read": 0,
-        "temp_written": 0,
-        "actual_rows": 10,
-        "max_actual_rows": 10,
-        "estimated_rows": 10,
-        "heap_fetches": 0,
-        "planning_ms": 0.425,
-        "execution_ms": 0.021
-      },
-      "dataset": "synthetic:edges",
-      "notes": "forward hop (source\u2192dest)"
+      "status": "skipped",
+      "reason": "Skipped: the visibility map could not be set \u2014 another session holds an older snapshot, so an Index Only Scan is unavailable and this test would be measuring that rather than the index"
     },
     {
       "bench_id": "query.generated_sql.plan[lead_entity_type]",
@@ -398,14 +316,14 @@
       },
       "metrics": {
         "shared_buffers": 154,
-        "shared_read": 9,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.823,
-        "execution_ms": 2.7,
+        "planning_ms": 0.658,
+        "execution_ms": 1.418,
         "sql_chars": 6702,
         "joins": 0
       },
@@ -433,14 +351,14 @@
       },
       "metrics": {
         "shared_buffers": 96,
-        "shared_read": 42,
+        "shared_read": 39,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 1649,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 3.436,
-        "execution_ms": 9.359,
+        "planning_ms": 1.747,
+        "execution_ms": 7.843,
         "sql_chars": 3811,
         "joins": 0
       },
@@ -470,14 +388,14 @@
       },
       "metrics": {
         "shared_buffers": 205,
-        "shared_read": 25,
+        "shared_read": 21,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.913,
-        "execution_ms": 14.464,
+        "planning_ms": 1.144,
+        "execution_ms": 16.483,
         "sql_chars": 6687,
         "joins": 0
       },
@@ -515,8 +433,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 2.032,
-        "execution_ms": 2.771,
+        "planning_ms": 1.326,
+        "execution_ms": 2.461,
         "sql_chars": 6961,
         "joins": 0
       },
@@ -550,51 +468,13 @@
         "max_actual_rows": 109745,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.829,
-        "execution_ms": 56.978,
+        "planning_ms": 0.821,
+        "execution_ms": 71.643,
         "sql_chars": 3801,
         "joins": 0
       },
       "dataset": "wordnet_frames",
       "notes": "typed subject page (the KGEntity listing shape)"
-    },
-    {
-      "bench_id": "query.growth.entity_page_buffers",
-      "kind": "query",
-      "status": "ok",
-      "metrics": {
-        "growth_class": "flat",
-        "buffers_at_50000": 104,
-        "buffers_at_150000": 104,
-        "buffers_at_450000": 104
-      },
-      "dataset": "synthetic:[50000, 150000, 450000]"
-    },
-    {
-      "bench_id": "query.kgquery.deep_paging.curve[100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "page_ms_offset_0": 69.3,
-        "page_ms_offset_250": 329.8,
-        "page_ms_offset_1000": 304.5,
-        "deep_ratio": 4.4
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "cost across offsets \u2014 issues/078; flat means fixed"
-    },
-    {
-      "bench_id": "query.kgquery.deep_paging.curve[10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "page_ms_offset_0": 35.7,
-        "page_ms_offset_250": 40.4,
-        "page_ms_offset_1000": 30.8,
-        "deep_ratio": 1.1
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "cost across offsets \u2014 issues/078; flat means fixed"
     },
     {
       "bench_id": "query.kgquery.deep_paging.monotonic[100k]",
@@ -642,16 +522,16 @@
         "seq_scans": []
       },
       "metrics": {
-        "shared_buffers": 333414,
+        "shared_buffers": 333395,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 33333,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 62.91,
-        "execution_ms": 378.49,
-        "min_ratio": 1.017,
+        "planning_ms": 34.605,
+        "execution_ms": 413.849,
+        "min_ratio": 0.914,
         "offsets_measured": 3,
         "deepest_offset": 1000
       },
@@ -710,9 +590,9 @@
         "max_actual_rows": 10000,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 43.537,
-        "execution_ms": 37.327,
-        "min_ratio": 1.096,
+        "planning_ms": 34.429,
+        "execution_ms": 41.111,
+        "min_ratio": 1.142,
         "offsets_measured": 2,
         "deepest_offset": 250
       },
@@ -774,8 +654,8 @@
         "max_actual_rows": 50469,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 45.438,
-        "execution_ms": 291.901,
+        "planning_ms": 46.876,
+        "execution_ms": 329.145,
         "rows": 25,
         "distinct": 25,
         "duplicate_anchors": 398
@@ -838,8 +718,8 @@
         "max_actual_rows": 699,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 43.916,
-        "execution_ms": 295.668,
+        "planning_ms": 43.941,
+        "execution_ms": 350.421,
         "rows": 25,
         "distinct": 25,
         "duplicate_anchors": 398
@@ -921,14 +801,14 @@
       },
       "metrics": {
         "shared_buffers": 104030,
-        "shared_read": 117,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 55.338,
-        "execution_ms": 76.62,
+        "planning_ms": 63.784,
+        "execution_ms": 103.443,
         "sparql_chars": 1872,
         "sql_chars": 6301,
         "joins": 0
@@ -986,14 +866,14 @@
       },
       "metrics": {
         "shared_buffers": 14163,
-        "shared_read": 232,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 58.672,
-        "execution_ms": 70.644,
+        "planning_ms": 57.103,
+        "execution_ms": 28.639,
         "sparql_chars": 1836,
         "sql_chars": 6274,
         "joins": 0
@@ -1049,14 +929,14 @@
       },
       "metrics": {
         "shared_buffers": 21444,
-        "shared_read": 41,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 13,
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 44.879,
-        "execution_ms": 20.751,
+        "planning_ms": 51.351,
+        "execution_ms": 19.96,
         "sparql_chars": 1844,
         "sql_chars": 6274,
         "joins": 0
@@ -1110,8 +990,8 @@
         "max_actual_rows": 36,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 48.357,
-        "execution_ms": 63.418,
+        "planning_ms": 82.613,
+        "execution_ms": 1340.916,
         "total_matches": 9220,
         "page_size": 25,
         "buffers_per_match": 5.918
@@ -1166,8 +1046,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 54.308,
-        "execution_ms": 55.442,
+        "planning_ms": 73.414,
+        "execution_ms": 259.81,
         "total_matches": 908,
         "page_size": 25,
         "buffers_per_match": 32.797
@@ -1218,14 +1098,14 @@
       },
       "metrics": {
         "shared_buffers": 135033,
-        "shared_read": 24366,
+        "shared_read": 22077,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 100000,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 52.227,
-        "execution_ms": 6326.202,
+        "planning_ms": 77.287,
+        "execution_ms": 10765.835,
         "total_matches": 3713,
         "page_size": 25,
         "buffers_per_match": 36.368
@@ -1275,14 +1155,14 @@
       },
       "metrics": {
         "shared_buffers": 14732,
-        "shared_read": 466,
+        "shared_read": 368,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 365,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 52.286,
-        "execution_ms": 182.89,
+        "planning_ms": 81.303,
+        "execution_ms": 298.745,
         "total_matches": 365,
         "page_size": 25,
         "buffers_per_match": 40.362
@@ -1330,14 +1210,14 @@
       },
       "metrics": {
         "shared_buffers": 89717,
-        "shared_read": 255,
+        "shared_read": 75,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 37,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 44.937,
-        "execution_ms": 191.34,
+        "planning_ms": 81.771,
+        "execution_ms": 467.008,
         "total_matches": 5531,
         "page_size": 25,
         "buffers_per_match": 16.221
@@ -1386,14 +1266,14 @@
       },
       "metrics": {
         "shared_buffers": 46244,
-        "shared_read": 163,
+        "shared_read": 1,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 57.264,
-        "execution_ms": 158.591,
+        "planning_ms": 60.169,
+        "execution_ms": 96.929,
         "total_matches": 547,
         "page_size": 25,
         "buffers_per_match": 84.541
@@ -1441,14 +1321,14 @@
       },
       "metrics": {
         "shared_buffers": 103671,
-        "shared_read": 10534,
+        "shared_read": 163,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 37,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 46.914,
-        "execution_ms": 3135.784,
+        "planning_ms": 76.09,
+        "execution_ms": 505.274,
         "total_matches": 7337,
         "page_size": 25,
         "buffers_per_match": 14.13
@@ -1497,14 +1377,14 @@
       },
       "metrics": {
         "shared_buffers": 39039,
-        "shared_read": 221,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 52.406,
-        "execution_ms": 123.278,
+        "planning_ms": 91.419,
+        "execution_ms": 413.275,
         "total_matches": 765,
         "page_size": 25,
         "buffers_per_match": 51.031
@@ -1554,14 +1434,14 @@
       },
       "metrics": {
         "shared_buffers": 35409,
-        "shared_read": 6240,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 878,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 54.401,
-        "execution_ms": 2133.868,
+        "planning_ms": 56.549,
+        "execution_ms": 258.461,
         "total_matches": 878,
         "page_size": 25,
         "buffers_per_match": 40.329
@@ -1611,14 +1491,14 @@
       },
       "metrics": {
         "shared_buffers": 3969,
-        "shared_read": 119,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 96,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 66.446,
-        "execution_ms": 49.192,
+        "planning_ms": 80.479,
+        "execution_ms": 49.35,
         "total_matches": 96,
         "page_size": 25,
         "buffers_per_match": 41.344
@@ -1702,8 +1582,8 @@
         "max_actual_rows": 878,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 47.581,
-        "execution_ms": 41.478,
+        "planning_ms": 46.35,
+        "execution_ms": 40.603,
         "rows": 25,
         "distinct": 25
       },
@@ -1758,8 +1638,8 @@
         "max_actual_rows": 96,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 63.875,
-        "execution_ms": 7.827,
+        "planning_ms": 54.363,
+        "execution_ms": 4.434,
         "rows": 25,
         "distinct": 25
       },
@@ -1815,8 +1695,8 @@
         "max_actual_rows": 878,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 29.723,
-        "execution_ms": 40.268,
+        "planning_ms": 40.272,
+        "execution_ms": 42.738,
         "rows": 25,
         "distinct": 25
       },
@@ -1872,8 +1752,8 @@
         "max_actual_rows": 96,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 29.928,
-        "execution_ms": 4.543,
+        "planning_ms": 35.395,
+        "execution_ms": 5.045,
         "rows": 25,
         "distinct": 25
       },
@@ -1967,10 +1847,10 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "sorted_ms_offset_0": 750.3,
-        "sorted_ms_offset_250": 846.2,
-        "sorted_ms_offset_1000": 659.1,
-        "sorted_depth_ratio": 0.9
+        "sorted_ms_offset_0": 560.9,
+        "sorted_ms_offset_250": 573.3,
+        "sorted_ms_offset_1000": 592.8,
+        "sorted_depth_ratio": 1.1
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "sorted page cost across offsets \u2014 issues/080"
@@ -1980,10 +1860,10 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "sorted_ms_offset_0": 87.6,
-        "sorted_ms_offset_250": 81.1,
-        "sorted_ms_offset_1000": 86.0,
-        "sorted_depth_ratio": 0.9
+        "sorted_ms_offset_0": 79.4,
+        "sorted_ms_offset_250": 96.9,
+        "sorted_ms_offset_1000": 85.7,
+        "sorted_depth_ratio": 1.2
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "sorted page cost across offsets \u2014 issues/080"
@@ -1993,8 +1873,8 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 65.8,
-        "sorted_ms": 648.9,
+        "unsorted_ms": 65.9,
+        "sorted_ms": 649.2,
         "sort_ratio": 9.9
       },
       "dataset": "sp_lead_synth_100k",
@@ -2005,9 +1885,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 42.2,
-        "sorted_ms": 84.7,
-        "sort_ratio": 2.0
+        "unsorted_ms": 35.3,
+        "sorted_ms": 83.4,
+        "sort_ratio": 2.4
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "entity_property sort vs the same query unsorted (issues/080)"
@@ -2065,15 +1945,15 @@
         "seq_scans": []
       },
       "metrics": {
-        "shared_buffers": 453167,
+        "shared_buffers": 453155,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 33333,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 33.296,
-        "execution_ms": 739.38,
+        "planning_ms": 35.68,
+        "execution_ms": 607.646,
         "rows": 25,
         "sorted_values": 25
       },
@@ -2138,8 +2018,8 @@
         "max_actual_rows": 10000,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 49.048,
-        "execution_ms": 54.329,
+        "planning_ms": 51.374,
+        "execution_ms": 56.291,
         "rows": 25,
         "sorted_values": 25
       },
@@ -2151,8 +2031,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 17.5,
-        "min_ms": 17.0,
+        "wall_ms": 16.4,
+        "min_ms": 15.1,
         "page_size": 100,
         "results": 100
       },
@@ -2164,8 +2044,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 18.1,
-        "min_ms": 16.4,
+        "wall_ms": 14.9,
+        "min_ms": 13.9,
         "page_size": 100,
         "results": 100
       },
@@ -2177,8 +2057,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 21.0,
-        "min_ms": 20.6,
+        "wall_ms": 22.6,
+        "min_ms": 22.2,
         "page_size": 100,
         "results": 100
       },
@@ -2190,8 +2070,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 12.4,
-        "min_ms": 11.8,
+        "wall_ms": 12.9,
+        "min_ms": 12.7,
         "page_size": 25,
         "results": 25
       },
@@ -2203,8 +2083,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 13.0,
-        "min_ms": 11.7,
+        "wall_ms": 13.1,
+        "min_ms": 12.4,
         "page_size": 25,
         "results": 25
       },
@@ -2216,8 +2096,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 12.8,
-        "min_ms": 11.8,
+        "wall_ms": 11.3,
+        "min_ms": 10.9,
         "page_size": 25,
         "results": 25
       },
@@ -2229,8 +2109,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 115.0,
-        "min_ms": 105.4,
+        "wall_ms": 116.1,
+        "min_ms": 109.4,
         "page_size": 100,
         "results": 100
       },
@@ -2242,8 +2122,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 54.8,
-        "min_ms": 49.7,
+        "wall_ms": 45.3,
+        "min_ms": 43.0,
         "page_size": 100,
         "results": 100
       },
@@ -2255,8 +2135,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 78.8,
-        "min_ms": 77.2,
+        "wall_ms": 66.5,
+        "min_ms": 61.4,
         "page_size": 100,
         "results": 73
       },
@@ -2268,8 +2148,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 46.7,
-        "min_ms": 44.8,
+        "wall_ms": 49.4,
+        "min_ms": 39.8,
         "page_size": 25,
         "results": 25
       },
@@ -2281,8 +2161,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 27.1,
-        "min_ms": 24.3,
+        "wall_ms": 32.5,
+        "min_ms": 26.8,
         "page_size": 25,
         "results": 25
       },
@@ -2294,8 +2174,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 42.0,
-        "min_ms": 38.7,
+        "wall_ms": 32.6,
+        "min_ms": 30.6,
         "page_size": 25,
         "results": 25
       },
@@ -2307,8 +2187,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 88.4,
-        "min_ms": 83.0,
+        "wall_ms": 85.9,
+        "min_ms": 77.8,
         "page_size": 100,
         "results": 100
       },
@@ -2320,8 +2200,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 54.6,
-        "min_ms": 53.7,
+        "wall_ms": 46.5,
+        "min_ms": 45.1,
         "page_size": 100,
         "results": 100
       },
@@ -2333,8 +2213,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 56.5,
-        "min_ms": 43.6,
+        "wall_ms": 29.1,
+        "min_ms": 28.7,
         "page_size": 100,
         "results": 99
       },
@@ -2346,8 +2226,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 34.8,
-        "min_ms": 32.2,
+        "wall_ms": 30.1,
+        "min_ms": 29.6,
         "page_size": 25,
         "results": 25
       },
@@ -2359,8 +2239,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 25.1,
-        "min_ms": 23.7,
+        "wall_ms": 23.2,
+        "min_ms": 22.7,
         "page_size": 25,
         "results": 25
       },
@@ -2372,8 +2252,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 18.3,
-        "min_ms": 17.8,
+        "wall_ms": 17.1,
+        "min_ms": 16.6,
         "page_size": 25,
         "results": 25
       },
@@ -2385,8 +2265,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 398.2,
-        "min_ms": 378.6,
+        "wall_ms": 393.5,
+        "min_ms": 336.3,
         "page_size": 100,
         "results": 100
       },
@@ -2398,8 +2278,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 146.2,
-        "min_ms": 130.5,
+        "wall_ms": 134.2,
+        "min_ms": 122.1,
         "page_size": 100,
         "results": 100
       },
@@ -2411,8 +2291,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 29.8,
-        "min_ms": 27.9,
+        "wall_ms": 29.1,
+        "min_ms": 27.3,
         "page_size": 100,
         "results": 13
       },
@@ -2424,8 +2304,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 87.0,
-        "min_ms": 82.7,
+        "wall_ms": 74.2,
+        "min_ms": 72.6,
         "page_size": 25,
         "results": 25
       },
@@ -2437,8 +2317,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 45.4,
-        "min_ms": 44.6,
+        "wall_ms": 44.4,
+        "min_ms": 43.7,
         "page_size": 25,
         "results": 25
       },
@@ -2450,8 +2330,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 28.6,
-        "min_ms": 28.2,
+        "wall_ms": 27.9,
+        "min_ms": 27.5,
         "page_size": 25,
         "results": 13
       },
@@ -2470,17 +2350,6 @@
       "dataset": "synthetic:4part"
     },
     {
-      "bench_id": "query.relation.convergent_fan_in",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "convergent_ms": 5821.2,
-        "convergent_rows": 1313755
-      },
-      "dataset": "sp_kg_rel",
-      "notes": "convergent two-hop, quadratic in fan-in \u2014 relations"
-    },
-    {
       "bench_id": "query.relation.direction_choice",
       "kind": "sql",
       "status": "ok",
@@ -2496,7 +2365,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_friendof_ms": 62.1,
+        "rel_friendof_ms": 58.6,
         "rel_friendof_rows": 14625
       },
       "dataset": "sp_kg_rel",
@@ -2507,7 +2376,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_reportsto_ms": 38.6,
+        "rel_reportsto_ms": 45.8,
         "rel_reportsto_rows": 4750
       },
       "dataset": "sp_kg_rel",
@@ -2518,7 +2387,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_worksfor_ms": 40.7,
+        "rel_worksfor_ms": 42.3,
         "rel_worksfor_rows": 4875
       },
       "dataset": "sp_kg_rel",
@@ -2542,8 +2411,8 @@
       "status": "ok",
       "metrics": {
         "values_1_ms": 0.37,
-        "values_20_ms": 3.19,
-        "values_growth": 8.5
+        "values_20_ms": 3.43,
+        "values_growth": 9.2
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "VALUES cost against list length \u2014 issues/087"
@@ -2553,9 +2422,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "values_ms": 0.5,
-        "literal_subject_ms": 0.47,
-        "values_ratio": 1.1
+        "values_ms": 0.42,
+        "literal_subject_ms": 0.35,
+        "values_ratio": 1.2
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "VALUES vs an equivalent literal subject \u2014 issues/087"
@@ -2565,9 +2434,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "values_ms": 0.41,
-        "literal_subject_ms": 0.31,
-        "values_ratio": 1.3
+        "values_ms": 0.3,
+        "literal_subject_ms": 0.33,
+        "values_ratio": 0.9
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "VALUES vs an equivalent literal subject \u2014 issues/087"
@@ -2577,7 +2446,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 1760.1,
+        "wall_ms": 1671.6,
         "rows": 4
       },
       "dataset": "wordnet_frames",
@@ -2588,7 +2457,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 296.1,
+        "wall_ms": 457.8,
         "rows": 1
       },
       "dataset": "wordnet_frames",
@@ -2599,7 +2468,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 351.4,
+        "wall_ms": 415.9,
         "rows": 425
       },
       "dataset": "wordnet_frames",
@@ -2610,7 +2479,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 144.6,
+        "wall_ms": 85.3,
         "rows": 45
       },
       "dataset": "wordnet_frames",
@@ -2673,8 +2542,8 @@
         "max_actual_rows": 9266,
         "estimated_rows": 190,
         "heap_fetches": 0,
-        "planning_ms": 3.119,
-        "execution_ms": 24.929,
+        "planning_ms": 2.866,
+        "execution_ms": 26.305,
         "rows": 70
       },
       "dataset": "sp_graph_skew_2k",
@@ -2737,8 +2606,8 @@
         "max_actual_rows": 9266,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 2.54,
-        "execution_ms": 4.197,
+        "planning_ms": 2.268,
+        "execution_ms": 4.092,
         "rows": 21
       },
       "dataset": "sp_graph_skew_2k",
@@ -2801,8 +2670,8 @@
         "max_actual_rows": 9266,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 2.517,
-        "execution_ms": 3.375,
+        "planning_ms": 2.46,
+        "execution_ms": 3.827,
         "rows": 7
       },
       "dataset": "sp_graph_skew_2k",
@@ -2849,8 +2718,8 @@
           "CTE Scan",
           "Index Scan",
           "Index Only Scan",
-          "Index Only Scan",
           "Index Scan",
+          "Index Only Scan",
           "Index Only Scan",
           "Index Scan"
         ],
@@ -2865,15 +2734,15 @@
         "seq_scans": []
       },
       "metrics": {
-        "shared_buffers": 9064,
+        "shared_buffers": 8389,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 17,
         "max_actual_rows": 2022,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 6.256,
-        "execution_ms": 9.576,
+        "planning_ms": 5.647,
+        "execution_ms": 4.923,
         "rows": 17
       },
       "dataset": "sp_graph_skew_2k",
@@ -2929,8 +2798,8 @@
         "max_actual_rows": 27,
         "estimated_rows": 15,
         "heap_fetches": 0,
-        "planning_ms": 1.459,
-        "execution_ms": 0.584,
+        "planning_ms": 1.513,
+        "execution_ms": 0.479,
         "rows": 1
       },
       "dataset": "sp_graph_skew_2k",
@@ -2975,44 +2844,17 @@
         "max_actual_rows": 17029,
         "estimated_rows": 29,
         "heap_fetches": 0,
-        "planning_ms": 6.273,
-        "execution_ms": 118.522,
+        "planning_ms": 6.166,
+        "execution_ms": 90.81,
         "rows": 17029
       },
       "dataset": "sp_graph_skew_2k",
       "notes": "no criterion \u2014 must stay flat (traversal_decision)"
-    },
-    {
-      "bench_id": "write.ingest.bulk_vs_executemany",
-      "kind": "write",
-      "status": "ok",
-      "metrics": {
-        "executemany_quads_per_sec": 6731,
-        "copy_quads_per_sec": 69886,
-        "bulk_e2e_quads_per_sec": 41309,
-        "index_rebuild_s": 3.959,
-        "copy_speedup": 10.383,
-        "e2e_speedup": 6.137
-      },
-      "dataset": "synthetic:400000q"
-    },
-    {
-      "bench_id": "write.per_write_curve.incremental_probe",
-      "kind": "write",
-      "status": "ok",
-      "metrics": {
-        "growth_class": "flat",
-        "probe_ms_at_100000q": 87.44,
-        "probe_ms_at_300000q": 73.69,
-        "probe_ms_at_900000q": 73.54
-      },
-      "dataset": "synthetic:[50000, 150000, 450000]",
-      "notes": "probe=300 quads, min of 3 rolled-back runs"
     }
   ],
   "baseline": {
-    "name": "main",
-    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260820T153401Z-6726434-stable.json",
+    "name": "query",
+    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260820T164755Z-5d68c0f-query.json",
     "reason": "",
     "pg_stamped": true
   }

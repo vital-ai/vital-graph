@@ -5,11 +5,11 @@ Implements P2 of planning/planning_performance/performance_regression_tracking_p
 the suite records structured results (tests/performance/perf_record.py), this
 tool diffs a run against a named baseline and exits non-zero on regression.
 
-    # compare the run just recorded against the 'main' baseline
-    python scripts/perf_compare.py tests/performance/results/run.json --baseline main
+    # compare the run just recorded against a TIER baseline (query | slow)
+    python scripts/perf_compare.py tests/performance/results/run.json --baseline query
 
     # promote a reviewed run to be the new baseline
-    python scripts/perf_compare.py tests/performance/results/run.json --promote main
+    python scripts/perf_compare.py tests/performance/results/run.json --promote query
 
     # how has one bench moved over the recorded history?
     python scripts/perf_compare.py --trend query.fastpath.entity_page

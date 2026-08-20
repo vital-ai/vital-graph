@@ -20,8 +20,9 @@
 #
 # Regression tracking (see tests/performance/README.md):
 #   ./scripts/run-perf-tests.sh --record              # record a run JSON + history entry
-#   ./scripts/run-perf-tests.sh --baseline main       # record, then compare vs a baseline
-#   ./scripts/run-perf-tests.sh --promote main        # record, then make it the baseline
+#   ./scripts/run-perf-tests.sh --baseline query      # compare vs a TIER baseline
+#                                                     # (query | slow — there is no 'main')
+#   ./scripts/run-perf-tests.sh --promote query       # promote that tier
 #   ./scripts/run-perf-tests.sh --api-benches         # + REST latency benches (app up first)
 # A regression vs the baseline fails the run even when every assertion passed —
 # the inline bounds are absolute floors, the baseline is the drift detector.

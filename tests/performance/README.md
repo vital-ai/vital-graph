@@ -8,13 +8,16 @@ Design and rationale: `planning/planning_performance/performance_regression_trac
 
 ```bash
 # run against a clean, ephemeral PG 18 and compare to the promoted baseline
-./scripts/run-perf-tests.sh --baseline main -- tests/performance -m performance
+./scripts/check.sh perf        # query benches vs baselines/query.json  (~5.5m)
+./scripts/check.sh ingest      # the 20s+ benches vs baselines/slow.json (~6.5m)
 
 # record only (no comparison) — e.g. to capture a "before" point
 ./scripts/run-perf-tests.sh --record -- tests/performance -m performance
 
 # make a reviewed run the new reference
-./scripts/run-perf-tests.sh --promote main -- tests/performance -m performance
+# promote a tier, each independently:
+python scripts/perf_compare.py <run.json> --promote query
+python scripts/perf_compare.py <run.json> --promote slow
 ```
 
 The runner brings up `docker-compose.test.yml` (PostgreSQL 18 on :5433, Jena sidecar
@@ -83,7 +86,7 @@ format:
 ```bash
 LOAD_TEST_ENV=test python load_test_scripts/load_test.py \
     -u 20 -t 120 --read-only --record tests/performance/results/load.json
-python scripts/perf_compare.py tests/performance/results/load.json --baseline main
+python scripts/perf_compare.py tests/performance/results/load.json --baseline query
 ```
 
 Load records carry their run parameters (users, duration, ramp, think time) and
@@ -122,7 +125,14 @@ plain pytest run.
 - **Inline assertions** in the test (`max_shared_buffers=8_000`, `MIN_COPY_SPEEDUP=5.0`)
   are *absolute floors*: catastrophic-regression detectors that hold at any scale.
   They fail the build on their own.
-- **The baseline** (`tests/performance/baselines/main.json` + `thresholds.toml`)
+<!-- TIERED BASELINES -->
+There is no `main` baseline. `query.json` and `slow.json` each cover one tier
+COMPLETELY, so neither run has holes and both promote independently. A single
+combined baseline forced every promotion to pay the full 16 minutes and made a
+query-tier run report eleven "regressions" for benches it never ran — measured:
+0 failing against its own baseline, 12 against the combined one.
+
+- **The baselines** (`tests/performance/baselines/{query,slow}.json` + `thresholds.toml`)
   is the *drift detector*: it compares against what was actually measured, so a
   40% degradation that still clears the floor is caught.
 
@@ -140,7 +150,7 @@ On a clean `vg-test` stack only the self-seeding benches run. To load the
 realistic datasets and close the hole:
 
 ```bash
-./scripts/run-perf-tests.sh --seed-data --baseline main -- tests/performance -m performance
+./scripts/run-perf-tests.sh --seed-data --baseline query -- tests/performance -m performance
 ```
 
 `--seed-data` layers `docker-compose.test.data.yml` and implies `--persist`.
