@@ -1,65 +1,78 @@
-# A Specific Entity Type Pages Safely Only to 12 Rows
+# "A Specific Entity Type Pages Safely Only to 12 Rows" — It Does Not
 
-## Status: OPEN — live, measured, and previously tracked only by an xfail
-## pointing at two CLOSED issues
+## Status: WITHDRAWN 2026-08-20, same day it was filed. The bench was measuring a
+## plan that never runs. The measurement is fixed; there was no service defect.
 
-`test_page_size_before_plan_flip[specific-10k]`, run with `--runxfail`:
+## What was filed, and why it was wrong
 
-    AssertionError: paging falls back to a blocking plan above 12 rows — a
-    caller asking for 13 gets a page costing O(matches) rather than O(page)
-    assert (12 is None or 12 >= 100)
+`test_page_size_before_plan_flip[specific-10k]` reported, with `--runxfail`:
 
-`MIN_SAFE_PAGE_SIZE` is 100. The default page size is 25. So **the default page
-already exceeds the safe threshold** for this shape: a KGQuery with a SPECIFIC
-entity type on the 10k fixture gets an O(matches) plan at the size callers
-actually use.
+    paging falls back to a blocking plan above 12 rows — a caller asking for 13
+    gets a page costing O(matches) rather than O(page)
 
-## Why it had no issue
+I filed that as a live defect, reasoning that the default page size is 25 and
+therefore every caller of that shape was paying O(matches).
 
-The xfail says:
+**`_flips_to_blocking_plan` ran a bare `EXPLAIN`.** `execute_sparql_query` runs
+the statement inside `SET LOCAL enable_sort = off` whenever the generator sets
+`needs_ordered_scan`, and this shape sets it at every page size. Measured on the
+10k fixture, specific entity type:
 
-> issues/047 — the split-BGP anchor flips to a blocking sort at 19 rows on 10k,
-> below the default page size of 25
+    page  needs_ordered_scan  unfenced Sort  fenced Sort
+      10        True               no            no
+      12        True               no            no
+      13        True              YES            no
+      25        True              YES            no
+     500        True              YES            no
 
-Both issues it could belong to are closed:
+Fenced — which is what production does — there is no flip at any size up to 500.
+The "threshold at 12" was a property of a plan that never executes.
 
-* `issues/047` — "paging plan flips to a blocking sort above 51 rows" —
-  **FIXED 2026-08-08 (page and capped count)**
-* `issues/045` — "semijoin never fires when entity type is specific" —
-  **FIXED 2026-08-07, 24.5-32.3s → 2ms**
+## Why this was avoidable
 
-And the number has moved: the marker says 19, the measurement says 12. So this is
-not the defect either issue described, it is a residual with the same shape,
-carrying a citation to work that is done. An xfail is a fine way to stop a known
-defect failing the build; it is a poor way to own one, because nothing reviews
-the reason when the issue it names is closed.
+`_fenced` exists in the same file, with a docstring that says exactly this:
 
-## What is known
+> Measuring the plan WITHOUT that fence describes something that never runs —
+> and reports a growth ratio the served query does not have.
 
-* It is specific to a SPECIFIC entity type. The `generic` parameter passes at
-  both fixture sizes.
-* It is specific to the 10k fixture. `specific-100k` passes — the threshold there
-  is 161-180, comfortably above the page size, which is why the xfail was
-  narrowed to 10k (`issues/113` work).
-* The threshold is data-dependent: 52 on a production copy, 161-180 on 100k, 12
-  here. That is the pattern `issues/047` documented — the planner prorating an
-  ordered scan's cost by the LIMIT and getting it wrong — so the cause is
-  probably the same mechanism, not a new one.
+The growth-curve test uses it. `_flips_to_blocking_plan` did not, because
+`_criteria_to_sql` returned only `gen.sql` and discarded `needs_ordered_scan`, so
+the flag was not available at the point the decision was made. A helper that
+throws away the one field a caller needs to be correct will eventually have a
+caller that is not.
 
-## What to do
+## What changed
 
-1. Establish whether 12 is a regression from 19 or just a different measurement
-   of the same instability. `git log` on the emit path since 2026-08-08 is the
-   place to start; the fixture has been reloaded since, so re-measuring on the
-   commit the 19 came from is the honest comparison.
-2. Decide whether a threshold BELOW the default page size is acceptable for any
-   shape. If it is not, this is a correctness-of-service bug rather than a
-   benchmark finding: every caller of that shape is paying O(matches).
-3. Either fix it or re-point the xfail at THIS issue, so the marker names
-   something open.
+* `_criteria_to_gen` returns the whole `GenerateResult`; `_criteria_to_sql` is a
+  thin wrapper for callers that only want SQL.
+* `_flips_to_blocking_plan` fences when `needs_ordered_scan` is set and not
+  otherwise — mirroring the executor rather than improving on it, because
+  forcing `enable_sort = off` on a shape that genuinely needs a sort reads as a
+  273x regression.
+* The xfail is gone. All four parameters pass on their own merits.
+
+## What remains true, and is the real question
+
+The THRESHOLD was never a stable quantity — 12, 19, 52, 161-180 across datasets
+and dates — because it is a cost-model crossover, not a property of the system.
+That is worth stating plainly: a test that searches for the page size at which
+the planner changes its mind is measuring the planner's arithmetic against one
+data distribution.
+
+The fence is the answer to that, and it already exists: it removes the crossover
+entirely rather than locating it. What this bench should assert is that the fence
+APPLIES — `needs_ordered_scan` set for every shape that needs it — since a shape
+that misses the flag is the only way the cliff becomes reachable. That is a
+property with a yes/no answer, not a number that moves with the data.
+
+Two shapes are known to have missed the flag: this one (measured correctly, it
+does set it) and the selective range criterion in `issues/111`, which did not —
+`needs_ordered_scan=False` at the tight threshold, where the unfenced plan
+genuinely ran. So the failure mode is real; it just was not happening here.
 
 ## Related
 
-- `issues/047`, `issues/045` — both closed, both cited by the marker
-- `issues/112`, `issues/113` — the same theme: a gate that names something other
-  than what it measures
+- `issues/111` — a shape where the flag really was False and the unfenced plan ran
+- `issues/047` — the fence, and why it is a GUC rather than a hint
+- `issues/112`, `issues/113` — the same theme: a gate reporting something other
+  than what it names

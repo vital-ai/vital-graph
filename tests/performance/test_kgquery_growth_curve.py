@@ -220,6 +220,16 @@ class _fenced:
 
 async def _criteria_to_sql(conn, frame_criteria, fx, entity_type=KGENTITY,
                            page_size=None) -> str:
+    """The SQL alone. Callers that need `needs_ordered_scan` — i.e. anything
+    deciding whether to measure under the executor's fence — want
+    `_criteria_to_gen` instead. Discarding the flag here is what let
+    `_flips_to_blocking_plan` measure a plan that never runs."""
+    gen = await _criteria_to_gen(conn, frame_criteria, fx, entity_type, page_size)
+    return gen.sql
+
+
+async def _criteria_to_gen(conn, frame_criteria, fx, entity_type=KGENTITY,
+                           page_size=None):
     from .test_kgquery_generated_sql_plans import _to_builder_frame
     from vitalgraph.sparql.kg_query_builder import (
         KGQueryCriteriaBuilder, EntityQueryCriteria as BuilderEntityQueryCriteria)
@@ -248,7 +258,7 @@ async def _criteria_to_sql(conn, frame_criteria, fx, entity_type=KGENTITY,
     if not cr.ok:
         pytest.fail(f"KGQuery SPARQL failed to compile: {cr.error}\n\n{sparql}")
     gen = await generate_sql(cr, fx.space, conn=conn)
-    return gen.sql
+    return gen
 
 
 @pytest.mark.bench("query.kgquery.growth_curve.eq")
@@ -678,11 +688,38 @@ async def _flips_to_blocking_plan(conn, fx, page_size, entity_type=KGENTITY) -> 
     whole point is to detect that without paying it. The discriminator is a Sort
     between the Unique and the scan — the good plan feeds Unique directly from an
     index scan already in subject order.
+
+    UNDER THE SAME FENCE THE EXECUTOR APPLIES. `execute_sparql_query` runs the
+    statement inside `SET LOCAL enable_sort = off` whenever the generator sets
+    `needs_ordered_scan`, and this shape sets it at every page size. Measured on
+    the 10k fixture with a specific entity type:
+
+        page  needs_ordered_scan  unfenced Sort  fenced Sort
+          12         True             no             no
+          13         True            YES             no
+         500         True            YES             no
+
+    So the "threshold" this function used to find — 12 rows, below the default
+    page size of 25 — was a property of a plan that NEVER RUNS. `_fenced` above
+    exists for exactly this reason and is used by the growth-curve test in this
+    same file; this one was measuring bare. It is the difference between
+    reporting a service defect and reporting a cost-model crossover the executor
+    already removes.
+
+    Fenced only when the flag is set, never unconditionally: forcing
+    `enable_sort = off` on a shape that genuinely needs a sort reads as a 273x
+    regression, so the measurement has to mirror the executor rather than
+    improve on it.
     """
-    sql = await _criteria_to_sql(conn, _eq_criteria(EQ_STATES[0]), fx,
+    gen = await _criteria_to_gen(conn, _eq_criteria(EQ_STATES[0]), fx,
                                  entity_type=entity_type, page_size=page_size)
-    plan = "\n".join(r[0] for r in await conn.fetch("EXPLAIN " + sql))
-    return "->  Sort" in plan
+    if not getattr(gen, "needs_ordered_scan", False):
+        plan = "\n".join(r[0] for r in await conn.fetch("EXPLAIN " + gen.sql))
+        return "->  Sort" in plan
+    async with conn.transaction():
+        await conn.execute("SET LOCAL enable_sort = off")
+        plan = "\n".join(r[0] for r in await conn.fetch("EXPLAIN " + gen.sql))
+        return "->  Sort" in plan
 
 
 @pytest.mark.bench("query.kgquery.page_size_cliff")
@@ -697,8 +734,7 @@ async def _flips_to_blocking_plan(conn, fx, page_size, entity_type=KGENTITY) -> 
     # `_xfail_10k_only` narrows it to the fixture the reason is about.
     pytest.param(SPECIFIC_ENTITY_TYPE, id="specific"),
 ])
-async def test_page_size_before_plan_flip(perf_conn, perf_record, fx, entity_type,
-                                          request):
+async def test_page_size_before_plan_flip(perf_conn, perf_record, fx, entity_type):
     """Find the page size at which paging stops being O(page) (issues/047).
 
     Asserting the *threshold* rather than a fixed page size, because the
@@ -706,15 +742,14 @@ async def test_page_size_before_plan_flip(perf_conn, perf_record, fx, entity_typ
     fixture. A test pinned to one page size would certify a bound the other
     dataset does not honour.
     """
-    # issues/047: on the 10k fixture the split-BGP anchor flips to a blocking
-    # sort at 19 rows, below the default page size of 25. That is a property of
-    # THAT fixture; on 100k the threshold is 161-180 and the case passes. The
-    # marker used to cover both and reported XPASS on 100k for two months of runs.
-    if entity_type == SPECIFIC_ENTITY_TYPE and "10k" in fx.label and "100k" not in fx.label:
-        request.node.add_marker(pytest.mark.xfail(
-            reason="issues/047 — the split-BGP anchor flips to a blocking sort "
-                   "at 19 rows on 10k, below the default page size of 25",
-            strict=False))
+    # NO xfail. There used to be one, citing issues/047's "flips to a blocking
+    # sort at 19 rows on 10k, below the default page size of 25". Both that issue
+    # and issues/045 are closed, and the number kept moving — 19 in the marker,
+    # 12 when measured. It was never a service defect: `_flips_to_blocking_plan`
+    # was measuring WITHOUT the fence the executor applies, and this shape sets
+    # `needs_ordered_scan` at every page size, so the flip it found never
+    # happened in production. Measured under the fence there is no flip up to 500
+    # rows. See issues/114.
     await _require_loaded(perf_conn, fx)
 
     if await _flips_to_blocking_plan(perf_conn, fx, 1, entity_type):
