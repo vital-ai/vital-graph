@@ -101,6 +101,66 @@ The correctness fix made the gate decline correctly, and this seq-scanning
 set-based join is what it declines TO. Any real fix has to give this shape a
 third plan, not tune either of the two that do not fit.
 
+### THE THIRD PLAN EXISTS, AND THE DATA IS ALREADY THERE
+
+`{space}_entity_slot_sort` holds one row per (entity, frame, slot) with the value
+split into `value_text` / `value_num` / `value_dt`, and carries
+
+    idx_{space}_ess_num  btree (context_uuid, entity_type_uuid, frame_type_path,
+                                slot_type_uuid, value_num, entity_uuid)
+                         WHERE value_num IS NOT NULL
+
+which is exactly this query's shape: fix the context, entity type, frame path and
+slot type, range-scan `value_num`, read `entity_uuid` straight out of the index.
+
+Measured against the same criterion the edge walk takes 1,877 ms to answer:
+
+    entity_slot_sort, MQLRating >= 99      1.56 ms      736 buffers
+    the edge walk it replaces          1,877.00 ms  1,496,337 buffers
+
+**~1,200x faster, ~2,000x fewer buffers**, and exact on every threshold:
+
+        t   entity_slot_sort   manifest
+     99.9              145        145
+       99            1,017      1,017
+       90            9,907      9,907
+       65           34,790     34,790
+
+#### The preconditions, checked
+
+* **It is write-synced**, in five places on the write paths, and handles a
+  CHANGED value: `sync_entity_slot_sort_after_edge_insert` deletes before
+  re-deriving "so a CHANGED value replaces its row rather than losing to" the
+  old one.
+* **Drift is detected and repaired** — `maintenance_job._run_entity_slot_sort_integrity`.
+* **It is not a new trust tier.** `rewrite_edge_table` already answers traversals
+  from `{space}_edge`, a derived table with the same freshness story. Filtering
+  from `entity_slot_sort` is the same bargain, not a worse one.
+* `fast_slot_sort` declines on any criterion because it SORTS — "it does not know
+  which entities a criterion admits, and applying the sort to an unfiltered set
+  would page through the wrong population". Using the table to FILTER is the
+  opposite direction and does not inherit that objection.
+
+#### What building it involves — NOT DONE
+
+The hook is clean: `rewrite_edge_table` and `rewrite_frame_entity_table` are both
+`rewrite_*(plan, aliases, space_id)` applied in sequence in `generator.py`
+(995-1029), and a `rewrite_entity_slot_sort` would sit alongside them. The work is
+in the gating, not the plumbing:
+
+1. recognise entity -> frame(path) -> slot(type) with a range FILTER on the value;
+2. match `frame_type_path` EXACTLY — the index is keyed on the whole array, and a
+   loose match returns entities reached by a different path;
+3. resolve `entity_type_uuid` and `context_uuid`, declining when either is
+   unpinned;
+4. decline on every shape it cannot serve, the way `fast_slot_sort` enumerates
+   its own declines.
+
+Step 2 is where a mistake returns WRONG ROWS rather than slow ones, which is
+what stopped this being written in the same session that measured it: the day
+this was found had already produced two wrong-answer bugs from exactly that kind
+of near-miss.
+
 ### What remains
 
 1.66 seconds and 1,496,337 buffers for 1,017 rows — against 77 ms for the
