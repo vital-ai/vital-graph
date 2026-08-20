@@ -1,6 +1,58 @@
 # A Grouping URI With No Type Exists, and Nothing Can Have Created It
 
-## Status: OPEN — one instance, origin unexplained, detection added
+## Status: OPEN — but NOT one instance, and the repair was making it worse.
+## Detection and a guard landed 2026-08-20.
+
+Two things in the original filing were wrong.
+
+**It is not one instance.** Scanned across every current space on 2026-08-20:
+
+    kg_crud_stress_test            10
+    space_client_kgentities_test    5
+    space_multi_org_crud_test       3
+    <one client space>              1
+
+19 typeless grouping targets across 4 live spaces, three of them created by test
+suites — so this is reproducible, not archaeological.
+
+**The example this file was written about is gone.** `prod_kg` no longer exists
+on any cluster, so `urn:example:campaign:cer:reactivate_merchant_1` cannot be
+inspected. The description below is all that survives of it.
+
+### What the 19 look like, and where they came from
+
+EVERY ONE owns exactly one triple: its own self-link. No type, no name, nothing
+else. That is `scripts/repair_grouping_self_link.py`, the `issues/091` repair,
+which selected every grouping target lacking a self-link and inserted one **with
+no type check at all**. Where a URI was used as a group label with nothing behind
+it, the repair did not fix anything — it manufactured a subject whose only triple
+is `X hasKGGraphURI X`, making a phantom look like an object while the graph
+still reads EMPTY.
+
+It did not create the phantoms. It made them harder to see.
+
+### What landed
+
+* **The repair now skips a typeless target and says so**, on the same principle
+  it already applied to a misdirected one: a repair that cannot restore the
+  invariant should report rather than write something that hides the breakage.
+* **And it reports typeless targets it did not create.** The skip alone was not
+  enough — after the 2026-08-16 run those 19 are no longer *missing* a self-link,
+  because this script gave them one, so they were invisible to their own cause. A
+  detector that stops seeing a condition once it has written a row is reporting
+  its own effect.
+
+Verified: the three affected spaces now report 10 / 5 / 3, matching the manual
+scan, and a freshly planted phantom is reported as `1 TYPELESS, skipped` instead
+of being written.
+
+### Still open
+
+What creates a grouping URI with no object behind it. The reasoning below — that
+no server-property path can — still stands and is still unexplained. What has
+changed is that three of the four affected spaces are built by test suites, so
+the write path is now reachable from a test run rather than only from a
+production copy.
 
 `urn:example:campaign:cer:reactivate_merchant_1` on the host space `prod_kg`
 groups 26 objects under `hasKGGraphURI` but has only three triples of its own,
