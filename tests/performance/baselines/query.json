@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "env": {
-    "started_at": "2026-08-20T17:25:09.716507+00:00",
+    "started_at": "2026-08-20T17:56:15.094729+00:00",
     "git": {
-      "commit": "d0ba0373c759138dee72196e6df2e5e4604b9d54",
-      "short": "d0ba037",
+      "commit": "99bcd50ed62effd8c39a54389218bd11dd99d886",
+      "short": "99bcd50",
       "branch": "main",
       "dirty": true
     },
@@ -37,9 +37,9 @@
     "stats": {
       "fixture_tables": 260,
       "fixture_live_tuples": 126221181,
-      "fixture_last_analyze": "2026-08-20T16:50:18.695202+00:00"
+      "fixture_last_analyze": "2026-08-20T17:52:20.435377+00:00"
     },
-    "finished_at": "2026-08-20T17:32:25.399741+00:00"
+    "finished_at": "2026-08-20T18:02:39.110842+00:00"
   },
   "benches": [
     {
@@ -47,9 +47,9 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "first_page_ms": 690.9,
-        "deep_page_ms": 676.5,
-        "deep_offset_ratio": 0.98,
+        "first_page_ms": 773.7,
+        "deep_page_ms": 936.3,
+        "deep_offset_ratio": 1.21,
         "offset": 375,
         "rows": 25
       },
@@ -61,8 +61,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 154.4,
-        "sorted_ms": 616.2,
+        "unsorted_ms": 167.4,
+        "sorted_ms": 652.1,
         "rows": 25
       },
       "dataset": "synthetic:400frames",
@@ -73,9 +73,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_currency_min_ms": 384.1,
-        "agg_currency_avg_ms": 163.9,
-        "agg_currency_ratio": 2.34
+        "agg_currency_min_ms": 407.9,
+        "agg_currency_avg_ms": 185.7,
+        "agg_currency_ratio": 2.2
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN vs AVG on Currency \u2014 issues/029 sort-per-group"
@@ -85,9 +85,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_double_min_ms": 1245.4,
-        "agg_double_avg_ms": 2334.0,
-        "agg_double_ratio": 0.53
+        "agg_double_min_ms": 840.7,
+        "agg_double_avg_ms": 2480.5,
+        "agg_double_ratio": 0.34
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN vs AVG on Double \u2014 issues/029 sort-per-group"
@@ -97,9 +97,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_integer_min_ms": 879.7,
-        "agg_integer_avg_ms": 2407.5,
-        "agg_integer_ratio": 0.37
+        "agg_integer_min_ms": 936.3,
+        "agg_integer_avg_ms": 2389.3,
+        "agg_integer_ratio": 0.39
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN vs AVG on Integer \u2014 issues/029 sort-per-group"
@@ -109,9 +109,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_currency_min_ms": 211.7,
-        "agg_currency_avg_ms": 200.3,
-        "agg_currency_ratio": 1.06
+        "agg_currency_min_ms": 220.4,
+        "agg_currency_avg_ms": 185.4,
+        "agg_currency_ratio": 1.19
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Currency \u2014 issues/029 sort-per-group"
@@ -121,9 +121,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_double_min_ms": 227.4,
-        "agg_double_avg_ms": 151.3,
-        "agg_double_ratio": 1.5
+        "agg_double_min_ms": 245.2,
+        "agg_double_avg_ms": 160.4,
+        "agg_double_ratio": 1.53
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Double \u2014 issues/029 sort-per-group"
@@ -133,9 +133,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_integer_min_ms": 191.4,
-        "agg_integer_avg_ms": 172.3,
-        "agg_integer_ratio": 1.11
+        "agg_integer_min_ms": 197.3,
+        "agg_integer_avg_ms": 184.1,
+        "agg_integer_ratio": 1.07
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Integer \u2014 issues/029 sort-per-group"
@@ -145,12 +145,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 2304.3,
-        "agg_max_ms": 2446.9,
-        "agg_avg_ms": 1575.3,
-        "agg_sum_ms": 1393.9,
-        "agg_count_ms": 770.3,
-        "min_over_avg": 1.46
+        "agg_min_ms": 2236.8,
+        "agg_max_ms": 2742.2,
+        "agg_avg_ms": 1823.9,
+        "agg_sum_ms": 1674.1,
+        "agg_count_ms": 895.2,
+        "min_over_avg": 1.23
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "aggregate cost, group_by=True \u2014 issues/029 sort-per-group"
@@ -160,12 +160,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 932.7,
-        "agg_max_ms": 941.9,
-        "agg_avg_ms": 2218.8,
-        "agg_sum_ms": 2382.9,
-        "agg_count_ms": 47.1,
-        "min_over_avg": 0.42
+        "agg_min_ms": 945.4,
+        "agg_max_ms": 994.9,
+        "agg_avg_ms": 2986.3,
+        "agg_sum_ms": 2378.1,
+        "agg_count_ms": 45.3,
+        "min_over_avg": 0.32
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "aggregate cost, group_by=False \u2014 issues/029 sort-per-group"
@@ -175,12 +175,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 205.4,
-        "agg_max_ms": 197.6,
-        "agg_avg_ms": 121.9,
-        "agg_sum_ms": 132.3,
-        "agg_count_ms": 78.7,
-        "min_over_avg": 1.69
+        "agg_min_ms": 173.4,
+        "agg_max_ms": 175.3,
+        "agg_avg_ms": 127.9,
+        "agg_sum_ms": 114.2,
+        "agg_count_ms": 75.1,
+        "min_over_avg": 1.36
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "aggregate cost, group_by=True \u2014 issues/029 sort-per-group"
@@ -190,12 +190,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 259.8,
-        "agg_max_ms": 211.1,
-        "agg_avg_ms": 158.0,
-        "agg_sum_ms": 203.0,
-        "agg_count_ms": 3.6,
-        "min_over_avg": 1.64
+        "agg_min_ms": 293.6,
+        "agg_max_ms": 202.9,
+        "agg_avg_ms": 146.1,
+        "agg_sum_ms": 141.6,
+        "agg_count_ms": 3.3,
+        "min_over_avg": 2.01
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "aggregate cost, group_by=False \u2014 issues/029 sort-per-group"
@@ -205,9 +205,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "min_in_memory_ms": 876.6,
-        "min_spilled_ms": 896.4,
-        "spill_ratio": 1.02
+        "min_in_memory_ms": 870.1,
+        "min_spilled_ms": 956.8,
+        "spill_ratio": 1.1
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN with and without a work_mem spill \u2014 issues/029"
@@ -217,9 +217,9 @@
       "kind": "sql",
       "status": "skipped",
       "metrics": {
-        "min_in_memory_ms": 525.1,
-        "min_spilled_ms": 252.6,
-        "spill_ratio": 0.48
+        "min_in_memory_ms": 318.9,
+        "min_spilled_ms": 229.7,
+        "spill_ratio": 0.72
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN with and without a work_mem spill \u2014 issues/029",
@@ -251,8 +251,8 @@
         "max_actual_rows": 100,
         "estimated_rows": 100,
         "heap_fetches": 0,
-        "planning_ms": 0.291,
-        "execution_ms": 0.205,
+        "planning_ms": 0.372,
+        "execution_ms": 0.149,
         "matched_rows": 100
       },
       "dataset": "space_lead_dataset_test"
@@ -277,14 +277,14 @@
       },
       "metrics": {
         "shared_buffers": 989,
-        "shared_read": 4,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 1025,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.159,
-        "execution_ms": 24.117
+        "planning_ms": 0.131,
+        "execution_ms": 19.171
       },
       "dataset": "wordnet_frames"
     },
@@ -308,14 +308,14 @@
       },
       "metrics": {
         "shared_buffers": 127,
-        "shared_read": 2,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 1.105,
-        "execution_ms": 2.078
+        "planning_ms": 1.348,
+        "execution_ms": 1.075
       },
       "dataset": "wordnet_frames"
     },
@@ -345,8 +345,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.137,
-        "execution_ms": 0.566
+        "planning_ms": 0.127,
+        "execution_ms": 0.785
       },
       "dataset": "wordnet_frames"
     },
@@ -371,8 +371,8 @@
         "max_actual_rows": 10,
         "estimated_rows": 10,
         "heap_fetches": 0,
-        "planning_ms": 0.193,
-        "execution_ms": 0.017
+        "planning_ms": 0.146,
+        "execution_ms": 0.014
       },
       "dataset": "synthetic:edges",
       "notes": "forward hop (source\u2192dest)"
@@ -398,14 +398,14 @@
       },
       "metrics": {
         "shared_buffers": 154,
-        "shared_read": 3,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.731,
-        "execution_ms": 1.849,
+        "planning_ms": 0.688,
+        "execution_ms": 1.007,
         "sql_chars": 6702,
         "joins": 0
       },
@@ -433,14 +433,14 @@
       },
       "metrics": {
         "shared_buffers": 96,
-        "shared_read": 40,
+        "shared_read": 39,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 1649,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 4.689,
-        "execution_ms": 8.097,
+        "planning_ms": 2.516,
+        "execution_ms": 7.312,
         "sql_chars": 3811,
         "joins": 0
       },
@@ -470,14 +470,14 @@
       },
       "metrics": {
         "shared_buffers": 205,
-        "shared_read": 35,
+        "shared_read": 25,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.804,
-        "execution_ms": 16.727,
+        "planning_ms": 0.933,
+        "execution_ms": 11.518,
         "sql_chars": 6687,
         "joins": 0
       },
@@ -515,8 +515,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 1.107,
-        "execution_ms": 2.272,
+        "planning_ms": 1.367,
+        "execution_ms": 1.78,
         "sql_chars": 6961,
         "joins": 0
       },
@@ -550,8 +550,8 @@
         "max_actual_rows": 109745,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.489,
-        "execution_ms": 87.84,
+        "planning_ms": 0.55,
+        "execution_ms": 69.135,
         "sql_chars": 3801,
         "joins": 0
       },
@@ -563,10 +563,10 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "page_ms_offset_0": 59.4,
-        "page_ms_offset_250": 307.2,
-        "page_ms_offset_1000": 276.6,
-        "deep_ratio": 4.7
+        "page_ms_offset_0": 60.0,
+        "page_ms_offset_250": 280.9,
+        "page_ms_offset_1000": 287.5,
+        "deep_ratio": 4.8
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "cost across offsets \u2014 issues/078; flat means fixed"
@@ -576,10 +576,10 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "page_ms_offset_0": 34.2,
-        "page_ms_offset_250": 31.6,
-        "page_ms_offset_1000": 26.8,
-        "deep_ratio": 0.9
+        "page_ms_offset_0": 28.8,
+        "page_ms_offset_250": 34.1,
+        "page_ms_offset_1000": 32.8,
+        "deep_ratio": 1.2
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "cost across offsets \u2014 issues/078; flat means fixed"
@@ -630,16 +630,16 @@
         "seq_scans": []
       },
       "metrics": {
-        "shared_buffers": 333407,
+        "shared_buffers": 333402,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 33333,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 42.669,
-        "execution_ms": 423.185,
-        "min_ratio": 0.852,
+        "planning_ms": 36.744,
+        "execution_ms": 351.085,
+        "min_ratio": 1.005,
         "offsets_measured": 3,
         "deepest_offset": 1000
       },
@@ -698,9 +698,9 @@
         "max_actual_rows": 10000,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 30.513,
-        "execution_ms": 33.363,
-        "min_ratio": 0.825,
+        "planning_ms": 33.667,
+        "execution_ms": 33.281,
+        "min_ratio": 0.893,
         "offsets_measured": 2,
         "deepest_offset": 250
       },
@@ -762,8 +762,8 @@
         "max_actual_rows": 50469,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 46.457,
-        "execution_ms": 359.728,
+        "planning_ms": 49.072,
+        "execution_ms": 305.063,
         "rows": 25,
         "distinct": 25,
         "duplicate_anchors": 398
@@ -826,8 +826,8 @@
         "max_actual_rows": 699,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 48.828,
-        "execution_ms": 305.875,
+        "planning_ms": 43.722,
+        "execution_ms": 307.082,
         "rows": 25,
         "distinct": 25,
         "duplicate_anchors": 398
@@ -909,14 +909,14 @@
       },
       "metrics": {
         "shared_buffers": 104030,
-        "shared_read": 119,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 49.273,
-        "execution_ms": 71.888,
+        "planning_ms": 52.355,
+        "execution_ms": 69.279,
         "sparql_chars": 1872,
         "sql_chars": 6301,
         "joins": 0
@@ -974,14 +974,14 @@
       },
       "metrics": {
         "shared_buffers": 14163,
-        "shared_read": 240,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 59.129,
-        "execution_ms": 62.241,
+        "planning_ms": 52.327,
+        "execution_ms": 44.411,
         "sparql_chars": 1836,
         "sql_chars": 6274,
         "joins": 0
@@ -1037,14 +1037,14 @@
       },
       "metrics": {
         "shared_buffers": 21444,
-        "shared_read": 45,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 13,
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 42.389,
-        "execution_ms": 22.824,
+        "planning_ms": 44.376,
+        "execution_ms": 12.594,
         "sparql_chars": 1844,
         "sql_chars": 6274,
         "joins": 0
@@ -1098,8 +1098,8 @@
         "max_actual_rows": 36,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 46.445,
-        "execution_ms": 131.427,
+        "planning_ms": 43.07,
+        "execution_ms": 68.058,
         "total_matches": 9220,
         "page_size": 25,
         "buffers_per_match": 5.918
@@ -1154,8 +1154,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 54.367,
-        "execution_ms": 96.578,
+        "planning_ms": 63.588,
+        "execution_ms": 83.879,
         "total_matches": 908,
         "page_size": 25,
         "buffers_per_match": 32.797
@@ -1206,14 +1206,14 @@
       },
       "metrics": {
         "shared_buffers": 135033,
-        "shared_read": 24364,
+        "shared_read": 21860,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 100000,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 48.296,
-        "execution_ms": 5655.238,
+        "planning_ms": 47.164,
+        "execution_ms": 4839.735,
         "total_matches": 3713,
         "page_size": 25,
         "buffers_per_match": 36.368
@@ -1263,14 +1263,14 @@
       },
       "metrics": {
         "shared_buffers": 14732,
-        "shared_read": 466,
+        "shared_read": 400,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 365,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 52.846,
-        "execution_ms": 190.432,
+        "planning_ms": 52.06,
+        "execution_ms": 164.469,
         "total_matches": 365,
         "page_size": 25,
         "buffers_per_match": 40.362
@@ -1318,14 +1318,14 @@
       },
       "metrics": {
         "shared_buffers": 89717,
-        "shared_read": 254,
+        "shared_read": 76,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 37,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 45.449,
-        "execution_ms": 197.229,
+        "planning_ms": 41.038,
+        "execution_ms": 129.764,
         "total_matches": 5531,
         "page_size": 25,
         "buffers_per_match": 16.221
@@ -1374,14 +1374,14 @@
       },
       "metrics": {
         "shared_buffers": 46244,
-        "shared_read": 163,
+        "shared_read": 1,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 67.57,
-        "execution_ms": 110.82,
+        "planning_ms": 54.083,
+        "execution_ms": 76.433,
         "total_matches": 547,
         "page_size": 25,
         "buffers_per_match": 84.541
@@ -1429,14 +1429,14 @@
       },
       "metrics": {
         "shared_buffers": 103671,
-        "shared_read": 10530,
+        "shared_read": 168,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 37,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 51.421,
-        "execution_ms": 2554.516,
+        "planning_ms": 44.809,
+        "execution_ms": 306.088,
         "total_matches": 7337,
         "page_size": 25,
         "buffers_per_match": 14.13
@@ -1485,14 +1485,14 @@
       },
       "metrics": {
         "shared_buffers": 39039,
-        "shared_read": 221,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 69.244,
-        "execution_ms": 172.091,
+        "planning_ms": 52.29,
+        "execution_ms": 71.228,
         "total_matches": 765,
         "page_size": 25,
         "buffers_per_match": 51.031
@@ -1542,14 +1542,14 @@
       },
       "metrics": {
         "shared_buffers": 35409,
-        "shared_read": 6237,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 878,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 49.1,
-        "execution_ms": 1420.555,
+        "planning_ms": 62.572,
+        "execution_ms": 181.028,
         "total_matches": 878,
         "page_size": 25,
         "buffers_per_match": 40.329
@@ -1599,14 +1599,14 @@
       },
       "metrics": {
         "shared_buffers": 3969,
-        "shared_read": 119,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 96,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 59.885,
-        "execution_ms": 45.514,
+        "planning_ms": 59.314,
+        "execution_ms": 14.736,
         "total_matches": 96,
         "page_size": 25,
         "buffers_per_match": 41.344
@@ -1619,28 +1619,28 @@
       "kind": "query",
       "status": "ok",
       "metrics": {
-        "growth_ratio": 0.13,
-        "match_spread": 10.5,
-        "growth_vs_matches": -0.092,
+        "growth_ratio": 0.56,
+        "match_spread": 4.23,
+        "growth_vs_matches": -0.136,
         "buffers_smallest": 435228,
-        "buffers_largest": 54561
+        "buffers_largest": 244081
       },
       "dataset": "sp_lead_synth_100k",
-      "notes": "[100k] 25-row page, matches 878\u21929,220. O(page) predicts ~1.0; O(matches) predicts ~10.5"
+      "notes": "[100k] 25-row page, matches 878\u21923,713. O(page) predicts ~1.0; O(matches) predicts ~4.2"
     },
     {
       "bench_id": "query.kgquery.growth_ratio[10k]",
       "kind": "query",
       "status": "ok",
       "metrics": {
-        "growth_ratio": 0.04,
-        "match_spread": 9.46,
-        "growth_vs_matches": -0.113,
+        "growth_ratio": 0.35,
+        "match_spread": 3.8,
+        "growth_vs_matches": -0.232,
         "buffers_smallest": 685156,
-        "buffers_largest": 29780
+        "buffers_largest": 240018
       },
       "dataset": "sp_lead_synth_10k",
-      "notes": "[10k] 25-row page, matches 96\u2192908. O(page) predicts ~1.0; O(matches) predicts ~9.5"
+      "notes": "[10k] 25-row page, matches 96\u2192365. O(page) predicts ~1.0; O(matches) predicts ~3.8"
     },
     {
       "bench_id": "query.kgquery.no_duplicate_rows[generic-100k]",
@@ -1690,8 +1690,8 @@
         "max_actual_rows": 878,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 45.372,
-        "execution_ms": 40.823,
+        "planning_ms": 47.063,
+        "execution_ms": 39.033,
         "rows": 25,
         "distinct": 25
       },
@@ -1746,8 +1746,8 @@
         "max_actual_rows": 96,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 52.415,
-        "execution_ms": 4.184,
+        "planning_ms": 55.762,
+        "execution_ms": 4.302,
         "rows": 25,
         "distinct": 25
       },
@@ -1803,8 +1803,8 @@
         "max_actual_rows": 878,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 30.058,
-        "execution_ms": 49.805,
+        "planning_ms": 30.279,
+        "execution_ms": 42.293,
         "rows": 25,
         "distinct": 25
       },
@@ -1860,8 +1860,8 @@
         "max_actual_rows": 96,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 28.863,
-        "execution_ms": 3.787,
+        "planning_ms": 36.829,
+        "execution_ms": 5.111,
         "rows": 25,
         "distinct": 25
       },
@@ -1955,10 +1955,10 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "sorted_ms_offset_0": 640.9,
-        "sorted_ms_offset_250": 539.7,
-        "sorted_ms_offset_1000": 739.1,
-        "sorted_depth_ratio": 1.2
+        "sorted_ms_offset_0": 737.2,
+        "sorted_ms_offset_250": 627.7,
+        "sorted_ms_offset_1000": 552.7,
+        "sorted_depth_ratio": 0.7
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "sorted page cost across offsets \u2014 issues/080"
@@ -1968,10 +1968,10 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "sorted_ms_offset_0": 89.7,
-        "sorted_ms_offset_250": 79.2,
-        "sorted_ms_offset_1000": 88.7,
-        "sorted_depth_ratio": 0.9
+        "sorted_ms_offset_0": 86.3,
+        "sorted_ms_offset_250": 85.7,
+        "sorted_ms_offset_1000": 80.5,
+        "sorted_depth_ratio": 1.0
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "sorted page cost across offsets \u2014 issues/080"
@@ -1981,9 +1981,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 56.3,
-        "sorted_ms": 720.8,
-        "sort_ratio": 12.8
+        "unsorted_ms": 61.1,
+        "sorted_ms": 544.7,
+        "sort_ratio": 8.9
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "entity_property sort vs the same query unsorted (issues/080)"
@@ -1993,9 +1993,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 32.9,
-        "sorted_ms": 79.9,
-        "sort_ratio": 2.4
+        "unsorted_ms": 32.5,
+        "sorted_ms": 90.9,
+        "sort_ratio": 2.8
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "entity_property sort vs the same query unsorted (issues/080)"
@@ -2053,15 +2053,15 @@
         "seq_scans": []
       },
       "metrics": {
-        "shared_buffers": 453160,
+        "shared_buffers": 453167,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 33333,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 37.776,
-        "execution_ms": 536.273,
+        "planning_ms": 33.66,
+        "execution_ms": 538.086,
         "rows": 25,
         "sorted_values": 25
       },
@@ -2126,8 +2126,8 @@
         "max_actual_rows": 10000,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 51.134,
-        "execution_ms": 46.692,
+        "planning_ms": 49.716,
+        "execution_ms": 50.39,
         "rows": 25,
         "sorted_values": 25
       },
@@ -2139,8 +2139,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 21.7,
-        "min_ms": 21.0,
+        "wall_ms": 41.6,
+        "min_ms": 24.4,
         "page_size": 100,
         "results": 100
       },
@@ -2152,8 +2152,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 19.7,
-        "min_ms": 18.8,
+        "wall_ms": 15.9,
+        "min_ms": 13.9,
         "page_size": 100,
         "results": 100
       },
@@ -2165,8 +2165,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 22.9,
-        "min_ms": 22.2,
+        "wall_ms": 24.9,
+        "min_ms": 24.2,
         "page_size": 100,
         "results": 100
       },
@@ -2178,8 +2178,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 12.5,
-        "min_ms": 12.2,
+        "wall_ms": 13.6,
+        "min_ms": 12.9,
         "page_size": 25,
         "results": 25
       },
@@ -2191,8 +2191,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 11.1,
-        "min_ms": 10.4,
+        "wall_ms": 10.8,
+        "min_ms": 9.9,
         "page_size": 25,
         "results": 25
       },
@@ -2204,8 +2204,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 13.1,
-        "min_ms": 12.7,
+        "wall_ms": 11.5,
+        "min_ms": 10.7,
         "page_size": 25,
         "results": 25
       },
@@ -2217,8 +2217,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 146.3,
-        "min_ms": 126.4,
+        "wall_ms": 102.6,
+        "min_ms": 100.3,
         "page_size": 100,
         "results": 100
       },
@@ -2230,8 +2230,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 52.5,
-        "min_ms": 50.0,
+        "wall_ms": 50.0,
+        "min_ms": 45.0,
         "page_size": 100,
         "results": 100
       },
@@ -2243,8 +2243,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 92.8,
-        "min_ms": 78.3,
+        "wall_ms": 91.4,
+        "min_ms": 80.0,
         "page_size": 100,
         "results": 73
       },
@@ -2256,8 +2256,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 45.3,
-        "min_ms": 44.9,
+        "wall_ms": 47.6,
+        "min_ms": 42.2,
         "page_size": 25,
         "results": 25
       },
@@ -2269,8 +2269,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 29.5,
-        "min_ms": 28.2,
+        "wall_ms": 20.8,
+        "min_ms": 19.4,
         "page_size": 25,
         "results": 25
       },
@@ -2282,8 +2282,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 56.6,
-        "min_ms": 47.8,
+        "wall_ms": 37.4,
+        "min_ms": 33.3,
         "page_size": 25,
         "results": 25
       },
@@ -2295,8 +2295,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 88.4,
-        "min_ms": 85.6,
+        "wall_ms": 83.2,
+        "min_ms": 77.5,
         "page_size": 100,
         "results": 100
       },
@@ -2308,8 +2308,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 47.0,
-        "min_ms": 45.2,
+        "wall_ms": 44.5,
+        "min_ms": 42.3,
         "page_size": 100,
         "results": 100
       },
@@ -2321,8 +2321,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 32.0,
-        "min_ms": 31.3,
+        "wall_ms": 32.7,
+        "min_ms": 30.1,
         "page_size": 100,
         "results": 99
       },
@@ -2334,8 +2334,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 36.0,
-        "min_ms": 35.4,
+        "wall_ms": 32.8,
+        "min_ms": 30.4,
         "page_size": 25,
         "results": 25
       },
@@ -2347,8 +2347,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 25.8,
-        "min_ms": 24.5,
+        "wall_ms": 28.2,
+        "min_ms": 21.0,
         "page_size": 25,
         "results": 25
       },
@@ -2360,8 +2360,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 21.9,
-        "min_ms": 19.0,
+        "wall_ms": 15.2,
+        "min_ms": 14.8,
         "page_size": 25,
         "results": 25
       },
@@ -2373,8 +2373,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 415.4,
-        "min_ms": 407.5,
+        "wall_ms": 415.7,
+        "min_ms": 373.9,
         "page_size": 100,
         "results": 100
       },
@@ -2386,8 +2386,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 178.5,
-        "min_ms": 151.8,
+        "wall_ms": 135.6,
+        "min_ms": 130.6,
         "page_size": 100,
         "results": 100
       },
@@ -2399,8 +2399,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 31.8,
-        "min_ms": 31.2,
+        "wall_ms": 25.2,
+        "min_ms": 24.5,
         "page_size": 100,
         "results": 13
       },
@@ -2412,8 +2412,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 79.0,
-        "min_ms": 75.7,
+        "wall_ms": 70.7,
+        "min_ms": 69.5,
         "page_size": 25,
         "results": 25
       },
@@ -2425,8 +2425,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 48.7,
-        "min_ms": 47.8,
+        "wall_ms": 43.2,
+        "min_ms": 42.4,
         "page_size": 25,
         "results": 25
       },
@@ -2438,8 +2438,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 34.0,
-        "min_ms": 33.3,
+        "wall_ms": 28.2,
+        "min_ms": 27.2,
         "page_size": 25,
         "results": 13
       },
@@ -2462,7 +2462,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "convergent_ms": 6292.5,
+        "convergent_ms": 6306.1,
         "convergent_rows": 1313755
       },
       "dataset": "sp_kg_rel",
@@ -2484,7 +2484,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_friendof_ms": 58.7,
+        "rel_friendof_ms": 71.9,
         "rel_friendof_rows": 14625
       },
       "dataset": "sp_kg_rel",
@@ -2495,7 +2495,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_reportsto_ms": 32.5,
+        "rel_reportsto_ms": 47.6,
         "rel_reportsto_rows": 4750
       },
       "dataset": "sp_kg_rel",
@@ -2506,7 +2506,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_worksfor_ms": 38.8,
+        "rel_worksfor_ms": 39.5,
         "rel_worksfor_rows": 4875
       },
       "dataset": "sp_kg_rel",
@@ -2529,9 +2529,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "values_1_ms": 0.45,
-        "values_20_ms": 3.34,
-        "values_growth": 7.3
+        "values_1_ms": 0.36,
+        "values_20_ms": 3.52,
+        "values_growth": 9.8
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "VALUES cost against list length \u2014 issues/087"
@@ -2541,9 +2541,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "values_ms": 0.57,
-        "literal_subject_ms": 0.56,
-        "values_ratio": 1.0
+        "values_ms": 0.28,
+        "literal_subject_ms": 0.38,
+        "values_ratio": 0.8
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "VALUES vs an equivalent literal subject \u2014 issues/087"
@@ -2553,9 +2553,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "values_ms": 0.46,
-        "literal_subject_ms": 0.45,
-        "values_ratio": 1.0
+        "values_ms": 0.33,
+        "literal_subject_ms": 0.38,
+        "values_ratio": 0.9
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "VALUES vs an equivalent literal subject \u2014 issues/087"
@@ -2565,7 +2565,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 2404.5,
+        "wall_ms": 1384.2,
         "rows": 4
       },
       "dataset": "wordnet_frames",
@@ -2576,7 +2576,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 316.9,
+        "wall_ms": 254.1,
         "rows": 1
       },
       "dataset": "wordnet_frames",
@@ -2587,7 +2587,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 385.5,
+        "wall_ms": 295.2,
         "rows": 425
       },
       "dataset": "wordnet_frames",
@@ -2598,7 +2598,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 115.1,
+        "wall_ms": 117.4,
         "rows": 45
       },
       "dataset": "wordnet_frames",
@@ -2661,8 +2661,8 @@
         "max_actual_rows": 9266,
         "estimated_rows": 190,
         "heap_fetches": 0,
-        "planning_ms": 2.473,
-        "execution_ms": 28.276,
+        "planning_ms": 4.04,
+        "execution_ms": 27.197,
         "rows": 70
       },
       "dataset": "sp_graph_skew_2k",
@@ -2725,8 +2725,8 @@
         "max_actual_rows": 9266,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 2.445,
-        "execution_ms": 4.3,
+        "planning_ms": 2.451,
+        "execution_ms": 4.56,
         "rows": 21
       },
       "dataset": "sp_graph_skew_2k",
@@ -2789,8 +2789,8 @@
         "max_actual_rows": 9266,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 2.432,
-        "execution_ms": 3.169,
+        "planning_ms": 2.773,
+        "execution_ms": 4.556,
         "rows": 7
       },
       "dataset": "sp_graph_skew_2k",
@@ -2826,8 +2826,8 @@
           "CTE Scan",
           "Index Scan",
           "Index Only Scan",
-          "Index Scan",
           "Index Only Scan",
+          "Index Scan",
           "Unique",
           "Sort",
           "Nested Loop",
@@ -2837,8 +2837,8 @@
           "CTE Scan",
           "Index Scan",
           "Index Only Scan",
-          "Index Only Scan",
           "Index Scan",
+          "Index Only Scan",
           "Index Only Scan",
           "Index Scan"
         ],
@@ -2853,15 +2853,15 @@
         "seq_scans": []
       },
       "metrics": {
-        "shared_buffers": 8836,
+        "shared_buffers": 8389,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 17,
         "max_actual_rows": 2022,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 8.463,
-        "execution_ms": 9.749,
+        "planning_ms": 6.873,
+        "execution_ms": 5.46,
         "rows": 17
       },
       "dataset": "sp_graph_skew_2k",
@@ -2917,8 +2917,8 @@
         "max_actual_rows": 27,
         "estimated_rows": 15,
         "heap_fetches": 0,
-        "planning_ms": 5.765,
-        "execution_ms": 1.786,
+        "planning_ms": 1.536,
+        "execution_ms": 0.671,
         "rows": 1
       },
       "dataset": "sp_graph_skew_2k",
@@ -2963,8 +2963,8 @@
         "max_actual_rows": 17029,
         "estimated_rows": 29,
         "heap_fetches": 0,
-        "planning_ms": 16.561,
-        "execution_ms": 95.971,
+        "planning_ms": 6.942,
+        "execution_ms": 94.02,
         "rows": 17029
       },
       "dataset": "sp_graph_skew_2k",
@@ -2973,7 +2973,7 @@
   ],
   "baseline": {
     "name": "query",
-    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260820T172110Z-d0ba037-query2.json",
+    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260820T175614Z-99bcd50-query3.json",
     "reason": "",
     "pg_stamped": true
   }

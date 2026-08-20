@@ -282,23 +282,34 @@ async def test_page_cost_vs_match_count_equality(perf_conn, perf_record, fx, sta
 
 @pytest.mark.bench("query.kgquery.growth_ratio")
 @pytest.mark.parametrize("fx", FIXTURES, ids=[f.label for f in FIXTURES])
-@pytest.mark.xfail(
-    reason="This ratio compares two DIFFERENT plan strategies, so it does not "
-           "measure O(page). EQ_STATES spans semijoin.MIN_SELECTIVITY (0.05): "
-           "CA is 908/10000 = 0.091 and takes the probe path, VT is "
-           "96/10000 = 0.010 and falls back to the set-based plan. Dividing a "
-           "probe-path buffer count by a set-based one is a comparison of "
-           "algorithms, not of scaling. It passed previously only because "
-           "sp_lead_synth_10k carried a hand-made 4-key index that changed "
-           "absolute buffers on the probe path; that index doubled wordnet "
-           "traversal time and was reverted. Fix by splitting the curve at the "
-           "gate and asserting within each regime, not by moving the constant.",
-    strict=False)
 async def test_growth_ratio_equality(perf_conn, perf_record, fx):
-    """The fix, as one number: page cost against a 9.5x change in match count."""
+    """The fix, as one number: page cost against a change in match count.
+
+    SPLIT AT THE GATE, which is what the xfail this replaces asked for.
+
+    `EQ_STATES` straddles `semijoin.MIN_SELECTIVITY` — measured on both fixtures,
+    CA/TX/NY are 5.5-9.2% and take the PROBE path, IL/VT are 0.9-3.7% and fall
+    back to the SET-BASED plan. The old ratio divided the widest state's buffers
+    by the narrowest, which meant dividing a probe-path count by a set-based one:
+    a comparison of algorithms, not of scaling. It was marked xfail for exactly
+    that reason, and then began reporting XPASS — passing on a number that never
+    meant anything either way, which is worse than failing.
+
+    So the growth is now measured WITHIN each regime, over the states that share
+    a plan. A regime with fewer than two states is skipped rather than compared
+    against itself.
+    """
     await _require_loaded(perf_conn, fx)
 
+    from vitalgraph.db.sparql_sql.semijoin import MIN_SELECTIVITY
     counts = _load_manifest(fx)["actual_matches"]["companystatecode_eq"]
+    # From the manifest, not from the label: "10k" is a name, `n_entities` is
+    # the number the selectivity is actually against.
+    total = _load_manifest(fx).get("n_entities") or 0
+    if not total:
+        pytest.skip(f"{fx.label}: manifest has no n_entities to compute "
+                    f"selectivity against")
+
     measured = {}
     for state in EQ_STATES:
         sql = await _criteria_to_sql(perf_conn, _eq_criteria(state), fx)
@@ -306,22 +317,45 @@ async def test_growth_ratio_equality(perf_conn, perf_record, fx):
             plan = await assert_plan(c, sql, no_spill=True)
         measured[state] = total_shared_buffers(plan)
 
-    big, small = EQ_STATES[0], EQ_STATES[-1]
-    ratio = measured[big] / max(measured[small], 1)
-    spread = counts.get(big, 1) / max(counts.get(small, 1), 1)
+    probe = [s for s in EQ_STATES
+             if counts.get(s, 0) / max(total, 1) >= MIN_SELECTIVITY]
+    setbased = [s for s in EQ_STATES
+                if counts.get(s, 0) / max(total, 1) < MIN_SELECTIVITY]
+    regimes = [("probe", probe), ("set-based", setbased)]
 
-    print(f"\n  [{fx.label}] {'state':>6} {'matches':>9} {'buffers':>10} {'buf/match':>10}")
+    print(f"\n  [{fx.label}] {'state':>6} {'matches':>9} {'sel':>7} {'plan':>10} "
+          f"{'buffers':>10} {'buf/match':>10}")
     for s in EQ_STATES:
         n = counts.get(s, 0)
-        print(f"  {s:>6} {n:>9,} {measured[s]:>10,} "
+        sel = n / max(total, 1)
+        lane = "probe" if sel >= MIN_SELECTIVITY else "set-based"
+        print(f"  {s:>6} {n:>9,} {sel:>7.3f} {lane:>10} {measured[s]:>10,} "
               f"{measured[s] / max(n, 1):>10.1f}")
-    print(f"\n  match spread {spread:.1f}x → buffer growth {ratio:.1f}x "
-          f"(O(page) predicts ~1.0)")
 
-    # Growth as a fraction of the growth in match count: 0 = O(page),
-    # 1 = O(matches). Derived from this fixture's own numbers, so it means the
-    # same thing at 10k or 100k entities.
-    vs_matches = (ratio - 1.0) / max(spread - 1.0, 1e-9)
+    worst = None
+    for name, states in regimes:
+        if len(states) < 2:
+            print(f"  {name}: {len(states)} state(s) — nothing to compare within "
+                  f"this regime, skipped")
+            continue
+        big, small = states[0], states[-1]
+        r = measured[big] / max(measured[small], 1)
+        sp = counts.get(big, 1) / max(counts.get(small, 1), 1)
+        v = (r - 1.0) / max(sp - 1.0, 1e-9)
+        print(f"  {name}: {small}→{big}, match spread {sp:.1f}x → buffer growth "
+              f"{r:.1f}x = {v:.2f} of linear")
+        if worst is None or v > worst[1]:
+            worst = (name, v, r, sp, big, small)
+
+    if worst is None:
+        pytest.skip("no regime has two states to compare on this fixture")
+
+    _, vs_matches, ratio, spread, big, small = worst
+
+    # `vs_matches` is growth as a fraction of the growth in match count:
+    # 0 = O(page), 1 = O(matches). Taken from the WORST regime above, so the
+    # gate still reports one number and it is now a number about scaling rather
+    # than about which plan was chosen.
 
     perf_record(
         dataset=fx.space,
@@ -655,14 +689,16 @@ async def _flips_to_blocking_plan(conn, fx, page_size, entity_type=KGENTITY) -> 
 @pytest.mark.parametrize("fx", FIXTURES, ids=[f.label for f in FIXTURES])
 @pytest.mark.parametrize("entity_type", [
     pytest.param(KGENTITY, id="generic"),
-    pytest.param(SPECIFIC_ENTITY_TYPE, id="specific",
-                 marks=pytest.mark.xfail(
-                     reason="issues/047 — the split-BGP anchor flips to a "
-                            "blocking sort at 19 rows on 10k, below the "
-                            "default page size of 25",
-                     strict=False)),
+    # NOT marked xfail here. The cause is a 10k phenomenon — "flips at 19 rows,
+    # below the default page size of 25" — and on 100k the threshold is 161-180,
+    # far above it. Marking the parameter marked BOTH fixtures, so
+    # `specific-100k` reported XPASS while `specific-10k` genuinely xfailed. An
+    # xfail wider than its reason hides the case it does not describe.
+    # `_xfail_10k_only` narrows it to the fixture the reason is about.
+    pytest.param(SPECIFIC_ENTITY_TYPE, id="specific"),
 ])
-async def test_page_size_before_plan_flip(perf_conn, perf_record, fx, entity_type):
+async def test_page_size_before_plan_flip(perf_conn, perf_record, fx, entity_type,
+                                          request):
     """Find the page size at which paging stops being O(page) (issues/047).
 
     Asserting the *threshold* rather than a fixed page size, because the
@@ -670,6 +706,15 @@ async def test_page_size_before_plan_flip(perf_conn, perf_record, fx, entity_typ
     fixture. A test pinned to one page size would certify a bound the other
     dataset does not honour.
     """
+    # issues/047: on the 10k fixture the split-BGP anchor flips to a blocking
+    # sort at 19 rows, below the default page size of 25. That is a property of
+    # THAT fixture; on 100k the threshold is 161-180 and the case passes. The
+    # marker used to cover both and reported XPASS on 100k for two months of runs.
+    if entity_type == SPECIFIC_ENTITY_TYPE and "10k" in fx.label and "100k" not in fx.label:
+        request.node.add_marker(pytest.mark.xfail(
+            reason="issues/047 — the split-BGP anchor flips to a blocking sort "
+                   "at 19 rows on 10k, below the default page size of 25",
+            strict=False))
     await _require_loaded(perf_conn, fx)
 
     if await _flips_to_blocking_plan(perf_conn, fx, 1, entity_type):
