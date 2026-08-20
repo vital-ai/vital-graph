@@ -336,7 +336,23 @@ async def test_the_nested_criterion_is_not_vacuous(perf_conn, criterion):
     bogus = template.replace('"alpha", "beta"', '"no-such-category"') \
                     .replace("?nsc{n} >= 50", "?nsc{n} >= 100000")
     if bogus == template:
-        pytest.skip(f"{criterion} carries no value to falsify")
+        # An EXISTENCE criterion — `has_nested` asserts a nested frame is
+        # reachable and filters on no value, so there is nothing to substitute.
+        # It used to skip here, which left the one criterion carrying no value
+        # as the one criterion never checked for vacuity: if the hop were
+        # dropped entirely, every case above would still pass wherever the
+        # unfiltered answer coincides, which is precisely what this test exists
+        # to notice.
+        #
+        # Falsify the HOP instead of the value: an edge type nothing carries
+        # makes the nested frame unreachable, so zero rows is again the only
+        # correct answer.
+        bogus = template.replace(NESTED_EDGE_TYPE,
+                                 "urn:no-such-edge-type:falsify")
+    if bogus == template:
+        pytest.skip(f"{criterion} could not be made unsatisfiable — this check "
+                    f"cannot falsify it, which is worth fixing rather than "
+                    f"skipping")
     start = SMALL.sample_starts()[0]
     rows, _gen = await _run(
         perf_conn, chain_query(SMALL, start, 2, criterion=bogus))
