@@ -51,6 +51,36 @@ caller that is not.
   273x regression.
 * The xfail is gone. All four parameters pass on their own merits.
 
+## The bench that replaces the threshold search — and the version of it that was wrong
+
+`tests/performance/test_paging_fence_covers_every_shape.py` enumerates 6 criteria
+shapes x 2 entity types x 2 page sizes x 2 fixtures and asserts a property rather
+than searching for a number.
+
+**The first attempt asserted the wrong property** — "a plan containing a Sort must
+be fenced". It fired on 24 shapes, and measuring them disproved it:
+
+    shape       flag    unfenced   fenced     fencing would be
+    eq-rare     False     35,409   435,228    12x WORSE
+    range-mid   False     51,182   312,248     6x WORSE
+    eq-common   True      54,561    54,561    identical
+
+For those shapes the sort-based plan IS the right one and `False` is the correct
+judgement. A Sort is not a defect, and forcing `enable_sort = off` on a shape
+that needs one is the 273x regression this repository already documents. Had that
+version shipped, the "fix" would have been to set the flag on 24 shapes and make
+them all catastrophically slower.
+
+What is actually checkable is whether the flag AGREES with which plan is cheaper:
+
+    fenced materially cheaper   -> the flag must be True
+    unfenced materially cheaper -> the flag must be False
+
+Both sides measured in the same run, compared as a ratio (2x to count as
+decisive), with a probe timeout that is itself a measurement — a side that cannot
+finish is not the cheaper side. Currently 0 failing; inverting the flag fails 17
+ways, in both directions, with ratios of 36.5x and 172.6x.
+
 ## What remains true, and is the real question
 
 The THRESHOLD was never a stable quantity — 12, 19, 52, 161-180 across datasets
