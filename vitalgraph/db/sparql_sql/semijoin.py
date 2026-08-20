@@ -96,8 +96,17 @@ def _term_uuid(aliases, text: str, ttype: str) -> Optional[str]:
     return getattr(aliases, "resolved_constants", {}).get(col)
 
 
-def _leaf_rows(node, aliases) -> Optional[int]:
+def _leaf_rows(node, aliases, *, filter_derived: bool = True) -> Optional[int]:
     """Smallest (predicate, object) row count among a subtree's constant leaves.
+
+    `filter_derived=False` counts ONLY what the BGP itself binds, excluding the
+    range and text measurements below. Those describe FILTERs sitting ABOVE the
+    join, which is exactly right for deciding whether to PROBE this subtree and
+    exactly wrong for deciding whether to DRIVE from it: `emit_bgp_anchor` emits
+    the BGP's constant leaves and not the filter, so a caller that drives on a
+    filter-derived count reproduces the row count without the predicate that
+    produced it — and returns rows that do not satisfy the criterion.
+    See `emit_slice._try_selective_driven`.
 
     Reads `plan.leaf_terms`, recorded at collect time, rather than parsing the
     generated SQL. The generator already loads these counts for `reorder_bgp`,
@@ -116,7 +125,7 @@ def _leaf_rows(node, aliases) -> Optional[int]:
     # predicate uuid is what associates the two — without it the range's count
     # is missed entirely and a 0.16%-selective range reads as 100%, which is
     # how a tight threshold came to be probed at 646x the cost.
-    range_stats = getattr(aliases, "range_stats", {})
+    range_stats = getattr(aliases, "range_stats", {}) if filter_derived else {}
     if range_stats:
         preds = set()
         for bgp in _bgps(node):
@@ -133,7 +142,7 @@ def _leaf_rows(node, aliases) -> Optional[int]:
     # FILTER sits above the join and the predicate it constrains below it.
     # Without this a selective substring reads as unmeasured, and unmeasured
     # means "keep the current plan" — which is the probe-per-candidate walk.
-    text_stats = getattr(aliases, "text_stats", {})
+    text_stats = getattr(aliases, "text_stats", {}) if filter_derived else {}
     if text_stats:
         preds = set()
         for bgp in _bgps(node):

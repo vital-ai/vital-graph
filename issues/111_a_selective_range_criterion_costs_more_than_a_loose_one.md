@@ -1,10 +1,66 @@
 # The More Selective a Range Criterion, the More It Costs
 
-## Status: OPEN — and this is a REDISCOVERY. `issues/archive/040` documented it,
-## then it was archived with the regression unfixed and the gate re-pointed away.
+## Status: FIXED 2026-08-20 — and it was never a performance problem
 
-Filed 2026-08-20 from measurements, before finding the archive. Keeping it,
-because how it stopped being visible is more useful than the measurement.
+**The tight threshold was not filtering.** `MQLRating >= 99` with a 60,000-row
+page returned 60,000 rows where 1,017 match, and neither `num_val` nor `99`
+appeared anywhere in the generated SQL. The buffer curve below is what an
+unfiltered scan costs; "3,705 buffers per match" divided real work by a match
+count the query never honoured.
+
+    before   60,000 rows returned, 1,017 match, 3,768,476 buffers
+    after     1,017 rows returned, 1,017 match, 1,496,324 buffers
+
+Correct AND 60% cheaper. 10k the same: 326,985 -> 141,918 buffers.
+
+### The cause
+
+`_try_selective_driven` (`emit_slice`) pages from a selective criterion instead
+of the entity anchor, choosing it with `_leaf_rows`. `_leaf_rows` counts three
+things: constant leaves the BGP binds, plus `range_stats` and `text_stats` —
+measurements of FILTERs sitting ABOVE the join, keyed by predicate precisely
+because filter and predicate live at different levels.
+
+Counting all three is right for the SEMI-JOIN gate, which decides whether to
+PROBE a subtree. It is wrong for deciding whether to DRIVE from one, because
+`emit_bgp_anchor` emits the BGP's constant leaves and not the filter. Driving on
+a filter-derived count reproduces the row count without the predicate that
+produced it.
+
+`driver_n` is now measured with `filter_derived=False`. The anchor side still
+counts everything — it is probed, not driven, so filter-derived selectivity is
+legitimate there.
+
+### The guard existed and did not cover this
+
+The unmeasured branch says it outright:
+
+> A text criterion is a pushed FILTER, so driving from its BGP drops the ILIKE
+> entirely — measured: `contains 'ZZQQXX'` returned 25 rows for a substring
+> matching nothing. Fixing this means teaching the driver to carry pushed filter
+> conditions; until then the guard stays.
+
+That fires when the count is MISSING. A numeric range has the identical shape and
+`range_stats` gives it a number, so it walked straight through the guard written
+for it. `_emit_two_phase` had already learned the lesson — it pushes the filters
+and refuses if any survive, with a comment naming this exact failure —
+and `_try_selective_driven`, added afterwards for `issues/061` step 3, inherited
+neither the push nor the check.
+
+### What remains
+
+1,496,324 buffers for 1,017 rows is still the "pays for every candidate" shape
+`issues/archive/040` documented. That number is now honest, and it is what the
+archive's fix family (make the selectivity visible to the planner) would address.
+The correctness half is done.
+
+---
+
+## Original filing, kept for the record
+
+Filed 2026-08-20 from measurements, before finding the archive and before the
+cause was known. Kept because how it stopped being visible is worth more than the
+measurement — and because the framing below, "a performance problem", was wrong.
 
 ## What is measured today
 

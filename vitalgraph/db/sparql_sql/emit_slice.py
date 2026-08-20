@@ -609,7 +609,19 @@ def _try_selective_driven(plan: PlanV2, ctx: EmitContext,
         logger.debug("selective-driven declined: a side has no BGP"); return None
 
     anchor_n = _leaf_rows(left, ctx.aliases)
-    driver_n = _leaf_rows(right, ctx.aliases)
+    # CONSTANT LEAVES ONLY for the driver. `_leaf_rows` also counts range and
+    # text measurements, which describe FILTERs sitting ABOVE the join — right
+    # for deciding whether to probe, wrong for deciding whether to DRIVE, because
+    # `emit_bgp_anchor` below emits the BGP's constant leaves and not the filter.
+    #
+    # The comment under the next guard already says this for the UNMEASURED case
+    # ("a text criterion is a pushed FILTER, so driving from its BGP drops the
+    # ILIKE entirely"). The case it does not cover is a filter that IS measured:
+    # a numeric range is the same shape and `range_stats` gives it a number, so
+    # it walked straight through. Measured on sp_lead_synth_100k, MQLRating >= 99
+    # asked for 60,000 rows and returned 60,000 when 1,017 match — the predicate
+    # absent from the SQL entirely (`issues/111`).
+    driver_n = _leaf_rows(right, ctx.aliases, filter_derived=False)
     if not anchor_n or not driver_n:
         logger.debug("selective-driven declined: unmeasured (anchor=%s driver=%s)",
                      anchor_n, driver_n)
