@@ -46,13 +46,52 @@ Verified: the three affected spaces now report 10 / 5 / 3, matching the manual
 scan, and a freshly planted phantom is reported as `1 TYPELESS, skipped` instead
 of being written.
 
+### The origin: reading #1 was right — it is a DELETE, not a write
+
+The file below spent its length looking for a writer, and concluded correctly
+that no server-property path can produce this. That is why it stayed
+unexplained: there is no writer. It is residue, which the file listed as
+untested reading #1.
+
+`delete_entity_graph_bulk` decides membership with ONE query
+(`sparql_sql_space_impl.py:1591`):
+
+    SELECT DISTINCT subject_uuid FROM rdf_quad
+    WHERE predicate_uuid = <hasKGGraphURI> AND object_uuid = <entity>
+      AND context_uuid = <graph>
+
+and deletes exactly those subjects' quads. So membership is a SNAPSHOT of one
+predicate at one instant, and anything whose grouping URI is missing, misdirected
+or in another context at that moment is not deleted. Nothing points the other
+way either: a quad with the entity as its OBJECT is never considered.
+
+The observed residue matches. Taking one of the 19 apart —
+`.../server_props/frame_create_mt/7580cd65-…`, the entity a test creates and then
+deletes in a `finally`:
+
+    the entity's own triples   GONE (type, name — the name term is still in
+                               `term` with no quad attached to it)
+    its frame                  SURVIVES
+    its entity->frame edge     SURVIVES
+    its self-link              present, and written by the issues/091 repair
+
+so the delete removed the root and left the graph. Which of the three ways
+membership can be missed applies to these particular rows is NOT established — I
+did not reconstruct the sequence, and the context hypothesis is disproved
+(members and self-link share one context). What the code shows is that the delete
+CAN leave this residue by construction, and the data shows residue of exactly
+that shape.
+
 ### Still open
 
-What creates a grouping URI with no object behind it. The reasoning below — that
-no server-property path can — still stands and is still unexplained. What has
-changed is that three of the four affected spaces are built by test suites, so
-the write path is now reachable from a test run rather than only from a
-production copy.
+* **Which miss produced these 19.** The candidates are the three above; a delete
+  running against an entity whose members had not yet been stamped is the most
+  likely, given `create_entity_frames` and the delete are adjacent in the same
+  test.
+* **Whether the delete should be membership-scoped at all.** A delete that
+  defines the graph by a single mutable predicate will always be able to orphan
+  the rest of it. The alternative — deleting by reachability, or refusing when
+  the member count disagrees with a recount — is a design question, not a patch.
 
 `urn:example:campaign:cer:reactivate_merchant_1` on the host space `prod_kg`
 groups 26 objects under `hasKGGraphURI` but has only three triples of its own,
