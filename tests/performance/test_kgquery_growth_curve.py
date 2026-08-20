@@ -328,13 +328,18 @@ async def test_growth_ratio_equality(perf_conn, perf_record, fx):
 @pytest.mark.bench("query.kgquery.range_penalty")
 @pytest.mark.parametrize("fx", FIXTURES, ids=[f.label for f in FIXTURES])
 async def test_range_comparator_pays_for_every_candidate(perf_conn, perf_record, fx):
-    """Range comparators cost the same whatever the threshold.
+    """A range comparator gets MORE expensive as it gets more selective.
 
-    Sweeping the threshold changes the match count by 625x and the buffer count
-    by nothing, because the filter is applied above the join and every candidate
-    crosses it regardless. Recorded as buffers-per-match at the *tightest*
-    threshold, where the waste is most visible: a 16-row result paying for
-    10,000 candidates.
+    The name and this docstring used to claim the cost was flat — "changes the
+    match count by 625x and the buffer count by nothing". Measured, it is
+    inverted, which is worse, and the summary line below has been saying so all
+    along: `10x fewer matches -> 12.87x the cost`. On sp_lead_synth_100k a 25-row
+    page under MQLRating >= 99 returns 1,017 rows and reads 3,768,476 buffers,
+    against 5,477 for the threshold that returns all 100,000.
+
+    t=90 plans as an Index Only Scan that stops at the page; t=99 sorts every
+    candidate and takes 25. See issues/111 — including why the `enable_sort`
+    fence is NOT the fix, and why this is measured but deliberately not gated.
 
     Note this sweep is deliberately NOT the growth-curve gate. Its flatness is
     the pathology, not the fix, and a flat line here would be indistinguishable
