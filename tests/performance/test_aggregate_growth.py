@@ -120,6 +120,12 @@ async def _warm_ms(conn, sql):
 @pytest.mark.bench("query.aggregate.sort_per_group")
 @pytest.mark.parametrize("group_by", [False, True], ids=["one_group", "by_type"])
 @pytest.mark.parametrize("fx", FIXTURES, ids=[f.label for f in FIXTURES])
+# SLOW BENCH. 20s+, nearly all of it building or scanning data rather than
+# the plan being measured — the whole suite records only ~16s of
+# execution_ms across 111 benches, so the cost here is setup, not signal.
+# Excluded from `check.sh perf`; REQUIRED for a promotable baseline,
+# because a partial run promotes holes (issues/081).
+@pytest.mark.slow_bench
 async def test_min_max_sort_per_group_stays_bounded(
         perf_conn, perf_record, fx, group_by):
     """`MIN` against `AVG` over identical data — the ratio IS the sort cost.

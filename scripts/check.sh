@@ -19,8 +19,19 @@
 #
 #   ./scripts/check.sh              # fast:  unit + conformance      ~40s
 #   ./scripts/check.sh pre-commit   # + integration + api            ~6m
-#   ./scripts/check.sh full         # + performance                  ~16m
+#   ./scripts/check.sh perf         # + benchmarks minus slow_bench  ~5.5m
+#   ./scripts/check.sh full         # + the slow benchmarks          ~16m
 #   ./scripts/check.sh unit sparql  # any pytest path/-k, straight through
+#
+# WHY `perf` IS NOT `full`. Across 111 recorded benches the suite measures only
+# ~16 SECONDS of execution_ms — 99% of a 15-minute run is building and scanning
+# data, not the plans being measured. Eight benches at 20s+ account for 388s of
+# it, and they are marked `slow_bench`. Dropping them: 900s -> 330s.
+#
+# A `perf` run is therefore PARTIAL, and `perf_compare --partial` reports a bench
+# it did not run as "not run in this tier" rather than a regression. Promoting a
+# partial run is refused outright — it would bake the missing benches in as holes
+# (issues/081).
 #
 # PARALLELISM, measured rather than assumed:
 #   integration  -n 4  186s -> 136s   OK, with `serial`-marked tests split out
@@ -50,6 +61,10 @@ case "$TIER" in
     run tests/integration -n 4 -m "not serial"
     run tests/integration -m "serial"
     run tests/api
+    ;;
+  perf)
+    "$0" pre-commit
+    run tests/performance -m "not slow_bench"
     ;;
   full)
     "$0" pre-commit

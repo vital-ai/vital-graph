@@ -140,6 +140,12 @@ async def _warm_ms(conn, sql, needs_ordered_scan=True):
 
 @pytest.mark.bench("query.kgquery.deep_paging.curve")
 @pytest.mark.parametrize("fx", FIXTURES, ids=[f.label for f in FIXTURES])
+# SLOW BENCH. 20s+, nearly all of it building or scanning data rather than
+# the plan being measured — the whole suite records only ~16s of
+# execution_ms across 111 benches, so the cost here is setup, not signal.
+# Excluded from `check.sh perf`; REQUIRED for a promotable baseline,
+# because a partial run promotes holes (issues/081).
+@pytest.mark.slow_bench
 async def test_page_cost_across_offsets(perf_conn, perf_record, fx):
     """The curve itself. A flat one means a fix landed; a steep one is issues/078."""
     reason = await require_usable(perf_conn, fx)

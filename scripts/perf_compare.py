@@ -170,7 +170,7 @@ def compare_env(run: Dict[str, Any], base: Dict[str, Any]) -> List[str]:
 # ---------------------------------------------------------------------------
 
 def compare_bench(bench_id: str, base: Dict[str, Any], cur: Optional[Dict[str, Any]],
-                  thresholds: Dict[str, Any]) -> List[Dict[str, Any]]:
+                                    thresholds: Dict[str, Any], partial: bool = False) -> List[Dict[str, Any]]:
     """Compare one bench; returns a list of finding dicts."""
     out: List[Dict[str, Any]] = []
 
@@ -181,6 +181,12 @@ def compare_bench(bench_id: str, base: Dict[str, Any], cur: Optional[Dict[str, A
     # those forever would train everyone to ignore the gate.
     base_ok = base.get("status") == "ok"
     if cur is None:
+        if partial:
+            # A tier that deliberately excludes benches is not a hole. Saying
+            # "REGRESSED to status=skipped" for every one of them is how a gate
+            # gets ignored — the same failure mode as reporting nothing.
+            return [{"bench": bench_id, "metric": "-", "level": INFO,
+                     "detail": "not run in this tier (--partial)"}]
         return [{"bench": bench_id, "metric": "-",
                  "level": FAIL if base_ok else WARN,
                  "detail": "present in baseline, MISSING from run" if base_ok
@@ -300,7 +306,8 @@ ICON = {OK: "✅", WARN: "⚠️ ", FAIL: "❌", INFO: "ℹ️ "}
 
 
 def report(run: Dict[str, Any], base: Dict[str, Any],
-           thresholds: Dict[str, Any]) -> Tuple[int, List[Dict[str, Any]]]:
+           thresholds: Dict[str, Any],
+           partial: bool = False) -> Tuple[int, List[Dict[str, Any]]]:
     cur_b, base_b = benches(run), benches(base)
     findings: List[Dict[str, Any]] = []
 
@@ -311,7 +318,8 @@ def report(run: Dict[str, Any], base: Dict[str, Any],
 
     for bench_id in sorted(base_b):
         findings.extend(compare_bench(bench_id, base_b[bench_id],
-                                      cur_b.get(bench_id), thresholds))
+                                      cur_b.get(bench_id), thresholds,
+                                      partial=partial))
 
     new_benches = sorted(set(cur_b) - set(base_b))
     skipped_new = [b for b in new_benches if cur_b[b].get("status") != "ok"]
@@ -424,6 +432,11 @@ def main() -> int:
     ap.add_argument("run", nargs="?", help="path to a recorded run JSON")
     ap.add_argument("--baseline", help="baseline name (tests/performance/baselines/<name>.json) or path")
     ap.add_argument("--promote", metavar="NAME", help="promote this run to a named baseline")
+    ap.add_argument("--partial", action="store_true",
+                    help="this run deliberately covers a SUBSET (e.g. "
+                         "`-m 'not slow_bench'`), so a bench absent from it is "
+                         "not-run rather than lost. Never promote a partial run: "
+                         "it bakes the missing benches in as holes (issues/081)")
     ap.add_argument("--force-unstamped", action="store_true",
                     help="promote even if the run recorded no PostgreSQL "
                          "settings (issues/081 — the resulting baseline cannot "
@@ -440,6 +453,12 @@ def main() -> int:
         return 0
     if not args.run:
         ap.error("a run path is required (or use --trend)")
+    if args.promote and getattr(args, "partial", False):
+        print("  refusing to promote a --partial run: the benches it did not "
+              "run would be promoted as holes, which is exactly what issues/081 "
+              "warns about. Record a full run first.")
+        return 2
+
     if args.promote:
         promote(args.run, args.promote, args.reason,
                 force=args.force_unstamped)
@@ -449,7 +468,8 @@ def main() -> int:
 
     run = load_json(args.run)
     base = load_json(resolve_baseline(args.baseline))
-    code, findings = report(run, base, load_thresholds(args.thresholds))
+    code, findings = report(run, base, load_thresholds(args.thresholds),
+                            partial=args.partial)
     if args.json:
         with open(args.json, "w") as fh:
             json.dump({"findings": findings}, fh, indent=2)

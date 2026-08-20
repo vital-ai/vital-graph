@@ -275,6 +275,7 @@ markers = [
     "integration: Tier 3 integration tests (require PG + Jena sidecar)",
     "api: Tier 4 API end-to-end tests (require running VitalGraph server)",
     "serial: must not run under pytest-xdist - measures a shared resource (pool capacity, timing) that parallel workers change",
+    "slow_bench: a benchmark costing 20s+, dominated by building or scanning data rather than by the plan it measures - excluded from the default perf tier, required for a promotable baseline",
 ]
 
 [tool.check-manifest]

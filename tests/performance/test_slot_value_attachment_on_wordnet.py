@@ -114,6 +114,12 @@ async def _entities(conn, role):
 
 @pytest.mark.parametrize("role", [SRC, DEST, None],
                          ids=["source-role", "destination-role", "any-role"])
+# SLOW BENCH. 20s+, nearly all of it building or scanning data rather than
+# the plan being measured — the whole suite records only ~16s of
+# execution_ms across 111 benches, so the cost here is setup, not signal.
+# Excluded from `check.sh perf`; REQUIRED for a promotable baseline,
+# because a partial run promotes holes (issues/081).
+@pytest.mark.slow_bench
 async def test_slot_value_attachment_matches_ground_truth(perf_conn, role):
     await _skip_unless_loaded(perf_conn)
     expected = await _ground_truth(perf_conn, role)

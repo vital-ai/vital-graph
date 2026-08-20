@@ -78,6 +78,12 @@ async def two_spaces(perf_pool):
 
 
 @pytest.mark.bench("write.ingest.bulk_vs_executemany")
+# SLOW BENCH. 20s+, nearly all of it building or scanning data rather than
+# the plan being measured — the whole suite records only ~16s of
+# execution_ms across 111 benches, so the cost here is setup, not signal.
+# Excluded from `check.sh perf`; REQUIRED for a promotable baseline,
+# because a partial run promotes holes (issues/081).
+@pytest.mark.slow_bench
 async def test_bulk_rebuild_beats_executemany(perf_pool, two_spaces, perf_record):
     em_sid, bulk_sid = two_spaces
     term_args, quad_rows = _synth_rows(N_QUADS)

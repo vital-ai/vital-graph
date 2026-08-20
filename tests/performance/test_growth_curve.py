@@ -45,6 +45,12 @@ def _fast_page_sql(space_id: str) -> str:
 
 
 @pytest.mark.bench("query.growth.entity_page_buffers")
+# SLOW BENCH. 20s+, nearly all of it building or scanning data rather than
+# the plan being measured — the whole suite records only ~16s of
+# execution_ms across 111 benches, so the cost here is setup, not signal.
+# Excluded from `check.sh perf`; REQUIRED for a promotable baseline,
+# because a partial run promotes holes (issues/081).
+@pytest.mark.slow_bench
 async def test_entity_page_growth_is_flat(perf_pool, perf_record):
     p_uuid = _generate_term_uuid(VITALTYPE, "U")
     obj_uuids = [_generate_term_uuid(u, "U") for u in KGENTITY_TYPES]
