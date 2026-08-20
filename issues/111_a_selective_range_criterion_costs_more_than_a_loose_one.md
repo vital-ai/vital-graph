@@ -55,6 +55,52 @@ and refuses if any survive, with a comment naming this exact failure —
 and `_try_selective_driven`, added afterwards for `issues/061` step 3, inherited
 neither the push nor the check.
 
+### THREE PROPOSED FIXES, ALL MEASURED, ALL FAIL
+
+Recorded so nobody spends the day I spent. Warm, best of three/five, t=99 on
+sp_lead_synth_100k, 25-row page:
+
+    as generated                    1,877 ms   1,496,337 buf
+    fenced (OFFSET 0)               7,763 ms  10,783,176 buf   4x WORSE
+    materialised CTE                1,957 ms     606,072 buf   60% fewer buffers,
+                                                               no faster
+    push filters into the driver    2,753 ms                   consistently worse
+
+The first two are `issues/archive/040`'s own suggestion — "emit a push-down whose
+selectivity is visible (a materialised uuid list, or a fenced subquery)". The
+third is what `_try_selective_driven`'s comment proposes — "teaching the driver
+to carry pushed filter conditions" — implemented by pushing the FILTERs into the
+driver BGP before measuring, the way `_emit_two_phase` does. It stays correct and
+it is slower at both thresholds.
+
+**Buffers are not time on this stack.** The CTE removes 60% of the buffer traffic
+and gains nothing, because a 16 GB `shared_buffers` makes these cache hits. Every
+proposal above, and the whole of `archive/040`, optimises buffers. That is the
+wrong target here and it is why the proposals do not land.
+
+### Where the time actually goes
+
+`EXPLAIN (ANALYZE)` self-time, t=99, total 1,973 ms:
+
+     self ms    %    loops       rows    buffers  node
+         990  50%        3     33,333     67,429  Hash Join
+         600  30%  100,000          1    500,000  Index Scan rdf_quad
+         416  21%        3  1,659,000     66,360  Seq Scan {space}_edge
+         400  20%  100,000       0.01    400,000  Index Scan term
+
+Half the time is one Hash Join, and a fifth is a SEQUENTIAL SCAN of all 1.66M
+edge rows. It is not the per-candidate probing the issue name describes — that is
+the 30%/20% pair. This is the other half of the trap
+`_try_selective_driven` documents:
+
+> The semi-join gate declines ... and that call is CORRECT. But the set-based
+> join it falls back to materialises the large criterion. Neither plan fits, so
+> no threshold reaches one.
+
+The correctness fix made the gate decline correctly, and this seq-scanning
+set-based join is what it declines TO. Any real fix has to give this shape a
+third plan, not tune either of the two that do not fit.
+
 ### What remains
 
 1.66 seconds and 1,496,337 buffers for 1,017 rows — against 77 ms for the

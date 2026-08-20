@@ -325,6 +325,35 @@ async def test_growth_ratio_equality(perf_conn, perf_record, fx):
         f"expensive faster than the result set grows. See issues/040.")
 
 
+async def _assert_criterion_is_applied(conn, fx, criteria_fn, threshold, counts):
+    """The query must actually return the rows the manifest says match.
+
+    EVERY per-match number in this file divides a measured buffer count by a
+    count read from a MANIFEST. Nothing checked that the query honoured it, and
+    for one threshold it did not: `MQLRating >= 99` on sp_lead_synth_100k asked
+    for 60,000 rows and returned 60,000 where 1,017 match, with `num_val` and the
+    threshold both absent from the generated SQL (`issues/111`). The bench went
+    on dividing real work by a number the query never used, and reported "3,705
+    buffers per match" for a page that was not filtering at all.
+
+    Checked at the TIGHTEST threshold, `RANGE_THRESHOLDS[0]`, which is both the
+    cheapest to materialise (145 rows at 100k) and the most likely to break — the
+    wrong plan is chosen precisely when the criterion looks most selective. One
+    execution per fixture; the sweep below stays EXPLAIN-only.
+    """
+    expected = counts[str(threshold)]
+    sql = await _criteria_to_sql(conn, criteria_fn(threshold), fx,
+                                 page_size=expected + 1000)
+    rows = await conn.fetch(sql)
+    assert len(rows) == expected, (
+        f"[{fx.label}] the criterion is NOT being applied: asked for "
+        f"{expected + 1000:,} rows at threshold {threshold} and got "
+        f"{len(rows):,}, where the manifest says {expected:,} match. Every "
+        f"buffers-per-match number below divides by that manifest count, so "
+        f"they describe a query that answered a different question. "
+        f"num_val in the generated SQL: {'num_val' in sql}. See issues/111.")
+
+
 @pytest.mark.bench("query.kgquery.range_penalty")
 @pytest.mark.parametrize("fx", FIXTURES, ids=[f.label for f in FIXTURES])
 async def test_range_comparator_pays_for_every_candidate(perf_conn, perf_record, fx):
@@ -348,6 +377,8 @@ async def test_range_comparator_pays_for_every_candidate(perf_conn, perf_record,
     await _require_loaded(perf_conn, fx)
 
     counts = _load_manifest(fx)["actual_matches"]["mqlrating_gte"]
+    await _assert_criterion_is_applied(
+        perf_conn, fx, _range_criteria, RANGE_THRESHOLDS[0], counts)
     measured = {}
     for t in RANGE_THRESHOLDS:
         sql = await _criteria_to_sql(perf_conn, _range_criteria(t), fx)
