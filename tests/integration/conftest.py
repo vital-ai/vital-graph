@@ -123,9 +123,18 @@ async def pg_conn(pg_pool):
 # ---------------------------------------------------------------------------
 
 # System/global spaces that must NEVER be dropped by tests:
-#   sp_kg_types — centralized KG type definitions used by all spaces
-#   dawg_test   — shared conformance test data
-PROTECTED_SPACES = frozenset({"sp_kg_types", "dawg_test"})
+#   sp_kg_types — centralized KG type definitions used by all spaces (registered)
+#   dawg_test   — shared conformance test data (deliberately NOT registered)
+#
+# The second half comes from `devtools/reserved_spaces.py` rather than being
+# repeated here. It was listed in both places, for different reasons — this one
+# says "tests must not drop it", that one says "the orphan sweep must not drop
+# it" — and only one of them was ever updated. The sweep's copy is the one with
+# teeth: it drops an unregistered space once it holds no quads, and dawg_test is
+# truncated between cases, so `--apply` would have taken it.
+from devtools.reserved_spaces import UNREGISTERED_BY_DESIGN
+
+PROTECTED_SPACES = frozenset({"sp_kg_types"}) | frozenset(UNREGISTERED_BY_DESIGN)
 
 # All integration test spaces use this prefix for easy identification/cleanup.
 TEST_SPACE_PREFIX = "inttest_"

@@ -42,6 +42,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
+from devtools.reserved_spaces import (  # noqa: E402
+    UNREGISTERED_BY_DESIGN, is_unregistered_by_design)
 
 def global_tables() -> set[str]:
     """Tables belonging to the GLOBAL registries, not to any space.
@@ -130,6 +132,7 @@ async def survey(conn):
                 break
 
     orphan_spaces = []
+    reserved = []
     for r in await conn.fetch(
             """
             SELECT replace(t.tablename, '_rdf_quad', '') AS s
@@ -140,6 +143,13 @@ async def survey(conn):
             ORDER BY 1
             """):
         sid = r["s"]
+        if is_unregistered_by_design(sid):
+            # A fixture that has tables and no registry row ON PURPOSE. It also
+            # holds zero quads between runs, which is this function's drop
+            # condition exactly — so without this the sweep deletes the
+            # conformance suite's space. See devtools/reserved_spaces.py.
+            reserved.append(sid)
+            continue
         quads = await conn.fetchval(f'SELECT count(*) FROM "{sid}_rdf_quad"')
         n = await conn.fetchval(
             "SELECT count(*) FROM pg_tables WHERE schemaname='public' "
@@ -153,7 +163,7 @@ async def survey(conn):
                           AND t.tablename = sp.space_id || '_rdf_quad')
         ORDER BY sp.space_id
         """)]
-    return orphan_tables, orphan_spaces, stale_rows
+    return orphan_tables, orphan_spaces, stale_rows, reserved
 
 
 async def main():
@@ -174,7 +184,7 @@ async def main():
     try:
         total = await conn.fetchval(
             "SELECT count(*) FROM pg_tables WHERE schemaname='public'")
-        tables, spaces, rows = await survey(conn)
+        tables, spaces, rows, reserved = await survey(conn)
 
         print(f"{a.host}:{a.port}/{a.database} — {total:,} public tables\n")
         print(f"1. orphaned on-demand tables : {len(tables):,}")
@@ -190,6 +200,14 @@ async def main():
             mark = "EMPTY, will drop" if s["quads"] == 0 else "HAS DATA — REFUSED"
             print(f"      {s['space']}: {s['quads']:,} quads, "
                   f"{s['tables']} tables  [{mark}]")
+
+        if reserved:
+            # Named, not silently filtered. A sweep that quietly skips things is
+            # one nobody can audit, and the whole point of the declaration is
+            # that the exemption is visible at the moment it is applied.
+            print(f"\n   RESERVED, not touched : {len(reserved)}")
+            for sid in reserved:
+                print(f"      {sid}: {UNREGISTERED_BY_DESIGN[sid].split('.')[0]}.")
 
         print(f"\n3. stale space rows (no tables) : {len(rows)}")
         for r in rows[:5]:
