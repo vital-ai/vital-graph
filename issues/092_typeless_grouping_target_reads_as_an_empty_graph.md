@@ -1,8 +1,8 @@
 # A Grouping URI With No Type Exists, and Nothing Can Have Created It
 
-## Status: ORIGIN ESTABLISHED 2026-08-21 (a7b68cb). The open question below —
-## which miss produced the 19 — is answered: the member was never stamped.
-## Detection and a guard landed 2026-08-20; a second guard 2026-08-21.
+## Status: CLOSED 2026-08-21. Origin established (the member was never
+## stamped), both guards landed, and the membership-scope question is
+## decided: the delete stays scoped, reachability is ruled out.
 
 Two things in the original filing were wrong.
 
@@ -204,10 +204,33 @@ stamped must delete clean and say nothing.
 This should now be archaeology. If it fires, one of the issues/091 writers is
 back or a new one has appeared.
 
-### What is still open
+### The membership-scope question — DECIDED 2026-08-21: keep it scoped
 
-**Whether the delete should be membership-scoped at all**, unchanged from
-above. Both guards report; neither repairs. Deleting by reachability, or
-refusing when a recount disagrees, remains a design question — and now a
-better-informed one, since the failing mode is a member the grouping predicate
-never described, which no amount of care with that predicate can catch.
+`hasKGGraphURI` is the authoritative definition of membership, not a
+denormalized index of edge structure. So the delete stays as it is, an orphan
+is a WRITE bug, and the two guards above are the mechanism for catching one.
+Reachability is ruled out.
+
+The measurements taken while deciding, kept because they are the argument:
+
+* **The two definitions agree exactly on healthy data.** On `kg_load_test`,
+  five entity roots, membership by grouping and membership by reachability are
+  both 45. Getting that to line up needs the traversed EDGE objects counted as
+  members, not just the nodes — nodes alone give 23, because an edge is a
+  subject with its own quads.
+* **No member belongs to two graphs.** 0 of 900 in the only space here with
+  real grouping data, and confirmed as the intent: entity graphs are disjoint.
+* **Cost was not the obstacle.** 0.184 ms scoped against 0.401 ms by
+  reachability, both negligible beside the delete itself.
+
+**And the hazard that settles it.** Reachability has to decide which edges
+mean "contains". In `sp_kg_rel`, `Edge_hasKGRelation` outnumbers every
+containment edge — 27,896 against 19,500 — and every one of them points at
+another `KGEntity`. A walk that followed them would delete the neighbouring
+entities' graphs along with the target. It can be fenced with a whitelist of
+containment edge types, but then the delete is only as correct as that list,
+and a new edge type added anywhere else in the system makes it silently wrong.
+That is a worse failure than the orphan it was meant to fix: an over-delete
+cannot be detected after the fact, while the orphan now reports itself.
+
+So the residue guards stay detection-only by design, not by omission.
