@@ -1,6 +1,7 @@
 # A Perf "Regression" With Identical Code: the App Re-ANALYZEs the Fixtures
 
-## Status: EXPLAINED and MITIGATED 2026-08-20 (options 1 and 2). Option 3 open.
+## Status: CLOSED 2026-08-21. Options 1 and 2 landed 2026-08-20; option 3
+## landed 2026-08-21 as a per-deployment setting, not a default.
 
 Both landed:
 
@@ -154,6 +155,28 @@ is not recorded and which the application mutates on its own schedule.
    space behaves — the maintenance job IS part of production behaviour.
 
 1 and 2 compose; 3 is a separate call.
+
+### Option 3, as landed (`d68e2f3`)
+
+`VG_MAINTENANCE_EXCLUDE_SPACES`, read once at construction and applied in
+`_only_registered` beside the registry filter. **Empty by default**, so
+production behaviour is unchanged and nothing in shipped code names a fixture.
+
+The divergence this option costs is real and was the reason it stayed open, so
+it is opt-in per deployment rather than a default: the fixture names belong to
+a dev machine rather than to the product, and a deployment should choose to
+make its benchmarks unlike production instead of inheriting that silently.
+
+Set on the test stack for its nine fixtures and overridable from the
+environment. Confirmed from the running server:
+
+    MaintenanceJob: 9 space(s) exempt from maintenance: sp_graph_forms_20k,
+    sp_graph_skew_2k, sp_graph_synth_100k, sp_graph_synth_10k, sp_lead_dup,
+    sp_lead_synth_100k, sp_lead_synth_10k, sp_sql_lead_dataset, wordnet_frames
+
+`tests/unit/test_maintenance_exclusions.py` covers the default, the empty
+string, named spaces, hand-edited whitespace and trailing commas, and naming a
+space that is not there.
 
 ## Related
 
