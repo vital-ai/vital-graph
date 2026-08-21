@@ -1,7 +1,8 @@
 # Concurrent Writers Deadlock on the Stats Tables
 
-## Status: PARTLY FIXED 2026-08-20 (60d37f2, b43af89) — deadlock closed,
-## hold window closed, end-to-end scaling still unmeasured
+## Status: CLOSED 2026-08-21. Deadlock fixed, hold window fixed, and the
+## remaining ceiling MEASURED — it is not these tables, so the redesign this
+## file proposed is declined with a reason.
 
 Sorted lock order plus a bounded retry. Measured: 60 predicates, two writers
 in opposite order, 2 deadlocks in 8 rounds before, 0 after. The
@@ -124,15 +125,46 @@ instead of applying them inline. `update_quads` applies them once at the end:
 `test_deferred_stats_match_an_inline_sync_exactly` holds the deferred counts
 to what a full resync produces.
 
-## Still open — end-to-end write scaling
+## End-to-end write scaling — measured 2026-08-21, and it is not these tables
 
-Four concurrent writers reached 1.67x with the stats sync and 1.97x without.
-Both are far short of 4x, and the gap is mostly NOT the stats tables: that
-harness drives every writer from one event loop, so the Python-side work
-(term classification, dedup) serialises before Postgres is ever involved.
-Neither figure should be quoted as the ceiling.
+The in-process figures (1.67x with the sync, 1.97x without) measured the
+client: one event loop doing every writer's term classification and dedup.
+`test_scripts/perf/write_scaling.py` puts each writer in its own process and
+samples `pg_stat_activity` throughout.
 
-Measuring this properly needs a multi-process client. Worth doing before any
-further work here, because the two candidate designs — a per-writer delta
-table rolled up out of band, or moving the sync after commit — are only worth
-their complexity if the stats tables turn out to be what is actually binding.
+    stats | procs | quads/s | scaling | top waits
+     on   |   1   |   9,072 |  1.00x  | RUNNING:cpu x27
+     on   |   2   |  15,438 |  1.70x  | RUNNING:cpu x56,  Lock:transactionid x9
+     on   |   4   |  26,029 |  2.87x  | RUNNING:cpu x134, Lock:transactionid x25
+     on   |   8   |  36,246 |  4.00x  | RUNNING:cpu x269, LWLock:BufferContent x68
+     off  |   8   |  37,662 |  3.46x  | RUNNING:cpu x260, LWLock:BufferContent x113
+
+Three things follow.
+
+**CPU is the ceiling, not the stats rows.** `RUNNING:cpu` is the top state in
+every cell. 4.00x from 8 processes on a 10-core box running both the client
+and the server is what CPU saturation looks like, not what lock convoy looks
+like.
+
+**The stats sync costs work, not waiting.** Disabling it moves throughput by
+17% at one process, 10% at four, 4% at eight — shrinking as CPU binds. That is
+the cost of doing the upserts.
+
+**The row-lock waiting that does appear is mostly not ours.**
+`Lock:transactionid` reaches 64 samples at 8 processes with the sync on, and
+44 with it OFF. Most of it is the shared term inserts: every writer inserts
+the same `vitaltype`, `KGEntity` and `hasKGGraphURI` terms, and
+`ON CONFLICT DO NOTHING` on a row another transaction has just written waits
+for that transaction to commit.
+
+### So the redesign is declined
+
+A per-writer delta table rolled up out of band, or moving the sync after
+commit, would buy at most the 4% that separates on from off at 8 processes,
+and cost a second write path, a rollup job, and a window where the stats are
+knowably stale. Not worth it on this evidence.
+
+Reopen this if the picture changes: a deployment with the client OFF the
+database host would move the CPU ceiling and could let the row locks bind
+where they do not here. The harness takes `VG_PG_HOST`, so that measurement
+is the same command.
