@@ -56,8 +56,21 @@ URIs across 12 host spaces were not.
 > `apitest_37a59eb5` holds such a root with 8 members and no self-link, which
 > the repair script handles correctly. Reading "groups objects" as "is an
 > entity" is a live source of error: it produced a residue guard that was
-> shipped and withdrawn the same day (`37332fd`, `issues/092`). `hasFrameGraphURI`
-> is a separate, narrower scope — the frame, its slots and its edges.
+> shipped and withdrawn the same day (`37332fd`, `issues/092`).
+>
+> `hasFrameGraphURI` is a separate, narrower scope — the frame, its slots and
+> its **slot** edges. The self-link invariant above does apply to it: a frame is
+> self-grouped, `frameGraphURI` pointing at its own URI (120 of 120 in
+> `kg_load_test`).
+>
+> But it does NOT extend to connecting edges, and that is deliberate.
+> `Edge_hasKGFrame` (parent → child frame) and `Edge_hasEntityKGFrame`
+> (entity → frame) carry `kGGraphURI` only and **no** `hasFrameGraphURI` —
+> stated at `kgentity_hierarchical_frame_impl.py:102` and `:114`, and confirmed
+> in the data at 0 of 60 for each, against 320 of 320 for slot edges. Connecting
+> edges belong to the entity graph. A frame graph is therefore not
+> self-contained by design, and a missing `frameGraphURI` on one of those edges
+> is CORRECT, not a case of this issue.
 
 Repaired (`scripts/repair_grouping_self_link.py`, both clusters verify clean)
 and watched (the maintenance cycle reports violations). **What wrote them that
