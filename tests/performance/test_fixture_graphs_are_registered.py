@@ -37,8 +37,24 @@ FIXTURES = sorted(
     | {("wordnet_frames", "urn:wordnet_frames")})
 
 
+async def _skip_if_absent(perf_conn, space):
+    """A fixture may legitimately not exist in every environment.
+
+    The host cluster and the docker test stack do not carry the same set —
+    `sp_graph_skew_2k` is vg-test only. Absence is not a registration gap, and
+    the check that matters (data present, catalog silent) needs the data to be
+    there to mean anything. Mirrors test_fixture_indexes_match_schema.
+    """
+    exists = await perf_conn.fetchval(
+        "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1",
+        f"{space}_rdf_quad")
+    if not exists:
+        pytest.skip(f"space {space} not present in this environment")
+
+
 @pytest.mark.parametrize("space,graph", FIXTURES)
 async def test_declared_graph_is_registered(perf_conn, space, graph):
+    await _skip_if_absent(perf_conn, space)
     row = await perf_conn.fetchrow(
         "SELECT graph_uri FROM graph WHERE space_id = $1 AND graph_uri = $2",
         space, graph)
@@ -51,6 +67,7 @@ async def test_declared_graph_is_registered(perf_conn, space, graph):
 @pytest.mark.parametrize("space,graph", FIXTURES)
 async def test_every_context_in_the_data_is_registered(perf_conn, space, graph):
     """Catches the half-registered case the declared-graph check cannot see."""
+    await _skip_if_absent(perf_conn, space)
     unregistered = await perf_conn.fetch(
         f"""
         SELECT t.term_text
