@@ -1,6 +1,7 @@
 # Concurrent Writers Deadlock on the Stats Tables
 
-## Status: PARTLY FIXED 2026-08-20 (60d37f2) — deadlock closed, ceiling open
+## Status: PARTLY FIXED 2026-08-20 (60d37f2, b43af89) — deadlock closed,
+## hold window closed, end-to-end scaling still unmeasured
 
 Sorted lock order plus a bounded retry. Measured: 60 predicates, two writers
 in opposite order, 2 deadlocks in 8 rounds before, 0 after. The
@@ -46,6 +47,8 @@ it to read as an unexplained intermittent failure under load, which is how
    `vitaltype` and `hasKGGraphURI` are on nearly every quad, so every writer
    to a space takes the same row lock and holds it until commit. Four workers
    cannot deliver four times the throughput; the real factor is unmeasured.
+
+   MEASURED LATER, and the framing above was wrong. See "The hold window".
 
 2. **A long delete blocks ingest.** `delete_entity_graph_bulk` syncs stats
    inside the same transaction as the delete, so the locks are held for the
@@ -93,3 +96,43 @@ means writers to a space queue behind `vitaltype` and `hasKGGraphURI` no
 matter how many workers there are. The factor is still unmeasured, and fixing
 it means the stats delta stops being applied inline — a per-writer delta table
 rolled up out of band, or the sync moved after commit.
+
+## The hold window — measured 2026-08-20, fixed in b43af89
+
+"Locked until commit" is true and was the wrong thing to worry about on its
+own. What decides the cost is WHERE in the transaction the sync sits:
+
+    add_rdf_quads_batch_bulk   txn 414 ms, hot row held  32 ms    7.7%
+    update_quads shape         txn 667 ms, hot row held 657 ms   98.4%
+
+A plain bulk insert already synced last, so its hold is a tail — the ceiling
+it imposes is small, and the original claim that writers queue behind the hot
+predicates "no matter how many workers" does not hold for it.
+
+`update_quads` was the real case. It is a remove followed by a full insert in
+one transaction, and the remove's sync fired first — ahead even of its own
+DELETE — so every concurrent writer touching `vitaltype` or `hasKGGraphURI`
+waited out the entire insert.
+
+Fixed by moving the remove path's sync after its DELETE (the decrement needs
+only the row list, never the table, so the earlier position bought nothing),
+and by giving both bulk paths a `stats_sink` that hands the deltas back
+instead of applying them inline. `update_quads` applies them once at the end:
+
+    update_quads shape         txn 740 ms, hot row held  63 ms    8.6%
+
+`test_deferred_stats_match_an_inline_sync_exactly` holds the deferred counts
+to what a full resync produces.
+
+## Still open — end-to-end write scaling
+
+Four concurrent writers reached 1.67x with the stats sync and 1.97x without.
+Both are far short of 4x, and the gap is mostly NOT the stats tables: that
+harness drives every writer from one event loop, so the Python-side work
+(term classification, dedup) serialises before Postgres is ever involved.
+Neither figure should be quoted as the ceiling.
+
+Measuring this properly needs a multi-process client. Worth doing before any
+further work here, because the two candidate designs — a per-writer delta
+table rolled up out of band, or moving the sync after commit — are only worth
+their complexity if the stats tables turn out to be what is actually binding.
