@@ -1,8 +1,9 @@
 # A Grouping URI With No Type Exists, and Nothing Can Have Created It
 
-## Status: CLOSED 2026-08-21. Origin established (the member was never
-## stamped), both guards landed, and the membership-scope question is
-## decided: the delete stays scoped, reachability is ruled out.
+## Status: CLOSED 2026-08-21. Membership-scope question decided (the delete
+## stays scoped, reachability ruled out). ONE guard, not two — the
+## edge-based one was withdrawn the same day; see the correction at the end.
+## The origin of the 19 is NOT established.
 
 Two things in the original filing were wrong.
 
@@ -234,3 +235,42 @@ That is a worse failure than the orphan it was meant to fix: an over-delete
 cannot be detected after the fact, while the orphan now reports itself.
 
 So the residue guards stay detection-only by design, not by omission.
+
+## Correction 2026-08-21 — the edge-based guard was withdrawn, and the origin
+## claim above with it
+
+The section "Which miss produced them — settled" is wrong and is retained
+only so the mistake is legible. It concluded that the residue came from a
+member which was never stamped with `hasKGGraphURI`, and added a guard that
+warned when an edge still named a deleted entity.
+
+Both rest on reading absence of `hasKGGraphURI` as a missing stamp. It is not.
+The property asserts membership in a graph — the entity case being every
+member, *including the entity itself*, carrying it set to the enclosing
+entity. Absence means the object is **not in that entity graph**, and says
+nothing about why. An object that was never a member looks exactly like a
+member someone forgot to stamp, and the guard called every one of the first a
+case of the second.
+
+What that would have cost: in `sp_kg_rel` a typical entity has 0 members by
+grouping and 13-16 edges naming it, so every delete there would have warned.
+14,625 frames in that space and 285,348 in `wordnet_frames` carry neither
+grouping property, while `kg_load_test`'s 120 carry both — the shapes are
+ordinary, not damaged. And a dangling edge is not an error, so there was no
+defect to report even where the walk was right.
+
+Withdrawn in 37332fd. The reproduction it was built on — an entity, a frame
+with no grouping URI, an edge between them — was most likely a frame that was
+never in the entity graph, behaving correctly.
+
+**So which miss produced the 19 is open again.** What still holds: the
+quad-level check, because something pointing at the entity via
+`hasKGGraphURI` after the delete IS claiming membership in a graph whose root
+is gone; and `issues/091`'s finding that the entity must carry the property
+for its own graph, which the domain confirms — the entity is a member of its
+own graph, so the unconditional include in the delete is right.
+
+Also worth recording, since it was the source of the error:
+`hasFrameGraphURI` is a *different* scope — the frame, its slots and its
+edges, with the frame-within-frame edge belonging to the child frame. Reading
+one for the other is what produced this.
