@@ -25,6 +25,8 @@ HGU = "http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI"
 VITALTYPE = "http://vital.ai/ontology/vital-core#vitaltype"
 KG_ENTITY = "http://vital.ai/ontology/haley-ai-kg#KGEntity"
 KG_FRAME = "http://vital.ai/ontology/haley-ai-kg#KGFrame"
+KG_NS = "http://vital.ai/ontology/haley-ai-kg#"
+VITAL_NS = "http://vital.ai/ontology/vital-core#"
 
 
 @pytest_asyncio.fixture(loop_scope="session")
@@ -144,3 +146,64 @@ async def test_delete_reports_members_that_arrive_after_the_membership_snapshot(
               if "still" in r.getMessage() and "issues/092" in r.getMessage()]
     assert warned, f"the surviving member was not reported: {caplog.records}"
     assert "1 quad(s)" in warned[0], warned[0]
+
+
+async def test_delete_reports_a_member_that_was_never_stamped(
+        space_impl, del_space, caplog):
+    """The miss that actually produced the issues/092 residue.
+
+    Not the race — a member that never carried hasKGGraphURI at all, which is
+    what the three writers fixed in issues/091 omitted. The membership query
+    cannot see it, so it outlives its root, and the hasKGGraphURI check cannot
+    see it either: an unstamped member points at nothing. Reproduced against
+    the recorded shape — entity gone, frame and entity->frame edge surviving.
+
+    The edge table is where it stays visible, so the delete looks there too.
+    """
+    sid, g, e = del_space, "urn:g4", "urn:e4"
+    gu = URIRef(g)
+    frame, edge = URIRef("urn:m4"), URIRef("urn:edge4")
+    await space_impl.add_rdf_quads_batch_bulk(sid, [
+        (URIRef(e), URIRef(VITALTYPE), URIRef(KG_ENTITY), gu),
+        (URIRef(e), URIRef(HGU), URIRef(e), gu),
+        (frame, URIRef(VITALTYPE), URIRef(KG_FRAME), gu),        # NOT stamped
+        (edge, URIRef(VITALTYPE), URIRef(f"{KG_NS}Edge_hasKGFrame"), gu),
+        (edge, URIRef(f"{VITAL_NS}hasEdgeSource"), URIRef(e), gu),
+        (edge, URIRef(f"{VITAL_NS}hasEdgeDestination"), frame, gu)])
+
+    with caplog.at_level("WARNING"):
+        await space_impl.delete_entity_graph_bulk(sid, g, e)
+
+    warned = [r.getMessage() for r in caplog.records
+              if "still name this entity" in r.getMessage()]
+    assert warned, "an unstamped member outlived its root unreported"
+    assert "1 edge(s)" in warned[0], warned[0]
+
+
+async def test_a_fully_stamped_graph_deletes_clean_and_silent(
+        space_impl, del_space, caplog):
+    """The same shape with the grouping links present: nothing left, nothing
+    said. Guards the check above against firing on healthy data."""
+    sid, g, e = del_space, "urn:g5", "urn:e5"
+    gu = URIRef(g)
+    frame, edge = URIRef("urn:m5"), URIRef("urn:edge5")
+    await space_impl.add_rdf_quads_batch_bulk(sid, [
+        (URIRef(e), URIRef(VITALTYPE), URIRef(KG_ENTITY), gu),
+        (URIRef(e), URIRef(HGU), URIRef(e), gu),
+        (frame, URIRef(VITALTYPE), URIRef(KG_FRAME), gu),
+        (frame, URIRef(HGU), URIRef(e), gu),
+        (edge, URIRef(VITALTYPE), URIRef(f"{KG_NS}Edge_hasKGFrame"), gu),
+        (edge, URIRef(HGU), URIRef(e), gu),
+        (edge, URIRef(f"{VITAL_NS}hasEdgeSource"), URIRef(e), gu),
+        (edge, URIRef(f"{VITAL_NS}hasEdgeDestination"), frame, gu)])
+
+    with caplog.at_level("WARNING"):
+        await space_impl.delete_entity_graph_bulk(sid, g, e)
+
+    async with space_impl.db_impl.connection_pool.acquire() as conn:
+        left = await conn.fetchval(
+            f"SELECT count(*) FROM {sid}_rdf_quad WHERE context_uuid = "
+            f"(SELECT term_uuid FROM {sid}_term WHERE term_text = $1)", g)
+    assert left == 0, f"{left} quad(s) survived a fully stamped graph delete"
+    assert not [r for r in caplog.records
+                if "still name this entity" in r.getMessage()], "false positive"

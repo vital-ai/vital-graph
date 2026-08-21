@@ -1686,6 +1686,33 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                         "empty entity graph. See issues/092.",
                         space_id, entity_uri, orphaned)
 
+                # And the residue that does NOT point back. The check above
+                # only sees a member that still carries the grouping link, so
+                # it cannot see the one that never carried it — and that is
+                # the miss which actually produced the issues/092 residue.
+                # Reproduced: an entity plus a frame joined by an edge but
+                # never stamped, deleted, leaves entity=0, frame=2, edge=3,
+                # exactly the shape recorded there, with the check above
+                # silent. Those writers were fixed in issues/091, so this
+                # should now be archaeology; if it fires, one of them is back
+                # or a new one has appeared.
+                #
+                # The edge table is where such a member is still reachable:
+                # the entity is gone, but an edge row that named it survives.
+                stranded = await conn.fetchval(
+                    f"SELECT count(*) FROM {t['edge']} "
+                    f"WHERE (source_node_uuid = $1 OR dest_node_uuid = $1) "
+                    f"AND context_uuid = $2",
+                    entity_uuid, g_uuid)
+                if stranded:
+                    logger.warning(
+                        "delete_entity_graph_bulk(%s, %s): %d edge(s) still "
+                        "name this entity after the delete. Their far side was "
+                        "never stamped with hasKGGraphURI, so the membership "
+                        "query could not see it and it outlived its root. See "
+                        "issues/092 and issues/091.",
+                        space_id, entity_uri, stranded)
+
                 return subject_uuids, deleted, edge_deleted
 
             # Retry a deadlock victim: this transaction takes stats-table
