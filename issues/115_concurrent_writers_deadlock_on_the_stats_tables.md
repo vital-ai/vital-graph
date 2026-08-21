@@ -1,6 +1,12 @@
 # Concurrent Writers Deadlock on the Stats Tables
 
-## Status: OPEN — found 2026-08-20 while writing the issues/092 regression test
+## Status: PARTLY FIXED 2026-08-20 (60d37f2) — deadlock closed, ceiling open
+
+Sorted lock order plus a bounded retry. Measured: 60 predicates, two writers
+in opposite order, 2 deadlocks in 8 rounds before, 0 after. The
+serialization ceiling below is untouched and still open.
+
+Found 2026-08-20 while writing the issues/092 regression test.
 
 Two transactions writing quads to the same space can deadlock on
 `{space}_rdf_pred_stats` / `{space}_rdf_stats`, and the loser's work is
@@ -45,7 +51,7 @@ it to read as an unexplained intermittent failure under load, which is how
    inside the same transaction as the delete, so the locks are held for the
    whole entity-graph delete, not just the stats update.
 
-## Fix
+## Fix (done)
 
 Sorting each parameter list by key gives every transaction one global lock
 order and removes this deadlock class outright — cheap, local, no schema
@@ -61,3 +67,29 @@ band, or the sync moved after commit — and is a larger decision.
 
 Two connections, `sync_stats_after_insert` with predicates `[A, B]` and
 `[B, A]`, each holding its first lock until both are held. Deterministic.
+
+## What was done
+
+`sync_stats_after_insert` / `sync_stats_after_delete` sort every parameter
+list, and the delete path took on the insert path's pruned/unpruned split —
+sorting alone would not have lined them up, because a delete sorted across all
+pairs still crosses an insert that does every unpruned pair first. Term
+inserts in `add_rdf_quads_batch_bulk` are sorted too.
+
+`deadlock_retry.with_deadlock_retry` retries the victim, on the paths that own
+their transaction. Sorting settles one batch against another but not two calls
+in one transaction — a remove of `{C}` plus an insert of `{B}` takes C then B
+while a concurrent update doing the reverse takes B then C — so `update_quads`,
+which is exactly that shape and owns its transaction, retries there.
+
+Guarded by `tests/integration/test_stats_lock_order.py`: the reproduction, and
+a deterministic assertion on the sort, since the race only catches a lost sort
+when it happens to land.
+
+## Still open
+
+The hot-row serialization above. One row per predicate, locked to commit,
+means writers to a space queue behind `vitaltype` and `hasKGGraphURI` no
+matter how many workers there are. The factor is still unmeasured, and fixing
+it means the stats delta stops being applied inline — a per-writer delta table
+rolled up out of band, or the sync moved after commit.
