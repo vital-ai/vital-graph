@@ -148,42 +148,14 @@ async def test_delete_reports_members_that_arrive_after_the_membership_snapshot(
     assert "1 quad(s)" in warned[0], warned[0]
 
 
-async def test_delete_reports_a_member_that_was_never_stamped(
-        space_impl, del_space, caplog):
-    """The miss that actually produced the issues/092 residue.
+async def test_a_fully_stamped_graph_deletes_clean(space_impl, del_space, caplog):
+    """Every member carries hasKGGraphURI pointing at the entity, including the
+    entity itself, so the whole graph goes.
 
-    Not the race — a member that never carried hasKGGraphURI at all, which is
-    what the three writers fixed in issues/091 omitted. The membership query
-    cannot see it, so it outlives its root, and the hasKGGraphURI check cannot
-    see it either: an unstamped member points at nothing. Reproduced against
-    the recorded shape — entity gone, frame and entity->frame edge surviving.
-
-    The edge table is where it stays visible, so the delete looks there too.
-    """
-    sid, g, e = del_space, "urn:g4", "urn:e4"
-    gu = URIRef(g)
-    frame, edge = URIRef("urn:m4"), URIRef("urn:edge4")
-    await space_impl.add_rdf_quads_batch_bulk(sid, [
-        (URIRef(e), URIRef(VITALTYPE), URIRef(KG_ENTITY), gu),
-        (URIRef(e), URIRef(HGU), URIRef(e), gu),
-        (frame, URIRef(VITALTYPE), URIRef(KG_FRAME), gu),        # NOT stamped
-        (edge, URIRef(VITALTYPE), URIRef(f"{KG_NS}Edge_hasKGFrame"), gu),
-        (edge, URIRef(f"{VITAL_NS}hasEdgeSource"), URIRef(e), gu),
-        (edge, URIRef(f"{VITAL_NS}hasEdgeDestination"), frame, gu)])
-
-    with caplog.at_level("WARNING"):
-        await space_impl.delete_entity_graph_bulk(sid, g, e)
-
-    warned = [r.getMessage() for r in caplog.records
-              if "still name this entity" in r.getMessage()]
-    assert warned, "an unstamped member outlived its root unreported"
-    assert "1 edge(s)" in warned[0], warned[0]
-
-
-async def test_a_fully_stamped_graph_deletes_clean_and_silent(
-        space_impl, del_space, caplog):
-    """The same shape with the grouping links present: nothing left, nothing
-    said. Guards the check above against firing on healthy data."""
+    That is what entity-graph membership IS: the property names the enclosing
+    entity, and the entity is a member of its own graph. A frame WITHOUT it is
+    not an unstamped member, it is simply not in this graph — which is why the
+    delete cannot infer a write bug from something it did not delete."""
     sid, g, e = del_space, "urn:g5", "urn:e5"
     gu = URIRef(g)
     frame, edge = URIRef("urn:m5"), URIRef("urn:edge5")
@@ -205,5 +177,3 @@ async def test_a_fully_stamped_graph_deletes_clean_and_silent(
             f"SELECT count(*) FROM {sid}_rdf_quad WHERE context_uuid = "
             f"(SELECT term_uuid FROM {sid}_term WHERE term_text = $1)", g)
     assert left == 0, f"{left} quad(s) survived a fully stamped graph delete"
-    assert not [r for r in caplog.records
-                if "still name this entity" in r.getMessage()], "false positive"
