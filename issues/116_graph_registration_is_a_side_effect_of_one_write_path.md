@@ -1,7 +1,7 @@
 # Graph Registration Is a Side Effect of One Write Path, So Every Other Path Leaves the Catalog Silent
 
-## Status: OPEN — found 2026-08-21. One instance fixed (`ee086a5`), one open,
-## and the general rule not established.
+## Status: BOTH INSTANCES FIXED 2026-08-21 (`ee086a5`, and the export path
+## below). The general rule is still not established — see "Approach".
 
 Quads can be in a graph that the `graph` catalog has never heard of. The data
 is queryable by naming the URI, so anything that hardcodes the graph works,
@@ -38,7 +38,7 @@ loader now registers from the contexts actually present, and
 `tests/performance/test_fixture_graphs_are_registered.py` guards the result on
 both clusters.
 
-**2. `bulk_export.import_space` — OPEN.** `vitalgraph/db/sparql_sql/bulk_export.py`
+**2. `bulk_export.import_space` — FIXED 2026-08-21.** `vitalgraph/db/sparql_sql/bulk_export.py`
 does not contain the string `graph` at all. It copies a space's tables into a
 destination, so the destination ends up with quads and no catalog row:
 
@@ -105,3 +105,31 @@ Do not register graphs from a sweep or a maintenance job. That repairs the
 symptom on a schedule and leaves every writer free to keep skipping it, and it
 is the same shape as the `issues/092` repair that wrote rows to make a detector
 stop reporting. The write path should be correct.
+
+## What landed for instance 2
+
+`vitalgraph/db/sparql_sql/graph_registry.py::register_graphs_from_data` — the
+shared helper from approach item 1, deriving from the contexts present rather
+than from a parameter (item 2). `import_space` calls it after the COPY and
+resync. A round-trip test asserts the destination's registrations equal the
+source's and that no context is missing; it fails on the previous code with
+`src={'urn:export:reg'} dst=set()`.
+
+Affected spaces repaired through the same helper: 2 on vg-test, 5 on the host.
+Both clusters now report **zero** spaces holding quads in an unlisted graph.
+
+## Still open
+
+**The general rule.** Two writers have been fixed one at a time; nothing stops
+a third. `scripts/load_wordnet_csv.py` still carries its own copy of the SQL
+because it is a psycopg script and the helper is asyncpg — worth reconciling,
+or at least cross-referencing so they cannot drift.
+
+**The broad guard.** The invariant — *no space has quads in a context the
+catalog does not list* — is one query and would have caught both instances. It
+is currently checked only for named perf fixtures
+(`tests/performance/test_fixture_graphs_are_registered.py`) and ad hoc by hand.
+
+**Declared exceptions** (approach item 3) are still hypothetical: no test has
+yet needed to sit outside this. `devtools/reserved_spaces.py` is where one
+would go.
