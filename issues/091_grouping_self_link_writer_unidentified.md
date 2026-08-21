@@ -45,9 +45,19 @@ built by exactly one function — `_BASE = "urn:vitalgraph:graphviz"` at
 path at #1 and the fixture loaders at #2; both were right, and neither needed the
 reload experiment it proposed.
 
-Every object in an entity's graph carries `hasKGGraphURI` pointing at the
-entity, the entity included: it is a member of its own graph. On 2026-08-16,
-619 grouping URIs across 12 host spaces were not.
+Every object in a grouping graph carries `hasKGGraphURI` pointing at the root,
+the root included: it is a member of its own graph. On 2026-08-16, 619 grouping
+URIs across 12 host spaces were not.
+
+> **Scope note added 2026-08-21.** The root is not always an entity — the
+> entity graph is the main case, not the only one. A `KGDocument` roots its own
+> graph the same way (`kgdocuments_endpoint._set_document_grouping_uris` exists
+> because that path once wrote documents with no grouping URI at all), and
+> `apitest_37a59eb5` holds such a root with 8 members and no self-link, which
+> the repair script handles correctly. Reading "groups objects" as "is an
+> entity" is a live source of error: it produced a residue guard that was
+> shipped and withdrawn the same day (`37332fd`, `issues/092`). `hasFrameGraphURI`
+> is a separate, narrower scope — the frame, its slots and its edges.
 
 Repaired (`scripts/repair_grouping_self_link.py`, both clusters verify clean)
 and watched (the maintenance cycle reports violations). **What wrote them that

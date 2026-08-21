@@ -143,11 +143,16 @@ explanation for a memory setting.
 | `045` | semi-join rewrite, "24.5-32.3 s -> 2 ms". The FIX is structural (the rewrite fires or it does not), so the direction stands; the magnitude does not. |
 | `058` | `ne` "times out on all five slot classes". Timeouts on a 1 GB pool are the same signature as `078`'s, which vanished. |
 | `059` | negation evaluated backward as a set. Direction is plan-shape, magnitudes are timings. |
-| `060` | "31x on a real query" for the edge type column. |
 | `061` | criterion ordering — 40 timing claims, no buffer counts. The reverts it records (7 range cells 3-14 ms -> 30 s) were also timings. |
 | `071` | `is_empty` at 52 s. |
 | `073` | absent constant as worst case. |
 | `048` | frame_entity rewrite "not a pessimization" — settled on timings. |
+
+## Re-measured and cleared
+
+| issue | outcome |
+|---|---|
+| `060` | **CLEARED 2026-08-21, and the headline corrected: 31x -> 6.5x.** Re-measured warm on the 16 GB pool with buffers recorded, both shapes cache-resident (`read=0`) and returning the same 3,877,000 rows: 14,161 ms / 23,663,258 buffers by quad joins against 2,166 ms / 4,115,236 by `edge_type_uuid`. The 31x was wall-clock on the 1 GB pool against a 22 GB quad table — one shape reading from disk throughout, the other not. The same distortion is reproducible: that query takes 74.8 s cold against 8.8 s warm here. Reproduce with `test_scripts/perf/edge_type_column_advantage.sql`. |
 
 ## Partly at risk — timings plus buffers or plan shape
 
