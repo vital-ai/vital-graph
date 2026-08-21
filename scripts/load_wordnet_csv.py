@@ -194,6 +194,28 @@ async def run(space: str, quads_csv: str, terms_csv: str,
             await cur.execute(f"SELECT count(*) FROM {quad_tbl}")
             n_quads = (await cur.fetchone())[0]
 
+            # REGISTER THE GRAPH. COPY writes quads with a context_uuid and
+            # nothing else, so the `graph` catalog never learned the graph
+            # exists — the data was queryable by naming the URI, but absent
+            # from every listing that reads the catalog. Found 2026-08-21 on
+            # sp_graph_synth_100k, and it was not one fixture: sp_graph_synth_10k
+            # and wordnet_frames were in the same state, all three loaded
+            # through this script, while sp_lead_synth_100k (loaded elsewhere)
+            # had its row.
+            #
+            # Registered from the contexts actually present, not from a flag,
+            # so this cannot disagree with the data it just loaded.
+            await cur.execute(f"""
+                INSERT INTO graph (space_id, graph_uri, graph_name, created_time)
+                SELECT %s, t.term_text, t.term_text, now()
+                FROM (SELECT DISTINCT context_uuid FROM {quad_tbl}) c
+                JOIN {term_tbl} t ON t.term_uuid = c.context_uuid
+                ON CONFLICT (space_id, graph_uri) DO NOTHING
+            """, (space,))
+            registered = cur.rowcount
+            if registered:
+                print(f"📇 registered {registered} graph(s) in the catalog")
+
     if not skip_resync:
         await resync_aux(space)
 
