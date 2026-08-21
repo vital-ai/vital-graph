@@ -1258,7 +1258,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
     async def add_rdf_quads_batch_bulk(self, space_id: str,
                                        quads: List[Tuple[Identifier, Identifier, Identifier, Identifier]],
                                        connection=None,
-                                       rebuild_indexes: Optional[bool] = None) -> int:
+                                       rebuild_indexes: Optional[bool] = None,
+                                       stats_sink: Optional[list] = None) -> int:
         """Batched insert: resolve datatypes, then insert terms + quads.
 
         All work happens inside a single transaction.  The term/quad insert
@@ -1455,8 +1456,15 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     conn, space_id, unique_subjects)
 
                 # Sync stats tables
-                from .sync_stats_tables import sync_stats_after_insert
-                await sync_stats_after_insert(conn, space_id, quad_rows)
+                # See the note in remove_rdf_quads_batch_bulk: a caller that
+                # keeps working after this returns holds the hot rows for the
+                # rest of its transaction, so it can take the deltas instead
+                # and apply them once, at the end (issues/115).
+                if stats_sink is None:
+                    from .sync_stats_tables import sync_stats_after_insert
+                    await sync_stats_after_insert(conn, space_id, quad_rows)
+                else:
+                    stats_sink.append(("insert", quad_rows))
 
                 # Value histograms, for a BULK load only.
                 #
@@ -1721,7 +1729,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
     async def remove_rdf_quads_batch_bulk(self, space_id: str,
                                            quads: List[tuple],
-                                           connection=None) -> int:
+                                           connection=None,
+                                           stats_sink: Optional[list] = None) -> int:
         """Batched quad deletion using executemany.
 
         Generates all quad UUIDs in Python, resolves datatype IDs once per
@@ -1787,16 +1796,28 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 edge_deleted = await sync_edge_table_before_delete(
                     conn, space_id, unique_subjects)
 
-                # Sync stats — decrement before quads are deleted
-                from .sync_stats_tables import sync_stats_after_delete
-                await sync_stats_after_delete(conn, space_id, delete_rows)
-
                 await conn.executemany(
                     f"DELETE FROM {t['rdf_quad']} "
                     f"WHERE subject_uuid = $1 AND predicate_uuid = $2 "
                     f"AND object_uuid = $3 AND context_uuid = $4",
                     delete_rows,
                 )
+
+                # Stats LAST, and optionally not here at all. The decrement
+                # needs only `delete_rows`, never the table, so its old place
+                # ahead of the DELETE bought nothing and cost the whole rest of
+                # the transaction: `rdf_pred_stats` holds one row per predicate,
+                # `vitaltype` and `hasKGGraphURI` are on nearly every quad, and
+                # the row stays locked until commit. Measured on the update_quads
+                # shape — a remove followed by a full insert in one transaction —
+                # the hot row was held for 98.4% of the transaction, against 7.7%
+                # for a plain insert, whose sync already sat at the end
+                # (issues/115).
+                if stats_sink is None:
+                    from .sync_stats_tables import sync_stats_after_delete
+                    await sync_stats_after_delete(conn, space_id, delete_rows)
+                else:
+                    stats_sink.append(("delete", delete_rows))
                 _t1 = _time.monotonic()
                 logger.info("⏱️  BULK remove_quads: %.3fs (%d quads, %d edges)",
                             _t1 - _t0, len(delete_rows), edge_deleted)
@@ -1809,7 +1830,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 from .deadlock_retry import with_deadlock_retry
                 count = await with_deadlock_retry(
                     self._db._pool, _do_bulk,
-                    what=f"add_rdf_quads_batch_bulk({space_id})")
+                    what=f"remove_rdf_quads_batch_bulk({space_id})")
 
             # Track row changes for auto-ANALYZE (outside transaction)
             from .auto_analyze import record_changes, maybe_analyze

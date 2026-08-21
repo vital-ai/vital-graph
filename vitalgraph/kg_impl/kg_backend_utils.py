@@ -1197,12 +1197,26 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             # The bulk paths retry themselves, but only when they own the
             # transaction. Here the transaction is ours, so the retry is too.
             async def _do_update(conn):
+                # Both halves hand their stats deltas back instead of applying
+                # them inline, so the hot predicate rows are locked once, at the
+                # end, rather than from the first remove through the last
+                # insert. Measured on this shape: 98.4% of the transaction spent
+                # holding them, against 7.7% for a plain insert (issues/115).
+                sink: list = []
                 if delete_quads:
                     await self.backend.remove_rdf_quads_batch_bulk(
-                        space_id, delete_quads, connection=conn)
+                        space_id, delete_quads, connection=conn, stats_sink=sink)
                 if insert_quads:
                     await self.backend.add_rdf_quads_batch_bulk(
-                        space_id, insert_quads, connection=conn)
+                        space_id, insert_quads, connection=conn, stats_sink=sink)
+
+                from vitalgraph.db.sparql_sql.sync_stats_tables import (
+                    sync_stats_after_delete, sync_stats_after_insert)
+                for op, rows in sink:
+                    if op == "delete":
+                        await sync_stats_after_delete(conn, space_id, rows)
+                    else:
+                        await sync_stats_after_insert(conn, space_id, rows)
 
             from vitalgraph.db.sparql_sql.deadlock_retry import with_deadlock_retry
             await with_deadlock_retry(
