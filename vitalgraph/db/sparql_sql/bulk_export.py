@@ -149,6 +149,14 @@ async def import_space(conn, space_id: str, paths: Dict[str, str],
         await resync_frame_entity_table(conn, space_id)
         await resync_stats_tables(conn, space_id)
 
+    # Register the graphs the restored quads are in. COPY writes context_uuid
+    # and nothing else, so none of the impl's write hooks fire and the
+    # destination ended up holding data in a graph the catalog had never heard
+    # of — the same space, exported and re-imported, disagreeing with itself
+    # (issues/116).
+    from .graph_registry import register_graphs_from_data
+    await register_graphs_from_data(conn, space_id)
+
     counts = {}
     for key in _EXPORT_TABLES:
         counts[key] = await conn.fetchval(f"SELECT count(*) FROM {_bare(t[key])}")

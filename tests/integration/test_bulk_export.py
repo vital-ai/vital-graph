@@ -231,3 +231,45 @@ async def test_export_is_self_consistent_under_concurrent_writes(
         """)
 
     assert dangling == 0, f"{dangling} exported quads reference unexported terms"
+
+
+async def test_import_registers_the_graphs_it_restored(space_impl, two_spaces, tmp_path):
+    """A round-trip must leave the catalog describing the destination.
+
+    issues/116. import_space COPYs quads with a context_uuid and no impl write
+    hook fires, so the destination held data in a graph the `graph` table had
+    never heard of — queryable by naming the URI, invisible to anything that
+    lists graphs. Found as real rows: inttest_exp_dst spaces carrying 20 and 90
+    quads with no catalog entry, on both clusters.
+    """
+    from vitalgraph.db.sparql_sql.bulk_export import export_space, import_space
+
+    src, dst = two_spaces
+    G = URIRef("urn:export:reg")
+    await space_impl.add_rdf_quads_batch_bulk(src, [
+        (URIRef("urn:export:reg:s1"), URIRef("urn:export:p"),
+         URIRef("urn:export:reg:o1"), G)])
+
+    async with space_impl.db_impl.connection_pool.acquire() as conn:
+        src_graphs = {r["graph_uri"] for r in await conn.fetch(
+            "SELECT graph_uri FROM graph WHERE space_id = $1", src)}
+        paths = await export_space(conn, src, str(tmp_path))
+
+    assert str(G) in src_graphs, (
+        f"the write path did not register {G} in the source: {src_graphs}")
+
+    async with space_impl.db_impl.connection_pool.acquire() as conn:
+        async with conn.transaction():
+            await import_space(conn, dst, paths)
+        dst_graphs = {r["graph_uri"] for r in await conn.fetch(
+            "SELECT graph_uri FROM graph WHERE space_id = $1", dst)}
+        contexts = {r["term_text"] for r in await conn.fetch(
+            f"""SELECT t.term_text
+                FROM (SELECT DISTINCT context_uuid FROM {dst}_rdf_quad) c
+                JOIN {dst}_term t ON t.term_uuid = c.context_uuid""")}
+
+    assert dst_graphs == src_graphs, (
+        f"round-trip lost graph registrations: src={src_graphs} dst={dst_graphs}")
+    assert contexts <= dst_graphs, (
+        f"{dst} holds quads in {contexts - dst_graphs}, which the catalog does "
+        f"not list")
