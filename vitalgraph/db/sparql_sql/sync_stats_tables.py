@@ -59,12 +59,20 @@ async def sync_stats_after_insert(
 
     # Upsert predicate stats
     upserted = 0
+    # SORTED, here and in every statement below, and in the same sequence in
+    # sync_stats_after_delete: one global lock order across all writers.
+    # `Counter` iterates in first-seen order, which comes from the caller's
+    # quad_rows, so two batches holding the same predicates in a different
+    # order locked the same rows in a different order and deadlocked outright
+    # (issues/115 — reproduced as SQLSTATE 40P01, the loser's whole batch
+    # discarded and, in the segmentation worker, recorded as a permanent job
+    # failure).
     await conn.executemany(
         f"INSERT INTO {t_pred} (predicate_uuid, row_count) "
         f"VALUES ($1, $2) "
         f"ON CONFLICT (predicate_uuid) "
         f"DO UPDATE SET row_count = {t_pred}.row_count + EXCLUDED.row_count",
-        [(p, cnt) for p, cnt in pred_counts.items()],
+        sorted(pred_counts.items()),
     )
     upserted += len(pred_counts)
 
@@ -83,7 +91,7 @@ async def sync_stats_after_insert(
     pruned = {r["predicate_uuid"] for r in await conn.fetch(
         f"SELECT predicate_uuid FROM {t_pred} WHERE pruned")}
 
-    fresh = [(p, o, c) for (p, o), c in po_counts.items() if p not in pruned]
+    fresh = sorted((p, o, c) for (p, o), c in po_counts.items() if p not in pruned)
     if fresh:
         await conn.executemany(
             f"INSERT INTO {t_stats} (predicate_uuid, object_uuid, row_count) "
@@ -92,7 +100,8 @@ async def sync_stats_after_insert(
             f"DO UPDATE SET row_count = {t_stats}.row_count + EXCLUDED.row_count",
             fresh,
         )
-    stale = [(c, p, o) for (p, o), c in po_counts.items() if p in pruned]
+    stale = [(c, p, o) for p, o, c in
+             sorted((p, o, c) for (p, o), c in po_counts.items() if p in pruned)]
     if stale:
         await conn.executemany(
             f"UPDATE {t_stats} SET row_count = row_count + $1 "
@@ -129,19 +138,32 @@ async def sync_stats_after_delete(
         po_counts[(p, o)] += 1
 
     updated = 0
+    # Sorted, and t_pred before t_stats, matching sync_stats_after_insert
+    # exactly. See the lock-order note there (issues/115).
     await conn.executemany(
         f"UPDATE {t_pred} "
         f"SET row_count = GREATEST(0, row_count - $2) "
         f"WHERE predicate_uuid = $1",
-        [(p, cnt) for p, cnt in pred_counts.items()],
+        sorted(pred_counts.items()),
     )
     updated += len(pred_counts)
 
+    # The insert path splits t_stats by whether the predicate is pruned and
+    # issues the two groups as separate statements, so sorting alone would not
+    # line the two paths up: a delete sorted across ALL pairs still crosses an
+    # insert that does every unpruned pair first. Take the same split, so both
+    # paths walk t_stats in one order: unpruned ascending, then pruned.
+    pruned = {r["predicate_uuid"] for r in await conn.fetch(
+        f"SELECT predicate_uuid FROM {t_pred} WHERE pruned")}
+    ordered = ([t for t in sorted((p, o, c) for (p, o), c in po_counts.items())
+                if t[0] not in pruned] +
+               [t for t in sorted((p, o, c) for (p, o), c in po_counts.items())
+                if t[0] in pruned])
     await conn.executemany(
         f"UPDATE {t_stats} "
         f"SET row_count = GREATEST(0, row_count - $3) "
         f"WHERE predicate_uuid = $1 AND object_uuid = $2",
-        [(p, o, cnt) for (p, o), cnt in po_counts.items()],
+        ordered,
     )
     updated += len(po_counts)
 
@@ -152,7 +174,7 @@ async def sync_stats_after_delete(
     await conn.executemany(
         f"DELETE FROM {t_stats} "
         f"WHERE predicate_uuid = $1 AND object_uuid = $2 AND row_count <= 0",
-        [(p, o) for (p, o) in po_counts.keys()],
+        [(p, o) for p, o, _c in ordered],
     )
 
     logger.debug("sync_stats_after_delete(%s): %d pred + %d po decrements",

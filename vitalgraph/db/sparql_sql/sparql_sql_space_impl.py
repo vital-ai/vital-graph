@@ -1402,7 +1402,11 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 from .bulk_load import (
                     REBUILD_MIN_QUADS, insert_terms_quads_executemany,
                     bulk_load_with_index_rebuild)
-                term_args = list(seen_terms.values())
+                # Sorted by term_uuid: `seen_terms` is keyed in first-seen order, so
+                # two batches sharing new terms inserted them in different orders and
+                # could deadlock on the term PK the same way the stats tables did
+                # (issues/115).
+                term_args = [seen_terms[k] for k in sorted(seen_terms)]
 
                 use_rebuild = rebuild_indexes
                 quad_empty = term_empty = False
@@ -1511,11 +1515,13 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 return len(quad_rows)
 
             if connection:
+                # The caller owns this transaction, so it owns the retry too.
                 count = await _do_bulk(connection)
             else:
-                async with self._db._pool.acquire() as conn:
-                    async with conn.transaction():
-                        count = await _do_bulk(conn)
+                from .deadlock_retry import with_deadlock_retry
+                count = await with_deadlock_retry(
+                    self._db._pool, _do_bulk,
+                    what=f"add_rdf_quads_batch_bulk({space_id})")
 
             # Track row changes for auto-ANALYZE (outside transaction)
             from .auto_analyze import record_changes, maybe_analyze
@@ -1585,94 +1591,105 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             # Object UUID for the entity URI value
             entity_uuid = _generate_term_uuid(entity_uri, 'U')
 
-            async with self._db._pool.acquire() as conn:
-                async with conn.transaction():
-                    # Step 1: Find all subject UUIDs with hasKGGraphURI = entity_uri
-                    subject_rows = await conn.fetch(
-                        f"SELECT DISTINCT subject_uuid FROM {t['rdf_quad']} "
-                        f"WHERE predicate_uuid = $1 AND object_uuid = $2 AND context_uuid = $3",
-                        p_uuid, entity_uuid, g_uuid,
-                    )
-                    subject_uuids = [row['subject_uuid'] for row in subject_rows]
+            async def _do_delete(conn):
+                # Step 1: Find all subject UUIDs with hasKGGraphURI = entity_uri
+                subject_rows = await conn.fetch(
+                    f"SELECT DISTINCT subject_uuid FROM {t['rdf_quad']} "
+                    f"WHERE predicate_uuid = $1 AND object_uuid = $2 AND context_uuid = $3",
+                    p_uuid, entity_uuid, g_uuid,
+                )
+                subject_uuids = [row['subject_uuid'] for row in subject_rows]
 
-                    # THE ENTITY ITSELF, unconditionally. Membership above is a
-                    # snapshot of ONE mutable predicate, and the entity appears
-                    # in it only if it carries its own self-link — which
-                    # `issues/091` established entities systematically did not,
-                    # 619 of them across 12 spaces. Without this, deleting such
-                    # an entity's graph removed every member and left the root
-                    # behind: a typed object with nothing under it.
-                    if entity_uuid not in subject_uuids:
-                        subject_uuids.append(entity_uuid)
+                # THE ENTITY ITSELF, unconditionally. Membership above is a
+                # snapshot of ONE mutable predicate, and the entity appears
+                # in it only if it carries its own self-link — which
+                # `issues/091` established entities systematically did not,
+                # 619 of them across 12 spaces. Without this, deleting such
+                # an entity's graph removed every member and left the root
+                # behind: a typed object with nothing under it.
+                if entity_uuid not in subject_uuids:
+                    subject_uuids.append(entity_uuid)
 
-                    if not subject_uuids:
-                        logger.warning("delete_entity_graph_bulk: no subjects found for %s", entity_uri)
-                        return 0
+                if not subject_uuids:
+                    logger.warning("delete_entity_graph_bulk: no subjects found for %s", entity_uri)
+                    return None
 
-                    # Step 2: Sync frame_entity table — remove before edge rows
-                    from .sync_frame_entity_table import sync_frame_entity_before_delete
-                    await sync_frame_entity_before_delete(
-                        conn, space_id, subject_uuids, context_uuid=g_uuid)
+                # Step 2: Sync frame_entity table — remove before edge rows
+                from .sync_frame_entity_table import sync_frame_entity_before_delete
+                await sync_frame_entity_before_delete(
+                    conn, space_id, subject_uuids, context_uuid=g_uuid)
 
-                    # Step 2a: entity_slot_sort, also before the edge rows go —
-                    # it resolves a touched slot back through the edge table.
-                    from .sync_entity_slot_sort import sync_entity_slot_sort_before_delete
-                    await sync_entity_slot_sort_before_delete(
-                        conn, space_id, subject_uuids, context_uuid=g_uuid)
+                # Step 2a: entity_slot_sort, also before the edge rows go —
+                # it resolves a touched slot back through the edge table.
+                from .sync_entity_slot_sort import sync_entity_slot_sort_before_delete
+                await sync_entity_slot_sort_before_delete(
+                    conn, space_id, subject_uuids, context_uuid=g_uuid)
 
-                    # Step 2b: Sync edge table — remove edge rows before quads
-                    from .sync_edge_table import sync_edge_table_before_delete
-                    edge_deleted = await sync_edge_table_before_delete(
-                        conn, space_id, subject_uuids, context_uuid=g_uuid)
+                # Step 2b: Sync edge table — remove edge rows before quads
+                from .sync_edge_table import sync_edge_table_before_delete
+                edge_deleted = await sync_edge_table_before_delete(
+                    conn, space_id, subject_uuids, context_uuid=g_uuid)
 
-                    # Step 3 (fused): DELETE ... RETURNING, then decrement stats
-                    # from the rows actually deleted — avoids the separate
-                    # read-before-delete scan of the same rows (100x mitigation #10;
-                    # halves delete-path I/O). Edge/frame_entity sync stayed BEFORE
-                    # the delete (they need the quads); only stats moves after.
-                    from .sync_stats_tables import sync_stats_after_delete
-                    deleted_rows = await conn.fetch(
-                        f"DELETE FROM {t['rdf_quad']} "
-                        f"WHERE subject_uuid = ANY($1) AND context_uuid = $2 "
-                        f"RETURNING subject_uuid, predicate_uuid, object_uuid, context_uuid",
-                        subject_uuids, g_uuid,
-                    )
-                    deleted = len(deleted_rows)
-                    if deleted_rows:
-                        quad_rows = [(r['subject_uuid'], r['predicate_uuid'],
-                                      r['object_uuid'], r['context_uuid']) for r in deleted_rows]
-                        await sync_stats_after_delete(conn, space_id, quad_rows)
+                # Step 3 (fused): DELETE ... RETURNING, then decrement stats
+                # from the rows actually deleted — avoids the separate
+                # read-before-delete scan of the same rows (100x mitigation #10;
+                # halves delete-path I/O). Edge/frame_entity sync stayed BEFORE
+                # the delete (they need the quads); only stats moves after.
+                from .sync_stats_tables import sync_stats_after_delete
+                deleted_rows = await conn.fetch(
+                    f"DELETE FROM {t['rdf_quad']} "
+                    f"WHERE subject_uuid = ANY($1) AND context_uuid = $2 "
+                    f"RETURNING subject_uuid, predicate_uuid, object_uuid, context_uuid",
+                    subject_uuids, g_uuid,
+                )
+                deleted = len(deleted_rows)
+                if deleted_rows:
+                    quad_rows = [(r['subject_uuid'], r['predicate_uuid'],
+                                  r['object_uuid'], r['context_uuid']) for r in deleted_rows]
+                    await sync_stats_after_delete(conn, space_id, quad_rows)
 
-                    # VERIFY, because the membership query above cannot be
-                    # trusted to have seen the whole graph. It matches on a
-                    # single mutable predicate at one instant, so anything whose
-                    # grouping URI was missing, misdirected, or written after
-                    # this ran is not in `subject_uuids` and survives — pointing
-                    # at an entity that no longer exists.
-                    #
-                    # That residue is `issues/092`: 19 grouping targets across 4
-                    # spaces with members and no typed root, each reading as an
-                    # EMPTY entity graph. It went three months without an
-                    # explanation because nothing on the delete path ever looked
-                    # back to see whether the delete had finished.
-                    #
-                    # Reported, not deleted. Removing whatever still points at
-                    # the entity would be a second, unbounded pass over rows
-                    # this caller never named, and the safe half of the fix is
-                    # for the delete to stop being silent about it.
-                    orphaned = await conn.fetchval(
-                        f"SELECT count(*) FROM {t['rdf_quad']} "
-                        f"WHERE predicate_uuid = $1 AND object_uuid = $2 "
-                        f"AND context_uuid = $3",
-                        p_uuid, entity_uuid, g_uuid)
-                    if orphaned:
-                        logger.warning(
-                            "delete_entity_graph_bulk(%s, %s): %d quad(s) still "
-                            "point at this entity via hasKGGraphURI after the "
-                            "delete — their root is gone and they read as an "
-                            "empty entity graph. See issues/092.",
-                            space_id, entity_uri, orphaned)
+                # VERIFY, because the membership query above cannot be
+                # trusted to have seen the whole graph. It matches on a
+                # single mutable predicate at one instant, so anything whose
+                # grouping URI was missing, misdirected, or written after
+                # this ran is not in `subject_uuids` and survives — pointing
+                # at an entity that no longer exists.
+                #
+                # That residue is `issues/092`: 19 grouping targets across 4
+                # spaces with members and no typed root, each reading as an
+                # EMPTY entity graph. It went three months without an
+                # explanation because nothing on the delete path ever looked
+                # back to see whether the delete had finished.
+                #
+                # Reported, not deleted. Removing whatever still points at
+                # the entity would be a second, unbounded pass over rows
+                # this caller never named, and the safe half of the fix is
+                # for the delete to stop being silent about it.
+                orphaned = await conn.fetchval(
+                    f"SELECT count(*) FROM {t['rdf_quad']} "
+                    f"WHERE predicate_uuid = $1 AND object_uuid = $2 "
+                    f"AND context_uuid = $3",
+                    p_uuid, entity_uuid, g_uuid)
+                if orphaned:
+                    logger.warning(
+                        "delete_entity_graph_bulk(%s, %s): %d quad(s) still "
+                        "point at this entity via hasKGGraphURI after the "
+                        "delete — their root is gone and they read as an "
+                        "empty entity graph. See issues/092.",
+                        space_id, entity_uri, orphaned)
 
+                return subject_uuids, deleted, edge_deleted
+
+            # Retry a deadlock victim: this transaction takes stats-table
+            # locks alongside a potentially large delete, and losing it
+            # discards the whole delete (issues/115).
+            from .deadlock_retry import with_deadlock_retry
+            _result = await with_deadlock_retry(
+                self._db._pool, _do_delete,
+                what=f"delete_entity_graph_bulk({space_id}, {entity_uri})")
+            if _result is None:
+                return 0
+            subject_uuids, deleted, edge_deleted = _result
             _t1 = _time.monotonic()
             logger.info(
                 "⏱️  BULK delete_entity_graph: %.3fs (%d subjects, %d quads, %d edges deleted)",
@@ -1786,11 +1803,13 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 return len(delete_rows)
 
             if connection:
+                # The caller owns this transaction, so it owns the retry too.
                 count = await _do_bulk(connection)
             else:
-                async with self._db._pool.acquire() as conn:
-                    async with conn.transaction():
-                        count = await _do_bulk(conn)
+                from .deadlock_retry import with_deadlock_retry
+                count = await with_deadlock_retry(
+                    self._db._pool, _do_bulk,
+                    what=f"add_rdf_quads_batch_bulk({space_id})")
 
             # Track row changes for auto-ANALYZE (outside transaction)
             from .auto_analyze import record_changes, maybe_analyze

@@ -1187,14 +1187,27 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                            delete_quads: List[tuple],
                            insert_quads: List[tuple]) -> bool:
         try:
-            async with self.backend.db_impl.connection_pool.acquire() as conn:
-                async with conn.transaction():
-                    if delete_quads:
-                        await self.backend.remove_rdf_quads_batch_bulk(
-                            space_id, delete_quads, connection=conn)
-                    if insert_quads:
-                        await self.backend.add_rdf_quads_batch_bulk(
-                            space_id, insert_quads, connection=conn)
+            # This transaction syncs the stats tables TWICE — once down for the
+            # removes, once up for the inserts — and the two calls lock their
+            # own key ranges in sorted order without being sorted against each
+            # other. So a remove of {C} plus an insert of {B} takes C then B,
+            # while a concurrent update doing the reverse takes B then C: a
+            # cycle that per-batch ordering cannot see (issues/115).
+            #
+            # The bulk paths retry themselves, but only when they own the
+            # transaction. Here the transaction is ours, so the retry is too.
+            async def _do_update(conn):
+                if delete_quads:
+                    await self.backend.remove_rdf_quads_batch_bulk(
+                        space_id, delete_quads, connection=conn)
+                if insert_quads:
+                    await self.backend.add_rdf_quads_batch_bulk(
+                        space_id, insert_quads, connection=conn)
+
+            from vitalgraph.db.sparql_sql.deadlock_retry import with_deadlock_retry
+            await with_deadlock_retry(
+                self.backend.db_impl.connection_pool, _do_update,
+                what=f"update_quads({space_id}, {graph_id})")
             return True
         except Exception as e:
             self.logger.error("update_quads failed: %s", e)
