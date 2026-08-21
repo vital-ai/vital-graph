@@ -2,7 +2,13 @@
 
 ## Status: LANDED locally; remaining work is non-local spaces — 2026-08-10
 
-> **Buffer-pool review — see `issues/081`. UNRESOLVED, and deliberately not cleared.** The test is buffer count against pool size: a 1 GB pool holds 131,072 pages, and a measurement is at risk if and only if the query approaches or exceeds that. The comparator issues were cleared that way (4,350..82,724 buffers, all fitting). **This one has no recorded buffer count**, so it cannot be cleared by the same arithmetic and has not been re-measured. The 31x figure is a wall-clock timing taken on the 1 GB pool and should be treated as unverified until someone records buffers for it. The 24 GB join and the missing type column are structural and stand regardless.
+> **Buffer-pool review — see `issues/081`. CLEARED 2026-08-21, and the 31x is
+> corrected to 6.5x.** Re-measured with buffers recorded; see "What the column
+> is actually worth" at the end. Both shapes are fully cache-resident
+> (`read=0`) on the 16 GB pool, so neither is I/O-distorted, and they return
+> the same 3,877,000 rows. The 31x was wall-clock on a 1 GB pool against a
+> 22 GB quad table — an I/O artifact of exactly the kind this review exists to
+> catch. The 24 GB join and the missing type column are structural and stand.
 
 Verified on the local cluster:
 
@@ -99,3 +105,34 @@ plan into a 22 s one.
 - `issues/041` — derived-table staleness, the risk this proposal has to answer
 - `high_cardinality_slot_value_query_plan.md` — the edge table's original
   rationale, "reducing joins via the supporting edge tables was critical"
+
+## What the column is actually worth — measured 2026-08-21
+
+The 31x could not be cleared by the `issues/081` arithmetic because no buffer
+count was ever recorded for it. Here is the same comparison with one:
+`Edge_hasEntityKGFrame -> Edge_hasKGFrame -> Edge_hasKGSlot`, the three-hop
+chain this fixture actually holds, run warm, both shapes returning **3,877,000
+rows**.
+
+| | time | buffers | read |
+|---|---|---|---|
+| typed via quad joins (pre-column) | 14,161 ms | 23,663,258 | 0 |
+| typed via `edge_type_uuid` | 2,166 ms | 4,115,236 | 0 |
+
+**6.5x in time, 5.75x in buffers.** `read=0` on both means the working set was
+resident in the 16 GB pool, so neither number is paying for I/O and the ratio
+is a fair structural comparison.
+
+### Why the original said 31x
+
+It was wall-clock on a **1 GB** pool against a 22 GB quad table, so the
+quad-join shape was reading from disk throughout while the edge-only shape was
+not. The same distortion is visible here: shape A took **74.8 s cold against
+8.8 s warm** on this machine, an 8.5x swing from pool state alone. A ratio
+between a query that fits in the pool and one that does not is a measurement of
+the pool, not of the schema.
+
+The direction of the finding is unchanged and the column earns its 80 MB. Only
+the magnitude was wrong, and it was wrong in the way `issues/081` predicted.
+
+Reproduce with `test_scripts/perf/edge_type_column_advantage.sql`.
