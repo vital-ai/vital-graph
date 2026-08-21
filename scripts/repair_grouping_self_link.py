@@ -1,12 +1,22 @@
 #!/usr/bin/env python3
 """Restore the `hasKGGraphURI` self-link on objects that group other objects.
 
-THE INVARIANT. Every object in an entity's graph carries
-`hasKGGraphURI -> <entity>`, and that includes the entity itself. The entity is
-a member of its own graph. Without the self-link the entity is reachable only by
+THE INVARIANT. Every object in a grouping graph carries
+`hasKGGraphURI -> <root>`, and that includes the root itself. The root is a
+member of its own graph. Without the self-link the root is reachable only by
 naming it directly, so "fetch this graph" returns the frames, slots and edges
-but NOT the entity's own properties — its name, type and status simply vanish
+but NOT the root's own properties — its name, type and status simply vanish
 from the result while the object count still looks plausible.
+
+THE ROOT IS NOT ALWAYS AN ENTITY. `hasKGGraphURI` asserts membership in a
+grouping graph generally; the entity graph is the main case, not the only one.
+A KGDocument roots its own graph the same way — see
+`kgdocuments_endpoint._set_document_grouping_uris`, which exists because that
+path once wrote documents with no grouping URI at all — and `apitest_37a59eb5`
+holds one such root with 8 members and no self-link, which this script repairs
+correctly. Do not read "groups objects" as "is an entity"; the property does
+not carry that. `hasFrameGraphURI` is a separate, narrower scope: the frame,
+its slots and its edges.
 
 WHY THE RETRIEVAL CODE HIDES THIS. `get_entity_graph` is a UNION: one branch
 fetches the entity's own triples by pinning its URI, the other fetches members

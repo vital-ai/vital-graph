@@ -617,8 +617,8 @@ class MaintenanceJob:
                             WHERE q.predicate_uuid = $1 AND q.subject_uuid = t.e
                               AND q.object_uuid = t.e AND q.context_uuid = t.ctx)
                     """, pred)
-                    # A grouping target with NO type is the other way an
-                    # entity graph comes back empty. The self-link may be
+                    # A grouping target with NO type is the other way a
+                    # grouping graph comes back empty. The self-link may be
                     # present, but a typeless subject builds no GraphObject, so
                     # the entity is absent from its own graph and the read
                     # returns nothing. Observed once on a 5.1M-quad space: a
@@ -646,15 +646,18 @@ class MaintenanceJob:
                         logger.warning(
                             "Grouping self-link: %s has %d URI(s) that group "
                             "objects but are not members of their own graph — "
-                            "those entities lose their own properties from "
-                            "entity-graph reads. Run "
+                            "those ROOTS lose their own properties from "
+                            "graph reads. A root is not necessarily an entity: "
+                            "hasKGGraphURI also groups document graphs, and "
+                            "KGDocument roots carry the self-link for the same "
+                            "reason (see _set_document_grouping_uris). Run "
                             "scripts/repair_grouping_self_link.py --space %s",
                             space_id, broken, space_id)
                     if typeless:
                         logger.warning(
                             "Grouping target without a type: %s has %d URI(s) "
                             "that group objects but carry no rdf:type or "
-                            "vitaltype. Their entity graphs read as EMPTY, "
+                            "vitaltype. Their graphs read as EMPTY, "
                             "because a typeless subject builds no object. "
                             "Decide whether the URI should be typed or whether "
                             "its members are grouped under the wrong URI.",
