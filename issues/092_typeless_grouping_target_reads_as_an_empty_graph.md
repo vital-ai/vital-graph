@@ -1,7 +1,8 @@
 # A Grouping URI With No Type Exists, and Nothing Can Have Created It
 
-## Status: OPEN — but NOT one instance, and the repair was making it worse.
-## Detection and a guard landed 2026-08-20.
+## Status: ORIGIN ESTABLISHED 2026-08-21 (a7b68cb). The open question below —
+## which miss produced the 19 — is answered: the member was never stamped.
+## Detection and a guard landed 2026-08-20; a second guard 2026-08-21.
 
 Two things in the original filing were wrong.
 
@@ -84,10 +85,9 @@ that shape.
 
 ### Still open
 
-* **Which miss produced these 19.** The candidates are the three above; a delete
-  running against an entity whose members had not yet been stamped is the most
-  likely, given `create_entity_frames` and the delete are adjacent in the same
-  test.
+* ~~**Which miss produced these 19.**~~ ANSWERED 2026-08-21 — see "Which miss"
+  below. It was the never-stamped member, and the guess recorded here (members
+  "not yet" stamped, i.e. a race) was the wrong one of the two.
 * **Whether the delete should be membership-scoped at all.** A delete that
   defines the graph by a single mutable predicate will always be able to orphan
   the rest of it. The alternative — deleting by reachability, or refusing when
@@ -162,3 +162,52 @@ knows what that campaign URI means. Deleting the three triples would orphan the
 ## Related
 
 - `issues/091` — the self-link repair pass that surfaced this
+
+## Which miss produced them — settled 2026-08-21
+
+By elimination, against the live stack.
+
+Driving the exact sequence that made one of the 19 — create entity, create
+frames, delete with `delete_entity_graph=True`, the shape from
+`case_entity_server_properties.py:515` — now leaves NOTHING behind.
+`create_entity_frames` sets `kGGraphURI` on the frame before writing it
+(`kgentities_endpoint.py:1789`), and the three writers that did not were fixed
+in `issues/091`. Kept as `tests/api/test_entity_graph_delete_residue.py`.
+
+Planting the pre-091 shape instead — an entity and a frame joined by an edge,
+the frame never stamped — reproduces the recorded residue exactly:
+
+    entity  2 quads -> 0        the root goes
+    frame   2 quads -> 2        the member outlives it
+    edge    3 quads -> 3
+
+which is what this file describes: "the entity's own triples GONE, its frame
+SURVIVES, its entity->frame edge SURVIVES".
+
+So the answer is the second candidate, not the first: the member never carried
+the grouping link, rather than being written after the snapshot. The
+distinction matters, because the guard added on 2026-08-20 only sees the race.
+
+### The guard was blind to it
+
+That check counts quads still pointing at the entity via `hasKGGraphURI`. An
+unstamped member points at nothing, so it is invisible — the check stayed
+silent through the entire reproduction above. A detector that cannot see the
+mechanism that actually fired is the same failure as the repair script's.
+
+The edge table is where such a member remains reachable: the entity is gone,
+but an edge row naming it survives, and `(source_node_uuid, dest_node_uuid)`
+and its reverse are both indexed. The delete now counts those and reports
+them, guarded both ways — the reproduction must warn, and the same graph fully
+stamped must delete clean and say nothing.
+
+This should now be archaeology. If it fires, one of the issues/091 writers is
+back or a new one has appeared.
+
+### What is still open
+
+**Whether the delete should be membership-scoped at all**, unchanged from
+above. Both guards report; neither repairs. Deleting by reachability, or
+refusing when a recount disagrees, remains a design question — and now a
+better-informed one, since the failing mode is a member the grouping predicate
+never described, which no amount of care with that predicate can catch.
