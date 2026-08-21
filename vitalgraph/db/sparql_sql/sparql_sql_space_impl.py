@@ -1595,6 +1595,16 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     )
                     subject_uuids = [row['subject_uuid'] for row in subject_rows]
 
+                    # THE ENTITY ITSELF, unconditionally. Membership above is a
+                    # snapshot of ONE mutable predicate, and the entity appears
+                    # in it only if it carries its own self-link — which
+                    # `issues/091` established entities systematically did not,
+                    # 619 of them across 12 spaces. Without this, deleting such
+                    # an entity's graph removed every member and left the root
+                    # behind: a typed object with nothing under it.
+                    if entity_uuid not in subject_uuids:
+                        subject_uuids.append(entity_uuid)
+
                     if not subject_uuids:
                         logger.warning("delete_entity_graph_bulk: no subjects found for %s", entity_uri)
                         return 0
@@ -1632,6 +1642,36 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                         quad_rows = [(r['subject_uuid'], r['predicate_uuid'],
                                       r['object_uuid'], r['context_uuid']) for r in deleted_rows]
                         await sync_stats_after_delete(conn, space_id, quad_rows)
+
+                    # VERIFY, because the membership query above cannot be
+                    # trusted to have seen the whole graph. It matches on a
+                    # single mutable predicate at one instant, so anything whose
+                    # grouping URI was missing, misdirected, or written after
+                    # this ran is not in `subject_uuids` and survives — pointing
+                    # at an entity that no longer exists.
+                    #
+                    # That residue is `issues/092`: 19 grouping targets across 4
+                    # spaces with members and no typed root, each reading as an
+                    # EMPTY entity graph. It went three months without an
+                    # explanation because nothing on the delete path ever looked
+                    # back to see whether the delete had finished.
+                    #
+                    # Reported, not deleted. Removing whatever still points at
+                    # the entity would be a second, unbounded pass over rows
+                    # this caller never named, and the safe half of the fix is
+                    # for the delete to stop being silent about it.
+                    orphaned = await conn.fetchval(
+                        f"SELECT count(*) FROM {t['rdf_quad']} "
+                        f"WHERE predicate_uuid = $1 AND object_uuid = $2 "
+                        f"AND context_uuid = $3",
+                        p_uuid, entity_uuid, g_uuid)
+                    if orphaned:
+                        logger.warning(
+                            "delete_entity_graph_bulk(%s, %s): %d quad(s) still "
+                            "point at this entity via hasKGGraphURI after the "
+                            "delete — their root is gone and they read as an "
+                            "empty entity graph. See issues/092.",
+                            space_id, entity_uri, orphaned)
 
             _t1 = _time.monotonic()
             logger.info(
