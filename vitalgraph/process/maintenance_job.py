@@ -114,6 +114,16 @@ class MaintenanceJob:
         self._pool = pool
         self._tracker = process_tracker
         self._pg_config = postgresql_config
+        # Spaces this deployment has declared exempt from maintenance
+        # (issues/112 option 3). Empty unless set; see _drop_excluded.
+        self._excluded = {
+            sid.strip() for sid in
+            os.environ.get("VG_MAINTENANCE_EXCLUDE_SPACES", "").split(",")
+            if sid.strip()
+        }
+        if self._excluded:
+            logger.info("MaintenanceJob: %d space(s) exempt from maintenance: %s",
+                        len(self._excluded), ", ".join(sorted(self._excluded)))
         self._instance_id = _get_instance_id()
         self._last_cleanup: Optional[float] = None
 
@@ -307,16 +317,50 @@ class MaintenanceJob:
     # ------------------------------------------------------------------
 
     async def _only_registered(self, stats: Dict[str, Dict]) -> Dict[str, Dict]:
-        """Drop space-shaped tables that no live space owns."""
+        """Drop space-shaped tables that no live space owns, and any space this
+        deployment has declared exempt."""
         registered = await self._registered_space_ids()
         if registered is None:
             return stats
         kept = {sid: v for sid, v in stats.items() if sid in registered}
+        kept = self._drop_excluded(kept)
         dropped = len(stats) - len(kept)
         if dropped:
             logger.info("MaintenanceJob: ignoring %d space-shaped table group(s) "
                         "with no row in `space` (scored %d, maintaining %d)",
                         dropped, len(stats), len(kept))
+        return kept
+
+    def _drop_excluded(self, stats: Dict[str, Dict]) -> Dict[str, Dict]:
+        """Remove spaces named in VG_MAINTENANCE_EXCLUDE_SPACES.
+
+        `issues/112`, option 3. The benchmark fixtures are not spaces anyone
+        serves, and maintaining them moves the ground the benchmarks stand on:
+        a cycle re-ANALYZEd them mid-session and a bench read +91% worse with
+        identical code, because the plan flipped on refreshed statistics.
+
+        Configured per deployment rather than hardcoded, for two reasons. The
+        fixture names are a property of a dev machine, not of the product, so
+        a list of them does not belong in shipped code. And the exclusion is a
+        real divergence from production — the maintenance job IS part of how a
+        served space behaves — so it should be something a deployment opts
+        into visibly, not a default that quietly makes benchmarks unlike
+        production everywhere.
+
+        Empty by default. Set it in the environment that runs benchmarks:
+
+            VG_MAINTENANCE_EXCLUDE_SPACES=sp_lead_synth_100k,wordnet_frames
+        """
+        if not self._excluded:
+            return stats
+        kept = {sid: v for sid, v in stats.items() if sid not in self._excluded}
+        skipped = len(stats) - len(kept)
+        if skipped:
+            logger.info(
+                "MaintenanceJob: skipping %d space(s) declared exempt via "
+                "VG_MAINTENANCE_EXCLUDE_SPACES (%s). Their statistics and "
+                "bloat are NOT maintained — see issues/112.",
+                skipped, ", ".join(sorted(self._excluded & set(stats))))
         return kept
 
     async def _registered_space_ids(self):

@@ -160,6 +160,16 @@ services:
       - AUTH_ROOT_PASSWORD=admin
       # Auto-init admin tables on startup (test environments only)
       - VG_AUTO_INIT=true
+      # Benchmark fixtures are exempt from the maintenance job (issues/112
+      # option 3). A cycle re-ANALYZEd them mid-session and a bench then read
+      # +91% worse with IDENTICAL code, because the plan flipped on refreshed
+      # statistics. These spaces are measured, not served, so the maintenance
+      # job's job here is to leave them alone.
+      #
+      # This is deliberately a divergence from production, and it is set on
+      # THIS stack only. A served space must keep being maintained; nothing in
+      # shipped code defaults to skipping anything.
+      - VG_MAINTENANCE_EXCLUDE_SPACES=${VG_MAINTENANCE_EXCLUDE_SPACES:-sp_lead_synth_100k,sp_lead_synth_10k,sp_lead_dup,sp_sql_lead_dataset,wordnet_frames,sp_graph_synth_100k,sp_graph_synth_10k,sp_graph_skew_2k,sp_graph_forms_20k}
       # Storage
       - STORAGE_ENDPOINT=http://minio:9000
       - STORAGE_ACCESS_KEY=minioadmin
