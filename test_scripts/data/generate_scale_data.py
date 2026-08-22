@@ -40,16 +40,35 @@ from vitalgraph.db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
 
 VITALTYPE = "http://vital.ai/ontology/vital-core#vitaltype"
 HASNAME = "http://vital.ai/ontology/vital-core#hasName"
+# A predicate carried by only a fraction of entities, so a probe on it is
+# SELECTIVE. Without one, every predicate here matches ~50% of the table
+# (two quads per entity), and at that selectivity PG18 costs a bitmap heap
+# scan cheaper than an index-only scan and picks a predicate-leading index —
+# which made `query.covering.advantage_growth` measure the covering index and
+# its absence as byte-identical (2938/2938, 8811/8811, 26426/26426 buffers)
+# and left the bench unable to demonstrate its own claim. See issues/112 notes
+# and the bench docstring.
+HASTAG = "http://vital.ai/ontology/vital-core#hasTag"
+# 1 entity in 100 carries it -> ~0.5% of quads, selective enough that the
+# planner prefers an index-only scan on the covering index.
+RARE_EVERY = 100
 KGENTITY = "http://vital.ai/ontology/haley-ai-kg#KGEntity"
 _QUAD_NS = uuid.UUID("6ba7b812-9dad-11d1-80b4-00c04fd430c8")
 
 
-def _build_rows(n_entities: int, graph_uri: str
+def _build_rows(n_entities: int, graph_uri: str, rare_every: int = 0
                 ) -> Tuple[List[tuple], List[tuple]]:
-    """Return (term_rows, quad_rows) for COPY. Deterministic given inputs."""
+    """Return (term_rows, quad_rows) for COPY. Deterministic given inputs.
+
+    rare_every: when > 0, emit a `HASTAG` quad on every Nth entity, giving a
+    predicate whose selectivity is 1/(2N + 1) of the table rather than ~1/2.
+    0 keeps the original two-quads-per-entity shape exactly, so existing
+    callers and their recorded numbers are unaffected.
+    """
     # Shared terms
     p_vt = _generate_term_uuid(VITALTYPE, "U")
     p_name = _generate_term_uuid(HASNAME, "U")
+    p_tag = _generate_term_uuid(HASTAG, "U")
     o_kgent = _generate_term_uuid(KGENTITY, "U")
     g = _generate_term_uuid(graph_uri, "U")
 
@@ -61,6 +80,8 @@ def _build_rows(n_entities: int, graph_uri: str
         o_kgent: (KGENTITY, "U"),
         g: (graph_uri, "U"),
     }
+    if rare_every > 0:
+        terms[p_tag] = (HASTAG, "U")
     quads: List[tuple] = []  # (subject, predicate, object, context, quad_uuid)
     for i in range(n_entities):
         e_uri = f"urn:perf:e:{i:09d}"
@@ -71,13 +92,19 @@ def _build_rows(n_entities: int, graph_uri: str
         terms[nm] = (name, "L")
         quads.append((e, p_vt, o_kgent, g, uuid.uuid5(_QUAD_NS, f"{i}:t")))
         quads.append((e, p_name, nm, g, uuid.uuid5(_QUAD_NS, f"{i}:n")))
+        if rare_every > 0 and i % rare_every == 0:
+            tag = f"tag-{i // rare_every:06d}"
+            tg = _generate_term_uuid(tag, "L")
+            terms[tg] = (tag, "L")
+            quads.append((e, p_tag, tg, g, uuid.uuid5(_QUAD_NS, f"{i}:r")))
 
     term_rows = [(k, v[0], v[1]) for k, v in terms.items()]
     return term_rows, quads
 
 
 async def load_scale_space(pool: asyncpg.Pool, space_id: str, n_entities: int,
-                           graph_uri: str = "urn:perf", drop_first: bool = True) -> int:
+                           graph_uri: str = "urn:perf", drop_first: bool = True,
+                           rare_every: int = 0) -> int:
     """Create `space_id` and COPY-load `n_entities` synthetic entities. Returns
     the quad count. Runs ANALYZE so the planner has fresh stats."""
     async with pool.acquire() as conn:
@@ -88,7 +115,7 @@ async def load_scale_space(pool: asyncpg.Pool, space_id: str, n_entities: int,
                 pass
         await SparqlSQLSchema.create_space(conn, space_id)
 
-        term_rows, quad_rows = _build_rows(n_entities, graph_uri)
+        term_rows, quad_rows = _build_rows(n_entities, graph_uri, rare_every)
         t = SparqlSQLSchema.get_table_names(space_id)
 
         await conn.copy_records_to_table(
