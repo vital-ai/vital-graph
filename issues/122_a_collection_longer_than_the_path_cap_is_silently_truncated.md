@@ -53,7 +53,8 @@ Note the interaction with cost: at 400 elements the truncated walk still burns
 2. **Make truncation loud.** If the recursion hits the cap, fail the query
    rather than return a short answer. Turns silent wrongness into a stated
    limit, and is small. Does not make long lists work.
-3. **A magic predicate in OUR namespace** — e.g. `vg:listMember`. A single
+3. **A magic predicate in OUR namespace — `vg:listMember`** (decided
+   2026-08-22; `vg:listIndex` for the ordinal variant if ever needed). A single
    triple pattern matched by predicate URI, lowering to the recursive CTE that
    already exists with `depth` selected rather than discarded
    (`emit_path.py:377` computes it and throws it away). This is the option that
