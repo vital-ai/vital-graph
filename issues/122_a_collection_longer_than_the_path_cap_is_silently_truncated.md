@@ -53,11 +53,15 @@ Note the interaction with cost: at 400 elements the truncated walk still burns
 2. **Make truncation loud.** If the recursion hits the cap, fail the query
    rather than return a short answer. Turns silent wrongness into a stated
    limit, and is small. Does not make long lists work.
-3. **Expose the ordinal the recursion already computes.** `emit_path.py:377`
-   carries `depth` through the CTE and uses it only for the cap. That number is
-   the list position. Recognising the `rest*`/`first` idiom and answering it
-   from one CTE instead of two joined would remove the O(n^2) — but it does not
-   remove the cap, and it is only worth doing if lists get large.
+3. **A magic predicate — `list:member` / `list:index`.** A single triple
+   pattern matched by predicate URI, lowering to the recursive CTE that already
+   exists with `depth` selected rather than discarded (`emit_path.py:377`
+   computes it and throws it away). This is the option that is genuinely as
+   cheap as the existing `*` handling, because it gives the emitter a NODE to
+   match instead of a multi-node idiom to recognise — see
+   `rdf_collections.md` §9.3. It also gives a natural place to lift the cap,
+   and it closes a live trap: `list:member` already parses here and silently
+   returns nothing (§9.4).
 
 **Do (2), and only (2), for now.** A wrong answer is a different category of
 problem from a slow one, and today there is no signal at all. (1) alone moves
