@@ -1,9 +1,9 @@
 # A Non-Selective Entity-Type Predicate Costs 6x Buffers and 10x Time
 
-## Status: OPEN — MECHANISM ESTABLISHED 2026-08-22. The fast plan is
-## `JOIN(bgp_entity_type, bgp_walk)`, and it exists only as a side effect of
-## UNION-branch pruning. Two earlier hypotheses tested and refuted, both kept
-## below. No fix applied; the change is a plan-shape decision, not a patch.
+## Status: DOWNGRADED to fixture-specific 2026-08-22, and the proposed fix is
+## DECLINED. The 5.9x is real on `sp_lead_synth_100k` and does NOT reproduce on
+## a fixture with real entity types. Mechanism below is still correct; what was
+## wrong was assuming it generalised.
 
 Adding an entity-type criterion that matches **every** entity makes the same
 KGQuery 5.9x more expensive in buffers and 9.8x slower. It filters nothing and
@@ -265,3 +265,47 @@ fresh promotion should hold still.
 **Do not** "fix" this by emitting a fake second UNION branch. It would work — D
 proves it — and it would turn a pruning side effect into a protocol, which is
 how the current behaviour came to depend on an accident in the first place.
+## It does not reproduce where entity types are real — 2026-08-22
+
+The 5.9x was measured where `hasKGEntityType` matches **100,000 of 100,000**
+entities: a type predicate that partitions nothing, which is a property of the
+synthetic fixture rather than of the product. Real data has entity types that
+discriminate. `wordnet_frames` does:
+
+    NounSynsetNode 82,115   AdjectiveSynsetNode 13,880
+    VerbSynsetNode 13,643   AdverbSynsetNode 107
+
+Same experiment there — one query, one entity type, only flat-BGP vs
+pruned-UNION differing, both warmed, best of three, both returning 25 rows:
+
+    entity type                    flat BGP        pruned UNION
+    AdverbSynsetNode  (0.1%)          4,182 buf       4,182 buf   identical
+    NounSynsetNode    (75%)       6,068,974 buf   7,572,671 buf   UNION WORSE
+
+Neither case reproduces it. At 0.1% the two shapes are byte-identical. At 75% —
+the closest available to the lead fixture's 100% — the pruned UNION is **1.25x
+worse**, the opposite direction.
+
+So "a specific entity type produces a flat BGP and that is slow" is not a
+general property. It is an interaction between this one fixture's shape and its
+statistics.
+
+### The fix is declined
+
+Making the plan builder emit `JOIN(bgp_type, bgp_walk)` deliberately would
+change plan shape for **every typed entity query** in the product, and the
+evidence for it is one synthetic fixture whose entity type filters nothing.
+That is the shape of the mistake `issues/081` exists to prevent, one level up:
+a real measurement generalised past what it measured.
+
+Reopen if a fixture or a production space shows the same gap with an entity
+type that actually discriminates. The experiment above is the test to run, and
+it is cheap.
+
+### What stays true
+
+The mechanism is correct and worth knowing: a pruned multi-branch UNION leaves
+its surviving branch as a separate BGP operand, and `JOIN(bgp, bgp)` can be
+much cheaper than one flat BGP. `sp_lead_synth_100k` benefits from that by
+accident. That is a fact about the emitter, not a defect, and the benchmarks
+that run on that fixture are measuring it.
