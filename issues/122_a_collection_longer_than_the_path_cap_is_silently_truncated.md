@@ -61,7 +61,7 @@ Note the interaction with cost: at 400 elements the truncated walk still burns
    match instead of a multi-node idiom to recognise — see
    `rdf_collections.md` §9.3. It also gives a natural place to lift the cap,
    and it closes a live trap: `list:member` already parses here and silently
-   returns nothing (§9.4).
+   returns nothing (`rdf_collections.md` §9.5).
 
 **Do (2), and only (2), for now.** A wrong answer is a different category of
 problem from a slow one, and today there is no signal at all. (1) alone moves
