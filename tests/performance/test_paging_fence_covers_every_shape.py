@@ -59,15 +59,44 @@ FIXTURES = SYNTH
 PAGE_SIZES = [25, 100]
 
 
+# THE NEEDLE HAS TO BE BOTH MATCHABLE AND SERVABLE, and the original slot could
+# not give both at once (issues/117).
+#
+# This probed `CompanyStateCode`, which holds two-letter codes — CA x9,220,
+# TX x7,337, FL x6,528 — with the needle "CAL". Nothing matched, the LIMIT
+# never filled, and both arms walked all 100,000 entities: 31.1M buffers,
+# ~105 s, a comparison between two exhaustive scans that says nothing about
+# fencing. ("California" is in the fixture on a DIFFERENT slot, which is what
+# made the needle look plausible.)
+#
+# Simply matching is not enough either. On a two-letter slot every matching
+# needle is at most two characters, and `MIN_TRIGRAM_NEEDLE = 3` — the index
+# deliberately does not serve 1- and 2-grams — so "CA" measures the unservable
+# path: 1,276,968 buffers against 138,369 for a servable needle that matches
+# nothing.
+#
+# `CompanyName` gives both. Values average 21 characters ("AMF FREIGHT LLC",
+# "Alternative Home Care LLC"), it hangs off `CompanyIdentityFrame` under the
+# same `CompanyFrame` parent the address slot used, and "LLC" is three
+# characters — servable — matching 41 distinct values.
+TEXT_FRAME = "CompanyIdentityFrame"
+TEXT_SLOT_TYPE = "CompanyName"
+MATCHING_NEEDLE = "LLC"
+# Deliberately absent AND servable, so the empty-result test below measures an
+# empty result rather than an unservable needle. Kept distinct from
+# MATCHING_NEEDLE so neither can be "fixed" into the other by accident.
+ABSENT_NEEDLE = "ZZQQXX"
+
+
 def _contains_criteria(needle: str):
     """A text criterion, which pushes down as a term semi-join."""
     from vitalgraph.model.kgentities_model import SlotCriteria, FrameCriteria
     return [FrameCriteria(
         frame_type=f"{NS}:frame:CompanyFrame",
         frame_criteria=[FrameCriteria(
-            frame_type=f"{NS}:frame:CompanyAddressFrame",
+            frame_type=f"{NS}:frame:{TEXT_FRAME}",
             slot_criteria=[SlotCriteria(
-                slot_type=f"{NS}:slot:CompanyStateCode",
+                slot_type=f"{NS}:slot:{TEXT_SLOT_TYPE}",
                 slot_class_uri=TEXT_SLOT, value=needle,
                 comparator="contains")])])]
 
@@ -80,8 +109,16 @@ SHAPES = [
     ("range-tight", lambda: _range_criteria(99.9)),
     ("range-mid", lambda: _range_criteria(99)),
     ("range-loose", lambda: _range_criteria(65)),
-    ("contains", lambda: _contains_criteria("CAL")),
+    ("contains", lambda: _contains_criteria(MATCHING_NEEDLE)),
 ]
+# The empty-result case is NOT in this matrix. It is exhaustive by
+# construction — nothing matches, so the LIMIT never short-circuits and both
+# arms run the walk to completion — which makes it a degenerate fence
+# comparison and an expensive one: on the 100k fixture each side is ~105 s and
+# 31M buffers, so four more cells would add roughly 17 minutes to warm plans
+# that must then time out anyway. It gets one bounded test at the bottom of
+# this file instead, on the small fixture, asserting the property that
+# actually matters.
 
 
 # How much cheaper one plan has to be before the flag is "wrong" rather than
@@ -94,19 +131,43 @@ DECISIVE = 2.0
 # Bad plans here can take minutes. The timeout IS a measurement: a side that
 # cannot finish is not the cheaper side.
 PROBE_TIMEOUT_MS = 20_000
+# The warm-up may legitimately take longer than the probe it is preparing —
+# it is the run that pays for the cache misses. Bounded so a genuinely
+# pathological shape still gives up rather than hanging the suite.
+WARM_TIMEOUT_MS = 120_000
 
 
-async def _cost(conn, sql, *, fenced: bool):
-    """Buffers for this plan, or None if it could not finish in time."""
+async def _cost(conn, sql, *, fenced: bool, warm: bool = False):
+    """Buffers for this plan, or None if it could not finish in time.
+
+    `warm=True` discards the result: it exists to pull this plan's working set
+    into the buffer pool before anything is timed.
+    """
     from .harness import explain_json, total_shared_buffers
     try:
         async with conn.transaction():
-            await conn.execute(f"SET LOCAL statement_timeout = {PROBE_TIMEOUT_MS}")
+            await conn.execute(
+                f"SET LOCAL statement_timeout = "
+                f"{WARM_TIMEOUT_MS if warm else PROBE_TIMEOUT_MS}")
             if fenced:
                 await conn.execute("SET LOCAL enable_sort = off")
             return total_shared_buffers(await explain_json(conn, sql))
     except Exception:
         return None
+
+
+async def _warm(conn, sql):
+    """Run both plans once, untimed, so the timeout measures the PLAN.
+
+    Without this the first probe pays to pull a 22 GB fixture's working set
+    into a 16 GB pool, and the timeout reports the buffer pool instead. It is
+    not a small effect: `range-tight/specific` measured 7.1x on a single cold
+    probe and 1.3x warm, alternating, median of three — and it exceeded the
+    20 s limit cold while finishing in about 5 s warm, so the shape was
+    reported as "neither plan finished" and skipped entirely (issues/117).
+    """
+    for fenced in (False, True):
+        await _cost(conn, sql, fenced=fenced, warm=True)
 
 
 @pytest.mark.ingest_bench   # two ANALYZEd plans per shape; not an edit-loop bench
@@ -133,6 +194,7 @@ async def test_a_flippable_shape_is_always_fenced(
         pytest.skip(f"generation refused, nothing to fence: {str(gen.error)[:120]}")
 
     flag = bool(getattr(gen, "needs_ordered_scan", False))
+    await _warm(perf_conn, gen.sql)
     unfenced = await _cost(perf_conn, gen.sql, fenced=False)
     fenced = await _cost(perf_conn, gen.sql, fenced=True)
 
@@ -170,3 +232,66 @@ async def test_a_flippable_shape_is_always_fenced(
             f"`needs_ordered_scan` IS set, so the executor forces the worse "
             f"plan. Forcing `enable_sort = off` on a shape that needs a sort is "
             f"the 273x regression this repository already documents.")
+
+
+@pytest.mark.ingest_bench
+@pytest.mark.asyncio(loop_scope="session")
+async def test_the_three_text_needle_regimes_stay_ordered(perf_conn):
+    """Match, empty, and unservable cost strictly more in that order.
+
+    This started as "an empty result costs the whole walk" and that was assumed
+    rather than measured. It is false: a SERVABLE needle matching nothing is
+    answered from the index and is cheap. What costs is unservability.
+
+    Three regimes, and the ordering between them is the property (issues/117,
+    and `MIN_TRIGRAM_NEEDLE` from issues/070):
+
+      servable + matches      cheapest — the LIMIT short-circuits
+      servable + no match     more     — nothing to short-circuit on
+      UNSERVABLE (< 3 chars)  most     — the index cannot help, so it scans
+
+    Measured on the 10k fixture when written: 6,528 / 138,357 / 1,276,968
+    buffers. The gates are the ORDER, not those numbers, which move with the
+    fixture.
+
+    The two-character needle is deliberate. `MIN_TRIGRAM_NEEDLE = 3` is a
+    decision not to optimise 1- and 2-grams, and this pins its cost so the
+    decision stays visible — the original version of this bench probed a
+    two-letter slot, where every matching needle is unservable by construction,
+    and measured that path while believing it measured fencing.
+    """
+    fx = [f for f in FIXTURES if f.label == "10k"][0]
+    reason = await require_usable(perf_conn, fx)
+    if reason:
+        pytest.skip(reason)
+
+    from .harness import explain_json, total_shared_buffers
+
+    UNSERVABLE_NEEDLE = "CA"          # 2 chars: below MIN_TRIGRAM_NEEDLE
+    regimes = (("matches", MATCHING_NEEDLE), ("empty", ABSENT_NEEDLE),
+               ("unservable", UNSERVABLE_NEEDLE))
+    cost, rows = {}, {}
+    for label, needle in regimes:
+        gen = await _criteria_to_gen(perf_conn, _contains_criteria(needle), fx,
+                                     entity_type=KGENTITY, page_size=25)
+        if not gen.ok:
+            pytest.skip(f"generation refused for {label}: {str(gen.error)[:100]}")
+        await _warm(perf_conn, gen.sql)
+        doc = await explain_json(perf_conn, gen.sql)
+        cost[label] = total_shared_buffers(doc)
+        rows[label] = doc["Plan"].get("Actual Rows")
+
+    assert rows["matches"] > 0, (
+        f"{MATCHING_NEEDLE!r} matched nothing — the 'matches' regime is not "
+        f"a match, so this test compares three empty walks")
+    assert rows["empty"] == 0, (
+        f"{ABSENT_NEEDLE!r} matched {rows['empty']} rows — it is not absent, "
+        f"so the 'empty' regime is measuring nothing")
+
+    assert cost["matches"] < cost["empty"], (
+        f"a matching needle ({cost['matches']:,}) did not cost less than an "
+        f"empty one ({cost['empty']:,}) — the LIMIT is not short-circuiting")
+    assert cost["empty"] < cost["unservable"], (
+        f"an empty SERVABLE needle ({cost['empty']:,}) cost as much as an "
+        f"UNSERVABLE one ({cost['unservable']:,}) — the text index has stopped "
+        f"answering the empty case, so it is scanning either way")
