@@ -71,13 +71,14 @@ walk, rather than arriving disguised as a timeout.
 
 ## What is still open
 
-**`contains` + the specific entity type stays over 20 s even with a matching
-needle**, where the generic entity type drops to 8.2 s. That is a 2.5x-plus
-gap between two entity types on the same criterion, and it is not explained by
-either cause above. It may be ordinary — the specific type adds a type
-predicate to an already wide walk — or it may be a real planning problem of the
-`issues/111` family.
+~~**`contains` + the specific entity type stays over 20 s even with a matching
+needle**~~ MEASURED 2026-08-22, and it is real: **`issues/118`**.
 
-NOT MEASURED WARM, so no claim is made about the size of it. That measurement
-is the next step, and it should be taken the way cause 1 shows is necessary:
-warm both sides, alternate, take a median.
+Warm, alternating, median of three: 6.37s / 4,043,455 buffers for the generic
+entity type against 62.56s / 23,861,490 for the specific one — 9.81x time,
+5.90x buffers, for a predicate that selects the identical 100,000 entities and
+therefore filters nothing. Intermediate rows expand to 800,000 in the specific
+arm where the generic arm holds flat at 100,000.
+
+So of the three things behind these six skips, two are defects in this bench
+and one is a product problem that the bench's timeout was hiding.
