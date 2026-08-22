@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "env": {
-    "started_at": "2026-08-20T18:34:20.113846+00:00",
+    "started_at": "2026-08-22T15:25:44.820044+00:00",
     "git": {
-      "commit": "b8ab22c8b9d5e21b778987ca454e79e2a15bb2b9",
-      "short": "b8ab22c",
+      "commit": "573c46f87c04e727ce65aab4699be1f4f9493541",
+      "short": "573c46f",
       "branch": "main",
       "dirty": true
     },
@@ -36,10 +36,10 @@
     },
     "stats": {
       "fixture_tables": 260,
-      "fixture_live_tuples": 126221181,
-      "fixture_last_analyze": "2026-08-20T18:29:21.365413+00:00"
+      "fixture_live_tuples": 126128097,
+      "fixture_last_analyze": "2026-08-22T13:59:10.048554+00:00"
     },
-    "finished_at": "2026-08-20T18:38:18.304805+00:00"
+    "finished_at": "2026-08-22T15:42:14.184674+00:00"
   },
   "benches": [
     {
@@ -55,16 +55,256 @@
       "dataset": "synthetic:[50000, 150000, 450000]"
     },
     {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-generic-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-generic-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-specific-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-specific-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-generic-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-generic-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-specific-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-specific-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-generic-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-generic-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-specific-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-specific-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-generic-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-generic-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-specific-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-specific-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-generic-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-generic-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-specific-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-specific-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-generic-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-generic-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-specific-100k]",
+      "status": "skipped",
+      "reason": "Skipped: neither plan finished within the probe timeout"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-specific-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-generic-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-generic-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-specific-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-specific-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-generic-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-generic-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-specific-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-specific-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-generic-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-generic-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-specific-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-specific-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-generic-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-generic-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-specific-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-specific-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-generic-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-generic-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-specific-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-specific-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-generic-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-generic-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-specific-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-specific-10k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
       "bench_id": "write.ingest.bulk_vs_executemany",
       "kind": "write",
       "status": "ok",
       "metrics": {
-        "executemany_quads_per_sec": 7133,
-        "copy_quads_per_sec": 70238,
-        "bulk_e2e_quads_per_sec": 40918,
-        "index_rebuild_s": 4.081,
-        "copy_speedup": 9.847,
-        "e2e_speedup": 5.737
+        "executemany_quads_per_sec": 7036,
+        "copy_quads_per_sec": 61961,
+        "bulk_e2e_quads_per_sec": 34407,
+        "index_rebuild_s": 5.17,
+        "copy_speedup": 8.806,
+        "e2e_speedup": 4.89
       },
       "dataset": "synthetic:400000q"
     },
@@ -73,10 +313,10 @@
       "kind": "write",
       "status": "ok",
       "metrics": {
-        "growth_class": "log",
-        "probe_ms_at_100000q": 70.15,
-        "probe_ms_at_300000q": 79.22,
-        "probe_ms_at_900000q": 98.94
+        "growth_class": "flat",
+        "probe_ms_at_100000q": 72.74,
+        "probe_ms_at_300000q": 67.68,
+        "probe_ms_at_900000q": 69.57
       },
       "dataset": "synthetic:[50000, 150000, 450000]",
       "notes": "probe=300 quads, min of 3 rolled-back runs"
@@ -84,7 +324,7 @@
   ],
   "baseline": {
     "name": "ingest",
-    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260820T182612Z-c2dc83e-i2.json",
+    "promoted_from": "/tmp/perf_ingest.json",
     "reason": "",
     "pg_stamped": true
   }
