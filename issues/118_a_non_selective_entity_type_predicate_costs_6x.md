@@ -1,8 +1,9 @@
 # A Non-Selective Entity-Type Predicate Costs 6x Buffers and 10x Time
 
-## Status: OPEN — measured 2026-08-22 and traced to the PLAN SHAPE, not to the
-## optimizer. A first trace blamed the search in `_try_selective_driven` and was
-## WRONG; the correction is below. No fix applied.
+## Status: OPEN — cause ISOLATED 2026-08-22 by experiment: a multi-branch
+## UNION is what produces the fast plan, and nothing else tested reproduces it.
+## Two earlier hypotheses were tested and REFUTED; both are kept below. No fix
+## applied — the emitter change is identified but not written.
 
 Adding an entity-type criterion that matches **every** entity makes the same
 KGQuery 5.9x more expensive in buffers and 9.8x slower. It filters nothing and
@@ -156,3 +157,66 @@ fixture: the same shape on the 10k fixture finishes inside the fence bench's
 needle that could not match; two were cold cache. This is what remained after
 both were accounted for, and it is the only one of the three that is a product
 problem rather than a test defect.
+
+## Isolated by experiment, 2026-08-22
+
+The generic arm's SPARQL differs from the specific arm's in exactly one place.
+`KGQueryCriteriaBuilder` emits, for a generic entity type:
+
+    { ?entity vital-core:vitaltype haley:KGEntity . }
+    UNION { ?entity vital-core:vitaltype haley:KGNewsEntity . }
+    UNION { ?entity vital-core:vitaltype haley:KGProductEntity . }
+    UNION { ?entity vital-core:vitaltype haley:KGWebEntity . }
+
+and for a specific one, a single triple that merges into the flat BGP:
+
+    ?entity haley:hasKGEntityType <urn:acme:kg:entity:Lead> .
+
+Four variants of the same query, changing only that fragment:
+
+    variant                              time      buffers
+    A  hasKGEntityType (as-is)          61.7s   23,861,490
+    B  vitaltype, no UNION              44.3s   23,562,030
+    C  vitaltype, UNION-of-ONE          50.6s   23,932,012
+    D  hasKGEntityType + 2-branch UNION  7.9s    4,043,842
+
+D matches the generic arm's 4,043,455 buffers. So:
+
+* **It is not the predicate.** `hasKGEntityType` and `vitaltype` behave the
+  same (A vs B).
+* **It is not braces, or a union in name only.** A single-branch UNION is as
+  slow as no union at all (C).
+* **A genuine multi-branch UNION is the entire difference** (D), and the second
+  branch in D matches nothing — its presence alone flips the plan.
+
+**The generic path is therefore fast by accident.** It is fast because
+`KGEntity` happens to expand to four type alternatives. Expand it to one and it
+would be as slow as the specific path.
+
+## Two hypotheses tested and refuted
+
+Recorded because each was plausible and each cost a measurement.
+
+1. **"The optimizer's search misses the join."** `_try_selective_driven` walks
+   only the `children[0]` spine, and for the specific arm `node` came back
+   `None`. Replacing that with a breadth-first search over every child was
+   written and measured: **no change**. The plan has no JOIN node at all — it is
+   `order/distinct/project/filter/BGP` — so the decline is correct.
+
+2. **"Any JOIN node will do."** Wrapping the type triple in a sub-SELECT DOES
+   produce `join(project(bgp), bgp)`, and the emitter then declines for the
+   same reason the generic arm does (`driver 50000 not selective vs anchor
+   100000`). Measured: **23,932,014 buffers, no better**. A JOIN node is not
+   sufficient; the UNION is doing something the sub-SELECT is not.
+
+## Next step
+
+Find what the emitter does for a UNION that it does not do for a single BGP
+leaf or a sub-SELECT — the generic SQL materialises the entity set as its own
+subquery and joins it once, and D shows a union is what triggers that. Then
+decide whether a single entity-type constraint can take the same path without
+pretending to be a union.
+
+Do not "fix" this by making the builder emit a fake second UNION branch. That
+would work — D proves it — and it would encode a planner accident as a
+protocol, which is how this got here.
