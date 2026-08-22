@@ -60,7 +60,29 @@ fail_pct = 0          # any new spill is a regression
 direction = "increase"
 report_only = true
 
-# Throughput / speedup ratios: timing-based, moderately noisy.
+# Throughput / speedup ratios: timing-based, and noisier than "moderately".
+#
+# MEASURED 2026-08-22, four samples of `copy_speedup` on UNCHANGED code — this
+# bench calls `insert_terms_quads_executemany` and `insert_terms_quads_copy`
+# directly, and `bulk_load.py` was not touched between any of them:
+#
+#     9.847   (2026-08-20 baseline)
+#     8.806   (2026-08-22 promotion run)
+#     9.235
+#    11.114
+#
+# A spread of 8.81 to 11.11 is about +/-12% around the mean, and `e2e_speedup`
+# ranged 4.89 to 6.70, wider still. At warn 10 / fail 20 the warn band sat
+# INSIDE the noise, so this pair warned on nothing and would eventually have
+# taught someone that a warning here means nothing — which is how a gate stops
+# working. Widened to sit outside the measured spread.
+#
+# The occasion for measuring it: a 10.6% move was attributed in a commit
+# message to sorting the stats parameter lists (issues/115), and that was
+# wrong — `bulk_load` contains no `sync_stats` call and no `sorted()`, so the
+# change cannot reach this bench at all. The number was noise and the story
+# was invented. Recorded here because the next plausible-sounding attribution
+# will be just as easy to believe.
 [metrics.quads_per_sec]
 direction = "decrease"
 warn_pct = 10
@@ -68,13 +90,13 @@ fail_pct = 20
 
 [metrics.copy_speedup]
 direction = "decrease"
-warn_pct = 10
-fail_pct = 20
+warn_pct = 20          # measured spread is ~+/-12%; warn outside it, not inside
+fail_pct = 35
 
 [metrics.e2e_speedup]
 direction = "decrease"
-warn_pct = 10
-fail_pct = 20
+warn_pct = 25          # ranged 4.89-6.70 on unchanged code, wider than copy
+fail_pct = 40
 
 # Load-driver throughput (load_test_scripts/load_test.py --record).
 [metrics.requests_per_sec]
