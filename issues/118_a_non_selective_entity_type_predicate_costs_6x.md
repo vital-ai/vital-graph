@@ -1,9 +1,9 @@
 # A Non-Selective Entity-Type Predicate Costs 6x Buffers and 10x Time
 
-## Status: OPEN — cause ISOLATED 2026-08-22 by experiment: a multi-branch
-## UNION is what produces the fast plan, and nothing else tested reproduces it.
-## Two earlier hypotheses were tested and REFUTED; both are kept below. No fix
-## applied — the emitter change is identified but not written.
+## Status: OPEN — MECHANISM ESTABLISHED 2026-08-22. The fast plan is
+## `JOIN(bgp_entity_type, bgp_walk)`, and it exists only as a side effect of
+## UNION-branch pruning. Two earlier hypotheses tested and refuted, both kept
+## below. No fix applied; the change is a plan-shape decision, not a patch.
 
 Adding an entity-type criterion that matches **every** entity makes the same
 KGQuery 5.9x more expensive in buffers and 9.8x slower. It filters nothing and
@@ -209,14 +209,59 @@ Recorded because each was plausible and each cost a measurement.
    100000`). Measured: **23,932,014 buffers, no better**. A JOIN node is not
    sufficient; the UNION is doing something the sub-SELECT is not.
 
+## The mechanism, established
+
+It is not `emit_union` — that emits `UNION ALL`, and the generic SQL contains
+no UNION at all. The union is gone before emission, removed by
+`prune_union.py`, whose docstring describes this exact case:
+
+> Prune dead UNION branches whose constants did not resolve to UUIDs. [...]
+> dramatically reducing PostgreSQL planning time for queries with entity
+> subtype UNIONs (e.g. KGEntity | KGNewsEntity | KGProductEntity |
+> KGWebEntity) where only one subtype exists in the space.
+
+In this fixture exactly one of the four resolves:
+
+    KGEntity 1 term    KGNewsEntity 0    KGProductEntity 0    KGWebEntity 0
+
+So the four-branch UNION is pruned to one surviving branch — and that branch
+stays a **separate BGP node**, leaving `JOIN(bgp, bgp)`: the entity-type
+constraint in one operand, the frame/slot walk in the other. That is the whole
+advantage. The entity side reduces to 100,000 rows once and is joined to the
+walk, instead of being one more pattern inside a flat BGP that PostgreSQL
+orders late.
+
+Every variant now lines up with this:
+
+* **D** (2-branch UNION, second branch a nonexistent type) — the dead branch is
+  pruned, the live one survives as its own BGP, `JOIN(bgp, bgp)`. **Fast.**
+* **C** (UNION-of-one) — `{ X }` is a group, not a union. No boundary is ever
+  created, nothing to prune. **Slow.**
+* **A/B** (bare triple, either predicate) — merges straight into the flat BGP.
+  **Slow.**
+
+## One detail that does NOT fit, and is worth knowing before fixing
+
+The sub-SELECT variant produced `JOIN(project(bgp), bgp)` — a genuine two-
+operand join with the entity constraint isolated — and was still **23.9M
+buffers**. So `JOIN(bgp, bgp)` is fast while `JOIN(project(bgp), bgp)` is not.
+The join boundary alone is not sufficient; something about the `project`
+wrapper defeats it. That has not been traced, and any fix that produces the
+isolated operand needs to produce the BARE-BGP form, not merely a join.
+
 ## Next step
 
-Find what the emitter does for a UNION that it does not do for a single BGP
-leaf or a sub-SELECT — the generic SQL materialises the entity set as its own
-subquery and joins it once, and D shows a union is what triggers that. Then
-decide whether a single entity-type constraint can take the same path without
-pretending to be a union.
+Make the shape deliberate: have the plan builder, or a rewrite pass beside
+`prune_union`, split an entity-type constraint into its own BGP operand joined
+to the rest — producing `JOIN(bgp, bgp)` on purpose rather than as a residue of
+pruning. Then measure across the suite, because this changes plan shape for
+every typed entity query, not just this one.
 
-Do not "fix" this by making the builder emit a fake second UNION branch. That
-would work — D proves it — and it would encode a planner accident as a
-protocol, which is how this got here.
+**Prerequisite:** re-promote `baselines/query.json`. It is stale on statistics
+(20 benches differ on unmodified code, 2026-08-22), so it cannot referee a
+plan-shape change. The fixtures are now exempt from the maintenance job, so a
+fresh promotion should hold still.
+
+**Do not** "fix" this by emitting a fake second UNION branch. It would work — D
+proves it — and it would turn a pruning side effect into a protocol, which is
+how the current behaviour came to depend on an accident in the first place.
