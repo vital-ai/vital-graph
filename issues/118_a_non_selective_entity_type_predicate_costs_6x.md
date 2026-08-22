@@ -1,7 +1,8 @@
 # A Non-Selective Entity-Type Predicate Costs 6x Buffers and 10x Time
 
-## Status: OPEN — measured 2026-08-22. Cause localised to intermediate row
-## growth; the emitter change that would fix it is NOT yet identified.
+## Status: OPEN — measured and TRACED 2026-08-22 to a single line in
+## `_try_selective_driven`. The fix is identified but NOT applied: it changes a
+## plan-selection heuristic and needs the full suite behind it.
 
 Adding an entity-type criterion that matches **every** entity makes the same
 KGQuery 5.9x more expensive in buffers and 9.8x slower. It filters nothing and
@@ -46,19 +47,68 @@ The generic arm holds 100,000 rows from the bottom of the tree upward. The
 specific arm expands to 800,000 and is then reduced back to 100,000 and finally
 to 9,220. Same answer, eight times the intermediate material.
 
-## Reading, and what has NOT been established
+## Traced: the restructuring is never even considered
 
-800,000 is close to 100,000 entities x the per-entity frame/slot fan-out, which
-suggests the type predicate is being joined against the ALREADY-EXPANDED row
-set — every frame and slot row of an entity re-checked for the entity's type —
-rather than applied to the entity set before the expansion, where it would cost
-one probe per entity and could not multiply anything.
+The two arms produce structurally different SQL.
 
-That is a reading of the row counts, not a proven cause. The emitter has not
-been traced, and no fix is proposed here. Establishing it means finding where
-the `hasKGEntityType` triple is placed in the generated SQL relative to the
-frame and slot joins, and whether the join order is chosen by the generator or
-left to PostgreSQL.
+**Generic** isolates the entity set as its own subquery and joins it once:
+
+    FROM (SELECT q0.subject_uuid AS v0__uuid
+          FROM ..._rdf_quad AS q0
+          WHERE q0.predicate_uuid = <vitaltype>
+            AND q0.object_uuid = <KGEntity> AND q0.context_uuid = <graph>) ...
+    JOIN (<the whole frame/slot walk>) AS j1 ON j0.v0__uuid = j1.v2__uuid
+
+**Specific** inlines the type triples into one flat join tree, correlated but
+positioned among the frame and slot joins:
+
+    JOIN ..._rdf_quad AS q0 ON q0.predicate_uuid = <hasKGEntityType>
+       AND q0.object_uuid = <Lead> AND q0.context_uuid = <graph>
+       AND mv0.source_node_uuid = q0.subject_uuid
+
+The joins ARE correlated — this is not a cartesian product. The difference is
+that the generic shape reduces to the entity set once, while the flat shape
+lets the walk expand first.
+
+The emitter's own decision log says why, and the two arms fail for **different**
+reasons:
+
+    generic   selective-driven declined: driver 50000 not selective vs anchor 100000
+    specific  selective-driven declined: no 2-child JOIN within 6 hops
+
+The generic arm was evaluated and declined on the merits. The specific arm was
+never evaluated at all. Instrumenting the decline shows why — `node=None`:
+
+`emit_slice.py:589`
+
+    node = plan.child
+    for _ in range(6):
+        if node is None or node.kind == KIND_JOIN:
+            break
+        node = node.children[0] if node.children else None
+    if node is None or node.kind != KIND_JOIN or len(node.children or []) != 2:
+        return None
+
+The search follows **one spine**, `children[0]`, for six hops. With the extra
+entity-type triple the plan tree changes shape enough that this spine ends in a
+leaf, `node` becomes `None`, and `_try_selective_driven` returns before looking
+at anything. The restructuring that would isolate the entity set is not
+rejected on cost — it is never reached.
+
+## The fix, and why it is not applied here
+
+Widen the search: look for a binary JOIN across the tree rather than down the
+first-child spine, or at least follow every child. That is a handful of lines.
+
+It is a change to plan SELECTION, which this repository has been burned by
+before — `_leaf_rows` counting filter-derived selectivity produced a driver
+choice that returned 60,000 rows where 1,017 were right, and the fence has a
+273x failure mode when applied to a shape that needs a sort. A wider search
+will pull other query shapes into `_try_selective_driven` that currently escape
+it, and each of those is a plan that changes.
+
+So it needs the full performance suite and a baseline comparison behind it, not
+a one-shape measurement. That is the next step.
 
 ## Why it matters beyond the benchmark
 
