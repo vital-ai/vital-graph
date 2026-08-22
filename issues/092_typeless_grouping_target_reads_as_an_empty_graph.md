@@ -274,3 +274,38 @@ Also worth recording, since it was the source of the error:
 `hasFrameGraphURI` is a *different* scope — the frame, its slots and its
 edges, with the frame-within-frame edge belonging to the child frame. Reading
 one for the other is what produced this.
+
+
+## Re-scanned 2026-08-22 — the 19 are stable, and nothing new has appeared
+
+Ran the maintenance job's integrity checks directly across every registered
+space on both clusters: 54 on the docker test stack, 99 on the host.
+
+**The typeless targets are exactly the same 19, in the same four spaces:**
+
+    kg_crud_stress_test            10
+    space_client_kgentities_test    5
+    space_multi_org_crud_test       3
+    <one client space>              1
+
+Unchanged since 2026-08-20. That is worth knowing on its own: whatever produced
+them is not still producing them, so this is residue rather than an active
+writer. It also means the detector is stable — it is not drifting, and it is
+not finding new instances to chase.
+
+Nothing is repaired. `scripts/repair_grouping_self_link.py` correctly SKIPS a
+typeless target, on the principle this issue established: a repair that cannot
+restore the invariant should report rather than write something that hides the
+breakage.
+
+**Graph registration is clean on both clusters** — no space holds quads in a
+context the catalog does not list (`issues/116`).
+
+**Two spaces do have missing self-links**, both ephemeral API-test leftovers
+rather than anything a user has:
+
+    vg-test  apitest_37a59eb5   1   (the KGDocument root from issues/091's scope note)
+    host     apitest_46fec680   3
+
+Neither is a fixture or a served space. They are the kind of thing the orphan
+sweep is for, not this issue.
