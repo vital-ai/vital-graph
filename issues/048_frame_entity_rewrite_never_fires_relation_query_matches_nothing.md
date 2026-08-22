@@ -1,6 +1,7 @@
 # Frame/Entity Traversal: Three Priced Performance Problems
 
-## Status: Problems 1 and 2 FIXED 2026-08-17. Problem 3 open (tidiness only).
+## Status: Problems 1 and 2 FIXED 2026-08-17. Problem 3 DECLINED 2026-08-22 —
+## attempted, and the guard turns out to be load-bearing. See the end.
 
 Problem 1 fixed by absorbing a slot type constraint as a ROLE-SCOPED semi-join
 (`63dbb58`). Re-measured on `sp_graph_synth_10k`, start 1658, row counts
@@ -623,7 +624,8 @@ collapse of the PINNED hop only — the cheapest one, bound to a single entity �
 while every later hop still collapses. At depth 3: 0.6 ms pinned by FILTER,
 0.6 ms pinned in the triple.
 
-Worth fixing for tidiness, not for speed.
+Worth fixing for tidiness, not for speed. **Attempted 2026-08-22 and declined —
+see "Problem 3, attempted" at the end of this file.**
 
 ---
 
@@ -813,3 +815,44 @@ materialised access path.
   attribute frames
 - `vitalgraph/db/sparql_sql/rewrite_frame_entity_table.py`
 - `vitalgraph/db/sparql_sql/sync_frame_entity_table.py`
+
+
+## Problem 3, attempted 2026-08-22 — and declined
+
+The guard reads as dead code. `_SlotGroup.entity_var` is assigned at
+`rewrite_frame_entity_table.py:298` and **never read anywhere in the module**;
+the collapse is driven by `value_quad`, `slot_var`, `frame_var`, `edge_alias`
+and `role`. So `if not entity_var: continue` appears to reject a group on the
+strength of a field nothing uses, and removing it appears to be free.
+
+It is not. With the guard removed, `tests/integration/test_frame_entity_collapse.py`
+fails 6 of 31, including the differential:
+
+    AssertionError: the frame_entity rewrite changed the answer
+    Extra items in the left set:
+      ('http://example.org/fe/h0', 'http://example.org/fe/c1')
+      ('http://example.org/fe/h2', 'http://example.org/fe/c3')
+
+The rewrite returns MORE rows than the unrewritten query. The value quad's
+`object_uuid` is remapped onto `source_entity_uuid` / `dest_entity_uuid`, which
+is right for a variable end — the variable simply reads from the new column —
+but a CONSTANT end carries an equality on that column, and that equality is
+lost in the remap. The collapse then matches every entity where it should have
+matched one.
+
+So the guard is load-bearing after all. It just does not say so: it excludes
+constant ends via a field that is a proxy for "this end is a variable", and
+`entity_var` being unread is what makes the exclusion look accidental.
+
+**Fixing it properly** means carrying the constant onto the frame_entity column
+explicitly, the way the `vitaltype` triple already is a few lines below (the
+comment there describes exactly this class of problem — a conjunct that must be
+dropped or rewritten rather than left to the generic remap). That is a real
+change to a correctness-sensitive rewrite.
+
+**For a price this file measures as zero** — 0.6 ms pinned by FILTER, 0.6 ms
+pinned in the triple, at depth 3. The existing test
+`test_pinning_one_end_to_a_constant_prevents_the_collapse` already pins the
+current behaviour deliberately, so nothing is unguarded.
+
+Declined. Reopen only if a measurement makes the pinned hop matter.
