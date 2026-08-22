@@ -1,7 +1,7 @@
 # A Perf "Regression" With Identical Code: the App Re-ANALYZEs the Fixtures
 
-## Status: CLOSED 2026-08-21. Options 1 and 2 landed 2026-08-20; option 3
-## landed 2026-08-21 as a per-deployment setting, not a default.
+## Status: CLOSED 2026-08-21, with a COST discovered 2026-08-22 that anyone
+## enabling option 3 has to know about — see the end.
 
 Both landed:
 
@@ -183,3 +183,39 @@ space that is not there.
 - `issues/081` — a benchmark measured against a configuration nobody recorded.
   Same shape, one level down: nobody records the statistics either.
 - `issues/108` — a green suite measuring something other than what it names.
+
+## Option 3 has a cost, and it is not the one the file predicted — 2026-08-22
+
+The downside recorded above was philosophical: excluding the fixtures "diverges
+from how a real space behaves". The actual cost is operational and sharper.
+
+**Nothing re-ANALYZEs an excluded space.** The maintenance job was not only
+disturbing the fixtures, it was also the thing keeping their statistics fresh.
+Turn it off and they go stale, and a stale-statistics plan can be far worse
+than a disturbed one.
+
+Measured on `query.kgquery.growth_curve.eq[NY-10k]`, on unmodified code:
+
+    before ANALYZE   6.62s   5,961,023 buffers
+    after  ANALYZE   2.63s      46,244 buffers
+
+46,244 is exactly the baseline value. The 129x was entirely stale statistics —
+the same bistable plan this issue is about, just reached from the other
+direction. Four of the seven genuine failures in a 2026-08-22 control run were
+this, on three benches.
+
+### So option 3 comes with an obligation
+
+**ANALYZE the excluded fixtures explicitly** before a run whose numbers matter,
+and certainly before promoting a baseline. Excluding them from maintenance
+removes the accidental refresh; it does not remove the need for one.
+
+    for sp in <the excluded spaces>; do
+      ANALYZE every <sp>_* table
+    done
+
+The difference from option 2 — which was tried and reverted — is WHEN. Option 2
+ANALYZEd before every recorded run, which randomised a bistable plan between
+runs and emptied a 45 GB cache each time. This is a deliberate, occasional
+refresh under an operator's control, at a moment of their choosing, not a
+per-run reflex.

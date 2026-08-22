@@ -15,10 +15,23 @@ fail_pct = 15
 min_abs_delta = 16     # a couple of buffers is noise, not a regression
 
 [metrics.shared_read]
+# REPORT ONLY. `shared_read` counts pages fetched from DISK, which is a
+# property of what the buffer pool happens to hold, not of the code under test.
+# `shared_buffers` (hit + read) is the structural measure and does not move
+# with cache state — the same plan touches the same pages either way — so
+# nothing is lost by ungating this and the signal is still printed.
+#
+# Measured 2026-08-22: a control run of UNMODIFIED code reported 20 benches
+# differing from the baseline, most of them `shared_read` 0 -> N, after
+# unrelated heavy work on the same stack evicted the fixtures' pages. A gate
+# that fails on that is reporting the machine's recent history, and it trained
+# exactly the habit this directory exists to prevent — reading a red run as
+# noise.
 direction = "increase"
 warn_pct = 10
 fail_pct = 25
 min_abs_delta = 16
+report_only = true
 
 [metrics.max_actual_rows]
 direction = "increase"
