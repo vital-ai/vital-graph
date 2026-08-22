@@ -57,15 +57,18 @@ Note the interaction with cost: at 400 elements the truncated walk still burns
    because there is **no standard equivalent**: RDF standardises the first/rest
    structure but no "member of this list" property, and `rdfs:member` is for
    CONTAINERS (`rdf:_n`) and needs RDFS entailment, which we do not implement.
-   See `rdf_collections.md` §9.4. A single triple
+   See `rdf_collections.md` §9.4. Since nothing is standard the URI is a
+   free choice; §9.5 records the trade-off — Jena's URI buys portability
+   and closes the trap but adopts ARQ's contract, so the subset we do not
+   implement must REFUSE rather than answer differently. A single triple
    pattern matched by predicate URI, lowering to the recursive CTE that already
    exists with `depth` selected rather than discarded (`emit_path.py:377`
    computes it and throws it away). This is the option that is genuinely as
    cheap as the existing `*` handling, because it gives the emitter a NODE to
    match instead of a multi-node idiom to recognise — see
-   `rdf_collections.md` §9.3-9.5. It also gives a natural place to lift the cap,
+   `rdf_collections.md` §9.3-9.6. It also gives a natural place to lift the cap,
    and it closes a live trap: `list:member` already parses here and silently
-   returns nothing (`rdf_collections.md` §9.6).
+   returns nothing (`rdf_collections.md` §9.7).
 
 **Do (2), and only (2), for now.** A wrong answer is a different category of
 problem from a slow one, and today there is no signal at all. (1) alone moves
