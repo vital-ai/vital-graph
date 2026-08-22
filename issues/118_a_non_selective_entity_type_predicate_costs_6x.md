@@ -1,8 +1,8 @@
 # A Non-Selective Entity-Type Predicate Costs 6x Buffers and 10x Time
 
-## Status: OPEN — measured and TRACED 2026-08-22 to a single line in
-## `_try_selective_driven`. The fix is identified but NOT applied: it changes a
-## plan-selection heuristic and needs the full suite behind it.
+## Status: OPEN — measured 2026-08-22 and traced to the PLAN SHAPE, not to the
+## optimizer. A first trace blamed the search in `_try_selective_driven` and was
+## WRONG; the correction is below. No fix applied.
 
 Adding an entity-type criterion that matches **every** entity makes the same
 KGQuery 5.9x more expensive in buffers and 9.8x slower. It filters nothing and
@@ -89,26 +89,58 @@ never evaluated at all. Instrumenting the decline shows why — `node=None`:
     if node is None or node.kind != KIND_JOIN or len(node.children or []) != 2:
         return None
 
-The search follows **one spine**, `children[0]`, for six hops. With the extra
-entity-type triple the plan tree changes shape enough that this spine ends in a
-leaf, `node` becomes `None`, and `_try_selective_driven` returns before looking
-at anything. The restructuring that would isolate the entity set is not
-rejected on cost — it is never reached.
+The search follows **one spine**, `children[0]`, for six hops, and `node`
+becomes `None`.
 
-## The fix, and why it is not applied here
+### That reading was wrong, and the correction is the finding
 
-Widen the search: look for a binary JOIN across the tree rather than down the
-first-child spine, or at least follow every child. That is a handful of lines.
+The obvious inference — the spine misses a join that is off to one side — is
+false. Replacing the spine walk with a breadth-first search over every child
+declines identically. Dumping the plan trees shows why:
 
-It is a change to plan SELECTION, which this repository has been burned by
-before — `_leaf_rows` counting filter-derived selectivity produced a driver
-choice that returned 60,000 rows where 1,017 were right, and the fence has a
-273x failure mode when applied to a shape that needs a sort. A wider search
-will pull other query shapes into `_try_selective_driven` that currently escape
-it, and each of those is a plan that changes.
+    generic                       specific
+    order                         order
+      distinct                      distinct
+        project                       project
+          filter                        filter
+            join   (2 children)           bgp   (0 children)
+              bgp
+              bgp
 
-So it needs the full performance suite and a baseline comparison behind it, not
-a one-shape measurement. That is the next step.
+**The specific query has no JOIN node at all.** Its entire pattern is one BGP,
+so there is nothing for a join-restructuring pass to restructure, and
+`_try_selective_driven` is right to decline. The generic query is a JOIN of two
+BGPs, which is what gives it a two-sided shape to work with — an entity side
+that reduces to 100,000 rows, joined once to the walk.
+
+So the cost is decided BEFORE the optimizer sees it, by whatever builds one BGP
+in one case and a join of two in the other. Adding the entity-type criterion is
+what collapses the plan into a single BGP; the flat SQL join tree, and the
+800,000 intermediate rows, follow from that.
+
+### What that means for a fix
+
+Widening the optimizer's search — the change this issue previously proposed —
+is pointless. It was written, tested against this shape, and made no
+difference: the decline is correct.
+
+The question is instead why the plan builder emits a single BGP once an entity
+type is present, and whether it should emit the same JOIN-of-two-BGPs shape it
+produces without one. That is in the plan construction, not in `emit_slice`,
+and it has not been traced.
+
+## Next step
+
+Trace the plan builder: find where the entity-type criterion causes one BGP
+instead of a JOIN of two, and establish whether the single-BGP form is
+deliberate. Only then is there a fix worth measuring.
+
+Note for whoever picks this up: the perf baseline `query.json` was stale on
+statistics as of 2026-08-22 — 20 benches differ from it, most as `shared_read`
+(cold pool) and some as genuine plan flips, with
+`stats.fixture_last_analyze` moving 2026-08-20 -> 2026-08-22. Compare a change
+against a control run taken in the same session, not against that baseline,
+until it is re-promoted.
 
 ## Why it matters beyond the benchmark
 
