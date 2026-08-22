@@ -1,7 +1,8 @@
 # The Fence Bench Skips Six Shapes, for Two Reasons and Neither Is the Fence
 
-## Status: OPEN — investigated 2026-08-22. Both causes are bench defects, not
-## product defects. One further question is genuinely open (see the end).
+## Status: FIXED 2026-08-22 (`4c61499`). Both bench defects corrected; six
+## skips are now one, and that one is honest. The product question this
+## uncovered went to `issues/118` and was downgraded there.
 
 `test_paging_fence_covers_every_shape` reports:
 
@@ -82,3 +83,37 @@ arm where the generic arm holds flat at 100,000.
 
 So of the three things behind these six skips, two are defects in this bench
 and one is a product problem that the bench's timeout was hiding.
+
+## Fixed
+
+**Cause 1 — the cold probe.** Both plans now run once, untimed, before either
+is measured. `_warm` has its own 120 s budget: the warm-up is the run that pays
+for the cache misses, and bounding it separately keeps a genuinely pathological
+shape from hanging the suite.
+
+**Cause 2 — the needle.** The shape moved off `CompanyStateCode` entirely.
+Matching was necessary but not sufficient: on a two-letter slot every matching
+needle is at most two characters, and `MIN_TRIGRAM_NEEDLE = 3`, so a "fixed"
+needle of `"CA"` would have measured the unservable path instead — 1,276,968
+buffers against 138,369 for a servable needle. It now probes `CompanyName`
+(average 21 characters, hanging off the same `CompanyFrame` parent) with
+`"LLC"`: three characters, servable, 41 distinct matches.
+
+**Result: 6 skips became 1.** The survivor is
+`p100-range-tight-specific-100k`, which does not finish either way even warm —
+so the skip now means what it says.
+
+## And the empty-result case got a test that is actually true
+
+It was going to be a shape asserting that an empty result costs the whole walk.
+That was assumed, and measuring it showed it false: a SERVABLE needle matching
+nothing is answered from the index and is cheap. The ordering that does hold,
+now pinned on the 10k fixture:
+
+    servable + matches      6,528 buffers   the LIMIT short-circuits
+    servable + no match   138,357 buffers   nothing to short-circuit on
+    UNSERVABLE (2-gram) 1,276,968 buffers   the index cannot help
+
+Emptiness costs something. Unservability costs far more. The two-character
+needle is kept deliberately, so the cost of the `MIN_TRIGRAM_NEEDLE` decision
+stays visible rather than becoming folklore.
