@@ -53,14 +53,20 @@ Note the interaction with cost: at 400 elements the truncated walk still burns
 2. **Make truncation loud.** If the recursion hits the cap, fail the query
    rather than return a short answer. Turns silent wrongness into a stated
    limit, and is small. Does not make long lists work.
-3. **Materialise collections in a derived table** — see
-   `rdf_collections.md` §8. Removes both the cap and the cost, because the walk
-   stops being recursive. Largest change, and the one that makes lists a
-   supported feature rather than a tolerated one.
+3. **Expose the ordinal the recursion already computes.** `emit_path.py:377`
+   carries `depth` through the CTE and uses it only for the cap. That number is
+   the list position. Recognising the `rest*`/`first` idiom and answering it
+   from one CTE instead of two joined would remove the O(n^2) — but it does not
+   remove the cap, and it is only worth doing if lists get large.
 
-(1) alone should not be done. (2) is worth doing regardless of whether (3)
-ever is, because a wrong answer is a different category of problem from a slow
-one, and today we have no signal at all.
+**Do (2), and only (2), for now.** A wrong answer is a different category of
+problem from a slow one, and today there is no signal at all. (1) alone moves
+silent truncation to a larger number. (3) is an optimisation for a workload
+that does not exist — collections in our data hold a handful of members, where
+the whole position query costs 791 buffers and 14.6 ms.
+
+A derived table was considered and rejected as disproportionate; see
+`rdf_collections.md` §9.1.
 
 ## Test gap
 
