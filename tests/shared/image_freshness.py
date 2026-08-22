@@ -14,9 +14,25 @@ generator change the container did not contain.
 
 WHAT THIS DOES AND DOES NOT DO
 
-It fails the suite, naming the files that differ. It cannot rebuild for you; that
-is a separate decision (`issues/108` options 2-4), and an 8-minute rebuild
-wired into every run would be worked around rather than waited for.
+It fails the suite, naming the files that differ — and, since 2026-08-22, it
+first TRIES TO FIX IT (`issues/108` option 2, in the form the measurements
+justify).
+
+The original objection to rebuilding automatically was "8 minutes on every run,
+which will get worked around". That figure was a COLD build. Measured with a
+warm layer cache, which is the normal state of a machine that has built this
+image before:
+
+    no-op build (nothing changed)            1.7 s
+    rebuild after a real source change      24.1 s
+    plus container recreate and health       13 s
+
+So the honest cost is under two seconds when the image is already current, and
+about forty when it is not — against a manual cycle that interrupted this
+module's author four times in one day. The rebuild is attempted ONCE; if the
+image still does not match afterwards, the suite fails exactly as before. A
+guard that repairs the common case and still refuses the uncommon one is not
+the thing that gets worked around.
 
 FOUR THINGS THAT DECIDE WHETHER IT WORKS OR BECOMES NOISE
 
@@ -46,11 +62,14 @@ exempt, because there the image is built from the commit under test.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shlex
 import subprocess
 from pathlib import Path
 from typing import Dict, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 # Only what the image contains. Editing tests/, scripts/ or planning/ needs no
 # rebuild, and flagging those would train people to ignore this.
@@ -76,6 +95,16 @@ for dirpath, dirnames, filenames in os.walk(root):
             out[rel] = hashlib.sha256(fh.read()).hexdigest()[:16]
 print(json.dumps(out))
 """
+
+
+# Bounds for the self-heal. A build that exceeds this is a cold build or a
+# broken daemon; either way the suite should say so rather than hang.
+REBUILD_TIMEOUT = 600
+HEALTH_TIMEOUT = 90
+# Opt out of the rebuild while keeping the check — for CI, where the image is
+# already built from the commit under test, and for anyone who wants the
+# failure without the side effect.
+NO_REBUILD = "VG_NO_IMAGE_REBUILD"
 
 
 class ImageStale(AssertionError):
@@ -117,12 +146,54 @@ def _is_local_target(url: str) -> bool:
     return "localhost" in url or "127.0.0.1" in url
 
 
+def _rebuild(repo_root: Path, server_url: str) -> bool:
+    """Rebuild the app image and recreate its container. True if it completed.
+
+    ONLY the app service, and ONLY with --no-deps. The postgres container in
+    this stack keeps PGDATA in its writable layer (`issues/102`), so recreating
+    it would destroy the fixtures — 50M quads that take hours to reload. This
+    must never widen to `up -d` without a service name.
+    """
+    import subprocess
+    compose = ["docker", "compose", "-f", "docker-compose.test.yml"]
+    try:
+        for args in (["build", "vitalgraph"],
+                     ["up", "-d", "--no-deps", "vitalgraph"]):
+            r = subprocess.run(compose + args, cwd=str(repo_root),
+                               capture_output=True, text=True, timeout=REBUILD_TIMEOUT)
+            if r.returncode != 0:
+                logger.warning("image rebuild step %s failed: %s",
+                               args[0], (r.stderr or r.stdout)[-400:])
+                return False
+    except Exception as exc:                      # docker missing, timeout, ...
+        logger.warning("image rebuild could not run: %s", exc)
+        return False
+
+    # The container is up before it is READY; a request now races uvicorn's
+    # startup and fails as a connection error that looks nothing like staleness.
+    import time
+    import urllib.request
+    deadline = time.monotonic() + HEALTH_TIMEOUT
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(f"{server_url.rstrip('/')}/health",
+                                        timeout=2) as resp:
+                if resp.status == 200:
+                    return True
+        except Exception:
+            time.sleep(1)
+    logger.warning("rebuilt image did not become healthy within %ss", HEALTH_TIMEOUT)
+    return False
+
+
 def check(server_url: str, repo_root: Path, container: str = CONTAINER) -> None:
     """Raise `ImageStale` unless the container's source matches the tree.
 
-    Exempt only when the target is explicitly NOT local — a remote stack builds
-    its image from the commit under test, so there is nothing to compare against
-    a working tree that may not even be the same commit.
+    On a mismatch, rebuild once and re-check before failing (`issues/108`
+    option 2). Exempt only when the target is explicitly NOT local — a remote
+    stack builds its image from the commit under test, so there is nothing to
+    compare against a working tree that may not even be the same commit, and
+    rebuilding someone else's stack from here would be worse than wrong.
     """
     if os.environ.get(ALLOW_STALE) == "1":
         _report_only(server_url, repo_root, container)
@@ -133,6 +204,13 @@ def check(server_url: str, repo_root: Path, container: str = CONTAINER) -> None:
 
     local = _local(repo_root / PACKAGE)
     image = _in_container(container)
+
+    if image is not None and os.environ.get(NO_REBUILD) != "1":
+        if any(diff(local, image)):
+            logger.warning("image is stale; rebuilding %r once before failing",
+                           container)
+            if _rebuild(repo_root, server_url):
+                image = _in_container(container)
 
     if image is None:
         raise ImageStale(
@@ -161,9 +239,15 @@ def check(server_url: str, repo_root: Path, container: str = CONTAINER) -> None:
         *_sample(added, "ONLY IN TREE — never built"),
         *_sample(removed, "ONLY IN IMAGE — deleted since the build"),
         "",
-        "  rebuild:  docker compose -f docker-compose.test.yml build vitalgraph",
-        "            docker compose -f docker-compose.test.yml up -d --no-deps vitalgraph",
-        f"  or set {ALLOW_STALE}=1 to run against the image as it is.",
+        "  A rebuild was attempted automatically and did NOT resolve this, so",
+        "  something beyond staleness is wrong — a failing build, a container",
+        "  that will not start, or a file the image genuinely cannot contain.",
+        "",
+        "  rebuild by hand:",
+        "    docker compose -f docker-compose.test.yml build vitalgraph",
+        "    docker compose -f docker-compose.test.yml up -d --no-deps vitalgraph",
+        f"  {NO_REBUILD}=1 keeps this check but skips the rebuild.",
+        f"  {ALLOW_STALE}=1 runs against the image as it is.",
     ]
     raise ImageStale("\n".join(lines))
 
