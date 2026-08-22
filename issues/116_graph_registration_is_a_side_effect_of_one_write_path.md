@@ -1,7 +1,7 @@
 # Graph Registration Is a Side Effect of One Write Path, So Every Other Path Leaves the Catalog Silent
 
-## Status: BOTH INSTANCES FIXED 2026-08-21 (`ee086a5`, and the export path
-## below). The general rule is still not established — see "Approach".
+## Status: CLOSED 2026-08-21. Both instances fixed (`ee086a5`, `1a7abc1`) and
+## the general rule now watched (`_run_graph_registration_check`).
 
 Quads can be in a graph that the `graph` catalog has never heard of. The data
 is queryable by naming the URI, so anything that hardcodes the graph works,
@@ -120,15 +120,21 @@ Both clusters now report **zero** spaces holding quads in an unlisted graph.
 
 ## Still open
 
-**The general rule.** Two writers have been fixed one at a time; nothing stops
-a third. `scripts/load_wordnet_csv.py` still carries its own copy of the SQL
-because it is a psycopg script and the helper is asyncpg — worth reconciling,
-or at least cross-referencing so they cannot drift.
+**A third writer is now detected rather than prevented.** The check finds one
+after the fact; nothing yet makes registration a property of landing quads.
+That is the remaining structural work, and it is smaller now that the detector
+exists. `scripts/load_wordnet_csv.py` also still carries its own copy of the
+SQL because it is a psycopg script and the helper is asyncpg — worth
+reconciling, or at least cross-referencing so they cannot drift.
 
-**The broad guard.** The invariant — *no space has quads in a context the
-catalog does not list* — is one query and would have caught both instances. It
-is currently checked only for named perf fixtures
-(`tests/performance/test_fixture_graphs_are_registered.py`) and ad hoc by hand.
+~~**The broad guard.**~~ DONE. `_run_graph_registration_check` runs the
+invariant — *no space has quads in a context the catalog does not list* — as an
+integrity phase in the maintenance cycle and in the single-space trigger, beside
+the grouping self-link check it is modelled on. It REPORTS; registering from a
+sweep would fix the symptom on a schedule and leave every writer free to keep
+skipping it. A space with no quad table yet is not a finding.
+`tests/integration/test_graph_registration_check.py` covers the clean case, the
+reporting case, that the row is still absent afterwards, and mid-creation.
 
 **Declared exceptions** (approach item 3) are still hypothetical: no test has
 yet needed to sit outside this. `devtools/reserved_spaces.py` is where one
