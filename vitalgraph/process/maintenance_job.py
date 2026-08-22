@@ -183,6 +183,11 @@ class MaintenanceJob:
             if selflink_result:
                 summary["grouping_self_link"] = selflink_result
 
+            # --- Graph registration (quads in a graph nothing lists; issues/116) ---
+            graphreg_result = await self._run_graph_registration_check(list(stats.keys()))
+            if graphreg_result:
+                summary["graph_registration"] = graphreg_result
+
             # --- Stats integrity (wrong counts => wrong plans, silently) ---
             stats_int_result = await self._run_stats_integrity(list(stats.keys()))
             if stats_int_result:
@@ -276,6 +281,7 @@ class MaintenanceJob:
                 ("frame_entity_integrity", self._run_frame_entity_integrity),
                 ("entity_slot_sort_integrity", self._run_entity_slot_sort_integrity),
                 ("grouping_self_link", self._run_grouping_self_link_check),
+                ("graph_registration", self._run_graph_registration_check),
                 ("stats_integrity", self._run_stats_integrity),
                 ("stats_prune", self._run_stats_prune),
             ):
@@ -710,6 +716,61 @@ class MaintenanceJob:
                             "typeless_targets": typeless}
             except Exception as exc:
                 logger.debug("Self-link check skipped for %s: %s", space_id, exc)
+                continue
+        return None
+
+    async def _run_graph_registration_check(self, space_ids: List[str]) -> Optional[Dict]:
+        """Report quads sitting in a graph the `graph` catalog does not list.
+
+        `issues/116`. Registration is implicit on three impl functions —
+        `add_rdf_quad`, `add_rdf_quads_batch`, `add_rdf_quads_batch_bulk`, all
+        of which call `_ensure_graphs_registered` — rather than on the act of
+        landing quads. Any path that writes another way skips it silently, and
+        the data is then queryable by naming the URI while everything that
+        LISTS graphs sees nothing.
+
+        Two writers did exactly that, found one at a time and months apart:
+        `scripts/load_wordnet_csv.py` left three fixtures holding 31M quads
+        with no catalog row, and `bulk_export.import_space` copied whole spaces
+        in and registered nothing. Both are fixed. Nothing stops a third, which
+        is what this watches for — it is one query, and it would have caught
+        both.
+
+        REPORTS, does not repair, on the same principle as the self-link check
+        above and for a sharper reason: registering from a sweep fixes the
+        symptom on a schedule and leaves every writer free to keep skipping it.
+        `register_graphs_from_data` is the repair, callable where it can be
+        reviewed before it runs.
+        """
+        for space_id in space_ids:
+            try:
+                async with self._pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        f"""
+                        SELECT t.term_text
+                        FROM (SELECT DISTINCT context_uuid
+                              FROM {space_id}_rdf_quad) c
+                        JOIN {space_id}_term t ON t.term_uuid = c.context_uuid
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM graph g
+                            WHERE g.space_id = $1 AND g.graph_uri = t.term_text)
+                        LIMIT 20
+                        """, space_id)
+                if not rows:
+                    continue
+                unlisted = [r["term_text"] for r in rows]
+                logger.warning(
+                    "Unregistered graph: %s holds quads in %d graph(s) the "
+                    "catalog does not list (%s). The data is queryable by URI "
+                    "but invisible to anything that lists graphs — some writer "
+                    "landed quads without registering. See issues/116; repair "
+                    "with graph_registry.register_graphs_from_data.",
+                    space_id, len(unlisted), ", ".join(unlisted[:5]))
+                return {"space_id": space_id, "unlisted_graphs": unlisted}
+            except Exception as exc:
+                # A space with no quad table yet, or mid-creation. Not a finding.
+                logger.debug("Graph registration check skipped for %s: %s",
+                             space_id, exc)
                 continue
         return None
 
