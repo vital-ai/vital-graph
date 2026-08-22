@@ -1,6 +1,7 @@
 # A Stale Test-Stack Image Hides Regressions for Days
 
-## Status: option 1 DONE 2026-08-19 — the suite now refuses; options 2-4 still open
+## Status: options 1 and 2 DONE (2026-08-19, 2026-08-22) — the suite refuses,
+## and now rebuilds once first. Options 3 and 4 DECLINED, with reasons.
 
 `tests/shared/image_freshness.py`, called from `tests/api/conftest.py` at
 `pytest_sessionstart`. It compares `vitalgraph/**/*.py` in the working tree
@@ -112,3 +113,46 @@ than what it names.**
 - `issues/100` — the two days of wrong hypotheses that a stale image contributed to
 - `issues/107` — found by the rebuild, latent before it
 - `issues/102` — PGDATA in the writable layer, the reason recreating is avoided
+
+## Option 2 landed 2026-08-22 (`c21d89d`), and the objection to it was wrong
+
+This file rejected rebuilding automatically as "correct and slow: 8 minutes on
+every run of `tests/api`, which will get worked around". That number was a COLD
+build. Measured on a machine with the warm layer cache it normally has:
+
+    no-op build (nothing changed)          1.7 s
+    rebuild after a real source change    24.1 s
+    container recreate and health         13 s
+
+**0.4 s when the image is current**, about 40 s when it is not. The estimate
+was out by two orders of magnitude for the case that happens on almost every
+run, and the decision rested on it for three days.
+
+On a mismatch the guard now rebuilds once, recreates the app container, waits
+for `/health`, and re-checks. Still stale afterwards and it fails as before,
+saying a rebuild was already attempted so the cause is not staleness.
+
+Scoped to the app service with `--no-deps`, because this stack's postgres keeps
+PGDATA in its writable layer (`issues/102`) and recreating it would destroy the
+fixtures. Verified untouched across a self-heal: 54 spaces, 50,570,000 quads.
+
+`VG_NO_IMAGE_REBUILD=1` keeps the check without the side effect.
+
+### Why 3 and 4 are declined
+
+**3, bind-mount the source.** It would remove staleness for pure-Python changes
+and introduce a different class of "works here": the tested artefact stops
+being the built image, so anything the Dockerfile does — dependency pinning,
+compiled extensions, file layout — is no longer exercised locally. Option 2
+gets the same result while keeping the image the thing under test.
+
+**4, run `tests/api` only in CI.** This gives up the local signal to protect
+it, and the local signal is where the two regressions in this file were found.
+With option 2 the local run is now self-correcting, which is what made 4 look
+attractive in the first place.
+
+### A footnote worth keeping
+
+The module logged through an undefined `logger` — a `NameError` waiting to fire
+exactly when a rebuild failed, replacing the diagnosis with a traceback at the
+one moment it mattered. Found while wiring option 2, not by the tests.
