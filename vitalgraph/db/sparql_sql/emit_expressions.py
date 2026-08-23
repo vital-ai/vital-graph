@@ -459,6 +459,45 @@ def _datatype_guard(left, right, ctx: EmitContext) -> Optional[str]:
     return (f"(COALESCE({ldt}, {_S}) IS NOT DISTINCT FROM COALESCE({rdt}, {_S}))")
 
 
+def _var_var_cmp(left, right, op: str, ctx: EmitContext) -> Optional[str]:
+    """Compare two VARIABLES by value, choosing the lane at RUN TIME.
+
+    `issues/127`. Every other comparison here picks a lane at emit time,
+    because one side is written in the query and its datatype is known. Two
+    variables have no compile-time type, so `_is_numeric_expr` refuses to
+    trust a BGP variable's `num_col` — correctly, since the variable could
+    hold a URI. But refusing the numeric lane does not make the comparison
+    safe, it makes it LEXICAL: `"1"^^integer = "01"^^integer` answered false,
+    and so did the three spellings of one double in `data-builtin-1.ttl`.
+
+    `num_col` is already a `CASE` yielding NULL for anything non-numeric, so
+    "both sides are numeric" is a runtime test that costs nothing to ask.
+    Where it holds, compare numerically; otherwise fall through to the text
+    lane exactly as before, datatype guard included.
+
+    A plain `"1"` is NOT caught by the numeric branch — `num_col` requires a
+    numeric `datatype_id` — so a string that merely looks like a number keeps
+    comparing as a string, which is the distinction `issues/121` is about.
+    """
+    li, ri = ctx.types.get(left.var), ctx.types.get(right.var)
+    if not (li and ri and li.num_col and ri.num_col):
+        return None
+    if li.num_col == "NULL" or ri.num_col == "NULL":
+        return None
+    a, b = expr_to_sql(left, ctx), expr_to_sql(right, ctx)
+    if not (a and b):
+        return None
+
+    from .collation import collate
+    text = f"({collate(a)} {op} {b})"
+    guard = _datatype_guard(left, right, ctx)
+    if guard is not None:
+        text = (f"(({collate(a)} != {b}) OR NOT {guard})" if op == "!="
+                else f"({text} AND {guard})")
+    return (f"(CASE WHEN {li.num_col} IS NOT NULL AND {ri.num_col} IS NOT NULL "
+            f"THEN ({li.num_col} {op} {ri.num_col}) ELSE {text} END)")
+
+
 def _cmp_sql(left, right, op: str, ctx: EmitContext) -> Optional[str]:
     """A comparison, with a datatype guard when the operands need one.
 
@@ -472,6 +511,16 @@ def _cmp_sql(left, right, op: str, ctx: EmitContext) -> Optional[str]:
     what the guard produces. See
     `planning_sparql_features/datatypes_and_language_tags.md` §4b.
     """
+    # Two variables: no compile-time type, so the lane is chosen per row.
+    if (isinstance(left, ExprVar) and isinstance(right, ExprVar)
+            and not _is_numeric_expr(left, ctx)
+            and not _is_numeric_expr(right, ctx)
+            and not _is_boolean_expr(left, ctx)
+            and not _is_boolean_expr(right, ctx)):
+        _vv = _var_var_cmp(left, right, op, ctx)
+        if _vv:
+            return _vv
+
     a, b = _cmp_pair(left, right, ctx)
     if not a or not b:
         return None

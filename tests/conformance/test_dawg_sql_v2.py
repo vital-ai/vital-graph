@@ -93,6 +93,18 @@ P0_CATEGORIES = [
     # `issues/120` shipped a langMatches that did no prefix matching while
     # q-langMatches-2.rq, literally the failing query, sat on disk unrun.
     "sparql10/expr-builtin",
+    # The rest of sparql10 that passes CLEAN, wired 2026-08-23. 68 more cases,
+    # zero failures. Measured, not assumed — the other 16 evaluation
+    # categories collect 98 failures across at least six distinct causes and
+    # are NOT wired, because 98 xfails would destroy the signal this list
+    # exists to carry. `issues/128` records the measurement per category.
+    "sparql10/ask",
+    "sparql10/bnode-coreference",
+    "sparql10/bound",
+    "sparql10/dataset",
+    "sparql10/optional",
+    "sparql10/solution-seq",
+    "sparql10/triple-match",
 ]
 
 # Cases that fail today, kept RUNNING rather than removed so the count stays
@@ -109,16 +121,26 @@ KNOWN_FAILURES = {
     # are five cases seen by two test functions each. They are NOT one kind,
     # and the difference is the whole point of listing them separately.
 
-    # OUR GAP, diagnosed — issues/127. `?v1 = ?v2` between two VARIABLES
-    # compares term_text, so "1"^^integer = "01"^^integer is false where it
-    # should be true. `_is_numeric_expr` will not trust a BGP variable's
-    # num_col because it cannot know at compile time that the variable IS
-    # numeric, so a var-to-var comparison never reaches the numeric lane.
-    # sameTerm itself is correct (uuid = uuid); it is the other half of
-    # `!sameTerm(?v1,?v2) && ?v1 = ?v2` that returns nothing.
-    ("sparql10/expr-builtin", "sameTerm-eq"): "issues/127",
-    ("sparql10/expr-builtin", "sameTerm-not-eq"): "issues/127",
-    ("sparql10/expr-builtin", "sameTerm-simple"): "issues/127",
+    # WAS our gap (issues/127, `?v1 = ?v2` between two VARIABLES compared
+    # term_text). FIXED — the lane is now chosen per row. `sameTerm-not-eq`
+    # went from 0 rows to 18, which is exactly what the .ttl expects, and all
+    # three now match the corpus while pyoxigraph does not:
+    #
+    #     case              .ttl   pyoxigraph   us
+    #     sameTerm-eq        24        14       24
+    #     sameTerm-not-eq    18        28       18
+    #     sameTerm-simple    24        14       24
+    #
+    # They stay listed because `test_sql_v2` compares against the ORACLE, and
+    # the oracle is the one that is wrong here. Deleting them would report a
+    # pass we are not getting; keeping the old reason would claim a bug we no
+    # longer have.
+    ("sparql10/expr-builtin", "sameTerm-eq"):
+        "oracle disagrees with the corpus; WE match the .ttl since issues/127",
+    ("sparql10/expr-builtin", "sameTerm-not-eq"):
+        "oracle disagrees with the corpus; WE match the .ttl since issues/127",
+    ("sparql10/expr-builtin", "sameTerm-simple"):
+        "oracle disagrees with the corpus; WE match the .ttl since issues/127",
 
     # EXPECTATION DISAGREEMENT, not ours. pyoxigraph differs from the .ttl
     # too, and reading the data by hand agrees with US: str-1 asks for
