@@ -57,6 +57,9 @@ def _like_escape_sql(expr: str) -> str:
 
 # XSD namespace
 XSD = "http://www.w3.org/2001/XMLSchema#"
+# RDF 1.1: a language-tagged literal's datatype. Not stored — a tagged
+# literal carries `lang` and a NULL datatype — so it is derived, not read.
+RDF_LANGSTRING = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString"
 
 # Numeric datatypes for CAST
 _NUMERIC_DATATYPES = frozenset({
@@ -960,15 +963,47 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
         return "''"
 
     if fname == "datatype" and len(args) == 1:
+        # RDF 1.1 abolished the untyped literal, so EVERY literal has a
+        # datatype: a plain one is `xsd:string`, a tagged one is
+        # `rdf:langString`. Neither is stored — both are a NULL `datatype_id`
+        # — so both have to be derived here. Returning the column raw meant
+        # `FILTER(datatype(?x) = xsd:string)` dropped exactly the rows it
+        # should keep (§4.3).
         if isinstance(args[0], ExprVar):
             info = ctx.types.get(args[0].var)
             if info and info.dt_col:
-                return info.dt_col
-        # Handle constant literals: datatype(10) → xsd:integer
+                # "NULL" is the sentinel for a datatype the emitters never
+                # tracked (see `_dt_sql`). UNKNOWN is not "no datatype", and
+                # answering xsd:string there would invent one.
+                if info.dt_col == "NULL":
+                    return "NULL"
+                # A non-literal has NO datatype — that is a type error, i.e.
+                # unbound. Without the term-type test the COALESCE below would
+                # claim every URI and blank node is an xsd:string, which is
+                # worse than the bug being fixed. No type column, no coalesce.
+                if not info.type_col:
+                    return info.dt_col
+                if info.lang_col:
+                    absent = (f"CASE WHEN {info.lang_col} IS NOT NULL "
+                              f"AND {info.lang_col} != '' "
+                              f"THEN '{RDF_LANGSTRING}' ELSE '{XSD}string' END")
+                else:
+                    absent = f"'{XSD}string'"
+                return (f"CASE WHEN {info.type_col} = 'L' "
+                        f"THEN COALESCE({info.dt_col}, {absent}) ELSE NULL END")
+        # Constant literals. `datatype(10)` was already right; a plain literal
+        # fell through to NULL because the datatype is absent rather than
+        # falsy-but-present — and Jena canonicalises `"a"^^xsd:string` to a
+        # plain literal, so an explicitly typed string arrived here the same
+        # way and got the same wrong answer.
         if isinstance(args[0], ExprValue) and isinstance(args[0].node, LiteralNode):
-            dt = args[0].node.datatype
+            node = args[0].node
+            dt = node.datatype
             if dt:
                 return f"'{dt.replace(chr(39), chr(39)+chr(39))}'"
+            if getattr(node, "lang", None):
+                return f"'{RDF_LANGSTRING}'"
+            return f"'{XSD}string'"
         return "NULL"
 
     if fname == "langmatches" and len(args) == 2:
