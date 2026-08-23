@@ -1,10 +1,10 @@
 # A Property Path Seeds Only From a Literal URI, Not From a Bound Variable
 
-## Status: OPEN, and the PREMISE NEEDS RE-VALIDATING. Found 2026-08-22 and
-## explored the same day: the obvious implementation is wrong, the second one
-## is not better at small scale, and the 14x that motivated it was itself
-## measured on a toy fixture. See "Implementation explored" before building
-## anything.
+## Status: OPEN and VALIDATED on a real fixture 2026-08-22. This is a
+## core-workload defect: 67 seconds against 26 milliseconds for the same 53
+## results on `sp_lead_synth_100k`. The fix shape is SET-SEEDING; LATERAL is
+## proven wrong. See "Validated at scale" at the end — it reverses the
+## small-fixture conclusion above it.
 
 The same query, the same data, the same 100 results. The only difference is
 whether the path's start arrives as a constant or through a join:
@@ -163,3 +163,60 @@ baselines were re-promoted 2026-08-22 so a before/after is meaningful.
 If the gap is large there, this is a core-workload defect and the set-seed
 shape is the candidate. If it is small, this issue closes as a curiosity and
 `rdf_collections.md` §4.1's cost stands on the double-closure idiom alone.
+
+## Validated at scale 2026-08-22 — and it reverses the toy result
+
+The section above hedged because seeding lost on a 2,000-quad fixture. That
+hedge was right to demand a real measurement and wrong about the answer.
+
+**Through the generator, on `sp_lead_synth_100k` (50.5M quads)**, the same
+frame-nesting walk written two ways —
+`(^vital:hasEdgeSource/vital:hasEdgeDestination)*`:
+
+    start PINNED as a constant     34 rows     4.2 ms      723 buffers
+    start BOUND by a join          did not finish in 120 s
+
+**In raw SQL on the same table**, counting the same reachable set from one
+entity's frames:
+
+    unseeded closure          53 results   67,122.5 ms
+    SET-seeded from entity    53 results        25.9 ms
+
+Same answer. **2,600x.**
+
+### Why the toy fixture said the opposite
+
+On a 2,000-quad fixture the "whole graph" the unseeded form closes over IS
+2,000 quads, so closing over it is nearly free and the per-iteration cost of a
+seeded recursion dominates. That inverts the comparison and hides the effect
+entirely.
+
+On a real fixture the unseeded closure is over 50 million quads. This is the
+same lesson as `issues/081` and `issues/118`, arriving from the other
+direction: there, a measurement on an unrepresentative fixture made a problem
+look bigger than it was; here it made one look smaller, and very nearly closed
+a real defect as a curiosity.
+
+### What is now established
+
+* **The premise holds, and 14x understated it.** A path whose start is bound by
+  a preceding triple is not slightly worse, it is unusable at scale.
+* **SET-SEEDING is the fix.** Restrict the recursion's base term to the bound
+  starts. `seed_where` already emits `WHERE _base.start_uuid = <scalar>`; this
+  makes it `IN (<subquery producing the bound starts>)`.
+* **LATERAL remains wrong**, for the reason measured above: it re-runs the
+  recursion per driving row.
+
+### Remaining work
+
+1. The path node must receive the SQL that produces its start variable. That is
+   a plan-level dependency between a JOIN's two children — the same analysis
+   `_try_selective_driven` does for anchor and driver.
+2. Guard against the toy case: when the graph is small the seeded form was
+   slightly worse. It is noise at that size, but the emitter should not need to
+   choose — measure whether a single form is acceptable everywhere before
+   adding a heuristic, because a heuristic is what `issues/118` shows going
+   silently wrong.
+3. A regression test on a REAL fixture. Nothing in the suite covers a
+   variable-started property path, which is why a 67-second query has been
+   shipping.
