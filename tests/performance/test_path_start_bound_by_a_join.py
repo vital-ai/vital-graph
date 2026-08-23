@@ -7,14 +7,21 @@ a `VarNode`, nothing seeds, and the recursion closes over the whole graph before
 filtering — which is precisely what the comment at `emit_path.py:134` says
 seeding exists to avoid.
 
-Measured on `sp_lead_synth_100k` (50.5M quads) when this was written:
+Measured on `sp_lead_synth_100k` (50.5M quads) BEFORE the fix:
 
     same walk, start PINNED as a constant     34 rows      4.2 ms
     same walk, start BOUND by a join          did not finish in 120 s
 
 and in raw SQL over the identical reachable set, 67,122 ms against 25.9 ms for
-the same 53 results. It is not a slow query, it is an unusable one, and nothing
-in the suite covered the shape — which is why it ships.
+the same 53 results. It was not a slow query, it was an unusable one, and
+nothing in the suite covered the shape — which is why it shipped.
+
+AFTER (`emit_join` hands the left's output down as a seed):
+
+    start PINNED     34 rows   3.7 ms     723 buffers
+    start BOUND      53 rows   4.2 ms   1,345 buffers
+
+Two starts, roughly twice one start's cost. That is the property below.
 
 WHY THIS ASSERTS A RATIO AND NOT A TIME. Wall-clock is context here, not the
 gate (`performance_regression_tracking_plan.md`). The property is that a walk
@@ -77,11 +84,6 @@ async def _gen(conn, space, sparql):
                 await res
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "issues/124 — a path started from a bound variable does not seed, so the "
-    "recursion closes over the whole graph. Measured at 67s against 26ms for "
-    "the same 53 results. REMOVE this xfail when seeding lands; a strict xfail "
-    "fails once it starts passing, which is the point."))
 async def test_a_path_started_from_a_bound_variable_costs_what_the_walk_costs(perf_conn):
     fx = [f for f in SYNTH if f.label == "100k"][0]
     reason = await require_usable(perf_conn, fx)

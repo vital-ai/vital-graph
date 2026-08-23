@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Set
 
-from .ir import KIND_BGP, PlanV2, KIND_TABLE
+from ..jena_sparql.jena_types import VarNode
+from .ir import KIND_BGP, PlanV2, KIND_TABLE, KIND_PATH
 from .emit_context import EmitContext
 from .var_scope import compute_scope
 
@@ -99,6 +100,40 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
 
     # Semi-join: emit the right side as a flat existence probe correlated on the
     # shared variable. Requires the left side emitted first, for its alias.
+    # --- Seed a right-hand property path from the left's output (issues/124) ---
+    #
+    # A recursive path seeds its base term only when its start is a URI written
+    # literally in the query. Reached through a sibling it is a variable, and an
+    # unseeded recursion closes over the whole graph before filtering: measured
+    # at 67 s against 26 ms on `sp_lead_synth_100k` for the same 53 results.
+    #
+    # The left is already emitted, so its rows are exactly the starts the path
+    # will be joined to. Handing that SQL down restricts the recursion's base
+    # term to them. The outer join still applies the same constraint, so this is
+    # redundant rather than semantically load-bearing — the same argument
+    # `emit_path` makes for the pinned case.
+    #
+    # Conditions, all necessary: the path's start must be the shared variable,
+    # and the LEFT must actually produce it with term identity, or there is no
+    # uuid column to seed from.
+    if right_child.kind == KIND_PATH:
+        _meta = right_child.path_meta or {}
+        _subj = _meta.get("subject")
+        if isinstance(_subj, VarNode) and _subj.name in shared:
+            _linfo = left_ctx.types.get(_subj.name)
+            if _linfo is not None and _linfo.has_term_identity():
+                # No NULL filter: `= ANY (...)` never matches NULL, so one is
+                # redundant — and testing a __uuid column for NULL is the
+                # boundness-inference mistake `issue 026` and
+                # `test_null_provenance_lint` exist to prevent. The
+                # has_term_identity() guard above is what makes this column
+                # meaningful; a per-row NULL simply contributes no seed.
+                right_child.hints["path_start_seed"] = (
+                    f"SELECT _seed.{_linfo.sql_name}__uuid "
+                    f"FROM ({left_sql}) AS _seed")
+                ctx.log("join", f"seeding right-hand path on ?{_subj.name} "
+                                f"from the left (issues/124)")
+
     exists_sql = None
     if (not is_left) and plan.hints.get('semijoin') and len(shared) == 1:
         from .emit_bgp import emit_bgp_exists, find_bgp

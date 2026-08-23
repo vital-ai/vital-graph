@@ -145,6 +145,29 @@ def emit_path(plan: PlanV2, ctx: EmitContext) -> str:
             f"(SELECT term_uuid FROM {term_table} "
             f"WHERE term_text = '{_esc(subject.value)}' AND term_type = 'U' LIMIT 1)"
         )
+    elif isinstance(subject, VarNode):
+        # The start is a VARIABLE bound by a sibling in the join. `emit_join`
+        # hands down SQL producing that variable's uuids, and seeding from it is
+        # the difference between walking and closing over the graph.
+        #
+        # `issues/124`: on `sp_lead_synth_100k` the same walk is 4.2 ms pinned
+        # to a constant and does not finish in 120 s reached through a join —
+        # 67 s against 26 ms in raw SQL for the identical 53 results, because
+        # the unseeded recursion closes over 50M quads before filtering.
+        #
+        # `ANY (subquery)` rather than `IN (subquery)` deliberately: the seed is
+        # substituted into `_base.start_uuid = {seed}` at three sites below, so
+        # a set-valued expression that still reads as `= <expr>` needs no new
+        # parameter threaded through `_path_to_sql`'s recursion.
+        #
+        # ALWAYS, never conditionally. A switch between seeded and unseeded
+        # would fire or decline on a plan property with the declining case
+        # silent, which is the `issues/118` failure exactly. The seeded form is
+        # marginally worse on a graph small enough for everything to be fast,
+        # and unboundedly better otherwise; that trade is taken unconditionally.
+        _seed = plan.hints.get("path_start_seed")
+        if _seed:
+            seed_start_sql = f"ANY ({_seed})"
     if isinstance(obj, URINode):
         seed_end_sql = (
             f"(SELECT term_uuid FROM {term_table} "
