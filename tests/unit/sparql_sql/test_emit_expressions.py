@@ -489,8 +489,14 @@ class TestAccessors:
         # LANG(?x) is an accessor, langMatches checks it
         lang_expr = _func("lang", _var("x"))
         sql = expr_to_sql(_func("langmatches", lang_expr, _lit("*")), ctx)
-        assert "IS NOT NULL" in sql
-        assert "!= ''" in sql
+        # An absent tag must not match, and a TYPE ERROR must propagate.
+        # This asserted `IS NOT NULL`, which is how the arm used to fold NULL
+        # into FALSE — invisible in a positive filter and wrong under
+        # negation, since `!FALSE` is TRUE while `!error` stays an error. DAWG
+        # `LangMatches-4` returned a URI because of it (`issues/125`).
+        assert "!= ''" in sql, sql
+        assert "IS NULL" in sql and "THEN NULL" in sql, (
+            f"the wildcard arm must propagate a type error, got: {sql}")
 
     def test_langmatches_specific(self):
         ctx = _make_ctx({"x": "full"})

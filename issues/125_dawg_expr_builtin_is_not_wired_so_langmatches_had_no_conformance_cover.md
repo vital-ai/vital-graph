@@ -1,6 +1,7 @@
 # The DAWG Category Covering `langMatches` Is Not Wired, and It Is Not `i18n`
 
-## Status: OPEN — found 2026-08-23 while fixing `issues/120`
+## Status: RESOLVED 2026-08-23 — wired, and it found two real bugs the
+## same day. Original report follows.
 
 `issues/120` shipped a `langMatches` that did no prefix matching. Its "test gap
 that hid it" section named the wrong category:
@@ -67,3 +68,59 @@ manifest on disk that would have found one of them.
 
 Do not wire it and add 29 xfails. Diagnose the oracle/data-loading half first;
 the honest failure count is not known until that is separated out.
+
+
+## Resolved
+
+`get_manifest_path` now treats a slashed category as a path relative to
+`sparql/`, and `sparql10/expr-builtin` is in `P0_CATEGORIES`.
+
+## The 29-of-48 estimate in this document was wrong
+
+It said "a triage project, not a switch" and told the next reader to diagnose
+the oracle half first. That instinct was right and the SIZE was not: the
+failures were mostly **one missing parser**.
+
+`sparql10` predates SRX and encodes expected results as RDF —
+`rs:ResultSet` / `rs:solution` / `rs:binding` — so every `.ttl` result was
+read as a CONSTRUCT graph and compared as triples. `LangMatches-1` reporting
+`expected 10, got 1` was 10 TRIPLES IN THE FILE, not ten rows of anything.
+That is why the oracle "failed" cases it should trivially pass, and it is why
+this looked structural.
+
+    29 failures  ->  13   after adding the rs:ResultSet parser
+                 ->  11   after fixing lang() on non-literals
+                 ->  10   after propagating the type error through langMatches "*"
+
+**The lesson worth keeping is about the estimate, not the parser.** The
+measurement in this document was accurate — 29 of 48 — and the inference from
+it was not. A failure count says nothing about how many CAUSES there are, and
+"the oracle also fails" pointed at a shared comparator rather than at 29
+independent problems. One hour of reading beat the estimate by a wide margin.
+
+## What it caught immediately, both ours
+
+* **`lang()` of a non-literal returned `''`** instead of a type error, so a URI
+  looked like an untagged literal — `lang-1`, `lang-2` and `LangMatches-4`,
+  three cases with one cause. The same `term_type = 'L'` gate `datatype()`
+  needed the same day.
+* **The `langMatches` `*` arm turned NULL into FALSE.** Invisible positively
+  and wrong under negation, since `!FALSE` is TRUE while `!error` is an error.
+  A bug in code written hours earlier, caught by the net being switched on.
+
+## The ten that remain are two different things
+
+* `sameTerm-eq`, `sameTerm-not-eq`, `sameTerm-simple` — a REAL gap, diagnosed
+  and filed as `issues/127`: `?v1 = ?v2` between two VARIABLES compares
+  `term_text`. `sameTerm` itself is correct.
+* `str-1`, `str-2` — the corpus disagrees with BOTH engines; hand-reading
+  `data-builtin-1.ttl` agrees with us.
+
+Recorded in `KNOWN_FAILURES` and `XFAIL_TESTS_V2` separately. `sameTerm-*`
+needs an entry in both, for different reasons; deleting either hides half.
+
+## Still unwired
+
+`sparql10` has other categories, and `sparql12`, `rdf11`, `rdf12` remain
+unreachable-by-default in the same way — the mechanism is fixed, the wiring is
+per-category. `dawg_conformance_coverage.md` §2 now records that.

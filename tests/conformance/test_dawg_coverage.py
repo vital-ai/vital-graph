@@ -29,9 +29,8 @@ from pathlib import Path
 import pytest
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-SPARQL11_ROOT = (
-    _PROJECT_ROOT / "tests" / "conformance" / "dawg_data" / "sparql" / "sparql11"
-)
+DAWG_ROOT = _PROJECT_ROOT / "tests" / "conformance" / "dawg_data"
+SPARQL11_ROOT = DAWG_ROOT / "sparql" / "sparql11"
 
 # Categories deliberately NOT run, each with the reason. An entry here is a
 # DECISION; the point of writing it down is that an unexplained gap in a
@@ -135,8 +134,17 @@ class TestDAWGCoverage:
         manifest type — and zero collected tests looks exactly like zero
         failures in every count pytest prints.
         """
-        corpus = _corpus_categories()
-        missing = sorted(_wired_categories() - corpus)
+        # Resolve through `get_manifest_path`, the SAME function the runners
+        # use, rather than by listing one tree. Listing `sparql11` was the
+        # reason this guard could not see a `sparql10/...` category at all —
+        # and the resolver being single-tree was itself `issues/125`, so a
+        # guard that re-implements the lookup can be blind in exactly the way
+        # the thing it guards is broken.
+        from vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_manifest_parser import (
+            get_manifest_path)
+        missing = sorted(
+            c for c in _wired_categories()
+            if not get_manifest_path(DAWG_ROOT, c).exists())
         assert not missing, (
             f"Suites reference categories with no manifest on disk: {missing}"
         )
