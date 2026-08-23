@@ -114,8 +114,16 @@ class TestEmitPath:
         plan = self._path_plan(PathOneOrMore(sub=PathLink(uri="http://ex.org/p")))
         sql = emit_path(plan, ctx)
         assert "WITH RECURSIVE" in sql
-        assert "depth" in sql
-        assert str(100) in sql  # MAX_PATH_DEPTH
+        # It used to assert a `depth` column and the literal 100 (the old
+        # MAX_PATH_DEPTH). Both are gone — `issues/123`: the depth column made
+        # (s,e,1) and (s,e,2) distinct rows, which defeated the UNION dedup
+        # that terminates a cycle, and the cap existed to contain the runaway
+        # that created. The meaningful properties are that the recursion
+        # deduplicates, and that no depth bound truncates a long path.
+        assert "UNION ALL" not in sql, (
+            "the recursive CTE must deduplicate or it cannot terminate on a cycle")
+        assert "depth" not in sql, (
+            "a depth column defeats the UNION dedup that terminates a cycle")
 
     # --- PathZeroOrMore ---
 

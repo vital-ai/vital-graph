@@ -32,21 +32,38 @@ from .collect import _esc
 
 logger = logging.getLogger(__name__)
 
-# Depth fence for recursive property-path CTEs.
+# NO DEPTH FENCE — removed 2026-08-23, `issues/123`.
 #
-# Must be high enough to NOT truncate legitimate deep-but-narrow traversals —
-# notably arbitrary-depth FRAME NESTING (`frame Edge_hasKGFrame* ...`), which is
-# an active correctness surface (frame_entity_integrity_plan.md §7). A cap that's
-# too low silently under-counts nested-frame relation queries.
+# There was one: `MAX_PATH_DEPTH = 100`, documented as "cycle prevention +
+# backstop". It was containing a runaway that the mechanism enforcing it
+# created.
 #
-# It is NOT the primary runaway fence: a high-fan-out predicate over a
-# billion-row table blows up in 2-3 steps regardless of this cap, while a low cap
-# only penalizes narrow deep paths. Runaway is fenced by statement_timeout +
-# temp_file_limit (Tier-0 config). This value is just a cycle/backstop.
+# The recursive CTEs below use `UNION`, which deduplicates, and that is what
+# normally terminates a transitive closure over cyclic data: revisiting a pair
+# adds no new row. But `depth` was part of the tuple, so `(s, e, 1)` and
+# `(s, e, 2)` were different rows, the dedup never fired, and the recursion ran
+# until the cap stopped it. On a three-node cycle: 300 rows with the depth
+# column, 9 without — and 9 is the correct answer.
 #
-# Kept at the original 100 so it never truncates real frame nesting. Ideally make
-# this per-query/space configurable rather than a fixed constant.
-MAX_PATH_DEPTH = 100  # cycle prevention + backstop; NOT the runaway fence (timeout is)
+# `depth` had no other consumer. Every reference to it was the column list, its
+# increment, or the comparison against the cap. It existed to be compared
+# against a limit that existed because of it.
+#
+# What the cap cost while it was there: a chain of 150 links reported 101 nodes,
+# silently (`issues/122`). For frame nesting a depth of 100 is beyond anything
+# real, which is why it was chosen — but for any LINEAR structure the depth IS
+# the length, so the backstop was a size limit.
+#
+# Runaway is still fenced, and always was by something else: `statement_timeout`
+# and `temp_file_limit` (Tier-0 config). The comment this replaces said so
+# itself — "It is NOT the primary runaway fence". A high-fan-out predicate over
+# a billion-row table blows up in two or three steps regardless of any depth
+# limit, so the cap only ever penalised narrow deep paths, which are the ones
+# that are cheap.
+#
+# `tests/integration/test_recursive_path_termination.py` pins both halves: a
+# cycle terminates and yields each node once, and a chain longer than the old
+# cap is not truncated.
 _cte_counter = 0
 
 def _next_cte_name(prefix: str) -> str:
@@ -392,14 +409,13 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
             seed_where = (f" WHERE _base.start_uuid = {seed_start_sql}"
                           if seed_start_sql else "")
             rec_body = (
-                f"{rec_name}(start_uuid, end_uuid, depth, ctx_uuid) AS (\n"
-                f"  SELECT start_uuid, end_uuid, 1, ctx_uuid FROM ({base_sql}) AS _base"
+                f"{rec_name}(start_uuid, end_uuid, ctx_uuid) AS (\n"
+                f"  SELECT start_uuid, end_uuid, ctx_uuid FROM ({base_sql}) AS _base"
                 f"{seed_where}\n"
                 f"  UNION\n"
-                f"  SELECT r.start_uuid, step.end_uuid, r.depth + 1, r.ctx_uuid\n"
+                f"  SELECT r.start_uuid, step.end_uuid, r.ctx_uuid\n"
                 f"  FROM {rec_name} r\n"
                 f"  JOIN ({base_sql}) AS step ON r.end_uuid = step.start_uuid{ctx_rec_constraint}\n"
-                f"  WHERE r.depth < {MAX_PATH_DEPTH}\n"
                 f")"
             )
         else:
@@ -412,15 +428,14 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
             # the edges arriving AT the pin, and each step PREPENDS an edge,
             # moving `start_uuid` further back while `end_uuid` stays the pin.
             rec_body = (
-                f"{rec_name}(start_uuid, end_uuid, depth, ctx_uuid) AS (\n"
-                f"  SELECT start_uuid, end_uuid, 1, ctx_uuid FROM ({base_sql}) AS _base"
+                f"{rec_name}(start_uuid, end_uuid, ctx_uuid) AS (\n"
+                f"  SELECT start_uuid, end_uuid, ctx_uuid FROM ({base_sql}) AS _base"
                 f" WHERE _base.end_uuid = {seed_end_sql}\n"
                 f"  UNION\n"
-                f"  SELECT step.start_uuid, r.end_uuid, r.depth + 1, r.ctx_uuid\n"
+                f"  SELECT step.start_uuid, r.end_uuid, r.ctx_uuid\n"
                 f"  FROM {rec_name} r\n"
                 f"  JOIN ({base_sql}) AS step ON step.end_uuid = r.start_uuid"
                 f"{ctx_rec_constraint.replace('r.ctx_uuid = step.ctx_uuid', 'step.ctx_uuid = r.ctx_uuid')}\n"
-                f"  WHERE r.depth < {MAX_PATH_DEPTH}\n"
                 f")"
             )
         cte = _merge_ctes(inner_cte, rec_body)
@@ -448,10 +463,10 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
         _id_where_o = graph_clause + _id_seed_o
         identity_sql = (
             f"SELECT q.subject_uuid AS start_uuid, q.subject_uuid AS end_uuid, "
-            f"0, q.context_uuid AS ctx_uuid "
+            f"q.context_uuid AS ctx_uuid "
             f"FROM {quad_table} q{' WHERE TRUE' + _id_where if _id_where else ''} "
             f"UNION SELECT q.object_uuid, q.object_uuid, "
-            f"0, q.context_uuid "
+            f"q.context_uuid "
             f"FROM {quad_table} q{' WHERE TRUE' + _id_where_o if _id_where_o else ''}"
         )
         ctx_rec_constraint = " AND r.ctx_uuid = step.ctx_uuid" if same_graph else ""
@@ -460,23 +475,22 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
             # so `start_uuid` walks backwards and `end_uuid` stays the pin.
             # Extending forward from (C, C) would return C's DESCENDANTS, which
             # is the opposite question.
-            step_join = (f"  SELECT step.start_uuid, r.end_uuid, r.depth + 1, "
+            step_join = (f"  SELECT step.start_uuid, r.end_uuid, "
                          f"r.ctx_uuid\n"
                          f"  FROM {rec_name} r\n"
                          f"  JOIN ({base_sql}) AS step "
                          f"ON step.end_uuid = r.start_uuid{ctx_rec_constraint}\n")
         else:
-            step_join = (f"  SELECT r.start_uuid, step.end_uuid, r.depth + 1, "
+            step_join = (f"  SELECT r.start_uuid, step.end_uuid, "
                          f"r.ctx_uuid\n"
                          f"  FROM {rec_name} r\n"
                          f"  JOIN ({base_sql}) AS step "
                          f"ON r.end_uuid = step.start_uuid{ctx_rec_constraint}\n")
         rec_body = (
-            f"{rec_name}(start_uuid, end_uuid, depth, ctx_uuid) AS (\n"
+            f"{rec_name}(start_uuid, end_uuid, ctx_uuid) AS (\n"
             f"  ({identity_sql})\n"
             f"  UNION\n"
             f"{step_join}"
-            f"  WHERE r.depth < {MAX_PATH_DEPTH}\n"
             f")"
         )
         cte = _merge_ctes(inner_cte, rec_body)

@@ -2,14 +2,14 @@
 
 - term cache is LRU-bounded (was an unbounded dict → OOM risk at 1B, see
   100x_scalability_analysis.md §5.1)
-- property-path depth is fenced low (runaway recursive CTE fence, §7)
+- recursive property-path CTEs TERMINATE (they deduplicate, §7)
 """
 
 import pytest
 
 from vitalgraph.db.sparql_sql.generator import (
     _LRUCache, _term_cache, _TERM_CACHE_MAX, invalidate_term_cache)
-from vitalgraph.db.sparql_sql.emit_path import MAX_PATH_DEPTH
+
 
 pytestmark = pytest.mark.unit
 
@@ -51,10 +51,47 @@ def test_invalidate_term_cache_scoped_and_full():
     assert len(_term_cache) == 0
 
 
-def test_property_path_depth_is_finite_and_nesting_safe():
-    # Two-sided: it must be a FINITE backstop (not unbounded recursion), but ALSO
-    # high enough not to truncate legitimate deep-but-narrow traversals like
-    # arbitrary-depth frame nesting (frame_entity_integrity_plan.md §7). A cap too
-    # low silently under-counts nested-frame relation queries; the real runaway
-    # fence is statement_timeout/temp_file_limit, not this value.
-    assert 16 <= MAX_PATH_DEPTH <= 128
+def test_recursive_path_ctes_deduplicate_so_they_terminate():
+    """A recursive path must terminate on cyclic data BY CONSTRUCTION.
+
+    This used to assert `16 <= MAX_PATH_DEPTH <= 128` — a finite depth cap as
+    the backstop against unbounded recursion. That cap was removed in
+    `issues/123`, and the reason is worth keeping: it was containing a runaway
+    the depth column itself created.
+
+    `UNION` deduplicates, which is what terminates a transitive closure over a
+    cycle — revisiting a pair adds no row. But `depth` was part of the CTE
+    tuple, so `(s,e,1)` and `(s,e,2)` were distinct, the dedup never fired, and
+    only the cap stopped the recursion. On a three-node cycle: 300 rows with
+    the depth column, 9 without.
+
+    With `depth` gone, termination is guaranteed by the finiteness of the
+    graph — there are only so many distinct (start, end) pairs — which is a
+    STRONGER property than a magic constant. This asserts the mechanism that
+    provides it, so a change to `UNION ALL` fails here rather than hanging a
+    query.
+
+    The cap never was the runaway fence, and the comment it carried said so.
+    `100x_scalability_analysis.md` §7 shows the 1B-row blowup reaching "tens of
+    billions of rows" WITH the cap in place; work is bounded by
+    `statement_timeout` and `temp_file_limit`, which is what the rest of this
+    file tests.
+    """
+    import pathlib as _pl
+    src = _pl.Path("vitalgraph/db/sparql_sql/emit_path.py").read_text()
+
+    # Every recursive CTE body in this file must use deduplicating UNION.
+    bodies = [m for m in src.split("rec_body = (")[1:]]
+    assert bodies, "no recursive CTE bodies found — has emit_path been restructured?"
+    for body in bodies:
+        head = body[:1200]
+        assert "UNION ALL" not in head, (
+            "a recursive property-path CTE uses UNION ALL. Without dedup it "
+            "cannot terminate on cyclic data, and the depth cap that used to "
+            "stop it was removed in issues/123.")
+
+    # And no depth column may come back, since that is what defeats the dedup.
+    assert "depth" not in src.split("def _path_to_sql")[-1].lower(), (
+        "a `depth` column reappeared in the recursive CTEs. It makes "
+        "(s,e,1) and (s,e,2) distinct rows, which defeats the UNION dedup that "
+        "terminates a cycle — and then a cap is needed again (issues/123).")
