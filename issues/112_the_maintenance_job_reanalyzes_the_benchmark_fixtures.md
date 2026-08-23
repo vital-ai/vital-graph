@@ -219,3 +219,28 @@ ANALYZEd before every recorded run, which randomised a bistable plan between
 runs and emptied a 45 GB cache each time. This is a deliberate, occasional
 refresh under an operator's control, at a moment of their choosing, not a
 per-run reflex.
+
+## A second obligation, found 2026-08-23
+
+The exclusion list and `STATS_FIXTURE_PREFIXES` in
+`tests/performance/perf_record.py` answer the same question — which spaces are
+benchmark fixtures — and they had drifted apart. `sp_lead_types` and
+`space_lead_dataset_test` were STAMPED as fixtures but not EXCLUDED from
+maintenance.
+
+The symptom is a lie in the other direction from this issue's original one: a
+perf run reported
+
+    NOTE stats.fixture_last_analyze: baseline=2026-08-22T13:10 run=2026-08-23T01:22
+      — the fixtures were re-ANALYZEd between these runs
+
+while the fixtures the benches actually use had NOT moved —
+`sp_lead_synth_100k` and `sp_lead_synth_10k` still carried `last_analyze` from
+13:06 and 13:08, and `last_autoanalyze = never`. What moved was
+`space_lead_dataset_test`, analyzed at 01:52 by the maintenance job because
+nothing excluded it.
+
+So the note invited exactly the misattribution this issue exists to prevent —
+blaming a plan difference on stale statistics that were not stale. The lists
+now match, and `docker-compose.test.yml` carries a comment saying they must
+stay matched.
