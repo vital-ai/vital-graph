@@ -1,6 +1,10 @@
 # A Property Path Seeds Only From a Literal URI, Not From a Bound Variable
 
-## Status: OPEN and VALIDATED on a real fixture 2026-08-22. This is a
+## Status: RESOLVED 2026-08-23 — set-seeding landed; verified 2026-08-23 by
+## running the gate test, which now PASSES with its strict xfail removed.
+## Original report follows.
+##
+## OPEN and VALIDATED on a real fixture 2026-08-22. This is a
 ## core-workload defect: 67 seconds against 26 milliseconds for the same 53
 ## results on `sp_lead_synth_100k`. The fix shape is SET-SEEDING; LATERAL is
 ## proven wrong. See "Validated at scale" at the end — it reverses the
@@ -240,3 +244,22 @@ a real defect as a curiosity.
 
    Strict, so it fails the moment seeding lands and the xfail has to be
    removed.
+
+## Resolved
+
+Set-seeding, the shape this issue argued for. `emit_join.py:131` puts the
+bound start into `right_child.hints["path_start_seed"]`; `emit_path.py:185`
+reads it and seeds the recursive CTE from `ANY (<subquery>)` rather than
+closing over the graph. LATERAL stayed rejected, as the report concluded.
+
+The gate this issue left behind —
+`tests/performance/test_path_start_bound_by_a_join.py`, `xfail(strict=True)`
+so it would fail the moment seeding landed — now passes and the xfail is gone.
+That is the check, not a re-measurement: it asserts the bound form costs about
+`starts x pinned`, a self-calibrating ratio rather than a maintained
+threshold.
+
+Marked resolved late. The fix and the test both landed 2026-08-23 while this
+document still said OPEN, which is the same staleness that had
+`rdf_collections` §4.0 and three `regex_dialect` items describing behaviour
+that no longer existed.
