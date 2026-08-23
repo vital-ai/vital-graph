@@ -12,6 +12,7 @@ expanded to cover all ~40 SPARQL functions as Phase 6 progresses.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 from ..jena_sparql.jena_types import (
@@ -243,6 +244,25 @@ def _value_to_sql(expr: ExprValue) -> Optional[str]:
     return "NULL"
 
 
+def _strdt_target(expr) -> Optional[str]:
+    """The datatype URI `STRDT`/`STRLANG` is constructing, or None.
+
+    Only a URI written in the query is knowable here. A datatype arriving
+    through a variable is a runtime value, and the lane a constructed literal
+    takes has to be decided at emit time — so that case keeps the lexical
+    result rather than guessing.
+    """
+    if isinstance(expr, ExprValue) and isinstance(expr.node, URINode):
+        return expr.node.value
+    return None
+
+
+# A lexical form CAST can safely read as a number. `STRDT("abc", xsd:integer)`
+# is a type error, i.e. unbound — and an unguarded CAST would raise instead,
+# taking the whole query with it.
+_NUMERIC_LEX_RE = r"^[-+]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]+)?$"
+
+
 def _is_numeric_expr(expr, ctx: EmitContext) -> bool:
     """Check if an expression is known to be numeric at compile time.
 
@@ -275,6 +295,13 @@ def _is_numeric_expr(expr, ctx: EmitContext) -> bool:
         ):
             return True
         # Recurse: COALESCE/IF is numeric if any argument is numeric
+        # A constructed literal is numeric when the datatype it is being GIVEN
+        # is numeric — not when its lexical form happens to parse. Keying on
+        # the text would make `STRDT("1", xsd:string)` a number, which is the
+        # lexical-vs-value trap behind `issues/121`.
+        if fname == "strdt" and len(expr.args or []) == 2:
+            target = _strdt_target(expr.args[1])
+            return bool(target and target in _NUMERIC_DATATYPES)
         if fname in ("coalesce", "if") and expr.args:
             return any(_is_numeric_expr(a, ctx) for a in expr.args)
     return False
@@ -991,6 +1018,16 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
                     absent = f"'{XSD}string'"
                 return (f"CASE WHEN {info.type_col} = 'L' "
                         f"THEN COALESCE({info.dt_col}, {absent}) ELSE NULL END")
+        # A constructed literal knows its datatype statically — reporting it
+        # unbound would leave `STRDT` indistinguishable from a plain string
+        # even after the value fix above.
+        if isinstance(args[0], ExprFunction):
+            _inner = (args[0].name or "").lower()
+            _iargs = args[0].args or []
+            if _inner == "strdt" and len(_iargs) == 2:
+                _t = _strdt_target(_iargs[1])
+                if _t:
+                    return f"'{_t.replace(chr(39), chr(39)+chr(39))}'"
         # Constant literals. `datatype(10)` was already right; a plain literal
         # fell through to NULL because the datatype is absent rather than
         # falsy-but-present — and Jena canonicalises `"a"^^xsd:string` to a
@@ -1145,7 +1182,10 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
 
     if fname == "strdt" and len(args) == 2:
         a = expr_to_sql(args[0], ctx)
-        if a and isinstance(args[0], ExprVar):
+        if not a:
+            return None
+        lex = a
+        if isinstance(args[0], ExprVar):
             info = ctx.types.get(args[0].var)
             if info:
                 # STRDT requires simple literal — error if input has lang tag,
@@ -1162,8 +1202,34 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
                                   f"AND {info.dt_col} != '{_XSD_STR}')")
                 if guards:
                     cond = " OR ".join(guards)
-                    return f"CASE WHEN {cond} THEN NULL ELSE {a} END"
-        return a
+                    lex = f"CASE WHEN {cond} THEN NULL ELSE {a} END"
+        # Give the constructed literal the VALUE its datatype implies (§4.4).
+        # This returned the lexical form and dropped the datatype, so
+        # `STRDT("1", xsd:integer) + 1` was NULL — nothing downstream could
+        # tell the result from the string "1", which makes the standard way to
+        # type a computed value close to useless.
+        #
+        # `_is_numeric_expr` decides whether arithmetic takes the numeric lane,
+        # and it now recognises the same shape. Both halves are needed: a
+        # numeric result the lane chooser cannot see is still unusable, and a
+        # lane chooser pointed at a text operand is worse.
+        target = _strdt_target(args[1])
+        if target and target in _NUMERIC_DATATYPES:
+            # A STATIC lexical form has to be decided here, not in SQL.
+            # PostgreSQL constant-folds `CAST('abc' AS NUMERIC)` at PLAN time,
+            # so the runtime CASE below never gets to guard it and the whole
+            # query dies with `invalid input syntax for type numeric`. A
+            # compile-time fold cannot be defended by a runtime test.
+            if isinstance(args[0], ExprValue) and isinstance(args[0].node,
+                                                             LiteralNode):
+                raw = args[0].node.value or ""
+                if not re.match(_NUMERIC_LEX_RE, raw.strip()):
+                    return "NULL"          # type error -> unbound
+                return f"CAST('{_esc(raw.strip())}' AS NUMERIC)"
+            # A column is not folded, so the guard holds at run time.
+            return (f"CASE WHEN ({lex}) ~ '{_NUMERIC_LEX_RE}' "
+                    f"THEN CAST({lex} AS NUMERIC) END")
+        return lex
 
     if fname == "strlang" and len(args) == 2:
         a = expr_to_sql(args[0], ctx)
