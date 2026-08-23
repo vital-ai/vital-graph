@@ -150,6 +150,23 @@ async def main() -> int:
             return 1
         print(f"✅ {created} index(es) created, {len(stmts)} statements applied, "
               f"all verified present")
+
+        # Indexes are not the only thing a space can be silently missing.
+        # `issues/126`: a space whose `datatype` table was never seeded has
+        # num_val/dt_val generated columns referencing ids that mean something
+        # else there. Warn rather than fail — this script's job is indexes, and
+        # the repair is not one it could safely perform.
+        try:
+            from check_space_datatypes import check_space, OK
+            status, detail = await check_space(conn, a.space)
+            if status != OK:
+                print(f"\n⚠️  datatype table is {status}: {detail}\n"
+                      f"    num_val/dt_val reference ids that mean something "
+                      f"else here — see issues/126.\n"
+                      f"    python scripts/check_space_datatypes.py --all",
+                      file=sys.stderr)
+        except Exception as e:
+            print(f"(datatype check skipped: {e})", file=sys.stderr)
         return 0
     finally:
         await conn.close()

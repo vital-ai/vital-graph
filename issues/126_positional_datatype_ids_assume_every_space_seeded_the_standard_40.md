@@ -95,11 +95,24 @@ are wrong for it. A cluster-wide sweep is in this issue's history.
 ## Suggested order
 
 1. ~~Fix the boolean guard (category A)~~ — done.
-2. Add a startup or `ensure_space_indexes.py` check that flags a space whose
-   datatype table does not match `STANDARD_DATATYPES`, so this stops being
-   invisible. Detection before repair: the three known spaces are test data,
-   and it is not yet known whether any real space is affected.
-3. Only then decide about repair. Backfilling ids is not possible in place —
+2. ~~Add a check that flags a space whose datatype table does not match
+   `STANDARD_DATATYPES`~~ — **done**. `scripts/check_space_datatypes.py`
+   sweeps a cluster (`--all`) or one space, exits 1 if any is off, and
+   `ensure_space_indexes.py` now warns through the same function. It
+   reproduces the finding independently:
+
+       test stack (:5433)   56 spaces, 0 off
+       host (:5432)          100 spaces, 3 off
+                             sp_geo_test    id 1 is vital-core#geoLocation
+                             sp_dedup_test  0 rows
+                             sp_vgeo_e2e    0 rows
+
+   It compares against the POSITIONAL ids the generated columns assume, not
+   merely that the table is non-empty — a space could be populated and still
+   have every id shifted, which is the case the column definitions cannot
+   survive.
+3. Only then decide about repair. **Still open, and deliberately not
+   attempted.** Backfilling ids is not possible in place —
    they are referenced by `term.datatype_id` — so a repair means rewriting the
    datatype table AND remapping every term, or recreating the space.
 
