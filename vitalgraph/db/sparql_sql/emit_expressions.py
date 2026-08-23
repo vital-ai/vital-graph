@@ -1092,6 +1092,36 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
                 _t = _strdt_target(_iargs[1])
                 if _t:
                     return f"'{_t.replace(chr(39), chr(39)+chr(39))}'"
+            # Arithmetic: the PROMOTED type, which for variable operands is a
+            # per-row answer — `?l + ?r` is xsd:integer over shorts and
+            # xsd:double over doubles in the same query. `promotion_datatype_sql`
+            # is deliberately not the same function the type registry uses:
+            # that one must stay static because its result is used to CLASSIFY,
+            # and returning a CASE there made an arithmetic result read as
+            # non-numeric and collect a COLLATE.
+            try:
+                from .sql_type_generation import promotion_datatype_sql
+                if _inner in ("add", "subtract", "multiply"):
+                    _p = promotion_datatype_sql(_iargs, ctx.types)
+                    if _p:
+                        return _p
+                elif _inner == "divide":
+                    _p = promotion_datatype_sql(_iargs, ctx.types, floor=1)
+                    if _p:
+                        return _p
+            except Exception:
+                pass
+            # Anything else computed: the static inference is the best answer
+            # available, and it is what BIND already reports for the same
+            # expression.
+            try:
+                from .sql_type_generation import infer_expr_type
+                _typed = infer_expr_type(args[0], ctx.types)
+            except Exception:
+                _typed = None
+            if (_typed is not None and _typed.datatype
+                    and not _typed.datatype_is_sql):
+                return f"'{_typed.datatype.replace(chr(39), chr(39)+chr(39))}'"
         # Constant literals. `datatype(10)` was already right; a plain literal
         # fell through to NULL because the datatype is absent rather than
         # falsy-but-present — and Jena canonicalises `"a"^^xsd:string` to a

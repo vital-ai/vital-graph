@@ -105,6 +105,8 @@ P0_CATEGORIES = [
     "sparql10/optional",
     "sparql10/solution-seq",
     "sparql10/triple-match",
+    # Wired once XSD promotion landed — 22 cases, one cause (issues/128).
+    "sparql10/type-promotion",
 ]
 
 # Cases that fail today, kept RUNNING rather than removed so the count stays

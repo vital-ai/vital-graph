@@ -761,6 +761,91 @@ class TypeRegistry:
 # Type Inference Functions
 # ---------------------------------------------------------------------------
 
+# XSD numeric type promotion (SPARQL 1.1 §17.4.1, XPath F&O §6.2). Operands
+# promote to their LEAST COMMON TYPE up this ladder, and every bounded integer
+# subtype collapses to xsd:integer — `xsd:short + xsd:short` is `xsd:integer`,
+# not `xsd:short`.
+_PROMOTION_RANK = {
+    f"{XSD}double": 3,
+    f"{XSD}float": 2,
+    f"{XSD}decimal": 1,
+}
+_RANK_TO_DT = {3: f"{XSD}double", 2: f"{XSD}float",
+               1: f"{XSD}decimal", 0: f"{XSD}integer"}
+
+
+def _promotion_rank_sql(dt_sql: str) -> str:
+    """Rank a datatype expression at RUN TIME.
+
+    Needed because an operand that is a VARIABLE carries a datatype COLUMN, not
+    a known URI, and the promoted type genuinely differs per row: the same
+    `?l + ?r` is xsd:integer over shorts and xsd:double over doubles. DAWG
+    type-promotion requires both.
+    """
+    whens = " ".join(f"WHEN {dt_sql} = '{uri}' THEN {rank}"
+                     for uri, rank in _PROMOTION_RANK.items())
+    return f"CASE {whens} ELSE 0 END"
+
+
+def _promoted_numeric_type(args, registry, floor: int = 0) -> "TypedExpr":
+    """The datatype of an arithmetic result, per XSD promotion — STATIC ONLY.
+
+    `floor` is for `divide`, where integer / integer is xsd:decimal — a FLOOR,
+    not the answer, so double / double stays xsd:double.
+
+    **This must never return a SQL expression.** Callers use the datatype to
+    CLASSIFY — `is_numeric` and friends compare it against known URIs, and
+    `emit_order` decides collatability from it. Returning a `CASE` here made
+    those comparisons fail, so an arithmetic result read as non-numeric and
+    picked up a COLLATE: "collations are not supported by type numeric". It
+    also put a bare `v1__datatype` reference inside an aggregate, which
+    PostgreSQL rejects for not being in the GROUP BY.
+
+    An operand whose datatype is only known at run time therefore contributes
+    the floor rather than a column. Every possible promotion result is numeric,
+    so classification stays correct either way; the exact URI is reported by
+    `promotion_datatype_sql`, which `datatype()` calls and which CAN be SQL.
+    """
+    ranks = [floor]
+    for a in (args or []):
+        t = infer_expr_type(a, registry)
+        if t.datatype and not t.datatype_is_sql:
+            ranks.append(_PROMOTION_RANK.get(t.datatype, 0))
+    return TypedExpr(sql="", sparql_type="literal",
+                     datatype=_RANK_TO_DT[max(ranks)])
+
+
+def promotion_datatype_sql(args, registry, floor: int = 0) -> Optional[str]:
+    """The promoted datatype as SQL, for `datatype()` to report.
+
+    Separate from `_promoted_numeric_type` because the two want different
+    things: classification needs a static answer, reporting needs the true one.
+    `?l + ?r` is xsd:integer over shorts and xsd:double over doubles in the
+    SAME query, so only a per-row expression can answer DAWG type-promotion.
+
+    Returns a quoted URI when every operand is statically known, so the common
+    case pays nothing for a CASE it does not need.
+    """
+    static_ranks, sql_ranks = [floor], []
+    for a in (args or []):
+        t = infer_expr_type(a, registry)
+        if not t.datatype:
+            return None
+        if t.datatype_is_sql:
+            sql_ranks.append(_promotion_rank_sql(t.datatype))
+        else:
+            static_ranks.append(_PROMOTION_RANK.get(t.datatype, 0))
+
+    if not sql_ranks:
+        return f"'{_RANK_TO_DT[max(static_ranks)]}'"
+
+    greatest = f"GREATEST({', '.join(sql_ranks + [str(max(static_ranks))])})"
+    whens = " ".join(f"WHEN {greatest} = {r} THEN '{uri}'"
+                     for r, uri in sorted(_RANK_TO_DT.items(), reverse=True)
+                     if r > 0)
+    return f"(CASE {whens} ELSE '{_RANK_TO_DT[0]}' END)"
+
+
 def infer_expr_type(expr: Any, registry: TypeRegistry) -> TypedExpr:
     """Infer the RDF type metadata for a SPARQL expression.
 
@@ -884,18 +969,15 @@ def _infer_function_type(expr: ExprFunction, registry: TypeRegistry) -> TypedExp
         return TypedExpr(sql="", sparql_type="uri")
 
     # Arithmetic operators
+    # XSD promotion, not "first argument wins". That propagated args[0]'s
+    # datatype, which is right only when both operands are the same unbounded
+    # type: `short + short` reported xsd:short (XSD says xsd:integer) and
+    # `integer + double` reported xsd:integer (XSD says xsd:double).
     if fname == "divide":
-        return TypedExpr(sql="", sparql_type="literal",
-                         datatype=f"{XSD}decimal")
+        # integer / integer is xsd:decimal, so the ladder starts at decimal.
+        return _promoted_numeric_type(args, registry, floor=1)
     if fname in ("add", "subtract", "multiply"):
-        # Propagate from first arg if available
-        if args:
-            arg_type = infer_expr_type(args[0], registry)
-            if arg_type.datatype and not arg_type.datatype_is_sql:
-                return TypedExpr(sql="", sparql_type="literal",
-                                 datatype=arg_type.datatype)
-        return TypedExpr(sql="", sparql_type="literal",
-                         datatype=f"{XSD}integer")
+        return _promoted_numeric_type(args, registry)
 
     # Functions that always return xsd:integer
     if fname in _ALWAYS_INTEGER_FUNCS:
