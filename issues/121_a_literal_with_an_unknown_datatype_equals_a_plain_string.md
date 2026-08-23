@@ -40,6 +40,20 @@ comparison that loses the distinction.
   own data uses the standard 40 in `STANDARD_DATATYPES`, which is why this has
   not surfaced.
 
+## How much data this affects: NONE, measured 2026-08-23
+
+Zero spaces on either cluster hold a literal whose datatype is outside the
+standard 40 in `STANDARD_DATATYPES` — checked across all 54 spaces on the
+docker test stack and all 99 on the host.
+
+That matters both ways. **Nothing we serve today can be returning a wrong
+answer because of this**, so there is no user waiting on it. And equally,
+fixing it cannot break an existing query, because there is no data for the
+changed comparison to apply to.
+
+What it protects is imported third-party RDF, which is where custom datatypes
+come from — the same reason this whole directory exists.
+
 ## Fix — needs a decision, not just an edit
 
 Unlike `issues/120` this is not one expression. Correct equality means carrying
@@ -56,6 +70,13 @@ emitter arm:
 The third rule is the new one. The risk is doing it in a way that also breaks
 the first, which is the mistake `issues/049` made in the other direction —
 booleans were compared in the text lane when they should not have been.
+
+**A narrower form avoids most of that risk.** Rather than reworking how
+equality chooses a lane, require datatype equality ONLY when a datatype is
+outside the standard set — leaving every currently-correct path untouched.
+Unknown datatypes are exactly the broken case, and they are also the case with
+no data behind them, so the blast radius of getting it wrong is confined to
+the thing that is already wrong.
 
 Worth checking before implementing: whether the pushdown path
 (`filter_pushdown.py`) and the expression path agree on this, since
