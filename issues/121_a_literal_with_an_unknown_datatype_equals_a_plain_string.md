@@ -40,19 +40,33 @@ comparison that loses the distinction.
   own data uses the standard 40 in `STANDARD_DATATYPES`, which is why this has
   not surfaced.
 
-## How much data this affects: NONE, measured 2026-08-23
+## Exposure is UNKNOWN — and the local measurement does not bound it
 
-Zero spaces on either cluster hold a literal whose datatype is outside the
-standard 40 in `STANDARD_DATATYPES` — checked across all 54 spaces on the
-docker test stack and all 99 on the host.
+Zero spaces carry a literal with a datatype outside the standard 40 — checked
+across all 54 spaces on the docker test stack and all 99 on the local host
+cluster.
 
-That matters both ways. **Nothing we serve today can be returning a wrong
-answer because of this**, so there is no user waiting on it. And equally,
-fixing it cannot break an existing query, because there is no data for the
-changed comparison to apply to.
+**That says nothing about production.** Both of those are development
+environments. Custom datatypes arrive with imported third-party RDF, and what
+has been imported into a served space is not visible from here. If any of it
+carries one, callers are getting wrong answers today and have been.
 
-What it protects is imported third-party RDF, which is where custom datatypes
-come from — the same reason this whole directory exists.
+An earlier revision of this section read "nothing we serve today can be
+returning a wrong answer because of this". That was an overreach from two dev
+databases to production, and it is exactly the inference this repository keeps
+getting caught by — `issues/081` and `issues/118` are both a measurement
+generalised past what it measured.
+
+What the local result DOES establish: the change can be developed and tested
+here without a fixture that exercises it, so one has to be built.
+
+**Answering the exposure question takes one query against a production space**,
+and it is cheap for anyone with access:
+
+    SELECT count(*) FROM <space>_datatype WHERE datatype_id > 40;
+
+Non-zero anywhere means this is a live defect with a known blast radius rather
+than a latent one, and it should be prioritised accordingly.
 
 ## Fix — needs a decision, not just an edit
 
