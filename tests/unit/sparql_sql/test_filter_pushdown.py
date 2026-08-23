@@ -241,12 +241,61 @@ class _FakeCtx:
     constants and falls back to the term-table subquery — which is what the
     correlated-subquery tests below want to observe. Pass a real
     AliasGenerator to exercise the constant path.
+
+    `dt_ids` maps datatype URI -> id the way a space's `datatype` table does.
+    It defaults to a normally-seeded space (`xsd:string` at 1, which 161 of 164
+    real spaces have). Pass `{}` to model a space that never seeded the
+    standard 40 — `issues/126`.
     """
 
-    def __init__(self, in_correlated_subquery: bool = False, aliases=None):
+    XSD_STRING = "http://www.w3.org/2001/XMLSchema#string"
+
+    def __init__(self, in_correlated_subquery: bool = False, aliases=None,
+                 dt_ids=None):
         self.in_correlated_subquery = in_correlated_subquery
         if aliases is not None:
             self.aliases = aliases
+        self._dt_ids = ({self.XSD_STRING: 1} if dt_ids is None else dt_ids)
+
+    def dt_ids_for_uris(self, uris):
+        """Same contract as `EmitContext.dt_ids_for_uris`, including the
+        `'NULL'` returned when nothing resolves — which makes an `IN` arm
+        always false rather than silently matching id 1."""
+        ids = [str(self._dt_ids[u]) for u in uris if u in self._dt_ids]
+        return ", ".join(ids) if ids else "NULL"
+
+
+class TestStringGuardResolvesIdsPerSpace:
+    """The plain/xsd:string guard must read the SPACE's datatype table.
+
+    `issues/126`: the id was derived positionally from `STANDARD_DATATYPES`,
+    which assumes every space seeded those 40 in order. Three of 164 real
+    spaces did not, and `sp_geo_test` has `vital-core#geoLocation` at id 1 —
+    so the positional form pinned the guard to geoLocation and called it a
+    string. Verified against that space directly before this test existed;
+    this is what keeps it from coming back.
+    """
+
+    from vitalgraph.db.sparql_sql import filter_pushdown as _fp
+
+    def test_seeded_space_pins_the_real_string_id(self):
+        guard = self._fp._plain_string_datatype_guard(_FakeCtx())
+        assert "datatype_id IN (1)" in guard
+        assert "datatype_id IS NULL" in guard, "plain literals store NULL"
+
+    def test_space_that_never_seeded_matches_only_plain_literals(self):
+        """`NULL` is correct, not degraded: no term there carries xsd:string."""
+        guard = self._fp._plain_string_datatype_guard(_FakeCtx(dt_ids={}))
+        assert "datatype_id IN (NULL)" in guard
+
+    def test_a_space_that_numbers_string_differently_is_followed(self):
+        """The id is whatever THAT space says, not 1."""
+        guard = self._fp._plain_string_datatype_guard(
+            _FakeCtx(dt_ids={_FakeCtx.XSD_STRING: 37}))
+        assert "datatype_id IN (37)" in guard
+
+    def test_no_context_declines_rather_than_guessing(self):
+        assert self._fp._plain_string_datatype_guard(None) == ""
 
 
 class TestNoPushDownInsideCorrelatedSubquery:
