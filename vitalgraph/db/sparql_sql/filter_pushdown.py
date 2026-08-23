@@ -399,24 +399,27 @@ def _try_text_filter(
                else "term_text")
         term_cond = f"{col} {op} '{pat}'"
     elif name == "eq":
-        # Pin the datatype, or this matches EVERY term sharing the lexical form.
+        # Defer to `_ne_equality_cond`, the ONE place that knows how to turn a
+        # literal into a term-level equality: `num_val` for numerics so
+        # `"5.0"^^double` matches `5^^integer`, `dt_val` for dateTimes so one
+        # instant matches however it is written, both boolean spellings, and
+        # plain/`xsd:string` with the datatype guard `issues/121` needed.
         #
-        # `issues/121`: `FILTER(?v = "x")` returned a term typed
-        # `<urn:custom>` as well as the plain literal, because a bare
-        # `term_text = 'x'` cannot tell them apart — stored, they differ only
-        # in `datatype_id` (NULL for plain, the standard id for xsd:string, a
-        # new row 41+ for anything else).
+        # This arm used to build its own `term_text = '...'`. Lexical, and for
+        # a dateTime simply wrong: rdflib normalises `...Z` to `...+00:00` on
+        # the way in, so `?v = "...Z"^^xsd:dateTime` matched NOTHING — not even
+        # the term holding that exact instant — and two timestamps denoting one
+        # moment compared unequal whenever their text differed.
         #
-        # This is the same lexical-vs-value trap the note below `_TEXT_SEARCH_OPS`
-        # already records for `eq` in the other direction, where
-        # `term_text = '5'` misses `"5.0"^^xsd:double`.
-        _dt = (literal_node.datatype or "") if literal_node is not None else ""
-        if _dt in ("", f"{_XSD}string"):
-            term_cond = (f"term_text = '{escaped}'"
-                         + _plain_string_datatype_guard(ctx))
-        else:
-            # A typed literal: leave it to the expression path, which knows how
-            # to compare datatypes. Declining is what the sibling site does.
+        # The shape is the same either way; the caller wraps this in
+        # `uuid IN (SELECT term_uuid ... WHERE <cond>)`, which is exactly what
+        # `_ne_equality_cond` is written to fill. Declining when it declines
+        # keeps the two in step, which the note below `_TEXT_SEARCH_OPS` is
+        # about.
+        if literal_node is None:
+            return None
+        term_cond = _ne_equality_cond(literal_node, ctx)
+        if term_cond is None:
             return None
     else:
         return None
@@ -549,6 +552,12 @@ _FLIPPED = {"<": ">", "<=": ">=", ">": "<", ">=": "<="}
 
 _XSD = "http://www.w3.org/2001/XMLSchema#"
 _DATETIME_DTS = (f"{_XSD}dateTime", f"{_XSD}date")
+# A trailing `Z` or a `±HH:MM` offset — the two ways XSD spells a timezone.
+# Kept as a pair: the Python form classifies the literal at emit time, the SQL
+# form classifies the stored term at run time, and they must agree.
+_TZ_RE = re.compile(r"(Z|[+-]\d{2}:\d{2})$")
+_TZ_SQL_RE = r"(Z|[+-][0-9]{2}:[0-9]{2})$"
+
 _ISO_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?)?"
     r"(?:[+-]\d{2}:\d{2}|Z)?$")
@@ -821,8 +830,23 @@ def _ne_equality_cond(value_node, ctx=None) -> Optional[str]:
         return f"{NUMERIC_TERM_COLUMN} = {num}"
 
     if dt in _DATETIME_DTS and _ISO_RE.match(raw.strip()):
+        # By VALUE, so one instant matches however it is written — `...Z`,
+        # `...+00:00` and `2019-12-31T23:00:00-01:00` are the same moment.
+        #
+        # Plus a timezone-agreement guard, because `vitalgraph_iso_to_utc`
+        # reads an untimezoned value AS IF it were UTC. XSD says a timezoned
+        # and an untimezoned dateTime are INCOMPARABLE — the answer depends on
+        # the offset nobody supplied — so without this, normalising would
+        # declare them equal, which is a wrong answer rather than a missing
+        # one. Requiring the two to agree makes an incomparable pair simply not
+        # match, which is what a FILTER does with a type error anyway and what
+        # `datatypes_and_language_tags.md` §4.6 records as the deliberate,
+        # practical choice.
+        _lit = raw.strip()
+        _lit_tz = "true" if _TZ_RE.search(_lit) else "false"
         return (f"{DATETIME_TERM_COLUMN} = "
-                f"vitalgraph_iso_to_utc('{_esc(raw.strip())}')")
+                f"vitalgraph_iso_to_utc('{_esc(_lit)}') "
+                f"AND (term_text ~ '{_TZ_SQL_RE}') IS {_lit_tz}")
 
     if dt in ("", f"{_XSD}string"):
         # A plain literal and an xsd:string literal are one value in RDF 1.1, so
