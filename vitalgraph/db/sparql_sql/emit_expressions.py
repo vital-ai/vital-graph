@@ -977,7 +977,38 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
         if a and b:
             if b == "'*'":
                 return f"({a} IS NOT NULL AND {a} != '')"
-            return f"(LOWER({a}) = LOWER({b}))"
+            # RFC 4647 basic filtering, which SPARQL 1.1 defines langMatches in
+            # terms of: the range matches when it EQUALS the tag, or is a
+            # prefix of it ENDING AT A SUBTAG BOUNDARY. This was equality
+            # alone, so `langMatches(lang(?x), "en")` — the standard way to ask
+            # for "English, any region" — returned nothing for en-US, en-GB,
+            # en-AU (`issues/120`).
+            #
+            # The boundary is the whole difficulty. Comparing `LEFT(a, n+1)`
+            # against `b || '-'` requires the separator, so `en` matches
+            # `en-US` but NOT `enm`, which is Middle English — a different
+            # language a plain prefix test would wrongly return.
+            #
+            # `LEFT(...) = ...` rather than LIKE, matching `strstarts` above:
+            # the range can arrive through a variable, and LIKE would read a
+            # `%` or `_` in it as a metacharacter.
+            _basic = (f"LOWER({a}) = LOWER({b}) OR "
+                      f"LEFT(LOWER({a}), LENGTH({b}) + 1) = LOWER({b}) || '-'")
+            # A range written in the query is known now, and the arm above
+            # already caught `"*"`, so it cannot be the wildcard. One arriving
+            # through a VARIABLE can be, and only at runtime — testing for it
+            # is the difference between `langMatches(?t, ?r)` with ?r = "*"
+            # answering TRUE and answering FALSE, which it did.
+            #
+            # Gated on the range being dynamic so the ordinary
+            # `langMatches(lang(?v), "en")` keeps the plain predicate instead
+            # of paying for a CASE that can never take its first branch.
+            if isinstance(args[1], ExprValue) and isinstance(args[1].node,
+                                                             LiteralNode):
+                return f"({_basic})"
+            return (f"(CASE WHEN {b} = '*' "
+                    f"THEN ({a} IS NOT NULL AND {a} != '') "
+                    f"ELSE ({_basic}) END)")
 
     # --- Conditional ---
     if fname == "if" and len(args) == 3:
