@@ -70,6 +70,13 @@ than a latent one, and it should be prioritised accordingly.
 
 ## Fix — needs a decision, not just an edit
 
+The mechanism is written up in
+`planning/planning_sparql_features/datatypes_and_language_tags.md` §4b:
+`_cmp_pair` (`emit_expressions.py:342`) is the lane chooser, it returns a
+PAIR that six callers compose with an operator, and correct term equality
+is a CONJUNCTION — so the full fix changes that contract and all six
+comparators, every one of which works today.
+
 Unlike `issues/120` this is not one expression. Correct equality means carrying
 `datatype_id` into the comparison whenever neither side is in a known
 comparable value space, which touches the value lanes rather than a single
