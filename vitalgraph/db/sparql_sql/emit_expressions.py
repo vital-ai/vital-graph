@@ -370,9 +370,23 @@ def _in_one_value_space(left, right, ctx: EmitContext) -> bool:
         return True
     if _is_boolean_expr(left, ctx) or _is_boolean_expr(right, ctx):
         return True
-    if _is_text_operand(left, ctx) and _is_text_operand(right, ctx):
+    # NOT `_is_text_operand`. That answers "is COLLATE safe here", and it says
+    # True for a VARIABLE resolving to its text column — which is exactly the
+    # case that needs the guard, because the row behind that variable may hold
+    # any datatype. Using it here suppressed the guard for `?v = "x"`, so the
+    # expression-path fix passed every test that compared two literals written
+    # in the query while stored data stayed wrong.
+    #
+    # Only two STATICALLY known string literals are provably one value.
+    if _is_static_string_literal(left) and _is_static_string_literal(right):
         return True
     return False
+
+
+def _is_static_string_literal(expr) -> bool:
+    """A literal written in the query whose datatype is absent or xsd:string."""
+    return (isinstance(expr, ExprValue) and isinstance(expr.node, LiteralNode)
+            and (expr.node.datatype or "") in ("", f"{XSD}string"))
 
 
 def _datatype_guard(left, right, ctx: EmitContext) -> Optional[str]:
@@ -395,7 +409,13 @@ def _datatype_guard(left, right, ctx: EmitContext) -> Optional[str]:
     ldt, rdt = _dt_sql(left, ctx), _dt_sql(right, ctx)
     if ldt is None or rdt is None:
         return None
-    return f"({ldt} IS NOT DISTINCT FROM {rdt})"
+    # COALESCE to xsd:string on both sides. A plain literal stores
+    # `datatype_id` NULL while an explicit `"x"^^xsd:string` stores the id, and
+    # RDF 1.1 makes those ONE value — so comparing the raw columns would put
+    # them in different classes and drop the plain rows. Normalising is what
+    # keeps `"x" = "x"^^xsd:string` TRUE.
+    _S = f"'{XSD}string'"
+    return (f"(COALESCE({ldt}, {_S}) IS NOT DISTINCT FROM COALESCE({rdt}, {_S}))")
 
 
 def _cmp_sql(left, right, op: str, ctx: EmitContext) -> Optional[str]:

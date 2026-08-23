@@ -254,6 +254,19 @@ def push_filters(plan: PlanV2, space_id: str, ctx=None) -> None:
 push_text_filters = push_filters
 
 
+def _plain_string_datatype_guard() -> str:
+    """SQL restricting a term to the plain/`xsd:string` value space, or "".
+
+    RDF 1.1 makes a plain literal and an `xsd:string` literal the same value,
+    so both ids pass; every other datatype sharing the lexical form is a
+    DIFFERENT term and must not. Empty string when no id is known, which leaves
+    the caller's condition as it was.
+    """
+    from .sparql_sql_schema import string_datatype_ids
+    ids = string_datatype_ids()
+    return f" AND (datatype_id IS NULL OR datatype_id IN ({ids}))" if ids else ""
+
+
 def _try_text_filter(
     expr, bgp: PlanV2, term_table: str, quad_aliases: set, ctx=None
 ) -> Optional[Tuple[str, str]]:
@@ -269,6 +282,7 @@ def _try_text_filter(
 
     var_name = None
     literal_value = None
+    literal_node = None
     flags_arg = None
     ci = False
 
@@ -281,6 +295,7 @@ def _try_text_filter(
                 if isinstance(args[j].node, LiteralNode):
                     var_name = args[i].var
                     literal_value = args[j].node.value
+                    literal_node = args[j].node
                     break
 
     if var_name is None or literal_value is None:
@@ -369,7 +384,24 @@ def _try_text_filter(
                else "term_text")
         term_cond = f"{col} {op} '{pat}'"
     elif name == "eq":
-        term_cond = f"term_text = '{escaped}'"
+        # Pin the datatype, or this matches EVERY term sharing the lexical form.
+        #
+        # `issues/121`: `FILTER(?v = "x")` returned a term typed
+        # `<urn:custom>` as well as the plain literal, because a bare
+        # `term_text = 'x'` cannot tell them apart — stored, they differ only
+        # in `datatype_id` (NULL for plain, the standard id for xsd:string, a
+        # new row 41+ for anything else).
+        #
+        # This is the same lexical-vs-value trap the note below `_TEXT_SEARCH_OPS`
+        # already records for `eq` in the other direction, where
+        # `term_text = '5'` misses `"5.0"^^xsd:double`.
+        _dt = (literal_node.datatype or "") if literal_node is not None else ""
+        if _dt in ("", f"{_XSD}string"):
+            term_cond = f"term_text = '{escaped}'" + _plain_string_datatype_guard()
+        else:
+            # A typed literal: leave it to the expression path, which knows how
+            # to compare datatypes. Declining is what the sibling site does.
+            return None
     else:
         return None
 
@@ -762,8 +794,23 @@ def _ne_equality_cond(value_node)-> Optional[str]:
 
     if dt in ("", f"{_XSD}string"):
         # A plain literal and an xsd:string literal are one value in RDF 1.1, so
-        # match lexically without pinning the datatype id.
-        return f"term_text = '{_esc(raw)}' AND term_type = 'L'"
+        # both must match — but ONLY those two.
+        #
+        # This used to match on `term_text` and `term_type` alone, described as
+        # "without pinning the datatype id". That treats plain and xsd:string
+        # as one value correctly, and every OTHER datatype sharing the lexical
+        # form as the same value incorrectly. Stored, the three are distinct
+        # terms:
+        #
+        #     "x"                  datatype_id NULL
+        #     "x"^^xsd:string      datatype_id 1
+        #     "x"^^<urn:custom>    datatype_id 41
+        #
+        # so `FILTER(?v = "x")` over data holding the third returned it —
+        # `issues/121` on the pushdown side, and invisible to a test that only
+        # compares literals written in the query.
+        return (f"term_text = '{_esc(raw)}' AND term_type = 'L'"
+                + _plain_string_datatype_guard())
 
     # Anything else — a language-tagged literal, an unrecognised datatype —
     # decline rather than answer approximately. A wrong answer here is a row

@@ -84,6 +84,28 @@ def numeric_datatype_ids() -> str:
     return ", ".join(str(ids[u]) for u in _NUMERIC_DATATYPES if u in ids)
 
 
+def string_datatype_ids() -> str:
+    """Comma-separated datatype_ids that mean "this is a plain string".
+
+    Positional, like `numeric_datatype_ids` and `boolean_datatype_ids`. Today
+    that is `xsd:string` alone, because RDF 1.1 abolished the untyped literal —
+    a plain literal IS an `xsd:string`.
+
+    Needed because those two are ONE VALUE while every other datatype sharing a
+    lexical form is a DIFFERENT TERM. Stored, they are distinguishable:
+
+        "x"                 datatype_id NULL
+        "x"^^xsd:string     datatype_id 1
+        "x"^^<urn:custom>   datatype_id 41
+
+    A lexical match that ignores `datatype_id` collapses all three, which is
+    `issues/121` on the pushdown side.
+    """
+    _s = "http://www.w3.org/2001/XMLSchema#string"
+    ids = {uri: i for i, (uri, _n) in enumerate(STANDARD_DATATYPES, start=1)}
+    return str(ids[_s]) if _s in ids else ""
+
+
 NUMERIC_TERM_COLUMN = "num_val"
 DATETIME_TERM_COLUMN = "dt_val"
 

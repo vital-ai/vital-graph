@@ -12,7 +12,16 @@ guard exists. Appending `AND datatypes agree` is right for `=` and wrong for
 are different terms and must compare UNEQUAL.
 
 Everything in §3 of that document is correct today and must stay correct, so
-most of what follows is a guard against the fix rather than a test of it.
+much of what follows is a guard against the fix rather than a test of it.
+
+TWO PATHS, AND THE FIRST VERSION OF THIS FILE ONLY TESTED ONE. Comparing two
+literals written in the QUERY exercises `emit_expressions`. A `FILTER` against
+stored DATA can be pushed down instead, where `filter_pushdown` emits its own
+matching SQL — and it matched on `term_text` and `term_type` while ignoring
+`datatype_id`, so it returned a custom-typed term for `FILTER(?v = "x")`. The
+expression-path fix passed all eight of the original tests while the case that
+actually matters stayed broken. The stored-data tests at the end are the ones
+that would have caught it.
 """
 
 from __future__ import annotations
@@ -122,3 +131,64 @@ async def test_datetime_still_compares(space_impl, dt_space):
     XS = "http://www.w3.org/2001/XMLSchema#dateTime"
     assert await _ask(space_impl, dt_space,
                       f'"2020-01-01T00:00:00Z"^^<{XS}> = "2020-01-01T00:00:00Z"^^<{XS}>') is True
+
+
+# --- the same question against STORED data, which takes the pushdown path ----
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def stored(space_impl, dt_space):
+    """Three terms sharing one lexical form, differing only by datatype.
+
+    Stored they are distinct — plain has `datatype_id` NULL, `xsd:string` has
+    the standard id, a custom datatype gets a NEW ROW in the space's `datatype`
+    table (id 41+, which is what makes `datatype_id > 40` an exposure query).
+    """
+    g = URIRef(G)
+    await space_impl.add_rdf_quads_batch_bulk(dt_space, [
+        (URIRef("urn:dt:plain"), URIRef("urn:dt:v"), Literal("x"), g),
+        (URIRef("urn:dt:xsd"), URIRef("urn:dt:v"), Literal("x", datatype=XSD.string), g),
+        (URIRef("urn:dt:custom"), URIRef("urn:dt:v"), Literal("x", datatype=URIRef(CUSTOM)), g)])
+    return dt_space
+
+
+async def _subjects(space_impl, space, flt):
+    from vitalgraph.db.jena_sparql.jena_ast_mapper import map_compile_response
+    from vitalgraph.db.jena_sparql.jena_sidecar_client import AsyncSidecarClient
+    from vitalgraph.db.sparql_sql.generator import generate_sql
+
+    q = f'SELECT ?s WHERE {{ GRAPH <{G}> {{ ?s <urn:dt:v> ?v }} FILTER({flt}) }}'
+    client = AsyncSidecarClient(SIDECAR)
+    try:
+        cr = map_compile_response(await client.compile(q))
+        assert cr.ok, f"compile failed: {cr.error}"
+        async with space_impl.db_impl.connection_pool.acquire() as conn:
+            gen = await generate_sql(cr, space, conn=conn)
+            assert gen.ok, f"generation refused: {gen.error}"
+            rows = await conn.fetch(gen.sql)
+        return sorted(str(list(dict(r).values())[0]) for r in rows)
+    finally:
+        close = getattr(client, "aclose", None) or getattr(client, "close", None)
+        if close:
+            res = close()
+            if hasattr(res, "__await__"):
+                await res
+
+
+async def test_stored_custom_datatype_does_not_match_a_plain_literal(space_impl, stored):
+    """THE case. A plain-literal filter must not return a custom-typed term."""
+    got = await _subjects(space_impl, stored, '?v = "x"')
+    assert got == ["urn:dt:plain", "urn:dt:xsd"], (
+        f"FILTER(?v = \"x\") returned {got}. A term whose datatype is "
+        f"<{CUSTOM}> is not the plain literal \"x\" — RDF 1.1 makes plain and "
+        f"xsd:string one value, and nothing else (issues/121).")
+
+
+async def test_stored_custom_datatype_matches_its_own_datatype(space_impl, stored):
+    got = await _subjects(space_impl, stored, f'?v = "x"^^<{CUSTOM}>')
+    assert got == ["urn:dt:custom"], got
+
+
+async def test_stored_ne_excludes_only_the_matching_terms(space_impl, stored):
+    """`!=` is where a naive guard inverts: the custom term IS unequal to "x"."""
+    got = await _subjects(space_impl, stored, '?v != "x"')
+    assert got == ["urn:dt:custom"], got
