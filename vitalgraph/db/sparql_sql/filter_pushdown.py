@@ -766,8 +766,7 @@ def _ne_equality_cond(value_node, ctx=None) -> Optional[str]:
     Neither is reachable from KGQuery, which types its literals, but both are
     reachable from SPARQL a caller writes.
     """
-    from .sparql_sql_schema import (NUMERIC_TERM_COLUMN, DATETIME_TERM_COLUMN,
-                                    boolean_datatype_ids)
+    from .sparql_sql_schema import NUMERIC_TERM_COLUMN, DATETIME_TERM_COLUMN
     from .emit_bgp import _NUMERIC_DATATYPES
 
     if isinstance(value_node, URINode):
@@ -793,8 +792,25 @@ def _ne_equality_cond(value_node, ctx=None) -> Optional[str]:
                "false": "'false','0'", "0": "'false','0'"}.get(raw.strip().lower())
         if lex is None:
             return None            # not a valid boolean lexical form
-        return (f"term_text IN ({lex}) "
-                f"AND datatype_id IN ({boolean_datatype_ids()})")
+        # Resolved from THIS SPACE, not positionally — `issues/126`. The id
+        # used to come from `boolean_datatype_ids()`, which enumerates
+        # STANDARD_DATATYPES and assumes every space seeded those 40 in order.
+        # Three of 164 real spaces did not; `sp_geo_test` has
+        # `vital-core#geoLocation` at id 1, so that form pinned "boolean" to
+        # geoLocation — simultaneously admitting the wrong terms and excluding
+        # the right ones.
+        #
+        # No context means this call is the semijoin GATE
+        # (`_inequality_var`/`_in_var`), which reads `ops[0]` and discards this
+        # SQL. It must still return non-None: the gate and the push-down have
+        # to recognise exactly the same expressions, and a gate that declined
+        # here while `_try_inequality_filter` accepted would mark a join whose
+        # filter then fails to push — `issues/054`, where `gt` became uniquely
+        # slow. So drop the guard rather than the row.
+        _bool_guard = (f" AND datatype_id IN "
+                       f"({ctx.dt_ids_for_uris([f'{_XSD}boolean'])})"
+                       if ctx is not None else "")
+        return f"term_text IN ({lex}){_bool_guard}"
 
     if dt in _NUMERIC_DATATYPES:
         num = _numeric_literal(ExprValue(node=value_node))

@@ -298,6 +298,58 @@ class TestStringGuardResolvesIdsPerSpace:
         assert self._fp._plain_string_datatype_guard(None) == ""
 
 
+class TestBooleanGuardResolvesIdsPerSpace:
+    """`issues/126` category A: the boolean guard was pinned positionally too.
+
+    The guard is what stops the plain string "true" and the integer 1 matching
+    a boolean, so a wrong id here both admits wrong terms and excludes right
+    ones. In `sp_geo_test` the positional form resolved to
+    `vital-core#geoLocation`.
+    """
+
+    from vitalgraph.db.sparql_sql import filter_pushdown as _fp
+
+    XSD_BOOL = "http://www.w3.org/2001/XMLSchema#boolean"
+
+    def _cond(self, ctx, lex="true"):
+        return self._fp._ne_equality_cond(
+            LiteralNode(value=lex, datatype=self.XSD_BOOL), ctx)
+
+    def test_uses_the_id_this_space_gives_boolean(self):
+        cond = self._cond(_FakeCtx(dt_ids={self.XSD_BOOL: 9}))
+        assert "datatype_id IN (9)" in cond
+
+    def test_space_that_never_seeded_matches_no_datatype(self):
+        cond = self._cond(_FakeCtx(dt_ids={}))
+        assert "datatype_id IN (NULL)" in cond
+
+    def test_both_spellings_of_one_value_still_match(self):
+        """"true" and "1" are one value and two terms."""
+        for lex in ("true", "1"):
+            assert "'true','1'" in self._cond(_FakeCtx(), lex)
+        for lex in ("false", "0"):
+            assert "'false','0'" in self._cond(_FakeCtx(), lex)
+
+    def test_the_gate_still_recognises_a_boolean_without_a_context(self):
+        """THE constraint that makes `ctx is None` subtle.
+
+        `_inequality_var`/`_in_var` call this with no context, discard the SQL,
+        and use only whether it is None. If declining here made the gate reject
+        a boolean that `_try_inequality_filter` would go on to accept, semijoin
+        would mark a join whose filter then fails to push — `issues/054`, where
+        `gt` became uniquely slow. Non-None is the contract, not the guard.
+        """
+        assert self._cond(None) is not None
+        ne = ExprFunction(name="ne", args=[
+            ExprVar(var="v"),
+            ExprValue(node=LiteralNode(value="true", datatype=self.XSD_BOOL))])
+        assert self._fp._inequality_var(ne) == "v", (
+            "the gate must still see a pushable boolean with no context")
+
+    def test_an_invalid_boolean_lexical_form_still_declines(self):
+        assert self._cond(_FakeCtx(), "yes") is None
+
+
 class TestNoPushDownInsideCorrelatedSubquery:
     """A pushed constraint is an UNCORRELATED `IN (SELECT term_uuid ...)`.
 
@@ -406,9 +458,18 @@ class TestEqualityConditionDispatchesOnDatatype:
 
     XSD = "http://www.w3.org/2001/XMLSchema#"
 
-    def _cond(self, value, datatype=None):
+    def _cond(self, value, datatype=None, ctx=None):
+        """Emit through a real context, the way query generation does.
+
+        These assert on the CONDITION, and a datatype guard resolves its ids
+        against the space (`issues/126`). Passing no context is the semijoin
+        gate's path, which discards the SQL and only checks for None — so
+        asserting emitted SQL without a context would be testing a string
+        nothing uses.
+        """
         from vitalgraph.db.sparql_sql.filter_pushdown import _ne_equality_cond
-        return _ne_equality_cond(LiteralNode(value=value, datatype=datatype))
+        return _ne_equality_cond(LiteralNode(value=value, datatype=datatype),
+                                 _FakeCtx() if ctx is None else ctx)
 
     def test_plain_numeric_looking_literal_is_a_string(self):
         cond = self._cond("5")

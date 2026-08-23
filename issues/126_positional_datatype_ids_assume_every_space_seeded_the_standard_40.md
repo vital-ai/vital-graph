@@ -27,7 +27,7 @@ unknown** — no access from here, same open question as `issues/121`.
 
 ## Two categories, and only one is cheap
 
-### A. A query predicate — same defect as `issues/121`, one line
+### A. A query predicate — RESOLVED 2026-08-23
 
 `filter_pushdown.py:797` emits
 
@@ -37,8 +37,20 @@ into a WHERE clause. In `sp_geo_test` that pins "boolean" to ids that mean
 geoLocation and wktLiteral. This is exactly the bug fixed for the string guard
 in `0571abe`, and the fix is now trivial: `_ne_equality_cond` already takes
 `ctx` as of that commit, so it can call `ctx.dt_ids_for_uris(_BOOLEAN_DATATYPES)`
-the way `_plain_string_datatype_guard` does. **Not done here** only because it
-was outside the scope asked for; it should be the first thing fixed.
+the way `_plain_string_datatype_guard` does.
+
+**Done.** It resolves through `ctx.dt_ids_for_uris` now, and
+`boolean_datatype_ids` is deleted rather than left as a second, wrong source
+of truth — the same disposal `string_datatype_ids` got.
+
+One constraint made this less mechanical than it looked. `_ne_equality_cond`
+is called with NO context by `_inequality_var`/`_in_var`, which are the
+semijoin GATE. Declining there would have been the obvious way to avoid
+emitting an unguarded condition, and it would have been wrong: the gate and
+the push-down must recognise exactly the same expressions, or semijoin marks a
+join whose filter then fails to push. That is `issues/054`, where `gt` became
+uniquely slow. So the no-context path drops the guard and keeps the shape —
+safe because those two callers read `ops[0]` and discard the SQL.
 
 ### B. STORED generated columns — materialized on disk, needs a rewrite
 
@@ -82,7 +94,7 @@ are wrong for it. A cluster-wide sweep is in this issue's history.
 
 ## Suggested order
 
-1. Fix the boolean guard (category A) — one line, ctx already threaded.
+1. ~~Fix the boolean guard (category A)~~ — done.
 2. Add a startup or `ensure_space_indexes.py` check that flags a space whose
    datatype table does not match `STANDARD_DATATYPES`, so this stops being
    invisible. Detection before repair: the three known spaces are test data,
