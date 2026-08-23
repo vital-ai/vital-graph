@@ -339,6 +339,89 @@ def _is_text_operand(expr, ctx: EmitContext) -> bool:
     return False
 
 
+def _dt_sql(expr, ctx: EmitContext) -> Optional[str]:
+    """SQL yielding this operand's datatype IRI, or None if it has no lane.
+
+    A variable carries `dt_col` (`sql_type_generation.ColumnInfo`); a literal
+    written in the query knows its own datatype statically.
+    """
+    if isinstance(expr, ExprVar):
+        info = ctx.types.get(expr.var)
+        return info.dt_col if info and info.dt_col else None
+    if isinstance(expr, ExprValue) and isinstance(expr.node, LiteralNode):
+        # RDF 1.1: a plain literal IS an xsd:string, so an absent datatype is
+        # xsd:string rather than "no datatype" — which is what makes
+        # `"x" = "x"^^xsd:string` TRUE.
+        dt = expr.node.datatype or f"{XSD}string"
+        return f"'{_esc(dt)}'"
+    return None
+
+
+def _in_one_value_space(left, right, ctx: EmitContext) -> bool:
+    """True when SPARQL compares these two BY VALUE regardless of datatype.
+
+    These are the cases that are correct today and must not acquire a datatype
+    guard: two numerics compare across integer/decimal/double
+    (`"1"^^xsd:integer = 1.0` is TRUE), booleans were settled in `issues/049`,
+    datetimes have their own lane, and a plain literal is an `xsd:string` in
+    RDF 1.1 so the string lane is one space too.
+    """
+    if _is_numeric_expr(left, ctx) or _is_numeric_expr(right, ctx):
+        return True
+    if _is_boolean_expr(left, ctx) or _is_boolean_expr(right, ctx):
+        return True
+    if _is_text_operand(left, ctx) and _is_text_operand(right, ctx):
+        return True
+    return False
+
+
+def _datatype_guard(left, right, ctx: EmitContext) -> Optional[str]:
+    """SQL requiring the two operands' datatypes to agree, or None.
+
+    `issues/121`: comparison falls back to `term_text`, so a datatype we do not
+    model collapses into the string lane and `"x"^^<urn:myType> = "x"` answers
+    TRUE where SPARQL says FALSE.
+
+    None when the two are in one value space — that is where today's correct
+    behaviour lives, and a guard there would break it, which is `issues/049` in
+    reverse.
+
+    NOT DISTINCT FROM rather than `=`: a datatype column is NULL for a term
+    with no datatype, and NULL = NULL is unknown, which would silently exclude
+    rows instead of matching them.
+    """
+    if _in_one_value_space(left, right, ctx):
+        return None
+    ldt, rdt = _dt_sql(left, ctx), _dt_sql(right, ctx)
+    if ldt is None or rdt is None:
+        return None
+    return f"({ldt} IS NOT DISTINCT FROM {rdt})"
+
+
+def _cmp_sql(left, right, op: str, ctx: EmitContext) -> Optional[str]:
+    """A comparison, with a datatype guard when the operands need one.
+
+    `=` and `!=` are NOT mirror images here. Appending `AND <guard>` is right
+    for `=` and backwards for `!=`: two literals sharing a lexical form and
+    differing in datatype are different terms, so they must compare UNEQUAL,
+    and `(values differ) AND (datatypes agree)` makes that FALSE.
+
+    Ordering comparators compose like `=`. SPARQL calls an incomparable
+    ordering a type error, which in a FILTER excludes the row, and excluding is
+    what the guard produces. See
+    `planning_sparql_features/datatypes_and_language_tags.md` §4b.
+    """
+    a, b = _cmp_pair(left, right, ctx)
+    if not a or not b:
+        return None
+    guard = _datatype_guard(left, right, ctx)
+    if guard is None:
+        return f"({a} {op} {b})"
+    if op == "!=":
+        return f"(({a} != {b}) OR NOT {guard})"
+    return f"(({a} {op} {b}) AND {guard})"
+
+
 def _cmp_pair(left, right, ctx: EmitContext):
     """Return (left_sql, right_sql) using numeric columns when appropriate.
 
@@ -516,34 +599,34 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
     # --- Comparison operators ---
     # Use numeric columns when either side is numeric to avoid text=integer errors
     if fname in ("eq", "numericequal") and len(args) == 2:
-        a, b = _cmp_pair(args[0], args[1], ctx)
-        if a and b:
-            return f"({a} = {b})"
+        _sql = _cmp_sql(args[0], args[1], "=", ctx)
+        if _sql:
+            return _sql
 
     if fname in ("ne", "numericnotequal") and len(args) == 2:
-        a, b = _cmp_pair(args[0], args[1], ctx)
-        if a and b:
-            return f"({a} != {b})"
+        _sql = _cmp_sql(args[0], args[1], "!=", ctx)
+        if _sql:
+            return _sql
 
     if fname in ("lt", "numericlessthan") and len(args) == 2:
-        a, b = _cmp_pair(args[0], args[1], ctx)
-        if a and b:
-            return f"({a} < {b})"
+        _sql = _cmp_sql(args[0], args[1], "<", ctx)
+        if _sql:
+            return _sql
 
     if fname in ("gt", "numericgreaterthan") and len(args) == 2:
-        a, b = _cmp_pair(args[0], args[1], ctx)
-        if a and b:
-            return f"({a} > {b})"
+        _sql = _cmp_sql(args[0], args[1], ">", ctx)
+        if _sql:
+            return _sql
 
     if fname in ("le",) and len(args) == 2:
-        a, b = _cmp_pair(args[0], args[1], ctx)
-        if a and b:
-            return f"({a} <= {b})"
+        _sql = _cmp_sql(args[0], args[1], "<=", ctx)
+        if _sql:
+            return _sql
 
     if fname in ("ge",) and len(args) == 2:
-        a, b = _cmp_pair(args[0], args[1], ctx)
-        if a and b:
-            return f"({a} >= {b})"
+        _sql = _cmp_sql(args[0], args[1], ">=", ctx)
+        if _sql:
+            return _sql
 
     # --- Logical operators ---
     if fname == "and" and len(args) == 2:
