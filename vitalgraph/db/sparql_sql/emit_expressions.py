@@ -347,7 +347,18 @@ def _dt_sql(expr, ctx: EmitContext) -> Optional[str]:
     """
     if isinstance(expr, ExprVar):
         info = ctx.types.get(expr.var)
-        return info.dt_col if info and info.dt_col else None
+        if not info or not info.dt_col:
+            return None
+        # The literal string "NULL" is not a column — it is what the emitters
+        # use when a var's datatype is not tracked at all (see
+        # `emit_context.py:569`, which tests for the same sentinel). That is
+        # UNKNOWN, not "no datatype": COALESCEing it to xsd:string would assert
+        # a datatype we never established and could exclude rows that match.
+        # Return None so the caller declines to guard and keeps prior
+        # behaviour, which is over-permissive rather than wrong-and-narrower.
+        if info.dt_col == "NULL":
+            return None
+        return info.dt_col
     if isinstance(expr, ExprValue) and isinstance(expr.node, LiteralNode):
         # RDF 1.1: a plain literal IS an xsd:string, so an absent datatype is
         # xsd:string rather than "no datatype" — which is what makes

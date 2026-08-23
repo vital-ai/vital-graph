@@ -1,6 +1,6 @@
 # A Literal With an Unknown Datatype Equals a Plain String
 
-## Status: OPEN — found 2026-08-22 while writing
+## Status: RESOLVED — fixed 2026-08-23 on branch `datatype-equality`
 ## `planning/planning_sparql_features/datatypes_and_language_tags.md` §4.2
 
     "x"^^<urn:myType> = "x"        spec: FALSE     actual: TRUE
@@ -103,3 +103,62 @@ Worth checking before implementing: whether the pushdown path
 (`filter_pushdown.py`) and the expression path agree on this, since
 `issues/070` and the regex work both found the two emitters disagreeing about
 semantics, which turns a pushdown into a behaviour change.
+
+
+## Resolved — the full fix, both emitters
+
+Done as the **full fix**, not the narrower unknown-datatype-only form sketched
+above. The narrow form would have left the pushdown path wrong, and the
+pushdown path is the one that runs against stored data.
+
+**Expression path** (`emit_expressions.py`). `_cmp_pair` still chooses a lane
+and still returns a pair; a new `_cmp_sql` composes it with the operator and
+conjoins a datatype guard when neither side is provably in one value space.
+The three rules above hold:
+
+* numeric and datetime lanes compare by value, unguarded — `_in_one_value_space`
+  returns True for them, so `"1"^^xsd:integer = 1.0` stays TRUE;
+* plain and `xsd:string` stay equal, via `COALESCE(dt, xsd:string)` on both
+  sides — a plain literal stores `datatype_id` NULL, not the xsd:string id;
+* everything else compares only when the datatypes match.
+
+`!=` is NOT the negation of the guarded `=`. It composes as
+`(a != b) OR NOT guard`: two terms with different datatypes ARE unequal, so
+the guard failing makes `!=` true, where it makes `=` false.
+
+**Pushdown path** (`filter_pushdown.py`) — and this is where the issue's own
+closing paragraph turned out to be right. The two emitters did disagree, and
+the expression-path fix alone changed nothing for stored data, because a
+stored-data `FILTER(?v = "x")` never reaches it. Two sites matched lexically:
+
+* `_try_text_filter`'s `eq` arm emitted a bare `term_text = 'x'`. It now pins
+  the datatype for a plain/`xsd:string` needle and DECLINES a typed one,
+  deferring to the expression path.
+* `_ne_equality_cond`'s plain/`xsd:string` arm carried a comment saying it
+  matched "without pinning the datatype id". Correct that plain and
+  `xsd:string` are one value; wrong that nothing else could collide.
+
+Both now use `_plain_string_datatype_guard()`, so they cannot drift apart.
+
+## What the original measurement missed
+
+The 11 tests in `tests/integration/test_datatype_equality.py` split into eight
+comparing literals written IN THE QUERY and three that STORE the three terms
+first. The eight passed against the expression-path fix alone. Only the stored
+ones caught the pushdown, and they only exist because the exposure query in
+this issue — `datatype_id > 40` — prompted checking what the three terms
+actually look like on disk:
+
+    "x"                  datatype_id NULL    (plain)
+    "x"^^xsd:string      datatype_id 1
+    "x"^^<urn:custom>    datatype_id 41      (a row added on store)
+
+That NULL is the detail the fix turns on, and it is not visible from a query
+that never stores anything. Answering "does the schema change?" — no DDL
+change; the per-space `datatype` table simply gains a row.
+
+## Exposure question still open
+
+The production count above was never run; no access from here. The fix is
+correct either way, but whether this was a live defect or a latent one is
+still unanswered.
