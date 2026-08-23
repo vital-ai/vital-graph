@@ -254,17 +254,32 @@ def push_filters(plan: PlanV2, space_id: str, ctx=None) -> None:
 push_text_filters = push_filters
 
 
-def _plain_string_datatype_guard() -> str:
+def _plain_string_datatype_guard(ctx) -> str:
     """SQL restricting a term to the plain/`xsd:string` value space, or "".
 
     RDF 1.1 makes a plain literal and an `xsd:string` literal the same value,
-    so both ids pass; every other datatype sharing the lexical form is a
-    DIFFERENT term and must not. Empty string when no id is known, which leaves
-    the caller's condition as it was.
+    so both pass; every other datatype sharing the lexical form is a DIFFERENT
+    term and must not.
+
+    The id is resolved from THIS SPACE via `ctx.dt_ids_for_uris`, rather than
+    positionally from `STANDARD_DATATYPES` the way `numeric_datatype_ids` and
+    its siblings do. That form assumes every space seeded those 40 in order. Measured 2026-08-23 across 164 per-space datatype tables: 161 hold
+    `xsd:string` at id 1, and three do not hold it at all. One of those,
+    `sp_geo_test`, has `vital-core#geoLocation` at id 1 — so the positional
+    form would have pinned this guard to geoLocation and called it a string.
+
+    A space with no `xsd:string` row yields `NULL` here, making the IN arm
+    always false. That is correct rather than degraded: no term in such a space
+    can carry that datatype, so only the plain literals (NULL) should match.
+
+    "" when there is no context to resolve against — the caller's condition is
+    then left as it was, which is over-permissive rather than wrong-and-
+    narrower. Reached only by the shape-only helpers, which discard the SQL.
     """
-    from .sparql_sql_schema import string_datatype_ids
-    ids = string_datatype_ids()
-    return f" AND (datatype_id IS NULL OR datatype_id IN ({ids}))" if ids else ""
+    if ctx is None:
+        return ""
+    ids = ctx.dt_ids_for_uris([f"{_XSD}string"])
+    return f" AND (datatype_id IS NULL OR datatype_id IN ({ids}))"
 
 
 def _try_text_filter(
@@ -397,7 +412,8 @@ def _try_text_filter(
         # `term_text = '5'` misses `"5.0"^^xsd:double`.
         _dt = (literal_node.datatype or "") if literal_node is not None else ""
         if _dt in ("", f"{_XSD}string"):
-            term_cond = f"term_text = '{escaped}'" + _plain_string_datatype_guard()
+            term_cond = (f"term_text = '{escaped}'"
+                         + _plain_string_datatype_guard(ctx))
         else:
             # A typed literal: leave it to the expression path, which knows how
             # to compare datatypes. Declining is what the sibling site does.
@@ -725,7 +741,7 @@ def _numeric_var(expr) -> Optional[str]:
 _NE_OPS = {"ne", "notequals", "not_equals", "!="}
 
 
-def _ne_equality_cond(value_node)-> Optional[str]:
+def _ne_equality_cond(value_node, ctx=None) -> Optional[str]:
     """Term-table condition matching values EQUAL to this literal, or None.
 
     The single source of truth for which inequalities are pushable. Both the
@@ -810,7 +826,7 @@ def _ne_equality_cond(value_node)-> Optional[str]:
         # `issues/121` on the pushdown side, and invisible to a test that only
         # compares literals written in the query.
         return (f"term_text = '{_esc(raw)}' AND term_type = 'L'"
-                + _plain_string_datatype_guard())
+                + _plain_string_datatype_guard(ctx))
 
     # Anything else — a language-tagged literal, an unrecognised datatype —
     # decline rather than answer approximately. A wrong answer here is a row
@@ -818,7 +834,7 @@ def _ne_equality_cond(value_node)-> Optional[str]:
     return None
 
 
-def _ne_operands(expr):
+def _ne_operands(expr, ctx=None):
     """(var_name, value_node) for a PUSHABLE `?var != <literal>`, else None."""
     if not isinstance(expr, ExprFunction):
         return None
@@ -833,7 +849,7 @@ def _ne_operands(expr):
         var, node = args[1].var, args[0].node
     else:
         return None
-    if _ne_equality_cond(node) is None:
+    if _ne_equality_cond(node, ctx) is None:
         return None
     return var, node
 
@@ -866,7 +882,7 @@ def _try_inequality_filter(expr, bgp, term_table: str, quad_aliases: set, ctx):
     if ref_id not in quad_aliases:
         return None
 
-    eq_cond = _ne_equality_cond(value_node)
+    eq_cond = _ne_equality_cond(value_node, ctx)
     if eq_cond is None:
         return None
     return (ref_id, f"{ref_id}.{col_name} NOT IN "
@@ -880,7 +896,7 @@ def _try_inequality_filter(expr, bgp, term_table: str, quad_aliases: set, ctx):
 _IN_OPS = {"in": "IN", "notin": "NOT IN"}
 
 
-def _in_operands(expr):
+def _in_operands(expr, ctx=None):
     """(var, sql_op, [conds], [value nodes]) for a pushable `?var IN (...)`."""
     if not isinstance(expr, ExprFunction):
         return None
@@ -896,7 +912,7 @@ def _in_operands(expr):
     for item in args[1:]:
         if not isinstance(item, ExprValue):
             return None
-        cond = _ne_equality_cond(item.node)
+        cond = _ne_equality_cond(item.node, ctx)
         if cond is None:
             return None
         conds.append(f"({cond})")
@@ -1037,7 +1053,10 @@ def _try_in_filter(expr, bgp, term_table: str, quad_aliases: set, ctx):
 
     Returns (alias, sql) or None.
     """
-    ops = _in_operands(expr)
+    # ctx, because `conds` is emitted below and its datatype guard resolves
+    # ids against THIS space. `_in_var` may keep the default: it takes ops[0]
+    # and discards the SQL.
+    ops = _in_operands(expr, ctx)
     if ops is None:
         return None
     var_name, sql_op, conds, nodes = ops
