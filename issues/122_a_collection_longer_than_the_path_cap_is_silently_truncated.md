@@ -1,6 +1,6 @@
 # A Collection Longer Than the Path Cap Is Silently Truncated
 
-## Status: OPEN — found 2026-08-22 while measuring
+## Status: FIXED 2026-08-23 — was OPEN — found 2026-08-22 while measuring
 ## `planning/planning_sparql_features/rdf_collections.md`
 
 Reading an RDF collection with the standard idiom returns **101 items** for a
@@ -84,3 +84,19 @@ A derived table was considered and rejected as disproportionate; see
 No test in the repository constructs an `rdf:first`/`rdf:rest` chain, so
 nothing exercises this at any length. Found by executing it by hand while
 documenting the feature.
+
+
+## FIXED 2026-08-23 by `issues/123` (`df9a06f`)
+
+Not by option 2. The cap was removed rather than made loud, along with the
+`depth` column that made it necessary — see `issues/123`. Measured on the same
+fixtures:
+
+    N=100   100 items (was 100)
+    N=200   200 items (was 101)
+    N=400   400 items (was 101)
+
+The other half of this issue's cost — 37.5M buffers at N=400 — was fixed
+separately by `issues/124`, seeding a path from the variable that binds its
+start. Together, N=400 went from 37,546,274 buffers returning the wrong answer
+to 287,921 returning the right one.

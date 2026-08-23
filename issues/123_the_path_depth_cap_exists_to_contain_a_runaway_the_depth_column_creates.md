@@ -1,6 +1,6 @@
 # The Path Depth Cap Exists to Contain a Runaway the `depth` Column Creates
 
-## Status: OPEN — found 2026-08-22 while looking for a way to remove the
+## Status: FIXED 2026-08-23 — was OPEN — found 2026-08-22 while looking for a way to remove the
 ## truncation in `issues/122`
 
 `MAX_PATH_DEPTH = 100` (`emit_path.py:49`) is documented as "cycle prevention +
@@ -82,3 +82,31 @@ experiment above shows `UNION` does that on its own once `depth` is gone.
 `issues/122` records the symptom — a silently truncated collection — and its
 option 2 was to make the truncation loud. If this issue is done, that becomes
 unnecessary: there is nothing to truncate. **Prefer this.**
+
+
+## FIXED 2026-08-23 (`df9a06f`)
+
+Both removed. All four recursive CTE sites now carry `(start_uuid, end_uuid,
+ctx_uuid)` and terminate by `UNION` dedup.
+
+The four checks this issue asked for, answered:
+
+1. **All sites, including the zero-length arms** — done; the identity base no
+   longer emits its `0` depth literal either.
+2. **Nothing downstream read a four-column CTE** — confirmed; every reference
+   to `depth` was inside `emit_path`.
+3. **No path shape needed ordinality** — confirmed. `vg:listIndex` would, and
+   `rdf_collections.md` §9.5 records that lists are acyclic so it could carry
+   depth without needing a cap.
+4. **A cyclic-data test** — written FIRST, as
+   `tests/integration/test_recursive_path_termination.py`.
+
+Two existing tests asserted the old behaviour and had to be changed:
+`test_emit_path` asserted `"depth" in sql`, and `tier0_safety` asserted
+`16 <= MAX_PATH_DEPTH <= 128` as a runaway fence. Both now assert that the CTE
+deduplicates — termination follows from the graph being finite, which is a
+stronger guarantee than a constant, and a switch to `UNION ALL` now fails a
+test rather than hanging a query.
+
+Perf: 107/108 within tolerance, 0 failing, one +5.3% buffer warning on
+`traversal.skew2k.dedup.depth3`.
