@@ -212,11 +212,31 @@ a real defect as a curiosity.
 1. The path node must receive the SQL that produces its start variable. That is
    a plan-level dependency between a JOIN's two children — the same analysis
    `_try_selective_driven` does for anchor and driver.
-2. Guard against the toy case: when the graph is small the seeded form was
-   slightly worse. It is noise at that size, but the emitter should not need to
-   choose — measure whether a single form is acceptable everywhere before
-   adding a heuristic, because a heuristic is what `issues/118` shows going
-   silently wrong.
-3. A regression test on a REAL fixture. Nothing in the suite covers a
-   variable-started property path, which is why a 67-second query has been
-   shipping.
+2. **ONE FORM, NO HEURISTIC.** Decided 2026-08-22. Seed always; do not choose
+   between seeded and unseeded based on graph size, cardinality estimates or
+   anything else.
+
+   The small-fixture result that made this tempting — 21,305 buffers seeded
+   against 3,060 unseeded on 2,000 quads — is a few thousand buffers on a graph
+   where everything is fast. Against it, the unseeded form is 67 SECONDS on a
+   real one. Trading an unbounded worst case for a bounded few-thousand-buffer
+   regression is the right trade taken unconditionally.
+
+   And a switch would be the `issues/118` shape: a rewrite that fires or
+   declines on a plan property, where the declining case is silent and nobody
+   notices which one they got. If the seeded form ever proves unacceptable
+   somewhere, that is a reason to find a better SINGLE form, not to branch.
+
+3. ~~A regression test on a REAL fixture.~~ DONE —
+   `tests/performance/test_path_start_bound_by_a_join.py`. It measures the same
+   walk pinned and bound on `sp_lead_synth_100k` and asserts the bound form
+   costs about `starts x pinned`, so the gate is a self-calibrating ratio
+   rather than a maintained threshold. Currently `xfail(strict=True)`, failing
+   with:
+
+       the walk from a BOUND start did not finish in 60000ms, while the same
+       walk from a PINNED start cost 660 buffers ... closing over the graph
+       instead of walking from the 2 start(s) it was given
+
+   Strict, so it fails the moment seeding lands and the xfail has to be
+   removed.
