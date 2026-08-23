@@ -224,6 +224,82 @@ def _parse_srj(path: Path) -> Optional[SparqlResults]:
     return SparqlResults(variables=variables, rows=rows)
 
 
+_RS = "http://www.w3.org/2001/sw/DataAccess/tests/result-set#"
+
+
+def _rs_term(store, node) -> Optional["SparqlBinding"]:
+    """One `rs:value` object as a binding."""
+    import pyoxigraph
+    if isinstance(node, pyoxigraph.NamedNode):
+        return SparqlBinding(type="uri", value=node.value)
+    if isinstance(node, pyoxigraph.BlankNode):
+        return SparqlBinding(type="bnode", value=node.value)
+    if isinstance(node, pyoxigraph.Literal):
+        dt = node.datatype.value if node.datatype else None
+        if dt == "http://www.w3.org/2001/XMLSchema#string":
+            dt = None
+        return SparqlBinding(type="literal", value=node.value,
+                             datatype=dt, lang=node.language)
+    return None
+
+
+def _parse_rs_result_set(store) -> Optional[SparqlResults]:
+    """Parse the DAWG RDF result-set vocabulary into bindings.
+
+    `sparql10` predates SRX and encodes expected results as RDF:
+
+        [] rdf:type rs:ResultSet ;
+           rs:resultVariable "p", "v" ;
+           rs:solution [ rs:binding [ rs:value "abc"@en-gb ; rs:variable "v" ] ] .
+
+    Without this, a `.ttl` result was read as a GRAPH and compared as
+    CONSTRUCT triples, so every case reported a triple-count mismatch against
+    its own expectation — `expected 10, got 1` for `LangMatches-1`, 10 being
+    the triples in the file rather than anything about the query
+    (`issues/125`).
+    """
+    import pyoxigraph
+
+    rs_set = list(store.quads_for_pattern(
+        None, pyoxigraph.NamedNode(f"{_RS}resultVariable"), None, None))
+    solutions = list(store.quads_for_pattern(
+        None, pyoxigraph.NamedNode(f"{_RS}solution"), None, None))
+    booleans = list(store.quads_for_pattern(
+        None, pyoxigraph.NamedNode(f"{_RS}boolean"), None, None))
+
+    if booleans:
+        v = booleans[0].object
+        return SparqlResults(variables=[], rows=[], is_boolean=True,
+                             boolean_value=str(v.value).lower() == "true")
+    if not rs_set and not solutions:
+        return None                      # not a result set; treat as a graph
+
+    variables = [q.object.value for q in rs_set]
+
+    rows: List[Dict[str, SparqlBinding]] = []
+    for sol in solutions:
+        row: Dict[str, SparqlBinding] = {}
+        for b in store.quads_for_pattern(
+                sol.object, pyoxigraph.NamedNode(f"{_RS}binding"), None, None):
+            name = value = None
+            for q in store.quads_for_pattern(b.object, None, None, None):
+                if q.predicate.value == f"{_RS}variable":
+                    name = q.object.value
+                elif q.predicate.value == f"{_RS}value":
+                    value = _rs_term(store, q.object)
+            if name is not None and value is not None:
+                row[name] = value
+        rows.append(row)
+
+    # `rs:resultVariable` is unordered in RDF, so a variable bound in a
+    # solution but absent from the header would silently vanish.
+    for row in rows:
+        for k in row:
+            if k not in variables:
+                variables.append(k)
+    return SparqlResults(variables=variables, rows=rows)
+
+
 def _parse_ttl_graph(path: Path) -> Optional[SparqlResults]:
     """Parse a Turtle (.ttl) file into triples for CONSTRUCT comparison."""
     try:
@@ -238,6 +314,13 @@ def _parse_ttl_graph(path: Path) -> Optional[SparqlResults]:
     except Exception as e:
         logger.error("TTL parse error in %s: %s", path, e)
         return None
+
+    # A .ttl result file is EITHER a CONSTRUCT graph or the DAWG RDF
+    # result-set vocabulary. Reading the second as the first compares
+    # bindings against triples and can only fail.
+    as_result_set = _parse_rs_result_set(store)
+    if as_result_set is not None:
+        return as_result_set
 
     _XSD_STRING = "http://www.w3.org/2001/XMLSchema#string"
 

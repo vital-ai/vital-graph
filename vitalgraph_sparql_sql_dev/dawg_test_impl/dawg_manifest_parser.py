@@ -262,7 +262,21 @@ def discover_categories(dawg_root: Path) -> List[str]:
 
 
 def get_manifest_path(dawg_root: Path, category: str) -> Path:
-    """Return the manifest.ttl path for a given category."""
+    """Return the manifest.ttl path for a given category.
+
+    A bare name resolves under `sparql11`, which is where all but a handful of
+    the wired categories live. A name containing a slash is a path relative to
+    `sparql/`, so a category in another tree can be named explicitly.
+
+    Resolving ONE tree did not merely leave `sparql10` unwired, it made it
+    unreachable by any spelling — and `sparql10/expr-builtin` holds the only
+    DAWG coverage of `langMatches`, `str`, `lang`, `datatype`, `isIRI`,
+    `isLiteral` and `sameTerm`. `issues/120` shipped a `langMatches` that did
+    no prefix matching while `q-langMatches-2.rq`, literally the failing query,
+    sat on disk unrun (`issues/125`).
+    """
+    if "/" in category:
+        return dawg_root / "sparql" / category / "manifest.ttl"
     return dawg_root / "sparql" / "sparql11" / category / "manifest.ttl"
 
 

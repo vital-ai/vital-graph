@@ -87,6 +87,12 @@ P0_CATEGORIES = [
     # see dawg_srx_parser's module docstring.
     "json-res",
     "csv-tsv-res",
+    # The only DAWG coverage of langMatches, str, lang, datatype, isIRI,
+    # isLiteral and sameTerm — and it sits under sparql10, which
+    # `get_manifest_path` could not reach by any spelling until `issues/125`.
+    # `issues/120` shipped a langMatches that did no prefix matching while
+    # q-langMatches-2.rq, literally the failing query, sat on disk unrun.
+    "sparql10/expr-builtin",
 ]
 
 # Cases that fail today, kept RUNNING rather than removed so the count stays
@@ -97,7 +103,30 @@ KNOWN_FAILURES = {
     # issues/093 (sq01-sq03) removed 2026-08-16 — fixed, and an entry that
     # starts passing must be DELETED rather than left as a permanent xfail, or
     # the number stops meaning anything.
-    # Empty. issues/093 and issues/094 both cleared it on 2026-08-16.
+
+    # --- sparql10/expr-builtin, wired 2026-08-23 (issues/125) --------------
+    # Wiring it took the category from 29 failures of 48 to 10, and the ten
+    # are five cases seen by two test functions each. They are NOT one kind,
+    # and the difference is the whole point of listing them separately.
+
+    # OUR GAP, diagnosed — issues/127. `?v1 = ?v2` between two VARIABLES
+    # compares term_text, so "1"^^integer = "01"^^integer is false where it
+    # should be true. `_is_numeric_expr` will not trust a BGP variable's
+    # num_col because it cannot know at compile time that the variable IS
+    # numeric, so a var-to-var comparison never reaches the numeric lane.
+    # sameTerm itself is correct (uuid = uuid); it is the other half of
+    # `!sameTerm(?v1,?v2) && ?v1 = ?v2` that returns nothing.
+    ("sparql10/expr-builtin", "sameTerm-eq"): "issues/127",
+    ("sparql10/expr-builtin", "sameTerm-not-eq"): "issues/127",
+    ("sparql10/expr-builtin", "sameTerm-simple"): "issues/127",
+
+    # EXPECTATION DISAGREEMENT, not ours. pyoxigraph differs from the .ttl
+    # too, and reading the data by hand agrees with US: str-1 asks for
+    # `str(?v) = "1"`, and the four lexical "1"s in data-builtin-1.ttl are
+    # exactly what we return. Kept running rather than deleted so that if the
+    # corpus or the comparator changes, the disagreement resurfaces.
+    ("sparql10/expr-builtin", "str-1"): "expectation disagrees with both engines",
+    ("sparql10/expr-builtin", "str-2"): "expectation disagrees with both engines",
 }
 
 
@@ -132,6 +161,28 @@ pytestmark = [
 # STOPS THE TEST. An entry here would never surface as an XPASS no matter how
 # right our answer became.
 XFAIL_TESTS_V2 = {
+    # --- sparql10/expr-builtin, wired 2026-08-23 (issues/125) --------------
+    # The ORACLE half. pyoxigraph disagrees with these .ttl expectations, so
+    # they say nothing about our backend — that is exactly what this baseline
+    # exists to separate. Reading data-builtin-1.ttl by hand agrees with both
+    # engines against the file for str-1: `str(?v) = "1"` has four lexical
+    # matches, not seven.
+    #
+    # sameTerm-* appear here AND in KNOWN_FAILURES, and for different reasons:
+    # the oracle disagrees with the corpus, and independently we have a real
+    # gap (issues/127). Both entries are needed; deleting either would hide
+    # half of the picture.
+    ("sparql10/expr-builtin", "sameTerm-eq"):
+        "pyoxigraph differs from the .ttl expectation",
+    ("sparql10/expr-builtin", "sameTerm-not-eq"):
+        "pyoxigraph differs from the .ttl expectation",
+    ("sparql10/expr-builtin", "sameTerm-simple"):
+        "pyoxigraph differs from the .ttl expectation",
+    ("sparql10/expr-builtin", "str-1"):
+        "pyoxigraph differs from the .ttl expectation; hand-reading agrees with the engines",
+    ("sparql10/expr-builtin", "str-2"):
+        "pyoxigraph differs from the .ttl expectation; hand-reading agrees with the engines",
+
     # Tests that fail due to pyoxigraph oracle limitations
     ("aggregates", "GROUP_CONCAT with one element"):
         "pyoxigraph GROUP_CONCAT separator handling",

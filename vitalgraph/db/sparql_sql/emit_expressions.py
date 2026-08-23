@@ -983,10 +983,25 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
 
     # --- Accessors ---
     if fname == "lang" and len(args) == 1:
+        # `lang()` of a NON-LITERAL is a type error, i.e. unbound — not "".
+        # Returning "" made a URI look like an untagged literal, so it leaked
+        # into every lang test: `FILTER(lang(?v) = '')` returned it,
+        # `FILTER(lang(?v) != '@NotALangTag@')` returned it, and
+        # `FILTER(! langMatches(lang(?v), "*"))` returned it. Three DAWG cases,
+        # one cause — found the day `sparql10/expr-builtin` first ran
+        # (`issues/125`). Same gate `datatype()` needs, for the same reason.
         if isinstance(args[0], ExprVar):
             info = ctx.types.get(args[0].var)
             if info and info.lang_col:
+                if info.type_col:
+                    return (f"CASE WHEN {info.type_col} = 'L' "
+                            f"THEN COALESCE({info.lang_col}, '') END")
                 return f"COALESCE({info.lang_col}, '')"
+        if isinstance(args[0], ExprValue):
+            node = args[0].node
+            if isinstance(node, LiteralNode):
+                return f"'{(getattr(node, 'lang', None) or '')}'"
+            return "NULL"          # URI or blank node: type error
         return "''"
 
     if fname == "datatype" and len(args) == 1:
@@ -1048,7 +1063,14 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
         b = expr_to_sql(args[1], ctx)
         if a and b:
             if b == "'*'":
-                return f"({a} IS NOT NULL AND {a} != '')"
+                # NULL is a type error from `lang()` on a non-literal, and it
+                # has to PROPAGATE. `a IS NOT NULL AND ...` converts it to
+                # FALSE, which is invisible in a positive filter and wrong
+                # under negation: `FILTER(! langMatches(lang(?v), "*"))` then
+                # returns the URI, because `!FALSE` is TRUE while `!error` is
+                # still an error. DAWG `LangMatches-4` (`issues/125`).
+                return (f"CASE WHEN {a} IS NULL THEN NULL "
+                        f"ELSE ({a} != '') END")
             # RFC 4647 basic filtering, which SPARQL 1.1 defines langMatches in
             # terms of: the range matches when it EQUALS the tag, or is a
             # prefix of it ENDING AT A SUBTAG BOUNDARY. This was equality
