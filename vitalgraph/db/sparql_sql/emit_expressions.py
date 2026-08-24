@@ -379,6 +379,16 @@ def _dt_sql(expr, ctx: EmitContext) -> Optional[str]:
         info = ctx.types.get(expr.var)
         if not info or not info.dt_col:
             return None
+        # A LANGUAGE-TAGGED literal stores a NULL datatype, exactly like a
+        # plain one, but its datatype is `rdf:langString` — not `xsd:string`.
+        # Coalescing both to xsd:string made `"xyz"@en`, `"xyz"@EN`, `"xyz"`
+        # and `"xyz"^^xsd:string` mutually equal: twelve cross-pairs where four
+        # are correct (DAWG `open-eq-07`). `datatype()` already derived this
+        # correctly in §4.3; the guard did not.
+        if info.dt_col != "NULL" and info.lang_col:
+            return (f"(CASE WHEN {info.dt_col} IS NOT NULL THEN {info.dt_col} "
+                    f"WHEN {info.lang_col} IS NOT NULL AND {info.lang_col} != '' "
+                    f"THEN '{RDF_LANGSTRING}' ELSE '{XSD}string' END)")
         # The literal string "NULL" is not a column — it is what the emitters
         # use when a var's datatype is not tracked at all (see
         # `emit_context.py:569`, which tests for the same sentinel). That is
@@ -466,8 +476,22 @@ def _datatype_guard(left, right, ctx: EmitContext) -> Optional[str]:
 # NOT both literal — a URI against a literal is well-defined and unequal.
 _COMPARABLE_DATATYPES = _NUMERIC_DATATYPES | frozenset({
     f"{XSD}string", f"{XSD}boolean", f"{XSD}dateTime", f"{XSD}date",
-    "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString",
 })
+# `rdf:langString` is deliberately ABSENT. §17.3 lists no value comparison for
+# it, so two language-tagged literals fall to RDFterm-equal and relate by term
+# identity alone — `"xyz"@en` and `"xyz"@fr` are a type error, not false.
+
+
+def _lang_sql(expr, ctx: EmitContext) -> Optional[str]:
+    """SQL yielding this operand's language tag, or None if it has no lane."""
+    if isinstance(expr, ExprVar):
+        info = ctx.types.get(expr.var)
+        if info and info.lang_col and info.lang_col != "NULL":
+            return info.lang_col
+        return None
+    if isinstance(expr, ExprValue) and isinstance(expr.node, LiteralNode):
+        return f"'{(getattr(expr.node, 'lang', None) or '')}'"
+    return None
 
 
 def _comparable_sql(expr, ctx: EmitContext) -> Optional[str]:
@@ -533,6 +557,13 @@ def _term_error_cmp(left, right, op: str, ctx: EmitContext,
         return None
     guard = _datatype_guard(left, right, ctx)
     same = f"({a} = {b})" if guard is None else f"(({a} = {b}) AND {guard})"
+    # Two language-tagged literals are the same term only if the TAGS match,
+    # and BCP 47 tags are case-insensitive — `"xyz"@en` and `"xyz"@EN` ARE the
+    # same term, while `"xyz"@en` and `"xyz"@fr` are not.
+    la, lb = _lang_sql(left, ctx), _lang_sql(right, ctx)
+    if la and lb:
+        same = (f"({same} AND LOWER(COALESCE({la}, '')) = "
+                f"LOWER(COALESCE({lb}, '')))")
     ident = "TRUE" if op == "=" else "FALSE"
     return (f"(CASE WHEN {ca} AND {cb} THEN {normal} "
             f"WHEN {same} THEN {ident} ELSE NULL END)")
