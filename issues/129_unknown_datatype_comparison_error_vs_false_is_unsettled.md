@@ -117,3 +117,58 @@ never reaches `_cmp_sql`, and blamed the builder rewriting variable equality
 into a triple pattern. That was inferred from a row count that did not move.
 Dumping the generated SQL shows the type-error CASE is present. The path is
 fine; the branch is wrong.
+
+
+## The ill-typed fix was ATTEMPTED and REVERTED — comparability is PAIRWISE
+
+Diagnosis (2026-08-24): DAWG excludes `x1/x4` against `x5`, the ill-typed
+`"xyz"^^xsd:integer`. A recognised datatype carrying an unparseable lexical
+form has no value, and `num_col` is NULL exactly then — so requiring
+`num_col IS NOT NULL` looked like the fix.
+
+**It made things worse.** `open-eq-08` went 42 -> 34, `open-eq-10`/`-11` went
+53 -> 44. Eight pairs lost, not four gained.
+
+The reason is structural, and it invalidates the model rather than the edit:
+
+    x5 vs x1/x4  (ill-typed integer vs string)     DAWG EXCLUDES  -> error
+    x5 vs x2/x3  (ill-typed integer vs langString) DAWG INCLUDES  -> != is TRUE
+    x5 vs x7/x8  (ill-typed integer vs bnode/URI)  DAWG INCLUDES  -> != is TRUE
+
+The SAME operand is indeterminate against one datatype and determinate against
+another. **Comparability is not a property of one operand, which is what
+`_comparable_sql` assumes.** Marking `x5` non-comparable removes it from all
+three groups, and two of them were right.
+
+## What the model needs to become
+
+Pairwise determinacy, roughly:
+
+* either side NOT a literal            -> definite (RDFterm-equal gives FALSE)
+* exactly one side language-tagged     -> definite (never equal)
+* both language-tagged                 -> definite (term identity over text+tag)
+* both plain/typed literals            -> determinate ONLY if both datatypes are
+                                          recognised AND both values parsed
+
+That is a restructure of `_term_error_cmp`, not a patch to `_comparable_sql`.
+It should be done deliberately, with the expected SRX diffed after each step —
+this issue's history is five wrong theories, every one of them from reasoning
+instead of diffing the expected results.
+
+## Remaining, split by kind
+
+NOT ours (pyoxigraph also differs from the corpus; needs hand-checking and a
+recorded reason, the treatment `str-1`/`str-2` got):
+
+    date-2      FILTER(?v != "2006-08-23"^^xsd:date)   result-set mismatch
+    date-3      FILTER(?v > "2006-08-22"^^xsd:date)    expected 3, got 4
+    open-eq-01  graph match, no lexical form in data   expected 2, got 0
+
+Ours:
+
+    open-eq-08  42 rows, correct COUNT, wrong SET      pairwise determinacy
+    open-eq-10  52 vs 53, one extra row                probably the same
+    open-eq-11  52 vs 53, one extra row                same shape as -10
+    open-eq-12  10 vs 64, filter not constraining      DIFFERENT cause: an
+                OPTIONAL body's FILTER is not restricting the optional match.
+                A join/scoping question, not an equality one.
