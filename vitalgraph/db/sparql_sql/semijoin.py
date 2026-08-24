@@ -90,7 +90,7 @@ def _term_uuid(aliases, text: str, ttype: str) -> Optional[str]:
     coupled the lookup to the SQL text and returned None silently whenever
     anything differed.
     """
-    col = getattr(aliases, "constants", {}).get((text, ttype))
+    col = getattr(aliases, "constants", {}).get((text, ttype, None, None))
     if col is None:
         return None
     return getattr(aliases, "resolved_constants", {}).get(col)
@@ -157,7 +157,8 @@ def _leaf_rows(node, aliases, *, filter_derived: bool = True) -> Optional[int]:
 
     for bgp in _bgps(node):
         by_alias: dict = {}
-        for (alias, col), (text, ttype) in (bgp.leaf_terms or {}).items():
+        for (alias, col), _t in (bgp.leaf_terms or {}).items():
+            text, ttype = _t[0], _t[1]
             if col == "predicate_uuid":
                 by_alias.setdefault(alias, {})["p"] = (text, ttype)
             elif col == "object_uuid":
@@ -474,7 +475,8 @@ def needed_pairs(plan, aliases) -> set:
     out = set()
     for bgp in _bgps(plan):
         by_alias: dict = {}
-        for (alias, col), (text, ttype) in (bgp.leaf_terms or {}).items():
+        for (alias, col), _t in (bgp.leaf_terms or {}).items():
+            text, ttype = _t[0], _t[1]
             if col == "predicate_uuid":
                 by_alias.setdefault(alias, {})["p"] = (text, ttype)
             elif col == "object_uuid":

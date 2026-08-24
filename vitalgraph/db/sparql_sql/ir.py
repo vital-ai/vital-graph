@@ -26,8 +26,12 @@ class AliasGenerator:
     def __init__(self, alias_prefix: str = ""):
         self._counters: Dict[str, int] = {}
         self._alias_prefix = alias_prefix
-        # Constant term lookups: maps (term_text, term_type) → column alias
-        self.constants: Dict[Tuple[str, str], str] = {}
+        # Constant term lookups: (term_text, term_type, lang, datatype) → column
+        # alias. ALL FOUR, because `term_uuid` is a UUIDv5 over exactly those —
+        # keying on (text, type) alone made `"a"^^t:type1` and `"a"^^t:type2`
+        # share a column, and the lookup returned whichever the term table
+        # yielded first (`issues/129`).
+        self.constants: Dict[Tuple[str, str, object, object], str] = {}
         self._const_counter: int = 0
         # Resolved after materialize phase: col_name → uuid string
         self.resolved_constants: Dict[str, str] = {}
@@ -59,9 +63,17 @@ class AliasGenerator:
         self.var_map[sql_name] = sparql_name
         return sql_name
 
-    def register_constant(self, term_text: str, term_type: str) -> str:
-        """Register a constant term lookup for CTE batching."""
-        key = (term_text, term_type)
+    def register_constant(self, term_text: str, term_type: str,
+                          lang: str = None, datatype: str = None) -> str:
+        """Register a constant term lookup for CTE batching.
+
+        `lang` and `datatype` are part of the term's identity and must be
+        carried: a graph pattern matches by RDF TERM, so `"x"` and
+        `"x"^^xsd:string` are two different terms even though RDF 1.1 makes
+        them one VALUE. That is the opposite of the FILTER rule in
+        `issues/121`, and conflating the two is the easy mistake here.
+        """
+        key = (term_text, term_type, lang or None, datatype or None)
         if key not in self.constants:
             col = f"c_{self._const_counter}"
             self._const_counter += 1
@@ -163,7 +175,7 @@ class PlanV2:
     # bound to a constant. Recorded at collect time, when the value is known,
     # so consumers do not have to parse it back out of the generated SQL — that
     # couples them to the SQL text and fails silently when it differs.
-    leaf_terms: Dict[Tuple[str, str], Tuple[str, str]] = field(
+    leaf_terms: Dict[Tuple[str, str], Tuple[str, str, object, object]] = field(
         default_factory=dict)
     # (quad_alias, uuid_column) -> (sql_operator, literal) for a numeric range
     # pushed to this leaf. A range binds no constant object, so it leaves no

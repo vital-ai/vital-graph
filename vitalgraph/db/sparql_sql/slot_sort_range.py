@@ -92,7 +92,7 @@ _OBJ_RE = re.compile(r"(\w+)\.object_uuid\s*=\s*__CONST_(c_\d+)__")
 
 def _uuid_of(aliases, uri: str) -> Optional[str]:
     """The resolved term uuid for a constant URI, or None if unresolved."""
-    col = (aliases.constants or {}).get((uri, "U"))
+    col = (aliases.constants or {}).get((uri, "U", None, None))
     return (aliases.resolved_constants or {}).get(col) if col else None
 
 
@@ -141,7 +141,7 @@ def _is_selective(aliases, value_pred_uri: str, op: str, literal,
 
 def _const_uris(aliases) -> dict:
     """`__CONST_c_N__` token -> the URI it stands for."""
-    return {col: text for (text, ttype), col in aliases.constants.items()
+    return {col: text for (text, ttype, _lg, _dt), col in aliases.constants.items()
             if ttype == "U"}
 
 
@@ -172,7 +172,8 @@ def slot_range_constraint(bgp, aliases, space_id: str, value_var: str,
         if m:
             obj_of[m.group(1)] = const.get(m.group(2), "")
             obj_token[m.group(1)] = f"__CONST_{m.group(2)}__"
-    for (alias, col), (text, ttype) in (bgp.leaf_terms or {}).items():
+    for (alias, col), _t in (bgp.leaf_terms or {}).items():
+        text, ttype = _t[0], _t[1]
         if col == "predicate_uuid":
             pred_of.setdefault(alias, text)
         elif col == "object_uuid" and ttype == "U":

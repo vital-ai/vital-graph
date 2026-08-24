@@ -45,8 +45,9 @@ def _make(*, matches=1000, slot_total=100000, value_pred=f"{H}hasDoubleSlotValue
           slot_type_const=True, op=">="):
     """A BGP shaped like `?slot hasKGSlotType <T> ; has<X>SlotValue ?v`."""
     al = AliasGenerator()
-    al.constants = {(SLOT_TYPE_PRED, "U"): "c_0", ("urn:slot:MQL", "U"): "c_1",
-                    (value_pred, "U"): "c_2"}
+    al.constants = {(SLOT_TYPE_PRED, "U", None, None): "c_0",
+                    ("urn:slot:MQL", "U", None, None): "c_1",
+                    (value_pred, "U", None, None): "c_2"}
     al.resolved_constants = {"c_0": TYPE_PRED_U, "c_1": SLOT_TYPE_U,
                              "c_2": VAL_PRED_U}
     al.quad_stats = {(TYPE_PRED_U, SLOT_TYPE_U): slot_total}

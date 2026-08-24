@@ -65,7 +65,7 @@ class _Aliases(AliasGenerator):
         self.quad_stats = quad if quad is not None else {(PRED, "x"): 50_000}
         self.range_stats = rng or {}
         self.text_stats = txt or {}
-        self.constants = {("http://ex/mql", "U"): "c0"}
+        self.constants = {("http://ex/mql", "U", None, None): "c0"}
         self.resolved_constants = {"c0": PRED}
 
 
@@ -102,7 +102,7 @@ class TestFilterDerivedCountsAreSeparable:
         bgp = _bgp_with_predicate()
         bgp.leaf_terms[("q0", "object_uuid")] = ("urn:state:WV", "U")
         a = _Aliases(quad={(PRED, OBJ): 848})
-        a.constants[("urn:state:WV", "U")] = "c1"
+        a.constants[("urn:state:WV", "U", None, None)] = "c1"
         a.resolved_constants["c1"] = OBJ
         assert _leaf_rows(bgp, a, filter_derived=False) == 848
 

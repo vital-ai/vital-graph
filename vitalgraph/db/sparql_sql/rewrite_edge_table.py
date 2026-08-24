@@ -52,7 +52,7 @@ def rewrite_edge_table(plan: PlanV2, aliases: AliasGenerator,
 
     # Build reverse constant map: const_alias → URI text
     const_to_uri: Dict[str, str] = {}
-    for (text, ttype), col_alias in aliases.constants.items():
+    for (text, ttype, _lg, _dt), col_alias in aliases.constants.items():
         if ttype == "U":
             const_to_uri[col_alias] = text
 
