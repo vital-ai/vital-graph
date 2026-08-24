@@ -442,3 +442,58 @@ after the expression emitter, the push-down, and the semi-join gate.
 Worth doing carefully with the expected SRX diffed after each step. It should
 fix `open-eq-02` and may well move `open-eq-03`/`-05`/`-09`, which are the same
 graph-match-on-a-typed-literal shape.
+
+
+## Pairwise determinacy IMPLEMENTED 2026-08-24 — and `open-eq-12` is a
+## DIFFERENT bug
+
+`_determinate_sql` replaces the per-operand `_comparable_sql`. It short-circuits
+in the order the spec reasons: either side not a literal -> decidable; either
+side language-tagged -> decidable; otherwise both need a usable VALUE, where
+"usable" means a recognised datatype AND, for a numeric one, `num_col`
+non-NULL (an ill-typed `"xyz"^^xsd:integer` is a valid term with no value).
+
+`open-eq-08`, `-10` and `-11` pass. `open-eq-10` matches the corpus exactly —
+52 of 52, nothing extra, nothing missing.
+
+The measured diff is what made the rule obvious, and it is worth keeping
+because it shows why per-operand CANNOT work:
+
+    EXTRA    x5 (ill-typed integer) against strings  -> we said unequal,
+                                                        corpus says error
+    MISSING  x2/x3 (@en, @EN) against y6 (^^unknown) -> corpus says unequal,
+                                                        we excluded
+
+The SAME operand, `x5`, is indeterminate against a string and determinate
+against a tagged literal. A per-operand verdict removes it from both.
+
+### `open-eq-12` is NOT this rule — the OPTIONAL's variables are unresolved
+
+    OPTIONAL { ?y :p ?v3 . FILTER( ?v1 != ?v3 || ?v1 = ?v3 ) }
+    FILTER (!bound(?v3))
+
+Expected 10, we return 64. I assumed the determinacy rule was not reaching
+inside the OPTIONAL body. It is worse than that. The emitted LEFT JOIN reads:
+
+    ON j0.v2__uuid = j1.v4__uuid
+       AND ((NULL /* vg:unresolved-var ?v1 */ != NULL /* vg:unresolved-var ?v3 */)
+         OR (NULL /* vg:unresolved-var ?v1 */ =  NULL /* vg:unresolved-var ?v3 */))
+
+**Both variables emit as `vg:unresolved-var`.** `?v1` is bound on the LEFT side
+and `?v3` on the right, and both should be in scope for a join condition. The
+condition is therefore NULL, the LEFT JOIN matches nothing, `?v3` never binds,
+and `!bound(?v3)` keeps every row — 64 of them.
+
+That is a SCOPE defect in join-condition emission, not a semantics one. It
+explains the missing type-error `CASE` as a symptom rather than a cause:
+`_cmp_sql` never receives resolvable variables.
+
+`issues/028` established a policy for unresolved variables — `_check_unresolved_vars`
+raises when one was in scope and still failed to resolve. This case slips past
+it, emitting a comment-annotated NULL into a JOIN CONDITION, where the effect
+is not an error but a join that silently matches nothing.
+
+Not fixed here. It needs the scope available when a LeftJoin's condition is
+emitted, and it should probably also make an unresolved variable inside a join
+condition loud rather than a NULL — the same argument as the swallowed-exception
+prerequisite above.

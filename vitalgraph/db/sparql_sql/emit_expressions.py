@@ -576,6 +576,79 @@ def _both_literal_sql(left, right, ctx: EmitContext) -> Optional[str]:
     return f"({' AND '.join(parts)})"
 
 
+def _is_literal_sql(expr, ctx: EmitContext) -> Optional[str]:
+    """SQL true when this operand is a literal."""
+    if isinstance(expr, ExprVar):
+        info = ctx.types.get(expr.var)
+        if not info or not info.type_col or info.type_col == "NULL":
+            return None
+        return f"({info.type_col} = 'L')"
+    if isinstance(expr, ExprValue):
+        return "TRUE" if isinstance(expr.node, LiteralNode) else "FALSE"
+    return None
+
+
+def _has_lang_sql(expr, ctx: EmitContext) -> Optional[str]:
+    """SQL true when this operand carries a language tag."""
+    lg = _lang_sql(expr, ctx)
+    if lg is None:
+        return None
+    return f"({lg} IS NOT NULL AND {lg} != '')"
+
+
+def _value_ok_sql(expr, ctx: EmitContext) -> Optional[str]:
+    """SQL true when this operand's VALUE is usable for comparison.
+
+    A recognised datatype is not enough: `"xyz"^^xsd:integer` is a valid term
+    with no value, and `num_col` is NULL exactly then. DAWG `open-eq-10`
+    excludes it against every string for that reason.
+    """
+    dt = _dt_sql(expr, ctx)
+    if dt is None:
+        return None
+    known = ", ".join(f"'{d}'" for d in sorted(_COMPARABLE_DATATYPES))
+    ok = f"({dt} IS NULL OR {dt} IN ({known}))"
+    if isinstance(expr, ExprVar):
+        info = ctx.types.get(expr.var)
+        if info and info.num_col and info.num_col != "NULL":
+            numeric = ", ".join(f"'{d}'" for d in sorted(_NUMERIC_DATATYPES))
+            ok = (f"({ok} AND ({dt} IS NULL OR {dt} NOT IN ({numeric}) "
+                  f"OR {info.num_col} IS NOT NULL))")
+    return ok
+
+
+def _determinate_sql(left, right, ctx: EmitContext) -> Optional[str]:
+    """SQL true when RDFterm-equal can DECIDE this pair.
+
+    PAIRWISE, and it has to be. Comparability is not a property of one operand:
+    `"xyz"^^xsd:integer` is indeterminate against a string and DETERMINATE
+    against a language-tagged literal, because a tagged and an untagged literal
+    are different terms whatever their value spaces. A per-operand rule marked
+    that operand unusable everywhere and over-excluded 34 of 64 pairs — the
+    attempt recorded in `issues/129`.
+
+    The four cases, in the order they short-circuit:
+
+    * either side is NOT a literal — RDFterm-equal answers FALSE, definitely;
+    * either side carries a LANGUAGE TAG — a tagged literal is never equal to
+      an untagged one, and two tagged ones compare as terms over (text, tag);
+    * otherwise both are plain or typed literals, and the answer is available
+      only if BOTH have a usable value.
+    """
+    al, bl = _is_literal_sql(left, ctx), _is_literal_sql(right, ctx)
+    ag, bg = _has_lang_sql(left, ctx), _has_lang_sql(right, ctx)
+    ao, bo = _value_ok_sql(left, ctx), _value_ok_sql(right, ctx)
+    if None in (al, bl, ao, bo):
+        return None
+    parts = [f"NOT ({al} AND {bl})"]
+    if ag:
+        parts.append(ag)
+    if bg:
+        parts.append(bg)
+    parts.append(f"({ao} AND {bo})")
+    return "(" + " OR ".join(parts) + ")"
+
+
 def _term_error_cmp(left, right, op: str, ctx: EmitContext,
                     normal: str) -> Optional[str]:
     """`=`/`!=` where a value comparison is not available is a TYPE ERROR.
@@ -597,10 +670,8 @@ def _term_error_cmp(left, right, op: str, ctx: EmitContext,
     # `?sample = 1.0` and broke `aggregates/SAMPLE`.
     if _in_one_value_space(left, right, ctx):
         return None
-    ca, cb = _comparable_sql(left, ctx), _comparable_sql(right, ctx)
-    if ca is None or cb is None:
-        return None
-    if ca == "TRUE" and cb == "TRUE":
+    determinate = _determinate_sql(left, right, ctx)
+    if determinate is None:
         return None
     a, b = expr_to_sql(left, ctx), expr_to_sql(right, ctx)
     if not a or not b:
@@ -625,9 +696,6 @@ def _term_error_cmp(left, right, op: str, ctx: EmitContext,
     # `ca AND cb` excluded the unknown-typed literal against the blank node and
     # the URI: four pairs, and the difference between 38 and 42 in DAWG
     # `open-eq-08`.
-    both_lit = _both_literal_sql(left, right, ctx)
-    determinate = f"({ca} AND {cb})" if both_lit is None else \
-                  f"(({ca} AND {cb}) OR NOT {both_lit})"
     return (f"(CASE WHEN {determinate} THEN {normal} "
             f"WHEN {same} THEN {ident} ELSE NULL END)")
 
