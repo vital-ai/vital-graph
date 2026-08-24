@@ -38,6 +38,19 @@ _BOOLEAN_DT = f"{XSD}boolean"
 _DATETIME_DATATYPES = [f"{XSD}dateTime", f"{XSD}date"]
 
 
+def _widen_term(term):
+    """A `leaf_terms` value as the 4-tuple `constants` is keyed on.
+
+    A 2-tuple `(text, type)` MEANS `(text, type, None, None)` — no language
+    tag, no datatype — which is exactly right for a URI. Widening rather than
+    demanding the long form keeps callers that only have a URI honest, and the
+    key still carries the full term identity `issues/129` needs.
+    """
+    if term is None:
+        return None
+    return term if len(term) == 4 else (term[0], term[1], None, None)
+
+
 def emit_bgp(plan: PlanV2, ctx: EmitContext) -> str:
     """Emit SQL for a Basic Graph Pattern.
 
@@ -331,7 +344,7 @@ def _leaf_cardinality(plan, ctx) -> dict:
     pred_stats = getattr(aliases, "pred_stats", None) or {}
 
     def _uuid(term):
-        col = consts.get(term)
+        col = consts.get(_widen_term(term))
         return resolved.get(col) if col else None
 
     by_alias: dict = {}

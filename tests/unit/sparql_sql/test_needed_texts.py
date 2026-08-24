@@ -33,13 +33,13 @@ PRED_TEXT = "http://example.org/name"
 class _Aliases:
     """Minimal stand-in for the two maps `_term_uuid` reads.
 
-    `constants[(text, type)]` gives a column name and
+    `constants[(text, type, lang, datatype)]` gives a column name and
     `resolved_constants[col]` gives the uuid — the structural lookup that
     replaced regex-parsing the emitted SQL.
     """
 
     def __init__(self):
-        self.constants = {(PRED_TEXT, "U"): "c0"}
+        self.constants = {(PRED_TEXT, "U", None, None): "c0"}
         self.resolved_constants = {"c0": "pred-uuid-1"}
         self.quad_stats = {}
 
