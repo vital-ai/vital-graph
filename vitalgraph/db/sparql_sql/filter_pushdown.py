@@ -919,6 +919,46 @@ def _inequality_var(expr) -> Optional[str]:
     return ops[0] if ops else None
 
 
+def _temporal_indeterminacy_cond(value_node, ctx) -> Optional[str]:
+    """Terms INCOMPARABLE with this temporal needle, or None.
+
+    XSD gives dates and dateTimes a partial order: a timezoned value and an
+    untimezoned one are comparable only when the interval between them exceeds
+    the largest possible offset, 14 hours. Inside that window the answer would
+    depend on an offset nobody supplied, so the comparison is a type error.
+
+    Returns the condition matching terms on the OTHER side of that timezone
+    divide and within the window, for the caller to exclude.
+    """
+    from .sparql_sql_schema import DATETIME_TERM_COLUMN
+    if not isinstance(value_node, LiteralNode):
+        return None
+    if (value_node.datatype or "") not in _DATETIME_DTS:
+        return None
+    raw = (value_node.value or "").strip()
+    if not _ISO_RE.match(raw):
+        return None
+    # WITHIN one value space only. `xsd:date` and `xsd:dateTime` are different
+    # datatypes, so their literals are different TERMS and equality is
+    # determinate however close the instants — the corpus includes the
+    # dateTime `2006-08-23T09:00:00+01:00` under
+    # `!= "2006-08-23"^^xsd:date` even though it is 8 hours away. Without this
+    # the 14-hour window swallowed it.
+    if ctx is None:
+        return None
+    _ids = ctx.dt_ids_for_uris([value_node.datatype])
+    if not _ids or _ids == "NULL":
+        return None
+    lit_tz = bool(_TZ_RE.search(raw))
+    # The stored term disagrees about having a timezone ...
+    side = ("NOT " if lit_tz else "") + f"(term_text ~ '{_TZ_SQL_RE}')"
+    # ... and is close enough that the missing offset could decide it.
+    near = (f"ABS(EXTRACT(EPOCH FROM ({DATETIME_TERM_COLUMN} - "
+            f"vitalgraph_iso_to_utc('{_esc(raw)}')))) <= 50400")
+    return (f"{DATETIME_TERM_COLUMN} IS NOT NULL AND datatype_id IN ({_ids}) "
+            f"AND {side} AND {near}")
+
+
 def _comparable_term_cond(ctx) -> Optional[str]:
     """Terms whose VALUE can be compared, as a term-table condition.
 
@@ -980,6 +1020,25 @@ def _try_inequality_filter(expr, bgp, term_table: str, quad_aliases: set, ctx):
     tail = ""
     if cmp_ok:
         tail = f" AND {ref_id}.{col_name} IN {_term_set(ctx, term_table, cmp_ok)}"
+
+    # A temporal value carrying a timezone and one without are INCOMPARABLE
+    # when they fall within the maximum offset of 14 hours — XSD orders dates
+    # and dateTimes only PARTIALLY. `?v != "2006-08-23"^^xsd:date` returned
+    # `2006-08-23Z` and `2006-08-23+00:00`, which are the same day differing
+    # only in carrying an offset (DAWG `date-2`).
+    #
+    # 14 hours and not "any timezone mismatch": the corpus KEEPS
+    # `2001-01-01Z` against that same untimezoned needle, because five years
+    # apart is determinate whatever the offset. A blanket mismatch rule would
+    # wrongly drop it.
+    #
+    # `vitalgraph_iso_to_utc` reads an untimezoned value as if UTC, so the
+    # stored dt_val cannot distinguish these — only the presence of an offset
+    # in the lexical form can, which is why this tests `term_text`.
+    _tz = _temporal_indeterminacy_cond(value_node, ctx)
+    if _tz:
+        tail += f" AND {ref_id}.{col_name} NOT IN {_term_set(ctx, term_table, _tz)}"
+
     return (ref_id, f"{ref_id}.{col_name} NOT IN "
                     f"{_term_set(ctx, term_table, eq_cond)}{tail}")
 
