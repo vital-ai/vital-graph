@@ -282,7 +282,7 @@ Two rules, and having only one gives a wrong answer in each direction:
 The asymmetry, twice confirmed by the corpus: different value spaces make
 ORDERING a type error and leave EQUALITY determinate.
 
-## HARNESS DEFECT — filing an xfail breaks a sibling test (CAUSE NOT FOUND)
+## NOT a harness defect — `open-eq-02` resolves a constant to the WRONG TERM
 
 Filing the three triaged cases as xfails was tried and REVERTED, because it
 broke `open-eq-02`, which had been passing:
@@ -330,3 +330,51 @@ the harness rather than from looking at its output.
 
 The reload cache should be removed regardless. A test's dataset depending on
 which test ran before it is wrong even when it is not the bug in hand.
+
+
+## `open-eq-02` — DIAGNOSED 2026-08-24. It is ours, and it is not about xfails
+
+    { ?x :p "a"^^t:type1 }        expects x1
+
+`data-1.ttl` holds two literals with the lexical form `a`:
+
+    :x1 :p "a"^^t:type1 .
+    :y1 :p "a"^^t:type2 .
+
+**We return `y1`.** A triple-pattern constant carrying an unrecognised datatype
+resolves to a term with the WRONG datatype. Measured directly: the space
+contains both terms correctly, the generated SQL runs, and it returns exactly
+one row — the wrong one.
+
+That also explains the behaviour that made this look like a harness problem.
+Two terms share the lexical form, so WHICH one the constant resolves to
+depends on load and cache state, and therefore on which tests ran before it.
+`open-eq-02` passed only when it inherited `open-eq-01`'s already-loaded data.
+
+### Three wrong explanations, for the record
+
+1. *"`pytest.xfail()` skips a neighbour's data load."* No — `open-eq-02` has
+   its own `data_file`.
+2. *"The runner's reload cache."* No — removing it entirely changed nothing.
+3. *"The generator's datatype cache is stale."* No — calling
+   `invalidate_datatype_cache` after every load changed nothing.
+
+All three were reasoning about the harness. The answer came from printing the
+row we actually return and comparing it against the data, which is the third
+time in this issue that measurement beat inference and the third time I reached
+for inference first.
+
+### The reload cache and the missing invalidation are still worth fixing
+
+Neither is the cause here, but both are real: `truncate_space` clears
+`rdf_quad` and `term` and NOT `datatype`, and no DAWG path calls
+`invalidate_datatype_cache`. A test's dataset should not depend on which test
+ran before it. Separate from this bug, and lower priority than it.
+
+### Next
+
+Find where a triple-pattern object constant is resolved to a `term_uuid` and
+check what datatype it uses. `term_uuid` is a UUIDv5 over
+`(text, type, lang, datatype)`, so resolving `"a"^^t:type1` to `y1`'s term
+means the datatype going into that computation — or into the lookup that
+replaces it — is not `t:type1`.
