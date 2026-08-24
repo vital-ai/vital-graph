@@ -85,29 +85,55 @@ async def dt_space(make_space):
 
 # --- the defect ------------------------------------------------------------
 
-async def test_different_datatypes_are_not_equal(space_impl, dt_space):
+# These asserted FALSE and TRUE when first written, from `issues/121`, which
+# said the spec answer for `"x"^^<urn:myType> = "x"` was FALSE. **That premise
+# was wrong.** SPARQL 1.1 §17.3 routes `=` to a value comparison only for the
+# datatypes it supports; everything else falls through to RDFterm-equal
+# (§17.4.1.7), which "produces a type error if the arguments are both literal
+# but are not the same RDF term". FALSE is reserved for the case where they are
+# NOT both literal.
+#
+# The DAWG `open-world` cases require the same reading: `open-eq-06` expects
+# ZERO rows from `FILTER(?v != "a"^^t:type1)` over eight, which only holds if
+# an unrecognised datatype makes the comparison an error rather than an answer.
+#
+# **What `issues/121` fixed is unaffected.** In a FILTER a type error and FALSE
+# both drop the row, so the wrong answers that issue was about stay fixed. The
+# two differ only where the value is observed — a BIND, as here — and under
+# negation, where `!error` is still an error but `!FALSE` is TRUE.
+
+async def test_different_datatypes_are_a_type_error(space_impl, dt_space):
+    """Both literal, not the same term, datatype not one we can compare."""
     assert await _ask(space_impl, dt_space,
-                      f'"x"^^<{CUSTOM}> = "x"') is False
+                      f'"x"^^<{CUSTOM}> = "x"') is None
 
 
-async def test_different_datatypes_are_unequal_under_ne(space_impl, dt_space):
-    """The case a naive `AND datatypes agree` gets backwards."""
+async def test_ne_across_datatypes_is_also_a_type_error(space_impl, dt_space):
+    """`!=` does not escape it — an error stays an error under negation."""
     assert await _ask(space_impl, dt_space,
-                      f'"x"^^<{CUSTOM}> != "x"') is True
+                      f'"x"^^<{CUSTOM}> != "x"') is None
 
 
-async def test_two_unknown_datatypes_that_differ_are_not_equal(space_impl, dt_space):
+async def test_two_unknown_datatypes_that_differ_are_a_type_error(space_impl, dt_space):
     assert await _ask(space_impl, dt_space,
-                      f'"x"^^<{CUSTOM}> = "x"^^<{OTHER}>') is False
+                      f'"x"^^<{CUSTOM}> = "x"^^<{OTHER}>') is None
 
 
 # --- what must NOT change --------------------------------------------------
 
-async def test_the_same_unknown_datatype_still_compares_by_value(space_impl, dt_space):
+async def test_identical_terms_are_equal_whatever_the_datatype(space_impl, dt_space):
+    """Term IDENTITY is always well defined, so this stays TRUE — it is the
+    first branch of RDFterm-equal and does not depend on the value space."""
     assert await _ask(space_impl, dt_space,
                       f'"x"^^<{CUSTOM}> = "x"^^<{CUSTOM}>') is True
+
+
+async def test_same_unknown_datatype_different_lexical_forms_is_an_error(space_impl, dt_space):
+    """NOT false. We cannot know whether `x` and `y` denote the same value in a
+    value space we do not model — which is exactly what DAWG `open-eq-06`
+    measures when it expects zero rows."""
     assert await _ask(space_impl, dt_space,
-                      f'"x"^^<{CUSTOM}> = "y"^^<{CUSTOM}>') is False
+                      f'"x"^^<{CUSTOM}> = "y"^^<{CUSTOM}>') is None
 
 
 async def test_cross_type_numeric_equality_survives(space_impl, dt_space):

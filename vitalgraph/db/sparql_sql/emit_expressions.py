@@ -459,6 +459,85 @@ def _datatype_guard(left, right, ctx: EmitContext) -> Optional[str]:
     return (f"(COALESCE({ldt}, {_S}) IS NOT DISTINCT FROM COALESCE({rdt}, {_S}))")
 
 
+# Datatypes whose VALUES we can compare. SPARQL 1.1 §17.3 routes `=` to a
+# value comparison for these; anything else falls through to RDFterm-equal
+# (§17.4.1.7), which "produces a type error if the arguments are both literal
+# but are not the same RDF term". FALSE is reserved for the case where they are
+# NOT both literal — a URI against a literal is well-defined and unequal.
+_COMPARABLE_DATATYPES = _NUMERIC_DATATYPES | frozenset({
+    f"{XSD}string", f"{XSD}boolean", f"{XSD}dateTime", f"{XSD}date",
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString",
+})
+
+
+def _comparable_sql(expr, ctx: EmitContext) -> Optional[str]:
+    """When this operand's VALUE can be compared: "TRUE", "FALSE", or SQL.
+
+    A plain literal is an `xsd:string` in RDF 1.1, so a NULL datatype counts.
+    A URI or blank node is not a literal at all, so RDFterm-equal gives a
+    definite answer for it — those count too, and only a LITERAL carrying an
+    unrecognised datatype is the error case.
+    """
+    if isinstance(expr, ExprValue) and isinstance(expr.node, LiteralNode):
+        dt = expr.node.datatype or f"{XSD}string"
+        return "TRUE" if dt in _COMPARABLE_DATATYPES else "FALSE"
+    if isinstance(expr, ExprVar):
+        # Through `_dt_sql`, NOT `info.dt_col` directly. `_dt_sql` is what
+        # `_datatype_guard` uses, so this engages exactly where the guard
+        # already does — and the guard is known to be in scope there. Reading
+        # the column info directly reached contexts the guard never enters and
+        # emitted `v2__datatype` where only `f0.v3__datatype` exists, which
+        # took out `aggregates/SAMPLE` and `bind/bind11`.
+        dt = _dt_sql(expr, ctx)
+        if dt is None:
+            return None
+        info = ctx.types.get(expr.var)
+        known = ", ".join(f"'{d}'" for d in sorted(_COMPARABLE_DATATYPES))
+        # A non-literal is not "both literal", so RDFterm-equal answers
+        # definitely for it — only a literal with an unrecognised datatype is
+        # the error case.
+        non_literal = (f"{info.type_col} != 'L' OR "
+                       if info and info.type_col else "")
+        return f"({non_literal}{dt} IS NULL OR {dt} IN ({known}))"
+    return None
+
+
+def _term_error_cmp(left, right, op: str, ctx: EmitContext,
+                    normal: str) -> Optional[str]:
+    """`=`/`!=` where a value comparison is not available is a TYPE ERROR.
+
+    §17.4.1.7 exactly: same term -> TRUE, both literal and not the same term ->
+    ERROR. `?v != "a"^^t:type1` must return NOTHING over data typed
+    `t:type1` — the identical term is unequal-false, every other term of that
+    type is incomparable — and we returned seven of eight rows by comparing
+    text (DAWG `open-eq-06`).
+
+    A literal with an unrecognised datatype cannot also carry a language tag,
+    so "same term" here is lexical form plus datatype agreement.
+    """
+    # A pair already in ONE value space needs nothing: the numeric and boolean
+    # lanes yield NULL for a term outside them, which is what a type error
+    # does in a FILTER anyway. Skipping here also keeps this in step with
+    # `_datatype_guard`, whose first act is the same test — engaging where it
+    # declines is what emitted an out-of-scope `v2__datatype` for
+    # `?sample = 1.0` and broke `aggregates/SAMPLE`.
+    if _in_one_value_space(left, right, ctx):
+        return None
+    ca, cb = _comparable_sql(left, ctx), _comparable_sql(right, ctx)
+    if ca is None or cb is None:
+        return None
+    if ca == "TRUE" and cb == "TRUE":
+        return None
+    a, b = expr_to_sql(left, ctx), expr_to_sql(right, ctx)
+    if not a or not b:
+        return None
+    guard = _datatype_guard(left, right, ctx)
+    same = f"({a} = {b})" if guard is None else f"(({a} = {b}) AND {guard})"
+    ident = "TRUE" if op == "=" else "FALSE"
+    return (f"(CASE WHEN {ca} AND {cb} THEN {normal} "
+            f"WHEN {same} THEN {ident} ELSE NULL END)")
+
+
 def _var_var_cmp(left, right, op: str, ctx: EmitContext) -> Optional[str]:
     """Compare two VARIABLES by value, choosing the lane at RUN TIME.
 
@@ -518,18 +597,30 @@ def _cmp_sql(left, right, op: str, ctx: EmitContext) -> Optional[str]:
             and not _is_boolean_expr(left, ctx)
             and not _is_boolean_expr(right, ctx)):
         _vv = _var_var_cmp(left, right, op, ctx)
-        if _vv:
-            return _vv
+    else:
+        _vv = None
 
-    a, b = _cmp_pair(left, right, ctx)
-    if not a or not b:
-        return None
-    guard = _datatype_guard(left, right, ctx)
-    if guard is None:
-        return f"({a} {op} {b})"
-    if op == "!=":
-        return f"(({a} != {b}) OR NOT {guard})"
-    return f"(({a} {op} {b}) AND {guard})"
+    # NOT an early return: the var-var lane must also reach the type-error rule.
+    if _vv:
+        normal = _vv
+    else:
+        a, b = _cmp_pair(left, right, ctx)
+        if not a or not b:
+            return None
+        guard = _datatype_guard(left, right, ctx)
+        if guard is None:
+            normal = f"({a} {op} {b})"
+        elif op == "!=":
+            normal = f"(({a} != {b}) OR NOT {guard})"
+        else:
+            normal = f"(({a} {op} {b}) AND {guard})"
+
+    # Only `=`/`!=` map to RDFterm-equal. Ordering is a different rule.
+    if op in ("=", "!="):
+        _te = _term_error_cmp(left, right, op, ctx, normal)
+        if _te:
+            return _te
+    return normal
 
 
 def _cmp_pair(left, right, ctx: EmitContext):
