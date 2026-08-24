@@ -259,3 +259,50 @@ is that rule, and it is missing.
 "oracle disagrees with the corpus; we match the corpus" — the same disposition
 `str-1`/`str-2` got. `date-2` and `date-3` must NOT: they are real defects and
 should stay visible.
+
+
+## date-2 and date-3 are FIXED (dd97082, cca66e2)
+
+Both now match the corpus exactly — `date-2` returns dt1, d4, d5; `date-3`
+returns d1, d2, d3 — and pyoxigraph differs from the corpus on both.
+
+Two rules, and having only one gives a wrong answer in each direction:
+
+* **`xsd:date` orders only PARTIALLY.** A timezoned value and an untimezoned
+  one are comparable only when the interval exceeds the maximum offset of 14
+  hours. `2006-08-23`, `2006-08-23Z` and `2006-08-23+00:00` all normalise to
+  the SAME `dt_val`, so only the presence of an offset in the lexical form
+  distinguishes them. 14 hours specifically and not "any timezone mismatch":
+  the corpus KEEPS `2001-01-01Z` against the same untimezoned needle.
+* **Confined to one value space.** `xsd:date` and `xsd:dateTime` are different
+  datatypes, so their literals are different TERMS and equality is determinate
+  however close the instants. Without this the window swallowed the dateTime 8
+  hours from the needle, taking `date-2` from 5 rows to 2.
+
+The asymmetry, twice confirmed by the corpus: different value spaces make
+ORDERING a type error and leave EQUALITY determinate.
+
+## HARNESS DEFECT — `pytest.xfail()` breaks sibling tests
+
+Filing the three triaged cases as xfails was tried and REVERTED, because it
+broke `open-eq-02`, which had been passing:
+
+    open-eq-02 alone                              FAILS
+    open-eq-02 with open-eq-01 xfailed            FAILS
+    full category, no xfails                      passes
+
+`pytest.xfail()` aborts the test body, so an xfailed test never runs its DATA
+LOAD — and `open-eq-02` was silently relying on `open-eq-01` having loaded
+`data-1.ttl` into a shared space. **The tests in this suite are
+neighbour-dependent.**
+
+That matters well beyond these three: `KNOWN_FAILURES` and `XFAIL_TESTS_V2`
+are used throughout this file, and every entry silently removes a data load
+that a later test may depend on. A category can therefore go GREEN when its
+xfails are added and RED when one is removed, for reasons unrelated to the
+code.
+
+Not fixed here. The dispositions are not needed until `open-world` is wired,
+and it will not be wired while `open-eq-08/10/11/12` fail. Before it is, the
+loader should be made per-test — or at minimum the dependence measured, since
+the same trap applies to every existing xfail.
