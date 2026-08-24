@@ -1,6 +1,7 @@
 # Equality Between Two Variables Compares Text, Not Value
 
-## Status: OPEN — found 2026-08-23, the day `sparql10/expr-builtin` first ran
+## Status: RESOLVED 2026-08-23 in `60b600c`. Found and fixed the day
+## `sparql10/expr-builtin` first ran. Original report follows.
 
     { ?x1 :p ?v1 . ?x2 :p ?v2 . FILTER ( ?v1 = ?v2 ) }
 
@@ -77,3 +78,38 @@ naming this issue, kept RUNNING so a fix flips them rather than needing anyone
 to remember to re-add a category. They also appear in `XFAIL_TESTS_V2`,
 because the oracle independently disagrees with the corpus for them — both
 entries are needed and deleting either hides half the picture.
+
+
+## Resolved
+
+`_var_var_cmp` in `emit_expressions.py`. The lane is chosen PER ROW rather than
+at emit time: `num_col` is already a `CASE` yielding NULL for anything
+non-numeric, so "are both sides numeric" costs nothing to ask. Where it holds,
+compare numerically; otherwise the text lane exactly as before, datatype guard
+included.
+
+A plain `"1"` is NOT caught by the numeric branch — `num_col` requires a
+numeric `datatype_id` — so a string that merely looks like a number still
+compares as a string. That is the distinction `issues/121` turns on.
+
+Verified against the CORPUS, not against my own expectation:
+
+    case              .ttl   pyoxigraph   before   after
+    sameTerm-eq        24        14         14      24
+    sameTerm-not-eq    18        28          0      18
+    sameTerm-simple    24        14         14      24
+
+`sameTerm-not-eq` went from zero rows to eighteen, which is what the `.ttl`
+expects. All three now match the corpus and pyoxigraph is the one that differs,
+so they stay in `KNOWN_FAILURES` with a corrected reason rather than being
+deleted — `test_sql_v2` compares against the oracle, and deleting them would
+claim a pass we do not get.
+
+Perf ran clean afterwards, which was the real risk: this puts a `CASE` where a
+column comparison used to sit, and `?a = ?b` across two BGP triples is a JOIN
+PREDICATE. `issues/054` records `gt` becoming uniquely slow from a related
+change.
+
+**Marked resolved a day late**, which is the drift the
+`planning_sparql_features` README now warns about — and it happened in work
+done the same session as that warning.
