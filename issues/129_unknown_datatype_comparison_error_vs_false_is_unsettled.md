@@ -282,7 +282,7 @@ Two rules, and having only one gives a wrong answer in each direction:
 The asymmetry, twice confirmed by the corpus: different value spaces make
 ORDERING a type error and leave EQUALITY determinate.
 
-## HARNESS DEFECT — `pytest.xfail()` breaks sibling tests
+## HARNESS DEFECT — filing an xfail breaks a sibling test (CAUSE NOT FOUND)
 
 Filing the three triaged cases as xfails was tried and REVERTED, because it
 broke `open-eq-02`, which had been passing:
@@ -291,10 +291,27 @@ broke `open-eq-02`, which had been passing:
     open-eq-02 with open-eq-01 xfailed            FAILS
     full category, no xfails                      passes
 
-`pytest.xfail()` aborts the test body, so an xfailed test never runs its DATA
-LOAD — and `open-eq-02` was silently relying on `open-eq-01` having loaded
-`data-1.ttl` into a shared space. **The tests in this suite are
-neighbour-dependent.**
+**My first explanation was wrong.** I said `pytest.xfail()` aborts the test
+body so an xfailed test never runs its DATA LOAD, and that `open-eq-02` was
+relying on `open-eq-01` to load `data-1.ttl` into the shared space.
+
+Two measurements refute it:
+
+* `open-eq-02` has its OWN `data_file` in the manifest — `data-1.ttl`, the same
+  one — so it does not depend on a neighbour to load it.
+* `run_single_test_sql_v2` caches the last dataset and skips the reload when it
+  matches. I REMOVED that cache so every test truncates and loads its own data,
+  and `open-eq-02` STILL failed with the xfails in place. The cache is not the
+  mechanism.
+
+What IS established, and reproducible in both cache states:
+
+    no xfails                     open-eq-02 PASSES
+    open-eq-01 filed as an xfail  open-eq-02 FAILS
+
+Neither test changed. The dependence is real; **the mechanism is unknown**, and
+the reload cache — genuinely fragile, and worth removing on its own merits —
+is not it.
 
 That matters well beyond these three: `KNOWN_FAILURES` and `XFAIL_TESTS_V2`
 are used throughout this file, and every entry silently removes a data load
@@ -302,7 +319,14 @@ that a later test may depend on. A category can therefore go GREEN when its
 xfails are added and RED when one is removed, for reasons unrelated to the
 code.
 
-Not fixed here. The dispositions are not needed until `open-world` is wired,
-and it will not be wired while `open-eq-08/10/11/12` fail. Before it is, the
-loader should be made per-test — or at minimum the dependence measured, since
-the same trap applies to every existing xfail.
+Not fixed. The dispositions were reverted, so nothing in the tree depends on
+this today — `open-world` stays unwired while `open-eq-08/10/11/12` fail.
+
+**Next step, and it is a measurement not a theory:** run `open-eq-02` in the
+failing configuration and print what it actually returns and what the space
+actually contains, the way `open-eq-07` was eventually cracked. Every
+explanation offered so far, including both of mine, came from reasoning about
+the harness rather than from looking at its output.
+
+The reload cache should be removed regardless. A test's dataset depending on
+which test ran before it is wrong even when it is not the bug in hand.
