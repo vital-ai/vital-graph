@@ -493,7 +493,17 @@ raises when one was in scope and still failed to resolve. This case slips past
 it, emitting a comment-annotated NULL into a JOIN CONDITION, where the effect
 is not an error but a join that silently matches nothing.
 
-Not fixed here. It needs the scope available when a LeftJoin's condition is
-emitted, and it should probably also make an unresolved variable inside a join
-condition loud rather than a NULL — the same argument as the swallowed-exception
-prerequisite above.
+**FIXED.** The ON clause now emits against a `ctx.child()` whose type registry
+maps each variable to its OPERAND-qualified column — `j0.<sql_name>` for the
+left side, `j1.<sql_name>` for the right. `open-eq-12` returns 10, matching the
+corpus.
+
+Two details that made this non-obvious:
+
+* The output variables ARE registered on `ctx` — but further down, after the ON
+  clause is built, and they name the join's OUTPUT columns. An ON clause has to
+  reference the OPERANDS. Registering earlier would not have fixed it.
+* A NULL join condition is not an error. It is a join that matches nothing, so
+  `issues/028`'s unresolved-variable policy never fires. That is the same
+  failure shape as the swallowed exception above: a defect that degrades the
+  answer instead of raising.

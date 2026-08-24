@@ -291,10 +291,38 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
         on_clause = "TRUE"
 
     # LEFT JOIN ON expressions (OPTIONAL filter conditions)
+    #
+    # These must be emitted against a scope that KNOWS the join's operands.
+    # `ctx.types` does not yet: the output variables are registered further
+    # down, and even then they name the join's OUTPUT columns, while an ON
+    # clause has to reference `j0.`/`j1.` — the operands themselves.
+    #
+    # Emitting against the outer ctx produced
+    # `NULL /* vg:unresolved-var ?v1 */` on BOTH sides of the condition, so the
+    # whole ON was NULL, the LEFT JOIN matched nothing, the optional variable
+    # never bound, and `FILTER(!bound(?v3))` kept every row — DAWG
+    # `open-eq-12`, 64 rows where 10 are correct (`issues/129`).
+    #
+    # A NULL join condition is not an error, it is a join that silently matches
+    # nothing, which is why `issues/028`'s unresolved-variable policy did not
+    # catch this.
     if is_left and plan.left_join_exprs:
         from .emit_expressions import expr_to_sql
+        from .sql_type_generation import ColumnInfo
+        on_ctx = ctx.child()
+        for v in sorted(all_vars):
+            src = (left_ctx.types.get(v) if v in left_vars
+                   else right_ctx.types.get(v))
+            if src is None or not src.sql_name:
+                continue
+            # Qualified by the OPERAND's alias, not the join's output name.
+            alias = l_alias if v in left_vars else r_alias
+            on_ctx.types.register(ColumnInfo.simple_output(
+                v, f"{alias}.{src.sql_name}",
+                from_triple=src.from_triple,
+                typed_lane=src.typed_lane))
         for expr in plan.left_join_exprs:
-            sql_expr = expr_to_sql(expr, ctx)
+            sql_expr = expr_to_sql(expr, on_ctx)
             if sql_expr:
                 on_clause += f" AND {sql_expr}"
 
