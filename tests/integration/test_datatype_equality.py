@@ -214,7 +214,20 @@ async def test_stored_custom_datatype_matches_its_own_datatype(space_impl, store
     assert got == ["urn:dt:custom"], got
 
 
-async def test_stored_ne_excludes_only_the_matching_terms(space_impl, stored):
-    """`!=` is where a naive guard inverts: the custom term IS unequal to "x"."""
+async def test_stored_ne_drops_the_incomparable_term_too(space_impl, stored):
+    """The stored twin of `test_ne_across_datatypes_is_also_a_type_error`.
+
+    This asserted `["urn:dt:custom"]`, from the same wrong premise as the
+    inline cases: that a custom-typed term is UNEQUAL to the plain literal.
+    RDFterm-equal makes it a TYPE ERROR — both are literals and they are not
+    the same RDF term — and a FILTER drops a type error, so nothing comes back.
+
+    The push-down needed teaching separately from the expression path, which is
+    why this failed while the inline version already passed: `!=` on a variable
+    goes through `_try_inequality_filter`, and `NOT IN (things equal to it)`
+    KEEPS an incomparable term rather than dropping it.
+    """
     got = await _subjects(space_impl, stored, '?v != "x"')
-    assert got == ["urn:dt:custom"], got
+    assert got == [], (
+        f"got {got} — a term typed <{CUSTOM}> is neither equal nor unequal to "
+        f'the plain literal "x"; that is a type error, and a FILTER drops it')

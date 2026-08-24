@@ -903,6 +903,30 @@ def _inequality_var(expr) -> Optional[str]:
     return ops[0] if ops else None
 
 
+def _comparable_term_cond(ctx) -> Optional[str]:
+    """Terms whose VALUE can be compared, as a term-table condition.
+
+    RDFterm-equal (SPARQL §17.4.1.7) makes a comparison between two literals
+    that are not the same RDF term a TYPE ERROR unless their datatype is one
+    whose values we can compare. A non-literal is not "both literal", so term
+    identity answers definitely for it and it stays. A plain literal has a NULL
+    datatype and IS an xsd:string in RDF 1.1, so it stays too.
+
+    None when there is no context to resolve ids against, which leaves the
+    caller's condition exactly as it was.
+    """
+    if ctx is None:
+        return None
+    from .emit_bgp import _NUMERIC_DATATYPES
+    uris = list(_NUMERIC_DATATYPES) + [
+        f"{_XSD}string", f"{_XSD}boolean", f"{_XSD}dateTime", f"{_XSD}date",
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString",
+    ]
+    ids = ctx.dt_ids_for_uris(uris)
+    return (f"term_type != 'L' OR datatype_id IS NULL "
+            f"OR datatype_id IN ({ids})")
+
+
 def _try_inequality_filter(expr, bgp, term_table: str, quad_aliases: set, ctx):
     """Convert `?var != <literal>` into a NOT IN over the equality set.
 
@@ -925,8 +949,23 @@ def _try_inequality_filter(expr, bgp, term_table: str, quad_aliases: set, ctx):
     eq_cond = _ne_equality_cond(value_node, ctx)
     if eq_cond is None:
         return None
+
+    # `NOT IN (things equal to it)` is not the whole of `!=`. A term whose
+    # datatype we cannot compare by VALUE is neither equal nor unequal to the
+    # literal — it is a TYPE ERROR, which a FILTER drops. `NOT IN` KEEPS those
+    # rows, so `?v != 1` over data carrying an unrecognised datatype returned
+    # six rows where two are correct (DAWG `open-eq-04`).
+    #
+    # The expression path learned this rule in 4fae676 and this did not, which
+    # is why that commit fixed `open-eq-06` and left `open-eq-04` failing: `!=`
+    # on a variable goes through the push-down. Same split as `issues/121`, in
+    # the same two files.
+    cmp_ok = _comparable_term_cond(ctx)
+    tail = ""
+    if cmp_ok:
+        tail = f" AND {ref_id}.{col_name} IN {_term_set(ctx, term_table, cmp_ok)}"
     return (ref_id, f"{ref_id}.{col_name} NOT IN "
-                    f"{_term_set(ctx, term_table, eq_cond)}")
+                    f"{_term_set(ctx, term_table, eq_cond)}{tail}")
 
 
 # `?v IN (a, b, c)` is a disjunction of equalities, so it is the same problem as
