@@ -52,10 +52,15 @@ def _all_values_resolved(ctx, rows, var) -> bool:
         return False
     for row in rows:
         val = row.get(var)
+        # The FULL term identity — `constants` is keyed on
+        # (text, type, lang, datatype). A 2-tuple key silently misses every
+        # time, this reports "not all resolved", and the VALUES fast path is
+        # abandoned: 20 URIs cost 7,342 ms against 0.4 ms for one.
         if isinstance(val, URINode):
-            key = (val.value, "U")
+            key = (val.value, "U", None, None)
         elif isinstance(val, LiteralNode):
-            key = (val.value, "L")
+            key = (val.value, "L", getattr(val, "lang", None) or None,
+                   val.datatype or None)
         else:
             return False           # UNDEF, blank node, or anything unexpected
         col = constants.get(key)
