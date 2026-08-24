@@ -81,7 +81,7 @@ logger = logging.getLogger(__name__)
 MIN_SELECTIVITY = 0.05
 
 
-def _term_uuid(aliases, text: str, ttype: str) -> Optional[str]:
+def _term_uuid(aliases, text: str, ttype: str, *_identity) -> Optional[str]:
     """Resolve a constant to its term uuid via the map the generator built.
 
     `materialize_constants` fills `resolved_constants[col_name]`, and
@@ -90,7 +90,14 @@ def _term_uuid(aliases, text: str, ttype: str) -> Optional[str]:
     coupled the lookup to the SQL text and returned None silently whenever
     anything differed.
     """
-    col = getattr(aliases, "constants", {}).get((text, ttype, None, None))
+    # `*_identity` absorbs the lang/datatype a `leaf_terms` value now carries.
+    # Callers splat that value straight in, and there are FIVE of them; a
+    # two-argument signature made every one a TypeError that generation
+    # swallowed, leaving `range_stats` empty. The slot-sort gate then reads the
+    # range as unmeasured, declines, and the `entity_slot_sort` narrowing is
+    # lost — 4115x buffers on the range comparator, with no error surfaced.
+    lang, dt = (_identity + (None, None))[:2]
+    col = getattr(aliases, "constants", {}).get((text, ttype, lang, dt))
     if col is None:
         return None
     return getattr(aliases, "resolved_constants", {}).get(col)
