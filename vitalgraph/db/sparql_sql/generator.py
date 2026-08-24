@@ -124,26 +124,22 @@ def build_constants_cte(aliases: AliasGenerator, term_table: str) -> str:
     # resolved through the space's own datatype table rather than by threading
     # a context in. IS NOT DISTINCT FROM because both `lang` and `datatype_uri`
     # are NULL for a plain literal and `= NULL` matches nothing.
-    dt_table = (term_table[:-len("_term")] + "_datatype"
-                if term_table.endswith("_term") else None)
+    # Same identity rule as `materialize_constants`, and the same id map, so
+    # this fallback cannot disagree with the path that normally resolves.
+    uri_to_id = getattr(aliases, "dt_uri_to_id", None) or {}
 
     def _one(key):
         text, ttype, lang, dt = key
-        parts = [f"t.term_text = '{_esc(text)}'", f"t.term_type = '{ttype}'"]
-        parts.append(f"t.lang IS NOT DISTINCT FROM '{_esc(lang)}'"
-                     if lang else "t.lang IS NULL")
-        if dt_table is not None:
-            parts.append(f"d.datatype_uri IS NOT DISTINCT FROM '{_esc(dt)}'"
-                         if dt else "d.datatype_uri IS NULL")
-        return "(" + " AND ".join(parts) + ")"
+        return ("(" + " AND ".join([
+            f"t.term_text = '{_esc(text)}'", f"t.term_type = '{ttype}'",
+            (f"t.lang IS NOT DISTINCT FROM '{_esc(lang)}'" if lang
+             else "t.lang IS NULL"),
+            _dt_predicate(dt, uri_to_id)]) + ")")
 
     where = " OR ".join(_one(k) for k in pairs)
-    join = (f"  LEFT JOIN {dt_table} AS d ON d.datatype_id = t.datatype_id\n"
-            if dt_table is not None else "")
     return (
         f"WITH _const AS (\n"
         f"  SELECT t.term_text, t.term_type, t.term_uuid FROM {term_table} AS t\n"
-        f"{join}"
         f"  WHERE {where}\n"
         f")\n"
     )
@@ -386,6 +382,43 @@ async def warm_stats_cache(
 # Main generator function
 # ---------------------------------------------------------------------------
 
+_XSD_STRING = "http://www.w3.org/2001/XMLSchema#string"
+
+
+def _norm_key(key):
+    """A constants key with plain / `xsd:string` collapsed to one form."""
+    text, ttype, lang, dt = key
+    return (text, ttype, lang or None, _norm_dt(dt))
+
+
+def _norm_dt(dt):
+    """Plain and `xsd:string` are ONE TERM in RDF 1.1, so both key as None.
+
+    Not a convenience. Jena hands us a PLAIN literal for `"x"` and for
+    `"x"^^xsd:string` alike, while ingest stores string values with an explicit
+    `xsd:string` id — measured on `sp_lead_synth_100k`: 3219 literals with
+    `datatype_id = 1` and ZERO with NULL. Requiring `datatype_id IS NULL` for a
+    plain constant therefore matched NOTHING, and 48 perf cases returned 0 rows.
+    """
+    return None if (not dt or dt == _XSD_STRING) else dt
+
+
+def _dt_predicate(dt, uri_to_id, col="t.datatype_id"):
+    """SQL selecting the datatype half of a term's identity — NO JOIN.
+
+    The id is resolved from the map the generator already loads, so this is an
+    integer comparison against a column on the term table rather than a join to
+    the datatype table. An unrecognised datatype resolves to nothing, which
+    correctly matches no term.
+    """
+    if _norm_dt(dt) is None:
+        sid = uri_to_id.get(_XSD_STRING)
+        return (f"({col} IS NULL OR {col} = {sid})" if sid is not None
+                else f"{col} IS NULL")
+    tid = uri_to_id.get(dt)
+    return f"{col} = {tid}" if tid is not None else "FALSE"
+
+
 async def materialize_constants(
     aliases: AliasGenerator,
     term_table: str,
@@ -411,22 +444,22 @@ async def materialize_constants(
     #
     # The cache key had the same hole, so a wrong resolution was remembered
     # for the rest of the process.
-    dt_table = (term_table[:-len("_term")] + "_datatype"
-                if term_table.endswith("_term") else None)
+    # Resolve datatype URIs to ids from the map the generator already loads,
+    # rather than joining the datatype table into this lookup. One integer
+    # comparison on a column the term table already has, and the load is
+    # per-space cached so the later call reuses it.
+    dt_map = await _load_datatype_cache(space_id, conn_params=conn_params,
+                                        conn=conn)
+    uri_to_id = {u: i for i, u in (dt_map or {}).items()}
+    aliases.dt_uri_to_id = uri_to_id
 
     def _lang_pred(lang):
         return (f"t.lang IS NOT DISTINCT FROM '{_esc(lang)}'" if lang
                 else "t.lang IS NULL")
 
-    def _dt_pred(dt):
-        if dt_table is None:
-            return None
-        return (f"d.datatype_uri IS NOT DISTINCT FROM '{_esc(dt)}'" if dt
-                else "d.datatype_uri IS NULL")
-
     missing_keys = []
     for key, col_name in aliases.constants.items():
-        cached = _term_cache.get((space_id,) + key)
+        cached = _term_cache.get((space_id,) + _norm_key(key))
         if cached is not None:
             aliases.resolved_constants[col_name] = cached
         else:
@@ -441,36 +474,30 @@ async def materialize_constants(
 
     def _clause(key):
         text, ttype, lang, dt = key
-        parts = [f"t.term_text = '{_esc(text)}'", f"t.term_type = '{ttype}'",
-                 _lang_pred(lang)]
-        dp = _dt_pred(dt)
-        if dp:
-            parts.append(dp)
-        return "(" + " AND ".join(parts) + ")"
+        return ("(" + " AND ".join([
+            f"t.term_text = '{_esc(text)}'", f"t.term_type = '{ttype}'",
+            _lang_pred(lang), _dt_predicate(dt, uri_to_id)]) + ")")
 
-    join = (f" LEFT JOIN {dt_table} AS d ON d.datatype_id = t.datatype_id"
-            if dt_table is not None else "")
-    dt_sel = ", d.datatype_uri AS dt_uri" if dt_table is not None else ""
     sql = (
-        f"SELECT t.term_text, t.term_type, t.lang, t.term_uuid{dt_sel} "
-        f"FROM {term_table} AS t{join} "
+        f"SELECT t.term_text, t.term_type, t.lang, t.datatype_id, t.term_uuid "
+        f"FROM {term_table} AS t "
         f"WHERE {' OR '.join(_clause(k) for k in missing_keys)}"
     )
 
     rows = await db.execute_query(sql, conn_params=conn_params, conn=conn)
     text_map = {}
     for r in rows:
-        k = (r["term_text"], r["term_type"], r["lang"] or None,
-             (r["dt_uri"] if dt_table is not None else None) or None)
+        dt_uri = (dt_map or {}).get(r["datatype_id"])
+        k = (r["term_text"], r["term_type"], r["lang"] or None, _norm_dt(dt_uri))
         text_map[k] = str(r["term_uuid"])
 
     for key, col_name in aliases.constants.items():
         if col_name in aliases.resolved_constants:
             continue  # already resolved from cache
-        uuid_str = text_map.get(key)
+        uuid_str = text_map.get(_norm_key(key))
         if uuid_str:
             aliases.resolved_constants[col_name] = uuid_str
-            _term_cache[(space_id,) + key] = uuid_str
+            _term_cache[(space_id,) + _norm_key(key)] = uuid_str
         else:
             logger.debug("Constant not found: %r", key)
 

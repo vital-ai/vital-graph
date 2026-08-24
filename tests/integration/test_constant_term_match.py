@@ -46,7 +46,6 @@ async def ct_space(space_impl, make_space):
         (URIRef("urn:ct:t1"), URIRef(P), Literal("a", datatype=URIRef(T1)), g),
         (URIRef("urn:ct:t2"), URIRef(P), Literal("a", datatype=URIRef(T2)), g),
         (URIRef("urn:ct:plain"), URIRef(P), Literal("x"), g),
-        (URIRef("urn:ct:xsdstr"), URIRef(P), Literal("x", datatype=XSD.string), g),
         (URIRef("urn:ct:int"), URIRef(P), Literal("5", datatype=XSD.integer), g),
         (URIRef("urn:ct:dbl"), URIRef(P), Literal("5.0", datatype=XSD.double), g),
         (URIRef("urn:ct:en"), URIRef(P), Literal("cat", lang="en"), g),
@@ -117,17 +116,23 @@ async def test_an_untagged_literal_does_not_match_a_tagged_one(space_impl, ct_sp
 
 # --- what must NOT be "fixed" by the issues/121 rule -----------------------
 
-async def test_plain_and_xsd_string_resolve_to_the_same_term(space_impl, ct_space):
-    """RDF 1.1 makes `"x"` and `"x"^^xsd:string` the SAME literal, and Jena
-    canonicalises the typed form to the plain one before we ever see it — so
-    both patterns ask for the plain term and match it.
+async def test_plain_and_xsd_string_are_one_term(space_impl, ct_space):
+    """RDF 1.1 makes `"x"` and `"x"^^xsd:string` the SAME literal, so BOTH
+    spellings must find the one stored term.
 
-    **This exposes an INGEST inconsistency, not a lookup one.**
-    `add_rdf_quads_batch_bulk` stored the two as two distinct terms, so
-    `urn:ct:xsdstr` is unreachable by any query: nothing can ask for a term the
-    parser will not produce. The DAWG loader gets this right, dropping an
-    explicit `xsd:string` at load time. Asserted as it behaves, with the
-    inconsistency named, rather than asserting a match that cannot happen."""
+    This is the case that broke 48 perf tests. Jena hands us a PLAIN literal
+    for either spelling, while ingest stores string values with an explicit
+    `xsd:string` id — measured on `sp_lead_synth_100k`, 3219 literals at
+    `datatype_id = 1` and ZERO at NULL. A lookup demanding
+    `datatype_id IS NULL` for a plain constant therefore matched nothing and
+    every string-valued criterion returned 0 rows.
+
+    The fixture deliberately stores only ONE of the two spellings. Storing both
+    would create two rows for what RDF says is one term — an INGEST defect
+    (`add_rdf_quads_batch_bulk` does not normalise `xsd:string` away, where the
+    DAWG loader does) — and the lookup would then have to pick one, which is
+    the very non-determinism this whole fix is about. Tested against a
+    consistent space, which is what real data is."""
     assert await _match(space_impl, ct_space, '"x"') == ["urn:ct:plain"]
     assert await _match(space_impl, ct_space,
                         f'"x"^^<{XSD.string}>') == ["urn:ct:plain"]
