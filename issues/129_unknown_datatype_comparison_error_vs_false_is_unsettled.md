@@ -442,3 +442,57 @@ after the expression emitter, the push-down, and the semi-join gate.
 Worth doing carefully with the expected SRX diffed after each step. It should
 fix `open-eq-02` and may well move `open-eq-03`/`-05`/`-09`, which are the same
 graph-match-on-a-typed-literal shape.
+
+
+## FIXED on branch `constant-term-identity` — and the fix carries a
+## prerequisite: generation must stop swallowing exceptions
+
+Three commits, all five gates green:
+
+    bb9d605  resolve a constant term by its full identity
+    334fe73  resolve the datatype by id, no join, plain == xsd:string
+    a2b623a  the widened key silently disabled three optimisations
+
+Perf went 48 -> 15 -> 2 -> 0 across them.
+
+### The three plan regressions, and why they are one shape
+
+Widening `constants` from `(text, type)` to `(text, type, lang, datatype)` did
+not break loudly anywhere. It broke as lookups returning None, and every
+consumer reads None as "unmeasured — decline the optimisation". Rows stayed
+CORRECT; plans collapsed.
+
+| site | symptom |
+|---|---|
+| `_dt_predicate` demanding `datatype_uri IS NULL` | 0 rows for every string criterion |
+| `_term_uuid(aliases, *pred)`, FIVE splat sites | swallowed TypeError -> `range_stats` empty -> 4115x buffers |
+| `_all_values_resolved` keying on a 2-tuple | VALUES fast path abandoned, 7,342 ms against 0.4 ms |
+
+Four suites passed with all three present. Only perf caught them, and only
+where a benchmark asserts buffers or milliseconds rather than rows.
+
+### THE PREREQUISITE: a swallowed exception is not an implementation detail
+
+`_generate_sql` catches broadly and returns `GenerateResult(ok=False, error=...)`,
+or lets a partially-degraded plan through. So a `TypeError` in an OPTIONAL path
+— a statistics lookup, a gate, a rewrite — never reaches a stack trace. It
+becomes a missing optimisation, and the query still answers correctly.
+
+That is what made the 4115x regression invisible. It is also what made
+`open-eq-02`'s `too many values to unpack` cost two wrong diagnoses earlier in
+this same issue: the message surfaced with no location, and finding it needed a
+hand-written probe that re-raised.
+
+**This belongs to the fix, not to a separate ticket.** The constants key is
+touched by a dozen call sites across nine modules; the next person to widen or
+narrow it will hit exactly this again, and will get the same silence.
+
+Minimum viable change: log the traceback at ERROR whenever generation catches,
+including for the paths that recover. A degraded plan that logs nothing is
+indistinguishable from a correct one until somebody benchmarks it.
+
+Worth considering beyond that: make the OPTIONAL paths — stats collection,
+selectivity gates, table rewrites — fail LOUDLY under test and quietly in
+production, so a shape change like this one turns a suite red instead of
+turning a benchmark slow. Every one of these three defects would have been
+caught at the first `pytest tests/unit` had that been true.
