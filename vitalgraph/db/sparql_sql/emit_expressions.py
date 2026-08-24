@@ -526,6 +526,34 @@ def _comparable_sql(expr, ctx: EmitContext) -> Optional[str]:
     return None
 
 
+def _term_type_guard(left, right, ctx: EmitContext) -> Optional[str]:
+    """SQL requiring both operands to be the same KIND of RDF term.
+
+    A literal, a URI and a blank node are never the same term, whatever their
+    text. We compared `term_text` alone, so the blank node `_:xyz` — whose
+    LABEL is "xyz" — came out equal to the literal `"xyz"`, and the datatype
+    guard waved it through because a blank node has a NULL datatype and so
+    derives `xsd:string`. Four spurious pairs in DAWG `open-eq-07`.
+
+    None when either side has no type lane, which leaves the caller as it was.
+    """
+    cols = []
+    for e in (left, right):
+        if isinstance(e, ExprVar):
+            info = ctx.types.get(e.var)
+            if not info or not info.type_col or info.type_col == "NULL":
+                return None
+            cols.append(info.type_col)
+        elif isinstance(e, ExprValue):
+            node = e.node
+            t = ("L" if isinstance(node, LiteralNode)
+                 else "B" if isinstance(node, BNodeNode) else "U")
+            cols.append(f"'{t}'")
+        else:
+            return None
+    return f"({cols[0]} = {cols[1]})"
+
+
 def _term_error_cmp(left, right, op: str, ctx: EmitContext,
                     normal: str) -> Optional[str]:
     """`=`/`!=` where a value comparison is not available is a TYPE ERROR.
@@ -564,6 +592,9 @@ def _term_error_cmp(left, right, op: str, ctx: EmitContext,
     if la and lb:
         same = (f"({same} AND LOWER(COALESCE({la}, '')) = "
                 f"LOWER(COALESCE({lb}, '')))")
+    _tg = _term_type_guard(left, right, ctx)
+    if _tg:
+        same = f"({same} AND {_tg})"
     ident = "TRUE" if op == "=" else "FALSE"
     return (f"(CASE WHEN {ca} AND {cb} THEN {normal} "
             f"WHEN {same} THEN {ident} ELSE NULL END)")
@@ -646,8 +677,13 @@ def _cmp_sql(left, right, op: str, ctx: EmitContext) -> Optional[str]:
         else:
             normal = f"(({a} {op} {b}) AND {guard})"
 
-    # Only `=`/`!=` map to RDFterm-equal. Ordering is a different rule.
+    # Only `=`/`!=` map to RDFterm-equal. Ordering is a different rule, with
+    # its own cross-type ordering, so the term-type guard is applied here only.
     if op in ("=", "!="):
+        _tg = _term_type_guard(left, right, ctx)
+        if _tg:
+            normal = (f"({normal} AND {_tg})" if op == "="
+                      else f"({normal} OR NOT {_tg})")
         _te = _term_error_cmp(left, right, op, ctx, normal)
         if _te:
             return _te
