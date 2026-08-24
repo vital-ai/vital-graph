@@ -199,11 +199,63 @@ determinacy model, and it will not be assessable until that lands. Whether the
 OPTIONAL body binding nothing is a second, independent defect is UNKNOWN — it
 has not been isolated from the equality behaviour.
 
-## Not-ours triage: NOT DONE
+## Triage DONE 2026-08-24 — and it reverses the earlier classification
 
-`date-2`, `date-3` and `open-eq-01` are flagged `[pyoxigraph also differs from
-.srx]`. They need hand-checking to decide which side is right — the treatment
-`str-1`/`str-2` got in `issues/125`, where reading the data by hand showed the
-engines were correct and the corpus was the outlier. That check has NOT been
-done here, so no reason has been recorded and they are NOT listed in
-KNOWN_FAILURES.
+I had grouped these three as "not our bug" from the `ACCEPTED` label. **That
+label only means pyoxigraph ALSO differs from the `.srx`. It does not mean we
+are right.** Hand-checked against data-1/data-3 and the expected SRX:
+
+| case | corpus | us | verdict |
+|---|---|---|---|
+| `open-eq-01` | 0 | **0** | we are RIGHT; the oracle returns 2 |
+| `date-2` | dt1,d4,d5 | dt1,d4,d5,**d2,d3** | OUR BUG |
+| `date-3` | d1,d2,d3 | d1,d2,d3,**dt1** | OUR BUG |
+
+### `open-eq-01` — oracle bug, we match the corpus
+
+    SELECT * { ?x :p "001"^^xsd:integer }
+
+A triple pattern, not a FILTER, so it matches by RDF TERM. `"001"^^xsd:integer`
+is a distinct term from `"1"` and `"01"`; no term in the data has that lexical
+form, so ZERO rows is right, and the manifest says so itself — "graph match -
+no lexical form in data (assumes no value matching)". pyoxigraph returns 2,
+value-matching in a graph pattern, which the manifest explicitly excludes.
+
+### `date-2` — ours: an untimezoned xsd:date is INDETERMINATE against a
+### timezoned one within 14 hours
+
+    FILTER ( ?v != "2006-08-23"^^xsd:date )
+
+We return `d2` (`2006-08-23Z`) and `d3` (`2006-08-23+00:00`), which the corpus
+excludes. Those are the SAME DAY as the needle, differing only in carrying a
+timezone. XSD gives dates a PARTIAL order: a timezoned and an untimezoned value
+are comparable only when the interval between them exceeds the maximum offset
+of 14 hours. Same day, so indeterminate — a type error, and the FILTER drops it.
+
+That the corpus KEEPS `d5` (`2001-01-01Z`) against the same untimezoned needle
+is the other half of the rule and the proof it is 14 hours and not "any
+timezone mismatch": five years apart is determinate whatever the offset.
+
+`datatypes_and_language_tags.md` §4.6 fixed the timezone question for
+`xsd:dateTime` EQUALITY by requiring both sides to agree about having a
+timezone. That is a cruder rule than XSD's and it was not applied to
+`xsd:date` at all.
+
+### `date-3` — ours: ordering an xsd:dateTime against an xsd:date is a type error
+
+    FILTER ( ?v > "2006-08-22"^^xsd:date )
+
+We return `dt1`, `"2006-08-23T09:00:00+01:00"^^xsd:dateTime`. `xsd:dateTime`
+and `xsd:date` are different value spaces, so the ordering is a type error and
+the row is dropped. We compare them anyway.
+
+Note this is ORDERING, not equality. The type-error work so far deliberately
+touched `=` and `!=` only, on the grounds that ordering has its own rule. This
+is that rule, and it is missing.
+
+### Disposition
+
+`open-eq-01` can go in `KNOWN_FAILURES` and `XFAIL_TESTS_V2` with the reason
+"oracle disagrees with the corpus; we match the corpus" — the same disposition
+`str-1`/`str-2` got. `date-2` and `date-3` must NOT: they are real defects and
+should stay visible.
