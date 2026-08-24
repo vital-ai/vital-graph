@@ -1,6 +1,7 @@
 # Unknown-Datatype Comparison: Type Error or False? The Two Authorities Disagree
 
-## Status: OPEN — investigated 2026-08-23, implementation REVERTED
+## Status: OPEN — semantics SETTLED and partly implemented 2026-08-24.
+## Two of seven cases fixed; five remain with a diagnosed cause.
 
 `issues/128` names `open-world` as the largest remaining sparql10 cluster.
 Attempted it; got two of seven cases passing and reverted, because the change
@@ -76,3 +77,43 @@ the three edits, staying at 28 rows where 12 are expected. It never reached
 turns variable equality into a triple pattern (term identity) rather than a
 FILTER. That is a THIRD comparison path, after the expression emitter and the
 push-down, and nothing in the planning docs mentions it.
+
+
+## Settled: the standard says TYPE ERROR
+
+SPARQL 1.1 §17.3 routes `=` to a value comparison only for the datatypes it
+supports. Everything else falls through to RDFterm-equal (§17.4.1.7), which
+**"produces a type error if the arguments are both literal but are not the
+same RDF term"**. FALSE is reserved for the case where they are NOT both
+literal — a URI against a literal is well defined and unequal.
+
+So the DAWG corpus was right and `issues/121`'s "spec: FALSE" premise was
+wrong. Five tests written from that premise now assert the standard.
+
+**What `issues/121` fixed is unaffected.** In a FILTER a type error and FALSE
+both drop the row. The two differ only where the value is observed — a BIND —
+and under negation, where `!error` stays an error but `!FALSE` is TRUE.
+
+## Done
+
+* `4fae676` — the expression path. Fixes `open-eq-06`.
+* this commit — the push-down. Fixes `open-eq-04`.
+
+Two constraints, both learned by violating them: resolve the datatype through
+`_dt_sql` rather than `info.dt_col` (the latter engages where `_datatype_guard`
+declines and references columns not in scope — it took out
+`aggregates/SAMPLE`), and skip a pair already in one value space (the numeric
+lane already yields NULL for a term outside it).
+
+## Remaining: 5 cases, one diagnosed cause
+
+`open-eq-07` is `FILTER(?v1 = ?v2)`: 28 rows where 12 is correct. **16 is
+exactly the number of pairs among the four unknown-typed terms**, so the
+same-term branch of `_term_error_cmp` is matching all of them rather than only
+the four identical pairs. `open-eq-08/10/11/12` are the same shape.
+
+**Correction to this issue's own earlier text:** it said `FILTER(?v1 = ?v2)`
+never reaches `_cmp_sql`, and blamed the builder rewriting variable equality
+into a triple pattern. That was inferred from a row count that did not move.
+Dumping the generated SQL shows the type-error CASE is present. The path is
+fine; the branch is wrong.
