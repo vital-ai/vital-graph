@@ -169,6 +169,41 @@ Ours:
     open-eq-08  42 rows, correct COUNT, wrong SET      pairwise determinacy
     open-eq-10  52 vs 53, one extra row                probably the same
     open-eq-11  52 vs 53, one extra row                same shape as -10
-    open-eq-12  10 vs 64, filter not constraining      DIFFERENT cause: an
-                OPTIONAL body's FILTER is not restricting the optional match.
-                A join/scoping question, not an equality one.
+    open-eq-12  10 vs 64                               DIFFERENT cause, below.
+
+
+## `open-eq-12` — measured 2026-08-24, and my first description of it was wrong
+
+    { ?x :p ?v1 . ?y :p ?v2 .
+      OPTIONAL { ?y :p ?v3 . FILTER( ?v1 != ?v3 || ?v1 = ?v3 ) }
+      FILTER (!bound(?v3)) }
+
+I said the outer `!bound(?v3)` was not emitted, from grepping the SQL for
+`IS NULL`. **It IS emitted** — as `NOT ((v5 IS NOT NULL))`, which that grep
+cannot match. The filter is fine.
+
+What the SQL actually shows: we return all 64 rows, so `?v3` is NEVER bound —
+the OPTIONAL body produces no match at all. And the body's own FILTER emits
+none of our type-error `CASE`s, so the equality rule is not reaching it.
+
+The intended behaviour is subtle and worth writing down, because it is what
+makes this case a test of the type-error rule rather than of OPTIONAL:
+`?v1 != ?v3 || ?v1 = ?v3` is TRUE whenever the comparison is DETERMINATE, and
+an ERROR when it is not. So the OPTIONAL matches exactly the determinate pairs,
+`?v3` binds for those, and `!bound(?v3)` keeps only the INDETERMINATE ones —
+the ten rows expected. It is the pairwise-determinacy question again, seen
+through OPTIONAL.
+
+So `-12` is probably NOT a separate cause after all; it is the same
+determinacy model, and it will not be assessable until that lands. Whether the
+OPTIONAL body binding nothing is a second, independent defect is UNKNOWN — it
+has not been isolated from the equality behaviour.
+
+## Not-ours triage: NOT DONE
+
+`date-2`, `date-3` and `open-eq-01` are flagged `[pyoxigraph also differs from
+.srx]`. They need hand-checking to decide which side is right — the treatment
+`str-1`/`str-2` got in `issues/125`, where reading the data by hand showed the
+engines were correct and the corpus was the outlier. That check has NOT been
+done here, so no reason has been recorded and they are NOT listed in
+KNOWN_FAILURES.
