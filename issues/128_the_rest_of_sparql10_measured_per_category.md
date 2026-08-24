@@ -16,6 +16,27 @@ collect **98 failures**, across at least six distinct causes.
 
 68 cases, free coverage. Plus `expr-builtin` from `issues/125`.
 
+## RE-MEASURED 2026-08-24, after type-promotion and the RDFterm-equal rule
+
+48 failures of ours across 12 categories (75 including the oracle half). The
+table below is the ORIGINAL measurement; the current counts are:
+
+| category | was | now | note |
+|---|---|---|---|
+| `open-world` | 10 | 9 | `open-eq-06` fixed by the type-error rule. The rest need the same rule in the PUSH-DOWN — `?v != 1` goes through `_try_inequality_filter`, which this did not touch. |
+| `cast` | 7 | 7 | untouched |
+| `expr-equals` | 6 | 6 | **unchanged.** I predicted the type-error rule would clear these for free. It did not. Re-measured rather than assumed, which is the only reason that is known. |
+| `boolean-effective-value` | 6 | 6 | untouched |
+| `graph` | 5 | 5 | untouched |
+| `algebra` | 4 | 4 | untouched |
+| `optional-filter` | 3 | 3 | untouched |
+| `regex`, `expr-ops`, `distinct` | 2 each | 2 each | untouched |
+| `i18n`, `basic` | 1 each | 1 each | untouched |
+
+**A measurement taken before a semantic change does not survive it, and the
+direction is not predictable.** `type-promotion` went 22 -> 0 from one rule;
+`expr-equals` went 6 -> 6 from a rule that looked like it should have helped.
+
 ## NOT wired, with the count and what is behind it
 
 | category | ours | first look |
