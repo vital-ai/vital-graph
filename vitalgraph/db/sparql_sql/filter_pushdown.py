@@ -619,17 +619,22 @@ def _try_numeric_filter(
 
     left, right = args
     is_dt = False
+    dt_uri = None          # which temporal value space the needle lives in
     if isinstance(left, ExprVar):
         var_name, literal = left.var, _numeric_literal(right)
         if literal is None:
             literal = _datetime_literal(right)
             is_dt = literal is not None
+            if is_dt:
+                dt_uri = right.node.datatype
     elif isinstance(right, ExprVar):
         # Variable on the right: `65 <= ?v` means `?v >= 65`.
         var_name, literal = right.var, _numeric_literal(left)
         if literal is None:
             literal = _datetime_literal(left)
             is_dt = literal is not None
+            if is_dt:
+                dt_uri = left.node.datatype
         op = _FLIPPED[op]
     else:
         return None
@@ -668,9 +673,20 @@ def _try_numeric_filter(
     # mis-costing it. With the generated column the estimate is accurate, so
     # the planner can be left to choose — and letting it choose is better,
     # since a fence also blocks legitimate optimisations.
+    range_cond = f"{num_expr} {op} {value_sql}"
+    if is_dt and dt_uri and ctx is not None:
+        # Confine the range to the needle's OWN value space. `dt_val` is
+        # generated for xsd:date AND xsd:dateTime alike, so without this a
+        # `> "2006-08-22"^^xsd:date` also ordered the dateTime
+        # `"2006-08-23T09:00:00+01:00"` against it. Those are different value
+        # spaces; XSD makes the comparison a type error, and a FILTER drops it
+        # (DAWG `date-3`).
+        _ids = ctx.dt_ids_for_uris([dt_uri])
+        if _ids and _ids != "NULL":
+            range_cond = f"({range_cond}) AND datatype_id IN ({_ids})"
     constraint_sql = (
         f"{ref_id}.{col_name} IN "
-        f"{_term_set(ctx, term_table, f'{num_expr} {op} {value_sql}')}"
+        f"{_term_set(ctx, term_table, range_cond)}"
     )
     # Record structurally so the selectivity gate can estimate this leaf.
     bgp.range_leaves[(ref_id, col_name)] = (op, literal)
