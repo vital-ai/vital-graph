@@ -117,3 +117,32 @@ now pinned on the 10k fixture:
 Emptiness costs something. Unservability costs far more. The two-character
 needle is kept deliberately, so the cost of the `MIN_TRIGRAM_NEEDLE` decision
 stays visible rather than becoming folklore.
+
+## Re-verified 2026-08-24 — still exactly one skip, and it is stable
+
+Checked while chasing an unrelated perf regression, so the observation is
+incidental but worth keeping: `test_paging_fence_covers_every_shape` reports
+
+    SKIPPED [1] ... neither plan finished within the probe timeout
+
+on EVERY clean run — on `main`, on a feature branch, and before and after a
+change that moved 48 other perf cases. The count did not vary once across a
+dozen runs.
+
+That stability is the useful part. A skip that comes and goes is a flaky probe
+and should be chased; one that is identical in every run is a fixed property of
+the shape, which is what this issue concluded. It can be used as a baseline: a
+run reporting anything other than `SKIPPED [1]` here has changed something
+real.
+
+**The survivor is `p100-range-tight-specific-100k`**, as recorded above — the
+shape that does not finish either way even warm. Worth stating plainly because
+it is easy to misremember as the `contains` case: `contains` LOOKS like the
+obvious candidate, having been half the original six and carrying the
+`MIN_TRIGRAM_NEEDLE` problem, but it was FIXED here by probing `CompanyName`
+with `"LLC"`. I made exactly that error reading this issue back, which is the
+argument for the sentence rather than against it.
+
+Not re-measured. This note records the count and which case, not a fresh
+timing — the 20s probe against a 22 GB fixture is the reason this is a skip in
+the first place.
