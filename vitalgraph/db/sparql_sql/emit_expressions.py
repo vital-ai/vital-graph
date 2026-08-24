@@ -476,10 +476,14 @@ def _datatype_guard(left, right, ctx: EmitContext) -> Optional[str]:
 # NOT both literal — a URI against a literal is well-defined and unequal.
 _COMPARABLE_DATATYPES = _NUMERIC_DATATYPES | frozenset({
     f"{XSD}string", f"{XSD}boolean", f"{XSD}dateTime", f"{XSD}date",
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString",
 })
-# `rdf:langString` is deliberately ABSENT. §17.3 lists no value comparison for
-# it, so two language-tagged literals fall to RDFterm-equal and relate by term
-# identity alone — `"xyz"@en` and `"xyz"@fr` are a type error, not false.
+# `rdf:langString` BELONGS here. "Comparable" means we can DETERMINE the
+# answer, not that a value comparison exists: a language-tagged literal is
+# perfectly well known, and term identity over (text, tag) is decidable. Only
+# an UNRECOGNISED datatype leaves us unable to say. Dropping langString made
+# `"xyz"@en != "xyz"` an error where DAWG `open-eq-08` requires TRUE, and
+# over-excluded 34 of 64 pairs.
 
 
 def _lang_sql(expr, ctx: EmitContext) -> Optional[str]:
@@ -554,6 +558,24 @@ def _term_type_guard(left, right, ctx: EmitContext) -> Optional[str]:
     return f"({cols[0]} = {cols[1]})"
 
 
+def _both_literal_sql(left, right, ctx: EmitContext) -> Optional[str]:
+    """SQL true when BOTH operands are literals, or None if unknowable."""
+    parts = []
+    for e in (left, right):
+        if isinstance(e, ExprVar):
+            info = ctx.types.get(e.var)
+            if not info or not info.type_col or info.type_col == "NULL":
+                return None
+            parts.append(f"{info.type_col} = 'L'")
+        elif isinstance(e, ExprValue):
+            if not isinstance(e.node, LiteralNode):
+                return "FALSE"
+            parts.append("TRUE")
+        else:
+            return None
+    return f"({' AND '.join(parts)})"
+
+
 def _term_error_cmp(left, right, op: str, ctx: EmitContext,
                     normal: str) -> Optional[str]:
     """`=`/`!=` where a value comparison is not available is a TYPE ERROR.
@@ -596,7 +618,17 @@ def _term_error_cmp(left, right, op: str, ctx: EmitContext,
     if _tg:
         same = f"({same} AND {_tg})"
     ident = "TRUE" if op == "=" else "FALSE"
-    return (f"(CASE WHEN {ca} AND {cb} THEN {normal} "
+    # "if the arguments are BOTH LITERAL but are not the same RDF term" — the
+    # error needs BOTH to be literals. An unrecognised datatype against a URI
+    # or a blank node is still a definite answer, because RDFterm-equal
+    # returns FALSE whenever the two are not both literal. Requiring only
+    # `ca AND cb` excluded the unknown-typed literal against the blank node and
+    # the URI: four pairs, and the difference between 38 and 42 in DAWG
+    # `open-eq-08`.
+    both_lit = _both_literal_sql(left, right, ctx)
+    determinate = f"({ca} AND {cb})" if both_lit is None else \
+                  f"(({ca} AND {cb}) OR NOT {both_lit})"
+    return (f"(CASE WHEN {determinate} THEN {normal} "
             f"WHEN {same} THEN {ident} ELSE NULL END)")
 
 
@@ -680,10 +712,35 @@ def _cmp_sql(left, right, op: str, ctx: EmitContext) -> Optional[str]:
     # Only `=`/`!=` map to RDFterm-equal. Ordering is a different rule, with
     # its own cross-type ordering, so the term-type guard is applied here only.
     if op in ("=", "!="):
+        # Gate on the DATATYPE GUARD engaging. That is the condition already
+        # proven to be in scope wherever comparisons are emitted; the term-type
+        # and language columns live beside the datatype column, so if it
+        # declines they are unavailable too. Reading them regardless emitted
+        # `v2__lang` for `?sample = 1.0`, where only `f0.v3__*` exists, and
+        # broke `aggregates/SAMPLE` — the SECOND time this session that reading
+        # ColumnInfo directly reached a context the guard never enters.
+        #
+        # Declining costs nothing here: a pair in one value space is compared
+        # numerically, where a term of another type or with a language tag
+        # yields NULL anyway.
+        _guards = []
+        if _datatype_guard(left, right, ctx) is None:
+            return normal
         _tg = _term_type_guard(left, right, ctx)
         if _tg:
-            normal = (f"({normal} AND {_tg})" if op == "="
-                      else f"({normal} OR NOT {_tg})")
+            _guards.append(_tg)
+        # The language TAG is part of term identity, so it belongs in the
+        # comparison and not only in the same-term branch: `"xyz"@en` and
+        # `"xyz"@fr` are different terms. BCP 47 tags are case-insensitive,
+        # which is what keeps `@en` and `@EN` one term.
+        _la, _lb = _lang_sql(left, ctx), _lang_sql(right, ctx)
+        if _la and _lb:
+            _guards.append(f"(LOWER(COALESCE({_la}, '')) = "
+                           f"LOWER(COALESCE({_lb}, '')))")
+        if _guards:
+            _g = " AND ".join(_guards)
+            normal = (f"({normal} AND {_g})" if op == "="
+                      else f"({normal} OR NOT ({_g}))")
         _te = _term_error_cmp(left, right, op, ctx, normal)
         if _te:
             return _te
