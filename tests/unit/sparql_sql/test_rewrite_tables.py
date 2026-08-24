@@ -47,7 +47,7 @@ def _aliases_with_constants(const_map: dict) -> AliasGenerator:
     """
     aliases = AliasGenerator()
     for alias, (text, ttype) in const_map.items():
-        aliases.constants[(text, ttype, None, None)] = alias
+        aliases.constants[(text, ttype)] = alias
     return aliases
 
 

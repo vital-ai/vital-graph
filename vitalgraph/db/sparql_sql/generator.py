@@ -81,7 +81,7 @@ def substitute_constants(sql: str, aliases: AliasGenerator) -> str:
     if not aliases.constants:
         return sql
 
-    for (text, ttype, _lg, _dt), col_name in aliases.constants.items():
+    for (text, ttype), col_name in aliases.constants.items():
         token = f"{_CONST_PREFIX}{col_name}{_CONST_SUFFIX}"
         uuid_str = aliases.resolved_constants.get(col_name)
         if uuid_str:
@@ -105,45 +105,22 @@ def build_constants_cte(aliases: AliasGenerator, term_table: str) -> str:
     if len(aliases.resolved_constants) == len(aliases.constants):
         return ""
     pairs = [
-        key for key, col_name in aliases.constants.items()
+        (text, ttype) for (text, ttype), col_name in aliases.constants.items()
         if col_name not in aliases.resolved_constants
     ]
     if not pairs:
         return ""
-
-    # Match on all FOUR components of the term's identity. `term_uuid` is a
-    # UUIDv5 over (text, type, lang, datatype); matching on (text, type) alone
-    # returned whichever term happened to share the lexical form, so
-    # `{ ?x :p "a"^^t:type1 }` resolved to the `t:type2` term (`issues/129`).
-    #
-    # A graph pattern matches by TERM, so `"x"` and `"x"^^xsd:string` must NOT
-    # match each other here even though RDF 1.1 makes them one VALUE and
-    # `issues/121` made them compare equal in a FILTER.
-    #
-    # The datatype arrives as a URI and the term table stores an id, so it is
-    # resolved through the space's own datatype table rather than by threading
-    # a context in. IS NOT DISTINCT FROM because both `lang` and `datatype_uri`
-    # are NULL for a plain literal and `= NULL` matches nothing.
-    dt_table = (term_table[:-len("_term")] + "_datatype"
-                if term_table.endswith("_term") else None)
-
-    def _one(key):
-        text, ttype, lang, dt = key
-        parts = [f"t.term_text = '{_esc(text)}'", f"t.term_type = '{ttype}'"]
-        parts.append(f"t.lang IS NOT DISTINCT FROM '{_esc(lang)}'"
-                     if lang else "t.lang IS NULL")
-        if dt_table is not None:
-            parts.append(f"d.datatype_uri IS NOT DISTINCT FROM '{_esc(dt)}'"
-                         if dt else "d.datatype_uri IS NULL")
-        return "(" + " AND ".join(parts) + ")"
-
-    where = " OR ".join(_one(k) for k in pairs)
-    join = (f"  LEFT JOIN {dt_table} AS d ON d.datatype_id = t.datatype_id\n"
-            if dt_table is not None else "")
+    if len(pairs) == 1:
+        text, ttype = pairs[0]
+        where = f"term_text = '{_esc(text)}' AND term_type = '{ttype}'"
+    else:
+        values = ", ".join(
+            f"('{_esc(text)}', '{ttype}')" for text, ttype in pairs
+        )
+        where = f"(term_text, term_type) IN ({values})"
     return (
         f"WITH _const AS (\n"
-        f"  SELECT t.term_text, t.term_type, t.term_uuid FROM {term_table} AS t\n"
-        f"{join}"
+        f"  SELECT term_text, term_type, term_uuid FROM {term_table}\n"
         f"  WHERE {where}\n"
         f")\n"
     )
@@ -403,80 +380,53 @@ async def materialize_constants(
     # Extract space_id from term_table name (e.g. "myspace_term" → "myspace")
     space_id = term_table.rsplit("_term", 1)[0] if term_table.endswith("_term") else ""
 
-    # Keyed on the FULL term identity throughout — cache, query and result map.
-    # `term_uuid` is a UUIDv5 over (text, type, lang, datatype), and matching on
-    # (text, type) alone returned whichever term shared the lexical form: over
-    # data holding both `"a"^^t:type1` and `"a"^^t:type2`, the pattern
-    # `{ ?x :p "a"^^t:type1 }` resolved to the type2 uuid (`issues/129`).
-    #
-    # The cache key had the same hole, so a wrong resolution was remembered
-    # for the rest of the process.
-    dt_table = (term_table[:-len("_term")] + "_datatype"
-                if term_table.endswith("_term") else None)
-
-    def _lang_pred(lang):
-        return (f"t.lang IS NOT DISTINCT FROM '{_esc(lang)}'" if lang
-                else "t.lang IS NULL")
-
-    def _dt_pred(dt):
-        if dt_table is None:
-            return None
-        return (f"d.datatype_uri IS NOT DISTINCT FROM '{_esc(dt)}'" if dt
-                else "d.datatype_uri IS NULL")
-
-    missing_keys = []
-    for key, col_name in aliases.constants.items():
-        cached = _term_cache.get((space_id,) + key)
+    # Check cache first — resolve as many as possible without DB
+    missing_pairs = []
+    for (text, ttype), col_name in aliases.constants.items():
+        cached = _term_cache.get((space_id, text, ttype))
         if cached is not None:
             aliases.resolved_constants[col_name] = cached
         else:
-            missing_keys.append(key)
+            missing_pairs.append((text, ttype))
 
-    if not missing_keys:
+    if not missing_pairs:
         logger.debug("Materialized %d/%d constants (all cached)",
                      len(aliases.resolved_constants), len(aliases.constants))
         return
 
     from . import db_provider as db
 
-    def _clause(key):
-        text, ttype, lang, dt = key
-        parts = [f"t.term_text = '{_esc(text)}'", f"t.term_type = '{ttype}'",
-                 _lang_pred(lang)]
-        dp = _dt_pred(dt)
-        if dp:
-            parts.append(dp)
-        return "(" + " AND ".join(parts) + ")"
-
-    join = (f" LEFT JOIN {dt_table} AS d ON d.datatype_id = t.datatype_id"
-            if dt_table is not None else "")
-    dt_sel = ", d.datatype_uri AS dt_uri" if dt_table is not None else ""
-    sql = (
-        f"SELECT t.term_text, t.term_type, t.lang, t.term_uuid{dt_sel} "
-        f"FROM {term_table} AS t{join} "
-        f"WHERE {' OR '.join(_clause(k) for k in missing_keys)}"
-    )
+    if len(missing_pairs) == 1:
+        text, ttype = missing_pairs[0]
+        sql = (
+            f"SELECT term_text, term_type, term_uuid FROM {term_table} "
+            f"WHERE term_text = '{_esc(text)}' AND term_type = '{ttype}' LIMIT 1"
+        )
+    else:
+        values = ", ".join(
+            f"('{_esc(text)}', '{ttype}')" for text, ttype in missing_pairs
+        )
+        sql = (
+            f"SELECT term_text, term_type, term_uuid FROM {term_table} "
+            f"WHERE (term_text, term_type) IN ({values})"
+        )
 
     rows = await db.execute_query(sql, conn_params=conn_params, conn=conn)
-    text_map = {}
-    for r in rows:
-        k = (r["term_text"], r["term_type"], r["lang"] or None,
-             (r["dt_uri"] if dt_table is not None else None) or None)
-        text_map[k] = str(r["term_uuid"])
+    text_map = {(r["term_text"], r["term_type"]): str(r["term_uuid"]) for r in rows}
 
-    for key, col_name in aliases.constants.items():
+    for (text, ttype), col_name in aliases.constants.items():
         if col_name in aliases.resolved_constants:
             continue  # already resolved from cache
-        uuid_str = text_map.get(key)
+        uuid_str = text_map.get((text, ttype))
         if uuid_str:
             aliases.resolved_constants[col_name] = uuid_str
-            _term_cache[(space_id,) + key] = uuid_str
+            _term_cache[(space_id, text, ttype)] = uuid_str
         else:
-            logger.debug("Constant not found: %r", key)
+            logger.debug("Constant not found: text=%r type=%r", text, ttype)
 
     logger.debug("Materialized %d/%d constants (%d from cache, %d from DB)",
                  len(aliases.resolved_constants), len(aliases.constants),
-                 len(aliases.constants) - len(missing_keys), len(missing_keys))
+                 len(aliases.constants) - len(missing_pairs), len(missing_pairs))
 
 
 # ---------------------------------------------------------------------------

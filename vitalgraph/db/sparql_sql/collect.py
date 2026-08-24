@@ -74,19 +74,14 @@ def _like_escape(s: str) -> str:
     return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def _const_subquery(term_text: str, term_type: str, aliases: AliasGenerator,
-                    lang: str = None, datatype: str = None) -> str:
+def _const_subquery(term_text: str, term_type: str, aliases: AliasGenerator) -> str:
     """Register a constant term and return a placeholder token.
 
     During collect, constants are embedded as placeholder tokens like
     ``__CONST_c_0__``.  After the materialize phase resolves UUIDs,
     these are replaced with ``'uuid'::uuid`` literals.
-
-    `lang` and `datatype` are part of the term's identity. Dropping the
-    datatype here made `{ ?x :p "a"^^t:type1 }` resolve to a `t:type2` term
-    (`issues/129`).
     """
-    col = aliases.register_constant(term_text, term_type, lang, datatype)
+    col = aliases.register_constant(term_text, term_type)
     return f"{_CONST_PREFIX}{col}{_CONST_SUFFIX}"
 
 
@@ -150,8 +145,7 @@ def _collect_bgp(op: OpBGP, space_id: str, aliases: AliasGenerator,
                 constraint = f"{full_uuid} = {subq}"
                 plan.constraints.append(constraint)
                 plan.tagged_constraints.append((q_id, constraint))
-                plan.leaf_terms[(q_id, uuid_col_name)] = (
-                    node.value, 'U', None, None)
+                plan.leaf_terms[(q_id, uuid_col_name)] = (node.value, 'U')
 
             elif isinstance(node, LiteralNode):
                 if node.lang:
@@ -163,17 +157,11 @@ def _collect_bgp(op: OpBGP, space_id: str, aliases: AliasGenerator,
                     plan.constraints.append(constraint)
                     plan.tagged_constraints.append((q_id, constraint))
                 else:
-                    # Carry the DATATYPE. A graph pattern matches by TERM, so
-                    # `"x"` and `"x"^^xsd:string` are different terms even
-                    # though RDF 1.1 makes them one value — the opposite of the
-                    # FILTER rule in `issues/121`.
-                    subq = _const_subquery(node.value, 'L', aliases,
-                                           datatype=node.datatype)
+                    subq = _const_subquery(node.value, 'L', aliases)
                     constraint = f"{full_uuid} = {subq}"
                     plan.constraints.append(constraint)
                     plan.tagged_constraints.append((q_id, constraint))
-                    plan.leaf_terms[(q_id, uuid_col_name)] = (
-                        node.value, 'L', None, node.datatype or None)
+                    plan.leaf_terms[(q_id, uuid_col_name)] = (node.value, 'L')
 
         # Graph lock — always applied (scoping / security)
         if aliases.graph_lock_uri:
@@ -257,9 +245,7 @@ def _collect_table(op: OpTable, space_id: str, aliases: AliasGenerator,
             if isinstance(val, URINode):
                 aliases.register_constant(val.value, "U")
             elif isinstance(val, LiteralNode):
-                aliases.register_constant(val.value, "L",
-                                          getattr(val, "lang", None),
-                                          val.datatype)
+                aliases.register_constant(val.value, "L")
     return PlanV2(
         kind=KIND_TABLE,
         values_vars=list(op.vars),

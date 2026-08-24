@@ -46,7 +46,7 @@ def _bgp(constraint: str, alias: str = "q0") -> PlanV2:
 
 def _aliases(col: str, resolved: bool) -> AliasGenerator:
     gen = AliasGenerator()
-    gen.constants[(f"http://example.org/{col}", "U", None, None)] = col
+    gen.constants[(f"http://example.org/{col}", "U")] = col
     if resolved:
         gen.resolved_constants[col] = "1a2b3c4d-0000-0000-0000-000000000000"
     return gen

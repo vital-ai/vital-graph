@@ -31,7 +31,7 @@ def _unresolved_const_names(aliases: AliasGenerator) -> Set[str]:
     """Return the set of constant column names (e.g. 'c_3') that did NOT
     resolve to a UUID during materialize_constants()."""
     unresolved = set()
-    for (_text, _ttype, _lg, _dt), col_name in aliases.constants.items():
+    for (_text, _ttype), col_name in aliases.constants.items():
         if col_name not in aliases.resolved_constants:
             unresolved.add(col_name)
     return unresolved
@@ -78,7 +78,7 @@ def prune_dead_union_branches(plan: PlanV2, aliases: AliasGenerator) -> PlanV2:
     pruned_count = _prune_recursive(plan, dead_tokens)
     if pruned_count > 0:
         dead_uris = []
-        for (text, _ttype, _lg, _dt), col_name in aliases.constants.items():
+        for (text, _ttype), col_name in aliases.constants.items():
             if col_name in unresolved:
                 # Shorten the URI for logging
                 short = text.rsplit('#', 1)[-1] if '#' in text else text.rsplit('/', 1)[-1]

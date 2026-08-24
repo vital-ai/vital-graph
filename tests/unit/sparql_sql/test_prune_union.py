@@ -16,10 +16,10 @@ def _aliases_with_constants(resolved: dict, unresolved_cols: list) -> AliasGener
     gen = AliasGenerator()
     for col, uuid in resolved.items():
         # Register a constant and resolve it
-        gen.constants[("resolved_text", "uri", None, None)] = col
+        gen.constants[("resolved_text", "uri")] = col
         gen.resolved_constants[col] = uuid
     for col in unresolved_cols:
-        gen.constants[(f"unresolved_{col}", "uri", None, None)] = col
+        gen.constants[(f"unresolved_{col}", "uri")] = col
         # Not adding to resolved_constants → marks as unresolved
     return gen
 
@@ -38,7 +38,7 @@ class TestPruneDeadUnionBranches:
     def test_no_unresolved_noop(self):
         """If all constants are resolved, no pruning occurs."""
         gen = AliasGenerator()
-        gen.constants[("http://example.org", "uri", None, None)] = "c_0"
+        gen.constants[("http://example.org", "uri")] = "c_0"
         gen.resolved_constants["c_0"] = "some-uuid"
 
         left = _bgp_with_constraint("q0.predicate_uuid = __CONST_c_0__")

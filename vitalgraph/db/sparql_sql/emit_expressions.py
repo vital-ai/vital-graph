@@ -1846,7 +1846,7 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext,
     # this because substitute_constants resolves its tokens to literals; the
     # body was simply never given the same treatment (issues/057).
     term_table = f"{ctx.space_id}_term"
-    for (text, ttype, _lg, _dt), col_name in inner_aliases.constants.items():
+    for (text, ttype), col_name in inner_aliases.constants.items():
         token = f"__CONST_{col_name}__"
         uuid_str = inner_aliases.resolved_constants.get(col_name)
         if uuid_str:

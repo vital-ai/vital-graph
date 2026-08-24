@@ -133,7 +133,7 @@ def slot_type_constants(plan: PlanV2, aliases: AliasGenerator):
     the alternative is making the rewrite async, and it is called from three
     places that are not.
     """
-    const_to_uri = {c: text for (text, ttype, _lg, _dt), c in aliases.constants.items()
+    const_to_uri = {c: text for (text, ttype), c in aliases.constants.items()
                     if ttype == "U"}
     pred_of, obj_of = {}, {}
     for _owner, sql in (plan.tagged_constraints or []):
@@ -173,7 +173,7 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
 
     # --- Step 1: Build constant reverse map ---
     const_to_uri: Dict[str, str] = {}
-    for (text, ttype, _lg, _dt), col_alias in aliases.constants.items():
+    for (text, ttype), col_alias in aliases.constants.items():
         if ttype == "U":
             const_to_uri[col_alias] = text
 
