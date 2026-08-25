@@ -1,6 +1,6 @@
 # The Sidecar Removes Dot-Segments From IRIs That RDF Compares Verbatim
 
-## Status: PARTLY FIXED 2026-08-25 (`75b0e42`) — found finishing the sparql10 categories
+## Status: FIXED 2026-08-25 (`75b0e42`, `281f181`) — found finishing the sparql10 categories
 
 `sparql10/i18n/normalization-02` returns nothing where the corpus expects one
 row, and the cause is upstream of the SQL pipeline entirely.
@@ -170,28 +170,45 @@ relative IRI in any production query resolved against wherever the service
 happened to run — environment-dependent, undocumented, and nothing would have
 reported it.
 
-## Still open: the conformance case
+## Closed — `281f181`
 
-`sparql10/i18n/normalization-02` still fails, and the reason is our own
-harness. The DAWG runner prepends `BASE <file://…>` to every query so that
-relative graph names resolve (`named_graph_semantics` §4.1), and an explicit
-BASE re-enables resolution for absolute IRIs as well:
+The remaining half was our own harness. The DAWG runner prepended
+`BASE <file://…>` to every query so relative graph names resolve
+(`named_graph_semantics` §4.1), and a prologue is a parse-time switch: it
+resolves relative IRIs, which §4.1 wanted, and normalises absolute ones, which
+is this issue. The two fixes made this week worked against each other.
 
-    no BASE    ->  eXAMPLE://a/./b/../b/%63/%7bfoo%7d#xyz   (correct)
-    with BASE  ->  eXAMPLE://a/b/%63/%7bfoo%7d#xyz          (normalised)
+`CompileRequest.baseURI` replaces it. The parse stays base-less; a post-parse
+pass resolves only IRIs with no scheme. An in-query `BASE` still wins, because
+it applies during the parse and those IRIs are already absolute by then.
 
-So the two fixes made this week work against each other, and the sidecar
-change alone cannot resolve it.
+Three sites a plain `NodeTransform` does not reach, each found by a failing
+test rather than by reading the code:
 
-Closing it means dropping the BASE prologue and resolving relative IRIs on our
-side — in `jena_ast_mapper`, against a base threaded from the caller, applied
-only to IRIs with no scheme. That is what SPARQL specifies in any case:
-relative IRIs resolve, absolute ones do not. The prologue was always a
-shortcut that bought §4.1 cheaply; it buys it by asking Jena to resolve
-everything.
+- **VALUES data** — `ElementTransformSubst.transform(ElementData)` renames
+  variables and passes values through, short-circuiting when no variable
+  changes (always, for an IRI transform).
+- **The top-level VALUES clause**, which hangs off the `Query`. No test pointed
+  at this one; found by asking where else bindings live after the first fix.
+- **HAVING** — `QueryTransformOps.mutateExprList` reads `get(0)` while writing
+  `set(i)`, so every condition becomes the transform of the first.
 
-Not attempted yet. It touches every IRI the mapper produces, so it wants its
-own measurement rather than being tacked onto this.
+`sparql10/i18n/normalization-02` now passes rather than xfails, and
+`XFAIL_SQL_V2_EXEC` is empty.
+
+## Upstream: two Jena issues worth reporting
+
+1. **`IRI3986.strictResolver` is a hardcoded `false`**, and
+   `AlgResolveIRI.transformReferencesStrict` is private with no callers, so the
+   behaviour SPARQL requires is unreachable. Why is not recorded anywhere. The
+   argument to make is SPARQL's, not RFC 3986's: §5.2.2 removes dot-segments
+   under strictness too, but SPARQL forbids syntax-based normalization outright.
+2. **`QueryTransformOps.mutateExprList` has an index error.** Unambiguous, no
+   design question attached.
+
+Neither is blocking us now — (1) is worked around by withholding the base and
+(2) by redoing the list — but both are real and neither is ours to keep
+carrying.
 
 ## Related
 
