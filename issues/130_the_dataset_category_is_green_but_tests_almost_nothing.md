@@ -1,6 +1,6 @@
 # `sparql10/dataset` Is Wired and Green and Tests Almost Nothing
 
-## Status: OPEN — found 2026-08-24 while scoping `named_graph_semantics` §4.2
+## Status: RESOLVED 2026-08-24 in `ffcd4b9` — found while scoping `named_graph_semantics` §4.2
 
     4 passed, 24 skipped, 4 xfailed
 
@@ -77,3 +77,62 @@ implementation that ignores `FROM` entirely — which is precisely the state
 Same shape as `issues/125`: a category that could not be reached at all, and
 `issues/117`, where six skips read as six pathological shapes and were two
 harness defects. A skip is not a pass, and a green category is not coverage.
+
+
+---
+
+## Resolution — `ffcd4b9`
+
+One cause, not the two originally written up: **nothing supplied a base IRI**,
+and every downstream symptom followed from that.
+
+The earlier attempt was abandoned because a naive base "broke 9 tests and then
+3". That reading was wrong, and worth recording as the reason this sat open.
+Those tests were not regressing — they were *running for the first time*. The
+suite had no way to say "this test just started executing and does not pass";
+it could only show a skip turning into a failure, which looks identical to a
+break. Measuring before believing that is what unblocked it.
+
+### What changed
+
+| | before | after |
+|---|---|---|
+| `sparql10/dataset` passing | 4 | 16 |
+| suite-wide skips | 50 | 29 |
+| failures | 0 | 0 |
+
+- result files (`.ttl`, `.rdf`, `.trig`) parse against their own location
+- `execute_query` takes `base_iri`; both suites pass the query file's path.
+  That is the only base under which a query's `<graph.ttl>` and the
+  `file://{ng_file}` its named graph is loaded under resolve to the same IRI.
+- `FROM` / `FROM NAMED` are dereferenced and loaded. The dataset tests declare
+  their data only in the query — the manifest has no `qt:data` for them — so
+  the store was empty and every one answered 0 rows while appearing to run.
+
+### Two genuine defects it exposed, both the oracle's
+
+`aggregates/COUNT: no GROUP BY inside of GRAPH` and `bindings/VALUES inside
+GRAPH binding the same variable as the graph name` were skipping in categories
+already counted clean. Both now run, and both fail the same way: pyoxigraph
+does not enumerate a named graph that is **empty**, returning one row short.
+The manifests are right — the aggregates one states the rule in words
+("counting no results without grouping always returns a single result per named
+graph"). Registered in `XFAIL_TESTS`/`XFAIL_TESTS_V2` as oracle limitations.
+
+Worth noting for §4.2: that empty-named-graph question is precisely what the
+strict-SPARQL decision turns on, and we now have two live tests pinned to it.
+
+### Left open deliberately
+
+12 skips remain in the dataset selection, all `pyoxigraph cannot execute this
+query (skip for v2 too)`. These are real oracle gaps rather than harness ones,
+and they still mean our backend goes untested on those cases — the same
+coverage-disappears-silently shape, one level down. Not in scope here.
+
+### The recurring lesson, third instance
+
+`csv-tsv-res`/`json-res` (2026-08-16), `XFAIL_TESTS_V2` deferring `test_sql_v2`
+(same day), and now this. Each time: a swallowed error became a skip, the skip
+counted as green, and the gap survived because nobody measured what was
+actually executing. `parse_result_file` returning `None` on failure is the
+shared mechanism and remains in place.
