@@ -878,6 +878,92 @@ _XSD_CAST_MAP = {
 }
 
 
+# Functions whose result is ALREADY a SQL boolean, so an EBV wrapper would be
+# both redundant and wrong (it would ask for the "value" of a comparison).
+_BOOLEAN_RESULT_FNS = frozenset({
+    "eq", "ne", "lt", "gt", "le", "ge",
+    "numericequal", "numericnotequal", "numericlessthan", "numericgreater",
+    "numericlessthanorequal", "numericgreaterthanorequal",
+    "and", "or", "not", "unarynot",
+    "bound", "sameterm", "isiri", "isuri", "isblank", "isliteral", "isnumeric",
+    "regex", "contains", "strstarts", "strends", "langmatches", "in", "notin",
+    "exists", "notexists",
+})
+
+
+def _returns_boolean(expr) -> bool:
+    """Is this expression already a SQL boolean?"""
+    if isinstance(expr, ExprFunction):
+        return (expr.name or "").lower() in _BOOLEAN_RESULT_FNS
+    if isinstance(expr, (ExprExists,)):
+        return True
+    if isinstance(expr, ExprValue) and isinstance(expr.node, LiteralNode):
+        return (expr.node.datatype or "") == f"{XSD}boolean"
+    return False
+
+
+def ebv_sql(expr, ctx: EmitContext) -> Optional[str]:
+    """The EFFECTIVE BOOLEAN VALUE of an expression (SPARQL §17.2.2).
+
+    A FILTER, and the operands of `&&`, `||` and `!`, take the EBV of whatever
+    they are given — they do not require a boolean. The rules:
+
+        xsd:boolean          its own value
+        plain / xsd:string   TRUE when the lexical form is non-empty
+        numeric              TRUE when non-zero
+        anything else        a type error, which a FILTER drops
+
+    Without this, `FILTER(?v)` emitted the raw text column and PostgreSQL
+    refused the query outright — `argument of WHERE must be type boolean, not
+    type text`. Six of the seven DAWG `boolean-effective-value` cases failed
+    that way, including `&&`, `||` and the plain `FILTER(true)`.
+
+    NULL for the error case rather than FALSE: `!error` must stay an error, and
+    SQL's three-valued logic gives that for free.
+    """
+    if _returns_boolean(expr):
+        return expr_to_sql(expr, ctx)
+
+    if isinstance(expr, ExprValue) and isinstance(expr.node, LiteralNode):
+        # Known statically — no CASE needed.
+        node = expr.node
+        dt = node.datatype or ""
+        raw = node.value or ""
+        if dt == f"{XSD}boolean":
+            return "TRUE" if raw.strip().lower() in ("true", "1") else "FALSE"
+        if dt in _NUMERIC_DATATYPES:
+            try:
+                return "FALSE" if float(raw) == 0.0 else "TRUE"
+            except ValueError:
+                return "NULL"
+        if dt in ("", f"{XSD}string"):
+            return "FALSE" if raw == "" else "TRUE"
+        return "NULL"
+
+    if isinstance(expr, ExprVar):
+        info = ctx.types.get(expr.var)
+        if not info or not info.text_col:
+            return None
+        bool_col = f"{info.sql_name}__bool" if info.sql_name else None
+        parts = []
+        if bool_col:
+            parts.append(f"WHEN {bool_col} IS NOT NULL THEN {bool_col}")
+        if info.num_col and info.num_col != "NULL":
+            parts.append(f"WHEN {info.num_col} IS NOT NULL "
+                         f"THEN ({info.num_col} != 0)")
+        dt = _dt_sql(expr, ctx)
+        str_ok = (f"({dt} IS NULL OR {dt} = '{XSD}string')" if dt
+                  else "TRUE")
+        lit = f"{info.type_col} = 'L'" if info.type_col else "TRUE"
+        parts.append(f"WHEN {lit} AND {str_ok} "
+                     f"THEN (LENGTH({info.text_col}) > 0)")
+        return "(CASE " + " ".join(parts) + " ELSE NULL END)"
+
+    # A computed expression: fall back to its SQL when it is already boolean-
+    # shaped, otherwise decline rather than guess.
+    return expr_to_sql(expr, ctx)
+
+
 def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
     """Convert a function call to SQL."""
     fname = (expr.name or "").lower()
@@ -1023,17 +1109,18 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
 
     # --- Logical operators ---
     if fname == "and" and len(args) == 2:
-        a, b = expr_to_sql(args[0], ctx), expr_to_sql(args[1], ctx)
+        # EBV of each operand — `&&` does not require booleans (§17.2.2).
+        a, b = ebv_sql(args[0], ctx), ebv_sql(args[1], ctx)
         if a and b:
             return f"({a} AND {b})"
 
     if fname == "or" and len(args) == 2:
-        a, b = expr_to_sql(args[0], ctx), expr_to_sql(args[1], ctx)
+        a, b = ebv_sql(args[0], ctx), ebv_sql(args[1], ctx)
         if a and b:
             return f"({a} OR {b})"
 
     if fname in ("not", "unarynot") and len(args) == 1:
-        a = expr_to_sql(args[0], ctx)
+        a = ebv_sql(args[0], ctx)
         if a:
             return f"NOT ({a})"
 

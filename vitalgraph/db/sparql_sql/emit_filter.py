@@ -37,7 +37,12 @@ def emit_filter(plan: PlanV2, ctx: EmitContext) -> str:
     from .var_scope import compute_scope
     with ctx.expression_scope(compute_scope(plan.child).all_visible):
         for expr in plan.filter_exprs:
-            sql_expr = expr_to_sql(expr, ctx)
+            # A FILTER takes the EFFECTIVE BOOLEAN VALUE of its expression, not
+            # a boolean (§17.2.2). Passing the raw expression made PostgreSQL
+            # refuse `FILTER(?v)` outright — "argument of WHERE must be type
+            # boolean, not type text".
+            from .emit_expressions import ebv_sql
+            sql_expr = ebv_sql(expr, ctx)
             if sql_expr:
                 where_parts.append(sql_expr)
 
