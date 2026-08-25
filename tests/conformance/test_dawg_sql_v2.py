@@ -296,28 +296,18 @@ XFAIL_TESTS_V2 = {
 }
 
 # Real gaps in the SQL pipeline surfaced when test_sql_v2 began actually
-# executing. Empty: the four aggregate failures it found (issue 029) are fixed.
+# executing. Empty again, twice over now: the four aggregate failures it first
+# found (issue 029) are fixed, and so are the fifteen it held between
+# 2026-08-24 and the end of that day -- thirteen were FROM/FROM NAMED being
+# ignored (named_graph_semantics §4.1) and two were blank node labels merging
+# across documents (issues/131).
+#
 # Kept as the place for the next one, with the rule that removing an entry
-# must make its test pass.
-XFAIL_SQL_V2_EXEC: dict = {
-    # The 15 entries here were FROM/FROM NAMED being parsed and ignored
-    # (named_graph_semantics §4.1). 13 now pass and have been removed, per the
-    # rule above. These two remain, and for a different reason than they were
-    # filed under -- worth stating, because "still failing" hid a second bug
-    # behind the first.
-    #
-    # Both are `FROM <data-g3-dup.ttl> FROM NAMED <data-g3.ttl>`, two files
-    # holding the SAME blank node labels (`_:x`, `_:a`). Blank nodes are scoped
-    # to a document, so those are four distinct nodes and the join across them
-    # must yield nothing. We return 2 rows: the loader mints term_uuid as
-    # uuid5(term_text, term_type), so `_:x` from either file is one term and
-    # the two documents' blank nodes are silently merged. Dataset scoping is
-    # correct here; term identity is not. See issues/131.
-    ("sparql10/dataset", "dataset-09b"):
-        "blank node labels are not document-scoped at load — issues/131",
-    ("sparql10/dataset", "dataset-10b"):
-        "blank node labels are not document-scoped at load — issues/131",
-}
+# must make its test pass. Note that `pytest.xfail()` is imperative and STOPS
+# the test, so an entry here can never surface as an XPASS -- the only way to
+# learn that a gap has closed is to delete the entry and run it. That is the
+# rule's real cost, and it is why these are listed individually.
+XFAIL_SQL_V2_EXEC: dict = {}
 
 # Cases where OUR output differs from the manifest AND so does pyoxigraph -- the
 # runner reports these as `ACCEPTED` rather than `FAIL`, meaning it could not

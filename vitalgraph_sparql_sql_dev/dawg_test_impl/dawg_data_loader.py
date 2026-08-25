@@ -77,6 +77,20 @@ async def load_ttl_into_space(
         logger.debug("No triples in %s", ttl_file)
         return 0
 
+    # Blank node labels are scoped to the document they appear in. pyoxigraph
+    # hands back the document-local label verbatim (`_:x`), and term_uuid is
+    # uuid5(text, type), so without scoping every `_:x` in the space is ONE
+    # node -- two files each saying `_:x` are silently merged. The corpus tests
+    # this directly: dataset-09b/-10b join across `data-g3.ttl` and its
+    # byte-identical `-dup`, which must yield nothing (issues/131).
+    #
+    # `skolem_label` is the mechanism already used by the file-import and REST
+    # batch paths (issues/076). Deriving the scope from the file's identity
+    # rather than randomly keeps re-loading the same document idempotent, which
+    # this loader relies on -- it caches by data-file path and reloads.
+    from vitalgraph.db.sparql_sql.term_normalize import skolem_label
+    bnode_scope = f"file://{ttl_file}"
+
     # Collect unique terms: key = (text, type, lang, datatype)
     terms: Dict[Tuple[str, str, Optional[str], Optional[str]], str] = {}
 
@@ -99,7 +113,7 @@ async def load_ttl_into_space(
         # Subject
         s_cls = type(triple.subject).__name__
         if s_cls == "BlankNode":
-            s_uuid = ensure(triple.subject.value, "B")
+            s_uuid = ensure(skolem_label(bnode_scope, triple.subject.value), "B")
         else:
             s_uuid = ensure(triple.subject.value, "U")
 
@@ -120,7 +134,7 @@ async def load_ttl_into_space(
                     dt = dt_uri
             o_uuid = ensure(obj.value, "L", lang, datatype=dt)
         elif obj_cls == "BlankNode":
-            o_uuid = ensure(obj.value, "B")
+            o_uuid = ensure(skolem_label(bnode_scope, obj.value), "B")
         else:
             o_uuid = ensure(obj.value, "U")
 
