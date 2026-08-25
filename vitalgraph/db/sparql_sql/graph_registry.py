@@ -14,12 +14,18 @@ copied a whole space in and registered nothing.
 DERIVED FROM THE DATA, never from a parameter. A caller saying which graph it
 *meant* to write can be wrong — it was, in both cases, by omission. The
 contexts present in the quads cannot be.
+
+One carve-out, declared here because "derive from the data" is otherwise
+absolute: the context backing the DEFAULT graph is skipped. It is a storage
+detail rather than a graph a user made, and registering it put `urn:default`
+in every listing of "the graphs in this space" (`named_graph_semantics` §4.2).
 """
 
 from __future__ import annotations
 
 import logging
 
+from .default_graph import DEFAULT_GRAPH_URI
 from .sparql_sql_schema import SparqlSQLSchema
 
 logger = logging.getLogger(__name__)
@@ -41,6 +47,7 @@ async def register_graphs_from_data(conn, space_id: str) -> int:
         SELECT $1, tm.term_text, tm.term_text, now()
         FROM (SELECT DISTINCT context_uuid FROM {quad}) c
         JOIN {term} tm ON tm.term_uuid = c.context_uuid
+        WHERE tm.term_text <> '{DEFAULT_GRAPH_URI}'
         ON CONFLICT (space_id, graph_uri) DO NOTHING
         """,
         space_id,

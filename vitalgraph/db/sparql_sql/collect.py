@@ -19,6 +19,8 @@ from __future__ import annotations
 from functools import singledispatch
 from typing import List, Optional
 
+from .default_graph import DEFAULT_GRAPH_URI, is_default_graph
+
 from ..jena_sparql.jena_types import (
     VarNode, URINode, LiteralNode, BNodeNode,
     ExprVar, ExprValue, ExprFunction, ExprAggregator,
@@ -88,6 +90,17 @@ def _const_subquery(term_text: str, term_type: str, aliases: AliasGenerator,
     """
     col = aliases.register_constant(term_text, term_type, lang, datatype)
     return f"{_CONST_PREFIX}{col}{_CONST_SUFFIX}"
+
+
+def _eligible_named(uris: Optional[List[str]]) -> List[str]:
+    """FROM NAMED graphs, minus the default graph's storage context.
+
+    `FROM NAMED <urn:default>` names the context that backs the default graph.
+    SPARQL's dataset model keeps the default graph out of the named graphs, so
+    it is dropped here rather than silently making the default graph
+    addressable by name (§4.2).
+    """
+    return [u for u in (uris or []) if not is_default_graph(u)]
 
 
 def _graph_set_sql(q_id: str, uris: List[str],
@@ -216,10 +229,10 @@ def _collect_bgp(op: OpBGP, space_id: str, aliases: AliasGenerator,
             elif graph_uri == GRAPH_VAR_SCOPE:
                 # GRAPH ?g ranges over the FROM NAMED graphs, and only those.
                 constraint = _graph_set_sql(
-                    q_id, aliases.dataset_named_graphs or [], aliases)
+                    q_id, _eligible_named(aliases.dataset_named_graphs), aliases)
             elif graph_uri != aliases.graph_lock_uri:
                 # GRAPH <uri> is satisfiable only if the dataset names it.
-                if graph_uri in (aliases.dataset_named_graphs or []):
+                if graph_uri in _eligible_named(aliases.dataset_named_graphs):
                     subq = _const_subquery(graph_uri, 'U', aliases)
                     constraint = f"{q_id}.context_uuid = {subq}"
                 else:
@@ -240,8 +253,15 @@ def _collect_bgp(op: OpBGP, space_id: str, aliases: AliasGenerator,
         # GRAPH ?g — exclude default graph (SPARQL: GRAPH ?g matches named graphs only).
         # Use IS DISTINCT FROM (not !=) so NULL from a missing default graph
         # term is treated as "no exclusion" rather than filtering all rows.
-        if aliases.default_graph and graph_uri == GRAPH_VAR_SCOPE:
-            subq = _const_subquery(aliases.default_graph, 'U', aliases)
+        #
+        # The fallback matters. This used to fire only when a caller passed an
+        # explicit default_graph, so in production -- where none is passed --
+        # `urn:default` was enumerated by `GRAPH ?g` as though a user had
+        # created it, and the same triples were reachable as the default graph
+        # AND as a named one (§4.2).
+        if graph_uri == GRAPH_VAR_SCOPE:
+            subq = _const_subquery(
+                aliases.default_graph or DEFAULT_GRAPH_URI, 'U', aliases)
             constraint = f"{q_id}.context_uuid IS DISTINCT FROM {subq}"
             plan.constraints.append(constraint)
             plan.tagged_constraints.append((q_id, constraint))

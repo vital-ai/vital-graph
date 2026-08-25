@@ -104,6 +104,7 @@ def emit_path(plan: PlanV2, ctx: EmitContext) -> str:
     graph_var = meta.get("graph_var")
 
     from .collect import GRAPH_VAR_SCOPE
+    from .default_graph import DEFAULT_GRAPH_URI
 
     # ── Build graph_clause (WHERE filter on every leaf quad scan) ──
     graph_clauses = []
@@ -133,10 +134,15 @@ def emit_path(plan: PlanV2, ctx: EmitContext) -> str:
     # GRAPH ?g — exclude default graph (named graphs only).
     # Use IS DISTINCT FROM (not !=) so NULL from a missing default graph
     # term is treated as "no exclusion" rather than filtering all rows.
-    if ctx.aliases.default_graph and graph_uri == GRAPH_VAR_SCOPE:
+    #
+    # Same fallback as collect.py: without it this fired only when a caller
+    # passed an explicit default_graph, leaving `urn:default` enumerable by
+    # `GRAPH ?g` on every production query (§4.2).
+    if graph_uri == GRAPH_VAR_SCOPE:
+        _dg = ctx.aliases.default_graph or DEFAULT_GRAPH_URI
         graph_clauses.append(
             f"q.context_uuid IS DISTINCT FROM (SELECT term_uuid FROM {term_table} "
-            f"WHERE term_text = '{_esc(ctx.aliases.default_graph)}' AND term_type = 'U' LIMIT 1)"
+            f"WHERE term_text = '{_esc(_dg)}' AND term_type = 'U' LIMIT 1)"
         )
 
     graph_clause = ""

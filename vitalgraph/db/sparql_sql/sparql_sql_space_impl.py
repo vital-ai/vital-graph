@@ -24,6 +24,7 @@ from rdflib.term import Identifier
 from ..space_backend_interface import SpaceBackendInterface, SparqlBackendInterface
 from .sparql_sql_db_impl import SparqlSQLDbImpl
 from .sparql_sql_db_objects import SparqlSQLDbObjects
+from .default_graph import is_default_graph
 from .sparql_sql_schema import SparqlSQLSchema, STANDARD_DATATYPES
 from .compile_cache import SparqlCompileCache
 from .generator import invalidate_datatype_cache
@@ -773,6 +774,12 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         fuseki_postgresql backend has: inserting data into a graph URI
         implicitly creates the graph record."""
         graph_uris = self._extract_graph_uris_from_quads(quads)
+        # The context backing the DEFAULT graph is storage, not a graph a user
+        # created, so it never earns a catalog row (`named_graph_semantics`
+        # §4.2). The same carve-out is in `register_graphs_from_data`; this is
+        # the write path, and missing it here is why `urn:default` still
+        # appeared in listings after that one was fixed.
+        graph_uris = [g for g in graph_uris if not is_default_graph(g)]
         if not graph_uris:
             return
         try:

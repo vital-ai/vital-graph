@@ -335,7 +335,7 @@ def _node_to_uuid_expr(node: RDFNode, term_table: str,
 
 # Default graph URI used when no explicit graph is specified.
 # Callers (e.g. DAWG test harness) can override via default_graph_uri param.
-_FALLBACK_DEFAULT_GRAPH = "urn:default"
+from .default_graph import DEFAULT_GRAPH_URI as _FALLBACK_DEFAULT_GRAPH
 
 
 async def update_to_sql(
