@@ -396,16 +396,6 @@ XFAIL_SQL_V2_EXEC: dict = {
     # OUR side, and it needs the promotion work to say which form is right.
             
 
-    # The sidecar removes RFC 3986 dot-segments when expanding a PNAME, so
-    # `p1:xyz` arrives as a different IRI from the one the data stores
-    # verbatim, and matches nothing. Upstream of the SQL pipeline: by the time
-    # generate_sql sees the constant the characters are already gone. The test
-    # is about NOT normalising -- s1 holds the normalised spelling and is
-    # deliberately not the answer. See issues/132, which also records that the
-    # reason previously written here ("no Unicode normalisation of literals")
-    # was wrong in every particular.
-    ("sparql10/i18n", "normalization-02"):
-        "sidecar removes dot-segments when expanding a PNAME — issues/132",
     # sparql10/graph, wired 2026-08-24. All three are ONE gap: a graph-scoped
     # group with NO triple pattern must be evaluated against the named graphs,
     # and we treat `{}` as a no-op that matches once regardless.

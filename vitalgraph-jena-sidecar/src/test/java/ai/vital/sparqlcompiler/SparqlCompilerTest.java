@@ -434,4 +434,109 @@ class SparqlCompilerTest {
         assertTrue(out.contains("file:///tmp/d/data-g1.ttl"),
                 "an explicit BASE stopped resolving relative IRIs: " + out);
     }
+
+    // ---- Request base: resolve the relative, leave the absolute ---------
+    //
+    // The distinction Jena's parser cannot draw. Its base is a parse-time
+    // switch -- set one and EVERY IRI goes through RFC 3986 resolution, which
+    // strips dot-segments from absolute IRIs too. SPARQL resolves only
+    // relative IRIs. See issues/132.
+
+    private CompileRequest withBase(String sparql, String base) {
+        CompileRequest req = makeRequest(sparql);
+        req.baseURI = base;
+        return req;
+    }
+
+    private String jsonWithBase(String sparql, String base) throws Exception {
+        CompileResponse resp = compiler.compile(withBase(sparql, base));
+        assertTrue(resp.ok, "compile failed: " + resp.error);
+        return mapper.writeValueAsString(resp);
+    }
+
+    @Test
+    void aRequestBaseResolvesRelativeGraphNames() throws Exception {
+        String out = jsonWithBase("SELECT * FROM <data-g1.ttl> WHERE { ?s ?p ?o }",
+                                  "file:///tmp/d/q.rq");
+        assertTrue(out.contains("file:///tmp/d/data-g1.ttl"),
+                "FROM was not resolved against the request base: " + out);
+    }
+
+    @Test
+    void aRequestBaseLeavesAbsoluteIrisAlone() throws Exception {
+        // THE case. A BASE prologue normalises this; a request base must not.
+        String out = jsonWithBase(
+                "PREFIX p: <eXAMPLE://a/./b/../b/c#> "
+                + "SELECT * WHERE { ?s <http://x#p> p:xyz }",
+                "file:///tmp/d/q.rq");
+        assertTrue(out.contains("eXAMPLE://a/./b/../b/c#xyz"),
+                "an absolute IRI was normalised by the request base: " + out);
+    }
+
+    @Test
+    void aRequestBaseResolvesRelativeIrisInPatterns() throws Exception {
+        String out = jsonWithBase("SELECT * WHERE { ?s <http://x#p> <rel.ttl> }",
+                                  "file:///tmp/d/q.rq");
+        assertTrue(out.contains("file:///tmp/d/rel.ttl"),
+                "a relative IRI in a BGP was not resolved: " + out);
+    }
+
+    @Test
+    void anInQueryBaseWinsOverTheRequestBase() throws Exception {
+        // A BASE in the query applies during the parse, so those IRIs are
+        // already absolute when the request base is considered.
+        String out = jsonWithBase(
+                "BASE <file:///from/query/q.rq> "
+                + "SELECT * FROM <data-g1.ttl> WHERE { ?s ?p ?o }",
+                "file:///from/request/q.rq");
+        assertTrue(out.contains("file:///from/query/data-g1.ttl"),
+                "the in-query BASE did not win: " + out);
+        assertFalse(out.contains("file:///from/request/data-g1.ttl"),
+                "the request base overrode the query's own BASE: " + out);
+    }
+
+    @Test
+    void noRequestBaseLeavesRelativeIrisRelative() throws Exception {
+        String out = json("SELECT * FROM <data-g1.ttl> WHERE { ?s ?p ?o }");
+        assertFalse(out.contains("file:"),
+                "a base was invented when none was supplied: " + out);
+    }
+
+    @Test
+    void aRequestBaseReachesRelativeIrisInsideVALUES() throws Exception {
+        // VALUES data is not reached by a plain NodeTransform: Jena's
+        // ElementData transform renames VARIABLES and passes values through,
+        // and short-circuits entirely when no variable changes -- which is
+        // always, for a transform that rewrites IRIs. Every other position in
+        // the query resolved while this one silently did not.
+        String out = jsonWithBase(
+                "SELECT ?g ?t { GRAPH ?g { VALUES (?g ?t) { (<empty.ttl> \"bar\") } } }",
+                "file:///tmp/d/q.rq");
+        assertTrue(out.contains("file:///tmp/d/empty.ttl"),
+                "a relative IRI inside VALUES was not resolved: " + out);
+    }
+
+    @Test
+    void aRequestBaseReachesTheTopLevelVALUESClause() throws Exception {
+        // The trailing VALUES clause hangs off the Query, not the pattern.
+        String out = jsonWithBase(
+                "SELECT ?g { ?s ?p ?g } VALUES (?g) { (<empty.ttl>) }",
+                "file:///tmp/d/q.rq");
+        assertTrue(out.contains("file:///tmp/d/empty.ttl"),
+                "a relative IRI in the top-level VALUES was not resolved: " + out);
+    }
+
+    @Test
+    void multipleHavingConditionsSurviveTheBaseTransform() throws Exception {
+        // `QueryTransformOps.mutateExprList` reads `exprList.get(0)` while
+        // writing at `set(i)`, so every HAVING condition became a copy of the
+        // first. Only bites with more than one condition, and only when the
+        // transform runs at all -- i.e. when a request base is supplied.
+        String out = jsonWithBase(
+                "SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s "
+                + "HAVING (COUNT(*) > 1) (COUNT(*) < 3)",
+                "file:///tmp/d/q.rq");
+        assertTrue(out.contains("(< (count) 3)"),
+                "the second HAVING condition was lost: " + out);
+    }
 }

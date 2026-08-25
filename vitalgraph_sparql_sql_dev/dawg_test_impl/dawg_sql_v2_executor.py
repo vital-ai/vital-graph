@@ -33,9 +33,6 @@ class SqlV2PipelineError(Exception):
     pass
 
 
-_HAS_BASE_RE = re.compile(r"^\s*(#[^\n]*\n\s*)*BASE\s", re.IGNORECASE)
-
-
 async def execute_query_via_v2_pipeline(
     sparql: str,
     sidecar_url: str = DEFAULT_SIDECAR_URL,
@@ -67,20 +64,21 @@ async def execute_query_via_v2_pipeline(
     from vitalgraph.db.jena_sparql.jena_ast_mapper import map_compile_response
     from vitalgraph.db.sparql_sql.generator import generate_sql
 
-    # The sidecar resolves relative IRIs against its own working directory
-    # (`file:///app/`) and accepts no base parameter, so a corpus query saying
-    # `FROM <data.ttl>` resolves to a graph that cannot exist. SPARQL's own
-    # BASE prologue does the job without touching the sidecar. Skipped when the
-    # query declares a BASE itself -- it must come first in a prologue and may
-    # appear only once, so prepending would be a syntax error.
-    if base_iri and not _HAS_BASE_RE.match(sparql):
-        sparql = f"BASE <{base_iri}>\n{sparql}"
-
     # Step 1: Compile via sidecar
     try:
         req = urllib.request.Request(
             f"{sidecar_url}/v1/sparql/compile",
-            data=json.dumps({"sparql": sparql}).encode(),
+            # `baseURI` rather than a `BASE <...>` prologue. A prologue is a
+            # parse-time switch: it resolves relative IRIs, which is what we
+            # want, and normalises ABSOLUTE ones, which SPARQL forbids -- so
+            # `<eXAMPLE://a/./b>` lost its dot-segments and matched nothing.
+            # The request field lets the sidecar separate the two cases after
+            # the parse. It also stops rewriting the caller's query text, which
+            # was shifting the line numbers reported in parse errors.
+            data=json.dumps(
+                {"sparql": sparql,
+                 **({"baseURI": base_iri} if base_iri else {})}
+            ).encode(),
             headers={"Content-Type": "application/json"},
         )
         with urllib.request.urlopen(req, timeout=10) as resp:

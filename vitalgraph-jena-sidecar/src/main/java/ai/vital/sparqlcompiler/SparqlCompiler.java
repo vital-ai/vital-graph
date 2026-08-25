@@ -9,6 +9,28 @@ import org.apache.jena.query.QueryFactory;
 import org.apache.jena.query.QueryParseException;
 import org.apache.jena.query.Syntax;
 import org.apache.jena.sparql.lang.SPARQLParser;
+import org.apache.jena.graph.Node;
+import org.apache.jena.graph.NodeFactory;
+import org.apache.jena.irix.IRIs;
+import org.apache.jena.irix.IRIx;
+import org.apache.jena.sparql.graph.NodeTransform;
+import org.apache.jena.sparql.syntax.syntaxtransform.QueryTransformOps;
+import org.apache.jena.sparql.syntax.Element;
+import org.apache.jena.sparql.syntax.ElementData;
+import org.apache.jena.sparql.syntax.syntaxtransform.ElementTransform;
+import org.apache.jena.sparql.syntax.syntaxtransform.ElementTransformSubst;
+import org.apache.jena.sparql.syntax.syntaxtransform.ExprTransformNodeElement;
+import org.apache.jena.sparql.core.Var;
+import org.apache.jena.sparql.engine.binding.Binding;
+import org.apache.jena.sparql.engine.binding.BindingBuilder;
+import org.apache.jena.sparql.engine.binding.BindingFactory;
+import org.apache.jena.sparql.expr.ExprTransform;
+import org.apache.jena.sparql.expr.Expr;
+import org.apache.jena.sparql.expr.ExprTransformer;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.regex.Pattern;
 import org.apache.jena.sparql.core.Var;
 import org.apache.jena.sparql.core.VarExprList;
 import org.apache.jena.sparql.algebra.Algebra;
@@ -52,6 +74,9 @@ public class SparqlCompiler {
         timing.start("parse");
         try {
             query = parseWithoutSystemBase(request.sparql);
+            if (request.baseURI != null && !request.baseURI.isEmpty()) {
+                query = resolveRelativeIris(query, request.baseURI);
+            }
             sparqlForm = "QUERY";
         } catch (QueryParseException qpe) {
             try {
@@ -345,6 +370,149 @@ public class SparqlCompiler {
         query.setSyntax(Syntax.defaultQuerySyntax);
         SPARQLParser parser = SPARQLParser.createParser(Syntax.defaultQuerySyntax);
         return parser.parse(query, sparql);
+    }
+
+    /** RFC 3986 scheme: ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) ":" */
+    private static final Pattern HAS_SCHEME =
+            Pattern.compile("^[A-Za-z][A-Za-z0-9+.-]*:");
+
+    /**
+     * Resolve the query's RELATIVE IRIs against {@code baseURI}, leaving
+     * absolute ones exactly as written.
+     *
+     * This is the distinction Jena's parser cannot draw. Its base is a
+     * parse-time switch: set one and EVERY IRI goes through RFC 3986
+     * resolution, which strips dot-segments from absolute IRIs too. SPARQL
+     * resolves only relative IRIs and performs neither Syntax-Based nor
+     * Scheme-Based Normalization, so the two cases have to be separated, and
+     * the only place to do that is after the parse.
+     *
+     * Callers used to get the same effect by prepending `BASE <...>` to the
+     * query text. That works for relative IRIs and breaks absolute ones for
+     * the reason above; it also shifts line numbers, so parse errors reported
+     * positions that did not match what the caller sent.
+     *
+     * A `BASE` in the query still wins: it applies during the parse, so those
+     * IRIs are already absolute here and carry a scheme, and are skipped.
+     */
+    private static Query resolveRelativeIris(Query query, String baseURI) {
+        IRIx base = IRIs.resolveIRI(baseURI);
+        NodeTransform nt = node -> {
+            if (node == null || !node.isURI())
+                return node;
+            String resolved = resolveIfRelative(base, node.getURI());
+            return resolved == null ? node : NodeFactory.createURI(resolved);
+        };
+
+        // VALUES data is NOT reached by a plain NodeTransform.
+        // `ElementTransformSubst.transform(ElementData)` renames VARIABLES and
+        // passes every VALUE through untouched -- it even short-circuits when
+        // no variable changes, which is always the case for a transform that
+        // rewrites IRIs. So `VALUES (?g) { (<empty.ttl>) }` kept a relative IRI
+        // while every other position in the query resolved. Overriding it is
+        // the only way to reach those nodes.
+        //
+        // Variables are left alone here deliberately: this transform only ever
+        // rewrites URIs, so `nt.apply(var)` returns the var unchanged.
+        ElementTransform eltrans = new ElementTransformSubst(nt) {
+            @Override
+            public ElementData transform(ElementData el) {
+                ElementData copy = new ElementData();
+                el.getVars().forEach(copy::add);
+                Iterator<Binding> rows = el.getTable().rows();
+                while (rows.hasNext())
+                    copy.add(transformBinding(rows.next(), nt));
+                return copy;
+            }
+        };
+        ExprTransform exprTrans = new ExprTransformNodeElement(nt, eltrans);
+        Query q2 = QueryTransformOps.transform(query, eltrans, exprTrans);
+
+        // Repair HAVING. `QueryTransformOps.mutateExprList` has an index bug:
+        //
+        //     for (int i = 0; i < exprList.size(); i++) {
+        //         Expr e1 = exprList.get(0);      // <- get(0), not get(i)
+        //         ...
+        //         exprList.set(i, e2);            // <- but writes at i
+        //     }
+        //
+        // so every condition is overwritten with the transform of the FIRST
+        // one. `HAVING (COUNT(*) > 1) (COUNT(*) < 3)` came back as
+        // `(> (count) 1)` twice and the second condition stopped filtering.
+        // It is the only caller of that method, and it only bites a query with
+        // more than one HAVING condition -- which is why the transform looked
+        // clean until agg-multiple-having ran.
+        //
+        // Redone here from the ORIGINAL list, at the right index.
+        List<Expr> having = q2.getHavingExprs();
+        List<Expr> havingBefore = query.getHavingExprs();
+        if (having != null && havingBefore != null
+                && having.size() == havingBefore.size()) {
+            for (int i = 0; i < having.size(); i++) {
+                Expr fixed = ExprTransformer.transform(exprTrans, havingBefore.get(i));
+                having.set(i, fixed == null ? havingBefore.get(i) : fixed);
+            }
+        }
+
+        // The top-level VALUES clause hangs off the Query, not the pattern.
+        if (q2.hasValues()) {
+            List<Binding> rows = new ArrayList<>();
+            for (Binding b : q2.getValuesData())
+                rows.add(transformBinding(b, nt));
+            q2.setValuesDataBlock(q2.getValuesVariables(), rows);
+        }
+
+        // FROM / FROM NAMED are plain Strings on the Query, not Nodes, so the
+        // NodeTransform above does not reach them. `shallowCopy` gave q2 its
+        // own lists, so mutating them here is safe.
+        resolveEach(base, q2.getGraphURIs());
+        resolveEach(base, q2.getNamedGraphURIs());
+
+        // DESCRIBE targets are Nodes but likewise live outside the pattern.
+        java.util.List<Node> describeNodes = q2.getResultURIs();
+        if (describeNodes != null)
+            describeNodes.replaceAll(nt::apply);
+
+        return q2;
+    }
+
+    /** A VALUES row with every node put through {@code nt}. */
+    private static Binding transformBinding(Binding b, NodeTransform nt) {
+        BindingBuilder out = BindingFactory.builder();
+        Iterator<Var> vars = b.vars();
+        while (vars.hasNext()) {
+            Var v = vars.next();
+            out.add(v, nt.apply(b.get(v)));
+        }
+        return out.build();
+    }
+
+    /** The resolved form, or null when the IRI is absolute and must not change. */
+    private static String resolveIfRelative(IRIx base, String iri) {
+        if (iri == null || iri.isEmpty())
+            return null;
+        // Jena carries blank nodes as `_:label` IRIs in some positions; those
+        // are not relative references and resolving one would invent a node.
+        if (iri.startsWith("_:"))
+            return null;
+        if (HAS_SCHEME.matcher(iri).find())
+            return null;
+        try {
+            return base.resolve(iri).toString();
+        } catch (Exception e) {
+            // An IRI we cannot resolve is left as written rather than
+            // replaced with a guess; the term simply will not match.
+            return null;
+        }
+    }
+
+    private static void resolveEach(IRIx base, java.util.List<String> uris) {
+        if (uris == null)
+            return;
+        uris.replaceAll(u -> {
+            String r = resolveIfRelative(base, u);
+            return r == null ? u : r;
+        });
     }
 
     private String computeHash(String sparql) {
