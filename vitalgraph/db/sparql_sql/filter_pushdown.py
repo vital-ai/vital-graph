@@ -392,9 +392,15 @@ def _try_text_filter(
         # Same translation as emit_expressions, for the same reason the flag
         # mapping is shared: which emitter runs is a performance decision and
         # must not change semantics.
-        from .regex_classes import CLASSIFY_COLLATION, translate_classes
-        body, needs_ctype = translate_classes(escaped)
-        pat = f"(?{pg_embedded_options(raw_flags)}){body}"
+        # `apply_to_literal` rather than rebuilding the body here. This used to
+        # call `translate_classes` and splice the options itself -- the same
+        # duplication the regex_flags docstring exists to prevent, one level
+        # down from the flag mapping it already shares. It is why the XPath
+        # dot rewrite had to be added in one place and would have been missed
+        # in the other.
+        from .regex_classes import CLASSIFY_COLLATION
+        from .regex_flags import apply_to_literal
+        pat, needs_ctype = apply_to_literal(escaped, raw_flags)
         col = (f"(term_text COLLATE {CLASSIFY_COLLATION})" if needs_ctype
                else "term_text")
         term_cond = f"{col} {op} '{pat}'"

@@ -172,8 +172,8 @@ kind.
 |---|---|---|---|
 | `graph` | 3 | `GRAPH {}` did not enumerate graphs | **fixed** |
 | `expr-ops` + `optional-filter` | 3 | *misfiled* — see below | **fixed** |
-| `regex` | 1 | XPath bracket-negation matches newline; no PostgreSQL mode pairs that with dot-excludes-newline | open |
-| `i18n` | 1 | no Unicode normalisation of literals on the way in | open |
+| `regex` | 1 | the 2x2 was a 2x2x1 — see below | **fixed** |
+| `i18n` | 1 | *misfiled* — sidecar IRI normalisation, `issues/132` | filed |
 
 `algebra` is **fixed** — see below. The `regex` one is diagnosed and
 deliberately unfixed: emulating XPath means
@@ -303,3 +303,64 @@ Of the seven gaps registered on 2026-08-24, **two of five reasons were wrong**
 plausibly shared). Both were written from failure messages rather than from
 running the case. The registry is more useful than no registry, but a reason
 in it is a hypothesis until someone measures it.
+
+
+---
+
+## `regex` — the documented 2x2 was missing an axis
+
+`regex_flags` mapped XPath's `s` and `m` onto PostgreSQL's four
+newline-sensitivity options as a clean 2x2. There is a third axis and **no
+PostgreSQL option covers it**: every one of those letters ties bracket
+negation to `.`.
+
+| option | `.` and `[^x]` |
+|---|---|
+| `p`, `n` | both **exclude** the newline |
+| `s`, `w` | both **admit** it |
+
+XPath does not tie them — `.` excludes the newline unless `s`, while `[^x]` is
+a set complement and always admits it. SPARQL's default is none of the four:
+
+    'a\nc' ~ '(?p)a[^b]c'   ->  false   (what we emitted)
+    'a\nc' ~ '(?s)a[^b]c'   ->  true    (XPath, and the corpus)
+
+So the dot moves into the PATTERN — `dot_to_non_newline` rewrites each
+unescaped `.` outside a bracket to `[^\n]` — and the option is left to place
+only the anchors (`s` normally, `w` for `m`). All four XPath combinations,
+exactly.
+
+A pattern arriving at RUN TIME has no text to rewrite, so `apply_to_pattern`
+keeps `p`/`n`: `.` right, bracket negation wrong. Deliberate — there is no
+third option there and `.` is the commoner case.
+
+**And a duplication.** `filter_pushdown` was calling `translate_classes` and
+splicing the options itself instead of using `apply_to_literal` — the same
+divergence `regex_flags` exists to prevent, one level below the flag mapping it
+already shared. It is precisely why the dot rewrite would have landed in one
+emitter and been missed in the other. It now calls the shared function.
+
+## Closing count
+
+Wired: **all 13** sparql10 evaluation categories, plus the 11 UPDATE
+categories and the syntax/protocol suites — and `test_dawg_coverage` asserts
+every corpus category is either run or declined in writing, so this cannot
+quietly regrow.
+
+Our failures across the sweep: **25 -> 1**, and the one left is not ours.
+`i18n/normalization-02` fails upstream of the SQL pipeline, in the sidecar's
+PNAME expansion (`issues/132`).
+
+### Filed-cause accuracy, final tally
+
+Of the seven gaps registered on 2026-08-24, **three of five reasons were
+wrong**: `expr-ops`/`optional-filter` (filed as lexical form, was three
+unrelated defects), `algebra` (filed as undiagnosed-but-maybe-shared, was one
+cause behind another), and `i18n` (filed as Unicode normalisation of literals —
+the test is about IRIs, about dot-segments, and about NOT normalising; that
+reason was written from the category name).
+
+Every wrong reason was written from a failure message or a category name
+instead of from running the case. The registry was still worth having — it
+kept the work visible and the suite honest — but a reason in it is a
+hypothesis, and three of five did not survive contact.

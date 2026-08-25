@@ -27,7 +27,8 @@ from __future__ import annotations
 import pytest
 
 from vitalgraph.db.sparql_sql.regex_flags import (
-    apply_to_pattern, is_case_insensitive, pg_embedded_options)
+    apply_to_literal, apply_to_pattern, dot_to_non_newline,
+    is_case_insensitive, pg_embedded_options)
 
 
 class TestFlagMapping:
@@ -201,3 +202,58 @@ class TestCharacterClassTranslation:
             assert "CLASSIFY_COLLATION" in src, (
                 f"{mod.__name__} translates classes without collating the "
                 f"operand, so non-ASCII text silently under-matches")
+
+
+class TestBracketNegationIsTheThirdAxis:
+    """`.` and `[^x]` disagree about the newline, and PostgreSQL cannot say so.
+
+    Every PostgreSQL newline option ties bracket negation to `.`: `p`/`n`
+    exclude the newline from both, `s`/`w` admit it to both. XPath does not tie
+    them -- `.` excludes it unless `s`, while `[^x]` is a set complement and
+    always admits it. So SPARQL's default is none of the four, and
+    `sparql10/regex`'s `a[^b]c` over `"a\nc"` failed on exactly that.
+
+    The dot moves into the pattern so the option is left to place the anchors.
+    """
+
+    @pytest.mark.parametrize("pattern,expected", [
+        ("a.c",           r"a[^\n]c"),
+        (r"a\.c",         r"a\.c"),        # escaped: already literal
+        ("a[^b]c",        "a[^b]c"),        # inside a bracket: literal
+        ("a[.]c",         "a[.]c"),
+        ("[[:alpha:].]x", "[[:alpha:].]x"),  # `]` in a POSIX name is not a close
+        ("[].]y",         "[].]y"),          # a leading `]` is a member
+        ("a.b[^.]c",      r"a[^\n]b[^.]c"),
+    ])
+    def test_only_the_real_dots_are_rewritten(self, pattern, expected):
+        assert dot_to_non_newline(pattern) == expected
+
+    @pytest.mark.parametrize("flags,expected", [
+        ("",   "s"),   # anchors at string ends; bracket negation keeps the newline
+        ("m",  "w"),   # anchors at line breaks
+    ])
+    def test_a_rewritten_dot_changes_which_option_is_right(self, flags, expected):
+        assert pg_embedded_options(flags, dot_rewritten=True) == expected
+
+    def test_the_unrewritten_mapping_is_untouched(self):
+        """A runtime pattern has no text to rewrite, so it keeps `p`/`n`.
+
+        That trade is deliberate: `.` right and bracket negation wrong, because
+        there is no third option and `.` is the commoner case.
+        """
+        assert pg_embedded_options("") == "p"
+        assert pg_embedded_options("m") == "n"
+
+    def test_a_literal_pattern_is_rewritten_and_options_agree(self):
+        body, _ = apply_to_literal("a.c", "")
+        assert body == r"(?s)a[^\n]c"
+
+    def test_dotall_skips_the_rewrite(self):
+        """With `s` the dot already means "any character" in both dialects."""
+        body, _ = apply_to_literal("a.c", "s")
+        assert body == "(?s)a.c"
+
+    def test_the_literal_flag_skips_the_rewrite(self):
+        """`q` makes the whole pattern literal -- there is no metacharacter."""
+        body, _ = apply_to_literal("a.c", "q")
+        assert ".c" in body and "[^" not in body

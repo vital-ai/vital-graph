@@ -51,18 +51,39 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DAWG_ROOT = _PROJECT_ROOT / "tests" / "conformance" / "dawg_data"
 
 P0_CATEGORIES = [
+    # The last of sparql10, wired 2026-08-24/25. These are the 98-failure
+    # backlog the note further down describes; every category the corpus has is
+    # now here. Our failures across them went 25 -> 1, and the one that remains
+    # is not ours (`issues/132`, the sidecar's PNAME expansion).
+    #
+    # Two of the three biggest wins were HARNESS defects rather than engine
+    # ones, and both had hidden working code behind a category that could not
+    # be wired:
+    #   sort    10 failures, all on the ORACLE, one cause — the RDF/XML and
+    #           TriG parsers never checked for the rs: result-set vocabulary,
+    #           so `.rdf` expectations were compared as raw triples. Our sort
+    #           needed no change at all.
+    #   graph    4 — one was the runner declaring `default_graph` only when
+    #           named graphs existed; the other three were `GRAPH {}` not
+    #           enumerating.
+    #   cast     6 — the cast emitters were already right; `datatype()` fell
+    #           through to the static inference and reported the target type
+    #           for casts that had failed.
+    #
+    # `issues/128` carries the per-category detail, including the three filed
+    # causes that turned out to be wrong.
     "sparql10/algebra",
     "sparql10/basic",
+    "sparql10/cast",
     "sparql10/construct",
     "sparql10/distinct",
     "sparql10/expr-equals",
     "sparql10/expr-ops",
+    "sparql10/graph",
     "sparql10/i18n",
     "sparql10/optional-filter",
     "sparql10/reduced",
     "sparql10/regex",
-    "sparql10/graph",
-    "sparql10/cast",
     "sparql10/sort",
     "bind",
     "aggregates",
@@ -107,11 +128,12 @@ P0_CATEGORIES = [
     # `issues/120` shipped a langMatches that did no prefix matching while
     # q-langMatches-2.rq, literally the failing query, sat on disk unrun.
     "sparql10/expr-builtin",
-    # The rest of sparql10 that passes CLEAN, wired 2026-08-23. 68 more cases,
-    # zero failures. Measured, not assumed — the other 16 evaluation
-    # categories collect 98 failures across at least six distinct causes and
-    # are NOT wired, because 98 xfails would destroy the signal this list
-    # exists to carry. `issues/128` records the measurement per category.
+    # The rest of sparql10 that passed CLEAN on 2026-08-23 — 68 cases, zero
+    # failures, measured rather than assumed. At the time the remaining 16
+    # evaluation categories collected 98 failures and were deliberately left
+    # out, because 98 xfails would have destroyed the signal this list carries.
+    # That backlog is now cleared and they are wired above; `issues/128` has
+    # the measurement per category.
     "sparql10/ask",
     "sparql10/bnode-coreference",
     "sparql10/bound",
@@ -367,20 +389,23 @@ XFAIL_SQL_V2_EXEC: dict = {
     # option and rewriting `.` to `[^\n]` in the pattern instead -- a change
     # to the shared flag mapping in `regex_flags`, whose 2x2 is measured and
     # documented, so not made in passing.
-    ("sparql10/regex", "REGEX with a [^] expression"):
-        "XPath bracket-negation matches newline; no PostgreSQL mode does that with dot-excludes-newline",
-
+    
     # Two operands of an arithmetic sign where the corpus keeps the operand's
     # own lexical form (`"3"`), and we return the canonical one. Same family as
     # the csv03 note above -- lexical identity of a computed numeric -- but on
     # OUR side, and it needs the promotion work to say which form is right.
             
 
-    # Unicode normalisation is not applied to literals, so two spellings of one
-    # character do not match. A storage-side normalisation question, not an
-    # expression one.
+    # The sidecar removes RFC 3986 dot-segments when expanding a PNAME, so
+    # `p1:xyz` arrives as a different IRI from the one the data stores
+    # verbatim, and matches nothing. Upstream of the SQL pipeline: by the time
+    # generate_sql sees the constant the characters are already gone. The test
+    # is about NOT normalising -- s1 holds the normalised spelling and is
+    # deliberately not the answer. See issues/132, which also records that the
+    # reason previously written here ("no Unicode normalisation of literals")
+    # was wrong in every particular.
     ("sparql10/i18n", "normalization-02"):
-        "no Unicode normalisation of literals on the way in",
+        "sidecar removes dot-segments when expanding a PNAME — issues/132",
     # sparql10/graph, wired 2026-08-24. All three are ONE gap: a graph-scoped
     # group with NO triple pattern must be evaluated against the named graphs,
     # and we treat `{}` as a no-op that matches once regardless.
