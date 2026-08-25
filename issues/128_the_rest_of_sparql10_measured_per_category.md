@@ -8,7 +8,7 @@ and does not have to guess.
 
 I said wiring the remainder was "just a list entry plus whatever it surfaces".
 **That was wrong**, and this is the number: the 23 evaluation categories
-collect **98 failures**, across at least six distinct causes.
+collect **98 failures**, across at least six distinct causes. (76 after `type-promotion` landed 2026-08-23.)
 
 ## Wired 2026-08-23 — clean, zero failures
 
@@ -41,7 +41,7 @@ direction is not predictable.** `type-promotion` went 22 -> 0 from one rule;
 
 | category | ours | first look |
 |---|---|---|
-| `type-promotion` | 22 | `ASK { FILTER(datatype(?l + ?r) = xsd:integer) }`. `datatype()` of an ARITHMETIC result is unbound, and XSD numeric type promotion (short+short -> integer) is not implemented. One cause, 22 cases. |
+| ~~`type-promotion`~~ | ~~22~~ | **DONE 2026-08-23** — wired, 60 passed / 0 failed. Both halves were real: `datatype()` never consulted the type inference at all, and the inference typed arithmetic by propagating the FIRST argument, which XSD promotion contradicts. |
 | `open-world` | 10 | unexamined |
 | `cast` | 7 | unexamined; `sparql11/cast` is wired and mostly passes, so compare the two |
 | `expr-equals` | 6 | `FILTER(?v = 1)` over `data-eq.ttl`. Was 9 before `issues/127`; the remainder is a different cause |
