@@ -23,7 +23,7 @@ table below is the ORIGINAL measurement; the current counts are:
 
 | category | was | now | note |
 |---|---|---|---|
-| `open-world` | 10 | **8** | `open-eq-06` fixed by the type-error rule. The rest need the same rule in the PUSH-DOWN — `?v != 1` goes through `_try_inequality_filter`, which this did not touch. |
+| ~~`open-world`~~ | ~~10~~ | **DONE** — wired 2026-08-24, 30 passed / 6 xfailed / 0 failed | `open-eq-06` fixed by the type-error rule. The rest need the same rule in the PUSH-DOWN — `?v != 1` goes through `_try_inequality_filter`, which this did not touch. |
 | `cast` | 7 | 7 | untouched |
 | `expr-equals` | 6 | 6 | **unchanged.** I predicted the type-error rule would clear these for free. It did not. Re-measured rather than assumed, which is the only reason that is known. |
 | `boolean-effective-value` | 6 | 6 | untouched |
