@@ -51,6 +51,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DAWG_ROOT = _PROJECT_ROOT / "tests" / "conformance" / "dawg_data"
 
 P0_CATEGORIES = [
+    "sparql10/sort",
     "bind",
     "aggregates",
     "functions",

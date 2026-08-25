@@ -411,6 +411,17 @@ def _parse_rdf_xml_graph(path: Path) -> Optional[SparqlResults]:
         logger.error("RDF/XML parse error in %s: %s", path, e)
         return None
 
+    # A .rdf/.trig result file is EITHER a CONSTRUCT graph or the DAWG RDF
+    # result-set vocabulary -- exactly the choice `_parse_ttl_graph` already
+    # makes. Only the Turtle parser made it. Every `.rdf` expectation was
+    # therefore compared as raw triples, so a SELECT whose results happened to
+    # serialise as 22 rs: triples was checked against 4 result rows and could
+    # not pass: all ten of sparql10/sort failed this way, on the oracle side,
+    # which is why the category was never wired.
+    as_result_set = _parse_rs_result_set(store)
+    if as_result_set is not None:
+        return as_result_set
+
     return _store_to_graph_results(store)
 
 
@@ -429,6 +440,17 @@ def _parse_trig_graph(path: Path) -> Optional[SparqlResults]:
     except Exception as e:
         logger.error("TriG parse error in %s: %s", path, e)
         return None
+
+    # A .rdf/.trig result file is EITHER a CONSTRUCT graph or the DAWG RDF
+    # result-set vocabulary -- exactly the choice `_parse_ttl_graph` already
+    # makes. Only the Turtle parser made it. Every `.rdf` expectation was
+    # therefore compared as raw triples, so a SELECT whose results happened to
+    # serialise as 22 rs: triples was checked against 4 result rows and could
+    # not pass: all ten of sparql10/sort failed this way, on the oracle side,
+    # which is why the category was never wired.
+    as_result_set = _parse_rs_result_set(store)
+    if as_result_set is not None:
+        return as_result_set
 
     return _store_to_graph_results(store)
 
