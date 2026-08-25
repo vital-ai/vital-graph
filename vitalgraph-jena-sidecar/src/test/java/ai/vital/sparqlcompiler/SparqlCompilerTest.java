@@ -383,4 +383,55 @@ class SparqlCompilerTest {
 
         assertTrue(resp.ok);
     }
+
+    // ---- Base IRI: we do not invent one -------------------------------
+    //
+    // `QueryFactory.create` substitutes the PROCESS WORKING DIRECTORY as base
+    // when none is given. That resolved callers' relative IRIs against
+    // whatever directory the service ran in, and -- because any base at all
+    // sends every IRI through RFC 3986 resolution -- stripped dot-segments
+    // from ABSOLUTE IRIs too, so a query could not match the term its own data
+    // held. SPARQL resolves only RELATIVE IRIs and performs no syntax-based
+    // normalisation. See issues/132.
+
+    private String json(String sparql) throws Exception {
+        CompileResponse resp = compiler.compile(makeRequest(sparql));
+        assertTrue(resp.ok, "compile failed: " + resp.error);
+        return mapper.writeValueAsString(resp);
+    }
+
+    @Test
+    void noBaseIsInventedWhenTheQueryDoesNotGiveOne() throws Exception {
+        CompileResponse resp = compiler.compile(makeRequest("SELECT * WHERE { ?s ?p ?o }"));
+        Map<?, ?> parsed = (Map<?, ?>) resp.phases.get("parsedQuery");
+        assertNull(parsed.get("baseURI"),
+                "a base the caller never mentioned must not be invented");
+    }
+
+    @Test
+    void anAbsoluteIriKeepsItsDotSegments() throws Exception {
+        // RDF compares IRIs by character. `a/./b/../b/c` and `a/b/c` are
+        // DIFFERENT IRIs and must stay so.
+        String out = json("PREFIX p: <eXAMPLE://a/./b/../b/c#> "
+                + "SELECT * WHERE { ?s <http://x#p> p:xyz }");
+        assertTrue(out.contains("eXAMPLE://a/./b/../b/c#xyz"),
+                "dot-segments were removed from an absolute IRI: " + out);
+    }
+
+    @Test
+    void aRelativeIriStaysRelativeWithoutABase() throws Exception {
+        String out = json("SELECT * FROM <data-g1.ttl> WHERE { ?s ?p ?o }");
+        assertTrue(out.contains("data-g1.ttl") && !out.contains("/app/data-g1.ttl"),
+                "a relative IRI was resolved against an invented base: " + out);
+    }
+
+    @Test
+    void anExplicitBaseStillResolvesRelativeIris() throws Exception {
+        // A BASE in the query is the caller ASKING for resolution, which is a
+        // different thing from us supplying one they never wrote.
+        String out = json("BASE <file:///tmp/d/q.rq> "
+                + "SELECT * FROM <data-g1.ttl> WHERE { ?s ?p ?o }");
+        assertTrue(out.contains("file:///tmp/d/data-g1.ttl"),
+                "an explicit BASE stopped resolving relative IRIs: " + out);
+    }
 }

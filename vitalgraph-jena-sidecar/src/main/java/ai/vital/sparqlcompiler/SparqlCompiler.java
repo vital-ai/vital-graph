@@ -7,6 +7,8 @@ import org.apache.jena.query.Query;
 import org.apache.jena.query.QueryException;
 import org.apache.jena.query.QueryFactory;
 import org.apache.jena.query.QueryParseException;
+import org.apache.jena.query.Syntax;
+import org.apache.jena.sparql.lang.SPARQLParser;
 import org.apache.jena.sparql.core.Var;
 import org.apache.jena.sparql.core.VarExprList;
 import org.apache.jena.sparql.algebra.Algebra;
@@ -49,7 +51,7 @@ public class SparqlCompiler {
 
         timing.start("parse");
         try {
-            query = QueryFactory.create(request.sparql);
+            query = parseWithoutSystemBase(request.sparql);
             sparqlForm = "QUERY";
         } catch (QueryParseException qpe) {
             try {
@@ -302,6 +304,47 @@ public class SparqlCompiler {
             return l.length() > 80 ? l.substring(0, 80) + "..." : l;
         }
         return null;
+    }
+
+    /**
+     * Parse a query WITHOUT letting Jena invent a base IRI.
+     *
+     * {@code QueryFactory.create} substitutes {@code IRIs.getSystemBase()}
+     * when no base is supplied, and that is the PROCESS WORKING DIRECTORY --
+     * in this container, {@code file:///app/}. Two consequences, both bad:
+     *
+     * <ol>
+     * <li>A relative IRI in a caller's query silently resolves against
+     *     whatever directory the service happens to be run from.</li>
+     * <li>Once ANY base is set, {@code QueryParserBase.resolveIRI} sends every
+     *     IRI through {@code IRIx.resolve}, which applies RFC 3986
+     *     {@code remove_dot_segments} even to an ABSOLUTE IRI. So
+     *     {@code <eXAMPLE://a/./b/../b/c>} came back as
+     *     {@code eXAMPLE://a/b/c} and could never match the term the data
+     *     holds verbatim. SPARQL 1.1 resolves only RELATIVE IRIs against the
+     *     base, and performs neither Syntax-Based nor Scheme-Based
+     *     Normalization -- path-segment removal being the former,
+     *     RFC 3986 section 6.2.2.3. See issues/132.</li>
+     * </ol>
+     *
+     * Jena implements what we want, twice, and neither copy is reachable:
+     * {@code IRI3986.strictResolver} is a hardcoded {@code false} and
+     * {@code AlgResolveIRI.transformReferencesStrict} is private with no
+     * callers. We cannot switch those on from outside a released artifact, so
+     * we withhold the base instead -- {@code resolveIRI} returns the string
+     * untouched when the prologue has none, leaving absolute IRIs intact and
+     * relative ones still relative for the caller to resolve.
+     *
+     * A {@code BASE} written IN the query still behaves normally: the grammar
+     * sets the prologue base as it parses and everything after it resolves.
+     * That is a caller asking for resolution, which is not the same as us
+     * inventing a base they never mentioned.
+     */
+    private static Query parseWithoutSystemBase(String sparql) {
+        Query query = new Query();
+        query.setSyntax(Syntax.defaultQuerySyntax);
+        SPARQLParser parser = SPARQLParser.createParser(Syntax.defaultQuerySyntax);
+        return parser.parse(query, sparql);
     }
 
     private String computeHash(String sparql) {
