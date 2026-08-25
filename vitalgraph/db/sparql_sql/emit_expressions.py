@@ -992,6 +992,13 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
                 _DEC_RE = "'^[-+]?[0-9]*\\.?[0-9]+$'"
                 _FLOAT_RE = ("'^[-+]?(\\d+\\.?\\d*|\\.\\d+)"
                              "([eE][-+]?\\d+)?$'")
+                # xsd:dateTime / date / time lexical space, loosely: enough to
+                # keep CAST from raising on anything that is plainly not one.
+                _DATETIME_RE = ("'^[-+]?[0-9]{4,}-[0-9]{2}-[0-9]{2}"
+                                "([T ][0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?)?"
+                                "(Z|[-+][0-9]{2}:[0-9]{2})?$|"
+                                "^[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?"
+                                "(Z|[-+][0-9]{2}:[0-9]{2})?$'")
                 # Boolean cast: accept string true/false/0/1 AND numeric 0/nonzero
                 if sql_type == "BOOLEAN":
                     parts = "CASE "
@@ -1067,6 +1074,17 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
                                   f"ELSE CAST({num_col} AS TEXT) END ")
                     parts += f"ELSE CAST({text_col} AS TEXT) END"
                     return parts
+                # Temporal types: a lexical form the target cannot hold is a
+                # type error, i.e. NULL -- the same rule the numeric branches
+                # above already apply. An unguarded CAST does not return NULL,
+                # it RAISES, and takes the whole query with it: casting a
+                # graph URI to TIMESTAMP failed the statement with "invalid
+                # input syntax for type timestamp" rather than excluding the
+                # row.
+                if sql_type in ("TIMESTAMP", "DATE", "TIME"):
+                    return (f"CASE WHEN {text_col} ~ {_DATETIME_RE} "
+                            f"THEN CAST({text_col} AS {sql_type}) "
+                            f"ELSE NULL END")
                 # Other types: plain cast
                 return f"CAST({text_col} AS {sql_type})"
         return None
@@ -1462,6 +1480,20 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
                 _t = _strdt_target(_iargs[1])
                 if _t:
                     return f"'{_t.replace(chr(39), chr(39)+chr(39))}'"
+            # An XSD cast reports its target type ONLY where it succeeded. The
+            # cast emitters already answer NULL for a lexical form the target
+            # cannot hold -- `xsd:decimal("-10.2E3")` is a type error, decimal
+            # admitting no exponent -- but the static inference below reported
+            # xsd:decimal regardless, so `datatype(xsd:decimal(?v))` was
+            # constant and `FILTER(... = xsd:decimal)` kept every row. All six
+            # sparql10/cast cases returned the whole dataset that way.
+            if (args[0].function_iri
+                    and args[0].function_iri in _XSD_CAST_MAP):
+                _cast_sql = expr_to_sql(args[0], ctx)
+                if _cast_sql:
+                    _dt = args[0].function_iri.replace("'", "''")
+                    return (f"CASE WHEN ({_cast_sql}) IS NOT NULL "
+                            f"THEN '{_dt}' ELSE NULL END")
             # Arithmetic: the PROMOTED type, which for variable operands is a
             # per-row answer — `?l + ?r` is xsd:integer over shorts and
             # xsd:double over doubles in the same query. `promotion_datatype_sql`
