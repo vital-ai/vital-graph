@@ -51,6 +51,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DAWG_ROOT = _PROJECT_ROOT / "tests" / "conformance" / "dawg_data"
 
 P0_CATEGORIES = [
+    "sparql10/graph",
     "sparql10/cast",
     "sparql10/sort",
     "bind",
@@ -211,6 +212,15 @@ pytestmark = [
 # STOPS THE TEST. An entry here would never surface as an XPASS no matter how
 # right our answer became.
 XFAIL_TESTS_V2 = {
+    # sparql10/graph, wired 2026-08-24. The ORACLE half: pyoxigraph disagrees
+    # with these three .srx expectations. `graph-optional` is oracle-only --
+    # our backend matches the corpus on it.
+    ("sparql10/graph", "graph-not-exist"):
+        "pyoxigraph differs from the .srx on an empty group in a missing graph",
+    ("sparql10/graph", "graph-optional"):
+        "pyoxigraph differs from the .srx on OPTIONAL inside GRAPH",
+    ("sparql10/graph", "graph-variable-scope"):
+        "pyoxigraph differs from the .srx on a FILTER-only group in GRAPH",
     # Exposed 2026-08-24 when the result parser and query executor were given a
     # base IRI (issues/130). Both were SKIPPING before -- their result file and
     # query use relative IRIs, so neither could be read at all. Both are the
@@ -309,7 +319,27 @@ XFAIL_TESTS_V2 = {
 # the test, so an entry here can never surface as an XPASS -- the only way to
 # learn that a gap has closed is to delete the entry and run it. That is the
 # rule's real cost, and it is why these are listed individually.
-XFAIL_SQL_V2_EXEC: dict = {}
+XFAIL_SQL_V2_EXEC: dict = {
+    # sparql10/graph, wired 2026-08-24. All three are ONE gap: a graph-scoped
+    # group with NO triple pattern must be evaluated against the named graphs,
+    # and we treat `{}` as a no-op that matches once regardless.
+    #
+    #   GRAPH ?g {}                   one solution per named graph, ?g bound
+    #   GRAPH ex:unknown {}           no solutions -- the graph is not there
+    #   GRAPH ?g { FILTER(BOUND(?g)) }  same, the group has only a FILTER
+    #
+    # We bind no ?g at all (the harness reports it as a missing variable) and
+    # answer one row for the non-existent graph. Enumerating requires a source
+    # for the graph variable when no quad scan supplies one -- see
+    # named_graph_semantics §4.3, which flags that enumeration is unbounded
+    # work and should not be assumed cheap.
+    ("sparql10/graph", "graph-empty"):
+        "GRAPH with an empty group pattern does not enumerate graphs",
+    ("sparql10/graph", "graph-not-exist"):
+        "GRAPH with an empty group pattern does not enumerate graphs",
+    ("sparql10/graph", "graph-variable-scope"):
+        "GRAPH with an empty group pattern does not enumerate graphs",
+}
 
 # Cases where OUR output differs from the manifest AND so does pyoxigraph -- the
 # runner reports these as `ACCEPTED` rather than `FAIL`, meaning it could not

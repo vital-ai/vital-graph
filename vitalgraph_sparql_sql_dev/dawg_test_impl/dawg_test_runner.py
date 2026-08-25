@@ -417,13 +417,19 @@ async def run_single_test_sql_v2(test: DawgTestCase, db_conn) -> TestResult:
         oracle_error = str(e)
 
     # Execute through v2 pipeline
-    # When BOTH default and named graphs are loaded, constrain outer BGPs to
-    # the default graph and exclude it from GRAPH ?g.  Without default data
-    # there's nothing to leak, so no constraint needed.
+    # The harness keeps default-graph data under its own context URI, so the
+    # pipeline has to be TOLD which context is the default graph -- its own
+    # `urn:default` constant is not the one in play here.
+    #
+    # Declared unconditionally. It used to be passed only when named graphs
+    # existed, on the reasoning that with no named graphs there is nothing to
+    # leak. That has it backwards: the leak is the DEFAULT graph showing up in
+    # `GRAPH ?g`, which needs no named graph to happen. `sparql10/graph-04`
+    # asks `GRAPH ?g { ?s ?p ?o }` of a dataset with default data only, and
+    # the answer is no rows -- we returned two, because with default_graph
+    # unset nothing excluded the default context from enumeration.
     from .dawg_data_loader import DEFAULT_GRAPH_URI
-    # When named graphs exist, constrain outer BGPs to the default graph.
-    # If no default data was loaded, the default graph is empty — correct.
-    v2_default_graph = DEFAULT_GRAPH_URI if named_paths else None
+    v2_default_graph = DEFAULT_GRAPH_URI
     t0 = time.time()
     try:
         sql_result = await execute_query_via_v2_pipeline(
