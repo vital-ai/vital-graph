@@ -1,7 +1,7 @@
 # Unknown-Datatype Comparison: Type Error or False? The Two Authorities Disagree
 
-## Status: OPEN — semantics SETTLED and partly implemented 2026-08-24.
-## Two of seven cases fixed; five remain with a diagnosed cause.
+## Status: CLOSED 2026-08-25 — all seven cases pass.
+## Semantics settled 2026-08-24; the remaining five closed out since.
 
 `issues/128` names `open-world` as the largest remaining sparql10 cluster.
 Attempted it; got two of seven cases passing and reverted, because the change
@@ -560,3 +560,29 @@ Two details that made this non-obvious:
   `issues/028`'s unresolved-variable policy never fires. That is the same
   failure shape as the swallowed exception above: a defect that degrades the
   answer instead of raising.
+
+
+---
+
+## Closed 2026-08-25 — the five resolved without being worked on directly
+
+`open-eq-07/08/10/11/12` all pass. `sparql10/open-world` is wired, the only
+`open-eq` entry left in any xfail table is `open-eq-01` on the ORACLE side, and
+the suite is green.
+
+They were not fixed by a change aimed at them. The diagnosis here — that the
+same-term branch of `_term_error_cmp` matched all sixteen pairs among the
+unknown-typed terms rather than the four identical ones — was resolved by the
+determinacy and comparison work that followed, and by the runner change that
+stopped an unreliable oracle from taking our backend out of the run with it.
+
+**The lesson is the one this repository keeps relearning.** These five sat
+recorded as open with a correct, specific diagnosis while the code underneath
+them changed. Nothing re-measured them, because `pytest.xfail()` is imperative
+and stops the test — an entry can never surface as an XPASS however right the
+answer becomes. The only way to find out is to delete the entry and run, and
+that is how all of these were found: ten stale xfails on 2026-08-25, the
+fifteen §4.1 cases, the two `algebra` cases before them.
+
+A diagnosis in an issue is a snapshot. It ages exactly as fast as the code it
+describes, and nothing tells you when it stops being true.
