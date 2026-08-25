@@ -1,6 +1,6 @@
 # The Sidecar Removes Dot-Segments From IRIs That RDF Compares Verbatim
 
-## Status: OPEN — found 2026-08-25 finishing the sparql10 categories
+## Status: PARTLY FIXED 2026-08-25 (`75b0e42`) — found finishing the sparql10 categories
 
 `sparql10/i18n/normalization-02` returns nothing where the corpus expects one
 row, and the cause is upstream of the SQL pipeline entirely.
@@ -145,15 +145,53 @@ test too, in the other direction. The corpus is asserting that the two IRIs are
 distinct and must stay so, which is the RDF position: IRIs are compared by
 character, not by URI equivalence.
 
-## Options, none taken
+## Fixed in the sidecar, `75b0e42`
 
-1. **Leave it.** One conformance case; real IRIs rarely carry `/./` or `/../`.
-   The cost is that a term that does carry them is unreachable by query, with
-   no error.
-2. **Fork Jena** to enable `strictResolver`. Correct, and a build-and-maintain
-   burden for one constant.
-3. **Ask upstream** whether `strictResolver` can become configurable. Cheapest
-   real fix if accepted, and slowest.
+We own the sidecar, so the fix went there rather than waiting on Jena.
+
+`SparqlCompiler` now parses through `SPARQLParser` directly, skipping the
+block in `QueryFactory.parse` that substitutes a base. `resolveIRI` returns
+the string untouched when the prologue has none, so nothing is resolved that
+the caller did not ask to have resolved.
+
+| | before | after |
+|---|---|---|
+| `<eXAMPLE://a/./b/../b/c>` | `eXAMPLE://a/b/c` | **preserved** |
+| default base | `file:///app/` | `None` |
+| `FROM <data-g1.ttl>`, no BASE | `file:///app/data-g1.ttl` | stays relative |
+| `FROM <data-g1.ttl>` + explicit BASE | resolved | resolved, unchanged |
+
+A `BASE` written IN the query still behaves exactly as before. Four tests in
+`SparqlCompilerTest` pin all four rows; the sidecar suite is 59 passing, and
+conformance/unit/integration are clean against the rebuilt image.
+
+The working-directory base was the more consequential half. It meant a
+relative IRI in any production query resolved against wherever the service
+happened to run — environment-dependent, undocumented, and nothing would have
+reported it.
+
+## Still open: the conformance case
+
+`sparql10/i18n/normalization-02` still fails, and the reason is our own
+harness. The DAWG runner prepends `BASE <file://…>` to every query so that
+relative graph names resolve (`named_graph_semantics` §4.1), and an explicit
+BASE re-enables resolution for absolute IRIs as well:
+
+    no BASE    ->  eXAMPLE://a/./b/../b/%63/%7bfoo%7d#xyz   (correct)
+    with BASE  ->  eXAMPLE://a/b/%63/%7bfoo%7d#xyz          (normalised)
+
+So the two fixes made this week work against each other, and the sidecar
+change alone cannot resolve it.
+
+Closing it means dropping the BASE prologue and resolving relative IRIs on our
+side — in `jena_ast_mapper`, against a base threaded from the caller, applied
+only to IRIs with no scheme. That is what SPARQL specifies in any case:
+relative IRIs resolve, absolute ones do not. The prologue was always a
+shortcut that bought §4.1 cheaply; it buys it by asking Jena to resolve
+everything.
+
+Not attempted yet. It touches every IRI the mapper produces, so it wants its
+own measurement rather than being tacked onto this.
 
 ## Related
 
