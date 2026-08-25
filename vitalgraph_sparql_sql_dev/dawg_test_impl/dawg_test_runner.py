@@ -34,6 +34,7 @@ import sys
 import time
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import unquote, urlparse
 
 from .dawg_manifest_parser import (
     DawgTestCase,
@@ -41,7 +42,11 @@ from .dawg_manifest_parser import (
     get_manifest_path,
     parse_manifest,
 )
-from .dawg_oxigraph_executor import SparqlExecutionError, execute_query
+from .dawg_oxigraph_executor import (
+    SparqlExecutionError,
+    _referenced_graphs,
+    execute_query,
+)
 from .dawg_report import (
     TestReport,
     TestResult,
@@ -336,7 +341,19 @@ async def run_single_test_sql_v2(test: DawgTestCase, db_conn) -> TestResult:
     global _current_data_file
     data_path = test.data_file
     named_paths = tuple(test.named_graph_files or [])
-    cache_key = (data_path, named_paths)
+    # Graphs named ONLY by FROM / FROM NAMED. The dataset cases declare their
+    # data nowhere else -- no qt:data in the manifest -- so without loading
+    # these the space is empty and every one of them answers 0 rows while
+    # looking like it ran.
+    from_graphs = tuple(
+        (iri, gp)
+        for iri, gp in (
+            (i, Path(unquote(urlparse(i).path)))
+            for i in _referenced_graphs(sparql, f"file://{test.query_file}")
+        )
+        if gp.exists()
+    )
+    cache_key = (data_path, named_paths, from_graphs)
     if cache_key != getattr(run_single_test_sql_v2, '_cache_key', None):
         await truncate_space(db_conn, SPACE_ID)
         if data_path and data_path.exists():
@@ -347,21 +364,28 @@ async def run_single_test_sql_v2(test: DawgTestCase, db_conn) -> TestResult:
                 ng_graph_uri = f"file://{ng_file}"
                 await load_ttl_into_space(db_conn, ng_file, SPACE_ID,
                                           graph_uri=ng_graph_uri)
+        for graph_iri, g_path in from_graphs:
+            await load_ttl_into_space(db_conn, g_path, SPACE_ID,
+                                      graph_uri=graph_iri)
         run_single_test_sql_v2._cache_key = cache_key
         _current_data_file = data_path
 
-    # Get pyoxigraph baseline
+    # Get pyoxigraph baseline. An oracle that cannot run the query is NOT a
+    # reason to stop testing OUR backend: the manifest's expected result is the
+    # authority, and it is already parsed above. Returning SKIP here is what
+    # left the dataset queries with no SQL coverage at all -- the oracle's gap
+    # silently became ours.
+    oracle_error = None
     try:
         oxigraph_result = execute_query(
             sparql,
             data_file=test.data_file,
             named_graph_files=test.named_graph_files or None,
+            base_iri=f"file://{test.query_file}",
         )
-    except SparqlExecutionError:
-        return TestResult(
-            name=test.name, category=test.category, status="SKIP",
-            error_message="pyoxigraph cannot execute this query (skip for v2 too)",
-        )
+    except SparqlExecutionError as e:
+        oxigraph_result = None
+        oracle_error = str(e)
 
     # Execute through v2 pipeline
     # When BOTH default and named graphs are loaded, constrain outer BGPs to
@@ -388,6 +412,22 @@ async def run_single_test_sql_v2(test: DawgTestCase, db_conn) -> TestResult:
             time_ms=(time.time() - t0) * 1000, error_message=f"Unexpected: {e}",
         )
     elapsed_ms = (time.time() - t0) * 1000
+
+    # With no oracle, compare straight to the manifest. That is a stricter
+    # test, not a weaker one -- the oracle is normally the primary comparand
+    # only because it attributes a failure better, not because it outranks the
+    # corpus.
+    if oxigraph_result is None:
+        comparison = compare_results(sql_result, expected)
+        return TestResult(
+            name=test.name, category=test.category,
+            status="PASS" if comparison.match else "FAIL",
+            expected_rows=comparison.expected_count,
+            actual_rows=comparison.actual_count,
+            time_ms=elapsed_ms,
+            error_message=None if comparison.match else
+            f"{comparison.message} [vs manifest; oracle could not run: {oracle_error}]",
+        )
 
     comparison = compare_results(sql_result, oxigraph_result)
     if comparison.match:
