@@ -122,12 +122,44 @@ graph"). Registered in `XFAIL_TESTS`/`XFAIL_TESTS_V2` as oracle limitations.
 Worth noting for §4.2: that empty-named-graph question is precisely what the
 strict-SPARQL decision turns on, and we now have two live tests pinned to it.
 
-### Left open deliberately
+### The remaining skips — also fixed, in `b412371`
 
-12 skips remain in the dataset selection, all `pyoxigraph cannot execute this
-query (skip for v2 too)`. These are real oracle gaps rather than harness ones,
-and they still mean our backend goes untested on those cases — the same
-coverage-disappears-silently shape, one level down. Not in scope here.
+The first pass left 12 skips reading `pyoxigraph cannot execute this query
+(skip for v2 too)` and called them "real oracle gaps, not harness ones". That
+was wrong twice over. `run_single_test_sql_v2` had never been given the base
+IRI the two test modules got, so it was the *same harness bug*; and even where
+the oracle genuinely cannot run, the manifest's expected result was already
+parsed two lines above and simply went unused. An oracle limitation was being
+allowed to switch off the test of our own backend.
+
+- the runner passes the query file as base IRI
+- `FROM` / `FROM NAMED` graphs load into the space — the dataset cases carry
+  no `qt:data`, so our backend had been querying an empty space
+- no oracle is no longer fatal: compare straight to the manifest, which is
+  stricter. The oracle is the primary comparand because it attributes a
+  failure better, not because it outranks the corpus.
+
+Skips **29 → 11**, and `pyoxigraph cannot execute` is now **zero**. What is
+left is 9 `NegativeSyntax` cases that belong to the syntax suite, one empty
+parameter set, and one `ENCODE_FOR_URI` parse gap.
+
+### What that measured: 15 real failures in our pipeline
+
+18 more tests run and 15 fail. Not new breakage — the first measurement of
+code nothing was checking. Every one names a graph by a file-relative IRI
+(`FROM <data.ttl>`, `GRAPH <exists02.ttl>`), and our pipeline has no base to
+resolve it against: `execute_query_via_v2_pipeline` hands the Jena sidecar no
+base at all. The symptom is bimodal and confirms the diagnosis — far too many
+rows where the `FROM` dataset restriction is ignored (0 → 8, 12 → 24), zero
+where the unresolved name matches no loaded graph.
+
+Recorded in `XFAIL_SQL_V2_EXEC`, which had been kept empty for exactly this.
+**Deliberately not worked around in the harness**: deriving the dataset from
+the query's `FROM` clause inside the test fixture would turn all 15 green and
+leave the engine exactly as unable to do it.
+
+These 15 are the concrete work list for `named_graph_semantics` §4.1, and they
+now fail loudly until it lands.
 
 ### The recurring lesson, third instance
 
