@@ -1,6 +1,7 @@
 # The Rest of sparql10, Measured Per Category
 
-## Status: OPEN — measurement done 2026-08-23, work not started
+## Status: CLOSED 2026-08-25 — all 13 categories wired, our failures 25 -> 0.
+## Measurement done 2026-08-23; the work it scoped is complete.
 
 `issues/125` made `sparql10` reachable and wired `expr-builtin`. This records
 what the REST of the tree costs, so the next person does not have to re-measure
@@ -364,3 +365,44 @@ Every wrong reason was written from a failure message or a category name
 instead of from running the case. The registry was still worth having — it
 kept the work visible and the suite honest — but a reason in it is a
 hypothesis, and three of five did not survive contact.
+
+
+---
+
+## Closed 2026-08-25
+
+Every sparql10 evaluation category is wired. `XFAIL_SQL_V2_EXEC`,
+`XFAIL_SQL_V2_ACCEPTED` and `KNOWN_FAILURES` are all empty: **no case in the
+suite leaves our backend unmeasured.**
+
+Our failures across the sweep went **25 -> 0**. The last one,
+`i18n/normalization-02`, was not ours — it was the sidecar removing RFC 3986
+dot-segments from absolute IRIs, fixed in `issues/132`.
+
+### What the sweep actually cost, versus what it looked like
+
+Of the 25, roughly half were not engine defects at all:
+
+| | |
+|---|---|
+| `sort` (10) | HARNESS — the RDF/XML and TriG parsers never checked for the `rs:` result-set vocabulary, so `.rdf` expectations were compared as raw triples. **Our sort implementation needed no change.** |
+| `graph` (1 of 5) | HARNESS — the runner declared `default_graph` only when named graphs existed |
+| `i18n` (1) | SIDECAR — `issues/132` |
+| the rest | genuine engine gaps: cast/datatype, boolean and dateTime value spaces, literal-only string functions, UNION join compatibility, unary signs, OPTIONAL's nested FILTER, graph enumeration, XPath bracket negation |
+
+Three separate times the answer to "why is this category failing" was **"the
+test could not read its own expectation"** — and each time it had been hiding
+working code behind a category that could not be wired.
+
+### Filed-cause accuracy
+
+Of the seven gaps registered on 2026-08-24 with a diagnosed reason, **three
+were wrong**: `expr-ops`/`optional-filter` (filed as lexical form, was three
+unrelated defects), `algebra` (filed as undiagnosed-but-plausibly-shared, was
+one cause behind another), and `i18n` (filed as Unicode normalisation of
+literals; it is about IRIs, dot-segments, and NOT normalising).
+
+Every wrong reason was written from a failure message or a category name rather
+than from running the case. The registry earned its keep — it kept the work
+visible and the suite honest — but a reason in it is a hypothesis, and three of
+five did not survive contact.
