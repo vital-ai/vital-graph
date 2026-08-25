@@ -78,10 +78,29 @@ and there:
         return other;        // absolute IRI returned UNCHANGED
     }
 
-**The behaviour the corpus expects is implemented in Jena and disabled at
-compile time.** `strictResolver` is a `private static final` constant with no
-setter, no system property and no context symbol — the branch is dead code in
-the shipped artifact.
+**The behaviour the corpus expects is implemented in Jena, twice, and neither
+copy is reachable.** `strictResolver` is a `private static final` constant with
+no setter, no system property and no context symbol. One layer down,
+`AlgResolveIRI` carries the same choice:
+
+    public static IRI3986 resolve(IRI base, IRI reference) {
+        return transformReferencesNonStrict(reference, base);   // always
+    }
+
+    private static IRI3986 transformReferencesStrict(IRI reference, IRI base) {
+        if ( reference.hasScheme() )
+            return RFC3986.create(reference);                   // unchanged
+        return transformReferencesNonStrict(reference, base);
+    }
+
+`transformReferencesStrict` is private and has exactly one occurrence in the
+whole Jena tree: its own declaration. Nothing calls it.
+
+**Why either is disabled is not recorded.** No comment, no linked issue, no
+test exercising the strict path. The vendored tree here is a source drop with
+no git history, so this cannot be answered from what we have -- it needs Jena's
+own history or mailing list. Calling it a deliberate trade-off would be
+inventing a reason.
 
 ## Why it cannot simply be switched on
 
@@ -96,13 +115,29 @@ whenever none is given, so the `getBase() == null` early return in
 
 ## Who is right
 
-Genuinely open, and worth stating rather than assuming.
+A correction to the first draft of this issue, which called the disabled branch
+"the RFC-conformant path". It is not, and the naming invites that mistake.
 
-RFC 3986 §5.2.2 does apply `remove_dot_segments` when resolving a reference
-that carries a scheme, so Jena's non-strict path has a reading behind it. The
-same section describes the strict behaviour -- return the reference unchanged
--- as the conformant one, which is what its own `strictResolver` branch
-implements and what the DAWG corpus expects.
+RFC 3986 §5.2.2's strict/non-strict distinction is about ONE thing: whether a
+parser may ignore a scheme in the reference when it is identical to the base's.
+Under RFC strictness a scheme-bearing reference is still transformed, and that
+transform includes `remove_dot_segments`:
+
+    if defined(R.scheme) then
+       T.scheme = R.scheme;
+       T.path   = remove_dot_segments(R.path);
+
+So RFC 3986 removes dot-segments either way. Jena's "strict" branch returns the
+reference untouched, which is STRONGER than RFC strictness rather than equal to
+it.
+
+What actually supports the corpus is SPARQL, not RFC 3986. SPARQL 1.1 resolves
+**relative** IRIs against the base using only §5.2's basic algorithm, and states
+that neither Syntax-Based nor Scheme-Based Normalization is performed --
+path-segment removal being Syntax-Based Normalization, §6.2.2.3. An absolute
+IRI is not combined with anything, so nothing licenses rewriting it. That is
+the reading every implementation passing this test uses, and the one Jena's
+unreachable branch happens to implement.
 
 Note that `s1` in the test holds the ALREADY-NORMALISED spelling and is
 deliberately **not** the expected answer. So "normalise both sides" fails this
