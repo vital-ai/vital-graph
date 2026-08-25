@@ -374,13 +374,7 @@ XFAIL_SQL_V2_EXEC: dict = {
     # own lexical form (`"3"`), and we return the canonical one. Same family as
     # the csv03 note above -- lexical identity of a computed numeric -- but on
     # OUR side, and it needs the promotion work to say which form is right.
-    ("sparql10/expr-ops", "Unary Minus with various datatype"):
-        "computed numeric returns a canonical lexical form; corpus keeps the operand's",
-    ("sparql10/expr-ops", "Unary Plus with various datatype"):
-        "computed numeric returns a canonical lexical form; corpus keeps the operand's",
-    ("sparql10/optional-filter", "dawg-optional-filter-005-simplified"):
-        "computed numeric returns a canonical lexical form; corpus keeps 2E+1",
-
+            
 
     # Unicode normalisation is not applied to literals, so two spellings of one
     # character do not match. A storage-side normalisation question, not an

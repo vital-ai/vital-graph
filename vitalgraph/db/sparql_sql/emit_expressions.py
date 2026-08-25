@@ -285,6 +285,7 @@ def _is_numeric_expr(expr, ctx: EmitContext) -> bool:
     if isinstance(expr, ExprFunction):
         fname = (expr.name or "").lower()
         if fname in ("add", "subtract", "multiply", "divide", "unaryminus",
+                      "unaryplus",
                       "abs", "ceil", "floor", "round", "strlen", "rand",
                       "year", "month", "day", "hours", "minutes", "seconds"):
             return True
@@ -1215,6 +1216,15 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
         a = _numeric_arg(args[0], ctx)
         if a:
             return f"(-{a})"
+
+    # Unary plus is the identity on the VALUE, but it is not a no-op on the
+    # expression: it still requires a numeric operand, so a non-numeric is a
+    # type error. The sidecar emits it as `unaryplus` and nothing handled it,
+    # so `(+?v AS ?result)` bound nothing at all.
+    if fname == "unaryplus" and len(args) == 1:
+        a = _numeric_arg(args[0], ctx)
+        if a:
+            return f"({a})"
 
     # --- String functions ---
     if fname == "str" and len(args) == 1:

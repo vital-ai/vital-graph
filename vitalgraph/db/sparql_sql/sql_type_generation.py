@@ -1001,8 +1001,11 @@ def _infer_function_type(expr: ExprFunction, registry: TypeRegistry) -> TypedExp
         return TypedExpr(sql="", sparql_type="literal",
                          datatype=f"{XSD}integer")
 
-    # ABS preserves input datatype
-    if fname == "abs":
+    # ABS and the unary signs preserve the input datatype. XSD gives unary
+    # minus/plus the operand's own type -- `-("3"^^xsd:float)` is an
+    # xsd:float -- and neither matched here, so both fell through to the
+    # default and came back as PLAIN literals with the datatype dropped.
+    if fname in ("abs", "unaryminus", "unaryplus"):
         if args:
             arg_type = infer_expr_type(args[0], registry)
             if arg_type.datatype:

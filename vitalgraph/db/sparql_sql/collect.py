@@ -288,10 +288,50 @@ def _collect_join(op: OpJoin, space_id: str, aliases: AliasGenerator,
 def _collect_left_join(op: OpLeftJoin, space_id: str, aliases: AliasGenerator,
                        graph_uri: str = None) -> PlanV2:
     left = collect(op.left, space_id, aliases, graph_uri)
-    right = collect(op.right, space_id, aliases, graph_uri)
+
+    # A FILTER at the top of the OPTIONAL's group belongs to the LEFT JOIN, not
+    # to its right side. SPARQL §18.2.2.3 says so directly: when the OPTIONAL's
+    # pattern translates to Filter(F, P), the result is LeftJoin(G, P, F).
+    #
+    # Jena lifts it for the plain form and hands it to us in `op.exprs`. For a
+    # NESTED group it does not -- `OPTIONAL { { P FILTER F } }` arrives as
+    # LeftJoin(A, Filter(F, P)) -- and then F is emitted against the right
+    # side alone, where a variable bound only on the LEFT is not resolvable.
+    # It compiled to NULL, the filter never held, and the OPTIONAL matched
+    # nothing:
+    #
+    #     ?book dc:title ?title
+    #     OPTIONAL { { ?book x:price ?price  FILTER (?title = "TITLE 2") } }
+    #
+    # returned no price for any book. The engine even logged the unresolvable
+    # variable; nothing acted on it.
+    #
+    # Lifted only when F names something the right side does not bind. A filter
+    # confined to its own side is left where it is: for a LEFT JOIN the two are
+    # equivalent, and moving it would churn plans for no gain.
+    right_op = op.right
+    lifted_exprs = []
+    while isinstance(right_op, OpFilter) and right_op.exprs:
+        inner = collect(right_op.sub_op, space_id, aliases, graph_uri)
+        from .var_scope import compute_scope
+        from .emit_traversal import _expr_vars
+        bound_here = compute_scope(inner).all_visible
+        needs_outer = [e for e in right_op.exprs
+                       if _expr_vars(e, set()) - bound_here]
+        if not needs_outer:
+            break
+        lifted_exprs.extend(needs_outer)
+        kept = [e for e in right_op.exprs if e not in needs_outer]
+        if kept:
+            right_op = OpFilter(exprs=kept, sub_op=right_op.sub_op)
+            break
+        right_op = right_op.sub_op
+
+    right = collect(right_op, space_id, aliases, graph_uri)
     plan = PlanV2(kind=KIND_LEFT_JOIN, children=[left, right])
-    if op.exprs:
-        plan.left_join_exprs = list(op.exprs)
+    exprs = list(op.exprs or []) + lifted_exprs
+    if exprs:
+        plan.left_join_exprs = exprs
     return plan
 
 
