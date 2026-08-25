@@ -34,6 +34,7 @@ from vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_oxigraph_executor import (
     SparqlExecutionError,
 )
 from vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_srx_parser import (
+    UnsupportedResultFormat,
     parse_result_file,
 )
 from vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_result_comparator import (
@@ -434,9 +435,13 @@ class TestDAWGSqlV2:
         if tc.result_file is None or not tc.result_file.exists():
             pytest.skip("Result file missing")
 
-        expected = parse_result_file(tc.result_file)
-        if expected is None:
-            pytest.skip(f"Cannot parse result file: {tc.result_file.suffix}")
+        # A format we cannot read at all is a skip; a file we SHOULD be able
+        # to read and cannot is a failure. Collapsing the two is what hid six
+        # unreadable dataset expectations behind a green category (issues/130).
+        try:
+            expected = parse_result_file(tc.result_file)
+        except UnsupportedResultFormat as e:
+            pytest.skip(str(e))
 
         sparql = tc.query_file.read_text(encoding="utf-8")
 

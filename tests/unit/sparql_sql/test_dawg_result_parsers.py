@@ -14,7 +14,9 @@ from pathlib import Path
 import pytest
 
 from vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_srx_parser import (
+    ResultParseError,
     SparqlBinding,
+    UnsupportedResultFormat,
     parse_result_file,
 )
 from vitalgraph_sparql_sql_dev.dawg_test_impl.dawg_result_comparator import (
@@ -164,3 +166,62 @@ class TestLossyComparison:
         a = self._results([SparqlBinding(type="literal", value="foo")], lossy=True)
         b = self._results([SparqlBinding(type="literal", value="bar")], lossy=True)
         assert not compare_results(a, b).match
+
+
+class TestUnreadableExpectationsRaise:
+    """An expectation we cannot read must not be able to become a skip.
+
+    This is the mechanism behind three separate coverage holes, not a
+    hypothetical: `parse_result_file` returned None on failure, every caller
+    turned None into a skip, and a skip counts as green. Six `sparql10/dataset`
+    result files were unreadable for as long as that category had been wired,
+    and the category reported clean the whole time (issues/130).
+
+    So these tests are about the FAILURE MODE, not about parsing. They assert
+    that the bad news is raised where callers cannot quietly discard it.
+    """
+
+    def test_unparseable_file_raises_rather_than_returning_none(self, tmp_path):
+        bad = tmp_path / "broken.srx"
+        bad.write_text("<sparql><head><this is not xml at all")
+        with pytest.raises(ResultParseError):
+            parse_result_file(bad)
+
+    def test_malformed_turtle_raises(self, tmp_path):
+        bad = tmp_path / "broken.ttl"
+        bad.write_text("@prefix : <http://example/> .\n:s :p [ unclosed .")
+        with pytest.raises(ResultParseError):
+            parse_result_file(bad)
+
+    def test_relative_iri_in_turtle_is_readable(self, tmp_path):
+        """The issues/130 case itself: a bare `<data-g1.ttl>` must resolve.
+
+        Kept as a test because the fix is a base IRI derived from the file's
+        own location, which is easy to drop in a refactor and whose absence
+        shows up as a skip rather than a failure.
+        """
+        f = tmp_path / "r.ttl"
+        f.write_text(
+            '@prefix rs: <http://www.w3.org/2001/sw/DataAccess/tests/result-set#> .\n'
+            '[] rs:resultVariable "g" ; rs:solution [ rs:binding '
+            '[ rs:value <data-g1.ttl> ; rs:variable "g" ] ] .\n'
+        )
+        r = parse_result_file(f)
+        assert len(r.rows) == 1
+        assert r.rows[0]["g"].value.endswith("/data-g1.ttl")
+
+    def test_missing_file_raises(self, tmp_path):
+        with pytest.raises(ResultParseError):
+            parse_result_file(tmp_path / "absent.srx")
+
+    def test_unknown_format_is_a_distinct_type(self, tmp_path):
+        """Skipping on a format we have no parser for is defensible.
+
+        It gets its own type so a call site has to opt into that, rather than
+        inheriting it from the same bare None that meant "corrupt".
+        """
+        f = tmp_path / "results.parquet"
+        f.write_text("x")
+        with pytest.raises(UnsupportedResultFormat):
+            parse_result_file(f)
+        assert issubclass(UnsupportedResultFormat, ResultParseError)

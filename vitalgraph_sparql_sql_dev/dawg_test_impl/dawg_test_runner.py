@@ -55,7 +55,12 @@ from .dawg_report import (
     save_report_json,
 )
 from .dawg_result_comparator import compare_results
-from .dawg_srx_parser import parse_result_file, SparqlResults
+from .dawg_srx_parser import (
+    ResultParseError,
+    SparqlResults,
+    UnsupportedResultFormat,
+    parse_result_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -175,11 +180,19 @@ def run_single_test(test: DawgTestCase) -> TestResult:
     if skip:
         return skip
 
-    expected = parse_result_file(test.result_file)
-    if expected is None:
+    # Unreadable expectation = ERROR, not SKIP. A skip counts as green, so
+    # returning one here retired the test instead of reporting it.
+    try:
+        expected = parse_result_file(test.result_file)
+    except UnsupportedResultFormat as e:
         return TestResult(
             name=test.name, category=test.category, status="SKIP",
-            error_message=f"Cannot parse result file: {test.result_file.suffix}",
+            error_message=str(e),
+        )
+    except ResultParseError as e:
+        return TestResult(
+            name=test.name, category=test.category, status="ERROR",
+            error_message=str(e),
         )
 
     try:
@@ -229,11 +242,19 @@ async def run_single_test_sql(test: DawgTestCase, orchestrator, db_conn) -> Test
     if skip:
         return skip
 
-    expected = parse_result_file(test.result_file)
-    if expected is None:
+    # Unreadable expectation = ERROR, not SKIP. A skip counts as green, so
+    # returning one here retired the test instead of reporting it.
+    try:
+        expected = parse_result_file(test.result_file)
+    except UnsupportedResultFormat as e:
         return TestResult(
             name=test.name, category=test.category, status="SKIP",
-            error_message=f"Cannot parse result file: {test.result_file.suffix}",
+            error_message=str(e),
+        )
+    except ResultParseError as e:
+        return TestResult(
+            name=test.name, category=test.category, status="ERROR",
+            error_message=str(e),
         )
 
     try:
@@ -322,11 +343,19 @@ async def run_single_test_sql_v2(test: DawgTestCase, db_conn) -> TestResult:
     if skip:
         return skip
 
-    expected = parse_result_file(test.result_file)
-    if expected is None:
+    # Unreadable expectation = ERROR, not SKIP. A skip counts as green, so
+    # returning one here retired the test instead of reporting it.
+    try:
+        expected = parse_result_file(test.result_file)
+    except UnsupportedResultFormat as e:
         return TestResult(
             name=test.name, category=test.category, status="SKIP",
-            error_message=f"Cannot parse result file: {test.result_file.suffix}",
+            error_message=str(e),
+        )
+    except ResultParseError as e:
+        return TestResult(
+            name=test.name, category=test.category, status="ERROR",
+            error_message=str(e),
         )
 
     try:

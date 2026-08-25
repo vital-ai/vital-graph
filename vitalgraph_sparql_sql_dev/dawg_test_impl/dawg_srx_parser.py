@@ -65,34 +65,65 @@ class SparqlResults:
     lossy_types: bool = False
 
 
-def parse_result_file(path: Path) -> Optional[SparqlResults]:
-    """Parse a .srx (XML) or .srj (JSON) result file.
+class ResultParseError(Exception):
+    """A result file we should have been able to read could not be read.
 
-    Returns None if the file format is not supported or parsing fails.
+    Raised rather than returned, because returning was the bug. Every caller
+    turned a None into `pytest.skip`, a skip counts as green, and so an
+    unreadable expectation looked exactly like a passing test. Three separate
+    coverage holes were found that way -- `csv-tsv-res`/`json-res` skipping for
+    want of a parser, `XFAIL_TESTS_V2` deferring `test_sql_v2`, and six
+    `sparql10/dataset` result files that had been unparseable for as long as
+    the category had been wired (issues/130). The type exists so that failure
+    to read an expectation is a test failure, not a silent absence.
+    """
+
+
+class UnsupportedResultFormat(ResultParseError):
+    """The harness has no parser for this file's format at all.
+
+    A capability gap rather than a defect, so skipping on it is defensible --
+    but it is a distinct type so that each call site has to say so on purpose,
+    instead of inheriting the decision from a bare None.
+    """
+
+
+_PARSERS = {
+    ".srx": lambda p: _parse_srx(p),
+    ".srj": lambda p: _parse_srj(p),
+    ".ttl": lambda p: _parse_ttl_graph(p),
+    ".rdf": lambda p: _parse_rdf_xml_graph(p),
+    ".trig": lambda p: _parse_trig_graph(p),
+    ".csv": lambda p: _parse_csv(p),
+    ".tsv": lambda p: _parse_tsv(p),
+}
+
+
+def parse_result_file(path: Path) -> SparqlResults:
+    """Parse a DAWG expected-result file.
+
+    Raises:
+        UnsupportedResultFormat: no parser exists for this extension.
+        ResultParseError: the file is missing, or a parser was found and could
+            not read it. Callers must NOT turn this into a skip.
     """
     if not path.exists():
-        logger.warning("Result file not found: %s", path)
-        return None
+        raise ResultParseError(f"Result file not found: {path}")
 
     suffix = path.suffix.lower()
+    parser = _PARSERS.get(suffix)
+    if parser is None:
+        raise UnsupportedResultFormat(
+            f"No parser for {suffix!r} result files: {path}")
 
-    if suffix == ".srx":
-        return _parse_srx(path)
-    elif suffix == ".srj":
-        return _parse_srj(path)
-    elif suffix == ".ttl":
-        return _parse_ttl_graph(path)
-    elif suffix == ".rdf":
-        return _parse_rdf_xml_graph(path)
-    elif suffix == ".trig":
-        return _parse_trig_graph(path)
-    elif suffix == ".csv":
-        return _parse_csv(path)
-    elif suffix == ".tsv":
-        return _parse_tsv(path)
-    else:
-        logger.warning("Unknown result format: %s", path)
-        return None
+    result = parser(path)
+    if result is None:
+        # The individual parsers still signal failure with None and log the
+        # cause. Converting it here means no future parser can reintroduce the
+        # silent-skip behaviour just by following the local convention.
+        raise ResultParseError(
+            f"Could not parse {suffix!r} result file (see log for cause): {path}")
+    return result
 
 
 def _parse_srx(path: Path) -> Optional[SparqlResults]:
