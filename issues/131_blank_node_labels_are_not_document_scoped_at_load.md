@@ -1,6 +1,6 @@
 # Blank Node Labels Are Not Document-Scoped At Load
 
-## Status: OPEN — found 2026-08-24 while landing `named_graph_semantics` §4.1
+## Status: FIXED 2026-08-24 — found while landing `named_graph_semantics` §4.1
 
 Two documents that both use `_:x` produce **one** term. RDF scopes a blank
 node label to the document it appears in, so those are two distinct nodes.
@@ -43,20 +43,35 @@ documents ingested into one space that happen to share a label — `_:b0`,
 merged. Nothing errors, and the result is a graph asserting identities that
 were never in the source. Common serialiser outputs collide constantly.
 
-## Fix — not attempted here
+## Fix — `skolem_label`, which already existed
 
-Blank node identity has to carry its document. The obvious form is a skolem
-prefix minted per load, so the stored text is unique per (document, label)
-while remaining a `B` term.
+The scope of this was overstated when filed, in two ways worth recording.
 
-Two things to settle first, which is why this is filed rather than fixed:
+**The production ingest path was never affected.** It goes through rdflib,
+which mints unique labels per parse — two `Graph.parse()` calls on files that
+both say `_:x` produce `n3426...b1` and `na803...b1`. The claim that "any two
+documents ingested into one space have their blank nodes merged" was wrong;
+the exposure was the DAWG loader, which uses `pyoxigraph.parse` and takes the
+document-local label verbatim.
 
-- **Term identity changes for every existing blank node.** Anything storing
-  or comparing those UUIDs is affected, so it needs a migration story.
-- **Re-loading the same document must be idempotent** where callers rely on
-  that today. A per-load random prefix breaks it; a prefix derived from the
-  document's identity keeps it. The second is probably right, but "the
-  document's identity" needs defining for streamed and generated input.
+**Both "things to settle" were already settled.** This filed a migration
+question and an idempotency question as blockers. `skolem_label`
+(`term_normalize.py`, from `issues/076`) had answered both: it hashes
+`(scope_id, label)`, so different documents give different nodes while the
+same document re-imported gives the same ones — the exact tension between RDF
+scoping and idempotent reload (`issues/041`) that this issue raised as open.
+It was already in use on the file-import and REST batch paths.
+
+So the fix is one call the loader never made, with the file's own URI as
+scope. Verified in both directions: same label in different documents differs,
+same label in the same document is stable.
+
+`dataset-09b` and `-10b` now pass, and `XFAIL_SQL_V2_EXEC` is empty again.
+
+The lesson is the one this whole thread keeps producing: a defect looked novel
+because nobody checked whether the codebase had already solved it. Searching
+for the mechanism before designing one would have turned this from an issue
+into a one-line fix.
 
 ## Related
 
