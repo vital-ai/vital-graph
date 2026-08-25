@@ -51,6 +51,16 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DAWG_ROOT = _PROJECT_ROOT / "tests" / "conformance" / "dawg_data"
 
 P0_CATEGORIES = [
+    "sparql10/algebra",
+    "sparql10/basic",
+    "sparql10/construct",
+    "sparql10/distinct",
+    "sparql10/expr-equals",
+    "sparql10/expr-ops",
+    "sparql10/i18n",
+    "sparql10/optional-filter",
+    "sparql10/reduced",
+    "sparql10/regex",
     "sparql10/graph",
     "sparql10/cast",
     "sparql10/sort",
@@ -212,6 +222,36 @@ pytestmark = [
 # STOPS THE TEST. An entry here would never surface as an XPASS no matter how
 # right our answer became.
 XFAIL_TESTS_V2 = {
+    # sparql10 categories wired 2026-08-24, ORACLE half. pyoxigraph
+    # canonicalises numeric lexical forms, so it collapses literals that
+    # DISTINCT and REDUCED must keep apart, and it loses CONSTRUCT bnode
+    # isomorphism on five cases. We match the corpus on all of these -- the
+    # runner now checks that directly and passes us, which is why none of them
+    # appear in XFAIL_SQL_V2_EXEC.
+    ("sparql10/construct", "dawg-construct-identity"):
+        "pyoxigraph CONSTRUCT bnode isomorphism",
+    ("sparql10/construct", "dawg-construct-optional"):
+        "pyoxigraph CONSTRUCT with OPTIONAL",
+    ("sparql10/construct", "dawg-construct-reification-1"):
+        "pyoxigraph CONSTRUCT bnode isomorphism",
+    ("sparql10/construct", "dawg-construct-reification-2"):
+        "pyoxigraph CONSTRUCT bnode isomorphism",
+    ("sparql10/construct", "dawg-construct-subgraph"):
+        "pyoxigraph CONSTRUCT bnode isomorphism",
+    ("sparql10/distinct", "All: Distinct"):
+        "pyoxigraph canonicalises lexical forms; DISTINCT is over TERMS",
+    ("sparql10/distinct", "Numbers: Distinct"):
+        "pyoxigraph canonicalises lexical forms; DISTINCT is over TERMS",
+    ("sparql10/reduced", "SELECT REDUCED *"):
+        "pyoxigraph canonicalises lexical forms; REDUCED is over TERMS",
+    ("sparql10/reduced", "SELECT REDUCED ?x with strings"):
+        "pyoxigraph canonicalises lexical forms; REDUCED is over TERMS",
+    ("sparql10/expr-equals", "Equality 1-1 -- graph"):
+        "pyoxigraph differs from the .srx; we match it",
+    ("sparql10/expr-equals", "Equality 1-2 -- graph"):
+        "pyoxigraph differs from the .srx; we match it",
+    ("sparql10/optional-filter", "dawg-optional-filter-005-not-simplified"):
+        "pyoxigraph differs from the .srx on a computed numeric's lexical form",
     # sparql10/graph, wired 2026-08-24. The ORACLE half: pyoxigraph disagrees
     # with these three .srx expectations. `graph-optional` is oracle-only --
     # our backend matches the corpus on it.
@@ -320,6 +360,40 @@ XFAIL_TESTS_V2 = {
 # learn that a gap has closed is to delete the entry and run it. That is the
 # rule's real cost, and it is why these are listed individually.
 XFAIL_SQL_V2_EXEC: dict = {
+    # --- sparql10 categories wired 2026-08-24 -------------------------------
+    # `[^b]` must match a newline while `.` must not. PostgreSQL has no mode
+    # that gives both: `p` and `n` exclude newline from bracket negation AND
+    # from `.`, `w` includes it in both. Emulating XPath means dropping the
+    # option and rewriting `.` to `[^\n]` in the pattern instead -- a change
+    # to the shared flag mapping in `regex_flags`, whose 2x2 is measured and
+    # documented, so not made in passing.
+    ("sparql10/regex", "REGEX with a [^] expression"):
+        "XPath bracket-negation matches newline; no PostgreSQL mode does that with dot-excludes-newline",
+
+    # Two operands of an arithmetic sign where the corpus keeps the operand's
+    # own lexical form (`"3"`), and we return the canonical one. Same family as
+    # the csv03 note above -- lexical identity of a computed numeric -- but on
+    # OUR side, and it needs the promotion work to say which form is right.
+    ("sparql10/expr-ops", "Unary Minus with various datatype"):
+        "computed numeric returns a canonical lexical form; corpus keeps the operand's",
+    ("sparql10/expr-ops", "Unary Plus with various datatype"):
+        "computed numeric returns a canonical lexical form; corpus keeps the operand's",
+    ("sparql10/optional-filter", "dawg-optional-filter-005-simplified"):
+        "computed numeric returns a canonical lexical form; corpus keeps 2E+1",
+
+    # Rows lost joining across GRAPH/UNION and OPTIONAL/UNION. Not diagnosed --
+    # a missing row in a multi-way join is not something to guess at, and the
+    # two differ (1 -> 0 and 2 -> 1), so they may not share a cause.
+    ("sparql10/algebra", "Join operator with Graph and Union"):
+        "rows lost joining across GRAPH and UNION — undiagnosed",
+    ("sparql10/algebra", "Join operator with OPTs, BGPs, and UNIONs"):
+        "rows lost joining across OPTIONAL, BGP and UNION — undiagnosed",
+
+    # Unicode normalisation is not applied to literals, so two spellings of one
+    # character do not match. A storage-side normalisation question, not an
+    # expression one.
+    ("sparql10/i18n", "normalization-02"):
+        "no Unicode normalisation of literals on the way in",
     # sparql10/graph, wired 2026-08-24. All three are ONE gap: a graph-scoped
     # group with NO triple pattern must be evaluated against the named graphs,
     # and we treat `{}` as a no-op that matches once regardless.

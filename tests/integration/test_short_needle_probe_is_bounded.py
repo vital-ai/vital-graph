@@ -36,6 +36,8 @@ import time
 
 import pytest
 
+from rdflib import Literal
+
 from .conftest import skip_no_infra
 
 pytestmark = [
@@ -58,7 +60,15 @@ async def _seed(impl, space_id, graph_uri):
     for i in range(40):
         s = f"http://example.org/shortneedle/e{i}"
         quads.append((s, f"{CORE}vitaltype", f"{KG}KGEntity", graph_uri))
-        quads.append((s, f"{CORE}hasName", f"entity {i} (Topic)", graph_uri))
+        # `Literal`, not a bare str. `_ensure_term` types anything that is not
+        # a URIRef/BNode/Literal as 'U', so a plain string object was stored as
+        # a URI -- and CONTAINS then matched it, because the push-down compared
+        # `term_text` without checking the term's kind. Once that was fixed to
+        # require a literal (§17.4.3), this fixture stopped matching and said
+        # so. The needle behaviour under test is unchanged; the data is now
+        # what it always claimed to be.
+        quads.append((s, f"{CORE}hasName",
+                      Literal(f"entity {i} (Topic)"), graph_uri))
     await impl.add_rdf_quads_batch_bulk(space_id, quads)
 
 

@@ -424,6 +424,15 @@ def _try_text_filter(
     else:
         return None
 
+    # §17.4.3 string functions take a literal; a URI or blank node is a type
+    # error, i.e. no row. Every arm above tests `term_text`, which holds a
+    # URI's text just as happily -- so `regex(?val, "example\\.com")` matched
+    # `<http://example.com/uri>` as well as the literal and returned a row too
+    # many. `eq` is excluded: RDFterm-equal compares terms of ANY kind, and
+    # restricting it to literals would drop every URI match.
+    if name in _TEXT_SEARCH_OPS:
+        term_cond = f"term_type = 'L' AND ({term_cond})"
+
     constraint_sql = f"{uuid_col} IN {_term_set(ctx, term_table, term_cond)}"
     logger.debug("Text filter pushdown: %s(%s, '%s') → %s",
                  name, var_name, literal_value, constraint_sql[:80])

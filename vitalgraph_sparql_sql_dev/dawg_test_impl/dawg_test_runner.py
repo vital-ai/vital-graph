@@ -476,7 +476,24 @@ async def run_single_test_sql_v2(test: DawgTestCase, db_conn) -> TestResult:
     else:
         oxigraph_vs_srx = compare_results(oxigraph_result, expected)
         if not oxigraph_vs_srx.match:
-            suffix = " [pyoxigraph also differs from .srx]"
+            # The oracle disagrees with the corpus, so it is not the authority
+            # here -- ask the corpus about us directly. This used to stop at
+            # "ACCEPTED", which recorded that the oracle was unreliable and
+            # then failed us anyway, without ever checking whether our answer
+            # was the right one. It frequently was: pyoxigraph canonicalises
+            # numeric lexical forms, so it collapses literals that DISTINCT
+            # must keep apart, and we match the .srx on exactly those.
+            ours_vs_srx = compare_results(sql_result, expected)
+            if ours_vs_srx.match:
+                return TestResult(
+                    name=test.name, category=test.category, status="PASS",
+                    expected_rows=ours_vs_srx.expected_count,
+                    actual_rows=ours_vs_srx.actual_count,
+                    time_ms=elapsed_ms,
+                    error_message="[oracle differs from .srx; we match it]",
+                )
+            suffix = (f" [pyoxigraph also differs from .srx; "
+                      f"vs .srx we differ too: {ours_vs_srx.message}]")
             status = "ACCEPTED"
         else:
             suffix = " [our bug: pyoxigraph matches .srx]"

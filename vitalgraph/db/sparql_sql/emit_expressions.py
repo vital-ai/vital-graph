@@ -262,6 +262,11 @@ def _strdt_target(expr) -> Optional[str]:
 # taking the whole query with it.
 _NUMERIC_LEX_RE = r"^[-+]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]+)?$"
 
+# A lexical form CAST can read as a timestamp. Same reason as above: inside a
+# CASE branch an unparseable value must yield no row, not raise.
+_TS_LEX = ("'^[-+]?[0-9]{4,}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}"
+           "(\\.[0-9]+)?(Z|[-+][0-9]{2}:[0-9]{2})?$'")
+
 
 def _is_numeric_expr(expr, ctx: EmitContext) -> bool:
     """Check if an expression is known to be numeric at compile time.
@@ -700,6 +705,24 @@ def _term_error_cmp(left, right, op: str, ctx: EmitContext,
             f"WHEN {same} THEN {ident} ELSE NULL END)")
 
 
+def _literal_only(arg, sql: str, ctx: EmitContext) -> str:
+    """Restrict a string-function result to rows where the operand IS a literal.
+
+    §17.4.3 takes `xsd:string` (or a plain/tagged literal) -- a URI or blank
+    node is a type error, i.e. no row. We compared against `term_text`, which
+    holds a URI's text just as happily, so `regex(?val, "example\\.com")` also
+    matched `<http://example.com/uri>` and returned one row too many.
+
+    Where the operand's term type is not tracked the guard cannot be applied,
+    and the expression is returned unchanged rather than guessed at.
+    """
+    if isinstance(arg, ExprVar):
+        info = ctx.types.get(arg.var)
+        if info and info.type_col:
+            return f"({info.type_col} = 'L' AND {sql})"
+    return sql
+
+
 def _var_var_cmp(left, right, op: str, ctx: EmitContext) -> Optional[str]:
     """Compare two VARIABLES by value, choosing the lane at RUN TIME.
 
@@ -735,8 +758,32 @@ def _var_var_cmp(left, right, op: str, ctx: EmitContext) -> Optional[str]:
     if guard is not None:
         text = (f"(({collate(a)} != {b}) OR NOT {guard})" if op == "!="
                 else f"({text} AND {guard})")
+    # Boolean and dateTime have a VALUE space too, and it is not the lexical
+    # one: `"0"^^xsd:boolean` and `"false"^^xsd:boolean` are one value, as are
+    # the same instant written at two UTC offsets. Only the numeric lane was
+    # chosen at run time, so those compared as text and answered false --
+    # sparql10/expr-equals asks for exactly this, six boolean pairs and five
+    # dateTime pairs of which we matched the two that happened to be spelled
+    # identically.
+    #
+    # Both sides must carry the datatype for the branch to fire; a lane is
+    # only safe where the value space is known on both sides.
+    lanes = ""
+    ldt, rdt = _dt_sql(left, ctx), _dt_sql(right, ctx)
+    if ldt and rdt and ldt != "NULL" and rdt != "NULL":
+        _B, _DT = f"'{XSD}boolean'", f"'{XSD}dateTime'"
+        lanes += (
+            f"WHEN {ldt} = {_B} AND {rdt} = {_B} "
+            f"THEN ((LOWER({a}) IN ('true','1')) {op} "
+            f"(LOWER({b}) IN ('true','1'))) ")
+        # The cast is guarded: an unparseable form must not raise and take the
+        # statement with it, the same hazard the temporal CAST branch hit.
+        lanes += (
+            f"WHEN {ldt} = {_DT} AND {rdt} = {_DT} "
+            f"AND {a} ~ {_TS_LEX} AND {b} ~ {_TS_LEX} "
+            f"THEN (CAST({a} AS TIMESTAMPTZ) {op} CAST({b} AS TIMESTAMPTZ)) ")
     return (f"(CASE WHEN {li.num_col} IS NOT NULL AND {ri.num_col} IS NOT NULL "
-            f"THEN ({li.num_col} {op} {ri.num_col}) ELSE {text} END)")
+            f"THEN ({li.num_col} {op} {ri.num_col}) {lanes}ELSE {text} END)")
 
 
 def _cmp_sql(left, right, op: str, ctx: EmitContext) -> Optional[str]:
@@ -1415,8 +1462,9 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
                     # patterns keep their existing plans.
                     from .regex_classes import CLASSIFY_COLLATION
                     s = f"({s} COLLATE {CLASSIFY_COLLATION})"
-                return f"({s} {op} {pat_sql})"
-            return f"({s} {op} {apply_to_pattern(pat, raw_flags)})"
+                return _literal_only(args[0], f"({s} {op} {pat_sql})", ctx)
+            return _literal_only(
+                args[0], f"({s} {op} {apply_to_pattern(pat, raw_flags)})", ctx)
 
     # --- Accessors ---
     if fname == "lang" and len(args) == 1:
