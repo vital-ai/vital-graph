@@ -12,6 +12,9 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import re
+from urllib.parse import urljoin, urlparse, unquote
+
 import pyoxigraph
 
 from .dawg_srx_parser import SparqlBinding, SparqlResults
@@ -23,6 +26,7 @@ def execute_query(
     sparql: str,
     data_file: Optional[Path] = None,
     named_graph_files: Optional[List[Path]] = None,
+    base_iri: Optional[str] = None,
 ) -> SparqlResults:
     """Execute a SPARQL query against test data using pyoxigraph.
 
@@ -30,6 +34,11 @@ def execute_query(
         sparql: The SPARQL query string.
         data_file: Path to the default graph data (.ttl file). May be None.
         named_graph_files: Paths to named graph data files.
+        base_iri: Base against which relative IRIs in the query resolve. The
+            DAWG corpus writes graph names as file-relative IRIs (`<graph.ttl>`),
+            so this must be the QUERY file's own location -- named graphs are
+            loaded under `file://{ng_file}`, and only that base makes the two
+            agree. Without it such a query is a parse error.
 
     Returns:
         SparqlResults with the query output.
@@ -64,9 +73,28 @@ def execute_query(
                 except Exception as e:
                     logger.warning("Failed to load named graph %s: %s", ng_file, e)
 
+    # Dereference FROM / FROM NAMED. The dataset tests declare their data
+    # ONLY in the query -- the manifest carries no qt:data for them -- so
+    # unless the harness loads what the FROM clauses name, the store is empty
+    # and every such query answers 0 rows while looking like it ran. Each file
+    # is loaded under the IRI the query used, which is what oxigraph then
+    # matches the FROM clause against.
+    for graph_iri in _referenced_graphs(sparql, base_iri):
+        g_path = Path(unquote(urlparse(graph_iri).path))
+        if not g_path.exists():
+            continue
+        try:
+            with open(g_path, "rb") as f:
+                store.load(f, _mime_for_path(g_path),
+                           base_iri=graph_iri,
+                           to_graph=pyoxigraph.NamedNode(graph_iri))
+        except Exception as e:
+            logger.warning("Failed to load FROM graph %s: %s", g_path, e)
+
     # Execute the query
     try:
-        result = store.query(sparql)
+        result = (store.query(sparql, base_iri=base_iri) if base_iri
+                  else store.query(sparql))
     except Exception as e:
         raise SparqlExecutionError(f"Query execution failed: {e}") from e
 
@@ -173,3 +201,20 @@ def _mime_for_path(path: Path) -> str:
 class SparqlExecutionError(Exception):
     """Raised when SPARQL query execution fails."""
     pass
+
+
+_FROM_RE = re.compile(r"\bFROM\s+(?:NAMED\s+)?<([^>]*)>", re.IGNORECASE)
+
+
+def _referenced_graphs(sparql: str, base_iri: Optional[str]) -> List[str]:
+    """IRIs named by FROM / FROM NAMED, resolved against the query's base.
+
+    Relative forms (`<data-g1.ttl>`) are how the DAWG corpus writes these, so
+    without a base they cannot be resolved and are skipped rather than guessed.
+    """
+    out = []
+    for ref in _FROM_RE.findall(sparql):
+        resolved = urljoin(base_iri, ref) if base_iri else ref
+        if resolved.startswith("file://") and resolved not in out:
+            out.append(resolved)
+    return out

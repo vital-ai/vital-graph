@@ -82,6 +82,17 @@ QUERY_CATEGORIES = P0_CATEGORIES + [
 # These are tests where pyoxigraph has known limitations or the test
 # exercises features outside our scope. Update as conformance improves.
 XFAIL_TESTS = {
+    # Exposed 2026-08-24 when the result parser and query executor were given a
+    # base IRI (issues/130). Both were SKIPPING before -- their result file and
+    # query use relative IRIs, so neither could be read at all. Both are the
+    # same ORACLE defect: pyoxigraph does not enumerate a named graph that is
+    # empty, so it returns one row fewer than the manifest requires. The
+    # aggregates manifest states the rule outright -- "counting no results
+    # without grouping always returns a single result per named graph".
+    ("aggregates", "COUNT: no GROUP BY inside of GRAPH"):
+        "pyoxigraph omits the empty named graph; the manifest counts it",
+    ("bindings", "VALUES inside GRAPH binding the same variable as the graph name"):
+        "pyoxigraph omits the empty named graph; the manifest counts it",
     # --- aggregates ---
     ("aggregates", "GROUP_CONCAT with one element"):
         "pyoxigraph GROUP_CONCAT separator handling",
@@ -214,6 +225,7 @@ def _run_dawg_test(tc: DawgTestCase) -> None:
             sparql,
             data_file=tc.data_file,
             named_graph_files=tc.named_graph_files or None,
+            base_iri=f"file://{tc.query_file}",
         )
     except SparqlExecutionError as e:
         pytest.fail(f"Execution error: {e}")

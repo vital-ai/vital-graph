@@ -310,7 +310,8 @@ def _parse_ttl_graph(path: Path) -> Optional[SparqlResults]:
 
     try:
         store = pyoxigraph.Store()
-        store.load(path.read_bytes(), "text/turtle")
+        store.load(path.read_bytes(), "text/turtle",
+                   base_iri=f"file://{path}")
     except Exception as e:
         logger.error("TTL parse error in %s: %s", path, e)
         return None
@@ -373,7 +374,8 @@ def _parse_rdf_xml_graph(path: Path) -> Optional[SparqlResults]:
 
     try:
         store = pyoxigraph.Store()
-        store.load(path.read_bytes(), "application/rdf+xml")
+        store.load(path.read_bytes(), "application/rdf+xml",
+                   base_iri=f"file://{path}")
     except Exception as e:
         logger.error("RDF/XML parse error in %s: %s", path, e)
         return None
@@ -391,7 +393,8 @@ def _parse_trig_graph(path: Path) -> Optional[SparqlResults]:
 
     try:
         store = pyoxigraph.Store()
-        store.load(path.read_bytes(), "application/trig")
+        store.load(path.read_bytes(), "application/trig",
+                   base_iri=f"file://{path}")
     except Exception as e:
         logger.error("TriG parse error in %s: %s", path, e)
         return None
