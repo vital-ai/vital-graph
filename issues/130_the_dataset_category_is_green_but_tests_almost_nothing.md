@@ -161,10 +161,30 @@ leave the engine exactly as unable to do it.
 These 15 are the concrete work list for `named_graph_semantics` §4.1, and they
 now fail loudly until it lands.
 
-### The recurring lesson, third instance
+### The shared mechanism — fixed at the source in `05536bc`
 
 `csv-tsv-res`/`json-res` (2026-08-16), `XFAIL_TESTS_V2` deferring `test_sql_v2`
-(same day), and now this. Each time: a swallowed error became a skip, the skip
+(same day), and this one. Each time: a swallowed error became a skip, the skip
 counted as green, and the gap survived because nobody measured what was
-actually executing. `parse_result_file` returning `None` on failure is the
-shared mechanism and remains in place.
+actually executing. Each was found by accident and fixed in place. What made
+all three possible was `parse_result_file` returning `None` on failure while
+every caller turned `None` into a skip.
+
+That return is now a raise, split into the distinction the `None` could not
+carry:
+
+| | meaning | callers may skip? |
+|---|---|---|
+| `UnsupportedResultFormat` | no parser for this extension | yes — a real capability gap |
+| `ResultParseError` | a file we should have read and could not | **no** |
+
+Discarding the bad news now takes a deliberate `except`. The pytest sites skip
+only on the first; the runner maps the second to `ERROR`. The individual
+parsers keep their local `None` convention and it is converted centrally, so a
+parser added later cannot reintroduce the old behaviour just by following the
+surrounding style.
+
+Five tests cover the failure mode rather than the parsing — malformed XML and
+Turtle raise, a missing file raises, an unknown extension raises the distinct
+subclass, and the relative-IRI case is pinned, because losing that base shows
+up as a skip rather than a failure and that is precisely how it hid.
