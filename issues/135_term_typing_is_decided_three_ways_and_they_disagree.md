@@ -175,6 +175,63 @@ Steps 1 and 2 are safe and independently valuable. Step 3 needs a caller sweep
 first. Doing 1 alone would already retire the largest class — every URI scheme
 outside three.
 
+### Performance implications, and whether a rewrite is the better trade
+
+Asked directly: is it better to rewrite the data once than to pay forever?
+Measured across 56 term tables on the perf cluster.
+
+**There is no permanent cost to pay.** The proposal adds one precompiled regex
+per term on the remove/get paths and nothing on the insert paths. No extra
+lookups, no probing, no index change. The alternative design that WOULD cost
+forever — try `'U'`, then try `'L'`, take whichever hits — is 2x the lookups on
+every delete and fetch, permanently, and is the reason not to go that way.
+
+**A rewrite would not buy anything, because the stored data is already right.**
+
+    'U' terms                                  17,549,506
+    'U' terms with no scheme (cannot be an IRI)         6
+
+All six are `'bind projection fixture'`, in throwaway integration spaces. So
+defect 3 — the `else 'U'` branch — has been reachable for as long as it has
+existed and has produced six bad rows, none of them in real data. Cleaning them
+is a `DELETE`, not a migration.
+
+The information that is missing is missing at the API BOUNDARY, not in storage.
+`remove_rdf_quad(space, s, p, o, g)` takes strings; RDF terms are not strings.
+Rewriting rows cannot add a distinction the caller never expressed.
+
+**What the measurement did change: step 1 is smaller than it looked, and the
+string API is worse than this issue said.**
+
+    'L' terms                                   3,421,707
+    already unreachable by string lookup today    138,871   (text starts http/https/urn)
+    NEWLY unreachable under a scheme regex             46
+
+So the scheme regex costs 46 rows to fix every non-http URI scheme — a good
+trade, and 0.03% of the literals already affected. But look at what those 46
+are:
+
+    'arrowworms: a group of small active transparent...'
+    'shorebirds: plovers; sandpipers; avocets; phalaropes'
+    'flatfishes: halibut; sole; flounder; plaice; turbot'
+
+`^[A-Za-z][A-Za-z0-9+.-]*:` matches `arrowworms:`. A word followed by a colon
+is a valid scheme by the grammar. **No regex can separate an IRI from a
+sentence**, and the 138,871 rows already lost prove the current three-prefix
+list cannot either.
+
+That is the argument for the API change rather than a better inference rule:
+inference is wrong for 138,917 stored literals today, will stay wrong for them,
+and cannot be made right by any test on the characters. A caller holding an
+rdflib term knows the answer; a caller holding a string does not have it to
+give.
+
+**Where a rewrite IS the right call, and it is not here.** `issues/131` —
+blank node labels not scoped to their document — cannot be fixed without moving
+term identity, so it needs exactly the one-time rewrite this question is about.
+These two should still not be bundled: this one needs none, and bundling would
+put a no-migration fix behind a migration decision.
+
 ### How to know it worked
 
 `tests/unit/sparql_sql/test_term_typing_agreement.py` records the current
