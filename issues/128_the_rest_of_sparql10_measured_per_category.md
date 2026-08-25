@@ -83,3 +83,70 @@ then one line plus a green run.
 this tree — `lang()` on non-literals, the `langMatches` wildcard swallowing a
 type error, and var-to-var value equality. The tree pays for itself; it just
 does not pay all at once.
+
+
+---
+
+## Re-measured 2026-08-24, after `named_graph_semantics` §4.1/§4.2
+
+The table above predates the dataset work and one of its predictions was
+wrong, which is the reason for re-measuring rather than reasoning forward.
+
+All 13 unwired sparql10 evaluation categories, measured together:
+
+| category | ours | oracle |
+|---|---|---|
+| ~~`sort`~~ | ~~0~~ | ~~**10**~~ → **DONE**, wired, 28 passed |
+| ~~`cast`~~ | ~~**6**~~ | 0 → **DONE**, wired, 0 failed |
+| ~~`graph`~~ | ~~5~~ → **3** | 3 → **DONE**, wired, gaps registered |
+| `expr-equals` | 4 | 2 |
+| `construct` | 0 | 5 |
+| `regex`, `optional-filter`, `expr-ops`, `distinct`, `algebra` | 2 each | — |
+| `reduced` | 0 | 2 |
+| `i18n` | 1 | — |
+
+### `sort` — 10 oracle failures, one cause, none of them ours
+
+The whole category failed on the ORACLE, which is why it had never been
+wired, which is why ORDER BY had no conformance coverage at all. A `.ttl`
+expectation is either a CONSTRUCT graph or the DAWG `rs:` result-set
+vocabulary and `_parse_ttl_graph` chose between them; the RDF/XML and TriG
+parsers never made that choice. `sort` keeps its expectations in
+`result-sort-N.rdf`, so all ten compared ~22 `rs:` triples against 4 result
+rows. **Our sort implementation needed no change** — it was correct
+throughout and the harness could not see it.
+
+### `cast` — 6, and the fix was in `datatype()`
+
+The cast emitters were already right: they answer NULL where the target
+cannot hold the lexical form. `datatype()` fell through to the STATIC type
+inference, which reports the target type unconditionally — so
+`datatype(xsd:decimal(?v))` was constant and the FILTER kept all 7 rows.
+Fixing that exposed a second: `xsd:dateTime` had no lexical guard at all and
+an unguarded CAST **raises** rather than returning NULL, killing the
+statement outright.
+
+### `graph` — the prediction that was wrong
+
+The table above guessed all 5 were §4.1. One was (`graph-04`, and by way of
+the harness declaring `default_graph` conditionally, not the engine). The
+other three are a single unrelated gap: a graph-scoped group with **no triple
+pattern** — `GRAPH ?g {}`, `GRAPH ex:unknown {}`, `GRAPH ?g { FILTER(...) }` —
+must be evaluated against the named graphs, and we treat `{}` as a no-op that
+matches once regardless. Registered in `XFAIL_SQL_V2_EXEC`; it needs a source
+for the graph variable where no quad scan supplies one, which
+`named_graph_semantics` §4.3 flags as unbounded work.
+
+### What is left
+
+25 of our failures became 10: `expr-equals` 4, `regex`/`optional-filter`/
+`expr-ops`/`distinct`/`algebra` 2 each, `i18n` 1, plus the 3 registered
+`graph` gaps. The oracle side still has `construct` 5 and `reduced` 2
+unexamined.
+
+### The pattern worth keeping
+
+Two of the three wins were **harness** defects, not engine defects, and both
+hid working code behind a category that could not be wired. That is the same
+shape as `issues/130`, and it is now the third time the answer to "why is this
+category failing" was "the test could not read its own expectation".
