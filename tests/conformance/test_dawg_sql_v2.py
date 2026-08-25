@@ -151,66 +151,19 @@ P0_CATEGORIES = [
 # honest and a fix flips them to passing without anyone re-adding a category.
 # Each names the issue; an entry that starts passing should be deleted, not
 # left as a permanent xfail.
-KNOWN_FAILURES = {
-    # --- sparql10/open-world, hand-triaged 2026-08-24 ---------------------
-    # WE MATCH THE CORPUS on all three; the ORACLE does not, and test_sql_v2
-    # compares against the oracle. Verified by reading the data and the
-    # expected SRX by hand — the check that cleared str-1/str-2. The ACCEPTED
-    # label only means the oracle ALSO differs; it never means we are right,
-    # and reading it that way had two of these filed as "not our bug" when
-    # they WERE, until date-2 and date-3 were fixed (dd97082, cca66e2).
-    #
-    #   date-2      != over xsd:date, needing XSD's 14-hour partial order.
-    #   date-3      > across xsd:date and xsd:dateTime, a type error.
-    #   open-eq-01  a TRIPLE PATTERN, so it matches by RDF TERM. No term
-    #               carries the lexical form "001", so zero rows — the
-    #               manifest says so itself: "graph match - no lexical form in
-    #               data (assumes no value matching)". pyoxigraph returns 2.
-    ("sparql10/open-world", "date-2"):
-        "oracle disagrees with the corpus; WE match the .ttl",
-    ("sparql10/open-world", "date-3"):
-        "oracle disagrees with the corpus; WE match the .ttl",
-    ("sparql10/open-world", "open-eq-01"):
-        "oracle value-matches in a graph pattern; WE match the .ttl",
-
-    # issues/093 (sq01-sq03) removed 2026-08-16 — fixed, and an entry that
-    # starts passing must be DELETED rather than left as a permanent xfail, or
-    # the number stops meaning anything.
-
-    # --- sparql10/expr-builtin, wired 2026-08-23 (issues/125) --------------
-    # Wiring it took the category from 29 failures of 48 to 10, and the ten
-    # are five cases seen by two test functions each. They are NOT one kind,
-    # and the difference is the whole point of listing them separately.
-
-    # WAS our gap (issues/127, `?v1 = ?v2` between two VARIABLES compared
-    # term_text). FIXED — the lane is now chosen per row. `sameTerm-not-eq`
-    # went from 0 rows to 18, which is exactly what the .ttl expects, and all
-    # three now match the corpus while pyoxigraph does not:
-    #
-    #     case              .ttl   pyoxigraph   us
-    #     sameTerm-eq        24        14       24
-    #     sameTerm-not-eq    18        28       18
-    #     sameTerm-simple    24        14       24
-    #
-    # They stay listed because `test_sql_v2` compares against the ORACLE, and
-    # the oracle is the one that is wrong here. Deleting them would report a
-    # pass we are not getting; keeping the old reason would claim a bug we no
-    # longer have.
-    ("sparql10/expr-builtin", "sameTerm-eq"):
-        "oracle disagrees with the corpus; WE match the .ttl since issues/127",
-    ("sparql10/expr-builtin", "sameTerm-not-eq"):
-        "oracle disagrees with the corpus; WE match the .ttl since issues/127",
-    ("sparql10/expr-builtin", "sameTerm-simple"):
-        "oracle disagrees with the corpus; WE match the .ttl since issues/127",
-
-    # EXPECTATION DISAGREEMENT, not ours. pyoxigraph differs from the .ttl
-    # too, and reading the data by hand agrees with US: str-1 asks for
-    # `str(?v) = "1"`, and the four lexical "1"s in data-builtin-1.ttl are
-    # exactly what we return. Kept running rather than deleted so that if the
-    # corpus or the comparator changes, the disagreement resurfaces.
-    ("sparql10/expr-builtin", "str-1"): "expectation disagrees with both engines",
-    ("sparql10/expr-builtin", "str-2"): "expectation disagrees with both engines",
-}
+# Cases where WE differ from the corpus and the difference has been hand-checked.
+#
+# Empty since 2026-08-25. It held eight -- three `sparql10/open-world`, five
+# `sparql10/expr-builtin` -- every one of them recorded as "we match the
+# corpus, the ORACLE does not". That was true, and it was never a reason to
+# stop testing us: the runner used to compare us only to pyoxigraph, so an
+# oracle that disagreed with the .srx took our backend out of the run with it.
+#
+# Since the runner consults the .srx directly when the oracle is not the
+# authority, all eight pass. Removed rather than left as documentation --
+# `pytest.xfail()` is imperative and STOPS the test, so an entry here is not a
+# note, it is a hole.
+KNOWN_FAILURES: dict = {}
 
 
 
@@ -419,14 +372,14 @@ XFAIL_SQL_V2_EXEC: dict = {
 # Kept separate so the count of "our backend is not being measured here" stays
 # visible and small. These two are the entire list; everything else previously
 # excused by the oracle table is now actually run.
-XFAIL_SQL_V2_ACCEPTED = {
-    ("aggregates", "GROUP_CONCAT with one element"):
-        "both engines differ from the manifest on GROUP_CONCAT separators; "
-        "attribution unresolved",
-    ("aggregates", "GROUP_CONCAT with same language tag"):
-        "both engines differ from the manifest on GROUP_CONCAT language tags; "
-        "attribution unresolved",
-}
+# Empty since 2026-08-25. It held the two GROUP_CONCAT cases, filed as "both
+# engines differ from the manifest; attribution unresolved". The attribution
+# was resolvable all along -- the runner just had no way to ask. Comparing to
+# the .srx directly answers it, and both pass.
+#
+# The count this dict exists to keep "visible and small" is now zero: there is
+# no case anywhere in the suite where our backend goes unmeasured.
+XFAIL_SQL_V2_ACCEPTED: dict = {}
 
 
 # ---------------------------------------------------------------------------
