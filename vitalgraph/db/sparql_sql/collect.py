@@ -25,7 +25,7 @@ from ..jena_sparql.jena_types import (
     VarNode, URINode, LiteralNode, BNodeNode,
     ExprVar, ExprValue, ExprFunction, ExprAggregator,
     SortCondition, GroupVar,
-    OpBGP, OpJoin, OpLeftJoin, OpUnion, OpFilter,
+    OpBGP, OpJoin, OpLeftJoin, OpUnion, OpFilter, TriplePattern,
     OpProject, OpSlice, OpDistinct, OpReduced, OpOrder,
     OpGroup, OpExtend, OpTable, OpMinus, OpGraph,
     OpSequence, OpNull, OpPath,
@@ -424,15 +424,70 @@ def _collect_path(op: OpPath, space_id: str, aliases: AliasGenerator,
     return plan
 
 
+def _is_unit_pattern(op) -> bool:
+    """True for a group with nothing in it -- `{}` , or only FILTERs.
+
+    Jena compiles an empty group to the unit table (one row, no variables), so
+    a GRAPH wrapping one has no triple pattern for the graph variable to be
+    read from.
+    """
+    if isinstance(op, OpTable):
+        return not (op.vars or [])
+    if isinstance(op, OpFilter):
+        return _is_unit_pattern(op.sub_op)
+    return False
+
+
+def _enumerate_graphs(space_id: str, aliases: AliasGenerator, graph_var: str,
+                      graph_uri: str = None) -> PlanV2:
+    """One solution per graph, from the contexts that actually hold quads.
+
+    `GRAPH ?g {}` binds ?g to each named graph; `GRAPH <uri> {}` yields one
+    solution if that graph exists and none if it does not. Both were answered
+    from a unit table, which binds nothing and matches unconditionally -- so
+    ?g came back missing, and a graph that does not exist still produced a row.
+
+    Built as `?s ?p ?o` scoped to the graph, projected to the graph variable
+    and DISTINCT'd, so it goes through the same scoping, default-graph
+    exclusion and dataset rules as any other quad scan rather than a second
+    path that would have to repeat them. SPARQL enumerates graphs by their
+    CONTENTS, so a created-but-empty graph is correctly absent
+    (`named_graph_semantics` §4.4); the catalog is the source for the other
+    question. Cost is the enumeration cost §4.3 warns about, not new work.
+    """
+    v = aliases.next("gq")
+    # `GRAPH <uri> {}` asks whether the graph EXISTS -- one solution, not one
+    # per quad in it. So the context is always the thing projected and
+    # DISTINCT'd, even when the query named it rather than binding it; with no
+    # projected column DISTINCT has nothing to collapse and a two-quad graph
+    # answered twice. A leading "." marks it anonymous, which the projection
+    # injected in `generator` strips before results are built.
+    out_var = graph_var if graph_var is not None else f".{v}g"
+    bgp = OpBGP(triples=[TriplePattern(
+        subject=VarNode(name=f"{v}s"),
+        predicate=VarNode(name=f"{v}p"),
+        object=VarNode(name=f"{v}o"))])
+    inner = collect(bgp, space_id, aliases,
+                    graph_uri=graph_uri if graph_uri else GRAPH_VAR_SCOPE)
+    _bind_graph_var(inner, out_var, space_id, aliases)
+    proj = PlanV2(kind=KIND_PROJECT, project_vars=[out_var], children=[inner])
+    return PlanV2(kind=KIND_DISTINCT, children=[proj])
+
+
 @collect.register(OpGraph)
 def _collect_graph(op: OpGraph, space_id: str, aliases: AliasGenerator,
                    graph_uri: str = None) -> PlanV2:
     if isinstance(op.graph_node, URINode):
+        if _is_unit_pattern(op.sub_op):
+            return _enumerate_graphs(space_id, aliases, None,
+                                     graph_uri=op.graph_node.value)
         return collect(op.sub_op, space_id, aliases,
                        graph_uri=op.graph_node.value)
 
     if isinstance(op.graph_node, VarNode):
         graph_var = op.graph_node.name
+        if _is_unit_pattern(op.sub_op):
+            return _enumerate_graphs(space_id, aliases, graph_var)
         inner = collect(op.sub_op, space_id, aliases, graph_uri=GRAPH_VAR_SCOPE)
         _bind_graph_var(inner, graph_var, space_id, aliases)
         return inner

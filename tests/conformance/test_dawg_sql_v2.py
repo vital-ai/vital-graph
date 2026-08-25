@@ -394,13 +394,7 @@ XFAIL_SQL_V2_EXEC: dict = {
     # for the graph variable when no quad scan supplies one -- see
     # named_graph_semantics §4.3, which flags that enumeration is unbounded
     # work and should not be assumed cheap.
-    ("sparql10/graph", "graph-empty"):
-        "GRAPH with an empty group pattern does not enumerate graphs",
-    ("sparql10/graph", "graph-not-exist"):
-        "GRAPH with an empty group pattern does not enumerate graphs",
-    ("sparql10/graph", "graph-variable-scope"):
-        "GRAPH with an empty group pattern does not enumerate graphs",
-}
+            }
 
 # Cases where OUR output differs from the manifest AND so does pyoxigraph -- the
 # runner reports these as `ACCEPTED` rather than `FAIL`, meaning it could not

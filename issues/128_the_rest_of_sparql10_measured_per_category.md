@@ -168,12 +168,12 @@ kind.
 
 ### The seven left, with causes
 
-| category | n | cause |
-|---|---|---|
-| `graph` | 3 | `GRAPH ?g {}` — a graph-scoped group with no triple pattern does not enumerate |
-| `expr-ops` + `optional-filter` | 3 | computed numerics return a canonical lexical form; the corpus keeps the operand's |
-| `regex` | 1 | XPath bracket-negation matches newline; no PostgreSQL mode pairs that with dot-excludes-newline |
-| `i18n` | 1 | no Unicode normalisation of literals on the way in |
+| category | n | cause | state |
+|---|---|---|---|
+| `graph` | 3 | `GRAPH {}` did not enumerate graphs | **fixed** |
+| `expr-ops` + `optional-filter` | 3 | *misfiled* — see below | **fixed** |
+| `regex` | 1 | XPath bracket-negation matches newline; no PostgreSQL mode pairs that with dot-excludes-newline | open |
+| `i18n` | 1 | no Unicode normalisation of literals on the way in | open |
 
 `algebra` is **fixed** — see below. The `regex` one is diagnosed and
 deliberately unfixed: emulating XPath means
@@ -258,3 +258,48 @@ The gate fix looked obviously right and changed nothing; only printing what
 down. And a green suite did not mean the second fix was safe — the blast
 radius of a shared flag is not something tests in the changed area can show
 you.
+
+
+---
+
+## The last six, and two causes filed wrong
+
+**`expr-ops` + `optional-filter` were not about lexical form.** That reason was
+inferred from a comparator message mentioning `2E+1` and `__NUMERIC__`, and
+none of the three cases involved a lexical form at all. Measuring each one
+directly gave three unrelated defects:
+
+- **unary plus did not exist.** The sidecar emits `unaryplus`; nothing handled
+  it, so `(+?v AS ?result)` bound nothing.
+- **unary minus dropped the datatype.** `-("3"^^xsd:float)` came back as a
+  plain `-3`. XSD gives the unary signs the operand's type; neither matched in
+  `infer_expr_type` so both fell to the default. They now sit with `abs`,
+  which had the rule already.
+- **a FILTER at the top of an OPTIONAL group belongs to the LEFT JOIN.**
+  §18.2.2.3: where the OPTIONAL's pattern translates to `Filter(F, P)`, the
+  result is `LeftJoin(G, P, F)`. Jena lifts it for the plain form; for a
+  nested group it does not, so `OPTIONAL { { P FILTER F } }` arrived as
+  `LeftJoin(A, Filter(F, P))` and F was emitted against the right side alone,
+  where a left-side variable is unresolvable. It compiled to NULL, the filter
+  never held, and no book got a price. **The engine logged the unresolvable
+  variable on every run**; nothing ever acted on the log.
+
+**`graph` — enumeration.** `GRAPH ?g {}` and `GRAPH <uri> {}` were answered
+from Jena's unit table, which binds nothing and matches unconditionally: `?g`
+came back missing, and a graph that does not exist still produced a row. Now
+built as `?s ?p ?o` scoped to the graph, projected to the context and
+DISTINCT'd — so it inherits the existing scoping, default-graph exclusion and
+dataset rules instead of a second path that would have to restate them.
+
+The URI form needs the same projection: `GRAPH <uri> {}` asks whether the
+graph EXISTS, one solution and not one per quad. Projecting nothing left
+DISTINCT with no column to collapse and a two-quad graph answered twice —
+caught by `graph-exist`, which had been passing.
+
+### Filed-cause accuracy
+
+Of the seven gaps registered on 2026-08-24, **two of five reasons were wrong**
+(`expr-ops`/`optional-filter` as lexical form; `algebra` as undiagnosed but
+plausibly shared). Both were written from failure messages rather than from
+running the case. The registry is more useful than no registry, but a reason
+in it is a hypothesis until someone measures it.
