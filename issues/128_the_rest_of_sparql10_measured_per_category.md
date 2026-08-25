@@ -172,16 +172,14 @@ kind.
 |---|---|---|
 | `graph` | 3 | `GRAPH ?g {}` — a graph-scoped group with no triple pattern does not enumerate |
 | `expr-ops` + `optional-filter` | 3 | computed numerics return a canonical lexical form; the corpus keeps the operand's |
-| `algebra` | 2 | rows lost joining across GRAPH/UNION and OPTIONAL/UNION — **undiagnosed** |
 | `regex` | 1 | XPath bracket-negation matches newline; no PostgreSQL mode pairs that with dot-excludes-newline |
 | `i18n` | 1 | no Unicode normalisation of literals on the way in |
 
-The `regex` one is diagnosed and deliberately unfixed: emulating XPath means
+`algebra` is **fixed** — see below. The `regex` one is diagnosed and
+deliberately unfixed: emulating XPath means
 dropping the newline option and rewriting `.` to `[^\n]`, a change to a shared
 flag mapping whose 2x2 is measured and documented — not a change to make in
-passing. `algebra` is the only pair with no diagnosis; a missing row in a
-multi-way join is not something to guess at, and the two differ (1→0, 2→1) so
-they may not share a cause.
+passing.
 
 ### The pattern worth keeping
 
@@ -189,3 +187,74 @@ Two of the three wins were **harness** defects, not engine defects, and both
 hid working code behind a category that could not be wired. That is the same
 shape as `issues/130`, and it is now the third time the answer to "why is this
 category failing" was "the test could not read its own expectation".
+
+
+---
+
+## `algebra` — one flag carrying two meanings
+
+Both cases lost rows joining a UNION whose branches bind **different variable
+sets**:
+
+    { ?a ?p 1  { ?p a ?y } UNION { ?a ?z ?p } }
+
+The first branch binds no `?a`. Its rows reached the join with `?a` NULL, met
+a bare equijoin, and died on `NULL = x` — so the query answered with the
+second branch alone. SPARQL joins COMPATIBLE mappings, and unbound is
+compatible with anything.
+
+Two defects, one behind the other.
+
+**The gate.** `emit_join` applied the compatible-mapping disjuncts when
+`right_is_table or left_is_table or is_left` — VALUES joins and LEFT JOINs.
+That is two of the three ways a variable comes out unbound, and it misses the
+third, which the `_all_required` helper immediately above names explicitly:
+*a UNION branch that omits it*. The knowledge was already in the file; the
+gate never asked. It now asks `_all_required` rather than widening to all
+inner joins, so BGP-to-BGP keeps its equijoin — that is where the measured
+6,219 ms → 4.6 ms lives.
+
+**The flag.** Fixing the gate changed nothing, which is the more interesting
+half. `emit_union` computed
+
+    ti = all(i.has_term_identity() for i in (l_info, r_info) if i)
+
+and passed it as `uuid_materialized`. The `if i` deliberately skips a branch
+that does not bind the variable — correct for TERM IDENTITY, which is what
+`ti` is about. But `uuid_materialized` is read by `_always_bound` as *"every
+row of this block bound this variable"*, which is a claim about BOUNDNESS, and
+for a UNION that holds only when every branch binds it. So the flag asserted
+always-bound for a variable one branch never binds, and the disjuncts were
+dropped again one level down.
+
+The fix records the missing half in `partial`, a field that already existed
+on `ColumnInfo` with exactly the right definition — *"whether this binding may
+be NULL (from OPTIONAL/UNION)"* — and was never set or read by anything.
+`_always_bound` now returns False when it is set, before any identity evidence
+is consulted.
+
+### The fix I nearly shipped instead
+
+My first version carried the term identity on `from_triple` and narrowed
+`uuid_materialized`. Every test passed. It was still wrong: `from_triple` is
+read in eight other places — `emit_distinct`, `emit_group` (×3), `emit_minus`,
+`emit_context`, and join lane selection — so setting it on union outputs
+changes DISTINCT, GROUP and MINUS behaviour to fix a join condition.
+
+The comment on `uuid_materialized` says so directly, and I had read it:
+
+> Kept separate from `from_triple` on purpose: that flag also drives
+> OPTIONAL/MINUS boundness reasoning, and widening it there is what made MINUS
+> a silent no-op (issue 026).
+
+What caught it was not the test suite, which was green. It was the perf run's
+skip count moving 1 → 2 on a probe-timeout test — a signal with no failure
+attached — and then asking what else reads the flag before trusting it.
+
+### Two lessons, both about sequence
+
+The gate fix looked obviously right and changed nothing; only printing what
+`_always_bound` actually decided exposed the flag overriding it one level
+down. And a green suite did not mean the second fix was safe — the blast
+radius of a shared flag is not something tests in the changed area can show
+you.

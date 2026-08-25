@@ -225,7 +225,27 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
             # __uuid where there is a term identity, and fall back to text
             # only for synthesized values, whose text is always materialised
             # precisely because there is no term row to defer.
-            if right_is_table or left_is_table or is_left:
+            # The gate used to read `right_is_table or left_is_table or is_left`
+            # -- VALUES joins and LEFT JOINs. That covers two of the three ways
+            # a variable can come out unbound and misses the third, which
+            # `_all_required` right above names explicitly: a UNION branch that
+            # omits it. So a plain INNER join against a UNION got a bare
+            # equijoin, and every row from a branch that did not bind the join
+            # variable was dropped on `NULL = x`.
+            #
+            #   { ?a ?p 1 { ?p a ?y } UNION { ?a ?z ?p } }
+            #
+            # The first branch binds no ?a, so its rows died at the join and
+            # the query answered with the second branch alone. SPARQL joins
+            # COMPATIBLE mappings, and unbound is compatible with anything.
+            #
+            # Asking `_all_required` rather than widening to all inner joins
+            # keeps the equijoin for BGP-to-BGP, which is where the measured
+            # 6,219ms -> 4.6ms lives. Per-variable `_always_bound` below still
+            # drops each disjunct it can prove dead.
+            _may_be_unbound = (not _all_required(left_child)
+                               or not _all_required(right_child))
+            if right_is_table or left_is_table or is_left or _may_be_unbound:
                 l_null_col = _boundness_col(l_alias, l_sn, left_info)
                 r_null_col = _boundness_col(r_alias, r_sn, right_info)
                 # The right-hand disjunct is dead when the right side is a plain
@@ -252,6 +272,11 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
                     # variable to a constant that resolved, so there is no
                     # UNDEF to protect against (`issues/087`).
                     if info is None:
+                        return False
+                    if info.partial:
+                        # A UNION branch (or OPTIONAL) left this variable
+                        # unbound on some rows, so no identity evidence below
+                        # can make it always-bound.
                         return False
                     if info.uuid_materialized:
                         # Per-VARIABLE evidence, which is stronger than the

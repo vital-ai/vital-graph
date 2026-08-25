@@ -381,13 +381,6 @@ XFAIL_SQL_V2_EXEC: dict = {
     ("sparql10/optional-filter", "dawg-optional-filter-005-simplified"):
         "computed numeric returns a canonical lexical form; corpus keeps 2E+1",
 
-    # Rows lost joining across GRAPH/UNION and OPTIONAL/UNION. Not diagnosed --
-    # a missing row in a multi-way join is not something to guess at, and the
-    # two differ (1 -> 0 and 2 -> 1), so they may not share a cause.
-    ("sparql10/algebra", "Join operator with Graph and Union"):
-        "rows lost joining across GRAPH and UNION — undiagnosed",
-    ("sparql10/algebra", "Join operator with OPTs, BGPs, and UNIONs"):
-        "rows lost joining across OPTIONAL, BGP and UNION — undiagnosed",
 
     # Unicode normalisation is not applied to literals, so two spellings of one
     # character do not match. A storage-side normalisation question, not an

@@ -102,9 +102,29 @@ def emit_union(plan: PlanV2, ctx: EmitContext) -> str:
         # unbound here rather than "no term identity", so the distinction
         # `has_term_identity` exists to preserve (issues/026, 087) is intact.
         ti = all(i.has_term_identity() for i in (l_info, r_info) if i)
+        # Term identity and BOUNDNESS are different claims, and `ti` is only
+        # the first: the `if i` above deliberately skips a branch that does not
+        # bind the variable, so `ti` says nothing about whether every row binds
+        # it. `emit_join._always_bound` reads `uuid_materialized` as exactly
+        # that stronger claim, and uses it to drop the compatible-mapping
+        # disjuncts and recover an equijoin.
+        #
+        # Carrying `ti` into it alone therefore asserted always-bound for a
+        # variable one branch never binds, the disjuncts went, and those rows
+        # died on `NULL = x`:
+        #
+        #     { ?a ?p 1  { ?p a ?y } UNION { ?a ?z ?p } }
+        #
+        # answered with the second branch alone. `partial` records the missing
+        # half. It is deliberately NOT `from_triple`: that flag also drives
+        # DISTINCT, GROUP, MINUS and lane selection -- the note on
+        # `uuid_materialized` in sql_type_generation says why widening it is
+        # how MINUS became a silent no-op (issue 026) -- and boundness needs a
+        # field that means only boundness.
         ctx.types.register(ColumnInfo.simple_output(
             v, out_names[v], typed_lane=lane, text_materialized=tm,
-            uuid_materialized=ti))
+            uuid_materialized=ti,
+            partial=(l_info is None or r_info is None)))
 
     sql = (
         f"SELECT {', '.join(outer_cols)}\n"

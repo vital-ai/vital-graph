@@ -125,7 +125,12 @@ class ColumnInfo:
     # purpose: that flag also drives OPTIONAL/MINUS boundness reasoning, and
     # widening it there is what made MINUS a silent no-op (issue 026).
     uuid_materialized: bool = False
-    # Whether this binding may be NULL (from OPTIONAL/UNION)
+    # Whether this binding may be NULL because a UNION branch or OPTIONAL did
+    # not bind it. Distinct from `uuid_materialized`/`from_triple`, which are
+    # about term IDENTITY: a union output can have a perfectly good term uuid
+    # on the rows that bound it and still be unbound on the rest. Read by
+    # `emit_join._always_bound`, which may only drop the compatible-mapping
+    # disjuncts when every row really does bind the variable.
     partial: bool = False
     # Which typed lane holds this variable's primary value.
     # "num" = __num, "bool" = __bool, "dt" = __dt, None = text only.
@@ -163,7 +168,8 @@ class ColumnInfo:
                       from_triple: bool = False,
                       typed_lane: Optional[str] = None,
                       text_materialized: bool = True,
-                      uuid_materialized: bool = False) -> 'ColumnInfo':
+                      uuid_materialized: bool = False,
+                      partial: bool = False) -> 'ColumnInfo':
         """Create a ColumnInfo with standard output column names.
 
         All companion columns derive from the opaque *sql_name*
@@ -183,6 +189,7 @@ class ColumnInfo:
             typed_lane=typed_lane,
             text_materialized=text_materialized,
             uuid_materialized=uuid_materialized,
+            partial=partial,
         )
 
     def has_term_identity(self) -> bool:
