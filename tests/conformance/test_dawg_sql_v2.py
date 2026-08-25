@@ -105,6 +105,7 @@ P0_CATEGORIES = [
     "sparql10/optional",
     "sparql10/solution-seq",
     "sparql10/triple-match",
+    "sparql10/open-world",
 ]
 
 # Cases that fail today, kept RUNNING rather than removed so the count stays
@@ -112,6 +113,27 @@ P0_CATEGORIES = [
 # Each names the issue; an entry that starts passing should be deleted, not
 # left as a permanent xfail.
 KNOWN_FAILURES = {
+    # --- sparql10/open-world, hand-triaged 2026-08-24 ---------------------
+    # WE MATCH THE CORPUS on all three; the ORACLE does not, and test_sql_v2
+    # compares against the oracle. Verified by reading the data and the
+    # expected SRX by hand — the check that cleared str-1/str-2. The ACCEPTED
+    # label only means the oracle ALSO differs; it never means we are right,
+    # and reading it that way had two of these filed as "not our bug" when
+    # they WERE, until date-2 and date-3 were fixed (dd97082, cca66e2).
+    #
+    #   date-2      != over xsd:date, needing XSD's 14-hour partial order.
+    #   date-3      > across xsd:date and xsd:dateTime, a type error.
+    #   open-eq-01  a TRIPLE PATTERN, so it matches by RDF TERM. No term
+    #               carries the lexical form "001", so zero rows — the
+    #               manifest says so itself: "graph match - no lexical form in
+    #               data (assumes no value matching)". pyoxigraph returns 2.
+    ("sparql10/open-world", "date-2"):
+        "oracle disagrees with the corpus; WE match the .ttl",
+    ("sparql10/open-world", "date-3"):
+        "oracle disagrees with the corpus; WE match the .ttl",
+    ("sparql10/open-world", "open-eq-01"):
+        "oracle value-matches in a graph pattern; WE match the .ttl",
+
     # issues/093 (sq01-sq03) removed 2026-08-16 — fixed, and an entry that
     # starts passing must be DELETED rather than left as a permanent xfail, or
     # the number stops meaning anything.
@@ -183,6 +205,15 @@ pytestmark = [
 # STOPS THE TEST. An entry here would never surface as an XPASS no matter how
 # right our answer became.
 XFAIL_TESTS_V2 = {
+    # sparql10/open-world — the ORACLE half. pyoxigraph differs from these
+    # expectations; we match them. See KNOWN_FAILURES for the hand-check.
+    ("sparql10/open-world", "date-2"):
+        "pyoxigraph differs from the .ttl expectation",
+    ("sparql10/open-world", "date-3"):
+        "pyoxigraph differs from the .ttl expectation",
+    ("sparql10/open-world", "open-eq-01"):
+        "pyoxigraph value-matches in a graph pattern",
+
     # --- sparql10/expr-builtin, wired 2026-08-23 (issues/125) --------------
     # The ORACLE half. pyoxigraph disagrees with these .ttl expectations, so
     # they say nothing about our backend — that is exactly what this baseline
