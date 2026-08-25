@@ -9,6 +9,8 @@ Allowed to import from both v1 and v2 per §11.7 (test harness exception).
 
 from __future__ import annotations
 
+import re
+
 import logging
 import os
 from typing import Any, Dict, List, Optional
@@ -31,6 +33,9 @@ class SqlV2PipelineError(Exception):
     pass
 
 
+_HAS_BASE_RE = re.compile(r"^\s*(#[^\n]*\n\s*)*BASE\s", re.IGNORECASE)
+
+
 async def execute_query_via_v2_pipeline(
     sparql: str,
     sidecar_url: str = DEFAULT_SIDECAR_URL,
@@ -39,6 +44,7 @@ async def execute_query_via_v2_pipeline(
     conn_params=None,
     graph_lock_uri: str = None,
     default_graph: str = None,
+    base_iri: str = None,
 ) -> SparqlResults:
     """Execute a SPARQL query through the v2 SQL pipeline.
 
@@ -60,6 +66,15 @@ async def execute_query_via_v2_pipeline(
 
     from vitalgraph.db.jena_sparql.jena_ast_mapper import map_compile_response
     from vitalgraph.db.sparql_sql.generator import generate_sql
+
+    # The sidecar resolves relative IRIs against its own working directory
+    # (`file:///app/`) and accepts no base parameter, so a corpus query saying
+    # `FROM <data.ttl>` resolves to a graph that cannot exist. SPARQL's own
+    # BASE prologue does the job without touching the sidecar. Skipped when the
+    # query declares a BASE itself -- it must come first in a prologue and may
+    # appear only once, so prepending would be a syntax error.
+    if base_iri and not _HAS_BASE_RE.match(sparql):
+        sparql = f"BASE <{base_iri}>\n{sparql}"
 
     # Step 1: Compile via sidecar
     try:

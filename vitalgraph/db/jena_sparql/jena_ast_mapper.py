@@ -122,6 +122,18 @@ def _map_parsed_query_meta(pq: Dict[str, Any]) -> ParsedQueryMeta:
     # DESCRIBE nodes
     describe_nodes = [map_node(n) for n in pq.get("describeNodes", [])]
 
+    # FROM / FROM NAMED. Absent key and empty list mean different things --
+    # `FROM NAMED <g>` alone yields datasetDefaultGraphs=[], a query whose
+    # default graph is deliberately empty -- so absence maps to None, not [].
+    ds_default = pq.get("datasetDefaultGraphs")
+    ds_named = pq.get("datasetNamedGraphs")
+    if not ds_default and not ds_named:
+        # Neither clause present: the service's own dataset applies.
+        ds_default = ds_named = None
+    else:
+        ds_default = list(ds_default or [])
+        ds_named = list(ds_named or [])
+
     return ParsedQueryMeta(
         sparql_form=pq.get("sparqlForm", "QUERY"),
         query_type=pq.get("queryType"),
@@ -137,6 +149,8 @@ def _map_parsed_query_meta(pq: Dict[str, Any]) -> ParsedQueryMeta:
         operation_count=pq.get("operationCount", 0),
         construct_template=construct_template,
         describe_nodes=describe_nodes,
+        dataset_default_graphs=ds_default,
+        dataset_named_graphs=ds_named,
     )
 
 

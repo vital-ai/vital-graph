@@ -17,7 +17,7 @@ All helper functions are defined locally.
 from __future__ import annotations
 
 from functools import singledispatch
-from typing import Optional
+from typing import List, Optional
 
 from ..jena_sparql.jena_types import (
     VarNode, URINode, LiteralNode, BNodeNode,
@@ -88,6 +88,24 @@ def _const_subquery(term_text: str, term_type: str, aliases: AliasGenerator,
     """
     col = aliases.register_constant(term_text, term_type, lang, datatype)
     return f"{_CONST_PREFIX}{col}{_CONST_SUFFIX}"
+
+
+def _graph_set_sql(q_id: str, uris: List[str],
+                   aliases: AliasGenerator) -> str:
+    """Constrain a quad's context to a set of graph URIs.
+
+    An EMPTY set yields `FALSE`, deliberately. It is the SPARQL answer for a
+    dataset position the query left empty -- `GRAPH ?g` under a query with
+    `FROM` but no `FROM NAMED` matches nothing -- and the alternative, emitting
+    no constraint, is exactly the bug this fixes: the query silently widens to
+    every graph in the space.
+    """
+    if not uris:
+        return "FALSE"
+    subs = [_const_subquery(u, 'U', aliases) for u in uris]
+    if len(subs) == 1:
+        return f"{q_id}.context_uuid = {subs[0]}"
+    return f"{q_id}.context_uuid IN ({', '.join(subs)})"
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +199,35 @@ def _collect_bgp(op: OpBGP, space_id: str, aliases: AliasGenerator,
             constraint = f"{q_id}.context_uuid = {subq}"
             plan.constraints.insert(0, constraint)
             plan.tagged_constraints.insert(0, (q_id, constraint))
+
+        # --- Dataset scoping ---------------------------------------------
+        # A query with FROM / FROM NAMED defines its own dataset, and that
+        # REPLACES the service default rather than narrowing it. Handled first
+        # so the `default_graph` rules below stay the no-dataset-clause case.
+        if aliases.has_dataset_clause:
+            constraint = None
+            if graph_uri is None:
+                # Outer BGP reads the default graph: the merge of the FROM
+                # graphs. No FROM means it is empty, and empty means no rows --
+                # not "unconstrained", which is how this looked when the clause
+                # was ignored entirely.
+                constraint = _graph_set_sql(
+                    q_id, aliases.dataset_default_graphs or [], aliases)
+            elif graph_uri == GRAPH_VAR_SCOPE:
+                # GRAPH ?g ranges over the FROM NAMED graphs, and only those.
+                constraint = _graph_set_sql(
+                    q_id, aliases.dataset_named_graphs or [], aliases)
+            elif graph_uri != aliases.graph_lock_uri:
+                # GRAPH <uri> is satisfiable only if the dataset names it.
+                if graph_uri in (aliases.dataset_named_graphs or []):
+                    subq = _const_subquery(graph_uri, 'U', aliases)
+                    constraint = f"{q_id}.context_uuid = {subq}"
+                else:
+                    constraint = "FALSE"
+            if constraint is not None:
+                plan.constraints.append(constraint)
+                plan.tagged_constraints.append((q_id, constraint))
+            return plan
 
         # Default graph — only when NOT inside a GRAPH clause
         if aliases.default_graph and graph_uri is None:

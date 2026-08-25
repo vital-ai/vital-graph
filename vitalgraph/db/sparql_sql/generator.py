@@ -996,6 +996,14 @@ async def _generate_sql(
             aliases.graph_lock_uri = graph_lock_uri
         if default_graph:
             aliases.default_graph = default_graph
+        # The query's own FROM / FROM NAMED. Present, these DEFINE the dataset
+        # and so take precedence over the service default above -- that is what
+        # a dataset clause is for. Parsed since the sidecar's first version and
+        # dropped on the floor until now, which made every scoped query answer
+        # over the whole space (named_graph_semantics §4.1).
+        if compile_result.meta is not None:
+            aliases.dataset_default_graphs = compile_result.meta.dataset_default_graphs
+            aliases.dataset_named_graphs = compile_result.meta.dataset_named_graphs
         plan = collect(algebra, space_id, aliases)
 
         # Inject PROJECT to exclude anonymous blank node variables

@@ -429,6 +429,7 @@ async def run_single_test_sql_v2(test: DawgTestCase, db_conn) -> TestResult:
         sql_result = await execute_query_via_v2_pipeline(
             sparql, space_id=SPACE_ID, conn=db_conn,
             default_graph=v2_default_graph,
+            base_iri=f"file://{test.query_file}",
         )
     except SqlV2PipelineError as e:
         return TestResult(

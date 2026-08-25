@@ -44,12 +44,26 @@ class AliasGenerator:
         # Default graph: applied to outer BGPs only (not inside GRAPH clauses).
         # SPARQL dataset semantics — separates default graph from named graphs.
         self.default_graph: Optional[str] = None
+        # FROM / FROM NAMED, straight from the query's own dataset clause.
+        # `None` = the query named no dataset, so `default_graph` above (the
+        # service's) applies. A LIST means the query defined the dataset
+        # itself, and an EMPTY list is a real answer: `FROM NAMED <g>` with no
+        # `FROM` gives a default graph that matches nothing. Collapsing the two
+        # would silently widen every such query to the whole space.
+        self.dataset_default_graphs: Optional[List[str]] = None
+        self.dataset_named_graphs: Optional[List[str]] = None
         # Predicate cardinality stats
         self.quad_stats: Dict[Tuple[str, str], int] = {}
         self.pred_stats: Dict[str, int] = {}
         # SPARQL→SQL variable name mapping: opaque sql_name → original sparql_name
         self.var_map: Dict[str, str] = {}
         self._var_counter: int = 0
+
+    @property
+    def has_dataset_clause(self) -> bool:
+        """True when the query defined its own dataset with FROM/FROM NAMED."""
+        return (self.dataset_default_graphs is not None
+                or self.dataset_named_graphs is not None)
 
     def next(self, prefix: str = "q") -> str:
         n = self._counters.get(prefix, 0)

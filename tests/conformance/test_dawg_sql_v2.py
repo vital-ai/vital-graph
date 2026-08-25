@@ -300,51 +300,23 @@ XFAIL_TESTS_V2 = {
 # Kept as the place for the next one, with the rule that removing an entry
 # must make its test pass.
 XFAIL_SQL_V2_EXEC: dict = {
-    # Added 2026-08-24. These 15 are not new breakage -- they are the first
-    # measurement of cases the runner used to SKIP whenever pyoxigraph could
-    # not parse the query, which silently took OUR backend out of the run too.
-    # With the oracle given a base IRI (issues/130) they execute, and they all
-    # fail the same way: every one names a graph by a file-relative IRI
-    # (`FROM <data.ttl>`, `GRAPH <exists02.ttl>`) and our pipeline has no base
-    # to resolve it against -- queries are parsed by the Jena sidecar, which
-    # `execute_query_via_v2_pipeline` gives no base at all. Symptom is
-    # bimodal and diagnostic: we return far too many rows where the FROM
-    # dataset restriction is ignored (0 -> 8, 12 -> 24), and zero where the
-    # unresolved name matches no loaded graph.
+    # The 15 entries here were FROM/FROM NAMED being parsed and ignored
+    # (named_graph_semantics §4.1). 13 now pass and have been removed, per the
+    # rule above. These two remain, and for a different reason than they were
+    # filed under -- worth stating, because "still failing" hid a second bug
+    # behind the first.
     #
-    # Deliberately NOT worked around in the harness. Deriving the dataset from
-    # the query's FROM clause in the test fixture would turn all 15 green while
-    # leaving the engine exactly as unable to do it.
-    ("exists", "Exists within graph pattern"):
-        "no base IRI in the SQL pipeline; relative graph names and FROM unhandled — named_graph_semantics §4.1",
-    ("bindings", "VALUES inside GRAPH binding the same variable as the graph name"):
-        "no base IRI in the SQL pipeline; relative graph names and FROM unhandled — named_graph_semantics §4.1",
-    ("construct", "constructwhere04 - CONSTRUCT WHERE"):
-        "no base IRI in the SQL pipeline; relative graph names and FROM unhandled — named_graph_semantics §4.1",
-    ("property-path", "(pp34) Named Graph 1"):
-        "no base IRI in the SQL pipeline; relative graph names and FROM unhandled — named_graph_semantics §4.1",
-    ("property-path", "(pp35) Named Graph 2"):
-        "no base IRI in the SQL pipeline; relative graph names and FROM unhandled — named_graph_semantics §4.1",
-    ("sparql10/dataset", "dataset-02"):
-        "no base IRI in the SQL pipeline; relative graph names and FROM unhandled — named_graph_semantics §4.1",
-    ("sparql10/dataset", "dataset-04"):
-        "no base IRI in the SQL pipeline; relative graph names and FROM unhandled — named_graph_semantics §4.1",
-    ("sparql10/dataset", "dataset-05"):
-        "no base IRI in the SQL pipeline; relative graph names and FROM unhandled — named_graph_semantics §4.1",
-    ("sparql10/dataset", "dataset-06"):
-        "no base IRI in the SQL pipeline; relative graph names and FROM unhandled — named_graph_semantics §4.1",
-    ("sparql10/dataset", "dataset-07"):
-        "no base IRI in the SQL pipeline; relative graph names and FROM unhandled — named_graph_semantics §4.1",
-    ("sparql10/dataset", "dataset-08"):
-        "no base IRI in the SQL pipeline; relative graph names and FROM unhandled — named_graph_semantics §4.1",
+    # Both are `FROM <data-g3-dup.ttl> FROM NAMED <data-g3.ttl>`, two files
+    # holding the SAME blank node labels (`_:x`, `_:a`). Blank nodes are scoped
+    # to a document, so those are four distinct nodes and the join across them
+    # must yield nothing. We return 2 rows: the loader mints term_uuid as
+    # uuid5(term_text, term_type), so `_:x` from either file is one term and
+    # the two documents' blank nodes are silently merged. Dataset scoping is
+    # correct here; term identity is not. See issues/131.
     ("sparql10/dataset", "dataset-09b"):
-        "no base IRI in the SQL pipeline; relative graph names and FROM unhandled — named_graph_semantics §4.1",
+        "blank node labels are not document-scoped at load — issues/131",
     ("sparql10/dataset", "dataset-10b"):
-        "no base IRI in the SQL pipeline; relative graph names and FROM unhandled — named_graph_semantics §4.1",
-    ("sparql10/dataset", "dataset-11"):
-        "no base IRI in the SQL pipeline; relative graph names and FROM unhandled — named_graph_semantics §4.1",
-    ("sparql10/dataset", "dataset-12b"):
-        "no base IRI in the SQL pipeline; relative graph names and FROM unhandled — named_graph_semantics §4.1",
+        "blank node labels are not document-scoped at load — issues/131",
 }
 
 # Cases where OUR output differs from the manifest AND so does pyoxigraph -- the

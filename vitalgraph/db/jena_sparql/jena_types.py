@@ -462,6 +462,18 @@ class ParsedQueryMeta:
     operation_count: int = 0  # for UPDATE
     construct_template: List[TriplePattern] = field(default_factory=list)
     describe_nodes: List[RDFNode] = field(default_factory=list)
+    # FROM / FROM NAMED. `None` means the query named no dataset at all, which
+    # is NOT the same as naming an empty one: without a dataset clause the
+    # service's own default applies, whereas `FROM NAMED <g>` alone gives a
+    # query whose default graph is genuinely empty. Two states, so two values.
+    dataset_default_graphs: Optional[List[str]] = None
+    dataset_named_graphs: Optional[List[str]] = None
+
+    @property
+    def has_dataset_clause(self) -> bool:
+        """True when the query defined its own dataset with FROM/FROM NAMED."""
+        return (self.dataset_default_graphs is not None
+                or self.dataset_named_graphs is not None)
 
 
 @dataclass
