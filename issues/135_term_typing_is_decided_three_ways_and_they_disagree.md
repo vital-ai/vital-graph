@@ -228,6 +228,105 @@ are:
 is a valid scheme *by the grammar* — RFC 3986 §3.1 defines the SYNTAX of a
 scheme, not which schemes exist.
 
+**Corrected twice. The registry beats the regex, but neither is the point.**
+
+IANA maintains the authoritative FINITE list of registered schemes, so
+membership beats shape: it rejects `arrowworms:` and accepts `file:`, `ftp:`,
+`mailto:`, `did:`, `tag:`. That is a better rule than either the three-prefix
+list (too narrow) or the syntax regex (too broad).
+
+But the question worth asking is why this layer is guessing at all. Every layer
+that recognises a URI in this system does it from an EXPLICIT MARKER:
+
+| layer | how it knows | ambiguous? |
+|---|---|---|
+| N-Quads / N-Triples text (`quad_format_utils`) | `<...>`, `_:`, `"..."` delimiters | no |
+| SPARQL text (the sidecar, Jena's parser) | the same delimiters | no |
+| sidecar JSON -> `jena_ast_mapper` | `"type": "uri" \| "literal" \| "bnode"` | no |
+| rdflib terms | the Python class | no |
+| **bare strings (`_infer_type`)** | **nothing — it guesses** | **yes** |
+
+Four layers carry the answer. One throws it away and then tries to reconstruct
+it from the characters. `_infer_type` exists because one API takes `str` where
+every layer feeding it had a term.
+
+So the fix is not a better guess. It is that the guessing layer should not
+exist — which is what the revised plan does by preferring the rdflib class in
+all four positions, exactly as the object position already does.
+
+### The two scheme tests must NOT be unified
+
+There are now two places asking something scheme-shaped, and they answer
+DIFFERENT questions:
+
+    sidecar   HAS_SCHEME = ^[A-Za-z][A-Za-z0-9+.-]*:
+              "is this IRI reference absolute, or relative and in need of
+               resolution?"  (issues/132)
+
+    _infer_type
+              "is this string a URI or a literal?"
+
+The sidecar's must stay a SYNTAX test. RFC 3986 §5.2.2 keys resolution on
+whether the reference carries a scheme, not on whether that scheme is
+registered — `<arrowworms:foo>` is an absolute reference and must be left
+alone. Swapping in the IANA registry there would resolve it against the base
+and silently change the IRI.
+
+They look like the same check and are not. Anyone tidying two scheme tests into
+one shared helper would break IRI resolution to improve term typing. That is
+the note this section exists to leave.
+
+### What no rule fixes
+
+A literal whose text is `"http://example.com"` is a literal, and no registry,
+regex or list can know that from the characters. The 138,871 rows already lost
+stay lost. That is the ceiling on the string surface, and the reason the fix is
+the API rather than the inference.
+
+### Performance implications, and whether a rewrite is the better trade
+
+Asked directly: is it better to rewrite the data once than to pay forever?
+Measured across 56 term tables on the perf cluster.
+
+**There is no permanent cost to pay.** The proposal adds one precompiled regex
+per term on the remove/get paths and nothing on the insert paths. No extra
+lookups, no probing, no index change. The alternative design that WOULD cost
+forever — try `'U'`, then try `'L'`, take whichever hits — is 2x the lookups on
+every delete and fetch, permanently, and is the reason not to go that way.
+
+**A rewrite would not buy anything, because the stored data is already right.**
+
+    'U' terms                                  17,549,506
+    'U' terms with no scheme (cannot be an IRI)         6
+
+All six are `'bind projection fixture'`, in throwaway integration spaces. So
+defect 3 — the `else 'U'` branch — has been reachable for as long as it has
+existed and has produced six bad rows, none of them in real data. Cleaning them
+is a `DELETE`, not a migration.
+
+The information that is missing is missing at the API BOUNDARY, not in storage.
+`remove_rdf_quad(space, s, p, o, g)` takes strings; RDF terms are not strings.
+Rewriting rows cannot add a distinction the caller never expressed.
+
+**What the measurement did change: step 1 is smaller than it looked, and the
+string API is worse than this issue said.**
+
+    'L' terms                                   3,421,707
+    already unreachable by string lookup today    138,871   (text starts http/https/urn)
+    NEWLY unreachable under a scheme regex             46
+
+So the scheme regex costs 46 rows to fix every non-http URI scheme — a good
+trade, and 0.03% of the literals already affected. But look at what those 46
+are:
+
+    'arrowworms: a group of small active transparent...'
+    'shorebirds: plovers; sandpipers; avocets; phalaropes'
+    'flatfishes: halibut; sole; flounder; plaice; turbot'
+
+`^[A-Za-z][A-Za-z0-9+.-]*:` matches `arrowworms:`. A word followed by a colon
+is a valid scheme *by the grammar* — RFC 3986 §3.1 defines the SYNTAX of a
+scheme, not which schemes exist.
+
 **Corrected: the right test is the registry, not a regex.** IANA maintains the
 authoritative list of registered URI schemes, and it is FINITE — a few hundred
 entries. `arrowworms` is not in it. `file`, `ftp`, `mailto`, `did`, `tag`,
