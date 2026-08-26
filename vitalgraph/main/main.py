@@ -34,56 +34,14 @@ from vitalgraph.config.config_loader import get_config, ConfigurationError
 
 
 
-_MAX_ECHOED_INPUT = 200
-
-
-def _safe_errors(errors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Make pydantic's validation errors safe to serialise back to the client.
-
-    Two problems with returning `exc.errors()` as-is, both of which showed up as
-    500s rather than as anything that looked like a client error:
-
-    1. `error["input"]` holds the raw request body when the body itself failed
-       to parse. For a non-JSON Content-Type that is BYTES, and bytes are not
-       JSON-serialisable. `jsonable_encoder` fixes the common case by decoding
-       as UTF-8 -- and then raises UnicodeDecodeError on a body that is not
-       UTF-8, which is the case the SPARQL Protocol suite tests deliberately.
-
-    2. Echoing a whole request body back to the caller is not something to do by
-       default regardless of encoding. It can be large, and it can contain
-       whatever the caller sent, including credentials they put in the wrong
-       field.
-
-    So the input is summarised rather than reflected: decoded if it is text,
-    described if it is not, and truncated either way. The error's `loc`, `msg`
-    and `type` -- which are what a caller needs to fix the request -- are
-    untouched.
-    """
-    safe: List[Dict[str, Any]] = []
-    for error in errors:
-        item = dict(error)
-        if "input" in item:
-            item["input"] = _describe_input(item["input"])
-        # `ctx` can carry the original exception object, which is not
-        # serialisable either.
-        if "ctx" in item:
-            item["ctx"] = {k: str(v) for k, v in (item["ctx"] or {}).items()}
-        safe.append(item)
-    return safe
-
-
-def _describe_input(value: Any) -> Any:
-    if isinstance(value, (bytes, bytearray)):
-        try:
-            text = bytes(value).decode("utf-8")
-        except UnicodeDecodeError:
-            # The point of the non-UTF-8 protocol cases: say what it was rather
-            # than fail trying to render it.
-            return f"<{len(value)} bytes, not valid UTF-8>"
-        return text[:_MAX_ECHOED_INPUT] + ("..." if len(text) > _MAX_ECHOED_INPUT else "")
-    if isinstance(value, str) and len(value) > _MAX_ECHOED_INPUT:
-        return value[:_MAX_ECHOED_INPUT] + "..."
-    return value
+# Shaping validation errors needs nothing from the server, so it lives in a
+# module that does not drag fastapi/uvicorn/torch in with it. Re-exported
+# here because callers and tests already import these names from `main`.
+from vitalgraph.main.validation_errors import (  # noqa: F401
+    _MAX_ECHOED_INPUT,
+    _describe_input,
+    _safe_errors,
+)
 
 
 def create_app() -> FastAPI:

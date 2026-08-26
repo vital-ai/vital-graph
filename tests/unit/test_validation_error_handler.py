@@ -27,7 +27,11 @@ import json
 
 import pytest
 
-from vitalgraph.main.main import _describe_input, _safe_errors
+# From `validation_errors`, not `main`. These are pure functions, but `main`
+# imports fastapi, starlette, uvicorn and (via vitalgraphapp_impl) torch — so
+# importing them from there made a unit test of two string helpers depend on
+# the whole server stack, and CI failed on whichever link was missing.
+from vitalgraph.main.validation_errors import _describe_input, _safe_errors
 
 
 def _serialisable(errors) -> str:

@@ -99,14 +99,6 @@ server = [
 
 # Development dependencies
 dev = [
-    # `tests/unit` covers server entry points -- test_validation_error_handler
-    # imports `vitalgraph.main.main` -- so the unit job needs what those
-    # imports need. CI installs `.[dev]` only, and this was missing from it:
-    # ModuleNotFoundError on a green-looking suite. The rest of that import
-    # chain currently arrives transitively, which is luck rather than a
-    # declaration; if another one goes missing, prefer installing `.[dev,server]`
-    # in unit-tests.yml over adding them here one at a time.
-    "itsdangerous>=2.1.0",
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "pglast>=7.0",
