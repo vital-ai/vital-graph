@@ -228,15 +228,12 @@ are:
 is a valid scheme *by the grammar* — RFC 3986 §3.1 defines the SYNTAX of a
 scheme, not which schemes exist.
 
-**Corrected twice. The registry beats the regex, but neither is the point.**
+**Corrected twice, and the second correction retires the first.**
 
-IANA maintains the authoritative FINITE list of registered schemes, so
-membership beats shape: it rejects `arrowworms:` and accepts `file:`, `ftp:`,
-`mailto:`, `did:`, `tag:`. That is a better rule than either the three-prefix
-list (too narrow) or the syntax regex (too broad).
-
-But the question worth asking is why this layer is guessing at all. Every layer
-that recognises a URI in this system does it from an EXPLICIT MARKER:
+The IANA registry beats a syntax regex — membership rejects `arrowworms:` and
+accepts `file:`, `ftp:`, `did:`. But asking which scheme test to use is the
+wrong question, because every OTHER layer in this system recognises a URI from
+an EXPLICIT MARKER and never guesses:
 
 | layer | how it knows | ambiguous? |
 |---|---|---|
@@ -246,13 +243,39 @@ that recognises a URI in this system does it from an EXPLICIT MARKER:
 | rdflib terms | the Python class | no |
 | **bare strings (`_infer_type`)** | **nothing — it guesses** | **yes** |
 
-Four layers carry the answer. One throws it away and then tries to reconstruct
-it from the characters. `_infer_type` exists because one API takes `str` where
-every layer feeding it had a term.
+Four layers carry the answer; one throws it away and reconstructs it from the
+characters. No scheme test repairs that, because the ambiguity is not in the
+rule — it is in accepting a string with no marker.
 
-So the fix is not a better guess. It is that the guessing layer should not
-exist — which is what the revised plan does by preferring the rdflib class in
-all four positions, exactly as the object position already does.
+### So: what to implement on the string surface
+
+**Nothing new. `nquads_term_to_rdflib` already does this**, correctly, and is
+already used by the REST batch endpoints:
+
+    <http://...>              -> URIRef
+    "value"                   -> Literal
+    "value"^^<http://...>     -> Literal with datatype
+    "value"@lang              -> Literal with language tag
+    _:label                   -> BNode
+
+It carries the marker, so there is nothing to infer. It also already handles
+`bnode_scope` (`issues/076`), which `_infer_type` has no concept of.
+
+The decision:
+
+1. **Delete `get_rdf_quad`** — zero callers.
+2. **`remove_rdf_quad` takes terms**, or N-Quads-encoded strings through
+   `nquads_term_to_rdflib`. Test-only, so free.
+3. **`remove_rdf_quads_batch` prefers the rdflib class in all four positions.**
+   The object already does; `s`, `p` and `g` are forced `'U'`. Any string
+   fallback goes through `nquads_term_to_rdflib`, not `_infer_type`.
+4. **Delete `_infer_type`.**
+
+**The IANA registry is not needed and should not be added.** It was the best
+answer to "how do we guess better", and the answer is that we stop guessing. A
+caller who writes `<http://x>` has said URI; one who writes `"http://x"` has
+said literal; the 138,871 literals whose text looks like a URL are no longer a
+problem, because nothing is looking at their text to decide.
 
 ### The two scheme tests must NOT be unified
 
@@ -276,12 +299,11 @@ They look like the same check and are not. Anyone tidying two scheme tests into
 one shared helper would break IRI resolution to improve term typing. That is
 the note this section exists to leave.
 
-### What no rule fixes
+### What this leaves
 
-A literal whose text is `"http://example.com"` is a literal, and no registry,
-regex or list can know that from the characters. The 138,871 rows already lost
-stay lost. That is the ceiling on the string surface, and the reason the fix is
-the API rather than the inference.
+`_infer_type`'s 138,871 mis-inferred literals stop mattering the moment nothing
+inspects their text to decide a type. They were never bad DATA — they are
+correctly stored `'L'` terms that a guessing lookup could not find.
 
 ### Performance implications, and whether a rewrite is the better trade
 
