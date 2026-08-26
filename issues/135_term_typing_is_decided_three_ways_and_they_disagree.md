@@ -118,62 +118,71 @@ the caller already knows.
 string-to-term PARSER used only at the API boundary, where a caller has
 supplied text and something must interpret it.
 
-### Three changes, in dependency order
+### Revised 2026-08-25 after surveying the callers
 
-**1. `_infer_type` tests for a scheme, not for three of them.** RFC 3986 allows
-any scheme, and the check already exists in the sidecar for exactly this
-purpose (`issues/132`):
+The first draft proposed three changes to the string inference. Surveying who
+actually calls these methods reorders the whole thing, and shrinks it.
 
-    ^[A-Za-z][A-Za-z0-9+.-]*:
+    get_rdf_quad             ZERO callers, anywhere
+    remove_rdf_quad          two tests, no production caller
+    remove_rdf_quads_batch   the live path — files_impl, fuseki ops, triples
+                             endpoint
 
-This alone closes defect 1 — `file://`, `ftp://`, `mailto:`, `did:` and every
-other scheme start round-tripping. It is the smallest change with real value
-and it needs no migration: nothing currently stores those as `'L'`, because the
-insert path always typed them `'U'`. **Do this first and separately.**
+And `remove_rdf_quads_batch` already does the right thing for the object:
 
-Note it changes what a literal whose text merely looks like a URI infers to.
-That is the ambiguity above, and it is why this must not be the whole fix.
+    s_uuid = _generate_term_uuid(str(s), 'U')          # forced
+    p_uuid = _generate_term_uuid(str(p), 'U')          # forced
+    g_uuid = _generate_term_uuid(str(g), 'U')          # forced
+    o_type = self._infer_rdflib_type(o) if hasattr(o, 'n3') else self._infer_type(o_text)
 
-**2. s/p/g stop being hardcoded `'U'`.** They take the parsed type like the
-object position does. Blank nodes are legal RDF subjects and N-Quads graph
-names; today no spelling reaches one. Closes defect 2 and
-`named_graph_semantics` §4.5.
+It prefers the rdflib CLASS and falls back to string inference only when the
+caller had no term. That is exactly the pattern this issue was going to
+propose — it is already here, applied to one position out of four.
 
-**3. `_ensure_term`'s `else` branch becomes an error, not `'U'`.** An unknown
-Python type is a caller mistake, and guessing "URI" is the worst available
-guess — it silently stores arbitrary text as an identifier, which is how
-`test_short_needle_probe_is_bounded` came to hold `"entity 3 (Topic)"` as a
-URI. Raising turns a silent data defect into a stack trace at the call site.
+`get_existing_quads_for_uris`, which feeds the live delete path, documents its
+return as *"List of tuples (subject, predicate, object, graph) as RDFLib
+Identifiers"*. So production always has terms, `hasattr(o, 'n3')` is always
+true, and **`_infer_type` is never reached on any production path.**
 
-`'L'` is the tempting alternative and is wrong for the same reason `'U'` is:
-it guesses. The difference is only that it guesses better.
+### What that changes
 
-### What this does NOT change
+**Defect 1 (the three-scheme list) is not reachable in production.** It bites
+only string callers, and there are none outside tests. It is still wrong, and
+the measurement below shows it cannot be made right by any regex — but it is no
+longer the largest item, and it is not urgent.
 
-**Nothing already stored moves.** That is the point of the ordering. Steps 1
-and 2 only make previously-unreachable terms reachable — they change what a
-LOOKUP computes, never what an INSERT writes, so no existing `term_uuid`
-changes and no migration is needed.
+**Defect 2 is the only one that bites live traffic**, and only in one place:
+`s`, `p` and `g` are forced `'U'` while the object beside them is typed
+properly. A blank-node subject or graph goes in as `'B'` and is looked up as
+`'U'`, so it cannot be deleted. Blank node subjects are ordinary RDF.
 
-Step 3 changes nothing stored either; it rejects a call that currently
-succeeds. That is a breaking API change for any caller passing bare strings,
-and the audit cannot say how many there are — worth a sweep before it lands.
+### The revised plan
 
-This is deliberately unlike `issues/131`, which cannot avoid moving term
-identity. These two should NOT be bundled: bundling them would put a
-no-migration fix behind a migration decision.
+**1. Extend the object's pattern to the other three positions.** One method,
+one line each, and the pattern is already in the file:
 
-### Ordering, and why
+    s_type = self._infer_rdflib_type(s) if hasattr(s, 'n3') else 'U'
 
-| step | closes | migration | breaking |
-|---|---|---|---|
-| 1. scheme regex | defect 1 | none | no |
-| 2. s/p/g take the parsed type | defect 2, §4.5 | none | no |
-| 3. `else` raises | defect 3 | none | **yes** |
+No API change — callers already pass terms. No migration. No lookup cost. This
+is the whole production fix, and it closes `named_graph_semantics` §4.5.
 
-Steps 1 and 2 are safe and independently valuable. Step 3 needs a caller sweep
-first. Doing 1 alone would already retire the largest class — every URI scheme
-outside three.
+**2. Delete `get_rdf_quad`.** Zero callers. Deleting it removes one of the
+three mechanisms outright rather than reconciling it, and it is the only method
+here whose type decision nothing depends on.
+
+**3. Apply the same pattern to `remove_rdf_quad`.** Test-only, so it is free,
+and leaving it inconsistent is how the next person learns the wrong pattern.
+
+**4. Later, separately: the string API.** Widening `_infer_type` to a scheme
+regex, and making `_ensure_term`'s `else` raise. Both are correctness work on a
+surface production does not use, both are measured below as small, and the
+second is breaking. Neither should hold up 1-3.
+
+### Why this ordering is different from the first draft
+
+The first draft led with the scheme regex because it looked like the biggest
+class of broken values. It is — in the string API that nothing calls. Counting
+callers before counting rows would have found that first.
 
 ### Performance implications, and whether a rewrite is the better trade
 
