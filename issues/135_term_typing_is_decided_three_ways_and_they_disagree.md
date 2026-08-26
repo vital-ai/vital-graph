@@ -225,15 +225,33 @@ are:
     'flatfishes: halibut; sole; flounder; plaice; turbot'
 
 `^[A-Za-z][A-Za-z0-9+.-]*:` matches `arrowworms:`. A word followed by a colon
-is a valid scheme by the grammar. **No regex can separate an IRI from a
-sentence**, and the 138,871 rows already lost prove the current three-prefix
-list cannot either.
+is a valid scheme *by the grammar* — RFC 3986 §3.1 defines the SYNTAX of a
+scheme, not which schemes exist.
 
-That is the argument for the API change rather than a better inference rule:
-inference is wrong for 138,917 stored literals today, will stay wrong for them,
-and cannot be made right by any test on the characters. A caller holding an
-rdflib term knows the answer; a caller holding a string does not have it to
-give.
+**Corrected: the right test is the registry, not a regex.** IANA maintains the
+authoritative list of registered URI schemes, and it is FINITE — a few hundred
+entries. `arrowworms` is not in it. `file`, `ftp`, `mailto`, `did`, `tag`,
+`s3`, `data` are. So checking membership rather than shape:
+
+    rejects  arrowworms:, shorebirds:, flatfishes:   (the 46 false positives)
+    accepts  file:, ftp:, mailto:, did:, tag:        (the class defect 1 is about)
+
+which is what both other options get wrong in opposite directions — the
+three-prefix list is too narrow, the syntax regex too broad.
+
+Two residuals, both smaller than what they replace:
+
+- **Unregistered private schemes** are legal in RDF and would be rejected. A
+  vocabulary coining `vital:` would not round-trip. That is a narrower failure
+  than today's list, which rejects every scheme but three.
+- **The registry changes**, so it needs a refresh path. It moves slowly, and a
+  vendored copy with a dated comment is enough.
+
+It still does not make string inference CORRECT — a literal whose text is
+`"http://example.com"` is a literal, and no registry can know that. The 138,871
+rows already lost stay lost. So the API change remains the real fix, and the
+registry is the right rule for the string surface that will still exist behind
+it.
 
 **Where a rewrite IS the right call, and it is not here.** `issues/131` —
 blank node labels not scoped to their document — cannot be fixed without moving
