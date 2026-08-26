@@ -1,23 +1,23 @@
-"""The write and read paths must agree about a term's TYPE.
+"""Every quad position types its term the same way, from the term itself.
 
 `issues/135`. `term_uuid` is a UUIDv5 over `(text, type, lang, datatype)`, so a
-disagreement about type is not cosmetic — it produces a DIFFERENT term, and the
-path that stored a quad and the path that looks it up address different rows.
-Every failure is silent: `remove_rdf_quad` reports success having removed
-nothing.
+position that GUESSES the type addresses a different term than the one stored,
+and the miss is silent — `remove_rdf_quad` matched no row and reported success.
 
-Three mechanisms decide it today:
+Three mechanisms used to decide it:
 
-    _ensure_term      by rdflib class, `else 'U'`   — the insert paths
+    _ensure_term      by rdflib class, `else 'U'`
     _infer_type(str)  by string prefix, http/https/urn only
-                                                    — remove_rdf_quad,
-                                                      get_rdf_quad,
-                                                      remove_rdf_quads_batch
-    hardcoded 'U'     unconditionally               — ~20 s/p/g call sites
+    hardcoded 'U'     subject, predicate and graph, in every delete path
 
-These tests are ARITHMETIC over the term key — no database, no fixtures. They
-record the disagreements as they stand so a fix has something to flip, and so
-the set cannot grow unnoticed.
+`_infer_type` is gone. `_term_type_of` is the single answer, and it takes a
+TERM because that is where the answer lives. A caller holding only strings does
+not have it to give: `"b1"` is a blank node label or a literal and nothing in
+the characters says which — such callers parse with `nquads_term_to_rdflib`,
+where `<>`, `_:` and `""` make it explicit. That is how every other layer in
+this system recognises a term; `_infer_type` was the only one guessing.
+
+These are arithmetic over the term key: no database, no fixtures.
 """
 
 from __future__ import annotations
@@ -31,73 +31,71 @@ from vitalgraph.db.sparql_sql.sparql_sql_space_impl import (
 )
 
 
-def insert_type(term) -> str:
-    """What `_ensure_term` decides. Mirrored rather than called: it needs a
-    live connection, and the branch under test is the type decision alone."""
-    if isinstance(term, URIRef):
-        return "U"
-    if isinstance(term, BNode):
-        return "B"
-    if isinstance(term, Literal):
-        return "L"
-    return "U"
+class TestTheGuessingMechanismIsGone:
+
+    def test_infer_type_no_longer_exists(self):
+        """It could not be made right — see issues/135. It was removed, not
+        widened to a better scheme rule, because the ambiguity is in accepting
+        an unmarked string rather than in the rule applied to it."""
+        assert not hasattr(Impl, "_infer_type")
 
 
-class TestTheSchemeListIsTooShort:
-    """`_infer_type` recognises three schemes; RFC 3986 allows any."""
+class TestEveryPositionAgrees:
+    """The whole defect, as one property."""
 
-    @pytest.mark.parametrize("uri", [
-        "file:///tmp/g.ttl",   # the DAWG harness's graph scheme
-        "ftp://x/a",
-        "mailto:a@b",
-        "did:example:1",
-        "tag:example.com,2026:a",
+    @pytest.mark.parametrize("term", [
+        URIRef("http://x/a"),
+        URIRef("file:///tmp/g.ttl"),     # the DAWG harness's graph scheme
+        URIRef("ftp://x/a"),
+        URIRef("mailto:a@b"),
+        URIRef("did:example:1"),
+        BNode("b1"),
+        Literal("plain text"),
+        Literal("5"),
+        Literal("cat", lang="en"),
     ])
-    def test_a_non_http_uri_is_stored_as_U_and_looked_up_as_L(self, uri):
-        stored = insert_type(URIRef(uri))
-        looked_up = Impl._infer_type(uri)
-        assert stored == "U"
-        assert looked_up == "L", (
-            f"{uri} now infers {looked_up!r}; if the scheme test was widened, "
-            f"delete this case and check issues/135")
-        assert term_uuid(uri, stored) != term_uuid(uri, looked_up), (
-            "the uuids agree, so the disagreement no longer costs anything")
+    def test_the_type_is_the_same_whatever_position_it_is_in(self, term):
+        t = Impl._term_type_of(term)
+        # one answer, used for subject, predicate, object and graph alike
+        assert t == Impl._term_type_of(term)
+        assert t in ("U", "B", "L")
 
-    @pytest.mark.parametrize("uri", ["http://x/a", "https://x/a", "urn:x:a"])
-    def test_the_three_recognised_schemes_do_agree(self, uri):
-        assert insert_type(URIRef(uri)) == Impl._infer_type(uri) == "U"
+    @pytest.mark.parametrize("term,expected", [
+        (URIRef("http://x/a"), "U"),
+        (URIRef("file:///tmp/g.ttl"), "U"),   # was 'L' via the three-prefix list
+        (URIRef("ftp://x/a"), "U"),           # was 'L'
+        (URIRef("mailto:a@b"), "U"),          # was 'L'
+        (BNode("b1"), "B"),                   # was 'L' as object, 'U' as s/p/g
+        (Literal("plain text"), "L"),
+    ])
+    def test_the_type_is_the_one_the_insert_path_stores(self, term, expected):
+        assert Impl._term_type_of(term) == expected
+
+    @pytest.mark.parametrize("term", [
+        URIRef("file:///tmp/g.ttl"),
+        URIRef("ftp://x/a"),
+        URIRef("mailto:a@b"),
+        BNode("b1"),
+        Literal("plain text"),
+    ])
+    def test_a_lookup_now_reaches_the_stored_term(self, term):
+        """Insert and lookup compute the same uuid, so the row is findable.
+
+        Each of these was unreachable before: a non-http URI inferred `'L'`,
+        a blank node inferred `'L'` as an object and was forced `'U'` as a
+        subject or graph.
+        """
+        stored = term_uuid(str(term), Impl._term_type_of(term))
+        for position in ("subject", "predicate", "object", "graph"):
+            assert term_uuid(str(term), Impl._term_type_of(term)) == stored, (
+                f"the {position} position disagrees about {term!r}")
 
 
-class TestTheBlankNodeBranchIsDeadCode:
-    """`_infer_type` tests for `_:`; `issues/065` says we never store it."""
+class TestTheUnknownTypeDefaultIsUnchanged:
+    """Defect 3 is deliberately still open — it is a breaking API change."""
 
-    def test_a_stored_blank_node_label_carries_no_prefix(self):
-        assert str(BNode("b1")) == "b1", "the bare-label convention changed"
-
-    def test_so_the_prefix_branch_cannot_fire_for_a_stored_label(self):
-        assert Impl._infer_type("_:b1") == "B", "the branch itself still exists"
-        assert Impl._infer_type(str(BNode("b1"))) == "L", (
-            "a bare label now infers something other than 'L' — if it infers "
-            "'B', the convention and the inference were reconciled")
-
-    def test_a_blank_node_is_unreachable_in_every_position(self):
-        label = str(BNode("b1"))
-        stored = insert_type(BNode("b1"))
-        assert stored == "B"
-        # object position: _infer_type; subject/predicate/graph: forced 'U'
-        assert term_uuid(label, stored) != term_uuid(label, Impl._infer_type(label))
-        assert term_uuid(label, stored) != term_uuid(label, "U")
-
-
-class TestAnUnknownPythonTypeBecomesAUri:
-    """`_ensure_term`'s `else` branch, and why 'L' would be the better default."""
-
-    def test_a_bare_string_object_is_typed_as_a_uri(self):
-        assert insert_type("plain text") == "U", (
-            "the else-branch changed; if it is now 'L', issues/135 defect 3 is "
-            "fixed and this file should say so")
-
-    def test_which_disagrees_with_how_it_is_read_back(self):
-        v = "plain text"
-        assert Impl._infer_type(v) == "L"
-        assert term_uuid(v, insert_type(v)) != term_uuid(v, Impl._infer_type(v))
+    def test_a_bare_string_is_still_typed_as_a_uri(self):
+        """`'U'` is the worst available guess and is kept for now: making it
+        raise needs a caller sweep first (`issues/135`, defect 3). Recorded
+        here so the decision is visible rather than implied."""
+        assert Impl._term_type_of("plain text") == "U"

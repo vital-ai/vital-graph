@@ -977,10 +977,15 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
     async def remove_rdf_quad(self, space_id: str, s: str, p: str, o: str, g: str) -> bool:
         try:
             t = self.schema.get_table_names(space_id)
-            s_uuid = _generate_term_uuid(s, 'U')
-            p_uuid = _generate_term_uuid(p, 'U')
-            o_uuid = _generate_term_uuid(o, self._infer_type(o))
-            g_uuid = _generate_term_uuid(g, 'U')
+            # Same rule as the batch paths: the type comes from the term.
+            # A caller with only strings should parse them first with
+            # `nquads_term_to_rdflib`, where `<>`, `_:` and `""` say which is
+            # which -- `_infer_type` used to guess here from three URI
+            # prefixes and could not see a blank node at all (`issues/135`).
+            s_uuid = _generate_term_uuid(str(s), self._term_type_of(s))
+            p_uuid = _generate_term_uuid(str(p), self._term_type_of(p))
+            o_uuid = _generate_term_uuid(str(o), self._term_type_of(o))
+            g_uuid = _generate_term_uuid(str(g), self._term_type_of(g))
             async with self._db._pool.acquire() as conn:
                 # Atomic, and the derived tables go first — frame_entity before
                 # edge because it derives from it, and both before the quad is
@@ -1010,12 +1015,25 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             return False
 
     async def get_rdf_quad(self, space_id: str, s: str, p: str, o: str, g: str) -> bool:
+        """Whether the quad exists.
+
+        No caller in this repository, but it is `@abstractmethod` on
+        `SpaceBackendInterface` and the other backends implement it, so it is
+        contract rather than dead code — removing it stops this class being
+        instantiable at all.
+
+        Types every position from the term, like the remove paths. It used to
+        force `'U'` on subject/predicate/graph and guess the object from three
+        URI prefixes, so it could not find a quad whose subject or graph was a
+        blank node, nor one whose object was a `file:`/`ftp:`/`mailto:` URI
+        (`issues/135`).
+        """
         try:
             t = self.schema.get_table_names(space_id)
-            s_uuid = _generate_term_uuid(s, 'U')
-            p_uuid = _generate_term_uuid(p, 'U')
-            o_uuid = _generate_term_uuid(o, self._infer_type(o))
-            g_uuid = _generate_term_uuid(g, 'U')
+            s_uuid = _generate_term_uuid(str(s), self._term_type_of(s))
+            p_uuid = _generate_term_uuid(str(p), self._term_type_of(p))
+            o_uuid = _generate_term_uuid(str(o), self._term_type_of(o))
+            g_uuid = _generate_term_uuid(str(g), self._term_type_of(g))
             async with self._db._pool.acquire() as conn:
                 count = await conn.fetchval(
                     f"SELECT COUNT(*) FROM {t['rdf_quad']} "
@@ -1769,19 +1787,12 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 # Build UUID tuples
                 delete_rows = []
                 for s, p, o, g in quads:
-                    s_uuid = _generate_term_uuid(str(s), 'U')
-                    p_uuid = _generate_term_uuid(str(p), 'U')
-                    g_uuid = _generate_term_uuid(str(g), 'U')
+                    s_uuid = _generate_term_uuid(str(s), self._term_type_of(s))
+                    p_uuid = _generate_term_uuid(str(p), self._term_type_of(p))
+                    g_uuid = _generate_term_uuid(str(g), self._term_type_of(g))
 
                     o_text = str(o)
-                    if isinstance(o, URIRef):
-                        o_type = 'U'
-                    elif isinstance(o, BNode):
-                        o_type = 'B'
-                    elif isinstance(o, Literal):
-                        o_type = 'L'
-                    else:
-                        o_type = 'U'
+                    o_type = self._term_type_of(o)
                     o_lang = o.language if isinstance(o, Literal) else None
                     o_dt = dt_map.get(str(o.datatype)) if isinstance(o, Literal) and o.datatype else None
                     o_uuid = _generate_term_uuid(o_text, o_type, o_lang, o_dt)
@@ -1872,13 +1883,13 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 # before the quads they are derived from disappear.
                 delete_rows = []
                 for s, p, o, g in quads:
-                    s_uuid = _generate_term_uuid(str(s), 'U')
-                    p_uuid = _generate_term_uuid(str(p), 'U')
-                    g_uuid = _generate_term_uuid(str(g), 'U')
+                    s_uuid = _generate_term_uuid(str(s), self._term_type_of(s))
+                    p_uuid = _generate_term_uuid(str(p), self._term_type_of(p))
+                    g_uuid = _generate_term_uuid(str(g), self._term_type_of(g))
 
                     # For the object, extract lang/datatype_id just like _ensure_term
                     o_text = str(o)
-                    o_type = self._infer_rdflib_type(o) if hasattr(o, 'n3') else self._infer_type(o_text)
+                    o_type = self._term_type_of(o)
                     o_lang = None
                     o_datatype_id = None
                     if isinstance(o, Literal):
@@ -2648,13 +2659,35 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         return result
 
     @staticmethod
-    def _infer_type(value: str) -> str:
-        """Infer term type from a raw string value."""
-        if value.startswith('http://') or value.startswith('https://') or value.startswith('urn:'):
+    def _term_type_of(term) -> str:
+        """The term type for a value in ANY quad position.
+
+        `term_uuid` is a UUIDv5 over `(text, type, ...)`, so a position that
+        guesses the type addresses a different term than the one stored. The
+        subject, predicate and graph positions used to be hardcoded `'U'` while
+        the object beside them was typed from its class — so a blank-node
+        subject or graph went in as `'B'` and was looked up as `'U'`, and the
+        delete matched no row and reported success (`issues/135`,
+        `named_graph_semantics` §4.5).
+
+        An rdflib term carries its own answer, which is why this takes one. A
+        caller holding a bare string does not have the answer to give: `"b1"`
+        is a blank node label or a literal and nothing in the characters says
+        which. Such callers should parse with `nquads_term_to_rdflib`, where
+        the `<>`, `_:` and `""` markers make it unambiguous — the same way
+        every other layer in this system recognises a term.
+        """
+        if isinstance(term, URIRef):
             return 'U'
-        if value.startswith('_:'):
+        if isinstance(term, BNode):
             return 'B'
-        return 'L'
+        if isinstance(term, Literal):
+            return 'L'
+        # Not an rdflib term. 'U' is the historical default and the worst
+        # available guess -- it stores arbitrary text as an identifier. Kept
+        # for now because changing it is a breaking API change that wants a
+        # caller sweep first (`issues/135`, defect 3).
+        return 'U'
 
     @staticmethod
     def _infer_rdflib_type(term) -> str:

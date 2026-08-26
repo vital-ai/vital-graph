@@ -108,6 +108,37 @@ class TestBlankNodeGraphRoundTrip:
         await space_impl.remove_rdf_quad(
             test_space, str(s), str(P), "v", str(g))
         assert await _count() == 1, (
-            "remove_rdf_quad reached the blank-node graph -- if this now "
-            "passes, the insert/remove typing was reconciled and "
-            "named_graph_semantics §4.5 should be updated to say so")
+            "a BARE STRING reached the blank-node graph. It should not: "
+            "`bng2` is a blank node label or a literal and nothing in the "
+            "characters says which, so `_term_type_of` types it 'U'. A caller "
+            "who means the blank node passes the TERM -- see the test below.")
+
+    async def test_remove_reaches_it_when_the_caller_passes_the_term(
+        self, test_space, space_impl, pg_conn
+    ):
+        """The fix (`issues/135`). Types come from the term, in every position.
+
+        Subject, predicate and graph used to be hardcoded `'U'` in both batch
+        delete paths and in `remove_rdf_quad`, while the object beside them was
+        typed from its class. So a blank-node graph went in as `'B'` and was
+        looked up as `'U'`: no row matched and the delete reported success.
+
+        This is the case production takes -- `get_existing_quads_for_uris`
+        returns rdflib Identifiers, so the live delete path always has terms.
+        """
+        g = BNode("bng3")
+        s = URIRef("urn:test:bng:s3")
+        await space_impl.add_rdf_quads_batch(
+            test_space, [(s, P, Literal("v"), g)])
+
+        def _count():
+            return pg_conn.fetchval(
+                f"""SELECT count(*) FROM {test_space}_rdf_quad q
+                    JOIN {test_space}_term t ON t.term_uuid = q.context_uuid
+                    WHERE t.term_text = 'bng3'""")
+
+        assert await _count() == 1, "setup failed: the quad is not there"
+        await space_impl.remove_rdf_quad(test_space, s, P, Literal("v"), g)
+        assert await _count() == 0, (
+            "the quad survived: some position is still typing the graph by "
+            "something other than the term")
