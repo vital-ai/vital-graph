@@ -353,12 +353,15 @@ class TriplesEndpoint:
                     affected_count=0
                 )
             
-            # Convert quads to tuple format expected by the backend
-            # Preserve RDFLib objects (especially Literal with datatype/language)
-            # so downstream dual-write formatters can match typed literals correctly
-            quad_tuples = []
-            for s, p, o, g in quads:
-                quad_tuples.append((str(s), str(p), o, str(g)))
+            # Pass the TERMS through, all four of them. The object was already
+            # preserved here "especially Literal with datatype/language ... so
+            # downstream dual-write formatters can match typed literals
+            # correctly" -- and the reasoning applies just as much to the other
+            # three, which were flattened with `str()`. A quad position cannot
+            # type a bare string, so it guessed 'U' (`issues/135`); for these
+            # three that happened to be right, and being right by luck is what
+            # made the guess survive.
+            quad_tuples = list(quads)
             
             # Remove quads from the database using hybrid backend batch method
             success = await db_space_impl.remove_rdf_quads_batch(space_id, quad_tuples)
@@ -417,7 +420,11 @@ class TriplesEndpoint:
             s = nquads_term_to_rdflib(q.s, bnode_scope)
             p = nquads_term_to_rdflib(q.p, bnode_scope)
             o = nquads_term_to_rdflib(q.o, bnode_scope)
-            g = nquads_term_to_rdflib(q.g, bnode_scope) if q.g else graph_uri
+            # URIRef on the fallback too. s/p/o are parsed above; this one
+            # was a bare string, and a quad position cannot type one
+            # (`issues/135`).
+            g = (nquads_term_to_rdflib(q.g, bnode_scope) if q.g
+                 else URIRef(graph_uri))
             quads.append((s, p, o, g))
         
         self.logger.info(f"Converted {len(quads)} quads from QuadRequest")

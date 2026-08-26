@@ -5,6 +5,7 @@ This module provides the implementation for deleting KG entities from the backen
 supporting both single entity deletion and entity graph deletion with related objects.
 """
 
+from rdflib import URIRef
 import logging
 from typing import List, Optional, Dict, Any, Union
 
@@ -71,7 +72,15 @@ class KGEntityDeleteProcessor:
                         o_rdflib = _sparql_binding_to_rdflib(binding.get('o', ''))
                         
                         if p_value and o_rdflib is not None:
-                            delete_quads.append((entity_uri, p_value, o_rdflib, full_graph_uri))
+                            # rdflib terms in every position. The object was
+                            # already reconstructed above "to preserve
+                            # datatype/language"; the other three were left as
+                            # strings, and a bare string cannot say whether it
+                            # is a URI, a literal or a blank node label
+                            # (`issues/135`).
+                            delete_quads.append(
+                                (URIRef(entity_uri), URIRef(p_value),
+                                 o_rdflib, URIRef(full_graph_uri)))
             
             if not delete_quads:
                 self.logger.warning(f"No triples found for entity {entity_uri}")

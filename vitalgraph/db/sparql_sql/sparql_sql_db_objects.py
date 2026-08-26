@@ -165,7 +165,13 @@ class SparqlSQLDbObjects:
             triples = await self._get_triples_for_uris(
                 space_id, graph_id, subject_uris
             )
-            return [(s, p, o, graph_id) for s, p, o in triples]
+            # URIRef on the graph. `_get_triples_for_uris` already returns
+            # rdflib terms for s/p/o -- "converted to rdflib terms for
+            # VitalSigns compatibility" -- and this one position was left as
+            # the bare string it arrived as. Every delete path downstream
+            # (objects, triples, entities) then handed a string to a quad
+            # position, which cannot type one and guessed 'U' (`issues/135`).
+            return [(s, p, o, URIRef(graph_id)) for s, p, o in triples]
 
         except Exception as e:
             self.logger.error("get_objects_by_uris_batch failed: %s", e)

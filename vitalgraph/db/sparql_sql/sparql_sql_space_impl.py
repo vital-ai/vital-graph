@@ -2225,10 +2225,19 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             return []
 
         values = " ".join(f"<{u}>" for u in safe)
-        sparql = (
-            f"SELECT ?s ?p ?o WHERE {{ GRAPH ?g {{ "
-            f"VALUES ?s {{ {values} }} ?s ?p ?o . }} }}"
-        )
+        # NO `GRAPH ?g` wrapper. It used to be here to mean "look in every
+        # graph", and that stopped being what it means: SPARQL's `GRAPH ?g`
+        # ranges over the NAMED graphs, and since
+        # `named_graph_semantics` §4.2 the default graph is correctly excluded
+        # from them. Data written without a graph clause -- `INSERT DATA { ... }`
+        # with no GRAPH, which is the ordinary case -- lands in the default
+        # graph, so a DESCRIBE of it returned an empty graph.
+        #
+        # Unwrapped, the pattern reads the whole dataset (§3), which is what a
+        # description is supposed to cover. Caught by `tests/api`, and only
+        # because the test container was rebuilt: the in-process suites do not
+        # exercise this path.
+        sparql = f"SELECT ?s ?p ?o WHERE {{ VALUES ?s {{ {values} }} ?s ?p ?o . }}"
         sub = await self.execute_sparql_query(space_id, sparql)
         triples: List[Dict[str, Any]] = []
         seen = set()
@@ -2689,19 +2698,23 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         if isinstance(term, Literal):
             return 'L'
         # Not an rdflib term, so there is no answer to give. Guessing was the
-        # defect: the old `else 'U'` stored arbitrary text as an IDENTIFIER,
-        # which is how `test_short_needle_probe_is_bounded` came to hold
-        # "entity 3 (Topic)" as a URI and match it with CONTAINS.
+        # defect: `else 'U'` stored arbitrary text as an IDENTIFIER, and a
+        # markdown document body really was being written as a URI by
+        # `update_type_documentation`.
         #
         # `'L'` would be a better guess and is still a guess. `"b1"` is a blank
-        # node label or a literal and the characters cannot say which, so the
-        # honest answer is to refuse and let the caller say. Parse with
-        # `nquads_term_to_rdflib` -- `<>`, `_:` and `""` make it explicit, the
-        # way every other layer in this system recognises a term.
+        # node label or a literal and the characters cannot say which, so this
+        # refuses and lets the caller say. Parse with `nquads_term_to_rdflib`,
+        # where `<>`, `_:` and `""` make it explicit -- the way every other
+        # layer here recognises a term.
         #
-        # Swept before this was made to raise (`issues/135` defect 3): across
-        # conformance, unit and integration, NINE bare strings reached here and
-        # every one came from a test. No production path passes one.
+        # Made to raise, reverted, and made to raise again on 2026-08-25. The
+        # first sweep instrumented this branch and ran conformance, unit and
+        # integration: nine bare strings, all from tests. It was WRONG, because
+        # `tests/api` drives a container and that container was two days stale,
+        # so the API layer never reached the instrumentation. Re-swept against
+        # a rebuilt image: 616 bare strings from six production call sites.
+        # Each now passes terms, and the sweep reads zero.
         raise TypeError(
             f"cannot type {term!r} ({type(term).__name__}): a quad position "
             f"needs an rdflib term, because a bare string cannot say whether "

@@ -105,9 +105,7 @@ class TestBlankNodeGraphRoundTrip:
                     WHERE t.term_text = 'bng2'""")
 
         assert await _count() == 1, "setup failed: the quad is not there"
-        # Raises now rather than silently removing nothing (`issues/135`).
-        # It used to return False from a swallowed error, which reads exactly
-        # like "the quad was not there".
+        # Raises rather than silently removing nothing (`issues/135`).
         with pytest.raises(TypeError):
             await space_impl.remove_rdf_quad(
                 test_space, str(s), str(P), "v", str(g))

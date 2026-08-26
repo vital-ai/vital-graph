@@ -5,6 +5,7 @@ This module provides READ operations for KGTypes using SPARQL queries.
 Implements GET, LIST, and batch GET operations with proper VitalSigns integration.
 """
 
+from rdflib import Literal, URIRef
 import asyncio
 import logging
 from typing import List, Dict, Any, Optional, Tuple
@@ -442,9 +443,16 @@ SELECT ?docURI ?content WHERE {{
             doc_uri = existing['document_uri']
             content_pred = "http://vital.ai/ontology/haley-ai-kg#hasKGDocumentContent"
 
-            # Delete old content triple, insert new one
-            delete_quads = [(doc_uri, content_pred, existing.get('content', ''), graph_id)]
-            insert_quads = [(doc_uri, content_pred, content, graph_id)]
+            # Delete old content triple, insert new one.
+            #
+            # rdflib terms, not bare strings. The content is a LITERAL -- a
+            # markdown document body -- and a quad position that receives a
+            # bare string cannot tell a literal from an identifier, so it
+            # guessed 'U' and stored the document text as a URI (`issues/135`).
+            delete_quads = [(URIRef(doc_uri), URIRef(content_pred),
+                             Literal(existing.get('content', '')), URIRef(graph_id))]
+            insert_quads = [(URIRef(doc_uri), URIRef(content_pred),
+                             Literal(content), URIRef(graph_id))]
 
             await backend.update_quads(
                 space_id=space_id, graph_id=graph_id,
@@ -463,18 +471,28 @@ SELECT ?docURI ?content WHERE {{
             edge_type = "http://vital.ai/ontology/haley-ai-kg#Edge_hasKGEdge"
             content_pred = "http://vital.ai/ontology/haley-ai-kg#hasKGDocumentContent"
 
+            # rdflib terms throughout. `content` and `"true"` are LITERALS;
+            # passed as bare strings they were typed 'U' and stored as
+            # identifiers -- a markdown document body as a URI (`issues/135`).
+            # The update branch above must agree with this one, or its delete
+            # computes a different term than the insert wrote and the old
+            # triple survives.
+            G = URIRef(graph_id)
+            doc, edge = URIRef(doc_uri), URIRef(edge_uri)
+            VC = "http://vital.ai/ontology/vital-core#"
+            RDF_TYPE = URIRef("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
             insert_quads = [
                 # KGDocument object
-                (doc_uri, "http://vital.ai/ontology/vital-core#vitaltype", kgdoc_type, graph_id),
-                (doc_uri, "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", kgdoc_type, graph_id),
-                (doc_uri, content_pred, content, graph_id),
-                (doc_uri, "http://vital.ai/ontology/vital-core#isActive", "true", graph_id),
+                (doc, URIRef(VC + "vitaltype"), URIRef(kgdoc_type), G),
+                (doc, RDF_TYPE, URIRef(kgdoc_type), G),
+                (doc, URIRef(content_pred), Literal(content), G),
+                (doc, URIRef(VC + "isActive"), Literal("true"), G),
                 # Edge_hasKGEdge linking type → document
-                (edge_uri, "http://vital.ai/ontology/vital-core#vitaltype", edge_type, graph_id),
-                (edge_uri, "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", edge_type, graph_id),
-                (edge_uri, "http://vital.ai/ontology/vital-core#hasEdgeSource", type_uri, graph_id),
-                (edge_uri, "http://vital.ai/ontology/vital-core#hasEdgeDestination", doc_uri, graph_id),
-                (edge_uri, "http://vital.ai/ontology/vital-core#isActive", "true", graph_id),
+                (edge, URIRef(VC + "vitaltype"), URIRef(edge_type), G),
+                (edge, RDF_TYPE, URIRef(edge_type), G),
+                (edge, URIRef(VC + "hasEdgeSource"), URIRef(type_uri), G),
+                (edge, URIRef(VC + "hasEdgeDestination"), doc, G),
+                (edge, URIRef(VC + "isActive"), Literal("true"), G),
             ]
 
             await backend.update_quads(

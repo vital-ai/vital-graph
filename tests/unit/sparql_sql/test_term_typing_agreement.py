@@ -92,13 +92,23 @@ class TestEveryPositionAgrees:
 
 
 class TestAnUntypeableValueRefusesRatherThanGuessing:
-    """Defect 3, closed. The old `else 'U'` stored text as an identifier."""
+    """Defect 3, closed. The old `else 'U'` stored text as an identifier.
+
+    Swept twice. The FIRST sweep instrumented this branch and ran conformance,
+    unit and integration: nine bare strings, all from tests, so raising looked
+    safe. It was wrong — `tests/api` drives a CONTAINER, and that container was
+    two days stale, so the API layer never reached the instrumentation. On a
+    rebuilt image, 616 bare strings arrived from six production call sites and
+    thirteen API tests failed.
+
+    Each of those now passes rdflib terms, and the sweep reads zero.
+    """
 
     @pytest.mark.parametrize("value", ["plain text", "http://x/a", "b1", 5, None])
     def test_a_non_term_raises(self, value):
         """Including `"http://x/a"`: a string that LOOKS like a URI still has
-        not said it is one. Guessing right by luck is what produced 138,871
-        literals no string lookup could find."""
+        not said it is one. Being right by luck is what let the guess survive —
+        `update_type_documentation` was writing a markdown body as a URI."""
         with pytest.raises(TypeError):
             Impl._term_type_of(value)
 
