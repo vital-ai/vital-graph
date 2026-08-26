@@ -46,6 +46,7 @@ recursive-exclude domain_schema *
 recursive-exclude jena *
 recursive-exclude k8s *
 recursive-exclude bin *
+recursive-exclude devtools *
 recursive-exclude registry *
 
 # Exclude IDE and build artifacts

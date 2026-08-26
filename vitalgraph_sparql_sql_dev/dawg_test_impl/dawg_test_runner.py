@@ -397,6 +397,24 @@ async def run_single_test_sql_v2(test: DawgTestCase, db_conn) -> TestResult:
             await load_ttl_into_space(db_conn, g_path, SPACE_ID,
                                       graph_uri=graph_iri)
         run_single_test_sql_v2._cache_key = cache_key
+        # The datatype cache is keyed by space and populated on the first
+        # query. Loading new data can register datatypes the corpus uses and
+        # this space did not have -- `t:type1`, `t:type2` and friends -- and
+        # `truncate_space` does not clear the datatype table, so ids accumulate
+        # in whatever order the tests happen to run.
+        #
+        # Without this, a cache populated before those rows existed stays
+        # stale, the unknown-datatype guard cannot tell two datatypes apart,
+        # and `open-eq-07` returns all sixteen pairs instead of twelve.
+        #
+        # It only bites where the space starts EMPTY, which is why it never
+        # showed locally -- a long-lived dawg_test already holds every datatype
+        # the corpus uses, so the first population is already complete. CI
+        # builds the database from nothing and failed 18 conformance tests on
+        # it. Production already invalidates on update (`emit_update`,
+        # `sparql_sql_space_impl`); only this harness did not.
+        from vitalgraph.db.sparql_sql.generator import invalidate_datatype_cache
+        invalidate_datatype_cache(SPACE_ID)
         _current_data_file = data_path
 
     # Get pyoxigraph baseline. An oracle that cannot run the query is NOT a
