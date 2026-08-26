@@ -91,11 +91,17 @@ class TestEveryPositionAgrees:
                 f"the {position} position disagrees about {term!r}")
 
 
-class TestTheUnknownTypeDefaultIsUnchanged:
-    """Defect 3 is deliberately still open — it is a breaking API change."""
+class TestAnUntypeableValueRefusesRatherThanGuessing:
+    """Defect 3, closed. The old `else 'U'` stored text as an identifier."""
 
-    def test_a_bare_string_is_still_typed_as_a_uri(self):
-        """`'U'` is the worst available guess and is kept for now: making it
-        raise needs a caller sweep first (`issues/135`, defect 3). Recorded
-        here so the decision is visible rather than implied."""
-        assert Impl._term_type_of("plain text") == "U"
+    @pytest.mark.parametrize("value", ["plain text", "http://x/a", "b1", 5, None])
+    def test_a_non_term_raises(self, value):
+        """Including `"http://x/a"`: a string that LOOKS like a URI still has
+        not said it is one. Guessing right by luck is what produced 138,871
+        literals no string lookup could find."""
+        with pytest.raises(TypeError):
+            Impl._term_type_of(value)
+
+    def test_the_error_says_what_to_do_about_it(self):
+        with pytest.raises(TypeError, match="nquads_term_to_rdflib"):
+            Impl._term_type_of("plain text")

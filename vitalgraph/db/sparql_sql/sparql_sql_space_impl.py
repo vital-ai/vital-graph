@@ -975,17 +975,17 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             return False
 
     async def remove_rdf_quad(self, space_id: str, s: str, p: str, o: str, g: str) -> bool:
+        # OUTSIDE the try. `_term_type_of` raises on a value it cannot type,
+        # and the `except Exception` below turns everything into a logged
+        # `return False` -- so a bad argument would become a silent "removed
+        # nothing"/"not found", the exact failure this was meant to end. A DB
+        # error is worth swallowing here; a caller error is not.
+        s_uuid = _generate_term_uuid(str(s), self._term_type_of(s))
+        p_uuid = _generate_term_uuid(str(p), self._term_type_of(p))
+        o_uuid = _generate_term_uuid(str(o), self._term_type_of(o))
+        g_uuid = _generate_term_uuid(str(g), self._term_type_of(g))
         try:
             t = self.schema.get_table_names(space_id)
-            # Same rule as the batch paths: the type comes from the term.
-            # A caller with only strings should parse them first with
-            # `nquads_term_to_rdflib`, where `<>`, `_:` and `""` say which is
-            # which -- `_infer_type` used to guess here from three URI
-            # prefixes and could not see a blank node at all (`issues/135`).
-            s_uuid = _generate_term_uuid(str(s), self._term_type_of(s))
-            p_uuid = _generate_term_uuid(str(p), self._term_type_of(p))
-            o_uuid = _generate_term_uuid(str(o), self._term_type_of(o))
-            g_uuid = _generate_term_uuid(str(g), self._term_type_of(g))
             async with self._db._pool.acquire() as conn:
                 # Atomic, and the derived tables go first — frame_entity before
                 # edge because it derives from it, and both before the quad is
@@ -1028,12 +1028,17 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         blank node, nor one whose object was a `file:`/`ftp:`/`mailto:` URI
         (`issues/135`).
         """
+        # OUTSIDE the try. `_term_type_of` raises on a value it cannot type,
+        # and the `except Exception` below turns everything into a logged
+        # `return False` -- so a bad argument would become a silent "removed
+        # nothing"/"not found", the exact failure this was meant to end. A DB
+        # error is worth swallowing here; a caller error is not.
+        s_uuid = _generate_term_uuid(str(s), self._term_type_of(s))
+        p_uuid = _generate_term_uuid(str(p), self._term_type_of(p))
+        o_uuid = _generate_term_uuid(str(o), self._term_type_of(o))
+        g_uuid = _generate_term_uuid(str(g), self._term_type_of(g))
         try:
             t = self.schema.get_table_names(space_id)
-            s_uuid = _generate_term_uuid(str(s), self._term_type_of(s))
-            p_uuid = _generate_term_uuid(str(p), self._term_type_of(p))
-            o_uuid = _generate_term_uuid(str(o), self._term_type_of(o))
-            g_uuid = _generate_term_uuid(str(g), self._term_type_of(g))
             async with self._db._pool.acquire() as conn:
                 count = await conn.fetchval(
                     f"SELECT COUNT(*) FROM {t['rdf_quad']} "
@@ -2683,11 +2688,25 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             return 'B'
         if isinstance(term, Literal):
             return 'L'
-        # Not an rdflib term. 'U' is the historical default and the worst
-        # available guess -- it stores arbitrary text as an identifier. Kept
-        # for now because changing it is a breaking API change that wants a
-        # caller sweep first (`issues/135`, defect 3).
-        return 'U'
+        # Not an rdflib term, so there is no answer to give. Guessing was the
+        # defect: the old `else 'U'` stored arbitrary text as an IDENTIFIER,
+        # which is how `test_short_needle_probe_is_bounded` came to hold
+        # "entity 3 (Topic)" as a URI and match it with CONTAINS.
+        #
+        # `'L'` would be a better guess and is still a guess. `"b1"` is a blank
+        # node label or a literal and the characters cannot say which, so the
+        # honest answer is to refuse and let the caller say. Parse with
+        # `nquads_term_to_rdflib` -- `<>`, `_:` and `""` make it explicit, the
+        # way every other layer in this system recognises a term.
+        #
+        # Swept before this was made to raise (`issues/135` defect 3): across
+        # conformance, unit and integration, NINE bare strings reached here and
+        # every one came from a test. No production path passes one.
+        raise TypeError(
+            f"cannot type {term!r} ({type(term).__name__}): a quad position "
+            f"needs an rdflib term, because a bare string cannot say whether "
+            f"it is a URI, a literal or a blank node label. Parse it first "
+            f"with vitalgraph.utils.quad_format_utils.nquads_term_to_rdflib.")
 
     @staticmethod
     def _infer_rdflib_type(term) -> str:

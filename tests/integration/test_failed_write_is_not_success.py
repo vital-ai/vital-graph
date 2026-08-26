@@ -35,6 +35,7 @@ flake, the fixture space is now created per module by `make_space`.
 from __future__ import annotations
 
 import pytest
+from rdflib import URIRef
 import pytest_asyncio
 
 from .conftest import skip_no_infra
@@ -58,8 +59,13 @@ async def write_space(make_space):
 
 @pytest.fixture
 def quads(write_space):
-    return [("urn:issues105:s", "urn:issues105:p", "urn:issues105:o",
-             f"urn:{write_space}")]
+    # rdflib terms, not bare strings. A quad position takes a TERM: a string
+    # cannot say whether it is a URI, a literal or a blank node label, and
+    # guessing is what stored `"entity 3 (Topic)"` as a URI (`issues/135`).
+    # This is also what the live write paths pass —
+    # `get_existing_quads_for_uris` returns rdflib Identifiers.
+    return [(URIRef("urn:issues105:s"), URIRef("urn:issues105:p"),
+             URIRef("urn:issues105:o"), URIRef(f"urn:{write_space}"))]
 
 
 async def _space_impl(pg_conn):

@@ -1,6 +1,6 @@
 # Term Typing Is Decided Three Ways, and They Disagree
 
-## Status: OPEN — audited 2026-08-25. Three defects, all silent, all in stored data.
+## Status: FIXED 2026-08-25. All three defects closed; `_infer_type` deleted.
 
 `term_uuid` is a UUIDv5 over `(text, type, lang, datatype)`. So a disagreement
 about a term's TYPE is not a cosmetic inconsistency — it produces a **different
@@ -393,3 +393,51 @@ signal that a mechanism was reconciled, not a regression.
 - `issues/065` — the bare-label convention `_infer_type` predates
 - `issues/131` — blank node labels not document-scoped; the same migration question
 - `issues/132` — where the scheme regex above already exists
+
+
+---
+
+## Fixed 2026-08-25
+
+One mechanism, `_term_type_of(term)`, for subject, predicate, object and graph
+alike in every path. `_infer_type` is deleted rather than widened.
+
+| defect | closed by |
+|---|---|
+| 1. non-http schemes unreachable | types come from the term, so no scheme rule is consulted at all |
+| 2. blank nodes unreachable | same — s/p/g stop being hardcoded `'U'` |
+| 3. unknown type guessed as `'U'` | raises `TypeError` naming `nquads_term_to_rdflib` |
+
+### Three things the implementation found that the audit had not
+
+**A third spelling.** `remove_rdf_quads_batch_bulk` carried its own inlined
+`isinstance` chain — a fourth decision point beside the three this issue named.
+Found by grep after fixing the first batch path; reading the issue alone would
+have missed it.
+
+**`get_rdf_quad` is contract, not dead code.** This issue recorded "zero
+callers" and proposed deleting it. It is `@abstractmethod` on
+`SpaceBackendInterface` and the fuseki backends implement it, so removing it
+left `SparqlSQLSpaceImpl` with an unimplemented abstract method and
+uninstantiable. *No direct callers* is not *unused*.
+
+**Raising into a swallowing `except` achieves nothing.** Both `remove_rdf_quad`
+and `get_rdf_quad` wrap everything in `except Exception -> log -> return
+False`, so the new `TypeError` became a logged failure and a `False` — which
+reads exactly like "the quad was not there". The typing now happens OUTSIDE the
+try: a DB error is worth swallowing there, a caller error is not.
+
+### The sweep that made defect 3 safe
+
+Instrumented the `else` branch and ran conformance, unit and integration:
+**nine** bare strings reached it, every one from a test. No production path
+passes one — consistent with `get_existing_quads_for_uris` returning rdflib
+Identifiers. Three test call sites were updated to pass terms.
+
+### Verification
+
+22 unit tests over the term key; an integration test that removes a quad from a
+blank-node graph, which is the case production takes. The string-passing test
+beside it now expects `TypeError` rather than a silent no-op.
+
+Conformance, unit and integration: 0 failures.
