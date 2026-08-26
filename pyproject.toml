@@ -99,6 +99,13 @@ server = [
 
 # Development dependencies
 dev = [
+    # `tests/unit/api` builds real FastAPI endpoints, and a route declaring
+    # `Form`/`File` raises at REGISTRATION time without this -- "Form data
+    # requires python-multipart". It is what those tests exercise rather than
+    # an incidental import, and it is ~50 kB, so it belongs here. Contrast
+    # `uvicorn`/`itsdangerous`, which were incidental: those were fixed by
+    # moving the helpers out of the server's import chain, not by adding deps.
+    "python-multipart>=0.0.6",
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "pglast>=7.0",

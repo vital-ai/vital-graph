@@ -115,5 +115,17 @@ class TestDotenvIsActuallyLoaded:
         assert called, "VitalGraphConfig did not load .env"
 
     def test_it_finds_the_repo_env_from_the_checkout(self):
-        """Not a mock: the real function must locate the real file."""
+        """Not a mock: the real function must locate the real file.
+
+        Skipped where there is no `.env` to find. It is gitignored, so a fresh
+        checkout -- CI's, and any new clone -- does not have one, and asserting
+        that the loader finds a file nobody shipped tests the developer's
+        machine rather than the loader. `test_the_loader_calls_it` above covers
+        the defect this was written for (the loader documented that it loaded
+        .env and never did) without needing the file to exist.
+        """
+        import pathlib
+        repo_env = pathlib.Path(__file__).resolve().parents[2] / ".env"
+        if not repo_env.is_file():
+            pytest.skip("no .env in this checkout — it is gitignored")
         assert cl.load_dotenv_files(), "no .env found from the repo checkout"
