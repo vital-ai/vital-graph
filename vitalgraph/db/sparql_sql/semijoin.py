@@ -103,8 +103,42 @@ def _term_uuid(aliases, text: str, ttype: str, *_identity) -> Optional[str]:
     return getattr(aliases, "resolved_constants", {}).get(col)
 
 
-def _leaf_rows(node, aliases, *, filter_derived: bool = True) -> Optional[int]:
-    """Smallest (predicate, object) row count among a subtree's constant leaves.
+def _constant_pairs(bgp):
+    """Yield the (predicate, object) constant leaves of one BGP.
+
+    Both terms come back as FULL term identities — the 4-tuple
+    (text, type, lang, datatype) that `leaf_terms` records and that `constants`
+    has been keyed on since a2b623a. Splat them straight into `_term_uuid`.
+
+    This exists as one function because it was two, inline, and both truncated
+    to (text, type). That silently misses every typed literal: `"x"^^xsd:string`
+    is recorded with its datatype and was looked up with None. The miss costs
+    the gate its whole signal — the selective leaf disappears, `_leaf_rows`
+    returns the next smallest RESOLVABLE leaf instead, and both sides come back
+    as the anchor's own count. Measured on production: a true 1/76,328 read as
+    76,328/76,328 = 1.000 -> probe, and a 2.7 ms lookup became 54,949 ms.
+
+    One shared producer, so a third call site cannot reintroduce it.
+    """
+    by_alias: dict = {}
+    for (alias, col), term in (bgp.leaf_terms or {}).items():
+        if col == "predicate_uuid":
+            by_alias.setdefault(alias, {})["p"] = term
+        elif col == "object_uuid":
+            by_alias.setdefault(alias, {})["o"] = term
+    for pair in by_alias.values():
+        if "p" in pair and "o" in pair:
+            yield pair["p"], pair["o"]
+
+
+def _leaf_rows_detail(node, aliases, *, filter_derived: bool = True):
+    """(smallest count, whether that count saturated) for a subtree's leaves.
+
+    The count is the smallest (predicate, object) row count among the subtree's
+    constant leaves. The flag says whether THAT leaf's count hit the generator's
+    count cap, making it a lower bound rather than a measurement — which matters
+    to anyone who divides by it. `aliases.saturated_pairs` records which pairs
+    saturated; before this it was populated and never read.
 
     `filter_derived=False` counts ONLY what the BGP itself binds, excluding the
     range and text measurements below. Those describe FILTERs sitting ABOVE the
@@ -123,7 +157,7 @@ def _leaf_rows(node, aliases, *, filter_derived: bool = True) -> Optional[int]:
     """
     stats = getattr(aliases, "quad_stats", None)
     if not stats:
-        return None
+        return None, False
     best = None
 
     # Numeric ranges, matched by predicate. They cannot be found by walking
@@ -162,19 +196,12 @@ def _leaf_rows(node, aliases, *, filter_derived: bool = True) -> Optional[int]:
             if p_uuid in preds and n is not None and (best is None or n < best):
                 best = n
 
+    saturated_pairs = getattr(aliases, "saturated_pairs", None) or set()
+    best_saturated = False
     for bgp in _bgps(node):
-        by_alias: dict = {}
-        for (alias, col), _t in (bgp.leaf_terms or {}).items():
-            text, ttype = _t[0], _t[1]
-            if col == "predicate_uuid":
-                by_alias.setdefault(alias, {})["p"] = (text, ttype)
-            elif col == "object_uuid":
-                by_alias.setdefault(alias, {})["o"] = (text, ttype)
-        for pair in by_alias.values():
-            if "p" not in pair or "o" not in pair:
-                continue
-            p_uuid = _term_uuid(aliases, *pair["p"])
-            o_uuid = _term_uuid(aliases, *pair["o"])
+        for p_term, o_term in _constant_pairs(bgp):
+            p_uuid = _term_uuid(aliases, *p_term)
+            o_uuid = _term_uuid(aliases, *o_term)
             if not p_uuid or not o_uuid:
                 continue
             n = stats.get((p_uuid, o_uuid))
@@ -183,7 +210,17 @@ def _leaf_rows(node, aliases, *, filter_derived: bool = True) -> Optional[int]:
                     (p_uuid, o_uuid))
             if n is not None and (best is None or n < best):
                 best = n
-    return best
+                # Only the WINNING leaf's saturation matters. A saturated pair
+                # that is not the minimum cannot move the minimum, because
+                # saturation only ever understates and the smaller leaf is
+                # still smaller.
+                best_saturated = (p_uuid, o_uuid) in saturated_pairs
+    return best, best_saturated
+
+
+def _leaf_rows(node, aliases, *, filter_derived: bool = True) -> Optional[int]:
+    """See `_leaf_rows_detail`. Returns the count only."""
+    return _leaf_rows_detail(node, aliases, filter_derived=filter_derived)[0]
 
 
 def needed_ranges(plan, aliases) -> set:
@@ -481,19 +518,11 @@ def needed_pairs(plan, aliases) -> set:
     """
     out = set()
     for bgp in _bgps(plan):
-        by_alias: dict = {}
-        for (alias, col), _t in (bgp.leaf_terms or {}).items():
-            text, ttype = _t[0], _t[1]
-            if col == "predicate_uuid":
-                by_alias.setdefault(alias, {})["p"] = (text, ttype)
-            elif col == "object_uuid":
-                by_alias.setdefault(alias, {})["o"] = (text, ttype)
-        for pair in by_alias.values():
-            if "p" in pair and "o" in pair:
-                p_uuid = _term_uuid(aliases, *pair["p"])
-                o_uuid = _term_uuid(aliases, *pair["o"])
-                if p_uuid and o_uuid:
-                    out.add((p_uuid, o_uuid))
+        for p_term, o_term in _constant_pairs(bgp):
+            p_uuid = _term_uuid(aliases, *p_term)
+            o_uuid = _term_uuid(aliases, *o_term)
+            if p_uuid and o_uuid:
+                out.add((p_uuid, o_uuid))
     return out
 
 
@@ -855,9 +884,29 @@ def _selective_enough(left, right, aliases) -> bool:
     """
     if aliases is None:
         return False
-    matches = _leaf_rows(right, aliases)
-    candidates = _leaf_rows(left, aliases)
+    matches, _ = _leaf_rows_detail(right, aliases)
+    candidates, candidates_saturated = _leaf_rows_detail(left, aliases)
     if not matches or not candidates:
+        return False
+    if candidates_saturated:
+        # The anchor's count hit `_PAIR_COUNT_CAP`, so it is a LOWER BOUND and
+        # the real denominator is larger. That makes the computed ratio an
+        # OVER-estimate, and over-estimating is the direction that probes when
+        # it should join — the 2.7 ms -> 54,949 ms failure this gate exists to
+        # prevent.
+        #
+        # Refusing loses nothing, because the arithmetic is decided either way:
+        # true_sel = matches / true_candidates <= matches / CAP. If that upper
+        # bound is already below the threshold the answer is "join"; if it is
+        # above, the true value can be anywhere at or below it and is unknown —
+        # and unknown means the set-based plan, per this function's contract.
+        #
+        # A saturated count on the PROBE side is safe and deliberately not
+        # refused: it understates `matches`, which understates the ratio, which
+        # errs toward the join.
+        logger.debug("semijoin selectivity: anchor count %d is saturated at the "
+                     "count cap — denominator is a lower bound, declining",
+                     candidates)
         return False
     sel = matches / candidates
     ok = sel >= MIN_SELECTIVITY

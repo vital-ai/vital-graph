@@ -554,7 +554,15 @@ def _check_unresolved_vars(unresolved) -> None:
 # match count against candidate count; both saturate at the cap, which only
 # blurs the decision for pairs far larger than any page could need.
 _PAIR_COUNT_CAP = 50_000
-_pair_count_cache: Dict[tuple, int] = {}
+
+# LRU, not a plain dict. The keys were low-cardinality while only URI constants
+# resolved — entity/frame/slot TYPES, a small fixed set per space. Once typed
+# literals resolve too (`semijoin._constant_pairs`), the object side becomes
+# unbounded: one entry per distinct slot value ever queried, and the hot
+# production shape is a per-lead id lookup. That is the same unbounded-growth
+# failure `_term_cache` already uses `_LRUCache` to avoid.
+_PAIR_COUNT_CACHE_MAX = 50_000
+_pair_count_cache: _LRUCache = _LRUCache(_PAIR_COUNT_CACHE_MAX)
 
 
 # The text probe answers "is this leaf small?" in TWO steps, cheapest first,
