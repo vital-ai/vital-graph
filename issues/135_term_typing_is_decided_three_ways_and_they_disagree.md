@@ -441,3 +441,61 @@ blank-node graph, which is the case production takes. The string-passing test
 beside it now expects `TypeError` rather than a silent no-op.
 
 Conformance, unit and integration: 0 failures.
+---
+
+## Appended 2026-09-01 — a lead from `issues/138`, checked and NOT a defect
+
+`issues/138` fixed two sites that truncated a `leaf_terms` identity from the
+4-tuple `(text, type, lang, datatype)` to `(text, type)`, silently missing every
+typed literal. `traversal_chain._as_uuid_pair` looked like a third instance — it
+does the same truncation:
+
+    p_text, p_type = pred[0], pred[1]
+    o_text, o_type = obj[0], obj[1]
+    ...
+    return (_generate_term_uuid(p_text, p_type),
+            _generate_term_uuid(o_text, o_type))
+
+**It is not a defect.** Two lines above the call there is an explicit guard:
+
+    if p_type != "U" or o_type != "U":
+        return None
+
+so nothing but a plain URI ever reaches `_generate_term_uuid`, and a plain URI
+has no lang or datatype to lose. The two-argument form is correct for whatever
+survives the guard. Recorded here so the next person who greps for this pattern
+does not re-open it.
+
+### What IS wrong there is the reasoning, and it is this issue's subject
+
+Both comments at that site assert something false about `leaf_terms` — the
+docstring says it "records constants as `(term_text, term_type)`", and the
+inline comment says a typed or language-tagged object's lang/datatype are not
+carried "here".
+
+`leaf_terms` DOES carry them, and has since `a2b623a` widened the key. Verified
+directly on a production query:
+
+    leaf_terms[q9,object_uuid] = ('00QUg00000mPfkIMAS', 'L', None,
+                                  'http://www.w3.org/2001/XMLSchema#string')
+
+That belief — "leaf_terms is a 2-tuple" — is exactly what produced `issues/138`,
+in two other files, at a measured cost of 2.7 ms -> 54,949 ms. It survives here
+as a comment justifying a restriction it does not actually justify.
+
+### The consequence is a missed optimisation, not a bug
+
+Because the identity IS available, the `p_type != "U"` bail is now self-imposed.
+`_as_uuid_pair` exists so `rdf_stats` can price a constrained end and the
+traversal direction can be chosen. Today a chain constrained by a typed LITERAL
+— the shape the production hot path uses, `hasTextSlotValue` on an `SFLeadId` —
+prices as unknown, so the direction goes unchosen.
+
+Lifting it means passing the full identity through and letting
+`_generate_term_uuid` hash lang/datatype as the writer does. Not attempted here:
+it changes which traversals get a direction, which is a plan change wanting its
+own measurement, and `issues/090` is where that argument belongs.
+
+**Not started. The stale comments are worth correcting regardless of whether the
+restriction is lifted** — they are the false belief, written down, sitting in the
+file that would otherwise be the next place it causes a defect.
