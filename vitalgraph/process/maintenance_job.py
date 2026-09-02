@@ -207,6 +207,57 @@ VECTOR_REINDEX_MIN_DEAD = 1_000      # skip if fewer dead tuples than this
 VECTOR_REINDEX_COOLDOWN_HOURS = 24   # skip if reindexed within this many hours
 
 
+# --- issues/143: watch cadence is not repair cadence -------------------------
+#
+# The maintenance cycle runs every 300s. Measured on prod over 46 minutes, the
+# job accounted for 87% of all slow database time and 38% of wall-clock -- ~115s
+# of sequential scans inside every 300s cycle, on a 4 vCPU box. Two of those
+# scans are pure WATCHES: they write nothing, they only log a warning, and they
+# re-derive their answer from the whole table every single cycle.
+#
+#     grouping self-link (typeless probe)   38.6s max, ~35s/cycle across spaces
+#     graph registration                    same shape
+#
+# The self-link typeless probe's own comment says its finding is "unexplained,
+# which is precisely why it is worth watching". A watch whose finding has
+# occurred once, ever, does not belong on a five-minute loop -- and the cost is
+# not just CPU: these scan the quad table and evict the buffer cache that the
+# read path depends on, which is the mechanism behind the same listing query
+# taking 1,216ms and 11,187ms an hour apart.
+#
+# Repairs keep the 300s cadence. Only watches are slowed, and the first cycle
+# after a restart always runs them, so a fresh deploy still gets a full report.
+WATCH_INTERVAL_S = float(os.getenv("VITALGRAPH_WATCH_INTERVAL_S", "3600"))
+
+_watch_last_run: Dict[Tuple[str, str], float] = {}
+
+
+def should_run_watch(name: str, space_id: str,
+                     interval_s: Optional[float] = None,
+                     now: Optional[float] = None) -> bool:
+    """True when this read-only watch is due for *space_id*.
+
+    Deliberately per (watch, space): one space being due does not drag the
+    others along, which spreads the cost across cycles instead of spiking it.
+
+    `time.monotonic` rather than wall-clock, so a clock adjustment cannot make a
+    watch either fire every cycle or never fire again.
+    """
+    key = (name, space_id)
+    t = time.monotonic() if now is None else now
+    last = _watch_last_run.get(key)
+    if last is not None and (t - last) < (
+            WATCH_INTERVAL_S if interval_s is None else interval_s):
+        return False
+    _watch_last_run[key] = t
+    return True
+
+
+def reset_watch_schedule() -> None:
+    """Test seam; also what a caller would use to force a full sweep."""
+    _watch_last_run.clear()
+
+
 def _get_instance_id() -> str:
     """Resolve instance identifier: ECS task ID → hostname fallback."""
     # ECS task metadata v4
@@ -818,6 +869,8 @@ class MaintenanceJob:
         """
         GRAPH_URI_PRED = "http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI"
         for space_id in space_ids:
+            if not should_run_watch("grouping_self_link", space_id):
+                continue
             try:
                 async with self._pool.acquire() as conn:
                     pred = await conn.fetchval(
@@ -910,6 +963,8 @@ class MaintenanceJob:
         reviewed before it runs.
         """
         for space_id in space_ids:
+            if not should_run_watch("graph_registration", space_id):
+                continue
             try:
                 async with self._pool.acquire() as conn:
                     rows = await conn.fetch(
@@ -1048,12 +1103,27 @@ class MaintenanceJob:
                             f"WHERE predicate_uuid = $1 AND object_uuid = $2",
                             [(r["predicate_uuid"], r["object_uuid"])
                              for r in bad_rows])
+                        # ...AND SET THE FLAG. Deleting alone is not the repair
+                        # -- it is half of it, and the wrong half on its own.
+                        #
+                        # The comment at STATS_OVERSIZED_SAMPLE says "absence
+                        # plus the flag is the intended state"; the delete above
+                        # shipped without the flag (`issues/142`). Absence WITHOUT
+                        # it means ZERO to `sync_stats_after_insert`, so the next
+                        # write inserts a delta-only row over a pair holding
+                        # millions -- recreating the present-and-low state this
+                        # repair exists to remove, one cycle later. A repair that
+                        # re-creates the disease reads as a repair that never ran.
+                        await conn.execute(
+                            f"UPDATE {space_id}_rdf_pred_stats SET pruned = TRUE "
+                            f"WHERE predicate_uuid = ANY($1)",
+                            list({r["predicate_uuid"] for r in bad_rows}))
                         worst = max(bad_rows, key=lambda r: r["actual"])
                         logger.warning(
                             "Stats oversized: %s removed %d pair(s) that were "
                             "present but above the %d cap — worst recorded %d "
-                            "against %d actual. Absence is the correct state "
-                            "for these; readers fall through to the bounded "
+                            "against %d actual. Absence PLUS pruned=TRUE is the "
+                            "correct state; readers fall through to the bounded "
                             "count.", space_id, len(bad_rows),
                             STATS_MAX_ROW_COUNT, worst["row_count"],
                             worst["actual"])

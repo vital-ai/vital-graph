@@ -616,10 +616,48 @@ async def prune_stats_tables(conn, space_id: str,
             f"INSERT INTO {t_stats} (predicate_uuid, object_uuid, row_count) "
             f"SELECT predicate_uuid, object_uuid, row_count FROM _keep_stats")
 
+        dropped = await conn.fetchval(
+            f"SELECT count(*) FROM {t_stats} s LEFT JOIN _keep_stats k "
+            f"  ON k.predicate_uuid = s.predicate_uuid "
+            f" AND k.object_uuid = s.object_uuid "
+            f"WHERE k.predicate_uuid IS NULL")
+        flagged = 0
         if pruned_preds:
-            await conn.execute(
+            res = await conn.execute(
                 f"UPDATE {t_pred} SET pruned = TRUE WHERE predicate_uuid = ANY($1)",
                 pruned_preds)
+            flagged = int(res.split()[-1]) if res else 0
+
+        # `issues/142`: a pair is dropped here and the next write re-creates it
+        # holding only a delta -- 129 -> ABSENT -> 1 -- which means `pruned` was
+        # FALSE when that write landed. Sampled on prod, it was FALSE in all 87
+        # readable samples. The anti-join above looks correct by inspection, so
+        # inspection is not going to settle it; these three numbers do.
+        #
+        # Read them as:
+        #   dropped > 0, preds = 0   the anti-join is wrong -- it is the suspect
+        #   preds > 0, flagged = 0   the UPDATE matched nothing: the predicate is
+        #                            missing from pred_stats, or the types differ
+        #   flagged = preds > 0      the prune is doing its job and the flag is
+        #                            being cleared by something AFTER this point
+        #
+        # The third is the case that would move the search to the resync's
+        # `SET pruned = EXISTS(...)`, which uses a NARROWER definition of pruned
+        # than the schema's ("prune removed any row for this predicate") -- that
+        # clear is paired with a full repopulation and so is correct in
+        # isolation, but not if anything drops rows between the two.
+        if dropped or pruned_preds:
+            logger.info(
+                "prune_stats_tables(%s): dropped %d pair(s) across %d "
+                "predicate(s); flagged pruned=TRUE on %d pred_stats row(s)",
+                space_id, dropped or 0, len(pruned_preds), flagged)
+            if pruned_preds and flagged != len(pruned_preds):
+                logger.warning(
+                    "prune_stats_tables(%s): %d predicate(s) needed pruned=TRUE "
+                    "but only %d row(s) updated — absence for the unflagged ones "
+                    "reads as ZERO and the next write will store a delta-only "
+                    "count (issues/142, issues/062)",
+                    space_id, len(pruned_preds), flagged)
 
     kept = await conn.fetchval(f"SELECT count(*) FROM {t_stats}")
     logger.info("prune_stats_tables(%s): kept %d rows (cap %d)",
