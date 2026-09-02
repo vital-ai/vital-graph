@@ -100,20 +100,85 @@ def get_pool():
 # Async API — uses the configured implementation's connection_pool
 # ---------------------------------------------------------------------------
 
-async def execute_query(sql, params=None, conn_params=None, conn=None):
+# How long a STATS read may wait for a lock before giving up. These reads feed
+# the join-reorder heuristic, the semi-join gate and the slot-type tautology
+# check: they improve a plan, they are not part of the answer, and every caller
+# already runs without them. Waiting the pool-wide 10s to maybe improve a plan is
+# never the right trade -- after 10s you get the worse plan anyway, having paid
+# 10s for it. Measured in `issues/145`: two such waits turned a 1,851ms request
+# into 21,980ms.
+STATS_LOCK_TIMEOUT_MS = 100
+
+
+@asynccontextmanager
+async def bounded_lock_wait(conn, lock_timeout_ms: int = STATS_LOCK_TIMEOUT_MS):
+    """Bound how long statements on *conn* wait for a lock, then restore.
+
+    For reads that are an optimisation input rather than part of the answer, so
+    they fail fast instead of parking behind a writer (`issues/145`).
+
+    NOT `SET LOCAL` in a transaction of our own: `create_transaction()` hands
+    callers a connection with one already open, asyncpg nests as a savepoint,
+    and SET LOCAL survives a savepoint RELEASE to the end of the OUTER
+    transaction — silently imposing this timeout on the caller's remaining
+    statements. Save/restore is correct whether or not a transaction is open.
+    """
+    prev = await conn.fetchval("SHOW lock_timeout")
+    await conn.execute(f"SET lock_timeout = '{int(lock_timeout_ms)}ms'")
+    try:
+        yield
+    finally:
+        try:
+            await conn.execute(f"SET lock_timeout = '{prev}'")
+        except Exception:  # pragma: no cover - abort path
+            # The statement failed inside the caller's transaction, so the
+            # restore fails too. Their ROLLBACK reverts the SET, and a
+            # connection returned to the pool is reset regardless; masking the
+            # real error with this one would be strictly worse.
+            logger.debug("could not restore lock_timeout to %s", prev)
+
+
+async def execute_query(sql, params=None, conn_params=None, conn=None,
+                        *, lock_timeout_ms: Optional[int] = None):
     """Execute a SQL query and return rows as list of dicts.
 
     If *conn* is provided (an asyncpg connection), reuses it.
     Otherwise acquires from the implementation's pool.
+
+    *lock_timeout_ms* bounds how long the statement will WAIT FOR A LOCK before
+    giving up; it does not bound execution. Pass it for reads that are an
+    optimisation input rather than part of the answer, so they fail fast instead
+    of parking behind a writer — see `issues/145`, where two such reads each
+    waited the pool-wide `lock_timeout` of 10s behind a `TRUNCATE`, turning a
+    1.9s request into 22s and then planning without the stats anyway.
+
+    The previous value is restored afterwards, so it cannot leak to the next
+    user of a pooled connection nor to the rest of a caller's transaction. The
+    wait can happen at PREPARE, not just execute — that is where asyncpg raised
+    in `issues/145` — and the timeout is in force before the statement is sent.
     """
     asql, args = _pg_params_to_asyncpg(sql, params)
-    if conn is not None:
-        rows = await conn.fetch(asql, *args)
+
+    async def _run(c):
+        if lock_timeout_ms is None:
+            rows = await c.fetch(asql, *args)
+            return [dict(r) for r in rows]
+        # Save and restore rather than SET LOCAL in a transaction of our own.
+        # `sparql_sql_space_impl.create_transaction()` hands callers a connection
+        # with a transaction already open, and asyncpg would nest ours as a
+        # savepoint -- but SET LOCAL survives the RELEASE of a savepoint and
+        # persists to the end of the OUTER transaction. That would silently
+        # impose a 100ms lock timeout on the caller's remaining statements.
+        # This form is correct whether or not a transaction is open.
+        async with bounded_lock_wait(c, lock_timeout_ms):
+            rows = await c.fetch(asql, *args)
         return [dict(r) for r in rows]
+
+    if conn is not None:
+        return await _run(conn)
     pool = get_pool()
     async with pool.acquire() as c:
-        rows = await c.fetch(asql, *args)
-        return [dict(r) for r in rows]
+        return await _run(c)
 
 
 async def execute_scalar(sql, params=None, conn_params=None, conn=None):

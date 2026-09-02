@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+
+import asyncpg
 from typing import Any, Dict, List, Optional
 
 from ..jena_sparql.jena_ast_mapper import map_compile_response, CompileResult
@@ -27,6 +29,7 @@ from .emit import emit
 from .emit_context import EmitContext
 
 from .text_needle import UnindexableTextSearch
+from .db_provider import STATS_LOCK_TIMEOUT_MS
 logger = logging.getLogger(__name__)
 
 
@@ -293,6 +296,7 @@ async def _load_quad_stats(
             f"SELECT predicate_uuid::text, row_count "
             f"FROM {space_id}_rdf_pred_stats",
             conn_params=conn_params, conn=conn,
+            lock_timeout_ms=STATS_LOCK_TIMEOUT_MS,
         )
         pred_stats = {r["predicate_uuid"]: r["row_count"] for r in pred_rows}
 
@@ -307,6 +311,7 @@ async def _load_quad_stats(
             f"WHERE row_count >= 2 AND row_count <= 200000 "
             f"ORDER BY row_count ASC LIMIT 10000",
             conn_params=conn_params, conn=conn,
+            lock_timeout_ms=STATS_LOCK_TIMEOUT_MS,
         )
         quad_stats = {
             (r["predicate_uuid"], r["object_uuid"]): r["row_count"]
@@ -320,6 +325,24 @@ async def _load_quad_stats(
                      len(pred_stats), len(quad_stats), space_id)
 
     except Exception as e:
+        # Cache the empty result ONLY when the stats are genuinely absent. A
+        # transient failure -- a lock wait behind the maintenance job's stats
+        # rebuild being the one that actually happens (`issues/145`) -- must not
+        # be memoised, or one unlucky 100ms window plans EVERY subsequent query
+        # for this space without stats until something invalidates the cache.
+        # That is the shape of `issues/140`: degrade correctly, say nothing, stay
+        # degraded. Lowering the timeout makes the window likelier to be hit, so
+        # this distinction is a precondition of that change, not a tidy-up.
+        transient = isinstance(e, (asyncpg.PostgresConnectionError,
+                                   asyncpg.LockNotAvailableError,
+                                   asyncpg.QueryCanceledError))
+        if transient:
+            logger.warning(
+                "Stats load for %s failed transiently (%s: %s); planning this "
+                "query without stats and NOT caching the miss",
+                space_id, type(e).__name__, e)
+            aliases.quad_stats, aliases.pred_stats = {}, {}
+            return
         logger.debug("No quad stats for %s (MV may not exist): %s", space_id, e)
         _stats_cache[space_id] = ({}, {})
 
@@ -714,7 +737,8 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                 f"SELECT predicate_uuid::text, object_uuid::text, row_count "
                 f"FROM {space_id}_rdf_stats "
                 f"WHERE (predicate_uuid, object_uuid) IN ({values})",
-                conn=conn, conn_params=conn_params)
+                conn=conn, conn_params=conn_params,
+                lock_timeout_ms=STATS_LOCK_TIMEOUT_MS)
             aliases.extra_quad_stats = {
                 (r["predicate_uuid"], r["object_uuid"]): r["row_count"] for r in rows
             }
@@ -868,7 +892,8 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                     f"JOIN {space_id}_rdf_stats s ON s.object_uuid = t.term_uuid "
                     f" AND s.predicate_uuid = '{p_uuid}'::uuid "
                     f"WHERE {' OR '.join(disjuncts)}",
-                    conn=conn, conn_params=conn_params)
+                    conn=conn, conn_params=conn_params,
+                    lock_timeout_ms=STATS_LOCK_TIMEOUT_MS)
             except Exception as exc:
                 logger.debug("IN selectivity lookup failed: %s", exc)
                 continue

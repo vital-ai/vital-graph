@@ -41,6 +41,8 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from .db_provider import bounded_lock_wait
+
 logger = logging.getLogger(__name__)
 
 # (space_id, type_uri, roles) -> (predicate_rows_when_computed, excludes_nothing)
@@ -67,11 +69,18 @@ async def excludes_nothing(space_id: str, type_uri: str, roles: tuple,
         return None
     key = (space_id, type_uri, tuple(sorted(roles)), type_predicate)
 
+    # Bounded lock wait: this reads the stats tables, which the maintenance
+    # rebuild truncates under an AccessExclusiveLock. Sampling prod during a
+    # rebuild, this query was 100 of 144 observed blocked-reader samples — the
+    # single most-blocked read on the box (`issues/145`). Returning None costs
+    # one kept-but-unnecessary constraint; waiting the pool-wide 10s costs the
+    # user 10s and then returns None regardless.
     try:
-        pred_rows = await conn.fetchval(
-            f"""SELECT s.row_count FROM {space_id}_rdf_pred_stats s
-                JOIN {space_id}_term t ON t.term_uuid = s.predicate_uuid
-                WHERE t.term_text = $1""", SLOT_TYPE_URI)
+        async with bounded_lock_wait(conn):
+            pred_rows = await conn.fetchval(
+                f"""SELECT s.row_count FROM {space_id}_rdf_pred_stats s
+                    JOIN {space_id}_term t ON t.term_uuid = s.predicate_uuid
+                    WHERE t.term_text = $1""", SLOT_TYPE_URI)
     except Exception as exc:
         logger.debug("slot-type tautology: pred stat lookup failed: %s", exc)
         return None
