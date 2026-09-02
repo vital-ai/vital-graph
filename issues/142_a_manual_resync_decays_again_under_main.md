@@ -1,5 +1,25 @@
 # A Manual Resync Decays Again Under `main`, With `pruned` Reading FALSE
 
+> **UPDATE 2026-09-02 (`2209009`).** One confirmed producer of this state was
+> found and fixed, and it is NOT the one this issue suspects. The maintenance
+> job's oversized-pair repair DELETEd the row and never set `pruned`, despite
+> the comment above `STATS_OVERSIZED_SAMPLE` saying "absence plus the flag is
+> the intended state". That guarantees the next write re-creates a delta-only
+> row — this issue's exact mechanism. It cannot explain the ORIGINAL
+> observation, because that repair is not in `v0.0.50`; it would have become a
+> second cause after the deploy.
+>
+> `prune_stats_tables` is now instrumented as this issue asked: it counts pairs
+> dropped against predicates flagged and WARNs when they disagree. The anti-join
+> still looks correct by inspection, so the next cycle should settle it with
+> numbers instead.
+>
+> Ruled out by reading: the resync's `SET pruned = EXISTS(...)`, which uses a
+> narrower definition of `pruned` than the schema's. It looks like the conflict
+> — it can clear a flag the prune legitimately set — but the clear is paired
+> with a full repopulation of every pair under the cap, so it is correct in
+> isolation. Do not "fix" it without a repro.
+
 ## Status: OPEN — MECHANISM ISOLATED 2026-09-02 by sampling. The prune removes
 ## the pair and does NOT set `pruned`, so the next write re-creates the row
 ## holding only a delta. The fix is in `prune_stats_tables`'s flag update, not

@@ -1,6 +1,7 @@
 # The Maintenance Job Is 38% of Database Wall-Clock, and It Is What Users Feel
 
-## Status: OPEN — measured 2026-09-02 from the RDS Postgres log, not from app logs.
+## Status: PARTIALLY FIXED 2026-09-02 in `2209009` — recommendation 2 landed.
+## The rest is still open. See "What was done" below.
 
 ## How this was found, and why it took so long
 
@@ -97,9 +98,27 @@ They removed the *pathological* plans. What remains is a healthy plan run on a
 box whose cache and CPU are being consumed by its own housekeeping — a
 different failure, which is why fixing the plans did not end the timeouts.
 
-## What to do
+## What was done, 2026-09-02 (`2209009`)
 
-Ordered by value against effort. None of this is written yet.
+**Recommendation 2 only: the two pure WATCHES came off the 300s loop.**
+`_run_grouping_self_link_check` and `_run_graph_registration_check` write
+nothing — zero UPDATE/INSERT/DELETE, only `logger.warning` — and were
+re-deriving from the whole table every cycle at ~35s/cycle across spaces. They
+now run hourly, gated per (watch, space) so the cost spreads across cycles
+rather than spiking, on `time.monotonic` so a clock change cannot disable them,
+and per-process so a restart still gets a full sweep.
+
+Repairs were deliberately NOT slowed: delaying a repair delays a fix, whereas
+delaying a watch delays a log line. A test asserts only the two write-nothing
+checks are gated, and a second asserts they still write nothing — so if either
+grows a repair, gating it fails loudly instead of silently deferring it.
+
+Expected effect: ~35s/cycle becomes ~3s/cycle amortised. That is roughly a third
+of the excess, NOT all of it.
+
+## What to do — still open
+
+Recommendations 1, 3 and 4 below are NOT written. Recommendation 2 is done.
 
 1. **Gate the self-link and drift checks on change.** Both recompute from
    scratch every cycle over the whole table. Neither needs to: skip a space
