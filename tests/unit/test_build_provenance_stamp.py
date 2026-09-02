@@ -22,7 +22,7 @@ Two details the issue got wrong, both load-bearing:
 
 from __future__ import annotations
 
-import inspect
+from pathlib import Path
 
 import pytest
 
@@ -111,20 +111,28 @@ def test_a_garbage_build_time_is_none_not_an_exception(monkeypatch):
 
 
 def test_the_stamp_is_not_gated_behind_vg_auto_init():
-    """The whole point is production, and VG_AUTO_INIT is test-only."""
-    from vitalgraph.impl import vitalgraphapp_impl as A
+    """The whole point is production, and VG_AUTO_INIT is test-only.
 
-    src = inspect.getsource(A.VitalGraphAppImpl._setup_startup_events)
-    call = src.index("_stamp_build_provenance()")
-    gate = src.index("VG_AUTO_INIT")
-    branch = src[gate:call]
-    assert "await self._auto_init_tables()" in branch, (
-        "sanity: the gate should be the auto-init branch")
-    # The stamp must be dedented back out of that branch.
-    line = next(ln for ln in src.splitlines() if "_stamp_build_provenance()" in ln)
-    gate_line = next(ln for ln in src.splitlines() if "VG_AUTO_INIT" in ln)
-    assert (len(line) - len(line.lstrip())) <= (
-        len(gate_line) - len(gate_line.lstrip())), (
+    Reads the SOURCE rather than importing the module. `vitalgraphapp_impl`
+    pulls in the FastAPI server chain, which needs `itsdangerous` — not
+    installed in the Tier 1 unit environment, so importing it here fails CI
+    while passing locally. That is the trap `c504abe` already fixed once, for
+    the same reason: a unit test has no business behind the server imports.
+    """
+    src = (Path(B.__file__).parent / "impl" / "vitalgraphapp_impl.py").read_text()
+
+    lines = src.splitlines()
+    call_at = next(i for i, ln in enumerate(lines)
+                   if "await self._stamp_build_provenance()" in ln)
+    # The NEAREST PRECEDING `if` that tests the flag -- not merely the first
+    # line mentioning it, which is a docstring in another method entirely.
+    gate_at = max(i for i, ln in enumerate(lines[:call_at])
+                  if "VG_AUTO_INIT" in ln and ln.lstrip().startswith("if "))
+
+    def indent(i):
+        return len(lines[i]) - len(lines[i].lstrip())
+
+    assert indent(call_at) <= indent(gate_at), (
         "the stamp is inside the VG_AUTO_INIT branch, so it would never run in "
         "production — which is the only environment issues/137 is about")
 
