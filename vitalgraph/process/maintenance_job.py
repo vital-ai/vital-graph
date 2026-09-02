@@ -1159,8 +1159,33 @@ class MaintenanceJob:
                 # Same reason every step here is guarded: one `except` covers
                 # the whole cycle, so a throw would silently skip the prune,
                 # the histogram refresh, the reindex and the cleanup.
-                logger.debug("Stats integrity check skipped for %s: %s",
-                             space_id, exc)
+                # WARNING, not DEBUG, and it names what stopped running.
+                #
+                # This one clause guards BOTH the coverage audit (`issues/141`)
+                # and the oversized-pair repair (`issues/142`), so catching it
+                # quietly disables the only two things that keep rdf_stats
+                # honest — and prod runs at INFO, so DEBUG is invisible.
+                #
+                # Observed 2026-09-02: every cycle logged
+                #
+                #     Stats integrity check skipped for <space>:
+                #     column p.pruned does not exist
+                #
+                # while the column demonstrably existed on every
+                # `*_rdf_pred_stats` table, in the only schema of the only
+                # database the service is configured for, and the running image
+                # contained the correct query. Whatever the cause, the audit and
+                # the repair had not run for as long as anyone had been looking,
+                # and nothing said so above DEBUG. That is the same shape as
+                # `issues/140` and `issues/144`, for the third time.
+                #
+                # `exc_info` because the message alone was not enough to
+                # diagnose it: the useful detail is which statement failed.
+                logger.warning(
+                    "Stats integrity check SKIPPED for %s (%s: %s) — neither "
+                    "the coverage audit nor the oversized-pair repair ran, so "
+                    "rdf_stats is unmonitored for this space this cycle",
+                    space_id, type(exc).__name__, exc, exc_info=True)
                 continue
         return None
 

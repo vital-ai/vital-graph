@@ -100,3 +100,28 @@ def test_the_benign_case_stays_quiet():
     assert src.count("log_probe_failure(") == 4, (
         "3 call sites + 1 definition — every probe reports its non-benign "
         "failures")
+
+
+def test_the_stats_integrity_guard_is_not_a_debug_swallow():
+    """`issues/148`. One `except` guards BOTH the coverage audit (141) and the
+    oversized-pair repair (142). Logging it at DEBUG meant a total failure of
+    both looked identical to a healthy cycle on a service that runs at INFO.
+
+    Observed on production: every cycle skipped the check with "column p.pruned
+    does not exist", while the column existed on every `*_rdf_pred_stats` table
+    in the only schema of the only configured database, and the running image
+    held the correct query. The cause is still open — what is not open is that
+    nothing said so above DEBUG.
+    """
+    import inspect
+    src = inspect.getsource(M.MaintenanceJob._run_stats_integrity)
+    tail = src[src.rindex("except"):]
+    assert "logger.debug" not in tail, (
+        "a swallowed integrity check must not be invisible at INFO")
+    assert "logger.warning" in tail
+    assert "SKIPPED" in tail and "unmonitored" in tail, (
+        "the message must name the consequence — that the audit and the repair "
+        "did not run — not merely that something was skipped")
+    assert "exc_info=True" in tail, (
+        "the message alone was not enough to diagnose this; the failing "
+        "statement is the useful part")
