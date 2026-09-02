@@ -35,8 +35,12 @@ class _Conn:
     """A space whose largest recorded pair disagrees with rdf_quad."""
 
     def __init__(self, stored: int, actual: int, record: list,
-                 coverage_gap=None):
+                 coverage_gap=None, oversized=None):
         self.stored, self.actual, self.record = stored, actual, record
+        # Rows that are PRESENT but above the prune's cap (issues/142). None
+        # means the space has none, which is what the other tests need so the
+        # sampling path is the one exercised.
+        self.oversized = oversized or []
         # The per-predicate coverage audit runs BEFORE the sample (issues/141).
         # None means "every unpruned predicate records all of its quads", which
         # is what these tests need so the SAMPLING path is the one exercised.
@@ -46,6 +50,10 @@ class _Conn:
         return self.coverage_gap
 
     async def fetch(self, sql, *args):
+        if "ORDER BY s.row_count ASC" in sql:      # the oversized probe
+            return self.oversized
+        if "DELETE" in sql:
+            return []
         # The sampled "largest recorded pairs" query.
         return [{"predicate_uuid": "p-uuid", "object_uuid": "o-uuid",
                  "row_count": self.stored}]
@@ -57,6 +65,11 @@ class _Conn:
     async def execute(self, sql, *args):
         return "OK"
 
+    async def executemany(self, sql, args):
+        if "DELETE" in sql:
+            self.record.append(("deleted", len(list(args))))
+        return "OK"
+
 
 class _Acquire:
     def __init__(self, pool):
@@ -64,7 +77,7 @@ class _Acquire:
 
     async def __aenter__(self):
         conn = _Conn(self._pool.stored, self._pool.actual, self._pool.record,
-                     self._pool.coverage_gap)
+                     self._pool.coverage_gap, self._pool.oversized)
         self._pool.handed_out.append(conn)
         return conn
 
@@ -73,9 +86,10 @@ class _Acquire:
 
 
 class _Pool:
-    def __init__(self, stored, actual, coverage_gap=None):
+    def __init__(self, stored, actual, coverage_gap=None, oversized=None):
         self.stored, self.actual = stored, actual
         self.coverage_gap = coverage_gap
+        self.oversized = oversized
         self.handed_out, self.record = [], []
 
     def acquire(self):
@@ -212,3 +226,61 @@ def test_full_coverage_is_not_reported(monkeypatch):
     job._pool = pool
 
     assert _run(job, ["sp_test"]) is None
+
+
+# ===========================================================================
+# Pairs that must not be PRESENT at all — issues/142
+# ===========================================================================
+
+def test_a_present_pair_above_the_cap_is_removed(monkeypatch):
+    """`pruned` licenses ABSENCE, not WRONGNESS.
+
+    A pair whose true count exceeds STATS_MAX_ROW_COUNT is evicted by the prune
+    and never written by the resync, so absence IS its correct state — readers
+    fall through to the bounded count, which saturates, and the semi-join gate
+    declines. Present-and-low is the one state that is never right, and the
+    flag cannot help: the writer takes the UPDATE-only path and faithfully
+    increments a row that should not exist.
+
+    Measured on production 2026-09-02: `(vitaltype, Edge_hasKGSlot)` recorded
+    1,503 against 2,729,244 actual, with `pruned = true`. Understated 1,800x
+    and read by the join reorder as a rare leaf.
+    """
+    from vitalgraph.db.sparql_sql import sync_stats_tables as sst
+
+    async def fake_resync(conn, space_id):
+        raise AssertionError("a resync cannot fix this — it never writes the pair")
+    monkeypatch.setattr(sst, "resync_stats_tables", fake_resync)
+
+    pool = _Pool(stored=1, actual=1, oversized=[
+        {"predicate_uuid": "vitaltype", "object_uuid": "Edge_hasKGSlot",
+         "row_count": 1503, "actual": 2_729_244},
+        {"predicate_uuid": "vitaltype", "object_uuid": "small",
+         "row_count": 2, "actual": 2},          # correct, must be left alone
+    ])
+    job = MaintenanceJob.__new__(MaintenanceJob)
+    job._pool = pool
+
+    result = _run(job, ["sp_test"])
+
+    assert result is not None, "a pair 1,800x understated was not reported"
+    assert result["reason"] == "oversized"
+    assert result["removed"] == 1, "only the oversized pair should be removed"
+    assert result["worst_actual"] == 2_729_244
+    assert ("deleted", 1) in pool.record
+
+
+def test_a_correctly_sized_present_pair_is_left_alone():
+    """The probe samples LOW recorded values, most of which are simply small.
+
+    Deleting those would destroy the statistics the reorder depends on, so the
+    actual count is what decides — not the recorded one.
+    """
+    pool = _Pool(stored=1, actual=1, oversized=[
+        {"predicate_uuid": "p", "object_uuid": "o", "row_count": 2, "actual": 2},
+    ])
+    job = MaintenanceJob.__new__(MaintenanceJob)
+    job._pool = pool
+
+    assert _run(job, ["sp_test"]) is None
+    assert not any(r[0] == "deleted" for r in pool.record if isinstance(r, tuple))

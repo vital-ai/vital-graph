@@ -19,8 +19,11 @@ import os
 import platform
 import socket
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
+
+import asyncpg
 from ..db.connection_config import require
 
 logger = logging.getLogger(__name__)
@@ -48,6 +51,35 @@ VACUUM_STALENESS_MINUTES = 30        # skip if vacuumed within this many minutes
 # whose pairs are singletons the prune legitimately removes, out of the audit.
 STATS_COVERAGE_RATIO = 0.5
 STATS_COVERAGE_MIN_PREDICATE_ROWS = 10_000
+
+# `pruned` licenses ABSENCE, not WRONGNESS (issues/142).
+#
+# A pair whose true count exceeds STATS_MAX_ROW_COUNT is evicted by the prune
+# and never written by the resync (`HAVING COUNT(*) <= 200000`), so it is
+# SUPPOSED to be absent — the flag tells readers that absence is not zero, and
+# they fall through to the bounded on-demand count, which saturates and makes
+# the semi-join gate decline.
+#
+# What breaks is a pair in that class being PRESENT and low. The flag then does
+# exactly what it promises and is powerless: the writer takes the UPDATE-only
+# path and faithfully increments a row that should not exist. Measured on
+# production 2026-09-02, every oversized pair in the space was in that state:
+#
+#     recorded   actual      object
+#        1,503   2,729,244   Edge_hasKGSlot
+#          988   1,791,677   KGT...
+#          257     473,405   Edge_hasEntityKGFrame
+#          165     292,438   MessageFrame / MsgSender / MsgTimestamp
+#
+# Understated by up to 1,800x, and read by the join reorder as a rare leaf.
+# Present-and-low is the one state that is never correct for this class, so
+# the repair is to DELETE the row: absence plus the flag is the intended state
+# and the one the readers handle.
+STATS_OVERSIZED_SAMPLE = 12
+
+# The prune's own window bound, imported rather than restated so the audit and
+# the prune cannot drift about what "oversized" means.
+from ..db.sparql_sql.sync_stats_tables import STATS_MAX_ROW_COUNT  # noqa: E402
 
 # Timeouts for the MAINTENANCE connections, which are not the read path's.
 #
@@ -84,6 +116,53 @@ def maintenance_conn_options() -> str:
     """
     return (f"-c statement_timeout={MAINTENANCE_STATEMENT_TIMEOUT_MS} "
             f"-c lock_timeout={MAINTENANCE_LOCK_TIMEOUT_MS}")
+
+@asynccontextmanager
+async def probe_timeouts(conn):
+    """Raise the read-path timeouts for an integrity PROBE, then restore.
+
+    The probes run on the shared pool, which carries the read path's
+    `statement_timeout` (60s on prod). That is a fence for USER queries; a probe
+    is maintenance and should get the maintenance budget, exactly as
+    `maintenance_conn_options` gives it to ANALYZE/VACUUM.
+
+    Not academic. `entity_slot_sort_drift` computes its expected count with the
+    full unseeded `WITH RECURSIVE frame_walk`, measured at **76s on prod against
+    a 60s limit** — so it has never once completed, and the bare `except` around
+    it read the timeout as "not a KG space" and skipped the repair every cycle
+    for months. The table it should have been backfilling is 0.6% populated
+    (`issues/144`), which is why the entity listing page is O(total).
+
+    Restores explicitly rather than trusting the pool's reset, so the raised
+    budget cannot outlive the probe on a connection handed to a user query.
+    """
+    prev = await conn.fetchval("SHOW statement_timeout")
+    await conn.execute(
+        f"SET statement_timeout = {MAINTENANCE_STATEMENT_TIMEOUT_MS}")
+    try:
+        yield conn
+    finally:
+        try:
+            await conn.execute(f"SET statement_timeout = '{prev}'")
+        except Exception:  # pragma: no cover - abort path
+            logger.debug("could not restore statement_timeout to %s", prev)
+
+
+def log_probe_failure(probe: str, space_id: str, exc: BaseException) -> None:
+    """Report a drift probe that failed for a reason other than "no table".
+
+    Every one of these probes used to sit under a bare `except Exception:
+    continue` whose comment asserted the cause was a non-KG space. Skipping is
+    still the right ACTION -- a probe that cannot answer must not trigger a
+    repair -- but asserting the reason hid a permanent, total failure of the
+    repair path behind a comment about a benign one (`issues/144`). Skipping
+    quietly and skipping *knowingly* are different things.
+    """
+    logger.warning(
+        "%s: drift probe FAILED for %s (%s: %s) — skipping this space, so its "
+        "derived table will NOT be repaired this cycle",
+        probe, space_id, type(exc).__name__, exc, exc_info=True)
+
 
 # Edge-table integrity: resync {space}_edge when it has drifted behind rdf_quad
 # (edges inserted via a path that didn't sync it). Drift = hasEdgeSource quads
@@ -935,7 +1014,55 @@ class MaintenanceJob:
                                 "pairs_sum": gap["pairs_sum"],
                                 "pred_total": gap["pred_total"]}
 
-                    # Check 2: sampling, which only sees the high end.
+                    # Check 2: pairs that must not be PRESENT at all.
+                    #
+                    # `WHERE NOT p.pruned` above is structurally blind to this
+                    # class — the flag is set, correctly, and the corruption is
+                    # a present row rather than a missing one. Sample the low
+                    # recorded values on heavily-pruned predicates and count
+                    # what they should be; anything above the cap is a row the
+                    # prune would have evicted, so delete it and let absence
+                    # plus the flag do their job.
+                    over = await conn.fetch(f"""
+                        WITH cand AS (
+                            SELECT s.predicate_uuid, s.object_uuid, s.row_count
+                              FROM {space_id}_rdf_stats s
+                              JOIN {space_id}_rdf_pred_stats p
+                                ON p.predicate_uuid = s.predicate_uuid
+                             WHERE p.pruned
+                               AND s.row_count < $1
+                             ORDER BY s.row_count ASC
+                             LIMIT $2)
+                        SELECT c.predicate_uuid, c.object_uuid, c.row_count,
+                               (SELECT count(*) FROM {space_id}_rdf_quad q
+                                 WHERE q.predicate_uuid = c.predicate_uuid
+                                   AND q.object_uuid = c.object_uuid) AS actual
+                          FROM cand c
+                    """, STATS_MAX_ROW_COUNT, STATS_OVERSIZED_SAMPLE)
+
+                    bad_rows = [r for r in over
+                                if (r["actual"] or 0) > STATS_MAX_ROW_COUNT]
+                    if bad_rows:
+                        await conn.executemany(
+                            f"DELETE FROM {space_id}_rdf_stats "
+                            f"WHERE predicate_uuid = $1 AND object_uuid = $2",
+                            [(r["predicate_uuid"], r["object_uuid"])
+                             for r in bad_rows])
+                        worst = max(bad_rows, key=lambda r: r["actual"])
+                        logger.warning(
+                            "Stats oversized: %s removed %d pair(s) that were "
+                            "present but above the %d cap — worst recorded %d "
+                            "against %d actual. Absence is the correct state "
+                            "for these; readers fall through to the bounded "
+                            "count.", space_id, len(bad_rows),
+                            STATS_MAX_ROW_COUNT, worst["row_count"],
+                            worst["actual"])
+                        return {"space_id": space_id, "reason": "oversized",
+                                "removed": len(bad_rows),
+                                "worst_recorded": worst["row_count"],
+                                "worst_actual": worst["actual"]}
+
+                    # Check 3: sampling, which only sees the high end.
                     rows = await conn.fetch(
                         f"SELECT predicate_uuid, object_uuid, row_count "
                         f"FROM {space_id}_rdf_stats "
@@ -1166,7 +1293,8 @@ class MaintenanceJob:
         for space_id in space_ids:
             try:
                 async with self._pool.acquire() as conn:
-                    src_quads, edge_rows = await edge_table_drift(conn, space_id)
+                    async with probe_timeouts(conn):
+                        src_quads, edge_rows = await edge_table_drift(conn, space_id)
                     # Counts agreeing does not mean the rows are right. A space
                     # reloaded in place leaves an edge table that is a faithful
                     # materialisation of the PREVIOUS contents — same size,
@@ -1181,8 +1309,11 @@ class MaintenanceJob:
                     # every row reads NULL and nothing is wrong. Orphan
                     # detection stays with the referential probe above.
                     untyped_rate = await edge_table_untyped_rate(conn, space_id)
-            except Exception:
+            except asyncpg.UndefinedTableError:
                 continue  # space has no edge table (e.g. non-KG) — skip
+            except Exception as exc:
+                log_probe_failure("edge_integrity", space_id, exc)
+                continue
             if untyped_rate > EDGE_UNTYPED_WARN_PCT:
                 # Reported, never acted on, and deliberately not called drift.
                 # Three conditions produce it and only one is actionable: the
@@ -1332,7 +1463,8 @@ class MaintenanceJob:
         for space_id in space_ids:
             try:
                 async with self._pool.acquire() as conn:
-                    expected, actual = await frame_entity_drift(conn, space_id)
+                    async with probe_timeouts(conn):
+                        expected, actual = await frame_entity_drift(conn, space_id)
                     # Counts agreeing does not mean the rows are RIGHT. A space
                     # reloaded in place — or under a new graph URI — leaves this
                     # table a faithful materialisation of the PREVIOUS contents:
@@ -1340,8 +1472,11 @@ class MaintenanceJob:
                     # (issues/041). Only a referential probe sees that, and
                     # until now only the edge table had one.
                     orphan_rate = await frame_entity_orphan_rate(conn, space_id)
-            except Exception:
+            except asyncpg.UndefinedTableError:
                 continue  # no frame_entity table (e.g. non-KG) — skip
+            except Exception as exc:
+                log_probe_failure("frame_entity_integrity", space_id, exc)
+                continue
             if orphan_rate > EDGE_ORPHAN_STALE_PCT:
                 stale_space = stale_space or (space_id, orphan_rate)
                 continue
@@ -1413,9 +1548,14 @@ class MaintenanceJob:
         for space_id in space_ids:
             try:
                 async with self._pool.acquire() as conn:
-                    expected, actual = await entity_slot_sort_drift(conn, space_id)
-            except Exception:
+                    async with probe_timeouts(conn):
+                        expected, actual = await entity_slot_sort_drift(
+                            conn, space_id)
+            except asyncpg.UndefinedTableError:
                 continue  # space predates the table, or is not a KG space
+            except Exception as exc:
+                log_probe_failure("entity_slot_sort_integrity", space_id, exc)
+                continue
             drift = expected - actual
             if drift > max(EDGE_DRIFT_MIN_ABS, int(EDGE_DRIFT_MIN_PCT * expected)):
                 if drift > worst_drift:
