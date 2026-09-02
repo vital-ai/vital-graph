@@ -33,6 +33,42 @@ ANALYZE_STALENESS_MINUTES = 10       # skip if analyzed within this many minutes
 VACUUM_DEAD_THRESHOLD = 10_000       # skip if fewer dead tuples
 VACUUM_STALENESS_MINUTES = 30        # skip if vacuumed within this many minutes
 
+# Timeouts for the MAINTENANCE connections, which are not the read path's.
+#
+# A deployment can set `statement_timeout` at the database or parameter-group
+# level, and every session inherits it — including the short-lived psycopg
+# connections this module opens for ANALYZE / VACUUM. Measured on production
+# 2026-09-01 with a 60s parameter-group default: `VACUUM {space}_rdf_quad` was
+# killed on 223 of 244 attempts (91%), 3.7 hours of cancelled VACUUM per day on
+# a 2-vCPU instance, while the job logged "VACUUM complete" each time.
+#
+# The cost is NOT the heap. That table's visibility map was already 96.9%
+# all-visible, so the heap scan is ~20k pages; the time goes to index cleanup
+# over 18 GB across nine indexes, which is proportional to index size and does
+# not shrink after a successful pass. A read-shaped fence can never fit it.
+#
+# BOUNDED rather than 0. Zero is defensible — there is no caller waiting on a
+# VACUUM — but it removes the only thing that would stop a pathological run,
+# and a generous explicit bound fails loudly once instead of silently every six
+# minutes. Override per deployment if a table outgrows it.
+MAINTENANCE_STATEMENT_TIMEOUT_MS = int(
+    os.environ.get("VG_MAINTENANCE_STATEMENT_TIMEOUT_MS", 15 * 60 * 1000))
+# The database-level `lock_timeout` is a read-path guard too (production sets
+# 10s via ALTER DATABASE). VACUUM takes ShareUpdateExclusive and does not block
+# readers or writers, so waiting a little longer for it is cheap.
+MAINTENANCE_LOCK_TIMEOUT_MS = int(
+    os.environ.get("VG_MAINTENANCE_LOCK_TIMEOUT_MS", 60 * 1000))
+
+
+def maintenance_conn_options() -> str:
+    """libpq `options` string clearing the read-path fences for maintenance.
+
+    Applied at CONNECT time rather than by a later `SET`, so there is no window
+    in which the session still carries the inherited value.
+    """
+    return (f"-c statement_timeout={MAINTENANCE_STATEMENT_TIMEOUT_MS} "
+            f"-c lock_timeout={MAINTENANCE_LOCK_TIMEOUT_MS}")
+
 # Edge-table integrity: resync {space}_edge when it has drifted behind rdf_quad
 # (edges inserted via a path that didn't sync it). Drift = hasEdgeSource quads
 # minus edge rows; resync when it exceeds both an absolute and a relative floor.
@@ -91,6 +127,34 @@ def _get_instance_id() -> str:
         except Exception:
             pass
     return socket.gethostname()
+
+
+def _log_table_op_outcome(command: str, space_id: str,
+                          completed: int, attempted: int) -> None:
+    """Log a table-loop outcome, and do NOT call a partial run complete.
+
+    `_sync_run_tables` catches per table, so one table failing returns a lower
+    count and the caller used to log "VACUUM complete: tables=6" at INFO either
+    way. On production that read as 244 clean runs a day while the ONE table
+    that mattered was the one missing from the count — the failure was a WARNING
+    several lines above and nothing tied them together.
+    """
+    if completed < attempted:
+        logger.error("%s INCOMPLETE: space=%s %d/%d tables — see the warnings "
+                     "above for which failed", command, space_id, completed,
+                     attempted)
+    else:
+        logger.info("%s complete: space=%s tables=%d", command, space_id,
+                    completed)
+
+
+def _latest(a, b):
+    """The later of two nullable timestamps, or whichever is set, or None."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return a if a > b else b
 
 
 class MaintenanceJob:
@@ -480,12 +544,16 @@ class MaintenanceJob:
             entry["n_mod_since_analyze"] += row["n_mod_since_analyze"] or 0
             entry["n_dead_tup"] += row["n_dead_tup"] or 0
 
-            last_a = row["last_analyze"] or row["last_autoanalyze"]
+            # The LATER of the two, not "manual if present". `or` returned the
+            # manual timestamp whenever it was non-NULL, so a table autovacuumed
+            # or autoanalyzed perfectly well but last touched by hand weeks ago
+            # read as weeks stale forever — and kept being re-picked.
+            last_a = _latest(row["last_analyze"], row["last_autoanalyze"])
             if last_a is not None:
                 if entry["last_analyze"] is None or last_a < entry["last_analyze"]:
                     entry["last_analyze"] = last_a
 
-            last_v = row["last_vacuum"] or row["last_autovacuum"]
+            last_v = _latest(row["last_vacuum"], row["last_autovacuum"])
             if last_v is not None:
                 if entry["last_vacuum"] is None or last_v < entry["last_vacuum"]:
                     entry["last_vacuum"] = last_v
@@ -584,10 +652,12 @@ class MaintenanceJob:
             else:
                 analyzed = await self._async_run_tables("ANALYZE", tables)
 
-            result = {"space_id": space_id, "tables_analyzed": analyzed}
+            attempted = len(tables)
+            result = {"space_id": space_id, "tables_analyzed": analyzed,
+                      "tables_attempted": attempted}
             if self._tracker and process_id:
                 await self._tracker.mark_completed(process_id, result_details=result)
-            logger.info("ANALYZE complete: space=%s tables=%d", space_id, analyzed)
+            _log_table_op_outcome("ANALYZE", space_id, analyzed, attempted)
             return result
 
         except Exception as e:
@@ -617,10 +687,12 @@ class MaintenanceJob:
             else:
                 vacuumed = await self._async_run_tables("VACUUM", tables)
 
-            result = {"space_id": space_id, "tables_vacuumed": vacuumed}
+            attempted = len(tables)
+            result = {"space_id": space_id, "tables_vacuumed": vacuumed,
+                      "tables_attempted": attempted}
             if self._tracker and process_id:
                 await self._tracker.mark_completed(process_id, result_details=result)
-            logger.info("VACUUM complete: space=%s tables=%d", space_id, vacuumed)
+            _log_table_op_outcome("VACUUM", space_id, vacuumed, attempted)
             return result
 
         except Exception as e:
@@ -1364,6 +1436,7 @@ class MaintenanceJob:
             user=require(cfg, 'username'),
             password=require(cfg, 'password'),
             autocommit=True,
+            options=maintenance_conn_options(),
         )
 
     _SQL_COMMANDS = {"ANALYZE": "ANALYZE", "VACUUM": "VACUUM"}

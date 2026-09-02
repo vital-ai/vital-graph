@@ -80,6 +80,11 @@ def _sync_analyze(tables: List[str], pg_config: Dict[str, Any]) -> int:
     import psycopg
     from psycopg import sql as psql
 
+    # Same reason as `maintenance_job.maintenance_conn_options` — a fresh
+    # connection is not a fresh CONFIGURATION, and a deployment-level
+    # `statement_timeout` is inherited here too. Imported rather than
+    # duplicated so the two cannot drift.
+    from ...process.maintenance_job import maintenance_conn_options
     conn = psycopg.connect(
         host=require(pg_config, 'host'),
         port=require(pg_config, 'port'),
@@ -87,6 +92,7 @@ def _sync_analyze(tables: List[str], pg_config: Dict[str, Any]) -> int:
         user=require(pg_config, 'username'),
         password=require(pg_config, 'password'),
         autocommit=True,
+        options=maintenance_conn_options(),
     )
     completed = 0
     try:
