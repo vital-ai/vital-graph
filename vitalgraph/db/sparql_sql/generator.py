@@ -690,6 +690,19 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
         from . import db_provider as db
         pairs = needed_pairs(plan, aliases)
         missing = [pr for pr in pairs if pr not in (aliases.quad_stats or {})]
+        # Defined here, not inside `if missing:`, because the summary log below
+        # reads it unconditionally. `be8159c` made this block conditional — so
+        # that range and text stats are still collected when the pair counts are
+        # all cached — and left the log referencing a name that path never
+        # binds. The result was an UnboundLocalError raised and swallowed by
+        # this function's own `except` on EVERY query with fully-cached pairs.
+        #
+        # Nothing was lost: the log is the last statement in the try and the
+        # handler only logs, so the stats were already on `aliases`. What it
+        # cost was diagnosis — a genuine failure here reports the identical
+        # "pair stats lookup failed", so the two were indistinguishable, and it
+        # fires at INFO too because logging evaluates its arguments eagerly.
+        still = []
         # NOT an early return. Range and text selectivity are independent of
         # whether the PAIR counts happen to be cached, and returning here
         # skipped both — measured on a filtered 3-hop traversal: 3 pairs needed,
@@ -932,7 +945,26 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                      len(still), len(aliases.range_stats),
                      len(aliases.text_stats))
     except Exception as e:
-        logger.debug("semijoin gate: pair stats lookup failed: %s", e)
+        # WARNING, not DEBUG, and with the traceback.
+        #
+        # Everything this function loads feeds the semi-join gate and the join
+        # reorder. Losing it does not fail the query — it degrades every leaf to
+        # "unmeasured", which is the input that made a 2.7 ms lookup cost
+        # 54,949 ms on production (issues/138, issues/139). A silent degradation
+        # of the thing that decides the plan is exactly what should be loud.
+        #
+        # It was DEBUG, and that is how an UnboundLocalError raised on every
+        # fully-cached query survived from 2026-08-14 to 2026-09-01: prod runs
+        # at INFO, so nothing was ever printed, and the one line that would have
+        # named it was suppressed. `exc_info` is here for the same reason —
+        # "pair stats lookup failed: cannot access local variable 'still'" cost
+        # a round of investigation that a traceback would have ended at once.
+        #
+        # This is only quiet enough to be a WARNING because the `still = []`
+        # binding above stopped the per-query throw. The two changes belong
+        # together: at WARNING without that fix, this floods the log.
+        logger.warning("semijoin gate: pair stats lookup failed, plan will be "
+                       "chosen without leaf statistics: %s", e, exc_info=True)
 
 
 async def generate_sql(
