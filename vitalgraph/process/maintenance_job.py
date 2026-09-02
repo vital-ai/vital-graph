@@ -1189,6 +1189,16 @@ class MaintenanceJob:
             if rows and rows > STATS_KEEP_DEFAULT and rows > worst_rows:
                 worst_rows, worst_space = rows, space_id
 
+        # NOTE (issues/147): `reltuples` counts EVERY row, including the
+        # row_count=1 singletons this prune exists to remove. That is the right
+        # trigger -- singletons are exactly the bloat -- but it means the prune
+        # fires for a table whose READ WINDOW is already under the cap. The
+        # keep-query must therefore not shrink the window further just because
+        # it was invoked; it no longer does, and the two halves have to stay
+        # consistent. If this trigger is ever narrowed to count only the window,
+        # revisit the conditional rank cut in `prune_stats_tables`, which
+        # assumes it may be called when there is nothing to do.
+
         if not worst_space:
             return None
 

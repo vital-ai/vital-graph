@@ -501,12 +501,15 @@ async def prune_stats_tables(conn, space_id: str,
     scale dominated by row_count=1 singletons (one per unique object) that the
     reorder loader never reads (it filters row_count >= 2). This removes the
     pairs outside the reorder's window (row_count < MIN or > MAX), keeps the
-    ``per_predicate_n`` most selective objects FOR EACH PREDICATE, and then
-    applies ``keep_top_n`` as an overall size bound.
+    most selective objects fairly across predicates up to ``keep_top_n``.
 
-    The per-predicate step is what stops one high-cardinality predicate evicting
-    every other — see the comment at step 2. Returns rows kept. pred_stats is
-    left alone (bounded by the distinct-predicate count).
+    Fairness comes from taking rank 1 of every predicate, then rank 2 of every
+    predicate, and so on until the cap is full — so one high-cardinality
+    predicate cannot evict every other, and the cap is actually reached.
+    ``per_predicate_n`` no longer bounds the result (`issues/147`: a fixed cut
+    of 2,000 discarded 41,146 rows with 41,146 slots free, and the rows it
+    discarded were the LARGEST pairs). Returns rows kept. pred_stats is left
+    alone (bounded by the distinct-predicate count).
 
     KEEP-AND-REWRITE, NOT DELETE, and the difference is hundreds of megabytes.
     ------------------------------------------------------------------------
@@ -579,6 +582,33 @@ async def prune_stats_tables(conn, space_id: str,
     # the cap now trims by selectivity instead of by where a row happens to sit.
     # (predicate_uuid, object_uuid) remains as a final tiebreak for determinism.
     async with conn.transaction():
+        # THE PER-PREDICATE RANK CUT IS GONE, and its purpose is preserved.
+        #
+        # `rn <= per_predicate_n` existed to stop one high-cardinality predicate
+        # evicting every other. But `ORDER BY r.rn ASC ... LIMIT keep_top_n`
+        # ALREADY does that, and better: it takes rn=1 from every predicate,
+        # then rn=2 from every predicate, and so on until the cap is full. That
+        # is round-robin fairness cut at exactly the depth that fits, instead of
+        # a fixed depth guessed in advance. The WHERE clause was redundant with
+        # the ORDER BY -- and destructive, because it truncated long before the
+        # cap was reached.
+        #
+        # Measured on production 2026-09-02 (`issues/147`), same table, same cap:
+        #
+        #                            rows kept   predicates   largest pair kept
+        #     with `rn <= 2000`          8,854           20              (small)
+        #     ordering + LIMIT alone    50,000           20             192,159
+        #
+        # 41,146 rows were being discarded with 41,146 slots free. Worse,
+        # `ORDER BY row_count ASC` meant the discarded ones were the LARGEST
+        # pairs -- exactly what the semi-join gate needs to know are large, and
+        # exactly the pair `issues/141` kept reporting as corrupt (192,091
+        # actual, recorded 259). The rebuild and the prune were fighting over
+        # the same rows every ~10 minutes, forever.
+        #
+        # `per_predicate_n` is kept in the signature: callers pass it, and a
+        # caller that wants nothing kept still gets that via keep_top_n=0. It no
+        # longer bounds the result, because the ordering does it properly.
         await conn.execute(
             f"CREATE TEMP TABLE _keep_stats ON COMMIT DROP AS "
             f"  SELECT predicate_uuid, object_uuid, row_count FROM ("
@@ -588,11 +618,9 @@ async def prune_stats_tables(conn, space_id: str,
             f"             ORDER BY row_count ASC, object_uuid) AS rn"
             f"    FROM {t_stats}"
             f"    WHERE row_count >= $1 AND row_count <= $2) r"
-            f"  WHERE r.rn <= $3"
             f"  ORDER BY r.rn ASC, r.row_count ASC, r.predicate_uuid, r.object_uuid"
-            f"  LIMIT $4",
-            STATS_MIN_ROW_COUNT, STATS_MAX_ROW_COUNT,
-            per_predicate_n, keep_top_n)
+            f"  LIMIT $3",
+            STATS_MIN_ROW_COUNT, STATS_MAX_ROW_COUNT, keep_top_n)
 
         # Which predicates lose a row. Collected BEFORE the rewrite, because
         # afterwards there is nothing left to compare against.
