@@ -22,6 +22,7 @@ Two details the issue got wrong, both load-bearing:
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -39,7 +40,20 @@ class _Conn:
     async def fetch(self, _sql):
         return [{"column_name": c} for c in self.columns]
 
-    async def execute(self, _sql, *args):
+    async def execute(self, sql, *args):
+        # Reject what asyncpg rejects. The first version of this fake accepted
+        # ANY argument, so it happily took a tz-aware datetime for a column the
+        # migration and both schemas declare TIMESTAMP (without time zone).
+        # Production logged "can't subtract offset-naive and offset-aware
+        # datetimes", the handler swallowed it, and the stamp silently did
+        # nothing. A fake that accepts more than the real driver does not test
+        # the code, it tests the fake.
+        for a in args:
+            if isinstance(a, datetime) and a.tzinfo is not None:
+                raise TypeError(
+                    "invalid input for query argument: can't subtract "
+                    "offset-naive and offset-aware datetimes")
+        self.sql = sql
         self.args = args
         return f"UPDATE {self.updated}"
 
@@ -57,6 +71,24 @@ async def test_it_stamps_version_and_commit(env):
     assert await B.stamp_install(conn) is True
     assert conn.args[0] == "v0.0.51"
     assert conn.args[1] == "a" * 40
+
+
+@pytest.mark.asyncio
+async def test_the_timestamp_comes_from_the_database_not_python(env):
+    """`deployed_datetime` is TIMESTAMP without time zone.
+
+    Passing a Python datetime at all is the bug: an aware one is rejected by the
+    driver, and a naive one silently records the CLIENT's clock in whatever zone
+    it happens to be. The database already produces this value for
+    `install_datetime` and `update_datetime`, and for the migration script.
+    """
+    conn = _Conn()
+    assert await B.stamp_install(conn) is True
+    assert not any(isinstance(a, datetime) for a in conn.args), (
+        "no datetime should be sent as a parameter")
+    assert "now() AT TIME ZONE 'utc'" in conn.sql, (
+        "the database must produce the timestamp, explicitly in UTC rather "
+        "than relying on the session TimeZone")
 
 
 @pytest.mark.asyncio

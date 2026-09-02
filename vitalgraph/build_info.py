@@ -135,10 +135,24 @@ async def stamp_install(conn) -> bool:
                 ", ".join(sorted(missing)))
             return False
 
+        # `now() AT TIME ZONE 'utc'`, NOT a Python datetime.
+        #
+        # `deployed_datetime` is `TIMESTAMP` — without time zone — in the
+        # migration, in both schema definitions, and on production. Passing an
+        # aware datetime makes asyncpg raise "can't subtract offset-naive and
+        # offset-aware datetimes", which the handler below swallows: the stamp
+        # silently does nothing while the server logs a warning and boots fine.
+        #
+        # Letting the database produce the value also keeps it consistent with
+        # `install_datetime` / `update_datetime` and with the migration script,
+        # all of which use `now()`, and removes the client clock from the
+        # answer. `AT TIME ZONE 'utc'` is explicit rather than relying on the
+        # session TimeZone being UTC, which it is on production but is not a
+        # property this code should depend on.
         result = await conn.execute(
             "UPDATE install SET vitalgraph_version = $1, git_commit = $2, "
-            "deployed_datetime = $3 WHERE active",
-            version or None, commit or None, datetime.now(timezone.utc))
+            "deployed_datetime = (now() AT TIME ZONE 'utc') WHERE active",
+            version or None, commit or None)
         updated = int(result.split()[-1]) if result else 0
         if not updated:
             logger.warning(
