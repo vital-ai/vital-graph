@@ -82,3 +82,31 @@ def test_the_prune_still_flags_every_predicate_it_prunes():
     assert "WHERE k.predicate_uuid IS NULL" in src, (
         "the anti-join finds rows present in rdf_stats and absent from the "
         "keep set — those are exactly the drops")
+
+
+def test_the_drop_count_is_measured_before_the_rewrite():
+    """A probe placed after the TRUNCATE can only ever report zero.
+
+    Observed on production 2026-09-02:
+
+        prune_stats_tables(<space>): dropped 0 pair(s) across 8 predicate(s);
+        flagged pruned=TRUE on 8
+
+    `dropped` was computed below the TRUNCATE and re-INSERT, where the table is
+    a copy of `_keep_stats`, so the anti-join is empty by construction. The line
+    is self-contradictory on its face — 0 rows dropped across 8 predicates — and
+    the whole point of this instrumentation is to settle `issues/142`, which it
+    cannot do while reporting a constant.
+    """
+    src = inspect.getsource(S.prune_stats_tables)
+    at_dropped = src.index("dropped = await conn.fetchval")
+    at_pruned = src.index('pruned_preds = [r["predicate_uuid"]')
+    at_truncate = src.index("TRUNCATE {t_stats}")
+
+    assert at_dropped < at_truncate, (
+        "dropped must be measured before the table is rewritten")
+    assert at_pruned < at_truncate, (
+        "and so must the predicate list it is compared against")
+    assert at_dropped < at_pruned, (
+        "both read the same pre-rewrite state; keep them adjacent so a later "
+        "edit cannot separate them across the TRUNCATE")

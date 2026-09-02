@@ -629,6 +629,18 @@ async def prune_stats_tables(conn, space_id: str,
         # pruned" from "absent because zero". Without that distinction it treats
         # a pruned pair's missing row as a zero base and stores only the
         # post-prune delta: 100,000 -> 1 after one write (issues/062).
+        # MEASURED BEFORE THE REWRITE, which is the only moment it means
+        # anything. This first shipped below the TRUNCATE and re-INSERT, where
+        # `{t_stats}` is by then a copy of `_keep_stats`, so the anti-join is
+        # empty by construction and it logged `dropped 0 pair(s) across 8
+        # predicate(s)` -- self-contradictory, and produced by a probe that
+        # could only ever report zero.
+        dropped = await conn.fetchval(
+            f"SELECT count(*) FROM {t_stats} s LEFT JOIN _keep_stats k "
+            f"  ON k.predicate_uuid = s.predicate_uuid "
+            f" AND k.object_uuid = s.object_uuid "
+            f"WHERE k.predicate_uuid IS NULL")
+
         pruned_preds = [r["predicate_uuid"] for r in await conn.fetch(
             f"SELECT DISTINCT s.predicate_uuid FROM {t_stats} s "
             f"LEFT JOIN _keep_stats k "
@@ -644,11 +656,6 @@ async def prune_stats_tables(conn, space_id: str,
             f"INSERT INTO {t_stats} (predicate_uuid, object_uuid, row_count) "
             f"SELECT predicate_uuid, object_uuid, row_count FROM _keep_stats")
 
-        dropped = await conn.fetchval(
-            f"SELECT count(*) FROM {t_stats} s LEFT JOIN _keep_stats k "
-            f"  ON k.predicate_uuid = s.predicate_uuid "
-            f" AND k.object_uuid = s.object_uuid "
-            f"WHERE k.predicate_uuid IS NULL")
         flagged = 0
         if pruned_preds:
             res = await conn.execute(

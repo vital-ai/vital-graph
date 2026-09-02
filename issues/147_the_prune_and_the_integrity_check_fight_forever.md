@@ -4,6 +4,26 @@
 ## is retracted in full below — read §"Retraction" before anything else.** The
 ## fix is correct; the causal story that motivated it was not.
 
+## CONFIRMED LIVE 2026-09-02 22:41:59, on production
+
+Sampling every ~3 minutes caught the prune running against a healthy table and
+producing, in its own log:
+
+    prune_stats_tables(prod_kg): kept 8866 rows (cap 50000)
+    Stats prune: prod_kg ~205292 -> 8866 rows
+
+    sampler:  22:41:06  in_window 50,146   pruned_preds  6
+              22:43:56  in_window  8,867   pruned_preds 12
+
+8,866 kept against a cap of 50,000 — 41,000 slots free — which is the defect
+this issue describes, at the exact magnitude predicted from the keep-query
+measurement. The fix in `342efc5` is therefore confirmed against live behaviour,
+not just against a hand-run query.
+
+Note this is a SECOND, separate destructive event from the one at 22:29 (max
+row_count 192,183 -> 200 with the population intact). That one is still
+unexplained and is NOT this. Two different things were eating the table.
+
 ## Retraction — what this file first claimed
 
 Filed as "the prune and the integrity check fight forever", claiming the prune
