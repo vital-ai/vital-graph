@@ -1,6 +1,8 @@
 # Production Is Built From A Second Repository With A Disjoint History
 
-## Status: OPEN — production is built from a separate deploy repo whose history
+## Status: ITEM 2 FIXED 2026-09-02 — the server now stamps `install` on startup.
+## Items 1 and 3 (name the repo here; share history) remain OPEN.
+## Original status: OPEN — production is built from a separate deploy repo whose history
 ## shares no commits with this one, and nothing here records that. The provenance
 ## label resolves, but only if you already know which repository to look in.
 ## Filed 2026-09-01, corrected the same day — see the retraction at the end.
@@ -88,6 +90,18 @@ what point of `main` was merged in. So:
 1. **Name the deploy repo here** — a line in `README.md` or `PACKAGING.md`
    saying production is built from it and which branch. Cheapest, fixes the
    worst symptom.
+
+   **BLOCKED, and not by effort.** The deploy repository's name contains the
+   client name, and this repo's standing rule is that the client name does not
+   appear in tracked files — `8e12e25` exists to remove it. `README.md` and
+   `PACKAGING.md` are both tracked, so writing the repo's real name into either
+   trades one problem for a worse one.
+
+   Item 2's stamp is the better answer anyway, and is done: the deployed
+   database now says what is running without anyone needing the repo name. What
+   is still missing is the mapping from a product sha to the deploy-repo sha
+   that built it, and that wants a home OUTSIDE this repository — the deploy
+   repo's own README, or the same place the deploy credentials live. Not here.
 2. **Record the mapping per deploy** — image tag -> deploy-repo sha -> product
    sha -> task definition revision, so "what is running" is answerable without
    pulling OCI labels out of a registry.
@@ -115,6 +129,32 @@ what point of `main` was merged in. So:
    against the database the app is already connected to — no registry access, no
    knowledge of which repo built it. The schema half of this was done and then
    left unwired.
+   **DONE 2026-09-02.** `vitalgraph/build_info.py` resolves version, commit and
+   build time; `VitalGraphAppImpl._stamp_build_provenance()` writes the first
+   two plus `now()` into the active `install` row on every startup.
+
+   Two details this section had wrong, both of which would have made the fix a
+   no-op in the environment it exists for:
+
+   * **`apps/` is not copied into the image.** The Dockerfile copies
+     `vitalgraph/` only, so detection could not live beside the migration.
+     `apps/migrate_install_version.py` now re-exports from the package instead,
+     so there is one copy rather than two that can drift.
+   * **"next to `_auto_init_auth_tables`" would never have run.** That path is
+     gated on `VG_AUTO_INIT=true`, which is test environments. The stamp is
+     placed after it and OUTSIDE that branch; a test asserts the indentation, so
+     a later edit cannot quietly move it back inside.
+
+   `deployed_datetime` is stamped at START time rather than build time: the
+   column is named "deployed", a restart legitimately updates "since when has
+   this code been running", and the build moment is still recoverable from the
+   version and commit. Build time is logged beside it.
+
+   Answering "what is running?" is now:
+
+       SELECT vitalgraph_version, git_commit, deployed_datetime
+         FROM install WHERE active;
+
 3. **Share history instead of copying.** A real fork or a subtree/submodule
    makes `git log A..B` work again. Larger change; the first two are worth doing
    regardless.

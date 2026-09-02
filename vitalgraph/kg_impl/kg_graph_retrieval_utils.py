@@ -106,7 +106,48 @@ def _bindings_to_objects(bindings: List[Dict]) -> List[Any]:
     if not entries:
         return []
 
-    return GraphObject.from_property_maps(entries)
+    try:
+        return GraphObject.from_property_maps(entries)
+    except Exception as exc:
+        # ONE MALFORMED ENTITY MUST NOT EMPTY THE WHOLE GRAPH.
+        #
+        # `from_property_maps` is called once for every subject in the result,
+        # so anything it rejects fails the entire request. Observed on
+        # production at ~19/day: two entities carry a LIST for a property the
+        # ontology declares single-valued, and `get_entity_graph` 500s for
+        # every caller that touches them.
+        #
+        # The list is built ~40 lines above, by design: two quads for the same
+        # predicate become `[existing, value]`. That is right for a genuinely
+        # multi-valued property and is the correct SPARQL reading either way —
+        # the defect is in the DATA (a duplicate quad on a single-valued
+        # predicate), not here. But a data defect on two entities should cost
+        # those two entities, not every request that reads them.
+        #
+        # Retry per entry so the good subjects still build. This is strictly a
+        # fallback: the bulk call above stays the fast path and this costs
+        # nothing until something is actually wrong.
+        logger.warning(
+            "Bulk GraphObject construction failed for %d subject(s) (%s: %s); "
+            "retrying individually so one bad entity does not empty the graph",
+            len(entries), type(exc).__name__, exc)
+        objs: List[Any] = []
+        for entry in entries:
+            try:
+                objs.extend(GraphObject.from_property_maps([entry]))
+            except Exception as inner:
+                multi = sorted(k for k, v in entry['properties'].items()
+                               if isinstance(v, list))
+                logger.error(
+                    "SKIPPING entity %s (type %s): %s: %s. Multi-valued "
+                    "properties on this subject: %s. If one of those is "
+                    "single-valued in the ontology, the data holds a duplicate "
+                    "quad for it and needs repair — this is a DATA defect and "
+                    "the entity will be missing from every graph until it is "
+                    "fixed.",
+                    entry['subject_uri'], entry['type_uri'],
+                    type(inner).__name__, inner, multi or "none")
+        return objs
 
 
 class MaterializedPredicateConstants:
