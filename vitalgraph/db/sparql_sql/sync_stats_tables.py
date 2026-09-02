@@ -301,16 +301,36 @@ async def _resync_stats_locked(conn, space_id: str, t_quad: str, t_pred: str,
     # TRUNCATE is transactional in PostgreSQL, so rolling back restores the
     # previous contents. ANALYZE stays outside; it is not part of the swap and
     # does not need to be.
+    # AGGREGATE FIRST, TRUNCATE LAST — the exclusive lock must not span the scan.
+    #
+    # TRUNCATE takes an AccessExclusiveLock held until COMMIT, and this used to
+    # be `TRUNCATE; INSERT ... SELECT ... GROUP BY` over the whole quad table, so
+    # the lock spanned an aggregate this function's own docstring describes as
+    # taking "minutes on a large space". It conflicts with everything, including
+    # PREPARING a statement against the table, and the read path reads exactly
+    # these tables to feed the join-reorder heuristic and the semi-join gate.
+    #
+    # Measured consequence (`issues/145`): two such reads each waited the full
+    # pool-wide `lock_timeout` of 10s and then failed, turning a 1,851ms request
+    # into 21,980ms and planning it without stats anyway. That is the P1.
+    #
+    # Staging into temp tables first is the pattern `prune_stats_tables` already
+    # uses, and for the same reason. Locks are taken when a statement runs, not
+    # when the transaction opens, so doing the expensive part before the TRUNCATE
+    # keeps the whole rebuild in ONE transaction — preserving the atomicity that
+    # `issues/103` is about — while the exclusive lock lasts only for the
+    # TRUNCATE and a bulk insert from an already-computed table.
+    #
+    # `ON COMMIT DROP` ties the temp tables to this transaction, so a failure
+    # cleans up after itself and a retry cannot meet a stale one.
     async with conn.transaction():
         # Predicate cardinality
-        await conn.execute(f"TRUNCATE {t_pred}")
-        result = await conn.execute(f"""
-            INSERT INTO {t_pred} (predicate_uuid, row_count)
-            SELECT predicate_uuid, COUNT(*)
+        await conn.execute(f"""
+            CREATE TEMP TABLE _new_pred_stats ON COMMIT DROP AS
+            SELECT predicate_uuid, COUNT(*) AS row_count
             FROM {t_quad}
             GROUP BY predicate_uuid
         """)
-        pred_count = int(result.split()[-1]) if result else 0
 
         # Predicate+object co-occurrence, excluding extremely common pairs.
         #
@@ -319,13 +339,26 @@ async def _resync_stats_locked(conn, space_id: str, t_quad: str, t_pred: str,
         # threshold to decide which predicates this rebuild covered — two copies of
         # a constant that must agree, where disagreement silently mislabels a
         # predicate as fully covered and re-opens the delta-only bug.
-        await conn.execute(f"TRUNCATE {t_stats}")
-        result = await conn.execute(f"""
-            INSERT INTO {t_stats} (predicate_uuid, object_uuid, row_count)
-            SELECT predicate_uuid, object_uuid, COUNT(*)
+        await conn.execute(f"""
+            CREATE TEMP TABLE _new_stats ON COMMIT DROP AS
+            SELECT predicate_uuid, object_uuid, COUNT(*) AS row_count
             FROM {t_quad}
             GROUP BY predicate_uuid, object_uuid
             HAVING COUNT(*) <= {STATS_MAX_ROW_COUNT}
+        """)
+
+        # --- from here, and only from here, an AccessExclusiveLock is held ---
+        await conn.execute(f"TRUNCATE {t_pred}")
+        result = await conn.execute(f"""
+            INSERT INTO {t_pred} (predicate_uuid, row_count)
+            SELECT predicate_uuid, row_count FROM _new_pred_stats
+        """)
+        pred_count = int(result.split()[-1]) if result else 0
+
+        await conn.execute(f"TRUNCATE {t_stats}")
+        result = await conn.execute(f"""
+            INSERT INTO {t_stats} (predicate_uuid, object_uuid, row_count)
+            SELECT predicate_uuid, object_uuid, row_count FROM _new_stats
         """)
         stats_count = int(result.split()[-1]) if result else 0
 
