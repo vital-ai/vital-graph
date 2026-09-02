@@ -33,6 +33,22 @@ ANALYZE_STALENESS_MINUTES = 10       # skip if analyzed within this many minutes
 VACUUM_DEAD_THRESHOLD = 10_000       # skip if fewer dead tuples
 VACUUM_STALENESS_MINUTES = 30        # skip if vacuumed within this many minutes
 
+# Stats coverage audit (issues/141). For a predicate whose `pruned` flag is
+# FALSE, absence of a pair means zero — so its recorded pairs must sum to its
+# exact `rdf_pred_stats` total. Anything far below that is the issues/062
+# corruption: pairs removed while the flag still says they were not.
+#
+# Measured on production 2026-09-02, all with pruned = FALSE:
+#     hasKGGraphURI     6,469,966 quads ->     6,758 recorded   0.10%
+#     hasFrameGraphURI  5,913,173        ->     6,210           0.11%
+#     hasKGEntityType      78,993        ->        92           0.12%
+#     hasObjectModificationDateTime 79,608 ->  79,608         100.00%  (healthy)
+#
+# 0.5 sits far from both populations. The floor on size keeps small predicates,
+# whose pairs are singletons the prune legitimately removes, out of the audit.
+STATS_COVERAGE_RATIO = 0.5
+STATS_COVERAGE_MIN_PREDICATE_ROWS = 10_000
+
 # Timeouts for the MAINTENANCE connections, which are not the read path's.
 #
 # A deployment can set `statement_timeout` at the database or parameter-group
@@ -858,10 +874,30 @@ class MaintenanceJob:
         endpoint — (rdf:type, Edge_hasKGSlot) stored 37 against 304,859 actual,
         269ms against 33ms once repaired.
 
-        Checked by SAMPLING the largest recorded pairs, not by recounting the
-        table. Understatement is what flips the gate, and the largest rows are
-        where it shows; an exact count on a handful of pairs is an index scan
-        each, which is what makes this affordable per cycle.
+        TWO checks, because sampling alone is biased against the failure it
+        exists to catch (`issues/141`).
+
+        1. **Coverage, per predicate.** For a predicate whose `pruned` flag is
+           FALSE, absence of a pair MEANS zero — so its recorded pairs must sum
+           to its exact `rdf_pred_stats` total. One grouped aggregate over a
+           small table joined to a 24-row one; no sampling and no bias, because
+           it does not care where a wrong row sorts.
+
+           Deliberately NOT a global `sum(row_count)` against the quad count:
+           the prune removes singletons and caps per predicate, so a healthy
+           pruned space legitimately totals a fraction of a percent and that
+           check would rebuild every cycle. The `pruned` flag is what makes the
+           per-predicate form sound — it excludes exactly the predicates whose
+           absence is expected.
+
+        2. **Sampling** the largest recorded pairs, as before, which still
+           catches overstatement.
+
+        Sampling was the only check, and the corruption makes recorded values
+        LOW: a pair that collapsed from 2,727,156 to 80 sorts to the BOTTOM of
+        `ORDER BY row_count DESC`, exactly where a LIMIT 3 never looks. Raising
+        SAMPLE buys more tickets in the same lottery instead of removing the
+        bias.
 
         Runs BEFORE the prune, deliberately. The prune removes pairs and flags
         their predicates, so auditing after it would be reading a table that was
@@ -873,6 +909,33 @@ class MaintenanceJob:
         for space_id in space_ids:
             try:
                 async with self._pool.acquire() as conn:
+                    # Check 1: per-predicate coverage for UNPRUNED predicates.
+                    gap = await conn.fetchrow(f"""
+                        SELECT p.predicate_uuid,
+                               p.row_count                  AS pred_total,
+                               COALESCE(sum(s.row_count),0) AS pairs_sum
+                          FROM {space_id}_rdf_pred_stats p
+                          LEFT JOIN {space_id}_rdf_stats s
+                                 ON s.predicate_uuid = p.predicate_uuid
+                         WHERE NOT p.pruned AND p.row_count >= $1
+                         GROUP BY p.predicate_uuid, p.row_count
+                        HAVING COALESCE(sum(s.row_count),0) < p.row_count * $2
+                         LIMIT 1
+                    """, STATS_COVERAGE_MIN_PREDICATE_ROWS, STATS_COVERAGE_RATIO)
+                    if gap is not None:
+                        logger.warning(
+                            "Stats coverage: %s predicate %s is unpruned but "
+                            "records %d of %d quads (%.2f%%) — rebuilding",
+                            space_id, gap["predicate_uuid"], gap["pairs_sum"],
+                            gap["pred_total"],
+                            100.0 * gap["pairs_sum"] / max(gap["pred_total"], 1))
+                        await resync_stats_tables(conn, space_id)
+                        return {"space_id": space_id, "rebuilt": True,
+                                "reason": "coverage",
+                                "pairs_sum": gap["pairs_sum"],
+                                "pred_total": gap["pred_total"]}
+
+                    # Check 2: sampling, which only sees the high end.
                     rows = await conn.fetch(
                         f"SELECT predicate_uuid, object_uuid, row_count "
                         f"FROM {space_id}_rdf_stats "

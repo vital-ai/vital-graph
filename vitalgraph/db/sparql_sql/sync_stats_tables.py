@@ -93,9 +93,31 @@ async def sync_stats_after_insert(
 
     fresh = sorted((p, o, c) for (p, o), c in po_counts.items() if p not in pruned)
     if fresh:
+        # The `pruned` test is repeated INSIDE the statement, not just in the
+        # Python filter above, because the read and the write are not
+        # serialised against `prune_stats_tables`:
+        #
+        #     read `pruned`   -> predicate not flagged
+        #                        <- prune commits: drops the pair, sets the flag
+        #     INSERT          -> pair is now absent, so ON CONFLICT does not
+        #                        fire and this CREATES a row holding only the
+        #                        delta
+        #
+        # That row is the `issues/062` corruption: a pair whose true count is
+        # 76,346 recorded as 80. Once written, nothing detects it — a wrong
+        # LOW value sorts away from the integrity check's sample
+        # (`issues/141`), and the join reorder reads it as a rare pair.
+        #
+        # `WHERE NOT EXISTS (... AND pruned)` re-evaluates the flag at insert
+        # time under the same snapshot as the write, so the losing side of the
+        # race inserts nothing instead of inventing a count. An UPDATE to an
+        # existing row is unaffected: ON CONFLICT still fires for a pair that
+        # is present, which is the case this path exists to serve.
         await conn.executemany(
             f"INSERT INTO {t_stats} (predicate_uuid, object_uuid, row_count) "
-            f"VALUES ($1, $2, $3) "
+            f"SELECT $1, $2, $3 WHERE NOT EXISTS ("
+            f"  SELECT 1 FROM {t_pred} p "
+            f"   WHERE p.predicate_uuid = $1 AND p.pruned) "
             f"ON CONFLICT (predicate_uuid, object_uuid) "
             f"DO UPDATE SET row_count = {t_stats}.row_count + EXCLUDED.row_count",
             fresh,

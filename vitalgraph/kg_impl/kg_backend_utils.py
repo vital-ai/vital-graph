@@ -1366,13 +1366,27 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             async with self.backend.db_impl.connection_pool.acquire() as conn:
                 async with conn.transaction():
                     if s_uuids:
-                        # Sync auxiliary tables before delete
+                        # Sync auxiliary tables before delete.
+                        #
+                        # TIMED INDIVIDUALLY because the aggregate was
+                        # misleading: `FRAME_CREATE step2` is 7.52s mean / 22.8s
+                        # max on production for FOURTEEN subjects, of which the
+                        # insert is ~0.3s, and the caller's log attributed the
+                        # whole thing to "update_subjects_graph" with no way to
+                        # tell which of these four statements owned it. Each one
+                        # scans for the affected quads before the DELETE, so any
+                        # of them could. Sub-millisecond to emit, and it runs on
+                        # the path that starves the connection pool.
+                        _s0 = _time.monotonic()
                         from ..db.sparql_sql.sync_frame_entity_table import sync_frame_entity_before_delete
                         await sync_frame_entity_before_delete(conn, space_id, s_uuids, context_uuid=g_uuid)
+                        _s1 = _time.monotonic()
                         from ..db.sparql_sql.sync_edge_table import sync_edge_table_before_delete
                         await sync_edge_table_before_delete(conn, space_id, s_uuids, context_uuid=g_uuid)
+                        _s2 = _time.monotonic()
                         from ..db.sparql_sql.sync_stats_tables import sync_stats_for_deleted_subjects
                         await sync_stats_for_deleted_subjects(conn, space_id, s_uuids, context_uuid=g_uuid)
+                        _s3 = _time.monotonic()
 
                         # Delete all quads for these subjects in this graph
                         result = await conn.execute(
@@ -1380,9 +1394,14 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                             f"WHERE subject_uuid = ANY($1) AND context_uuid = $2",
                             s_uuids, g_uuid,
                         )
+                        _s4 = _time.monotonic()
                         deleted = int(result.split()[-1]) if result else 0
-                        self.logger.info("update_subjects_graph: deleted %d quads for %d subjects",
-                                         deleted, len(s_uuids))
+                        self.logger.info(
+                            "⏱️  update_subjects_graph presync: frame_entity=%.3fs "
+                            "edge=%.3fs stats=%.3fs delete=%.3fs "
+                            "(%d subjects, %d quads deleted)",
+                            _s1 - _s0, _s2 - _s1, _s3 - _s2, _s4 - _s3,
+                            len(s_uuids), deleted)
 
                     # Insert new quads
                     if insert_quads:

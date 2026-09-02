@@ -901,14 +901,39 @@ def _selective_enough(left, right, aliases) -> bool:
         # above, the true value can be anywhere at or below it and is unknown —
         # and unknown means the set-based plan, per this function's contract.
         #
-        # A saturated count on the PROBE side is safe and deliberately not
-        # refused: it understates `matches`, which understates the ratio, which
-        # errs toward the join.
+        # Probe-side saturation is handled by the coherence check below, NOT
+        # by an argument that it is safe. An earlier version of this comment
+        # claimed a saturated `matches` "understates the ratio, which errs
+        # toward the join". That is wrong, and measured wrong: `_leaf_rows`
+        # returns the smallest leaf it could MEASURE, not a bound on the
+        # probe's match count, so when the selective leaf is unmeasurable it
+        # falls back to a larger unrelated leaf. Observed on production data
+        # for a slot value absent from the term table: true matches 0,
+        # `matches` reported as 50,000.
         logger.debug("semijoin selectivity: anchor count %d is saturated at the "
                      "count cap — denominator is a lower bound, declining",
                      candidates)
         return False
     sel = matches / candidates
+    if sel > 1.0:
+        # INCOHERENT, not merely large. A semi-join's probe RESTRICTS its
+        # anchor, so the match count cannot exceed the candidate count — this
+        # ratio is only reachable when the two numbers came from different
+        # leaves and are not comparable. It is the signature of a selective
+        # leaf that could not be measured at all: `_leaf_rows` skips it and
+        # returns the next leaf it can measure, which may be anything.
+        #
+        # Measured on production, `CtRefSFLeadId` bound to a value absent from
+        # the term table: 50000/76 = 657.895 -> probe. True matches: 0.
+        #
+        # Refusing is the module's stated default — an unmeasurable side means
+        # unknown, and unknown means the set-based plan. Cheap to check and it
+        # catches the whole class regardless of WHY the leaf was unmeasurable,
+        # where the saturation test above catches only one cause.
+        logger.debug("semijoin selectivity: %d/%d = %.3f is > 1 and therefore "
+                     "not a selectivity — the two counts came from different "
+                     "leaves, declining", matches, candidates, sel)
+        return False
     ok = sel >= MIN_SELECTIVITY
     logger.debug("semijoin selectivity: %d/%d = %.3f -> %s",
                  matches, candidates, sel, "probe" if ok else "join")

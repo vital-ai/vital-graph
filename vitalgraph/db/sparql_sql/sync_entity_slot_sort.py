@@ -129,7 +129,7 @@ _SLOT_VALUE_PREDS = [_u(x) for x in SLOT_VALUE_URIS]
 MAX_FRAME_DEPTH = 6
 
 
-def _select_rows(space_id: str, where: str) -> str:
+def _select_rows(space_id: str, where: str, *, seed_param: str = None) -> str:
     """The derivation itself: the walk, as one SELECT.
 
     Used verbatim by the full resync, the backfill and the incremental
@@ -156,6 +156,25 @@ def _select_rows(space_id: str, where: str) -> str:
     t_edge = f"{space_id}_edge"
     t_quad = f"{space_id}_rdf_quad"
     t_term = f"{space_id}_term"
+    # SEEDS the recursion; it used not to, and that was the whole cost.
+    #
+    # The base case selected EVERY entity->frame edge in the space, and the
+    # touched-set filter sat in the outer SELECT where PostgreSQL cannot push
+    # it into a recursive CTE. So an incremental write materialised the entire
+    # frame graph and discarded nearly all of it. Measured on production:
+    # 9,147 ms to produce 15 rows for 16 subjects, and the statement had burned
+    # 3.7 hours of database time within hours of the deploy (mean 9,575 ms,
+    # max 58,173 ms). Cost tracked the SPACE, not the change — lead_prod, a
+    # quarter the size, cost a quarter as much.
+    #
+    # Seeded from the affected roots: 107 ms for the same 15 rows, and 1,011 ms
+    # against 20,844 ms for 323 rows at 64 subjects. Row-identical to the
+    # unseeded form in both, verified on production data.
+    #
+    # `seed_param` stays None for the full resync and the backfill, which must
+    # walk everything. `_frame_roots` explains why a SUPERSET of roots is what
+    # makes the seeded form provably equivalent.
+    _seed = f" AND fe.source_node_uuid = ANY({seed_param})" if seed_param else ""
     return f"""
         WITH RECURSIVE frame_walk AS (
             -- Level 1: frames hanging directly off an entity.
@@ -174,7 +193,7 @@ def _select_rows(space_id: str, where: str) -> str:
               ON ft.subject_uuid = fe.dest_node_uuid
              AND ft.predicate_uuid = $4
              AND ft.context_uuid = fe.context_uuid
-            WHERE fe.edge_type_uuid = $1
+            WHERE fe.edge_type_uuid = $1{_seed}
 
             UNION ALL
 
@@ -303,6 +322,50 @@ async def sync_entity_slot_sort_before_delete(
     return deleted
 
 
+
+async def _frame_roots(conn, space_id: str, touched_uuids: List[uuid.UUID]):
+    """Entity roots whose frame walk could reach anything in *touched_uuids*.
+
+    Climbs UP the edge table — dest_node_uuid -> source_node_uuid — from every
+    touched node, and from the destination of every touched EDGE uuid, to
+    `MAX_FRAME_DEPTH`. Uses `idx_{space}_edge_dst_src`; measured 58-164 ms on a
+    3.2M-row edge table.
+
+    DELIBERATELY A SUPERSET. The climb returns intermediate frames as well as
+    true entity roots, and it does not try to mirror the six disjuncts of the
+    caller's WHERE (touched slot, touched entity, touched frame in the path,
+    touched slot edge, and two edge_uuid -> dest_node_uuid indirections).
+    Matching those one for one is where this would go wrong: a disjunct missed
+    is a row not derived, and `issues/096` records that a wrong
+    entity_slot_sort produces wrong SORT RESULTS, not merely a slow query.
+
+    Over-approximating is safe by construction. Extra seeds only add candidate
+    walks, and the outer WHERE that selects rows is unchanged, so a superset
+    cannot lose a row — it can only do slightly more work. That property is
+    what makes the seeded walk provably equivalent rather than equivalent-by-
+    inspection, and it is what the equivalence test pins.
+    """
+    if not touched_uuids:
+        return []
+    t_edge = f"{space_id}_edge"
+    rows = await conn.fetch(f"""
+        WITH RECURSIVE seed AS (
+            SELECT unnest($1::uuid[]) AS n
+            UNION
+            SELECT dest_node_uuid FROM {t_edge} WHERE edge_uuid = ANY($1)
+        ), climb AS (
+            SELECT n, 0 AS d FROM seed
+            UNION ALL
+            SELECT e.source_node_uuid, c.d + 1
+              FROM climb c
+              JOIN {t_edge} e ON e.dest_node_uuid = c.n
+             WHERE c.d < {MAX_FRAME_DEPTH}
+        )
+        SELECT DISTINCT n FROM climb
+    """, touched_uuids)
+    return [r["n"] for r in rows]
+
+
 async def sync_entity_slot_sort_after_edge_insert(
     conn, space_id: str, touched_uuids: List[uuid.UUID],
 ) -> int:
@@ -338,10 +401,16 @@ async def sync_entity_slot_sort_after_edge_insert(
               SELECT dest_node_uuid FROM {t_edge} WHERE edge_uuid = ANY($8)))
     """
     args = await _type_args(space_id)
+    roots = await _frame_roots(conn, space_id, touched_uuids)
+    if not roots:
+        # Nothing in the graph reaches the touched set, so the walk would
+        # derive nothing. The delete above still stands, which is correct:
+        # rows that referenced these subjects are gone.
+        return 0
     result = await conn.execute(
         f"INSERT INTO {t} ({_INSERT_COLS}) "
-        f"{_select_rows(space_id, where)} {_ON_CONFLICT}",
-        *args, touched_uuids)
+        f"{_select_rows(space_id, where, seed_param='$9')} {_ON_CONFLICT}",
+        *args, touched_uuids, roots)
     inserted = int(result.split()[-1]) if result else 0
     if inserted:
         logger.debug("entity_slot_sort after_insert(%s): %d rows",
