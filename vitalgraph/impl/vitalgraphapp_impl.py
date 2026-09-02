@@ -354,6 +354,27 @@ class VitalGraphAppImpl:
             self.logger.error(f"VG_AUTO_INIT: auth tables init failed: {e}")
             raise
 
+    async def _stamp_build_provenance(self):
+        """Write version / commit / deploy time to the `install` table.
+
+        `issues/137`: production is built from a second repository with a
+        disjoint history, so "what is running?" could only be answered by
+        pulling OCI labels from a registry AND knowing which repo to look in.
+        The `install` columns for this already existed and were never written.
+
+        Deliberately not raising: this is provenance, and a stamp that can take
+        the server down would be a worse defect than the one it fixes.
+        `stamp_install` already swallows its own failures; this guard is for the
+        pool being unavailable.
+        """
+        try:
+            from vitalgraph.build_info import stamp_install
+            pool = self.db_impl.connection_pool
+            async with pool.acquire() as conn:
+                await stamp_install(conn)
+        except Exception as e:
+            self.logger.warning(f"Build provenance stamp skipped: {e}")
+
     def _setup_startup_events(self):
         """Setup FastAPI startup and shutdown events"""
         @self.app.on_event("startup")
@@ -386,6 +407,11 @@ class VitalGraphAppImpl:
                     # Auto-init admin tables if VG_AUTO_INIT=true (test environments only)
                     if os.getenv('VG_AUTO_INIT', '').lower() == 'true':
                         await self._auto_init_tables()
+
+                    # Record what is running (issues/137). NOT inside the
+                    # VG_AUTO_INIT branch above: that is test-environments-only,
+                    # and production is the deployment this exists to identify.
+                    await self._stamp_build_provenance()
                     
                     # Update space_manager reference after database connection
                     self.space_manager = self.vital_graph_impl.get_space_manager()

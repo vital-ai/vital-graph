@@ -57,59 +57,11 @@ NEW_COLUMNS = [
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def detect_version() -> str:
-    """Version of the running build.
-
-    Order matters. ``VITALGRAPH_BUILD_VERSION`` is injected by the deploying
-    pipeline (see Dockerfile) and is the only source that is correct inside a
-    container. The local sources below are development conveniences.
-
-    Note ``importlib.metadata`` scans ``sys.path``, which does NOT include the repo
-    root when invoked as ``python apps/migrate_install_version.py`` — so an
-    editable install is invisible to it; hence the pyproject.toml fallback.
-    """
-    env = os.getenv("VITALGRAPH_BUILD_VERSION", "").strip()
-    if env:
-        return env
-    try:
-        import importlib.metadata as md
-        return md.version("vital-graph")
-    except Exception:
-        pass
-    try:
-        with open(os.path.join(REPO_ROOT, "pyproject.toml")) as fh:
-            for line in fh:
-                line = line.strip()
-                if line.startswith("version"):
-                    _, _, raw = line.partition("=")
-                    return raw.strip().strip('"').strip("'")
-    except Exception:
-        pass
-    return ""
-
-
-def detect_git_commit() -> str:
-    """Commit of the running build.
-
-    ``VITALGRAPH_GIT_COMMIT`` comes from the deploying pipeline via a Docker build
-    arg. **A deployed container has no .git directory**, so the git fallback below
-    only ever succeeds when this script is run by hand from a checkout — which is
-    exactly the case where the answer is least interesting. If you are stamping a
-    deployed environment and this returns empty, the pipeline is not passing
-    ``--build-arg GIT_COMMIT``; fix that rather than trusting a local SHA, which
-    would record the operator's working tree, not what is running.
-    """
-    env = os.getenv("VITALGRAPH_GIT_COMMIT", "").strip()
-    if env:
-        return env
-    try:
-        out = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=REPO_ROOT, capture_output=True, text=True, timeout=10,
-        )
-        return out.stdout.strip() if out.returncode == 0 else ""
-    except Exception:
-        return ""
+# Detection lives in `vitalgraph.build_info` so the RUNNING SERVER can use it
+# too -- `apps/` is not copied into the image (Dockerfile copies `vitalgraph/`
+# only), and issues/137's fix is a stamp on startup, not a manual script run.
+# Re-exported here so this script's interface is unchanged.
+from vitalgraph.build_info import detect_version, detect_git_commit  # noqa: E402
 
 
 async def existing_columns(conn: asyncpg.Connection) -> set:
