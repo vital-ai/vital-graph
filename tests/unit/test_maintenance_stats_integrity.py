@@ -34,8 +34,16 @@ from vitalgraph.process.maintenance_job import MaintenanceJob
 class _Conn:
     """A space whose largest recorded pair disagrees with rdf_quad."""
 
-    def __init__(self, stored: int, actual: int, record: list):
+    def __init__(self, stored: int, actual: int, record: list,
+                 coverage_gap=None):
         self.stored, self.actual, self.record = stored, actual, record
+        # The per-predicate coverage audit runs BEFORE the sample (issues/141).
+        # None means "every unpruned predicate records all of its quads", which
+        # is what these tests need so the SAMPLING path is the one exercised.
+        self.coverage_gap = coverage_gap
+
+    async def fetchrow(self, sql, *args):
+        return self.coverage_gap
 
     async def fetch(self, sql, *args):
         # The sampled "largest recorded pairs" query.
@@ -55,7 +63,8 @@ class _Acquire:
         self._pool = pool
 
     async def __aenter__(self):
-        conn = _Conn(self._pool.stored, self._pool.actual, self._pool.record)
+        conn = _Conn(self._pool.stored, self._pool.actual, self._pool.record,
+                     self._pool.coverage_gap)
         self._pool.handed_out.append(conn)
         return conn
 
@@ -64,8 +73,9 @@ class _Acquire:
 
 
 class _Pool:
-    def __init__(self, stored, actual):
+    def __init__(self, stored, actual, coverage_gap=None):
         self.stored, self.actual = stored, actual
+        self.coverage_gap = coverage_gap
         self.handed_out, self.record = [], []
 
     def acquire(self):
@@ -153,3 +163,52 @@ def test_a_failing_space_does_not_abort_the_cycle(monkeypatch):
 
     job = MaintenanceJob(_Boom())
     assert _run(job, ["gone"]) is None       # must not raise
+
+
+# ===========================================================================
+# The coverage audit — issues/141
+# ===========================================================================
+
+def test_unpruned_predicate_missing_its_pairs_is_rebuilt(monkeypatch):
+    """An unpruned predicate must record all of its quads.
+
+    `pruned = FALSE` means absence of a pair is evidence of ZERO, so the
+    recorded pairs have to sum to the predicate's exact total. Measured on
+    production 2026-09-02: `hasKGEntityType` unpruned, 78,993 quads, 92
+    recorded — 0.12%. The sampling check could not see it, because the
+    corruption makes values LOW and the sample reads the high end.
+    """
+    from vitalgraph.db.sparql_sql import sync_stats_tables as sst
+
+    async def fake_resync(conn, space_id):
+        pool.record.append(space_id)
+        return {"pred_stats": 0, "quad_stats": 0}
+    monkeypatch.setattr(sst, "resync_stats_tables", fake_resync)
+
+    gap = {"predicate_uuid": "p-uuid", "pred_total": 78_993, "pairs_sum": 92}
+    pool = _Pool(stored=1, actual=1, coverage_gap=gap)
+    job = MaintenanceJob.__new__(MaintenanceJob)
+    job._pool = pool
+
+    result = _run(job, ["sp_test"])
+
+    assert result is not None, "an unpruned predicate at 0.12% coverage was not reported"
+    assert result["reason"] == "coverage"
+    assert result["pred_total"] == 78_993
+    assert result["pairs_sum"] == 92
+    assert pool.record == ["sp_test"], "the space should have been resynced"
+
+
+def test_full_coverage_is_not_reported(monkeypatch):
+    """A predicate recording all of its quads must not trigger a rebuild."""
+    from vitalgraph.db.sparql_sql import sync_stats_tables as sst
+
+    async def fake_resync(conn, space_id):
+        raise AssertionError("a fully covered space must not be rebuilt")
+    monkeypatch.setattr(sst, "resync_stats_tables", fake_resync)
+
+    pool = _Pool(stored=5, actual=5, coverage_gap=None)
+    job = MaintenanceJob.__new__(MaintenanceJob)
+    job._pool = pool
+
+    assert _run(job, ["sp_test"]) is None
