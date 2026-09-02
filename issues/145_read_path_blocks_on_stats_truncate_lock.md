@@ -1,6 +1,9 @@
 # Reads Block 10s at a Time on a TRUNCATE Lock the Maintenance Job Holds
 
-## Status: OPEN — this is the P1. Measured end-to-end against prod 2026-09-02.
+## Status: FIXED IN `main`, UNDEPLOYED — 49a63fb (bound the wait) + 3f8d7b5
+## (aggregate before truncating). This is the P1. Measured end-to-end against
+## prod 2026-09-02. It stays "open" until the deploy proves it on production;
+## the verification is in the runbook §15 Phase 1.
 
 ## The single measurement that identifies it
 

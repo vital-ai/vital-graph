@@ -1,6 +1,8 @@
 # The Stats Integrity Check Samples The End That Corruption Cannot Reach
 
-## Status: OPEN — `_run_stats_integrity` samples the three HIGHEST recorded
+## Status: FIXED IN `main`, UNDEPLOYED — the coverage audit is landed. After
+## the deploy it should fire on the affected space and the anchor should snap
+## back to its true count. That is falsifiable; check it. Original status: OPEN — `_run_stats_integrity` samples the three HIGHEST recorded
 ## pairs, but the corruption it exists to catch is what makes recorded values
 ## LOW. Found 2026-09-02 when a production deploy did not self-heal and a manual
 ## resync was required.

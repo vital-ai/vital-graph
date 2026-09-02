@@ -1,6 +1,10 @@
 # The Sort Fast-Path Table Covers 0.7% of Its Population, and the Check That Would Notice Times Out Into a Bare `except`
 
-## Status: OPEN — measured against prod 2026-09-02. This is the reported slow page.
+## Status: CODE FIXED IN `main` (10e1157), BACKFILL STILL PENDING.
+## Measured against prod 2026-09-02. This is the reported slow page. The probe
+## and the swallowed-timeout defects are fixed; the table is still 0.6%
+## populated until the deploy lands and Phase 3 runs the backfill. Do NOT run
+## the backfill first — without 10e1157 it decays again, which is this history.
 
 ## The user-visible query
 
