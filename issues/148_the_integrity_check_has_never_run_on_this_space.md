@@ -1,6 +1,49 @@
 # The Stats Integrity Check Has Never Run On This Space, And Said So At DEBUG
 
-## Status: OPEN — the CAUSE is not understood. The silence is fixed (`c823f1f`).
+## Status: CAUSE FOUND AND FIXED 2026-09-03. It was a CLIENT-side timeout.
+
+The original write-up below could not explain why `column p.pruned does not
+exist` appeared when the column demonstrably existed. **That message was a red
+herring from an earlier build.** What the deployed code actually logs is:
+
+    Stats integrity check SKIPPED for <space> (TimeoutError)
+
+with an EMPTY message — the signature of asyncpg's `command_timeout=60` firing
+in the DRIVER. `164d9de` wrapped this check in `maintenance_timeouts`, which
+raises `statement_timeout` and `lock_timeout` with SET. Neither can touch a
+client-side bound. Six queries in the check had no `timeout=` at all.
+
+**The production consequence, measured 2026-09-03:** the audit that rebuilds
+`rdf_stats` never completed, so the table decayed to **5 rows** (max_rc ~1,879).
+The `(hasKGEntityType, NurtureAction)` anchor — 77,479 rows — was ABSENT, so the
+semi-join gate fell back to a **10.4 s runtime bounded-count probe on every
+query**:
+
+    SELECT count(*) FROM (SELECT 1 FROM <space>_rdf_quad
+      WHERE predicate_uuid=<hasKGEntityType> AND object_uuid=<NurtureAction>
+      LIMIT 50000) s                                          -- 10.4 s
+
+Combined with a 28 s entity scan and the client's 2-attempt / 60 s budget, that
+is the 60 s ReadTimeout on the dedup query. It bites only the MISS path — a
+brand-new lead with no action — which is exactly the ~58% slow population.
+
+The loop was self-sustaining: audit times out -> no rebuild -> a partial rebuild
+records low values -> the prune correctly keeps 5 rows of an all-singleton table
+(`issues/147`) -> repeat every cycle.
+
+**Fixed:** all seven maintenance queries now pass
+`timeout=PROBE_CLIENT_TIMEOUT_S`, and a guard test walks the source for any
+query inside a `maintenance_timeouts` block without one. Verified non-vacuous by
+removing a timeout and confirming the test fails.
+
+**This was the FOURTH recurrence of the same blind spot** — raise the server
+fence, forget the client one. `issues/149` fixed it for the slot-sort probe,
+then missed the backfill it gates; the audit after that checked for
+`maintenance_timeouts` wrapping and never for `timeout=`, which is how these six
+survived. The guard test exists because reading the code has now failed three
+times.
+
+## Original write-up (the `p.pruned` red herring) follows
 
 ## What happens
 

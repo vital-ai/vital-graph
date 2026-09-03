@@ -210,3 +210,51 @@ def test_watches_are_not_given_the_maintenance_budget():
         assert "maintenance_timeouts(" not in body, (
             f"{name} writes nothing; a longer budget only lets it scan more "
             f"(issues/143 measured it at 38.6s/pass evicting the read cache)")
+
+
+def test_maintenance_queries_carry_a_CLIENT_side_timeout_too():
+    """The blind spot that has now recurred four times.
+
+    `maintenance_timeouts` raises the SERVER fences with SET. asyncpg's
+    `command_timeout=60` is CLIENT-side and no SET can touch it, so a query
+    inside that block is still abandoned at 60s with a bare `TimeoutError` —
+    empty message, which is how it kept being misread as something else.
+
+    History:
+      issues/149  the slot-sort drift probe          — fixed, client timeout added
+      issues/149  the backfill it gates              — missed, fixed later
+      issues/150  (adjacent) the same for repairs    — audited
+      issues/148  _run_stats_integrity               — MISSED BY THAT AUDIT
+
+    The last one is why this test exists rather than another round of reading.
+    The audit checked for `maintenance_timeouts` wrapping and never for
+    `timeout=`, so six queries in the stats integrity check kept dying at 60s.
+    Production consequence: the audit that rebuilds `rdf_stats` never ran, the
+    table decayed to 5 rows, the anchor pair (77,479 rows) went ABSENT, and the
+    semi-join gate fell back to a 10.4s runtime probe on every dedup query.
+    """
+    import inspect
+    import re
+    src = inspect.getsource(M)
+    lines = src.split("\n")
+    inblock, blockind, cur, bad = False, 0, "<module>", []
+    for i, line in enumerate(lines):
+        m = re.match(r"    (?:async )?def (\w+)", line)
+        if m:
+            cur = m.group(1)
+        if "maintenance_timeouts(" in line:
+            inblock, blockind = True, len(line) - len(line.lstrip())
+            continue
+        if inblock and line.strip():
+            if (len(line) - len(line.lstrip())) <= blockind:
+                inblock = False
+        if inblock and re.search(
+                r"await conn\.(fetchrow|fetchval|fetch|execute|executemany)\(", line):
+            # generous window: these statements are long f-strings
+            window = "\n".join(lines[i:i + 40])
+            if "timeout=" not in window and cur != "<module>":
+                bad.append((i + 1, cur, line.strip()[:60]))
+    assert not bad, (
+        "maintenance queries inside maintenance_timeouts without a CLIENT-side "
+        "timeout — asyncpg abandons these at command_timeout=60 regardless of "
+        f"any SET: {bad}")

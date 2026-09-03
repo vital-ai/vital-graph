@@ -31,6 +31,10 @@ import pytest
 from vitalgraph.process.maintenance_job import MaintenanceJob
 
 
+# The doubles accept **kw because the real driver does. Maintenance queries
+# pass `timeout=` (asyncpg's CLIENT-side bound — `command_timeout=60` fires in
+# the driver and no server-side SET can raise it, `issues/148`). A mock narrower
+# than the driver fails on a correct change, which is noise, not a guard.
 class _Conn:
     """A space whose largest recorded pair disagrees with rdf_quad."""
 
@@ -46,10 +50,10 @@ class _Conn:
         # is what these tests need so the SAMPLING path is the one exercised.
         self.coverage_gap = coverage_gap
 
-    async def fetchrow(self, sql, *args):
+    async def fetchrow(self, sql, *args, **kw):
         return self.coverage_gap
 
-    async def fetch(self, sql, *args):
+    async def fetch(self, sql, *args, **kw):
         if "ORDER BY s.row_count ASC" in sql:      # the oversized probe
             return self.oversized
         if "DELETE" in sql:
@@ -58,14 +62,14 @@ class _Conn:
         return [{"predicate_uuid": "p-uuid", "object_uuid": "o-uuid",
                  "row_count": self.stored}]
 
-    async def fetchval(self, sql, *args):
+    async def fetchval(self, sql, *args, **kw):
         # The exact count for the sampled pair.
         return self.actual
 
-    async def execute(self, sql, *args):
+    async def execute(self, sql, *args, **kw):
         return "OK"
 
-    async def executemany(self, sql, args):
+    async def executemany(self, sql, args, **kw):
         if "DELETE" in sql:
             self.record.append(("deleted", len(list(args))))
         return "OK"

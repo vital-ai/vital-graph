@@ -32,7 +32,10 @@ def test_the_oversized_repair_flags_what_it_deletes():
     omission: it guarantees the next write re-creates a delta-only row."""
     src = inspect.getsource(M.MaintenanceJob)
     i = src.index("DELETE FROM {space_id}_rdf_stats")
-    after = src[i:i + 1200]
+    # Window sized generously: the DELETE and the UPDATE are separated by the
+    # comment explaining WHY the flag matters, which is the part most likely to
+    # grow. A tight window fails on a comment edit, which is noise.
+    after = src[i:i + 2500]
     assert "SET pruned = TRUE" in after, (
         "the oversized repair deletes the pair but leaves pruned FALSE, so "
         "absence reads as ZERO and the next write stores a delta-only count")

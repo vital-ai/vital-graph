@@ -1194,7 +1194,8 @@ class MaintenanceJob:
                          GROUP BY p.predicate_uuid, p.row_count
                         HAVING COALESCE(sum(s.row_count),0) < p.row_count * $2
                          LIMIT 1
-                    """, STATS_COVERAGE_MIN_PREDICATE_ROWS, STATS_COVERAGE_RATIO)
+                    """, STATS_COVERAGE_MIN_PREDICATE_ROWS, STATS_COVERAGE_RATIO,
+                        timeout=PROBE_CLIENT_TIMEOUT_S)
                     if gap is not None:
                         logger.warning(
                             "Stats coverage: %s predicate %s is unpruned but "
@@ -1234,7 +1235,8 @@ class MaintenanceJob:
                                      AND q.object_uuid = c.object_uuid
                                    LIMIT {STATS_MAX_ROW_COUNT} + 1) lim) AS actual
                           FROM cand c
-                    """, STATS_MAX_ROW_COUNT, STATS_OVERSIZED_SAMPLE)
+                    """, STATS_MAX_ROW_COUNT, STATS_OVERSIZED_SAMPLE,
+                        timeout=PROBE_CLIENT_TIMEOUT_S)
 
                     bad_rows = [r for r in over
                                 if (r["actual"] or 0) > STATS_MAX_ROW_COUNT]
@@ -1243,7 +1245,8 @@ class MaintenanceJob:
                             f"DELETE FROM {space_id}_rdf_stats "
                             f"WHERE predicate_uuid = $1 AND object_uuid = $2",
                             [(r["predicate_uuid"], r["object_uuid"])
-                             for r in bad_rows])
+                             for r in bad_rows],
+                            timeout=PROBE_CLIENT_TIMEOUT_S)
                         # ...AND SET THE FLAG. Deleting alone is not the repair
                         # -- it is half of it, and the wrong half on its own.
                         #
@@ -1258,7 +1261,8 @@ class MaintenanceJob:
                         await conn.execute(
                             f"UPDATE {space_id}_rdf_pred_stats SET pruned = TRUE "
                             f"WHERE predicate_uuid = ANY($1)",
-                            list({r["predicate_uuid"] for r in bad_rows}))
+                            list({r["predicate_uuid"] for r in bad_rows}),
+                            timeout=PROBE_CLIENT_TIMEOUT_S)
                         worst = max(bad_rows, key=lambda r: r["actual"])
                         logger.warning(
                             "Stats oversized: %s removed %d pair(s) that were "
@@ -1277,13 +1281,15 @@ class MaintenanceJob:
                     rows = await conn.fetch(
                         f"SELECT predicate_uuid, object_uuid, row_count "
                         f"FROM {space_id}_rdf_stats "
-                        f"ORDER BY row_count DESC LIMIT {SAMPLE}")
+                        f"ORDER BY row_count DESC LIMIT {SAMPLE}",
+                        timeout=PROBE_CLIENT_TIMEOUT_S)
                     bad = None
                     for r in rows:
                         actual = await conn.fetchval(
                             f"SELECT count(*) FROM {space_id}_rdf_quad "
                             f"WHERE predicate_uuid = $1 AND object_uuid = $2",
-                            r["predicate_uuid"], r["object_uuid"])
+                            r["predicate_uuid"], r["object_uuid"],
+                            timeout=PROBE_CLIENT_TIMEOUT_S)
                         if actual != r["row_count"]:
                             bad = (r["row_count"], actual)
                             break
@@ -2009,7 +2015,8 @@ class MaintenanceJob:
           async with maintenance_timeouts(conn):
             for table in tables:
                 try:
-                    await conn.execute(f"{command} {table}")
+                    await conn.execute(f"{command} {table}",
+                                       timeout=PROBE_CLIENT_TIMEOUT_S)
                     completed += 1
                 except Exception as e:
                     logger.warning("%s %s failed: %s", command, table, e)
