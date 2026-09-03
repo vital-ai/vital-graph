@@ -462,7 +462,64 @@ async def backfill_entity_slot_sort(conn, space_id: str) -> int:
     return rows
 
 
-async def entity_slot_sort_drift(conn, space_id: str) -> tuple[int, int]:
+async def entity_slot_sort_coverage(conn, space_id: str, limit: int = 5,
+                                    timeout: float | None = None) -> list[dict]:
+    """Entities IN the table against entities OF THAT TYPE in the quads.
+
+    `entity_slot_sort_drift` cannot see this, and the reason is structural: it
+    compares the table against `_select_rows`, which is the same walk that
+    POPULATED the table. When the walk is the thing at fault the two agree
+    perfectly and it reports converged — a probe that can only confirm its own
+    input. That is exactly `issues/141`'s defect on the stats side ("samples the
+    end that cannot be wrong"), and it hid this one just as long.
+
+    Measured on production 2026-09-03, `issues/149`:
+
+        entity type          in table   of type    coverage
+        NurtureAction             809    76,996       1.05%
+
+    while the drift probe was satisfied. The listing for that type therefore has
+    no fast path and does a full frame-walk, measured at 22.7s.
+
+    This counts from the QUADS, which no derived table can influence, so it is
+    independent of the walk in the way the drift probe is not. Returns the worst
+    `limit` types by absolute shortfall, each with `in_table`, `of_type` and
+    `ratio`, so a caller can act on the biggest gap first. Empty when every type
+    is fully covered.
+    """
+    rows = await conn.fetch(f"""
+        WITH have AS (
+            SELECT entity_type_uuid AS ty, count(DISTINCT entity_uuid) AS in_table
+              FROM {space_id}_entity_slot_sort
+             GROUP BY 1),
+        of_type AS (
+            SELECT q.object_uuid AS ty, count(DISTINCT q.subject_uuid) AS of_type
+              FROM {space_id}_rdf_quad q
+              JOIN {space_id}_term p ON p.term_uuid = q.predicate_uuid
+               AND p.term_text = $1
+             GROUP BY 1)
+        SELECT t.term_text AS entity_type,
+               COALESCE(h.in_table, 0) AS in_table,
+               o.of_type
+          FROM of_type o
+          JOIN {space_id}_term t ON t.term_uuid = o.ty
+          LEFT JOIN have h ON h.ty = o.ty
+         WHERE COALESCE(h.in_table, 0) < o.of_type
+         ORDER BY (o.of_type - COALESCE(h.in_table, 0)) DESC
+         LIMIT {int(limit)}
+    """, ENTITY_TYPE_URI, timeout=timeout)
+    return [
+        {"entity_type": r["entity_type"],
+         "in_table": int(r["in_table"]),
+         "of_type": int(r["of_type"]),
+         "ratio": (int(r["in_table"]) / int(r["of_type"])) if r["of_type"] else 1.0}
+        for r in rows
+    ]
+
+
+async def entity_slot_sort_drift(conn, space_id: str,
+                                 timeout: float | None = None
+                                 ) -> tuple[int, int]:
     """`(expected, actual)` row counts — the order `frame_entity_drift` uses,
     so `_run_*_integrity` reads `drift = expected - actual` for both.
 
@@ -477,11 +534,29 @@ async def entity_slot_sort_drift(conn, space_id: str) -> tuple[int, int]:
     it is prevented at the write path by deleting before re-deriving rather than
     detected here. The backfill cannot repair it either: `backfill` only ADDS.
     A space suspected of it needs `resync_entity_slot_sort`.
+
+    WHAT THIS ALSO CANNOT SEE, and it is worse: this compares the table against
+    the SAME walk that populated it. If the walk itself is incomplete the two
+    agree and it reports converged, however empty the table is relative to the
+    data. Measured on production 2026-09-03: 809 entities in the table against
+    76,996 of that type, with this probe satisfied (`issues/149`). Use
+    `entity_slot_sort_coverage`, which counts from the quads and so cannot be
+    confirmed by its own input.
     """
+    # `timeout` is asyncpg's CLIENT-side bound, and it is not optional here.
+    #
+    # The pool is built with `command_timeout=60`. That fires in the client,
+    # independently of the server, so raising `statement_timeout` with SET --
+    # which is what `maintenance_job.probe_timeouts` does -- cannot help: the
+    # driver abandons the call at 60s regardless and raises a bare
+    # `TimeoutError`. Measured on production 2026-09-03, this probe takes
+    # **97-133s** on a 45M-quad space, so it had NEVER completed there, and the
+    # backfill it gates had never run (`issues/149`). The table sat at 812
+    # entities against 79,630 the walk actually yields.
     t = f"{space_id}_entity_slot_sort"
-    actual = await conn.fetchval(f"SELECT count(*) FROM {t}")
+    actual = await conn.fetchval(f"SELECT count(*) FROM {t}", timeout=timeout)
     args = await _type_args(space_id)
     expected = await conn.fetchval(
         f"SELECT count(*) FROM (SELECT DISTINCT slot_uuid, context_uuid FROM ("
-        f"{_select_rows(space_id, 'TRUE')}) s) d", *args)
+        f"{_select_rows(space_id, 'TRUE')}) s) d", *args, timeout=timeout)
     return int(expected or 0), int(actual or 0)

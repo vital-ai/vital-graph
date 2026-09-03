@@ -1,10 +1,38 @@
 # The Sort Fast-Path Table Covers 0.7% of Its Population, and the Check That Would Notice Times Out Into a Bare `except`
 
-## Status: CODE FIXED IN `main` (10e1157), BACKFILL STILL PENDING.
+## Status: **CORE CLAIM RETRACTED 2026-09-03 — see the correction below.**
+## The listing endpoint has NO wiring to the fast path, so it is not "falling
+## back" from an underpopulated table; there is nothing for it to fall back
+## from. Superseded by `issues/149`. Original status follows.
+##
+## CODE FIXED IN `main` (10e1157), BACKFILL STILL PENDING.
 ## Measured against prod 2026-09-02. This is the reported slow page. The probe
 ## and the swallowed-timeout defects are fixed; the table is still 0.6%
 ## populated until the deploy lands and Phase 3 runs the backfill. Do NOT run
 ## the backfill first — without 10e1157 it decays again, which is this history.
+
+## Correction, 2026-09-03
+
+This file claims the listing page "fell back" to an O(total) scan because
+`{space}_entity_slot_sort` was 0.6% populated. Both halves are true separately;
+the causal link between them is not.
+
+    kgentities_endpoint.py   fast_slot_sort=0   entity_slot_sort=0
+    kgentity_list_impl.py    fast_slot_sort=0   entity_slot_sort=0
+    kgquery_endpoint.py      fast_slot_sort=7
+
+The slow request goes to `/api/graphs/kgentities`, which never consults the
+derived table. The fast path is wired only into `/api/graphs/kgqueries`. So
+filling the table to 100% would not change this page at all.
+
+I inferred the fallback from the SQL touching only `rdf_quad` and `term`, and
+did not check whether the endpoint had any code to do otherwise. The 77,310-loop
+measurement and the 0.6% figure both stand; the explanation joining them does
+not.
+
+`issues/149` covers why the table is 1% full (a client-side `command_timeout`
+killed the probe that gates the backfill) and what would actually make the page
+fast.
 
 ## The user-visible query
 

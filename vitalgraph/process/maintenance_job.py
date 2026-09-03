@@ -71,6 +71,15 @@ STATS_COVERAGE_MIN_PREDICATE_ROWS = 10_000
 #          257     473,405   Edge_hasEntityKGFrame
 #          165     292,438   MessageFrame / MsgSender / MsgTimestamp
 #
+# The count is BOUNDED at the cap + 1. This asks one question -- "is the true
+# count above STATS_MAX_ROW_COUNT?" -- and an exact count answers it no better
+# than a saturating one while costing vastly more. Shipped unbounded and
+# measured on production at **14,610 ms per candidate** against a 2.7M-row pair,
+# times STATS_OVERSIZED_SAMPLE candidates: up to ~175s of quad-table scanning
+# per cycle, which is what pushed the integrity check into TimeoutError. The
+# same saturating-count pattern is already used by the semi-join gate
+# (`_PAIR_COUNT_CAP`) for exactly this reason.
+#
 # Understated by up to 1,800x, and read by the join reorder as a rare leaf.
 # Present-and-low is the one state that is never correct for this class, so
 # the repair is to DELETE the row: absence plus the flag is the intended state
@@ -191,6 +200,24 @@ EDGE_ORPHAN_STALE_PCT = 0.5
 # often just an un-backfilled column after the migration that added it. It is
 # not a staleness signal — see the note at the log site.
 EDGE_UNTYPED_WARN_PCT = 0.01
+
+# Below this fraction of a type's entities being present in
+# {space}_entity_slot_sort, warn: queries sorting that type cannot use the
+# derived table. Deliberately low -- this is not a drift threshold, it is a
+# "the fast path does not exist for this type" alarm, and the case it was
+# written for measured 1.05% (`issues/149`).
+ENTITY_COVERAGE_MIN_RATIO = 0.90
+
+# Client-side bound for the integrity PROBES, in seconds.
+#
+# asyncpg's pool sets `command_timeout=60`, which fires in the DRIVER and is
+# untouched by `SET statement_timeout` -- so `probe_timeouts` alone raised only
+# the server half and the driver still abandoned the call at 60s with a bare
+# `TimeoutError`. `entity_slot_sort_drift` measures 97-133s on a 45M-quad space,
+# so it had never once completed on production and the backfill it gates had
+# never run (`issues/149`). Matched to the maintenance budget, not to the read
+# path's.
+PROBE_CLIENT_TIMEOUT_S = MAINTENANCE_STATEMENT_TIMEOUT_MS / 1000.0
 
 # Spaces to sweep for orphans per cycle. Each pass examines a bounded window and
 # costs real time (~12 s per 100k rows), so this trades convergence speed for a
@@ -1089,9 +1116,11 @@ class MaintenanceJob:
                              ORDER BY s.row_count ASC
                              LIMIT $2)
                         SELECT c.predicate_uuid, c.object_uuid, c.row_count,
-                               (SELECT count(*) FROM {space_id}_rdf_quad q
-                                 WHERE q.predicate_uuid = c.predicate_uuid
-                                   AND q.object_uuid = c.object_uuid) AS actual
+                               (SELECT count(*) FROM (
+                                  SELECT 1 FROM {space_id}_rdf_quad q
+                                   WHERE q.predicate_uuid = c.predicate_uuid
+                                     AND q.object_uuid = c.object_uuid
+                                   LIMIT {STATS_MAX_ROW_COUNT} + 1) lim) AS actual
                           FROM cand c
                     """, STATS_MAX_ROW_COUNT, STATS_OVERSIZED_SAMPLE)
 
@@ -1646,7 +1675,8 @@ class MaintenanceJob:
         at the write path (delete-then-re-derive) — see `entity_slot_sort_drift`.
         """
         from ..db.sparql_sql.sync_entity_slot_sort import (
-            entity_slot_sort_drift, backfill_entity_slot_sort)
+            entity_slot_sort_drift, backfill_entity_slot_sort,
+            entity_slot_sort_coverage)
 
         worst_space = None
         worst_drift = 0
@@ -1654,8 +1684,31 @@ class MaintenanceJob:
             try:
                 async with self._pool.acquire() as conn:
                     async with probe_timeouts(conn):
+                        # COVERAGE FIRST, because drift cannot see this class of
+                        # failure at all. Drift compares the table against the
+                        # same walk that populated it, so an incomplete WALK
+                        # makes the two agree and reports converged. Coverage
+                        # counts entities from the QUADS, which no derived table
+                        # can influence. `issues/149`: 809 entities in the table
+                        # against 76,996 of that type -- 1.05% -- while drift was
+                        # satisfied, and the listing for that type consequently
+                        # had no fast path and took 22.7s.
+                        for gap in await entity_slot_sort_coverage(
+                                conn, space_id,
+                                timeout=PROBE_CLIENT_TIMEOUT_S):
+                            if gap["ratio"] < ENTITY_COVERAGE_MIN_RATIO:
+                                logger.warning(
+                                    "entity_slot_sort coverage: %s type %s has "
+                                    "%d of %d entities (%.2f%%) — queries "
+                                    "sorting this type cannot use the derived "
+                                    "table and will do a full frame walk. A "
+                                    "resync only helps if the WALK reaches "
+                                    "them; see issues/149",
+                                    space_id, gap["entity_type"],
+                                    gap["in_table"], gap["of_type"],
+                                    gap["ratio"] * 100)
                         expected, actual = await entity_slot_sort_drift(
-                            conn, space_id)
+                            conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
             except asyncpg.UndefinedTableError:
                 continue  # space predates the table, or is not a KG space
             except Exception as exc:
