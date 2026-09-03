@@ -53,9 +53,28 @@ def test_coverage_counts_from_the_quads_not_from_the_walk():
 def test_it_reports_the_worst_gap_first():
     """A caller acting on one gap per cycle must get the biggest."""
     src = _body(E.entity_slot_sort_coverage)
-    assert "ORDER BY (o.of_type - COALESCE(h.in_table, 0)) DESC" in src
-    assert "WHERE COALESCE(h.in_table, 0) < o.of_type" in src, (
-        "fully covered types are not gaps and must not be reported")
+    assert "ORDER BY" in src and "DESC" in src
+    assert "HAVING" in src, "fully covered types must not be reported at all"
+
+
+def test_presence_is_tested_by_entity_uuid_not_the_tables_own_type_column():
+    """The bug this probe shipped with, and the reason it exists.
+
+    v1 grouped the derived table by its `entity_type_uuid` and joined that
+    against the type from the quads. Where they disagree the join misses and the
+    probe reports a false shortfall — measured on production at 1,188 of 77,369
+    (1.54%) while all 77,468 entities were present, because the table holds only
+    5 distinct type uuids across 80,102 entities.
+
+    That is `issues/149`'s defect reintroduced in the numerator: a check that
+    trusts the derived table's own account of itself. Presence must be tested by
+    `entity_uuid`, which the table cannot misreport.
+    """
+    body = _body(E.entity_slot_sort_coverage)
+    assert "e.entity_uuid = o.entity_uuid" in body, (
+        "presence must be an entity_uuid existence test")
+    assert "h.ty = o.ty" not in body, (
+        "joining on the derived table's own type column is the bug")
 
 
 def test_drift_says_it_cannot_see_this():
@@ -67,14 +86,20 @@ def test_drift_says_it_cannot_see_this():
         "the docstring must point at the probe that CAN see it")
 
 
-def test_the_maintenance_check_runs_coverage_before_drift():
-    """Drift can pick a space and declare it converged. Coverage has to be
-    evaluated regardless, or the warning never fires on exactly the space that
-    needs it."""
+def test_coverage_drives_the_repair_and_drift_is_off_this_path():
+    """`issues/151` S2. Drift's O(graph) walk no longer gates the repair.
+
+    It used to pick the space AND decide the repair, at 216-303s a time
+    (`issues/150`). Coverage answers the same question in 130ms and from the
+    quads, so it cannot be fooled by the derivation it checks. Drift survives
+    as an advisory number; nothing here waits on it.
+    """
     src = inspect.getsource(M.MaintenanceJob._run_entity_slot_sort_integrity)
-    at_cov = src.index("entity_slot_sort_coverage(")
-    at_drift = src.index("entity_slot_sort_drift(")
-    assert at_cov < at_drift
+    assert "entity_slot_sort_coverage(" in src
+    assert "entity_slot_sort_drift(" not in src, (
+        "the O(graph) walk is back on the repair path — that is issues/150")
+    assert "backfill_entity_slot_sort_batch(" in src, (
+        "the repair must be the bounded per-type batch, not the full walk")
 
 
 def test_the_warning_names_the_user_visible_consequence():

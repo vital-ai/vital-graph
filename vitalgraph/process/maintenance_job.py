@@ -231,6 +231,17 @@ EDGE_UNTYPED_WARN_PCT = 0.01
 # written for measured 1.05% (`issues/149`).
 ENTITY_COVERAGE_MIN_RATIO = 0.90
 
+# ...and at least this many entities short before it is worth saying anything.
+#
+# Without a floor a single uncovered entity — production has exactly one, a
+# `KGEntityType_KGEntity` node at 0 of 1 — trips the ratio at 0% and warns
+# every cycle forever, while a batch selects it, derives nothing (it has no
+# frame/slot chain) and leaves it absent. That is a permanent false alarm
+# wrapped around a permanent no-op. A type nobody can sort 25 rows of is not a
+# missing fast path.
+ENTITY_COVERAGE_MIN_SHORTFALL = int(
+    os.environ.get("VG_ENTITY_COVERAGE_MIN_SHORTFALL", "50"))
+
 # Client-side bound for maintenance probes AND repairs, in seconds.
 #
 # asyncpg's pool sets `command_timeout=60`, which fires in the DRIVER and is
@@ -1787,108 +1798,106 @@ class MaintenanceJob:
             return {"space_id": worst_space, "error": str(e)}
 
     async def _run_entity_slot_sort_integrity(self, space_ids: List[str]) -> Optional[Dict]:
-        """Backfill the worst-drifted {space}_entity_slot_sort table, if any.
+        """Fill {space}_entity_slot_sort one BOUNDED BATCH per cycle.
 
-        Same shape as _run_frame_entity_integrity, and after it for the same
-        reason: both are derived from the edge table, so repairing them before
-        the edge step would reproduce whatever the edge table is missing.
+        `issues/151`. This used to pick the worst-drifted space with an O(graph)
+        `WITH RECURSIVE` walk and then repair it with another one. Measured on
+        production: 216-303s per walk, 54% of wall-clock, and a user query that
+        ran 1.5s idle took 58s alongside it (`issues/150`). It could not be run
+        often enough to converge, so the table sat at 40k rows against a ~2.83M
+        target for months (`issues/149`, `issues/144`).
 
-        A stale row here is a WRONG SORT ORDER rather than a slow query
-        (issues/096), which is why this table gets a drift step at all rather
-        than relying on the next bulk resync.
+        Now:
 
-        The backfill only ADDS, so this closes the "rows missing" direction.
-        Rows that are present but describe a value that has moved are prevented
-        at the write path (delete-then-re-derive) — see `entity_slot_sort_drift`.
+          DETECT   `entity_slot_sort_coverage` — 130 ms, counts entities from
+                   the QUADS, so it cannot be fooled by the derivation it is
+                   checking. That independence is `issues/141`'s lesson and the
+                   reason drift could report "converged" on a 1%-full table.
+          REPAIR   one seeded batch of ONE short type. The seed is the same one
+                   the write path has used since `045988f`, measured
+                   row-identical against the full walk. Local sizing (P2):
+                   100 -> 53ms, 500 -> 30ms, 2000 -> 151ms.
+
+        Drift's full walk is NOT on this path any more. It survives as an
+        advisory number elsewhere; nothing gates a repair on it.
         """
         from ..db.sparql_sql.sync_entity_slot_sort import (
-            entity_slot_sort_drift, backfill_entity_slot_sort,
-            entity_slot_sort_coverage)
+            entity_slot_sort_coverage, backfill_entity_slot_sort_batch)
 
-        worst_space = None
-        worst_drift = 0
+        worst = None          # (shortfall, space_id, gap)
         for space_id in space_ids:
             try:
                 async with self._pool.acquire() as conn:
                     async with maintenance_timeouts(conn):
-                        # COVERAGE FIRST, because drift cannot see this class of
-                        # failure at all. Drift compares the table against the
-                        # same walk that populated it, so an incomplete WALK
-                        # makes the two agree and reports converged. Coverage
-                        # counts entities from the QUADS, which no derived table
-                        # can influence. `issues/149`: 809 entities in the table
-                        # against 76,996 of that type -- 1.05% -- while drift was
-                        # satisfied, and the listing for that type consequently
-                        # had no fast path and took 22.7s.
-                        for gap in await entity_slot_sort_coverage(
-                                conn, space_id,
-                                timeout=PROBE_CLIENT_TIMEOUT_S):
-                            if gap["ratio"] < ENTITY_COVERAGE_MIN_RATIO:
-                                logger.warning(
-                                    "entity_slot_sort coverage: %s type %s has "
-                                    "%d of %d entities (%.2f%%) — queries "
-                                    "sorting this type cannot use the derived "
-                                    "table and will do a full frame walk. A "
-                                    "resync only helps if the WALK reaches "
-                                    "them; see issues/149",
-                                    space_id, gap["entity_type"],
-                                    gap["in_table"], gap["of_type"],
-                                    gap["ratio"] * 100)
-                        # THE EXPENSIVE ONE — gated on changed data.
-                        # Coverage above is 130ms and runs every cycle; this is
-                        # a full O(graph) walk measured at 216-303s, so it runs
-                        # only when quads were written or it has work left
-                        # (`issues/150`). Skipping is not a deferral: with no
-                        # writes there is nothing new to find.
-                        if not await probe_data_changed(
-                                conn, space_id, "entity_slot_sort_drift"):
-                            continue
-                        expected, actual = await entity_slot_sort_drift(
+                        gaps = await entity_slot_sort_coverage(
                             conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
-                        mark_probe_converged(
-                            space_id, "entity_slot_sort_drift",
-                            expected - actual <= max(
-                                EDGE_DRIFT_MIN_ABS,
-                                int(EDGE_DRIFT_MIN_PCT * expected)))
             except asyncpg.UndefinedTableError:
                 continue  # space predates the table, or is not a KG space
             except Exception as exc:
-                log_probe_failure("entity_slot_sort_integrity", space_id, exc)
+                log_probe_failure("entity_slot_sort_coverage", space_id, exc)
                 continue
-            drift = expected - actual
-            if drift > max(EDGE_DRIFT_MIN_ABS, int(EDGE_DRIFT_MIN_PCT * expected)):
-                if drift > worst_drift:
-                    worst_drift, worst_space = drift, space_id
+            for gap in gaps:
+                short = gap["of_type"] - gap["in_table"]
+                if (gap["ratio"] >= ENTITY_COVERAGE_MIN_RATIO
+                        or short < ENTITY_COVERAGE_MIN_SHORTFALL):
+                    continue
+                logger.warning(
+                    "entity_slot_sort coverage: %s type %s has %d of %d "
+                    "entities (%.2f%%) — queries sorting this type "
+                    "cannot use the derived table"
+                    " and will do a full frame walk (issues/149)",
+                    space_id, gap["entity_type"], gap["in_table"],
+                    gap["of_type"], gap["ratio"] * 100)
+                if worst is None or short > worst[0]:
+                    worst = (short, space_id, gap)
 
-        if not worst_space:
+        if worst is None:
             return None
+        shortfall, space_id, gap = worst
 
         process_id = None
         if self._tracker:
             process_id = await self._tracker.create_process(
-                "entity_slot_sort_backfill", process_subtype=worst_space,
-                instance_id=self._instance_id, status="running")
+                "entity_slot_sort_backfill", space_id=space_id)
             await self._tracker.mark_running(process_id, self._instance_id)
         try:
             async with self._pool.acquire() as conn:
-                # THE REPAIR NEEDS THE SAME BUDGET AS THE PROBE. It is the same
-                # 133s walk, as an INSERT, and it also takes locks. Running it
-                # on the read path's fences is `issues/149`'s second half.
                 async with maintenance_timeouts(conn):
-                    inserted = await backfill_entity_slot_sort(
-                        conn, worst_space, timeout=PROBE_CLIENT_TIMEOUT_S)
-            result = {"space_id": worst_space, "drift": worst_drift,
-                      "rows_added": inserted}
+                    selected, inserted = await backfill_entity_slot_sort_batch(
+                        conn, space_id, gap["entity_type_uuid"],
+                        timeout=PROBE_CLIENT_TIMEOUT_S)
+        except Exception as exc:
+            logger.warning(
+                "entity_slot_sort batch failed for %s type %s: %s — the table "
+                "stays short until the next cycle",
+                space_id, gap["entity_type"], exc, exc_info=True)
             if self._tracker and process_id:
-                await self._tracker.mark_completed(process_id, result_details=result)
-            logger.info("Entity-slot-sort integrity: backfilled %s (drift=%d → +%d rows)",
-                        worst_space, worst_drift, inserted)
-            return result
-        except Exception as e:
-            if self._tracker and process_id:
-                await self._tracker.mark_failed(process_id, str(e))
-            logger.error("Entity-slot-sort backfill failed for %s: %s", worst_space, e)
-            return {"space_id": worst_space, "error": str(e)}
+                await self._tracker.mark_failed(process_id, str(exc))
+            return {"space_id": space_id, "failed": f"{type(exc).__name__}: {exc}"}
+
+        # SELECTED BUT NOTHING INSERTED means these entities derive no rows at
+        # all -- no frames, or slots with types but no VALUES (both joins in the
+        # outer SELECT are INNER). They stay absent, so the same batch is picked
+        # again next cycle, forever. Say so once rather than spinning silently.
+        if selected and not inserted:
+            logger.warning(
+                "entity_slot_sort: %s type %s — %d entities selected, 0 rows "
+                "derived. They have no frame/slot/value chain to walk, so they "
+                "will be re-selected every cycle and coverage can never reach "
+                "100%% for this type. This is a DATA shape, not a backfill "
+                "failure (issues/151)",
+                space_id, gap["entity_type"], selected)
+
+        logger.info(
+            "entity_slot_sort backfill: %s type %s +%d rows from %d entities "
+            "(%d still short)",
+            space_id, gap["entity_type"], inserted, selected, shortfall)
+        result = {"space_id": space_id, "entity_type": gap["entity_type"],
+                  "selected": selected, "rows_added": inserted,
+                  "shortfall": shortfall}
+        if self._tracker and process_id:
+            await self._tracker.mark_completed(process_id, result_details=result)
+        return result
 
     async def _run_stats_rebuild(self, space_id: str) -> Dict:
         """Rebuild rdf_pred_stats and rdf_stats for a space."""

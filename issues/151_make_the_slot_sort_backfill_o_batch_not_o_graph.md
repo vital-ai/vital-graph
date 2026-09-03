@@ -1,8 +1,24 @@
 # Make The Slot-Sort Backfill O(batch), Not O(graph)
 
-## Status: PROPOSAL — nothing implemented. Wants agreement, then prototype and
-## measurement, before any code. `issues/150`'s gate is the stopgap and is
-## already shipped.
+## Status: IMPLEMENTED 2026-09-03 after P1-P3 passed locally, EXCEPT S2(b).
+## See "Measured" for the numbers, and "What was NOT implemented" for the gap.
+
+## What was NOT implemented
+
+S2 recommended option **(b)** — keep `entity_slot_sort_drift` running rarely as
+an ADVISORY number, never gating a repair, so a ROW-LEVEL regression stays
+visible. Coverage counts ENTITIES; drift counts SLOT ROWS. An entity present
+with some of its slots missing is covered but not complete, and nothing now
+detects that.
+
+**The advisory caller is not written.** Drift is off the repair path (done) and
+has no caller at all (not done). Both `entity_slot_sort_drift` and the O(graph)
+`backfill_entity_slot_sort` are labelled in their docstrings as NOT on the
+maintenance loop so they are not mistaken for live code — the latter is kept
+deliberately as an operator escape hatch.
+
+Closing this needs a decision about cadence and where it logs. It is a gap in
+observability, not in the repair.
 
 ## Why this exists
 
@@ -152,6 +168,44 @@ the space go quiet.
 
 ---
 
+## Measured (P1-P3, local test stack, 2026-09-03)
+
+**P1 — is selecting a batch cheap?** This was the kill switch: if picking the
+batch is itself expensive, the design fails and nothing else matters.
+
+    batch-select, 500 of 2,000 entities:  7 ms
+
+**P2 — how does the seeded walk scale with batch size?**
+
+    batch=100    selected=100   inserted=100     53 ms   (0.53 ms/entity)
+    batch=500    selected=500   inserted=500     30 ms   (0.06 ms/entity)
+    batch=2000   selected=2000  inserted=2000   151 ms   (0.08 ms/entity)
+
+Linear in batch size with a small fixed overhead. Against the unseeded walk's
+216-303s, that is the whole point.
+
+**TWO CAVEATS ON THESE NUMBERS, both understating real cost:**
+
+1. The local fixture is ONE frame and ONE slot per entity. Production entities
+   carry several frames and many slots at depth, so ms/entity there will be
+   higher — possibly by an order of magnitude. What P2 establishes is the
+   SHAPE (linear, bounded), not the constant.
+2. The fixture is small enough to be entirely cached. Production is not
+   (`issues/150`: the working set exceeds shared_buffers).
+
+Re-measure on the test stack with a production-shaped fixture before raising
+`VG_ESS_BACKFILL_BATCH` above 500.
+
+**P3 — equivalence.** `tests/integration/test_slot_sort_batched_backfill.py`.
+The seeded batch derives exactly what the unseeded walk derives for the
+entities it covered, including the depth-2 slot that a non-recursing walk
+loses. The reference set is asserted NON-EMPTY first — this fixture family has
+twice produced a comparison that passed because both sides were empty.
+
+Also pinned: convergence (repeated batches finish, `selected == 0` means done)
+and the termination hazard (an entity that derives nothing is reported as
+`selected > 0, inserted == 0` rather than silently re-selected forever).
+
 ## Prototype and measurement plan
 
 Do this before writing S2 or S3 into the job. `issues/070` is the precedent for
@@ -191,6 +245,19 @@ must first assert the unseeded side is NON-EMPTY.
 
 The last row is the point. The current design cannot finish, and every attempt
 to make it finish has made reads worse.
+
+## Generalised
+
+The rule this produced is written up as
+`planning/planning_performance/maintenance_incremental_only_plan.md`:
+
+> No recurring job may perform a full walk or full scan of a space. Periodic
+> work runs OFTEN and does a BOUNDED UNIT if there is anything to do, and
+> nothing otherwise.
+
+It also records that a time-based interval is a CONFESSION that work is neither
+bounded nor incremental — which is what `2209009`'s hourly watch gating is, and
+it says so.
 
 ## Related
 

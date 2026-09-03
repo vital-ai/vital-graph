@@ -68,6 +68,7 @@ All functions take an asyncpg connection already inside a transaction.
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from typing import List, Optional
 
@@ -446,7 +447,14 @@ async def resync_entity_slot_sort(conn, space_id: str) -> int:
 
 async def backfill_entity_slot_sort(conn, space_id: str,
                                     timeout: float | None = None) -> int:
-    """Insert missing rows WITHOUT truncating.
+    """Insert missing rows WITHOUT truncating. **NOT on the maintenance loop.**
+
+    `issues/151` replaced this with `backfill_entity_slot_sort_batch` there,
+    because the full walk measured 216-303s and could not be run often enough to
+    converge without starving reads (`issues/150`). Kept as an operator escape
+    hatch for "fill everything now, I accept the cost" — which is a legitimate
+    thing to want and has no other implementation. Do not put it back on a
+    schedule.
 
     Takes only ROW EXCLUSIVE, so the maintenance job can repair drift while
     queries keep reading — the same reason `backfill_edge_table` exists rather
@@ -474,6 +482,75 @@ async def backfill_entity_slot_sort(conn, space_id: str,
     return rows
 
 
+# How many entities one backfill batch derives. `issues/151` S3.
+#
+# The point of batching is that the walk becomes O(batch) instead of O(graph):
+# the unseeded walk measured 216-303s on production and consumed 54% of
+# wall-clock (`issues/150`), which is why the previous design could never
+# finish. Seeded, the write path measured 32-1,473ms for its (smaller) seed
+# sets.
+#
+# 500 is a STARTING POINT, not a measured optimum. Establish the real number
+# from P2 in `issues/151` before trusting it.
+ESS_BACKFILL_BATCH = int(os.getenv("VG_ESS_BACKFILL_BATCH", "500"))
+
+
+async def backfill_entity_slot_sort_batch(
+        conn, space_id: str, entity_type_uuid, batch_size: int = None,
+        timeout: float | None = None) -> tuple[int, int]:
+    """Derive slot-sort rows for ONE batch of entities of ONE type.
+
+    `issues/151` S3. Replaces the O(graph) `backfill_entity_slot_sort` on the
+    maintenance loop, which re-walks the entire graph to add whatever is
+    missing and therefore cannot be run often enough to converge without
+    starving reads (`issues/150`: 216-303s per walk, 54% duty cycle).
+
+    Selects entities OF THIS TYPE with no rows in the table, then seeds
+    `_select_rows` with them — the same seed the write path has used in
+    production since `045988f`, measured row-identical against the full walk.
+    Not new derivation logic; the existing seed pointed at a different source
+    of UUIDs.
+
+    Returns `(entities_selected, rows_inserted)`.
+
+    Both numbers, because they answer different questions and the caller needs
+    both to terminate correctly:
+
+      selected == 0   this type is DONE. Nothing left that is absent.
+      selected  > 0
+        inserted > 0  progress.
+        inserted == 0 the batch's entities derive nothing -- no frames, or no
+                      slot VALUES. They stay absent, so they will be selected
+                      again next cycle, forever. The caller must treat this as
+                      "stop working on this type", not "keep going", or the
+                      maintenance job spins on the same batch indefinitely.
+
+    That second case is not hypothetical: the outer SELECT joins slot values
+    and their terms as INNER, so an entity whose slots have types but no values
+    derives nothing at all. The seeded-walk fixture originally hit exactly this
+    and made every equivalence assertion vacuous.
+    """
+    n = int(batch_size or ESS_BACKFILL_BATCH)
+    t = f"{space_id}_entity_slot_sort"
+    rows = await conn.fetch(
+        f"SELECT DISTINCT q.subject_uuid FROM {space_id}_rdf_quad q "
+        f"WHERE q.predicate_uuid = $1 AND q.object_uuid = $2 "
+        f"  AND NOT EXISTS (SELECT 1 FROM {t} e "
+        f"                   WHERE e.entity_uuid = q.subject_uuid) "
+        f"LIMIT {n}",
+        _ENTITY_TYPE, entity_type_uuid, timeout=timeout)
+    seeds = [r["subject_uuid"] for r in rows]
+    if not seeds:
+        return 0, 0
+    args = await _type_args(space_id)
+    result = await conn.execute(
+        f"INSERT INTO {t} ({_INSERT_COLS}) "
+        f"{_select_rows(space_id, 'TRUE', seed_param=f'${len(args) + 1}')} "
+        f"{_ON_CONFLICT}",
+        *args, seeds, timeout=timeout)
+    return len(seeds), (int(result.split()[-1]) if result else 0)
+
+
 async def entity_slot_sort_coverage(conn, space_id: str, limit: int = 5,
                                     timeout: float | None = None) -> list[dict]:
     """Entities IN the table against entities OF THAT TYPE in the quads.
@@ -499,29 +576,48 @@ async def entity_slot_sort_coverage(conn, space_id: str, limit: int = 5,
     `ratio`, so a caller can act on the biggest gap first. Empty when every type
     is fully covered.
     """
+    # PRESENCE IS TESTED BY entity_uuid, NOT by the table's own type column.
+    #
+    # The first version grouped `{space}_entity_slot_sort` by its
+    # `entity_type_uuid` and joined that against the type from the quads. When
+    # the two disagree the join misses and the probe reports a false shortfall.
+    # Measured on production 2026-09-03: it claimed 1,188 of 77,369 entities
+    # (1.54%) while all 77,468 were present — the table holds only 5 distinct
+    # type uuids across 80,102 entities, so the join key was wrong for almost
+    # everything.
+    #
+    # That is the exact defect this probe exists to avoid (`issues/149`): a
+    # check that trusts the derived table's own account of itself. Routing the
+    # DENOMINATOR through the quads was right; routing the NUMERATOR through the
+    # table's type column put the dependency straight back.
     rows = await conn.fetch(f"""
-        WITH have AS (
-            SELECT entity_type_uuid AS ty, count(DISTINCT entity_uuid) AS in_table
-              FROM {space_id}_entity_slot_sort
-             GROUP BY 1),
-        of_type AS (
-            SELECT q.object_uuid AS ty, count(DISTINCT q.subject_uuid) AS of_type
+        WITH of_type AS (
+            SELECT DISTINCT q.object_uuid AS ty, q.subject_uuid AS entity_uuid
               FROM {space_id}_rdf_quad q
               JOIN {space_id}_term p ON p.term_uuid = q.predicate_uuid
-               AND p.term_text = $1
-             GROUP BY 1)
+               AND p.term_text = $1)
         SELECT t.term_text AS entity_type,
-               COALESCE(h.in_table, 0) AS in_table,
-               o.of_type
+               o.ty        AS entity_type_uuid,
+               count(*) FILTER (WHERE EXISTS (
+                   SELECT 1 FROM {space_id}_entity_slot_sort e
+                    WHERE e.entity_uuid = o.entity_uuid)) AS in_table,
+               count(*) AS of_type
           FROM of_type o
           JOIN {space_id}_term t ON t.term_uuid = o.ty
-          LEFT JOIN have h ON h.ty = o.ty
-         WHERE COALESCE(h.in_table, 0) < o.of_type
-         ORDER BY (o.of_type - COALESCE(h.in_table, 0)) DESC
+         GROUP BY 1, 2
+        HAVING count(*) FILTER (WHERE EXISTS (
+                   SELECT 1 FROM {space_id}_entity_slot_sort e
+                    WHERE e.entity_uuid = o.entity_uuid)) < count(*)
+         ORDER BY (count(*) - count(*) FILTER (WHERE EXISTS (
+                   SELECT 1 FROM {space_id}_entity_slot_sort e
+                    WHERE e.entity_uuid = o.entity_uuid))) DESC
          LIMIT {int(limit)}
     """, ENTITY_TYPE_URI, timeout=timeout)
     return [
         {"entity_type": r["entity_type"],
+         # The UUID, so a caller can act on the gap without re-resolving the
+         # term. `backfill_entity_slot_sort_batch` seeds on it (`issues/151`).
+         "entity_type_uuid": r["entity_type_uuid"],
          "in_table": int(r["in_table"]),
          "of_type": int(r["of_type"]),
          "ratio": (int(r["in_table"]) / int(r["of_type"])) if r["of_type"] else 1.0}
@@ -554,6 +650,13 @@ async def entity_slot_sort_drift(conn, space_id: str,
     76,996 of that type, with this probe satisfied (`issues/149`). Use
     `entity_slot_sort_coverage`, which counts from the quads and so cannot be
     confirmed by its own input.
+
+    **NOT ON THE MAINTENANCE LOOP.** `issues/151` S2 took this off the repair
+    path — coverage answers the same question in 130ms. The recommendation there
+    was to keep this ADVISORY at a daily cadence so a ROW-LEVEL regression stays
+    visible (coverage counts ENTITIES; this counts SLOT ROWS). **That advisory
+    caller is not written.** Until it is, this has no caller at all and the
+    row-level signal is simply absent.
     """
     # `timeout` is asyncpg's CLIENT-side bound, and it is not optional here.
     #

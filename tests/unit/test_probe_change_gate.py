@@ -97,13 +97,23 @@ async def test_spaces_and_probes_do_not_share_a_watermark():
     assert await M.probe_data_changed(_Conn(100), "a", "other") is True
 
 
-def test_the_expensive_probe_is_gated_and_the_cheap_one_is_not():
-    src = inspect.getsource(M.MaintenanceJob._run_entity_slot_sort_integrity)
-    at_cov = src.index("entity_slot_sort_coverage(")
-    at_gate = src.index("probe_data_changed(")
-    at_drift = src.index("entity_slot_sort_drift(")
-    assert at_cov < at_gate < at_drift, (
-        "coverage (130ms) runs every cycle; the gate sits between it and the "
-        "O(graph) drift walk (216-303s)")
+def test_the_remaining_o_graph_probes_are_gated():
+    """The slot-sort walk left this path entirely in `issues/151` — coverage
+    replaced it. The gate still guards the two sibling drift probes, which are
+    the remaining full-table scans on the maintenance loop (edge_table_drift
+    measured 17.7s over ~50M rows)."""
+    src = inspect.getsource(M)
+    for probe in ("edge_table_drift", "frame_entity_drift"):
+        i = src.index(f'probe_data_changed(\n' if False else f'"{probe}")')
+        window = src[max(0, i - 400):i]
+        assert "probe_data_changed(" in window, f"{probe} is ungated"
     assert "mark_probe_converged(" in src, (
-        "without recording convergence the backfill strands half-done")
+        "without recording convergence a repair strands half-done on a quiet "
+        "space — the gate would skip the passes it still needs")
+
+
+def test_the_slot_sort_repair_no_longer_uses_the_o_graph_walk():
+    """`issues/151`: coverage (130ms) decides, a bounded batch repairs."""
+    src = inspect.getsource(M.MaintenanceJob._run_entity_slot_sort_integrity)
+    assert "entity_slot_sort_drift(" not in src
+    assert "backfill_entity_slot_sort_batch(" in src

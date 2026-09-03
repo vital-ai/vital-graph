@@ -148,7 +148,7 @@ async def test_the_repair_gets_the_same_budget_as_the_probe():
     """
     import inspect
     src = inspect.getsource(M.MaintenanceJob._run_entity_slot_sort_integrity)
-    at_backfill = src.index("backfill_entity_slot_sort(")
+    at_backfill = src.index("backfill_entity_slot_sort_batch(")
     before = src[:at_backfill]
     assert before.count("maintenance_timeouts(conn)") >= 2, (
         "the backfill call must be inside its own maintenance_timeouts block, "
@@ -182,7 +182,7 @@ def test_every_repair_runs_under_the_maintenance_budget():
     """
     import inspect
     lines = inspect.getsource(M).split("\n")
-    calls = ("backfill_entity_slot_sort(", "backfill_edge_table(",
+    calls = ("backfill_entity_slot_sort_batch(", "backfill_edge_table(",
              "backfill_frame_entity_table(", "cleanup_orphan_edges(",
              "cleanup_stale_frame_entity(", "prune_stats_tables(",
              "resync_value_stats(", "StatsRebuildOp(")

@@ -116,6 +116,21 @@ grows a repair, gating it fails loudly instead of silently deferring it.
 Expected effect: ~35s/cycle becomes ~3s/cycle amortised. That is roughly a third
 of the excess, NOT all of it.
 
+## SUPERSEDED IN PART, 2026-09-03
+
+Recommendations 1-4 below were framed as "run the expensive things less often".
+That framing is now rejected: see
+`planning/planning_performance/maintenance_incremental_only_plan.md`.
+
+Lengthening an interval trades "expensive constantly" for "expensive
+periodically" and leaves the cost proportional to the data. `issues/150` is the
+proof — the hourly watch gating from `2209009` helped, and then a DIFFERENT
+full walk on the same loop consumed 54% of wall-clock anyway.
+
+The remaining work here is to make these steps INCREMENTAL, after which their
+intervals can be deleted rather than tuned. Read the recommendations below as
+"what was tried", not "what to do".
+
 ## What to do — still open
 
 Recommendations 1, 3 and 4 below are NOT written. Recommendation 2 is done.
