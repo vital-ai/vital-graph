@@ -31,6 +31,16 @@ The loop was self-sustaining: audit times out -> no rebuild -> a partial rebuild
 records low values -> the prune correctly keeps 5 rows of an all-singleton table
 (`issues/147`) -> repeat every cycle.
 
+**AND ONE LEVEL DOWN.** Fixing the audit only moved the failure. The audit's
+response to a coverage gap is to call `resync_stats_tables`, whose own aggregate
+measured **19.6-49.0 s on production** against the same 60 s `command_timeout` —
+and its nine queries had no `timeout=` at all. The rebuild would have died in
+the driver and rolled back, leaving the stats exactly as corrupt as before. That
+is now threaded through too (`resync_stats_tables` -> `_resync_stats_locked`),
+and the guard test was widened to check the HELPERS the loop calls, not only the
+loop itself, because the first version of it read `maintenance_job` alone and
+would have passed while this was broken.
+
 **Fixed:** all seven maintenance queries now pass
 `timeout=PROBE_CLIENT_TIMEOUT_S`, and a guard test walks the source for any
 query inside a `maintenance_timeouts` block without one. Verified non-vacuous by

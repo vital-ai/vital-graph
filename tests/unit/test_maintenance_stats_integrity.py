@@ -108,7 +108,7 @@ def test_understated_pair_is_detected_and_rebuilt(monkeypatch):
     """The shape that cost 8x: stored far below actual."""
     rebuilt = []
 
-    async def fake_resync(conn, space_id):
+    async def fake_resync(conn, space_id, **_kw):
         rebuilt.append(space_id)
         return {"pred_stats": 1, "quad_stats": 1}
 
@@ -135,7 +135,7 @@ def test_overstated_pair_is_detected(monkeypatch):
     and the same repair, and a check that only looked for understatement would
     call those spaces clean.
     """
-    async def fake_resync(conn, space_id):
+    async def fake_resync(conn, space_id, **_kw):
         return {"pred_stats": 1, "quad_stats": 1}
 
     import vitalgraph.db.sparql_sql.sync_stats_tables as sst
@@ -155,7 +155,7 @@ def test_agreeing_counts_do_no_work(monkeypatch):
     """
     rebuilt = []
 
-    async def fake_resync(conn, space_id):
+    async def fake_resync(conn, space_id, **_kw):
         rebuilt.append(space_id)
         return {}
 
@@ -198,7 +198,7 @@ def test_unpruned_predicate_missing_its_pairs_is_rebuilt(monkeypatch):
     """
     from vitalgraph.db.sparql_sql import sync_stats_tables as sst
 
-    async def fake_resync(conn, space_id):
+    async def fake_resync(conn, space_id, **_kw):
         pool.record.append(space_id)
         return {"pred_stats": 0, "quad_stats": 0}
     monkeypatch.setattr(sst, "resync_stats_tables", fake_resync)
@@ -221,7 +221,7 @@ def test_full_coverage_is_not_reported(monkeypatch):
     """A predicate recording all of its quads must not trigger a rebuild."""
     from vitalgraph.db.sparql_sql import sync_stats_tables as sst
 
-    async def fake_resync(conn, space_id):
+    async def fake_resync(conn, space_id, **_kw):
         raise AssertionError("a fully covered space must not be rebuilt")
     monkeypatch.setattr(sst, "resync_stats_tables", fake_resync)
 
@@ -252,7 +252,7 @@ def test_a_present_pair_above_the_cap_is_removed(monkeypatch):
     """
     from vitalgraph.db.sparql_sql import sync_stats_tables as sst
 
-    async def fake_resync(conn, space_id):
+    async def fake_resync(conn, space_id, **_kw):
         raise AssertionError("a resync cannot fix this — it never writes the pair")
     monkeypatch.setattr(sst, "resync_stats_tables", fake_resync)
 

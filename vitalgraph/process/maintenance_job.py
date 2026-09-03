@@ -1203,7 +1203,13 @@ class MaintenanceJob:
                             space_id, gap["predicate_uuid"], gap["pairs_sum"],
                             gap["pred_total"],
                             100.0 * gap["pairs_sum"] / max(gap["pred_total"], 1))
-                        await resync_stats_tables(conn, space_id)
+                        # The rebuild's own aggregate measured 19.6-49.0 s on
+                        # production against a 60 s command_timeout. Without
+                        # this it dies in the driver and the whole transaction
+                        # rolls back, leaving the stats exactly as corrupt as
+                        # before — `issues/148` one level down.
+                        await resync_stats_tables(
+                            conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
                         return {"space_id": space_id, "rebuilt": True,
                                 "reason": "coverage",
                                 "pairs_sum": gap["pairs_sum"],

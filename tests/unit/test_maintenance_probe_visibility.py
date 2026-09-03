@@ -258,3 +258,36 @@ def test_maintenance_queries_carry_a_CLIENT_side_timeout_too():
         "maintenance queries inside maintenance_timeouts without a CLIENT-side "
         "timeout — asyncpg abandons these at command_timeout=60 regardless of "
         f"any SET: {bad}")
+
+
+def test_long_running_sync_helpers_accept_and_use_a_client_timeout():
+    """The guard above only reads `maintenance_job`. That is not enough.
+
+    Fixing the audit's client timeout moved the failure ONE LEVEL DOWN: the
+    audit's response to a coverage gap is `resync_stats_tables`, whose own
+    aggregate measured 19.6-49.0 s on production against the same 60 s
+    `command_timeout`. Its nine queries had no `timeout=` at all, so the rebuild
+    would die in the driver and roll back, leaving the stats as corrupt as
+    before.
+
+    So the helpers the maintenance loop CALLS have to be checked too, not just
+    the loop itself.
+    """
+    import inspect
+    from vitalgraph.db.sparql_sql import sync_stats_tables as S
+    from vitalgraph.db.sparql_sql import sync_entity_slot_sort as E
+
+    for fn in (S.resync_stats_tables, S._resync_stats_locked,
+               E.entity_slot_sort_drift, E.entity_slot_sort_coverage,
+               E.backfill_entity_slot_sort_batch):
+        sig = inspect.signature(fn)
+        assert "timeout" in sig.parameters, (
+            f"{fn.__name__} runs for tens of seconds and cannot be bounded by "
+            f"the caller without a timeout parameter")
+
+    body = inspect.getsource(S._resync_stats_locked)
+    calls = body.count("await conn.execute(")
+    used = body.count("timeout=timeout")
+    assert used >= calls, (
+        f"{calls} queries in the stats rebuild, only {used} pass the client "
+        f"timeout — the unbounded ones die at command_timeout=60")

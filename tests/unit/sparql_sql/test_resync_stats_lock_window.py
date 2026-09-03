@@ -29,6 +29,10 @@ import pytest
 from vitalgraph.db.sparql_sql import sync_stats_tables as S
 
 
+# **_kw because the real driver takes it: these queries now pass asyncpg's
+# CLIENT-side `timeout=` (`issues/148` — command_timeout=60 fires in the driver
+# and no server-side SET can raise it). A double narrower than the driver fails
+# on a correct change.
 class _Conn:
     def __init__(self):
         self.statements: list[str] = []
@@ -47,11 +51,11 @@ class _Conn:
 
         return _Txn()
 
-    async def execute(self, sql, *_args):
+    async def execute(self, sql, *_args, **_kw):
         self.statements.append(" ".join(sql.split()))
         return "INSERT 0 7"
 
-    async def fetchval(self, sql, *_args):
+    async def fetchval(self, sql, *_args, **_kw):
         self.statements.append(" ".join(sql.split()))
         return 0
 

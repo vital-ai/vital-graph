@@ -242,7 +242,8 @@ async def sync_stats_for_deleted_subjects(
     return await sync_stats_after_delete(conn, space_id, quad_rows)
 
 
-async def resync_stats_tables(conn, space_id: str) -> Dict[str, int]:
+async def resync_stats_tables(conn, space_id: str,
+                              timeout: float | None = None) -> Dict[str, int]:
     """Rebuild both stats tables from scratch by scanning rdf_quad.
 
     Truncates and repopulates both tables.  Runs ANALYZE afterwards.
@@ -278,15 +279,28 @@ async def resync_stats_tables(conn, space_id: str) -> Dict[str, int]:
     lock_key = f"vitalgraph.stats.{space_id}"
     await conn.execute("SELECT pg_advisory_lock(hashtext($1))", lock_key)
     try:
-        return await _resync_stats_locked(conn, space_id, t_quad, t_pred, t_stats)
+        return await _resync_stats_locked(conn, space_id, t_quad, t_pred,
+                                          t_stats, timeout=timeout)
     finally:
         await conn.execute("SELECT pg_advisory_unlock(hashtext($1))", lock_key)
 
 
 async def _resync_stats_locked(conn, space_id: str, t_quad: str, t_pred: str,
-                               t_stats: str) -> Dict[str, int]:
+                               t_stats: str,
+                               timeout: float | None = None) -> Dict[str, int]:
     """The rebuild itself. Callers go through `resync_stats_tables`, which holds
-    the per-space advisory lock this body assumes."""
+    the per-space advisory lock this body assumes.
+
+    `timeout` is asyncpg's CLIENT-side bound and is not optional in practice.
+    The pool is built with `command_timeout=60`, which fires in the DRIVER; no
+    server-side `SET` can raise it. The aggregate below measured **19.6-49.0 s
+    on production** — one busy cycle from dying at 60 s, and the whole
+    transaction then rolls back, leaving the stats exactly as corrupt as before.
+
+    That is not hypothetical: it is `issues/148` one level down. Fixing the
+    AUDIT's client timeout only moved the failure here, because the audit's
+    response to a coverage gap is to call this.
+    """
     # ONE TRANSACTION, so a failure cannot leave the tables EMPTY.
     #
     # Each `execute` autocommits on its own, so the TRUNCATE committed and a
@@ -330,7 +344,7 @@ async def _resync_stats_locked(conn, space_id: str, t_quad: str, t_pred: str,
             SELECT predicate_uuid, COUNT(*) AS row_count
             FROM {t_quad}
             GROUP BY predicate_uuid
-        """)
+        """, timeout=timeout)
 
         # Predicate+object co-occurrence, excluding extremely common pairs.
         #
@@ -345,25 +359,25 @@ async def _resync_stats_locked(conn, space_id: str, t_quad: str, t_pred: str,
             FROM {t_quad}
             GROUP BY predicate_uuid, object_uuid
             HAVING COUNT(*) <= {STATS_MAX_ROW_COUNT}
-        """)
+        """, timeout=timeout)
 
         # --- from here, and only from here, an AccessExclusiveLock is held ---
-        await conn.execute(f"TRUNCATE {t_pred}")
+        await conn.execute(f"TRUNCATE {t_pred}", timeout=timeout)
         result = await conn.execute(f"""
             INSERT INTO {t_pred} (predicate_uuid, row_count)
             SELECT predicate_uuid, row_count FROM _new_pred_stats
-        """)
+        """, timeout=timeout)
         pred_count = int(result.split()[-1]) if result else 0
 
-        await conn.execute(f"TRUNCATE {t_stats}")
+        await conn.execute(f"TRUNCATE {t_stats}", timeout=timeout)
         result = await conn.execute(f"""
             INSERT INTO {t_stats} (predicate_uuid, object_uuid, row_count)
             SELECT predicate_uuid, object_uuid, row_count FROM _new_stats
-        """)
+        """, timeout=timeout)
         stats_count = int(result.split()[-1]) if result else 0
 
-    await conn.execute(f"ANALYZE {t_pred}")
-    await conn.execute(f"ANALYZE {t_stats}")
+    await conn.execute(f"ANALYZE {t_pred}", timeout=timeout)
+    await conn.execute(f"ANALYZE {t_stats}", timeout=timeout)
 
     # A full rebuild makes rdf_stats complete WITHIN THE WINDOW, so absence
     # means zero again for every predicate as far as any consumer of the
@@ -412,7 +426,7 @@ async def _resync_stats_locked(conn, space_id: str, t_quad: str, t_pred: str,
             WHERE q.predicate_uuid = {t_pred}.predicate_uuid
             GROUP BY q.object_uuid
             HAVING COUNT(*) > {STATS_MAX_ROW_COUNT})
-    """)
+    """, timeout=timeout)
 
     logger.info("resync_stats_tables(%s): %d pred_stats, %d quad_stats",
                 space_id, pred_count, stats_count)
