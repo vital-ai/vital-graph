@@ -397,11 +397,28 @@ async def edge_table_drift(conn, space_id: str) -> tuple[int, int]:
     `DISTINCT ON (src.subject_uuid, src.context_uuid)`, so ONE row exists per
     edge regardless of how many hasEdgeSource QUADS that edge has.
 
-    And a quad can repeat: `rdf_quad`'s primary key includes `quad_uuid`, so the
-    identical (subject, predicate, object, context) can be stored more than
-    once. Counting quads then reports each duplicate as a missing edge row, and
-    no resync can ever clear it — the rebuild produces exactly the count the
-    comparison calls short.
+    STALE JUSTIFICATION, CORRECTED 2026-09-03. This used to say `rdf_quad`'s
+    primary key includes `quad_uuid`, so identical (subject, predicate, object,
+    context) could be stored twice and counting quads would report each
+    duplicate as a missing edge. That was true of the schema it was written
+    against and is NOT true now: the PK is FOUR columns —
+    (subject, predicate, object, context) — so exact duplicates are impossible
+    by construction. Measured on production, 3,245,117 quads and 3,245,117
+    distinct pairs, zero overcount.
+
+    DO NOT REMOVE THE DISTINCT ON THAT BASIS. It is still required, for a
+    different reason: `resync_edge_table` builds this table with
+    `DISTINCT ON (src.subject_uuid, src.context_uuid)`, and the four-column PK
+    still permits two DIFFERENT objects for the same subject+context. A
+    multi-source edge would make `count(*)` overcount against what the table
+    actually stores. Zero such edges exist on production today, but that is a
+    data invariant, not a schema guarantee. The DISTINCT mirrors the
+    DISTINCT ON; that is its real justification.
+
+    THIS QUERY SHOULD NOT EXIST ON A SCHEDULE AT ALL. Both sides are counts the
+    write path already knows, and recomputing them from ~50M rows every cycle is
+    the defect. See
+    `planning/planning_performance/maintenance_incremental_only_plan.md`.
 
     Measured on the local host cluster 2026-08-16: two spaces reported 31.3% and
     50.0% "missing" and were byte-for-byte correct. 67 source quads over 46
