@@ -303,6 +303,72 @@ def should_run_watch(name: str, space_id: str,
     return True
 
 
+# --- issues/150: an O(graph) probe must not run when nothing changed ---------
+#
+# `entity_slot_sort_drift` computes `expected` with the full unseeded
+# `WITH RECURSIVE frame_walk`. Measured on production 2026-09-03, AFTER 478fa06
+# gave it the maintenance budget:
+#
+#     durations: 216s, 216s, 122s, 303s, 252s, 59s, 256s
+#     DUTY CYCLE = 54% of wall-clock inside this ONE probe
+#
+# Before 478fa06 asyncpg's `command_timeout=60` killed it at 60s. That was a bug
+# -- it meant the probe never completed and the backfill never ran -- but it was
+# also accidentally BOUNDING the damage. Removing the fence without gating the
+# cadence turned "fails fast every cycle" into "runs for four minutes every
+# cycle", sequential-scanning the quad table and evicting the read path's cache.
+# A user query measured 1.5s when the probe was idle and 58s when it was not.
+#
+# The gate is CHANGED DATA, not a clock. If no quads were written, drift cannot
+# have changed, and re-deriving it is pure waste. `n_tup_ins + n_tup_upd +
+# n_tup_del` is monotonic and survives ANALYZE, unlike `n_mod_since_analyze`
+# which resets and would make this fire constantly.
+#
+# UNCONVERGED WORK OVERRIDES THE GATE. The backfill only ADDs, so a 2.7M-row
+# gap takes many passes. Gating on writes alone would skip those passes on a
+# quiet space and strand the table half-filled forever -- the same "looks fixed,
+# repairs nothing" outcome this whole line of work has been about.
+_probe_watermark: Dict[Tuple[str, str], int] = {}
+_probe_unconverged: Dict[Tuple[str, str], bool] = {}
+
+
+async def probe_data_changed(conn, space_id: str, probe: str) -> bool:
+    """True when *probe* should re-derive for *space_id*.
+
+    False only when BOTH: the quad table is unchanged since this probe last ran,
+    AND that probe last reported no outstanding work.
+    """
+    key = (probe, space_id)
+    if _probe_unconverged.get(key):
+        return True
+    try:
+        wm = await conn.fetchval(
+            "SELECT COALESCE(n_tup_ins,0) + COALESCE(n_tup_upd,0) "
+            "     + COALESCE(n_tup_del,0) "
+            "FROM pg_stat_user_tables WHERE relname = $1",
+            f"{space_id}_rdf_quad")
+    except Exception:
+        return True  # cannot tell -> do the work
+    if wm is None:
+        return True
+    prev = _probe_watermark.get(key)
+    _probe_watermark[key] = int(wm)
+    # `pg_stat_reset()` moves the counter DOWN; != is the honest test, and it
+    # fails toward running.
+    return prev is None or int(wm) != prev
+
+
+def mark_probe_converged(space_id: str, probe: str, converged: bool) -> None:
+    """Record whether *probe* still has outstanding work for *space_id*."""
+    _probe_unconverged[(probe, space_id)] = not converged
+
+
+def reset_probe_gate() -> None:
+    """Test seam; also forces a full re-derive on the next cycle."""
+    _probe_watermark.clear()
+    _probe_unconverged.clear()
+
+
 def reset_watch_schedule() -> None:
     """Test seam; also what a caller would use to force a full sweep."""
     _watch_last_run.clear()
@@ -1466,7 +1532,17 @@ class MaintenanceJob:
             try:
                 async with self._pool.acquire() as conn:
                     async with maintenance_timeouts(conn):
+                        # `issues/143` rec #1, same gate as the slot-sort walk:
+                        # this is a count(DISTINCT (subject,context)) over ~50M
+                        # rows, measured at 17.7s. With no quad writes there is
+                        # nothing new to count.
+                        if not await probe_data_changed(
+                                conn, space_id, "edge_table_drift"):
+                            continue
                         src_quads, edge_rows = await edge_table_drift(conn, space_id)
+                        mark_probe_converged(
+                            space_id, "edge_table_drift",
+                            (src_quads - edge_rows) <= EDGE_DRIFT_MIN_ABS)
                     # Counts agreeing does not mean the rows are right. A space
                     # reloaded in place leaves an edge table that is a faithful
                     # materialisation of the PREVIOUS contents — same size,
@@ -1642,7 +1718,13 @@ class MaintenanceJob:
             try:
                 async with self._pool.acquire() as conn:
                     async with maintenance_timeouts(conn):
+                        if not await probe_data_changed(
+                                conn, space_id, "frame_entity_drift"):
+                            continue
                         expected, actual = await frame_entity_drift(conn, space_id)
+                        mark_probe_converged(
+                            space_id, "frame_entity_drift",
+                            (expected - actual) <= EDGE_DRIFT_MIN_ABS)
                     # Counts agreeing does not mean the rows are RIGHT. A space
                     # reloaded in place — or under a new graph URI — leaves this
                     # table a faithful materialisation of the PREVIOUS contents:
@@ -1752,8 +1834,22 @@ class MaintenanceJob:
                                     space_id, gap["entity_type"],
                                     gap["in_table"], gap["of_type"],
                                     gap["ratio"] * 100)
+                        # THE EXPENSIVE ONE — gated on changed data.
+                        # Coverage above is 130ms and runs every cycle; this is
+                        # a full O(graph) walk measured at 216-303s, so it runs
+                        # only when quads were written or it has work left
+                        # (`issues/150`). Skipping is not a deferral: with no
+                        # writes there is nothing new to find.
+                        if not await probe_data_changed(
+                                conn, space_id, "entity_slot_sort_drift"):
+                            continue
                         expected, actual = await entity_slot_sort_drift(
                             conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
+                        mark_probe_converged(
+                            space_id, "entity_slot_sort_drift",
+                            expected - actual <= max(
+                                EDGE_DRIFT_MIN_ABS,
+                                int(EDGE_DRIFT_MIN_PCT * expected)))
             except asyncpg.UndefinedTableError:
                 continue  # space predates the table, or is not a KG space
             except Exception as exc:
