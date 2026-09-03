@@ -35,6 +35,8 @@ class _Conn:
 
     async def fetchval(self, sql, *_a):
         self.statements.append(sql)
+        if "lock_timeout" in sql:
+            return "10s"
         return self._st if "statement_timeout" in sql else None
 
     async def execute(self, sql, *_a):
@@ -45,12 +47,17 @@ class _Conn:
 @pytest.mark.asyncio
 async def test_a_probe_gets_the_maintenance_budget_not_the_read_path_fence():
     conn = _Conn(statement_timeout="60s")
-    async with M.probe_timeouts(conn):
+    async with M.maintenance_timeouts(conn):
         pass
 
-    assert conn.statements[0] == "SHOW statement_timeout"
-    assert conn.statements[1] == (
-        f"SET statement_timeout = {M.MAINTENANCE_STATEMENT_TIMEOUT_MS}")
+    assert "SHOW statement_timeout" in conn.statements
+    assert "SHOW lock_timeout" in conn.statements
+    assert (f"SET statement_timeout = {M.MAINTENANCE_STATEMENT_TIMEOUT_MS}"
+            in conn.statements)
+    assert (f"SET lock_timeout = {M.MAINTENANCE_LOCK_TIMEOUT_MS}"
+            in conn.statements), (
+        "issues/149: raising only statement_timeout left the backfill losing "
+        "43 lock races at the read path's 10s fence")
     assert M.MAINTENANCE_STATEMENT_TIMEOUT_MS > 76_000, (
         "the measured probe takes 76s on prod; a budget below that leaves "
         "issues/144 in place")
@@ -60,18 +67,19 @@ async def test_a_probe_gets_the_maintenance_budget_not_the_read_path_fence():
 async def test_the_budget_does_not_outlive_the_probe():
     """The connection goes back to a pool that also serves user queries."""
     conn = _Conn(statement_timeout="60s")
-    async with M.probe_timeouts(conn):
+    async with M.maintenance_timeouts(conn):
         pass
-    assert conn.statements[-1] == "SET statement_timeout = '60s'"
+    assert "SET statement_timeout = '60s'" in conn.statements[-2:]
+    assert "SET lock_timeout = '10s'" in conn.statements[-2:]
 
 
 @pytest.mark.asyncio
 async def test_the_budget_is_restored_when_the_probe_raises():
     conn = _Conn(statement_timeout="60s")
     with pytest.raises(asyncpg.QueryCanceledError):
-        async with M.probe_timeouts(conn):
+        async with M.maintenance_timeouts(conn):
             raise asyncpg.QueryCanceledError("canceling statement")
-    assert conn.statements[-1] == "SET statement_timeout = '60s'"
+    assert "SET statement_timeout = '60s'" in conn.statements[-2:]
 
 
 def test_a_timeout_is_reported_at_warning_with_its_consequence(caplog):
@@ -125,3 +133,80 @@ def test_the_stats_integrity_guard_is_not_a_debug_swallow():
     assert "exc_info=True" in tail, (
         "the message alone was not enough to diagnose this; the failing "
         "statement is the useful part")
+
+
+@pytest.mark.asyncio
+async def test_the_repair_gets_the_same_budget_as_the_probe():
+    """`issues/149`, second half. The probe was given the maintenance budget and
+    the BACKFILL it gates was left on the read path's fences. So the probe
+    completed, correctly reported a 2.7M-row gap, triggered the repair — and the
+    repair died: 3 statement timeouts at 60s and 43 LockNotAvailableError at the
+    10s lock fence. The table crept 26.5k -> 40k against a ~2.83M target.
+
+    A gate that is fixed while the thing behind it is not looks exactly like a
+    fixed gate, which is why this is asserted rather than assumed.
+    """
+    import inspect
+    src = inspect.getsource(M.MaintenanceJob._run_entity_slot_sort_integrity)
+    at_backfill = src.index("backfill_entity_slot_sort(")
+    before = src[:at_backfill]
+    assert before.count("maintenance_timeouts(conn)") >= 2, (
+        "the backfill call must be inside its own maintenance_timeouts block, "
+        "not only the probe above it")
+    tail = src[at_backfill:at_backfill + 200]
+    assert "timeout=PROBE_CLIENT_TIMEOUT_S" in tail, (
+        "and it needs the CLIENT-side bound too — command_timeout=60 fires in "
+        "the driver regardless of any server-side SET")
+
+
+def test_every_repair_runs_under_the_maintenance_budget():
+    """`issues/149` was fixed three times before it was fixed everywhere.
+
+    The defect is always the same shape: a PROBE is given the maintenance
+    budget, the REPAIR it gates is left on the read path's 60s statement / 10s
+    lock fences, and the result looks like a working check — it diagnoses
+    correctly every cycle and never repairs anything.
+
+    Found in `_run_entity_slot_sort_integrity` (measured: 3 statement timeouts,
+    43 LockNotAvailableError, table stuck at 40k of ~2.83M), then found unfixed
+    in `_run_edge_integrity`, `_run_frame_entity_integrity`, the orphan sweep,
+    and `_run_stats_rebuild` — the last of which repairs corrupt rdf_stats, so
+    it timing out means the stats stay corrupt forever (`issues/139`'s shape).
+
+    Checks EVERY call site, not the first: an earlier version of this test used
+    `src.index()` and passed while the orphan sweep was still unwrapped.
+
+    The psycopg sync path is exempt — `_make_sync_connection` applies
+    `maintenance_conn_options` at CONNECT time, which is the same fences by
+    another route.
+    """
+    import inspect
+    lines = inspect.getsource(M).split("\n")
+    calls = ("backfill_entity_slot_sort(", "backfill_edge_table(",
+             "backfill_frame_entity_table(", "cleanup_orphan_edges(",
+             "cleanup_stale_frame_entity(", "prune_stats_tables(",
+             "resync_value_stats(", "StatsRebuildOp(")
+    unwrapped = []
+    for i, line in enumerate(lines):
+        code = line.split("#")[0]
+        if "await " not in code and "StatsRebuildOp(" not in code:
+            continue
+        for c in calls:
+            if c in code:
+                ctx = "\n".join(lines[max(0, i - 25):i])
+                if "maintenance_timeouts(" not in ctx:
+                    unwrapped.append((i + 1, c))
+    assert not unwrapped, (
+        "repairs on the read path's fences — a repair that cannot finish is "
+        f"issues/149: {unwrapped}")
+
+
+def test_watches_are_not_given_the_maintenance_budget():
+    """The inverse error. A watch on a 15-minute budget scans for 15 minutes."""
+    import inspect
+    for name in ("_run_grouping_self_link_check",
+                 "_run_graph_registration_check"):
+        body = inspect.getsource(getattr(M.MaintenanceJob, name))
+        assert "maintenance_timeouts(" not in body, (
+            f"{name} writes nothing; a longer budget only lets it scan more "
+            f"(issues/143 measured it at 38.6s/pass evicting the read cache)")

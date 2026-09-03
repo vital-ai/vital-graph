@@ -444,18 +444,30 @@ async def resync_entity_slot_sort(conn, space_id: str) -> int:
     return rows
 
 
-async def backfill_entity_slot_sort(conn, space_id: str) -> int:
+async def backfill_entity_slot_sort(conn, space_id: str,
+                                    timeout: float | None = None) -> int:
     """Insert missing rows WITHOUT truncating.
 
     Takes only ROW EXCLUSIVE, so the maintenance job can repair drift while
     queries keep reading — the same reason `backfill_edge_table` exists rather
     than the drift detector calling the resync.
+
+    `timeout` is asyncpg's CLIENT-side bound and is needed for the same reason
+    `entity_slot_sort_drift` needs it: this is the SAME full walk, as an INSERT,
+    and it measures ~133s on a 45M-quad space. The pool's `command_timeout=60`
+    fires in the driver regardless of any server-side SET.
+
+    Caller must ALSO raise the server fences (`maintenance_timeouts`).
+    `issues/149` fixed the probe and left this running on the read path's, so it
+    completed the diagnosis and then died on the repair — 3 statement timeouts
+    at 60s and 43 LockNotAvailableError at the 10s lock fence, leaving the table
+    at 40k rows against a ~2.83M target.
     """
     t = f"{space_id}_entity_slot_sort"
     args = await _type_args(space_id)
     result = await conn.execute(
         f"INSERT INTO {t} ({_INSERT_COLS}) "
-        f"{_select_rows(space_id, 'TRUE')} {_ON_CONFLICT}", *args)
+        f"{_select_rows(space_id, 'TRUE')} {_ON_CONFLICT}", *args, timeout=timeout)
     rows = int(result.split()[-1]) if result else 0
     if rows:
         logger.info("backfill_entity_slot_sort(%s): %d rows added", space_id, rows)

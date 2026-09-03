@@ -127,8 +127,26 @@ def maintenance_conn_options() -> str:
             f"-c lock_timeout={MAINTENANCE_LOCK_TIMEOUT_MS}")
 
 @asynccontextmanager
-async def probe_timeouts(conn):
-    """Raise the read-path timeouts for an integrity PROBE, then restore.
+async def maintenance_timeouts(conn):
+    """Raise the read-path fences for maintenance work, then restore.
+
+    Applies to REPAIRS as well as probes, and the name says so because the
+    previous one -- `probe_timeouts` -- was read literally: `issues/149`'s fix
+    raised the budget on the drift probe and left the BACKFILL it gates running
+    on the read path's fences. The probe then completed, correctly reported a
+    2.7M-row gap, triggered the repair, and the repair died:
+
+        3 x  canceling statement due to statement timeout   (60s, on the INSERT)
+        43 x LockNotAvailableError                          (10s lock_timeout)
+
+    so `entity_slot_sort` crept 26.5k -> 40k instead of reaching ~2.83M. A gate
+    that is fixed while the thing behind it is not looks exactly like a fixed
+    gate.
+
+    RAISES BOTH FENCES, matching `maintenance_conn_options`. The first version
+    raised only `statement_timeout`, which is why the backfill lost 43 lock
+    races at the read path's 10s: a 133s walk-INSERT cannot hold to a fence
+    sized for user queries.
 
     The probes run on the shared pool, which carries the read path's
     `statement_timeout` (60s on prod). That is a fence for USER queries; a probe
@@ -145,16 +163,21 @@ async def probe_timeouts(conn):
     Restores explicitly rather than trusting the pool's reset, so the raised
     budget cannot outlive the probe on a connection handed to a user query.
     """
-    prev = await conn.fetchval("SHOW statement_timeout")
+    prev_stmt = await conn.fetchval("SHOW statement_timeout")
+    prev_lock = await conn.fetchval("SHOW lock_timeout")
     await conn.execute(
         f"SET statement_timeout = {MAINTENANCE_STATEMENT_TIMEOUT_MS}")
+    await conn.execute(
+        f"SET lock_timeout = {MAINTENANCE_LOCK_TIMEOUT_MS}")
     try:
         yield conn
     finally:
         try:
-            await conn.execute(f"SET statement_timeout = '{prev}'")
+            await conn.execute(f"SET statement_timeout = '{prev_stmt}'")
+            await conn.execute(f"SET lock_timeout = '{prev_lock}'")
         except Exception:  # pragma: no cover - abort path
-            logger.debug("could not restore statement_timeout to %s", prev)
+            logger.debug("could not restore timeouts to %s / %s",
+                         prev_stmt, prev_lock)
 
 
 def log_probe_failure(probe: str, space_id: str, exc: BaseException) -> None:
@@ -208,7 +231,7 @@ EDGE_UNTYPED_WARN_PCT = 0.01
 # written for measured 1.05% (`issues/149`).
 ENTITY_COVERAGE_MIN_RATIO = 0.90
 
-# Client-side bound for the integrity PROBES, in seconds.
+# Client-side bound for maintenance probes AND repairs, in seconds.
 #
 # asyncpg's pool sets `command_timeout=60`, which fires in the DRIVER and is
 # untouched by `SET statement_timeout` -- so `probe_timeouts` alone raised only
@@ -895,6 +918,17 @@ class MaintenanceJob:
         it runs.
         """
         GRAPH_URI_PRED = "http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI"
+        # DELIBERATELY NOT under `maintenance_timeouts`, unlike the repairs.
+        #
+        # This is a WATCH: it writes nothing and only logs. Giving it the
+        # 15-minute maintenance budget would let it run LONGER, and it is one of
+        # the two things `issues/143` measured burning the box -- 38.6s per pass,
+        # ~35s/cycle across spaces, sequential-scanning the quad table and
+        # evicting the buffer cache the read path depends on. The read fence is
+        # the right ceiling for it: if it cannot answer in 60s, the honest
+        # outcome is to give up and say so, not to keep scanning.
+        #
+        # The same reasoning covers `_run_graph_registration_check`.
         for space_id in space_ids:
             if not should_run_watch("grouping_self_link", space_id):
                 continue
@@ -1070,6 +1104,7 @@ class MaintenanceJob:
         for space_id in space_ids:
             try:
                 async with self._pool.acquire() as conn:
+                  async with maintenance_timeouts(conn):
                     # Check 1: per-predicate coverage for UNPRUNED predicates.
                     gap = await conn.fetchrow(f"""
                         SELECT p.predicate_uuid,
@@ -1266,7 +1301,8 @@ class MaintenanceJob:
         # value-histogram refresh, the vector reindex and the cleanup.
         try:
             async with self._pool.acquire() as conn:
-                kept = await prune_stats_tables(conn, worst_space)
+                async with maintenance_timeouts(conn):
+                    kept = await prune_stats_tables(conn, worst_space)
         except Exception as exc:
             logger.warning("Stats prune failed for %s: %s — the table stays "
                            "over its cap until the next cycle", worst_space, exc)
@@ -1336,7 +1372,8 @@ class MaintenanceJob:
         # histogram must not also cost the vector reindex and the cleanup.
         try:
             async with self._pool.acquire() as conn:
-                built = await resync_value_stats(conn, worst_space)
+                async with maintenance_timeouts(conn):
+                    built = await resync_value_stats(conn, worst_space)
         except Exception as exc:
             logger.warning("Value stats refresh failed for %s: %s — estimates "
                            "stay scaled or withdrawn until the next cycle",
@@ -1405,8 +1442,9 @@ class MaintenanceJob:
                     # cleanup that used to run in execute_sparql_update; moving
                     # the sweep here dropped the frame_entity half entirely,
                     # leaving it called from NOWHERE (issues/064).
-                    stale = await cleanup_stale_frame_entity(conn, sid)
-                    removed = await cleanup_orphan_edges(conn, sid)
+                    async with maintenance_timeouts(conn):
+                        stale = await cleanup_stale_frame_entity(conn, sid)
+                        removed = await cleanup_orphan_edges(conn, sid)
                 if stale:
                     logger.info("Frame-entity integrity: swept %d stale row(s) "
                                 "from %s after a WHERE-bound delete", stale, sid)
@@ -1427,7 +1465,7 @@ class MaintenanceJob:
         for space_id in space_ids:
             try:
                 async with self._pool.acquire() as conn:
-                    async with probe_timeouts(conn):
+                    async with maintenance_timeouts(conn):
                         src_quads, edge_rows = await edge_table_drift(conn, space_id)
                     # Counts agreeing does not mean the rows are right. A space
                     # reloaded in place leaves an edge table that is a faithful
@@ -1533,7 +1571,8 @@ class MaintenanceJob:
             if not worst_orphan_space:
                 return None
             async with self._pool.acquire() as conn:
-                removed = await cleanup_orphan_edges(conn, worst_orphan_space)
+                async with maintenance_timeouts(conn):
+                    removed = await cleanup_orphan_edges(conn, worst_orphan_space)
             if not removed:
                 return None
             logger.info("Edge integrity: removed %d orphaned row(s) from %s "
@@ -1558,8 +1597,13 @@ class MaintenanceJob:
             # accumulated across four spaces (issues/064). Also bounded and
             # ROW EXCLUSIVE, so it cannot block readers either.
             async with self._pool.acquire() as conn:
-                inserted = await backfill_edge_table(conn, worst_space)
-                removed = await cleanup_orphan_edges(conn, worst_space)
+                # Same budget as the probe above (`issues/149`). A repair left on
+                # the read path's fences is the defect that let entity_slot_sort
+                # sit at 40k rows against a 2.83M target while its probe
+                # reported the gap correctly every cycle.
+                async with maintenance_timeouts(conn):
+                    inserted = await backfill_edge_table(conn, worst_space)
+                    removed = await cleanup_orphan_edges(conn, worst_space)
                 # The orphan target is usually a DIFFERENT space, because the
                 # two problems are selected on different evidence.
                 if worst_orphan_space and worst_orphan_space != worst_space:
@@ -1597,7 +1641,7 @@ class MaintenanceJob:
         for space_id in space_ids:
             try:
                 async with self._pool.acquire() as conn:
-                    async with probe_timeouts(conn):
+                    async with maintenance_timeouts(conn):
                         expected, actual = await frame_entity_drift(conn, space_id)
                     # Counts agreeing does not mean the rows are RIGHT. A space
                     # reloaded in place — or under a new graph URI — leaves this
@@ -1646,7 +1690,8 @@ class MaintenanceJob:
             await self._tracker.mark_running(process_id, self._instance_id)
         try:
             async with self._pool.acquire() as conn:
-                inserted = await backfill_frame_entity_table(conn, worst_space)
+                async with maintenance_timeouts(conn):
+                    inserted = await backfill_frame_entity_table(conn, worst_space)
             result = {"space_id": worst_space, "drift": worst_drift, "rows_added": inserted}
             if self._tracker and process_id:
                 await self._tracker.mark_completed(process_id, result_details=result)
@@ -1683,7 +1728,7 @@ class MaintenanceJob:
         for space_id in space_ids:
             try:
                 async with self._pool.acquire() as conn:
-                    async with probe_timeouts(conn):
+                    async with maintenance_timeouts(conn):
                         # COVERAGE FIRST, because drift cannot see this class of
                         # failure at all. Drift compares the table against the
                         # same walk that populated it, so an incomplete WALK
@@ -1730,7 +1775,12 @@ class MaintenanceJob:
             await self._tracker.mark_running(process_id, self._instance_id)
         try:
             async with self._pool.acquire() as conn:
-                inserted = await backfill_entity_slot_sort(conn, worst_space)
+                # THE REPAIR NEEDS THE SAME BUDGET AS THE PROBE. It is the same
+                # 133s walk, as an INSERT, and it also takes locks. Running it
+                # on the read path's fences is `issues/149`'s second half.
+                async with maintenance_timeouts(conn):
+                    inserted = await backfill_entity_slot_sort(
+                        conn, worst_space, timeout=PROBE_CLIENT_TIMEOUT_S)
             result = {"space_id": worst_space, "drift": worst_drift,
                       "rows_added": inserted}
             if self._tracker and process_id:
@@ -1758,8 +1808,18 @@ class MaintenanceJob:
         try:
             conn = await self._pool.acquire()
             try:
-                op = StatsRebuildOp(space_id, conn=conn)
-                op_result = await op.execute()
+                # THE HIGHEST-CONSEQUENCE ONE. This is the full stats resync --
+                # the thing that repairs a corrupt rdf_stats -- and on production
+                # its aggregate alone measured 25,768 ms (`CREATE TEMP TABLE
+                # _new_stats ... GROUP BY`), with the pred aggregate and the
+                # re-insert on top. On the read path's 60s fence that is close,
+                # and on a larger space it simply cannot finish: the transaction
+                # rolls back (safe, by design) and the stats stay corrupt
+                # FOREVER, because the only thing that repairs them is the thing
+                # timing out. That is `issues/139`'s shape.
+                async with maintenance_timeouts(conn):
+                    op = StatsRebuildOp(space_id, conn=conn)
+                    op_result = await op.execute()
             finally:
                 await self._pool.release(conn)
 
@@ -1834,6 +1894,14 @@ class MaintenanceJob:
         conn = await self._pool.acquire()
         completed = 0
         try:
+          # The SYNC path gets these fences at CONNECT time via
+          # `maintenance_conn_options`; this async fallback had neither. ANALYZE
+          # on the big quad table measured 50,224 ms on production against the
+          # read path's 60s -- under it, but only just, and `issues/136` is the
+          # record of what happens when a maintenance operation is run inside a
+          # read-shaped fence: 91% of VACUUMs cancelled while the job logged
+          # "VACUUM complete" each time.
+          async with maintenance_timeouts(conn):
             for table in tables:
                 try:
                     await conn.execute(f"{command} {table}")
@@ -2070,7 +2138,12 @@ class MaintenanceJob:
         """Run REINDEX INDEX CONCURRENTLY via asyncpg (fallback)."""
         conn = await self._pool.acquire()
         try:
-            await conn.execute(f"REINDEX INDEX CONCURRENTLY {index_name}")
+            # REINDEX CONCURRENTLY on a large index runs for minutes and takes
+            # locks; the read path's 60s/10s fences guarantee it never finishes.
+            async with maintenance_timeouts(conn):
+                await conn.execute(
+                    f"REINDEX INDEX CONCURRENTLY {index_name}",
+                    timeout=PROBE_CLIENT_TIMEOUT_S)
         finally:
             await self._pool.release(conn)
 
