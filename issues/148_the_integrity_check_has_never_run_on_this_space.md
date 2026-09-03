@@ -1,6 +1,15 @@
 # The Stats Integrity Check Has Never Run On This Space, And Said So At DEBUG
 
 ## Status: CAUSE FOUND AND FIXED 2026-09-03. It was a CLIENT-side timeout.
+>
+> **SUPERSEDED IN PART.** This is a consequence of `rdf_stats` being an
+> incrementally-maintained accumulator that cannot validate itself. A
+> proposal to recompute the reader's 10,000-row window instead — measured
+> at 41 s on production — would remove the mechanism this issue describes
+> rather than repair it. See
+> `planning/planning_performance/rdf_stats_recompute_not_accumulate_plan.md`
+> before doing further work here.
+
 
 The original write-up below could not explain why `column p.pruned does not
 exist` appeared when the column demonstrably existed. **That message was a red

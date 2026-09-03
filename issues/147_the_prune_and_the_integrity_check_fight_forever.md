@@ -1,6 +1,15 @@
 # The Prune Keeps Only The Smallest Pairs Of A High-Cardinality Predicate
 
 ## Status: FIXED 2026-09-02. **The original framing of this issue was WRONG and
+>
+> **SUPERSEDED IN PART.** This is a consequence of `rdf_stats` being an
+> incrementally-maintained accumulator that cannot validate itself. A
+> proposal to recompute the reader's 10,000-row window instead — measured
+> at 41 s on production — would remove the mechanism this issue describes
+> rather than repair it. See
+> `planning/planning_performance/rdf_stats_recompute_not_accumulate_plan.md`
+> before doing further work here.
+
 ## is retracted in full below — read §"Retraction" before anything else.** The
 ## fix is correct; the causal story that motivated it was not.
 

@@ -21,6 +21,15 @@
 > isolation. Do not "fix" it without a repro.
 
 ## Status: OPEN — MECHANISM ISOLATED 2026-09-02 by sampling. The prune removes
+>
+> **SUPERSEDED IN PART.** This is a consequence of `rdf_stats` being an
+> incrementally-maintained accumulator that cannot validate itself. A
+> proposal to recompute the reader's 10,000-row window instead — measured
+> at 41 s on production — would remove the mechanism this issue describes
+> rather than repair it. See
+> `planning/planning_performance/rdf_stats_recompute_not_accumulate_plan.md`
+> before doing further work here.
+
 ## the pair and does NOT set `pruned`, so the next write re-creates the row
 ## holding only a delta. The fix is in `prune_stats_tables`'s flag update, not
 ## in the resync as this file first supposed.
