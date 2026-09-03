@@ -77,3 +77,86 @@ These items have been completed but are documented here for historical context.
 ## Gotchas (reference)
 
 - **DBeaver:** Chops queries at newlines by default, making it look like queries are faster than they are. Controlled in DBeaver settings.
+
+---
+
+## Why ANALYZE / VACUUM run on a psycopg SYNC connection, not the asyncpg pool
+
+**Added 2026-09-03.** Recorded because this decision has been questioned twice
+and its rationale lived only in a docstring, a one-line citation in an unrelated
+plan, and an aside in `issues/136`. It is easy to look like leftover code and it
+is not.
+
+### The decision
+
+`MaintenanceJob` runs ANALYZE and VACUUM (and the vector REINDEX) through
+`_make_sync_connection` — a short-lived **psycopg** connection with
+`autocommit=True` — offloaded via `asyncio.to_thread`. The asyncpg versions
+(`_async_run_tables`, `_async_reindex_concurrently`) exist only as a fallback
+for when no `postgresql_config` was supplied.
+
+The fork is `if self._pg_config:` at three sites (ANALYZE, VACUUM, REINDEX).
+`postgresql_config` IS passed in production (`vitalgraphapp_impl.py:546`), so
+**the sync path is what runs.** Verified 2026-09-03 from the Postgres log by
+fingerprint, not by reading the fork:
+
+    sync   psql.SQL("ANALYZE {}").format(psql.Identifier(t))  ->  ANALYZE "space_rdf_quad"
+    async  f"{command} {table}"                               ->  ANALYZE space_rdf_quad
+
+Every ANALYZE and VACUUM in the production log is quoted. That is psycopg's
+`Identifier`. There are no bare ones.
+
+### The stated reasons, and which one is actually load-bearing
+
+The docstring says: "so ANALYZE / VACUUM never touch the asyncpg pool or the
+event loop". That bundles two claims, and they are not equally strong.
+
+1. **Pool occupancy — this is the real one.** ANALYZE on the big quad table
+   measured **50,224 ms** on production. Holding a pooled connection for ~50 s
+   every cycle is one fewer connection for user queries for that whole time.
+2. **Event-loop blocking — weaker than it reads.** asyncpg is non-blocking;
+   `await conn.execute("ANALYZE ...")` yields rather than stalls. Whoever wrote
+   the async fallback appears to have thought the same — it sprinkles
+   `asyncio.sleep(0)` between tables, which would be pointless if the await
+   already yielded, and harmless if it did. The `to_thread` offload is cited as
+   prior art by `planning/planning_vector_geo/dedup_thread_offload_plan.md:41`
+   ("the same pattern used successfully for the ANALYZE/VACUUM thread-offload
+   fix"), and that doc's own problem — ~350 ms stalls from synchronous Redis —
+   IS genuine blocking. ANALYZE via asyncpg is not.
+
+A third benefit is incidental but turned out to matter: a dedicated connection
+can carry its own fences at CONNECT time, which is exactly what `issues/136`'s
+fix does (`maintenance_conn_options`).
+
+### `issues/136` endorsed keeping it
+
+> The docstring ... explains why it is a *separate* connection ... **which is
+> correct and was the right call.** What it does not do is notice that a fresh
+> connection is not a fresh *configuration*.
+
+136 fixed the configuration and deliberately kept the separate connection. The
+RDS parameter group sets `statement_timeout = 60000` database-wide, so a fresh
+connection inherits a read-shaped fence; before the fix, **91% of VACUUMs were
+cancelled while the job logged "VACUUM complete" each time.**
+
+### If sync is removed, what MUST be preserved
+
+The thread is not the point. The isolation and the fences are.
+
+* **Keep ANALYZE/VACUUM off the shared pool** — a small dedicated asyncpg pool,
+  or accept the ~50 s occupancy knowingly.
+* **Keep the fences.** Either `maintenance_conn_options` applied at pool init,
+  or `maintenance_timeouts` at each call site — the latter landed in `164d9de`
+  and now covers the async fallbacks too.
+
+Removing sync without one of those reopens `issues/136` silently, which is the
+failure mode that took months to notice the first time: the job reports success
+while the work is cancelled.
+
+### Related
+
+- `issues/136` — the fence that was inherited and not cleared
+- `issues/149` — the same class of error one layer up: a probe given the
+  maintenance budget while the repair it gates was left on the read path's
+- `planning/planning_vector_geo/dedup_thread_offload_plan.md` — the offload
+  pattern this is cited as prior art for
