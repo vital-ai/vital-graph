@@ -339,8 +339,20 @@ async def resync_edge_table(conn, space_id: str) -> int:
     return inserted
 
 
-async def backfill_edge_table(conn, space_id: str) -> int:
+async def backfill_edge_table(conn, space_id: str,
+                              timeout: float | None = None) -> int:
     """Add only the MISSING edges to {space}_edge — no TRUNCATE, no rebuild.
+
+    `timeout` is asyncpg's CLIENT-side bound and is not optional in practice.
+    The pool is built with `command_timeout=60`, which fires in the DRIVER;
+    `maintenance_timeouts` raises `statement_timeout` with SET, which is the
+    SERVER half and cannot touch it. A full-space backfill on a 45M-quad space
+    runs well past 60s, so without this the repair is cancelled by the client
+    every cycle and the edge table stays short forever.
+
+    That is not hypothetical — it is exactly `issues/149`, where the slot-sort
+    backfill had never once run for the same reason, and this is its sibling
+    path. Caller must ALSO raise the server fences.
 
     Unlike resync_edge_table (which TRUNCATEs and holds ACCESS EXCLUSIVE on the
     edge table for the whole rebuild, blocking edge-rewrite queries), this is a
@@ -374,18 +386,23 @@ async def backfill_edge_table(conn, space_id: str) -> int:
           AND dst.predicate_uuid = $2
         ORDER BY src.subject_uuid, src.context_uuid
         ON CONFLICT DO NOTHING
-    """, _EDGE_SRC_UUID, _EDGE_DST_UUID, _VITALTYPE_UUID)
+    """, _EDGE_SRC_UUID, _EDGE_DST_UUID, _VITALTYPE_UUID, timeout=timeout)
 
     inserted = int(result.split()[-1]) if result else 0
     if inserted:
         # ANALYZE takes SHARE UPDATE EXCLUSIVE — does not block readers/writers.
-        await conn.execute(f"ANALYZE {t_edge}")
+        await conn.execute(f"ANALYZE {t_edge}", timeout=timeout)
     logger.info("backfill_edge_table(%s): %d rows inserted", space_id, inserted)
     return inserted
 
 
-async def edge_table_drift(conn, space_id: str) -> tuple[int, int]:
+async def edge_table_drift(conn, space_id: str,
+                           timeout: float | None = None) -> tuple[int, int]:
     """Return (expected_edges, edge_rows) — a cheap, fully-indexed drift signal.
+
+    Takes a CLIENT-side `timeout` for the same reason the backfill it gates
+    does (`issues/149`): a probe that dies in the driver reports nothing, and a
+    repair gated on a probe that never completes never runs.
 
     expected_edges = DISTINCT (subject, context) among hasEdgeSource quads.
     edge_rows      = rows currently in {space}_edge.
@@ -435,13 +452,18 @@ async def edge_table_drift(conn, space_id: str) -> tuple[int, int]:
     t_quad = f"{space_id}_rdf_quad"
     expected = await conn.fetchval(
         f"SELECT count(DISTINCT (subject_uuid, context_uuid)) FROM {t_quad} "
-        f"WHERE predicate_uuid = $1", _EDGE_SRC_UUID)
-    edge_rows = await conn.fetchval(f"SELECT count(*) FROM {t_edge}")
+        f"WHERE predicate_uuid = $1", _EDGE_SRC_UUID, timeout=timeout)
+    edge_rows = await conn.fetchval(f"SELECT count(*) FROM {t_edge}", timeout=timeout)
     return int(expected or 0), int(edge_rows or 0)
 
 
-async def edge_table_orphan_rate(conn, space_id: str, sample: int = 200) -> float:
+async def edge_table_orphan_rate(conn, space_id: str, sample: int = 200,
+                                 timeout: float | None = None) -> float:
     """Fraction of sampled edge rows that no longer correspond to any quad.
+
+    Carries a CLIENT-side `timeout` for the same reason as its siblings
+    (`issues/149`). This one decides backfill-vs-resync, so losing it silently
+    does not just delay a repair — it picks the wrong repair.
 
     `edge_table_drift` compares COUNTS, which cannot see the failure mode in
     issues/041: a space reloaded in place leaves an edge table that is a
@@ -483,9 +505,10 @@ async def edge_table_orphan_rate(conn, space_id: str, sample: int = 200) -> floa
             WHERE q.subject_uuid = s.edge_uuid AND q.predicate_uuid = $1
               AND q.context_uuid = s.context_uuid
         )
-        """, _EDGE_SRC_UUID)
+        """, _EDGE_SRC_UUID, timeout=timeout)
     checked = await conn.fetchval(
-        f"SELECT count(*) FROM (SELECT 1 FROM {t_edge} LIMIT {int(sample)}) s")
+        f"SELECT count(*) FROM (SELECT 1 FROM {t_edge} LIMIT {int(sample)}) s",
+        timeout=timeout)
     if not checked:
         return 0.0
     return float(orphans or 0) / float(checked)

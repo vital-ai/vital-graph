@@ -1475,7 +1475,8 @@ class MaintenanceJob:
                         if not await probe_data_changed(
                                 conn, space_id, "edge_table_drift"):
                             continue
-                        src_quads, edge_rows = await edge_table_drift(conn, space_id)
+                        src_quads, edge_rows = await edge_table_drift(
+                            conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
                         mark_probe_converged(
                             space_id, "edge_table_drift",
                             (src_quads - edge_rows) <= EDGE_DRIFT_MIN_ABS)
@@ -1485,7 +1486,8 @@ class MaintenanceJob:
                     # disjoint set, every count check green and every frame
                     # traversal returning nothing (issues/041). Only a
                     # referential probe sees that.
-                    orphan_rate = await edge_table_orphan_rate(conn, space_id)
+                    orphan_rate = await edge_table_orphan_rate(
+                        conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
                     # Capability, NOT drift. A NULL edge_type_uuid means the row
                     # will not match a typed traversal; it does not mean the row
                     # is stale. The usual cause is simply that the column was
@@ -1614,7 +1616,8 @@ class MaintenanceJob:
                 # sit at 40k rows against a 2.83M target while its probe
                 # reported the gap correctly every cycle.
                 async with maintenance_timeouts(conn):
-                    inserted = await backfill_edge_table(conn, worst_space)
+                    inserted = await backfill_edge_table(
+                        conn, worst_space, timeout=PROBE_CLIENT_TIMEOUT_S)
                     removed = await cleanup_orphan_edges(conn, worst_space)
                 # The orphan target is usually a DIFFERENT space, because the
                 # two problems are selected on different evidence.
@@ -1657,7 +1660,8 @@ class MaintenanceJob:
                         if not await probe_data_changed(
                                 conn, space_id, "frame_entity_drift"):
                             continue
-                        expected, actual = await frame_entity_drift(conn, space_id)
+                        expected, actual = await frame_entity_drift(
+                            conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
                         mark_probe_converged(
                             space_id, "frame_entity_drift",
                             (expected - actual) <= EDGE_DRIFT_MIN_ABS)
@@ -1709,7 +1713,8 @@ class MaintenanceJob:
         try:
             async with self._pool.acquire() as conn:
                 async with maintenance_timeouts(conn):
-                    inserted = await backfill_frame_entity_table(conn, worst_space)
+                    inserted = await backfill_frame_entity_table(
+                        conn, worst_space, timeout=PROBE_CLIENT_TIMEOUT_S)
             result = {"space_id": worst_space, "drift": worst_drift, "rows_added": inserted}
             if self._tracker and process_id:
                 await self._tracker.mark_completed(process_id, result_details=result)

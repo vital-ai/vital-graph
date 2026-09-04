@@ -230,6 +230,99 @@ def test_every_repair_runs_under_the_maintenance_budget():
         f"issues/149: {unwrapped}")
 
 
+def test_every_long_probe_and_repair_gets_a_CLIENT_side_timeout():
+    """The OTHER half of `issues/149`, and the half that actually bit.
+
+    `maintenance_timeouts` raises `statement_timeout` and `lock_timeout` with
+    SET. Those are SERVER fences. The pool is built with `command_timeout=60`,
+    which fires in the DRIVER and cannot be affected by any SET — so a call that
+    runs past 60s is cancelled client-side no matter how generous the server
+    budget is, and `test_every_repair_runs_under_the_maintenance_budget` above
+    passes while the work still never completes.
+
+    That is precisely how the slot-sort backfill "had never once run": the probe
+    gating it took 97-133s, the driver gave up at 60s every cycle, and the
+    diagnosis looked healthy.
+
+    Found again 2026-09-04 in the EDGE path — `edge_table_drift`,
+    `edge_table_orphan_rate` and `backfill_edge_table` all took no client
+    timeout, so the repair for `issues/041`'s ~25% shortfall could not finish on
+    a production-sized space either. Same defect, sibling module, four months
+    later. Hence this test rather than another one-off fix.
+
+    Scoped to calls that can run long. A fast indexed count does not need it.
+    """
+    import inspect
+    lines = inspect.getsource(M).split("\n")
+    # Anything that scans or writes proportional to the SPACE, not to a batch.
+    long_calls = (
+        "backfill_entity_slot_sort_batch(", "backfill_edge_table(",
+        "backfill_frame_entity_table(", "entity_slot_sort_coverage(",
+        "entity_slot_sort_all_types(", "edge_table_drift(",
+        "edge_table_orphan_rate(", "frame_entity_drift(",
+    )
+    missing = []
+    for i, line in enumerate(lines):
+        code = line.split("#")[0]
+        for c in long_calls:
+            if c in code and "await " in code or (c in code and "await" in
+                                                  "\n".join(lines[max(0, i - 2):i + 1])):
+                # The call may wrap over several lines; read to its closing paren.
+                window = "\n".join(lines[i:i + 6])
+                if "timeout=" not in window:
+                    missing.append((i + 1, c))
+                break
+    assert not missing, (
+        "these run proportional to the space and would be cancelled by the "
+        "pool's 60s command_timeout, in the driver, whatever the server fence "
+        f"says — `issues/149`: {missing}")
+
+
+def test_no_maintenance_helper_uses_a_timeout_it_does_not_accept():
+    """The failure mode the call-site test above cannot see.
+
+    Threading a client timeout is TWO edits — pass it at the call, accept it in
+    the signature — and the call-site test only checks the first. Doing one
+    without the other produces a NameError at runtime, on the repair path, which
+    is the least observable place to put one.
+
+    Caught exactly that on 2026-09-04: `frame_entity_drift` and
+    `backfill_frame_entity_table` were given `timeout=timeout` in their queries
+    while a failed edit left both signatures unchanged. Every test still passed.
+
+    Scans the package rather than a list, because the next one will be in a
+    module nobody thought to enumerate.
+    """
+    import ast
+    import pathlib
+
+    root = pathlib.Path(M.__file__).resolve().parents[1]
+    offenders = []
+    for path in root.rglob("*.py"):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
+                continue
+            if node.args.kwarg:          # **kwargs can carry it
+                continue
+            names = ([a.arg for a in node.args.args]
+                     + [a.arg for a in node.args.kwonlyargs])
+            if "timeout" in names:
+                continue
+            loads = any(isinstance(x, ast.Name) and x.id == "timeout"
+                        and isinstance(x.ctx, ast.Load) for x in ast.walk(node))
+            stores = any(isinstance(x, ast.Name) and x.id == "timeout"
+                         and isinstance(x.ctx, ast.Store) for x in ast.walk(node))
+            if loads and not stores:
+                offenders.append(f"{path.name}:{node.lineno} {node.name}")
+    assert not offenders, (
+        "these reference `timeout` without accepting or binding it — a "
+        f"NameError the moment the branch runs: {offenders}")
+
+
 def test_watches_are_not_given_the_maintenance_budget():
     """The inverse error. A watch on a 15-minute budget scans for 15 minutes."""
     import inspect

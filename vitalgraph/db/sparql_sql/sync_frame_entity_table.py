@@ -402,7 +402,8 @@ async def resync_frame_entity_table(conn, space_id: str) -> int:
     return inserted
 
 
-async def backfill_frame_entity_table(conn, space_id: str) -> int:
+async def backfill_frame_entity_table(
+        conn, space_id: str, timeout: float | None = None) -> int:
     """Add only the MISSING frame_entity rows — no TRUNCATE, no rebuild.
 
     The non-blocking counterpart of resync_frame_entity_table (which TRUNCATEs
@@ -441,11 +442,11 @@ async def backfill_frame_entity_table(conn, space_id: str) -> int:
         HAVING (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $3))[1] IS NOT NULL
            AND (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $4))[1] IS NOT NULL
         ON CONFLICT DO NOTHING
-    """, st_uuid, sv_uuid, src_uuid, dst_uuid, _VT_UUID)
+    """, st_uuid, sv_uuid, src_uuid, dst_uuid, _VT_UUID, timeout=timeout)
 
     inserted = int(result.split()[-1]) if result else 0
     if inserted:
-        await conn.execute(f"ANALYZE {t_fe}")
+        await conn.execute(f"ANALYZE {t_fe}", timeout=timeout)
     logger.info("backfill_frame_entity_table(%s): %d rows inserted", space_id, inserted)
     return inserted
 
@@ -526,7 +527,9 @@ async def frame_entity_orphan_rate(conn, space_id: str, sample: int = 200) -> fl
     return float(orphans or 0) / float(checked)
 
 
-async def frame_entity_drift(conn, space_id: str) -> tuple[int, int]:
+async def frame_entity_drift(
+        conn, space_id: str,
+        timeout: float | None = None) -> tuple[int, int]:
     """Return (expected_rows, actual_rows) — a cheap drift signal for frame_entity.
 
     expected_rows = min(#source-entity slots, #dest-entity slots): an upper bound
@@ -538,10 +541,11 @@ async def frame_entity_drift(conn, space_id: str) -> tuple[int, int]:
     t_quad = f"{space_id}_rdf_quad"
     src_slots = await conn.fetchval(
         f"SELECT count(*) FROM {t_quad} WHERE predicate_uuid = $1 AND object_uuid = $2",
-        _ST_UUID, _SRC_UUID)
+        _ST_UUID, _SRC_UUID, timeout=timeout)
     dst_slots = await conn.fetchval(
         f"SELECT count(*) FROM {t_quad} WHERE predicate_uuid = $1 AND object_uuid = $2",
-        _ST_UUID, _DST_UUID)
-    fe_rows = await conn.fetchval(f"SELECT count(*) FROM {t_fe}")
+        _ST_UUID, _DST_UUID, timeout=timeout)
+    fe_rows = await conn.fetchval(f"SELECT count(*) FROM {t_fe}",
+                                  timeout=timeout)
     expected = min(int(src_slots or 0), int(dst_slots or 0))
     return expected, int(fe_rows or 0)
