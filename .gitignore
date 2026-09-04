@@ -273,6 +273,11 @@ archive/frontend-old/
 **/*.yml
 !docker-compose.yml
 !docker-compose.test.yml
+# Holds no secrets: a service name, a mount path, and a volume name that
+# comes from VGTEST_PGDATA in .env (which stays ignored). It documents the
+# volume-recovery procedure the deploy runbook points at, so it needs to
+# reach other clones rather than living on one machine.
+!docker-compose.test.persist.yml
 !.github/**/*.yml
 !.github/**/*.yaml
 

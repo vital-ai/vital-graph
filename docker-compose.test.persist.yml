@@ -1,0 +1,58 @@
+# docker-compose.test.persist.yml
+#
+# Optional override for docker-compose.test.yml that persists the test
+# PostgreSQL data in a named volume so a large dataset (e.g. a prod dump)
+# survives across `down`/`up` cycles — avoiding a multi-GB reload every run.
+#
+# The base compose is deliberately volume-less ("clean DB every run") for
+# reproducible functional tests. Layer this file ONLY when you want to reuse
+# a loaded database across a series of test runs:
+#
+#   # first run — loads data once, persists it
+#   docker compose -f docker-compose.test.yml -f docker-compose.test.persist.yml up -d --build
+#   #   ... load data (pg_restore / RDF import) ...
+#
+#   # subsequent runs — data is still there, no reload
+#   docker compose -f docker-compose.test.yml -f docker-compose.test.persist.yml up -d
+#
+#   # wipe the persisted data when you want a clean slate
+#   docker compose -f docker-compose.test.yml -f docker-compose.test.persist.yml down -v
+#
+# The run scripts expose this via the --persist / --reset-data flags.
+#
+# Note: the postgres:18 image declares VOLUME /var/lib/postgresql (PGDATA is
+# the 18/docker subdir underneath). Mounting the named volume at that parent
+# path makes one volume own all PG state and avoids a stray anonymous volume.
+# init-extensions.sql (/docker-entrypoint-initdb.d) runs only on first init
+# (empty volume); the created extensions then persist in the volume.
+
+name: vg-test
+
+# RECOVERING AN EXISTING STACK. The base compose mounts NO named volume, but
+# the image's VOLUME directive means PGDATA still lands in an ANONYMOUS volume.
+# Layering this file onto a stack that was started WITHOUT it therefore does not
+# "add persistence" to the running data — it swaps postgres onto a DIFFERENT
+# volume, and the loaded fixtures appear to vanish. They are not deleted, only
+# orphaned, and can be reattached by name:
+#
+#   docker system df -v | sort -k3 -hr | head        # find the large volume
+#   docker run --rm -v <name>:/v:ro alpine ls /v/18/docker/base   # confirm it is PGDATA
+#   echo 'VGTEST_PGDATA=<name>' >> .env              # pin it (gitignored)
+#
+# `VGTEST_PGDATA` exists for exactly that: it lets this overlay adopt an
+# already-populated volume instead of forcing a multi-hour reload. Unset, it
+# defaults to the normal named volume, which is what a fresh setup wants.
+#
+# Adopting a volume Compose did not create logs "already exists but was not
+# created by Docker Compose. Use `external: true`". That warning is EXPECTED
+# here and is safe to ignore: the existing volume is used as-is. `external: true`
+# is deliberately not set, because it would break the fresh-setup path, where the
+# volume is supposed to be created on first use.
+services:
+  postgres:
+    volumes:
+      - vgtest_pgdata:/var/lib/postgresql
+
+volumes:
+  vgtest_pgdata:
+    name: ${VGTEST_PGDATA:-vgtest_pgdata}
