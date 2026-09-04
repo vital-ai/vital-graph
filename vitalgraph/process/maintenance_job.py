@@ -14,6 +14,7 @@ Freshness thresholds (skip if ALL true):
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 import platform
@@ -36,59 +37,13 @@ ANALYZE_STALENESS_MINUTES = 10       # skip if analyzed within this many minutes
 VACUUM_DEAD_THRESHOLD = 10_000       # skip if fewer dead tuples
 VACUUM_STALENESS_MINUTES = 30        # skip if vacuumed within this many minutes
 
-# Stats coverage audit (issues/141). For a predicate whose `pruned` flag is
-# FALSE, absence of a pair means zero — so its recorded pairs must sum to its
-# exact `rdf_pred_stats` total. Anything far below that is the issues/062
-# corruption: pairs removed while the flag still says they were not.
-#
-# Measured on production 2026-09-02, all with pruned = FALSE:
-#     hasKGGraphURI     6,469,966 quads ->     6,758 recorded   0.10%
-#     hasFrameGraphURI  5,913,173        ->     6,210           0.11%
-#     hasKGEntityType      78,993        ->        92           0.12%
-#     hasObjectModificationDateTime 79,608 ->  79,608         100.00%  (healthy)
-#
-# 0.5 sits far from both populations. The floor on size keeps small predicates,
-# whose pairs are singletons the prune legitimately removes, out of the audit.
-STATS_COVERAGE_RATIO = 0.5
-STATS_COVERAGE_MIN_PREDICATE_ROWS = 10_000
-
-# `pruned` licenses ABSENCE, not WRONGNESS (issues/142).
-#
-# A pair whose true count exceeds STATS_MAX_ROW_COUNT is evicted by the prune
-# and never written by the resync (`HAVING COUNT(*) <= 200000`), so it is
-# SUPPOSED to be absent — the flag tells readers that absence is not zero, and
-# they fall through to the bounded on-demand count, which saturates and makes
-# the semi-join gate decline.
-#
-# What breaks is a pair in that class being PRESENT and low. The flag then does
-# exactly what it promises and is powerless: the writer takes the UPDATE-only
-# path and faithfully increments a row that should not exist. Measured on
-# production 2026-09-02, every oversized pair in the space was in that state:
-#
-#     recorded   actual      object
-#        1,503   2,729,244   Edge_hasKGSlot
-#          988   1,791,677   KGT...
-#          257     473,405   Edge_hasEntityKGFrame
-#          165     292,438   MessageFrame / MsgSender / MsgTimestamp
-#
-# The count is BOUNDED at the cap + 1. This asks one question -- "is the true
-# count above STATS_MAX_ROW_COUNT?" -- and an exact count answers it no better
-# than a saturating one while costing vastly more. Shipped unbounded and
-# measured on production at **14,610 ms per candidate** against a 2.7M-row pair,
-# times STATS_OVERSIZED_SAMPLE candidates: up to ~175s of quad-table scanning
-# per cycle, which is what pushed the integrity check into TimeoutError. The
-# same saturating-count pattern is already used by the semi-join gate
-# (`_PAIR_COUNT_CAP`) for exactly this reason.
-#
-# Understated by up to 1,800x, and read by the join reorder as a rare leaf.
-# Present-and-low is the one state that is never correct for this class, so
-# the repair is to DELETE the row: absence plus the flag is the intended state
-# and the one the readers handle.
-STATS_OVERSIZED_SAMPLE = 12
-
-# The prune's own window bound, imported rather than restated so the audit and
-# the prune cannot drift about what "oversized" means.
-from ..db.sparql_sql.sync_stats_tables import STATS_MAX_ROW_COUNT  # noqa: E402
+# The stats coverage audit, the `pruned` semantics and the oversized-pair
+# sample went with `_run_stats_integrity` and `_run_stats_prune`
+# (`issues/142`). There is nothing left to audit: `recompute_stats_tables`
+# derives the table from the quads in one statement, so it cannot disagree
+# with them, and absence means exactly one thing. STATS_COVERAGE_RATIO,
+# STATS_OVERSIZED_SAMPLE and the STATS_MAX_ROW_COUNT import all described a
+# world with two writers and a flag licensing absence; none of it survives.
 
 # Timeouts for the MAINTENANCE connections, which are not the read path's.
 #
@@ -314,6 +269,86 @@ def should_run_watch(name: str, space_id: str,
     return True
 
 
+# --- Per-space recompute schedule, phase-offset by space id ------------------
+#
+# The recompute is a GROUP BY over the whole quad table. Running several at once
+# is safe from a LOCKING standpoint -- the tables are per-space and TRUNCATE
+# takes its AccessExclusiveLock on one space only -- but they share a buffer
+# cache, and that is the resource the P1 was about: prod's working set (11.21GB)
+# already exceeds shared_buffers (7.69GB), so N concurrent full scans evict the
+# read path's cache N times faster.
+#
+# So the spaces are not coordinated and not queued. Each gets its OWN schedule,
+# running on a long interval with a start time offset by a hash of its space id.
+# Independent schedules spread across the interval rarely coincide, which gets
+# the spread without a central round-robin, a queue, or a concurrency limit --
+# and nothing needs to know how many spaces there are.
+#
+# THE HASH MUST BE STABLE ACROSS PROCESSES. Python's built-in `hash()` is salted
+# per interpreter (PYTHONHASHSEED), so two instances would compute different
+# offsets for the same space and the offsets would move on every restart --
+# which is precisely the clustering this exists to avoid. blake2b is stable.
+#
+# WALL CLOCK, not `time.monotonic`, unlike `should_run_watch` above. A phase
+# offset is only meaningful against a shared epoch, and monotonic's origin is
+# arbitrary per process. The cost is that a clock adjustment can make a space
+# run twice or skip an interval; a recompute is idempotent and the next one is
+# an interval away, so that is the cheaper failure.
+STATS_RECOMPUTE_INTERVAL_S = float(
+    os.getenv("VITALGRAPH_STATS_RECOMPUTE_INTERVAL_S", "3600"))
+
+# Wall-clock a cycle will spend recomputing before deferring the rest. Due
+# spaces that do not fit keep their slot and are picked up next cycle, so this
+# bounds a cycle without dropping work. Deferrals are LOGGED: a silent cap reads
+# as "everything was covered" when it was not.
+STATS_RECOMPUTE_CYCLE_BUDGET_S = float(
+    os.getenv("VITALGRAPH_STATS_RECOMPUTE_CYCLE_BUDGET_S", "120"))
+
+_recompute_slot: Dict[str, int] = {}
+
+
+def recompute_phase_offset(space_id: str, interval_s: float) -> float:
+    """Where in the interval this space runs, in [0, interval_s).
+
+    Deterministic in the space id alone, so every instance and every restart
+    agrees without any shared state.
+    """
+    digest = hashlib.blake2b(space_id.encode("utf-8"), digest_size=8).digest()
+    return (int.from_bytes(digest, "big") % 10_000_000) / 10_000_000 * interval_s
+
+
+def _recompute_slot_of(space_id: str, interval_s: float, now: float) -> int:
+    return int((now - recompute_phase_offset(space_id, interval_s)) // interval_s)
+
+
+def stats_recompute_due(space_id: str, interval_s: Optional[float] = None,
+                        now: Optional[float] = None) -> bool:
+    """True when *space_id* has entered a new interval since it last ran.
+
+    Does NOT consume the slot -- `mark_stats_recompute_done` does. They are
+    separate because a due space can be deferred by the cycle budget, and a
+    deferred space has to stay due or it waits a whole interval for work it was
+    already scheduled for.
+    """
+    iv = STATS_RECOMPUTE_INTERVAL_S if interval_s is None else interval_s
+    t = time.time() if now is None else now
+    last = _recompute_slot.get(space_id)
+    return last is None or _recompute_slot_of(space_id, iv, t) != last
+
+
+def mark_stats_recompute_done(space_id: str, interval_s: Optional[float] = None,
+                              now: Optional[float] = None) -> None:
+    """Record that this space has been handled for its current interval."""
+    iv = STATS_RECOMPUTE_INTERVAL_S if interval_s is None else interval_s
+    t = time.time() if now is None else now
+    _recompute_slot[space_id] = _recompute_slot_of(space_id, iv, t)
+
+
+def reset_stats_recompute_schedule() -> None:
+    """Test hook: forget every space's schedule."""
+    _recompute_slot.clear()
+
+
 # --- issues/150: an O(graph) probe must not run when nothing changed ---------
 #
 # `entity_slot_sort_drift` computes `expected` with the full unseeded
@@ -525,15 +560,10 @@ class MaintenanceJob:
             if graphreg_result:
                 summary["graph_registration"] = graphreg_result
 
-            # --- Stats integrity (wrong counts => wrong plans, silently) ---
-            stats_int_result = await self._run_stats_integrity(list(stats.keys()))
-            if stats_int_result:
-                summary["stats_integrity"] = stats_int_result
-
-            # --- Stats prune (bound rdf_stats to the reorder window) ---
-            stats_prune_result = await self._run_stats_prune(list(stats.keys()))
-            if stats_prune_result:
-                summary["stats_prune"] = stats_prune_result
+            # --- Stats: ONE recompute, replacing integrity + prune + rebuild ---
+            stats_result = await self._run_stats_recompute(list(stats.keys()))
+            if stats_result:
+                summary["stats_recompute"] = stats_result
 
             # --- Value histograms (rebuild the worst-drifted space) ---
             vstats_result = await self._run_value_stats_refresh(list(stats.keys()))
@@ -619,8 +649,10 @@ class MaintenanceJob:
                 ("entity_slot_sort_integrity", self._run_entity_slot_sort_integrity),
                 ("grouping_self_link", self._run_grouping_self_link_check),
                 ("graph_registration", self._run_graph_registration_check),
-                ("stats_integrity", self._run_stats_integrity),
-                ("stats_prune", self._run_stats_prune),
+                # Forced: an explicit trigger must not be declined by the
+                # per-space schedule (see `_run_stats_recompute`).
+                ("stats_recompute",
+                 lambda ids: self._run_stats_recompute(ids, force=True)),
             ):
                 try:
                     result = await phase(one)
@@ -1134,272 +1166,153 @@ class MaintenanceJob:
                 continue
         return None
 
-    async def _run_stats_integrity(self, space_ids: List[str]) -> Optional[Dict]:
-        """Catch rdf_stats counts that have gone wrong, and rebuild that space.
+    async def _run_stats_recompute(self, space_ids: List[str],
+                                   force: bool = False) -> Optional[Dict]:
+        """Rebuild `rdf_stats` from the quads. Replaces integrity + prune + rebuild.
 
-        A wrong count does not produce a wrong answer, it produces a wrong PLAN,
-        so nothing about the result reveals it. `semijoin._selective_enough`
-        divides the probe's match count by the anchor's candidate count: with
-        the anchor understated the gate takes a per-row probe over a set-based
-        join and the query stays correct while running orders of magnitude
-        slower. Found on a 5.1M-quad space only because someone profiled a slow
-        endpoint — (rdf:type, Edge_hasKGSlot) stored 37 against 304,859 actual,
-        269ms against 33ms once repaired.
+        `planning/planning_performance/rdf_stats_recompute_not_accumulate_plan.md`.
 
-        TWO checks, because sampling alone is biased against the failure it
-        exists to catch (`issues/141`).
+        There is nothing to audit, prune or repair any more: the table is
+        derived in one statement, bounded by a LIMIT, with absence meaning
+        exactly one thing. The three steps this replaces existed to manage an
+        accumulator that could not validate itself and, under normal update
+        churn, ratcheted to zero (`issues/142`).
 
-        1. **Coverage, per predicate.** For a predicate whose `pruned` flag is
-           FALSE, absence of a pair MEANS zero — so its recorded pairs must sum
-           to its exact `rdf_pred_stats` total. One grouped aggregate over a
-           small table joined to a 24-row one; no sampling and no bias, because
-           it does not care where a wrong row sorts.
+        CHANGE-GATED. A recompute over the whole quad table is a full scan, so
+        it obeys `maintenance_incremental_only_plan.md`'s category-2 rule: it
+        runs only when quads were written, and it is cheaper than what it
+        replaces (a resync at 19.6-49.0 s PLUS a prune PLUS an audit PLUS an
+        oversized repair, every cycle). Measured at 13-20 s across three
+        production spaces, flat in quad count.
 
-           Deliberately NOT a global `sum(row_count)` against the quad count:
-           the prune removes singletons and caps per predicate, so a healthy
-           pruned space legitimately totals a fraction of a percent and that
-           check would rebuild every cycle. The `pruned` flag is what makes the
-           per-predicate form sound — it excludes exactly the predicates whose
-           absence is expected.
+        SCHEDULE-GATED TOO, per space and independently. Each space runs on its
+        own long interval, phase-offset by a hash of its space id, so the spaces
+        spread themselves across the interval instead of taking turns in a
+        queue. Two gates, in cost order: the schedule is free, the change probe
+        is one `pg_stat` read, the recompute is the scan.
 
-        2. **Sampling** the largest recorded pairs, as before, which still
-           catches overstatement.
-
-        Sampling was the only check, and the corruption makes recorded values
-        LOW: a pair that collapsed from 2,727,156 to 80 sorts to the BOTTOM of
-        `ORDER BY row_count DESC`, exactly where a LIMIT 3 never looks. Raising
-        SAMPLE buys more tickets in the same lottery instead of removing the
-        bias.
-
-        Runs BEFORE the prune, deliberately. The prune removes pairs and flags
-        their predicates, so auditing after it would be reading a table that was
-        just rewritten — and one space per cycle is already the pattern here.
+        This used to do at most ONE space per cycle -- it returned after the
+        first space that actually recomputed. That bounded the cycle, but it
+        also meant N changed spaces took N cycles to cover regardless of how
+        cheap they were, and which space went first was an artefact of dict
+        order rather than anything about the space. Independent schedules give
+        the same bound in practice (they rarely coincide) without the queue.
+        `STATS_RECOMPUTE_CYCLE_BUDGET_S` is the backstop for when they do.
         """
-        from ..db.sparql_sql.sync_stats_tables import resync_stats_tables
+        from ..db.sparql_sql.sync_stats_tables import recompute_stats_tables
 
-        SAMPLE = 3
-        for space_id in space_ids:
-            try:
-                async with self._pool.acquire() as conn:
-                  async with maintenance_timeouts(conn):
-                    # Check 1: per-predicate coverage for UNPRUNED predicates.
-                    gap = await conn.fetchrow(f"""
-                        SELECT p.predicate_uuid,
-                               p.row_count                  AS pred_total,
-                               COALESCE(sum(s.row_count),0) AS pairs_sum
-                          FROM {space_id}_rdf_pred_stats p
-                          LEFT JOIN {space_id}_rdf_stats s
-                                 ON s.predicate_uuid = p.predicate_uuid
-                         WHERE NOT p.pruned AND p.row_count >= $1
-                         GROUP BY p.predicate_uuid, p.row_count
-                        HAVING COALESCE(sum(s.row_count),0) < p.row_count * $2
-                         LIMIT 1
-                    """, STATS_COVERAGE_MIN_PREDICATE_ROWS, STATS_COVERAGE_RATIO,
-                        timeout=PROBE_CLIENT_TIMEOUT_S)
-                    if gap is not None:
-                        logger.warning(
-                            "Stats coverage: %s predicate %s is unpruned but "
-                            "records %d of %d quads (%.2f%%) — rebuilding",
-                            space_id, gap["predicate_uuid"], gap["pairs_sum"],
-                            gap["pred_total"],
-                            100.0 * gap["pairs_sum"] / max(gap["pred_total"], 1))
-                        # The rebuild's own aggregate measured 19.6-49.0 s on
-                        # production against a 60 s command_timeout. Without
-                        # this it dies in the driver and the whole transaction
-                        # rolls back, leaving the stats exactly as corrupt as
-                        # before — `issues/148` one level down.
-                        await resync_stats_tables(
-                            conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
-                        return {"space_id": space_id, "rebuilt": True,
-                                "reason": "coverage",
-                                "pairs_sum": gap["pairs_sum"],
-                                "pred_total": gap["pred_total"]}
-
-                    # Check 2: pairs that must not be PRESENT at all.
-                    #
-                    # `WHERE NOT p.pruned` above is structurally blind to this
-                    # class — the flag is set, correctly, and the corruption is
-                    # a present row rather than a missing one. Sample the low
-                    # recorded values on heavily-pruned predicates and count
-                    # what they should be; anything above the cap is a row the
-                    # prune would have evicted, so delete it and let absence
-                    # plus the flag do their job.
-                    over = await conn.fetch(f"""
-                        WITH cand AS (
-                            SELECT s.predicate_uuid, s.object_uuid, s.row_count
-                              FROM {space_id}_rdf_stats s
-                              JOIN {space_id}_rdf_pred_stats p
-                                ON p.predicate_uuid = s.predicate_uuid
-                             WHERE p.pruned
-                               AND s.row_count < $1
-                             ORDER BY s.row_count ASC
-                             LIMIT $2)
-                        SELECT c.predicate_uuid, c.object_uuid, c.row_count,
-                               (SELECT count(*) FROM (
-                                  SELECT 1 FROM {space_id}_rdf_quad q
-                                   WHERE q.predicate_uuid = c.predicate_uuid
-                                     AND q.object_uuid = c.object_uuid
-                                   LIMIT {STATS_MAX_ROW_COUNT} + 1) lim) AS actual
-                          FROM cand c
-                    """, STATS_MAX_ROW_COUNT, STATS_OVERSIZED_SAMPLE,
-                        timeout=PROBE_CLIENT_TIMEOUT_S)
-
-                    bad_rows = [r for r in over
-                                if (r["actual"] or 0) > STATS_MAX_ROW_COUNT]
-                    if bad_rows:
-                        await conn.executemany(
-                            f"DELETE FROM {space_id}_rdf_stats "
-                            f"WHERE predicate_uuid = $1 AND object_uuid = $2",
-                            [(r["predicate_uuid"], r["object_uuid"])
-                             for r in bad_rows],
-                            timeout=PROBE_CLIENT_TIMEOUT_S)
-                        # ...AND SET THE FLAG. Deleting alone is not the repair
-                        # -- it is half of it, and the wrong half on its own.
-                        #
-                        # The comment at STATS_OVERSIZED_SAMPLE says "absence
-                        # plus the flag is the intended state"; the delete above
-                        # shipped without the flag (`issues/142`). Absence WITHOUT
-                        # it means ZERO to `sync_stats_after_insert`, so the next
-                        # write inserts a delta-only row over a pair holding
-                        # millions -- recreating the present-and-low state this
-                        # repair exists to remove, one cycle later. A repair that
-                        # re-creates the disease reads as a repair that never ran.
-                        await conn.execute(
-                            f"UPDATE {space_id}_rdf_pred_stats SET pruned = TRUE "
-                            f"WHERE predicate_uuid = ANY($1)",
-                            list({r["predicate_uuid"] for r in bad_rows}),
-                            timeout=PROBE_CLIENT_TIMEOUT_S)
-                        worst = max(bad_rows, key=lambda r: r["actual"])
-                        logger.warning(
-                            "Stats oversized: %s removed %d pair(s) that were "
-                            "present but above the %d cap — worst recorded %d "
-                            "against %d actual. Absence PLUS pruned=TRUE is the "
-                            "correct state; readers fall through to the bounded "
-                            "count.", space_id, len(bad_rows),
-                            STATS_MAX_ROW_COUNT, worst["row_count"],
-                            worst["actual"])
-                        return {"space_id": space_id, "reason": "oversized",
-                                "removed": len(bad_rows),
-                                "worst_recorded": worst["row_count"],
-                                "worst_actual": worst["actual"]}
-
-                    # Check 3: sampling, which only sees the high end.
-                    rows = await conn.fetch(
-                        f"SELECT predicate_uuid, object_uuid, row_count "
-                        f"FROM {space_id}_rdf_stats "
-                        f"ORDER BY row_count DESC LIMIT {SAMPLE}",
-                        timeout=PROBE_CLIENT_TIMEOUT_S)
-                    bad = None
-                    for r in rows:
-                        actual = await conn.fetchval(
-                            f"SELECT count(*) FROM {space_id}_rdf_quad "
-                            f"WHERE predicate_uuid = $1 AND object_uuid = $2",
-                            r["predicate_uuid"], r["object_uuid"],
-                            timeout=PROBE_CLIENT_TIMEOUT_S)
-                        if actual != r["row_count"]:
-                            bad = (r["row_count"], actual)
-                            break
-                    if bad is None:
-                        continue
-                    # One space per cycle, like every other step here.
-                    logger.warning(
-                        "Stats integrity: %s has a recorded pair of %d against "
-                        "%d actual — rebuilding", space_id, bad[0], bad[1])
-                    await resync_stats_tables(conn, space_id)
-                    return {"space_id": space_id, "stored": bad[0],
-                            "actual": bad[1], "rebuilt": True}
-            except Exception as exc:
-                # Same reason every step here is guarded: one `except` covers
-                # the whole cycle, so a throw would silently skip the prune,
-                # the histogram refresh, the reindex and the cleanup.
-                # WARNING, not DEBUG, and it names what stopped running.
-                #
-                # This one clause guards BOTH the coverage audit (`issues/141`)
-                # and the oversized-pair repair (`issues/142`), so catching it
-                # quietly disables the only two things that keep rdf_stats
-                # honest — and prod runs at INFO, so DEBUG is invisible.
-                #
-                # Observed 2026-09-02: every cycle logged
-                #
-                #     Stats integrity check skipped for <space>:
-                #     column p.pruned does not exist
-                #
-                # while the column demonstrably existed on every
-                # `*_rdf_pred_stats` table, in the only schema of the only
-                # database the service is configured for, and the running image
-                # contained the correct query. Whatever the cause, the audit and
-                # the repair had not run for as long as anyone had been looking,
-                # and nothing said so above DEBUG. That is the same shape as
-                # `issues/140` and `issues/144`, for the third time.
-                #
-                # `exc_info` because the message alone was not enough to
-                # diagnose it: the useful detail is which statement failed.
-                logger.warning(
-                    "Stats integrity check SKIPPED for %s (%s: %s) — neither "
-                    "the coverage audit nor the oversized-pair repair ran, so "
-                    "rdf_stats is unmonitored for this space this cycle",
-                    space_id, type(exc).__name__, exc, exc_info=True)
+        # Spaces run on INDEPENDENT hash-phased schedules, so "due" is a
+        # property of the space and its own clock, not of a position in a queue.
+        # Usually none or one is due; occasionally two coincide, and that is
+        # fine — they are separate tables and the schedules spread the rest.
+        # FORCE bypasses both gates. `trigger_maintenance` is documented as
+        # bypassing freshness checks, and an operator who names a space and gets
+        # silence has been told the opposite of the truth — the schedule would
+        # simply decline until that space's next slot, up to an interval away.
+        # This is why the parameter exists rather than the caller pre-seeding
+        # the schedule.
+        due: List[str] = list(space_ids) if force else []
+        for sid in ([] if force else space_ids):
+            if sid in _recompute_slot:
+                if stats_recompute_due(sid):
+                    due.append(sid)
                 continue
-        return None
-
-    async def _run_stats_prune(self, space_ids: List[str]) -> Optional[Dict]:
-        """Prune the single space whose rdf_stats is most over its cap.
-
-        rdf_stats accumulates one row per (predicate, object) pair — at scale
-        dominated by row_count=1 singletons the join reorder never reads.
-        prune_stats_tables bounds it to the reorder's window without changing the
-        reorder's input (two DELETEs, cheap). One space per cycle. Uses the
-        pg_class.reltuples estimate to pick the target (no full COUNT).
-        """
-        from ..db.sparql_sql.sync_stats_tables import (
-            prune_stats_tables, STATS_KEEP_DEFAULT)
-
-        worst_space = None
-        worst_rows = 0.0
-        for space_id in space_ids:
+            # FIRST SIGHT this process. The schedule lives in memory, so every
+            # space would be "due" immediately after a restart — which is the
+            # clustering the phase offset exists to prevent, arriving by another
+            # door, and worst on a deploy that restarts several instances.
+            #
+            # So a space seen for the first time waits for its next boundary
+            # instead, UNLESS its stats table is empty. Empty is not stale: the
+            # join reorder has nothing at all to plan with, and waiting an
+            # interval for the first fill is a real cost. Stale-but-populated
+            # can wait, which is the whole premise of recomputing periodically.
             try:
                 async with self._pool.acquire() as conn:
-                    rows = await conn.fetchval(
-                        "SELECT reltuples FROM pg_class WHERE relname = $1",
-                        f"{space_id}_rdf_stats")
-            except Exception:
-                continue  # no rdf_stats table (e.g. non-KG) — skip
-            if rows and rows > STATS_KEEP_DEFAULT and rows > worst_rows:
-                worst_rows, worst_space = rows, space_id
-
-        # NOTE (issues/147): `reltuples` counts EVERY row, including the
-        # row_count=1 singletons this prune exists to remove. That is the right
-        # trigger -- singletons are exactly the bloat -- but it means the prune
-        # fires for a table whose READ WINDOW is already under the cap. The
-        # keep-query must therefore not shrink the window further just because
-        # it was invoked; it no longer does, and the two halves have to stay
-        # consistent. If this trigger is ever narrowed to count only the window,
-        # revisit the conditional rank cut in `prune_stats_tables`, which
-        # assumes it may be called when there is nothing to do.
-
-        if not worst_space:
+                    empty = not await conn.fetchval(
+                        f"SELECT EXISTS(SELECT 1 FROM {sid}_rdf_stats)")
+            except asyncpg.UndefinedTableError:
+                mark_stats_recompute_done(sid)
+                continue
+            except Exception as exc:
+                # Cannot tell — treat as populated. Guessing "empty" here would
+                # make an unreachable database produce the herd.
+                #
+                # WARNING, not DEBUG. Production runs at INFO, and this is a
+                # repair step degrading: the space now waits a whole interval
+                # before its first recompute, and if its stats really were empty
+                # the join reorder plans on nothing for that interval. That is
+                # `issues/144` exactly — a dead path whose only trace was
+                # invisible at the level production logs at.
+                logger.warning(
+                    "Stats recompute first-sight probe FAILED for %s (%s: %s) — "
+                    "cannot tell whether rdf_stats is empty, so it waits for "
+                    "its next scheduled slot instead of running now",
+                    sid, type(exc).__name__, exc)
+                mark_stats_recompute_done(sid)
+                continue
+            if empty:
+                due.append(sid)
+            else:
+                mark_stats_recompute_done(sid)
+        if not due:
             return None
 
-        # Guarded for the reason this cycle documents about itself: one
-        # `except` covers the whole run, so a throw here silently skips every
-        # step after it — and the completion line then reports those steps as
-        # None, which reads exactly like a cycle that had nothing to do. The
-        # prune now rewrites the table (TRUNCATE plus re-insert) rather than
-        # deleting from it, so it briefly takes an exclusive lock and can lose
-        # a lock race. Failing to bound one stats table must not also cost the
-        # value-histogram refresh, the vector reindex and the cleanup.
-        try:
-            async with self._pool.acquire() as conn:
-                async with maintenance_timeouts(conn):
-                    kept = await prune_stats_tables(conn, worst_space)
-        except Exception as exc:
-            logger.warning("Stats prune failed for %s: %s — the table stays "
-                           "over its cap until the next cycle", worst_space, exc)
-            return {"space_id": worst_space, "est_before": int(worst_rows),
-                    "failed": f"{type(exc).__name__}: {exc}"}
-        result = {"space_id": worst_space, "est_before": int(worst_rows), "kept": kept}
-        logger.info("Stats prune: %s ~%d → %d rows", worst_space, int(worst_rows), kept)
-        return result
+        started = time.monotonic()
+        done: List[Dict] = []
+        for i, space_id in enumerate(due):
+            # Budget checked BEFORE starting, never mid-recompute: a partial
+            # recompute is not a thing — it is one transaction — so the choice
+            # is to start it or not. The unstarted ones keep their slot and stay
+            # due, so nothing is dropped.
+            if done and (time.monotonic() - started) > STATS_RECOMPUTE_CYCLE_BUDGET_S:
+                logger.info(
+                    "Stats recompute DEFERRED for %d space(s) (%s) — the "
+                    "%.0fs cycle budget went on %d space(s). They keep their "
+                    "slot and run next cycle; this is a deferral, not a skip",
+                    len(due) - i, ", ".join(due[i:][:5]),
+                    STATS_RECOMPUTE_CYCLE_BUDGET_S, len(done))
+                break
+            try:
+                async with self._pool.acquire() as conn:
+                    async with maintenance_timeouts(conn):
+                        if not force and not await probe_data_changed(
+                                conn, space_id, "stats_recompute"):
+                            # Nothing written since the last one, so the table is
+                            # already right. Consume the slot: re-deciding this
+                            # every cycle is what the schedule exists to stop.
+                            mark_stats_recompute_done(space_id)
+                            continue
+                        result = await recompute_stats_tables(
+                            conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
+            except asyncpg.UndefinedTableError:
+                mark_stats_recompute_done(space_id)
+                continue  # space has no stats tables (e.g. non-KG) — skip
+            except Exception as exc:
+                # NOT silent. This is now the ONLY thing keeping rdf_stats
+                # correct; if it stops working there is no audit behind it to
+                # notice (`issues/148` is the record of what a quiet failure
+                # here costs).
+                logger.warning(
+                    "Stats recompute FAILED for %s (%s: %s) — the join reorder "
+                    "will plan on whatever is currently in rdf_stats until the "
+                    "next cycle",
+                    space_id, type(exc).__name__, exc, exc_info=True)
+                mark_probe_converged(space_id, "stats_recompute", False)
+                # NOT marked done: a failure must stay due so the next cycle
+                # retries it. Marking it here would turn one transient error
+                # into a whole interval of planning on a stale table.
+                continue
+            mark_probe_converged(space_id, "stats_recompute", True)
+            mark_stats_recompute_done(space_id)
+            done.append({"space_id": space_id, **result})
+        if not done:
+            return None
+        # Shape kept for one space so existing readers of this summary still
+        # work; `spaces` carries the rest.
+        return {**done[0], "spaces": [d["space_id"] for d in done]} \
+            if len(done) == 1 else {"spaces": [d["space_id"] for d in done],
+                                    "results": done}
 
     async def _run_value_stats_refresh(self, space_ids: List[str]) -> Optional[Dict]:
         """Rebuild the value histograms for the single worst-drifted space.
@@ -1848,6 +1761,42 @@ class MaintenanceJob:
             except Exception as exc:
                 log_probe_failure("entity_slot_sort_coverage", space_id, exc)
                 continue
+
+            # Record what the table covers, per entity type, for the FILTER path
+            # (`issues/161`). `fast_slot_filter` cannot compute this inline —
+            # measured 5,677ms for the table side against 31ms for the quad side
+            # — so the marker is maintained here, where both numbers are already
+            # being produced.
+            #
+            # From `entity_slot_sort_all_types`, not from `gaps`: `gaps` carries
+            # `HAVING in_table < of_type` and is EMPTY when everything is
+            # covered, so it can only ever record incompleteness. A marker that
+            # can never be set to complete would switch the fast path off
+            # permanently.
+            try:
+                from ..db.sparql_sql.sync_entity_slot_sort import (
+                    entity_slot_sort_all_types)
+                from ..db.sparql_sql.fast_slot_filter import (
+                    record_slot_sort_coverage)
+                async with self._pool.acquire() as conn:
+                    async with maintenance_timeouts(conn):
+                        for cov in await entity_slot_sort_all_types(
+                                conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S):
+                            await record_slot_sort_coverage(
+                                conn, space_id, cov["entity_type_uuid"],
+                                cov["in_table"], cov["of_type"])
+            except Exception as exc:
+                # Not silent, at WARNING. Failing to record is SAFE — an unset
+                # marker makes the filter path decline, which is slow and
+                # correct — but it is not benign: the shape it serves measured
+                # 13.9s against 46.9ms, so a marker that never gets written is a
+                # permanent performance cliff with no other symptom. DEBUG would
+                # hide it, production runs at INFO, and that is exactly how
+                # `issues/144` hid a dead repair path for months.
+                logger.warning("slot_sort_coverage not recorded for %s: %s — "
+                               "the slot-value filter path stays off for this "
+                               "space until it is", space_id, exc)
+
             for gap in gaps:
                 short = gap["of_type"] - gap["in_table"]
                 if (gap["ratio"] >= ENTITY_COVERAGE_MIN_RATIO
@@ -1870,7 +1819,8 @@ class MaintenanceJob:
         process_id = None
         if self._tracker:
             process_id = await self._tracker.create_process(
-                "entity_slot_sort_backfill", space_id=space_id)
+                "entity_slot_sort_backfill", process_subtype=space_id,
+                instance_id=self._instance_id, status="running")
             await self._tracker.mark_running(process_id, self._instance_id)
         try:
             async with self._pool.acquire() as conn:

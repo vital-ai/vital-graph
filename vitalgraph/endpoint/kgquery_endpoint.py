@@ -451,6 +451,67 @@ class KGQueriesEndpoint:
             offset=query_request.offset,
         )
 
+    async def _try_fast_slot_filter(self, backend, space_id: str, graph_id: str,
+                                    entity_criteria, query_request):
+        """The slot-value FILTER from `{space}_entity_slot_sort`, or None.
+
+        The sibling of `_try_fast_slot_sort` for the other half of what the
+        table answers. Measured on a 53.4M-quad space against the BGP path:
+        13.9s -> 46.9ms for the head value, and a two-criterion conjunction that
+        TIMED OUT at 55s -> 271ms. Both return the answer verified from the
+        quads (`issues/161`).
+
+        Gated on a recorded completeness marker, and this gate is the whole
+        reason the path is safe. A short table makes a SORT mis-order a page; it
+        makes a FILTER return a SUBSET that looks like a complete answer, with a
+        plausible count and no error. `issues/149` measured a production type at
+        1.05% coverage while its own drift probe reported converged.
+
+        Serves `count_only` as well, unlike the sort path — a count is exactly
+        what an index probe answers cheapest, and it is the request the timeouts
+        were measured on.
+        """
+        from ..db.sparql_sql.fast_slot_filter import (
+            can_serve_filter, fast_slot_filter_page, fast_slot_filter_count,
+            slot_sort_coverage_is_complete)
+        if not can_serve_filter(entity_criteria):
+            return None
+        pool = getattr(getattr(backend, 'db_impl', None), 'connection_pool', None)
+        if pool is None:
+            return None
+        try:
+            t0 = _time.monotonic()
+            async with pool.acquire() as conn:
+                if not await slot_sort_coverage_is_complete(
+                        conn, space_id, entity_criteria.entity_type):
+                    return None
+                total = await fast_slot_filter_count(
+                    conn, space_id, graph_id, entity_criteria)
+                if total is None:
+                    return None
+                uris = []
+                if not query_request.count_only:
+                    uris = await fast_slot_filter_page(
+                        conn, space_id, graph_id, entity_criteria,
+                        query_request.page_size, query_request.offset)
+                    if uris is None:
+                        return None
+        except Exception as exc:
+            self.logger.warning("fast slot filter declined (%s) — using SPARQL", exc)
+            return None
+
+        self.logger.info(
+            "Entity slot filter via entity_slot_sort: %d uris, total=%d, %.0fms",
+            len(uris), total, (_time.monotonic() - t0) * 1000)
+        return KGQueryResponse(
+            status=OperationStatus.FOUND if total else OperationStatus.EMPTY,
+            query_type="entity",
+            entity_uris=uris,
+            total_count=total,
+            page_size=query_request.page_size,
+            offset=query_request.offset,
+        )
+
     async def _execute_entity_query(self, backend, space_id: str, graph_id: str, query_request: KGQueryRequest) -> KGQueryResponse:
         """Execute entity query — return matching entity URIs with correct total count."""
         try:
@@ -606,6 +667,15 @@ class KGQueriesEndpoint:
                     backend, space_id, graph_id, entity_criteria, query_request)
                 if fast is not None:
                     return fast
+
+            # The FILTER half of the same table (`issues/161`). Tried after the
+            # sort path because the two shapes are disjoint — `can_serve_filter`
+            # refuses anything carrying a sort — so the order only decides which
+            # predicate rejects first, not which answers.
+            fast = await self._try_fast_slot_filter(
+                backend, space_id, graph_id, entity_criteria, query_request)
+            if fast is not None:
+                return fast
 
             # Build paginated query + count query
             sparql_query = self.query_builder.build_entity_query_sparql(

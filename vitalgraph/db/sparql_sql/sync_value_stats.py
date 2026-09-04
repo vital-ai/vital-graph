@@ -81,6 +81,39 @@ async def resync_value_stats(conn, space_id: str,
         logger.debug("resync_value_stats(%s): no pred_stats, freshness "
                      "reference will be NULL: %s", space_id, exc)
 
+    if not pred_rows:
+        # COUNT FROM THE QUADS INSTEAD. `rdf_pred_stats` is no longer maintained
+        # by the write path -- `recompute_stats_tables` is the only writer
+        # (`issues/142`) and it runs on its own schedule -- so a freshly loaded
+        # space reaches here before the first recompute, with pred_stats empty.
+        #
+        # Falling through with a NULL reference is not a small loss and not a
+        # transient one: `_run_value_stats_refresh` filters on
+        # `vs.pred_rows IS NOT NULL`, so a histogram built without one is
+        # PERMANENTLY invisible to the drift check and never rebuilt. It
+        # silently reverts to the behaviour this column exists to replace, and
+        # "the guard is not running" reads exactly like "the guard found nothing
+        # wrong".
+        #
+        # One grouped aggregate, only when pred_stats is empty, against a
+        # function that is already scanning this table for percentiles. It must
+        # be a real per-predicate count and NOT `total_rows`: total_rows is the
+        # count for one LANE after the typed-value filter, which is a subset.
+        try:
+            for r in await conn.fetch(
+                    f"SELECT predicate_uuid, count(*) AS n FROM {quad} GROUP BY 1"):
+                pred_rows[r["predicate_uuid"]] = r["n"]
+            if pred_rows:
+                logger.info(
+                    "resync_value_stats(%s): rdf_pred_stats is empty, took the "
+                    "freshness reference from the quads for %d predicate(s)",
+                    space_id, len(pred_rows))
+        except Exception as exc:
+            logger.warning(
+                "resync_value_stats(%s): could not derive a freshness "
+                "reference (%s); histograms built now will be invisible to the "
+                "value-stats drift check until the next rebuild", space_id, exc)
+
     written = 0
     counts = {NUM: 0, DT: 0}
 
@@ -363,7 +396,7 @@ async def apply_freshness(conn, space_id: str,
         logger.warning(
             "apply_freshness(%s): %d of %d histogram(s) have no freshness "
             "reference, so they are neither scaled nor guarded — run "
-            "resync_stats_tables then resync_value_stats",
+            "recompute_stats_tables then resync_value_stats",
             space_id, summary["no_reference"], summary["checked"])
     return summary
 

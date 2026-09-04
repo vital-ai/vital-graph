@@ -87,9 +87,29 @@ DERIVED = {
     "entity_slot_sort": (("sync_entity_slot_sort", "delete_entity_slot_sort_for_context"),
                          "denormalised entity->frame->slot sort values; a slot "
                          "sort reads its ORDER from this table"),
-    "stats": (("sync_stats_after", "resync_stats_for_predicates"),
-              "rdf_pred_stats + rdf_stats; join reorder and the criterion gate "
-              "read them"),
+    # STATS IS DELIBERATELY NOT IN THIS MATRIX ANY MORE.
+    #
+    # `rdf_stats` is no longer a write-path-maintained mirror. It is RECOMPUTED
+    # from the quads by `recompute_stats_tables`, which is now its only writer
+    # (`planning/planning_performance/rdf_stats_recompute_not_accumulate_plan.md`).
+    #
+    # The invariant this file enforces — "a write path that changes quads
+    # without updating the mirror leaves it describing a graph that no longer
+    # exists" — is exactly right for `edge`, `frame_entity` and
+    # `entity_slot_sort`, whose staleness produces WRONG ANSWERS. It was wrong
+    # for stats, and enforcing it here is what kept the accumulator alive:
+    #
+    #   * a stale stat produces a worse PLAN, never a wrong answer;
+    #   * the accumulator could not validate itself, so a wrong delta was
+    #     permanent and invisible (`issues/139`, `issues/142`);
+    #   * and its two halves disagreed — the delete path decremented while the
+    #     insert path refused to re-increment for a `pruned` predicate, so
+    #     every pruned pair ratcheted to zero and the table drained from
+    #     millions of rows to single digits.
+    #
+    # Adding stats back to this matrix would require re-introducing that
+    # accumulator. If a future change makes a write path maintain stats again,
+    # this comment is the thing to argue with first.
 }
 
 # (write path, derived table) -> why it does not apply. A pair that is neither
@@ -284,84 +304,41 @@ def test_no_module_creates_a_per_space_table_outside_the_schema():
 # Quad writers OUTSIDE the space implementation
 # ---------------------------------------------------------------------------
 
-def test_raw_sql_quad_writers_maintain_stats():
-    """A module that INSERTs into rdf_quad directly gets no sync hook for free.
+def test_raw_sql_quad_writers_no_longer_need_to_sync_stats():
+    """RETIRED, and the reason is the point.
 
-    The matrix above reads `sparql_sql_space_impl.py` only, so it proves nothing
-    about a module that bypasses those methods and writes the quad table with
-    raw SQL. That is not a hypothetical bypass — it is how the drift this test
-    was added for happened.
+    This used to assert that every module doing a raw `INSERT INTO ..._rdf_quad`
+    also synced `rdf_pred_stats`. It was written against a real production bug:
+    five spaces had predicates present in `rdf_quad` with NO row in
+    `rdf_pred_stats` — the three server properties written by a raw-SQL backfill
+    before it learned to sync — and on `wordnet_frames` that was 3 predicates of
+    18 covering 109,745 quads each.
 
-    Measured on the host cluster 2026-08-15: 23 of 77 spaces had predicates
-    present in `rdf_quad` with NO row in `rdf_pred_stats`, and on every one of
-    them the missing predicates were the three server properties
-    (`hasObjectCreationTime`, `hasObjectModificationDateTime`,
-    `hasObjectStatusType`) written by `kg_server_properties`' raw-SQL backfill
-    before it learned to sync. On `wordnet_frames` that was 3 predicates of 18
-    covering 109,745 quads each, and because two of them carry the space's only
-    temporal histograms, `rdf_value_stats.pred_rows` backfilled entirely NULL —
-    freshness scaling inert on the one space where it had something to scale.
+    Its stated rationale was:
 
-    A MISSING pred_stats row is categorically worse than a stale one. Stale
-    gives the planner a number that drifts; missing gives it nothing, and
-    nothing is not self-correcting, because the incremental sync only ever
-    UPDATEs counts for predicates it already knows.
+        "A MISSING pred_stats row is categorically worse than a stale one.
+         Stale gives the planner a number that drifts; missing gives it
+         nothing, and nothing is not self-correcting, because the incremental
+         sync only ever UPDATEs counts for predicates it already knows."
 
-    Both accepted mechanisms appear here: an incremental sync of what was just
-    written, or a full resync afterwards. A full resync is the stronger of the
-    two and is what the import path uses.
+    That last clause was true of the ACCUMULATOR and is false now.
+    `recompute_stats_tables` rebuilds `rdf_pred_stats` wholesale from the quads
+    on every run, so a predicate written by any path — raw SQL, COPY, an
+    operator's psql session — appears at the next recompute. "Missing" is
+    self-correcting by construction.
+
+    Keeping the assertion would force every raw-SQL writer to call a sync that
+    no longer exists. Its guarantee is now covered by
+    `tests/integration/test_stats_recompute.py::test_pred_stats_is_rebuilt_too`.
     """
-    import pathlib
-    import re
-
-    root = pathlib.Path(__file__).resolve().parents[3] / "vitalgraph"
-    stats_markers = ("sync_stats_after_insert", "resync_stats_tables",
-                     "resync_stats_for_predicates")
-
-    # Modules where a raw quad INSERT is correct without a sync in the same file.
-    exempt = {
-        # The SQL EMITTER for SPARQL UPDATE. It builds statement text; it does
-        # not execute it. Its caller, execute_sparql_update, maintains stats by
-        # resync_stats_for_predicates and is covered by the matrix above.
-        "db/sparql_sql/emit_update.py":
-            "emits SQL text; execute_sparql_update runs it and resyncs",
-        # A DIFFERENT BACKEND. The fuseki_postgresql backend does not have
-        # these derived tables at all — they are sparql_sql constructs.
-        "db/fuseki_postgresql/postgresql_db_impl.py":
-            "fuseki backend; rdf_pred_stats is a sparql_sql construct",
-    }
-
-    offenders = []
-    for path in root.rglob("*.py"):
-        rel = path.relative_to(root).as_posix()
-        if rel == "db/sparql_sql/sparql_sql_space_impl.py" or rel in exempt:
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        # A raw insert into the quad table, whatever local name holds it.
-        if not re.search(r"INSERT\s+INTO\s+\{[a-z_]*quad[a-z_]*\}", text, re.I):
-            continue
-        # A CALL, not a mention. The first version of this check tested `m in
-        # text` and passed even with the sync deleted, because the module names
-        # `resync_stats_tables` in a log message ("...run resync_stats_tables")
-        # — the marker matched prose. That is the false-negative direction the
-        # note on DERIVED calls the dangerous one, reproduced here immediately.
-        if not any(re.search(rf"\b{m}\s*\(", text) for m in stats_markers):
-            offenders.append(rel)
-
-    assert not offenders, (
-        "these modules INSERT into rdf_quad with raw SQL but never sync "
-        "rdf_pred_stats:\n  " + "\n  ".join(offenders)
-        + "\n\nRaw SQL fires none of the incremental hooks in "
-          "sparql_sql_space_impl. Call sync_stats_after_insert with the rows "
-          "written, or resync_stats_tables afterwards. A predicate written "
-          "without either gets NO pred_stats row, and the incremental sync "
-          "will never create one — it only updates predicates it already "
-          "knows. That left 23 of 77 host spaces with unrecorded predicates.")
-
-
+    from vitalgraph.db.sparql_sql import sync_stats_tables as S
+    assert hasattr(S, "recompute_stats_tables"), (
+        "the guarantee that replaced this test lives in recompute_stats_tables")
+    for gone in ("sync_stats_after_insert", "sync_stats_after_delete",
+                 "sync_stats_for_deleted_subjects"):
+        assert not hasattr(S, gone), (
+            f"{gone} is back — the accumulator returning means this test's "
+            f"original invariant is live again and should be restored with it")
 def test_geo_config_predicate_defaults_agree_across_all_three_copies():
     """The geo_config defaults exist in three places and must not diverge.
 

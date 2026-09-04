@@ -66,11 +66,22 @@ def build_agent_search_text(agent: dict) -> str:
     return '. '.join(parts)
 
 
+def _vector_literal(embedding) -> str:
+    """pgvector's text input form: `[0.1,0.2,...]`.
+
+    A separate function rather than an inline join so the one place that builds
+    this is named and greppable — `issues/154` was two writers disagreeing about
+    whether the driver would convert a list, and it did not.
+    """
+    return "[" + ",".join(str(v) for v in embedding) + "]"
+
+
 # ---------------------------------------------------------------------------
 # Stats
 # ---------------------------------------------------------------------------
 
 @dataclass
+
 class PopulateStats:
     agents_processed: int = 0
     agents_vectorized: int = 0
@@ -170,15 +181,32 @@ class AgentRegistryVectorPopulator:
 
         # Insert into vector + FTS tables
         async with self.pool.acquire() as conn:
+            # `$3::vector` and a STRING literal, not a bare list (`issues/154`).
+            #
+            # pgvector's text input is `'[0.1,0.2,...]'`. asyncpg will not
+            # convert a Python list for a parameter whose type it cannot infer,
+            # so binding the raw list raised
+            #
+            #     invalid input for query argument $3 ... (expected str, got list)
+            #
+            # on EVERY agent write. `_sync_vectors` catches and warns, so the
+            # write succeeded, the API returned success, and the vector table
+            # stayed empty -- agent similarity search had nothing to search, and
+            # "no results" was indistinguishable from "no matching agents".
+            #
+            # Both halves were missing and both are needed: the cast, and the
+            # literal. This is what `vector_populator.py` already does at :360
+            # and :447; the FTS executemany below never broke because it binds
+            # only text.
             await conn.executemany(f"""
                 INSERT INTO {AGENT_VECTOR_TABLE} (subject_uuid, agent_id, {self._embedding_column}, search_text, updated_time)
-                VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+                VALUES ($1, $2, $3::vector, $4, CURRENT_TIMESTAMP)
                 ON CONFLICT (subject_uuid) DO UPDATE
                 SET {self._embedding_column} = EXCLUDED.{self._embedding_column},
                     search_text = EXCLUDED.search_text,
                     updated_time = CURRENT_TIMESTAMP
             """, [
-                (str(rec[0]), rec[1], embeddings[idx], rec[2])
+                (str(rec[0]), rec[1], _vector_literal(embeddings[idx]), rec[2])
                 for idx, rec in enumerate(records)
             ])
 

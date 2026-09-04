@@ -360,6 +360,32 @@ class SparqlSQLSchema:
                 PRIMARY KEY (space_id, graph_uri)
             )
         '''),
+        # Whether {space}_entity_slot_sort is COMPLETE for an entity type.
+        #
+        # `fast_slot_filter` needs this and cannot compute it inline: measured on
+        # a 53M-quad space, the quad-side count is 31ms but
+        # `count(DISTINCT entity_uuid)` over the slot-sort table is 5,677ms.
+        #
+        # It exists because the failure mode is ASYMMETRIC. A short table makes a
+        # SORT mis-order a page; it makes a FILTER return a subset that looks
+        # like a complete answer. `issues/149` measured a production type at
+        # 1.05% while its drift probe reported converged, so "it is probably
+        # fine" is not a defensible default.
+        #
+        # Written by the maintenance coverage probe, which already computes both
+        # numbers. `complete` is stored rather than derived at read time so a
+        # reader never has to know how the two counts were obtained.
+        ("slot_sort_coverage", '''
+            CREATE TABLE IF NOT EXISTS slot_sort_coverage (
+                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
+                entity_type_uuid UUID NOT NULL,
+                entities_in_table BIGINT NOT NULL,
+                entities_of_type BIGINT NOT NULL,
+                complete BOOLEAN NOT NULL,
+                verified_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (space_id, entity_type_uuid)
+            )
+        '''),
         ("space_analytics", '''
             CREATE TABLE IF NOT EXISTS space_analytics (
                 id SERIAL PRIMARY KEY,
@@ -647,21 +673,21 @@ class SparqlSQLSchema:
             CREATE TABLE IF NOT EXISTS {t['rdf_pred_stats']} (
                 predicate_uuid UUID PRIMARY KEY,
                 row_count      BIGINT NOT NULL DEFAULT 0,
-                -- TRUE once prune_stats_tables has removed any (predicate,
-                -- object) row for this predicate.
+                -- VESTIGIAL. Never written and never read since issues/142;
+                -- kept only because dropping a column needs its own migration.
                 --
-                -- It makes ABSENCE from rdf_stats mean something. Without it,
-                -- absence is ambiguous between "this pair has no quads" and
-                -- "this pair was pruned", and the incremental sync resolves the
-                -- ambiguity the wrong way: it upserts `row_count = row_count +
-                -- delta`, so a pruned pair reappears holding ONLY its
-                -- post-prune delta. Measured at 100,000 -> 1 after a single
-                -- write (issues/062), and it looks authoritative.
+                -- It existed to disambiguate ABSENCE from rdf_stats between
+                -- "this pair has no quads" and "this pair was pruned", because
+                -- the incremental sync resolved that the wrong way: it upserted
+                -- `row_count = row_count + delta`, so a pruned pair reappeared
+                -- holding ONLY its post-prune delta. Measured at 100,000 -> 1
+                -- after a single write (issues/062), and it looked
+                -- authoritative.
                 --
-                -- Per PREDICATE rather than per pair, so it costs one boolean
-                -- on a table with one row per distinct predicate — about 21
-                -- rows in a real space — instead of tracking tombstones for
-                -- the pairs pruning exists to remove.
+                -- Both halves of that are gone. `prune_stats_tables` is
+                -- deleted, and `recompute_stats_tables` has no delta
+                -- arithmetic at all -- it rebuilds from the quads -- so absence
+                -- now means exactly one thing and needs no flag to license it.
                 pruned         BOOLEAN NOT NULL DEFAULT FALSE
             )
         ''')

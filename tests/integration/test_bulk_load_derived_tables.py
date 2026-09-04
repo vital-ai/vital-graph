@@ -115,12 +115,22 @@ class TestBulkLoadDerivedTables:
         after_load = await _snapshot(pg_conn, test_space)
         assert after_load["edge"], "bulk load produced no edge rows"
         assert after_load["frame_entity"], "bulk load produced no frame_entity rows"
-        assert after_load["stats"], "bulk load produced no stats rows"
+        # NOT stats. The load is no longer expected to produce them:
+        # `recompute_stats_tables` is the only writer (`issues/142`), so the
+        # load leaving them empty is correct and the comparison below moves to
+        # "the rebuild matches the quads" — which is what the load-vs-rebuild
+        # check was standing in for anyway.
+        assert not after_load["stats"], (
+            "the bulk load wrote rdf_stats. It has exactly one writer now, and "
+            "a second one reintroduces the drift of issues/142")
 
         await resync_all_auxiliary_tables(pg_conn, test_space)
         after_rebuild = await _snapshot(pg_conn, test_space)
 
-        for table in ("edge", "frame_entity", "pred_stats"):
+        # edge and frame_entity ONLY. pred_stats moved to the quad-truth check
+        # below for the same reason as rdf_stats: the load does not write it any
+        # more, so "load == rebuild" is a comparison against an empty table.
+        for table in ("edge", "frame_entity"):
             missing = after_rebuild[table] - after_load[table]
             extra = after_load[table] - after_rebuild[table]
             assert not missing and not extra, (
@@ -129,16 +139,31 @@ class TestBulkLoadDerivedTables:
                 f"produce, {len(extra)} row(s) the load left that the rebuild "
                 f"does not. The rebuild is the definition of correct.")
 
-        # rdf_stats is pruned, so the rebuild may legitimately hold a different
-        # SET of pairs. What must agree is every count present in both.
-        load_map = {(p, o): n for p, o, n in after_load["stats"]}
-        rebuild_map = {(p, o): n for p, o, n in after_rebuild["stats"]}
-        disagreeing = {k: (load_map[k], rebuild_map[k])
-                       for k in load_map.keys() & rebuild_map.keys()
-                       if load_map[k] != rebuild_map[k]}
-        assert not disagreeing, (
-            f"{len(disagreeing)} stats count(s) disagree with a full rebuild: "
-            f"{list(disagreeing.items())[:5]}")
+        # rdf_stats against the QUADS, which is the definition the rebuild was
+        # standing in for. Comparing two derived tables can only show they
+        # agree; the accumulator and its resync agreed while both were short.
+        rebuilt = {(p, o): n for p, o, n in after_rebuild["stats"]}
+        truth = {(r["predicate_uuid"], r["object_uuid"]): r["n"]
+                 for r in await pg_conn.fetch(
+                     f"SELECT predicate_uuid, object_uuid, count(*) AS n "
+                     f"FROM {test_space}_rdf_quad GROUP BY 1, 2 "
+                     f"HAVING count(*) >= 2")}
+        assert rebuilt == truth, (
+            f"rebuilt rdf_stats does not match the quads: "
+            f"{len(set(truth) - set(rebuilt))} pair(s) missing, "
+            f"{len(set(rebuilt) - set(truth))} extra, "
+            f"{sum(1 for k in set(truth) & set(rebuilt) if truth[k] != rebuilt[k])} "
+            f"with the wrong count")
+
+        # pred_stats is the per-predicate total feeding the same heuristic, and
+        # unlike rdf_stats it is not capped — every predicate must be exact.
+        rebuilt_preds = dict(after_rebuild["pred_stats"])
+        true_preds = {r["predicate_uuid"]: r["n"] for r in await pg_conn.fetch(
+            f"SELECT predicate_uuid, count(*) AS n "
+            f"FROM {test_space}_rdf_quad GROUP BY 1")}
+        assert rebuilt_preds == true_preds, (
+            f"rebuilt rdf_pred_stats does not match the quads: "
+            f"{len(set(true_preds) - set(rebuilt_preds))} predicate(s) missing")
 
     async def test_bulk_load_then_crud_still_matches_a_rebuild(
         self, test_space, space_impl, pg_conn

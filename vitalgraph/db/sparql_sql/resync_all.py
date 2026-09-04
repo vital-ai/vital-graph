@@ -24,12 +24,24 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
     """
     from .sync_edge_table import resync_edge_table
     from .sync_frame_entity_table import resync_frame_entity_table
-    from .sync_stats_tables import resync_stats_tables
+    from .sync_stats_tables import recompute_stats_tables
     from .sync_value_stats import resync_value_stats
     from .generator import invalidate_stats_cache
     from .sparql_sql_schema import SparqlSQLSchema
 
     t = SparqlSQLSchema.get_table_names(space_id)
+
+    # Invalidate the slot-sort completeness markers FIRST, before anything is
+    # rebuilt (`issues/161`). A bulk load repopulates the quads long before the
+    # derived tables catch up, so a marker written for the PREVIOUS contents
+    # describes a table that no longer covers the data — and `fast_slot_filter`
+    # would serve a filter from it and return a confident subset.
+    #
+    # Cleared at the START rather than the end so the window where the quads and
+    # the derived tables disagree is never a window where the marker says they
+    # agree. The maintenance coverage probe re-establishes them afterwards.
+    from .fast_slot_filter import clear_slot_sort_coverage
+    await clear_slot_sort_coverage(conn, space_id)
 
     # 1. Edge table (frame_entity depends on this)
     edge_count = await resync_edge_table(conn, space_id)
@@ -49,8 +61,15 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
         logger.warning("resync_all(%s): entity_slot_sort skipped (%s)",
                        space_id, exc)
 
-    # 3. Stats tables
-    stats = await resync_stats_tables(conn, space_id)
+    # 3. Stats tables — the SAME function the maintenance job runs, so "rebuild
+    # everything" and the periodic rebuild cannot disagree about what the table
+    # is. They did: `resync_stats_tables` keeps `row_count = 1` pairs and drops
+    # everything above STATS_MAX_ROW_COUNT, while `recompute_stats_tables` has a
+    # floor of 2 and NO upper bound. An operator running this would have put
+    # rdf_stats back into the shape the recompute was written to replace —
+    # missing the large pairs that are 36% of all quads and the anchors the join
+    # reorder most needs — and it would have looked like a repair.
+    stats = await recompute_stats_tables(conn, space_id)
     # Value histograms: rdf_stats answers equality on a small value set,
     # this answers ranges over a large one (issues/090).
     try:

@@ -67,6 +67,8 @@ from pathlib import Path
 
 XSD = "http://www.w3.org/2001/XMLSchema#"
 KG = "http://vital.ai/ontology/haley-ai-kg#"
+VC = "http://vital.ai/ontology/vital-core#"
+RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
 
 TRIPLE_RE = re.compile(r"^<([^>]*)> <([^>]*)> (.+) \.$")
 SLOT_LOCAL_RE = re.compile(r":slot:([a-z0-9_]+)$")
@@ -110,6 +112,55 @@ LAST_NAMES = [
     "Adams", "Nelson", "Baker", "Hall", "Rivera", "Campbell", "Mitchell",
     "Carter", "Roberts",
 ]
+
+# --- The Nurture shape, FITTED TO PRODUCTION ------------------------------
+#
+# `planning/planning_performance/lead_fixture_production_shape_plan.md`.
+#
+# The fixture could not express the query that broke production:
+#
+#     entity_type = X, plus TWO frame criteria —
+#       a campaign URI  COMMON, shared by many entities
+#       an SF lead id   RARE, and ZERO for a lead that is new
+#
+# MEASURED AGAINST THE PRODUCTION SPACE 2026-09-04, because the first version of
+# this was built from the bench script's *shape* and got the mechanism wrong:
+#
+#     hasUriSlotValue      53,937 rows / 5,176 distinct values
+#       head               42,399  = 78.6% of rows   <- the campaign
+#       singletons          2,679  = 52% of values   <- per-entity URIs
+#     hasTextSlotValue  1,082,018                    <- lead ids live here
+#     hasEntitySlotValue        0                    <- NONE. frame_entity is 0.
+#
+# THREE THINGS THAT VERSION GOT WRONG, all corrected here:
+#
+#   1. It used `hasEntitySlotValue`. Production has ZERO of them and its
+#      `frame_entity` table is empty. The campaign is a URI-VALUED LITERAL slot
+#      (`hasUriSlotValue`), not an entity reference. Adding an entity connector
+#      made the fixture LESS like production, not more.
+#   2. Zipf(s=1.1) over 40 values gave a 26% head. Production's head is 78.6%
+#      over 5,176 values. Not the same distribution in any useful sense.
+#   3. It missed the singleton tail entirely — half of production's distinct URI
+#      values occur exactly once, which is the per-entity URI case.
+#
+# So the model here is an explicit three-part mixture rather than a pure Zipf,
+# because production is not one: a dominant campaign, a short head of secondary
+# campaigns, and a long singleton tail. Each share is a named constant so the
+# manifest can report it and a bench can assert against it.
+NURTURE_HEAD_SHARE = 0.786      # one campaign, matching prod's 42,399/53,937
+NURTURE_SINGLETON_SHARE = 0.05  # per-entity URIs — prod's 52% of DISTINCT values
+NURTURE_CAMPAIGNS = 40          # the secondary head; the rest of the mass
+NURTURE_ZIPF_EXPONENT = 1.1     # ...distributed over those, as prod's tail is
+NURTURE_FRAME_TYPE = "urn:acme:kg:frame:NurtureInfoFrame"
+NURTURE_CAMPAIGN_SLOT = "urn:acme:kg:slot:NurtureCampaignURI"
+NURTURE_LEADID_SLOT = "urn:acme:kg:slot:SFLeadId"
+CAMPAIGN_URI = "urn:acme:campaign:{n:03d}"
+
+# Lead ids the generator deliberately does NOT emit. The production failure is a
+# query for a lead that does not exist yet, and without a declared absent id
+# there is no way to write that test down — any id you invent might collide with
+# a generated one, and "0 rows" then means "collided" rather than "absent".
+ABSENT_LEAD_IDS = 25
 
 # Thresholds the manifest reports counts for. A growth-curve bench sweeps
 # these to vary match count while the dataset stays fixed.
@@ -197,6 +248,37 @@ class Sampler:
         self._statuses = list(LEAD_STATUS_WEIGHTS)
         self._status_weights = [LEAD_STATUS_WEIGHTS[k] for k in self._statuses]
         self._empty_seen = 0
+        # Zipf weights over the campaign set: rank 1 gets the most, and the tail
+        # is long. Precomputed once — `random.choices` renormalises per call
+        # otherwise, which at 100k entities is measurable.
+        self._campaigns = [CAMPAIGN_URI.format(n=i)
+                           for i in range(NURTURE_CAMPAIGNS)]
+        self._campaign_weights = [1.0 / ((i + 1) ** NURTURE_ZIPF_EXPONENT)
+                                  for i in range(NURTURE_CAMPAIGNS)]
+        self.campaign_counts: dict[str, int] = {}
+        self.campaign_singletons = 0
+
+    def campaign(self, new_id: str) -> str:
+        """One URI-slot value, matching production's three-part mixture.
+
+        Production is not a pure Zipf and modelling it as one produced a 26%
+        head against its actual 78.6%. It is: one dominant campaign, a short
+        head of secondary ones, and a long tail of per-entity URIs that occur
+        exactly once (52% of its distinct values).
+        """
+        r = self.rng.random()
+        if r < NURTURE_HEAD_SHARE:
+            c = self._campaigns[0]
+        elif r < NURTURE_HEAD_SHARE + NURTURE_SINGLETON_SHARE:
+            # The singleton tail: a URI unique to this entity. Never collides,
+            # so `eq` on one of these selects exactly 1.
+            self.campaign_singletons += 1
+            return f"urn:acme:entityref:{new_id}"
+        else:
+            c = self.rng.choices(self._campaigns[1:],
+                                 self._campaign_weights[1:])[0]
+        self.campaign_counts[c] = self.campaign_counts.get(c, 0) + 1
+        return c
 
     def value_for(self, slot: str, predicate: str) -> str | None:
         """Return a replacement literal, or None to keep the original."""
@@ -281,6 +363,70 @@ class Sampler:
         return f"{first} {last}"
 
 
+def _node(uri: str, vitaltype: str) -> list[str]:
+    """The four triples every node in this model carries.
+
+    URIProp / vitaltype / rdf:type are not decoration — the loader and the
+    derived-table syncs all key off them, and a node missing one is invisible to
+    whichever of them reads it.
+    """
+    return [
+        f"<{uri}> <{VC}URIProp> <{uri}> .",
+        f"<{uri}> <{VC}vitaltype> <{KG}{vitaltype}> .",
+        f"<{uri}> <{RDF_TYPE}> <{KG}{vitaltype}> .",
+    ]
+
+
+def _edge(uri: str, src: str, dst: str, vitaltype: str) -> list[str]:
+    return _node(uri, vitaltype) + [
+        f"<{uri}> <{VC}hasEdgeSource> <{src}> .",
+        f"<{uri}> <{VC}hasEdgeDestination> <{dst}> .",
+    ]
+
+
+def nurture_triples(entity_uri: str, new_id: str, sampler: Sampler) -> list[str]:
+    """The nurture frame: one COMMON entity-valued slot, one UNIQUE text slot.
+
+    This is the shape the fixture existed without — see the block comment at
+    NURTURE_CAMPAIGNS. The campaign slot uses `hasEntitySlotValue`, which is
+    what makes `frame_entity` non-empty and frame criteria answerable at all.
+    """
+    frame = f"{entity_uri}:frame:nurtureinfoframe:0"
+    c_slot = f"{frame}:slot:nurturecampaign"
+    l_slot = f"{frame}:slot:sfleadid"
+    campaign = sampler.campaign(new_id)
+
+    out = _node(frame, "KGFrame")
+    out.append(f"<{frame}> <{KG}hasKGFrameType> <{NURTURE_FRAME_TYPE}> .")
+    out += _edge(f"{entity_uri}:edge:entity_to_nurtureinfoframe_0",
+                 entity_uri, frame, "Edge_hasEntityKGFrame")
+
+    # COMMON end: a URI-VALUED LITERAL slot, not an entity reference.
+    # Production carries zero `hasEntitySlotValue` and an empty frame_entity
+    # table; its campaign is `hasUriSlotValue`. Emitting an entity connector
+    # here made the fixture less faithful, not more, and is why frame_entity
+    # went from 0 to 5,000 in a way production never does.
+    # `KGURISlot`, not `KGUriSlot`. The ontology spells the PREDICATE
+    # `hasUriSlotValue` and the CLASS `KGURISlot`, and `kg_query_builder.py:108`
+    # maps only the latter. Emitting `KGUriSlot` produced a slot the query
+    # builder could not resolve to a value predicate, so the criterion matched
+    # nothing while the data looked correct.
+    out += _node(c_slot, "KGURISlot")
+    out.append(f"<{c_slot}> <{KG}hasKGSlotType> <{NURTURE_CAMPAIGN_SLOT}> .")
+    out.append(f"<{c_slot}> <{KG}hasUriSlotValue> <{campaign}> .")
+    out += _edge(f"{frame}:edge:to_slot_nurturecampaign",
+                 frame, c_slot, "Edge_hasKGSlot")
+
+    # RARE end: the lead id, unique per entity. `eq` on this selects exactly one
+    # — and on a DECLARED-ABSENT id, exactly zero.
+    out += _node(l_slot, "KGTextSlot")
+    out.append(f"<{l_slot}> <{KG}hasKGSlotType> <{NURTURE_LEADID_SLOT}> .")
+    out.append(f"<{l_slot}> <{KG}hasTextSlotValue> {lit(new_id, 'string')} .")
+    out += _edge(f"{frame}:edge:to_slot_sfleadid",
+                 frame, l_slot, "Edge_hasKGSlot")
+    return out
+
+
 def load_templates(template_dir: Path, limit: int | None) -> list[tuple[str, list[str]]]:
     """Return [(lead_id, [lines])] for each template graph."""
     out = []
@@ -341,6 +487,12 @@ def render_entity(lead_id: str, lines: list[str], new_id: str,
                     obj = repl
 
         out.append(f"<{subj}> <{pred}> {obj} .")
+
+    # Appended, not woven in: the templates have no nurture frame to clone, so
+    # this is synthesised rather than substituted. It survives --trim on purpose
+    # — trimming exists to drop frames the criteria do not touch, and this one
+    # is the reason the fixture can express the criteria at all.
+    out += nurture_triples(entity_uri, new_id, sampler)
 
     return out
 
@@ -416,10 +568,36 @@ def generate(template_dir: Path, out_dir: Path, n_entities: int, seed: int,
             "MQLRatingPoints": "uniform int [0,100], xsd:integer",
             "MQLv2": f"Bernoulli(p={mql_true_rate}), xsd:boolean",
             "CompanyStateCode": "weighted choice over 49 states, xsd:string",
+            "NurtureCampaignURI": (
+                f"mixture fitted to production: {NURTURE_HEAD_SHARE:.1%} one "
+                f"dominant campaign, {NURTURE_SINGLETON_SHARE:.1%} per-entity "
+                f"singletons, remainder Zipf(s={NURTURE_ZIPF_EXPONENT}) over "
+                f"{NURTURE_CAMPAIGNS - 1} secondary campaigns; hasUriSlotValue"),
+            "SFLeadId": "unique per entity, xsd:string",
             "*DateTimeSlotValue": f"uniform [{DT_START.date()}, {DT_END.date()}), xsd:dateTime",
             "_other": "copied verbatim from the template graph",
         },
         "expected_matches": expected_selectivity(n_entities, mql_true_rate),
+        # Ids this run deliberately did NOT emit. The production failure is a
+        # query for a lead that does not exist yet; without a DECLARED absent id
+        # there is no way to write that test, because any id you invent might
+        # collide with a generated one and "0 rows" would then mean "collided".
+        # These are outside the SYN%09d space by construction.
+        "absent_lead_ids": [f"ABSENT{i:09d}" for i in range(ABSENT_LEAD_IDS)],
+        "connector": {
+            "predicate": f"{KG}hasUriSlotValue",
+            "frame_type": NURTURE_FRAME_TYPE,
+            "campaign_slot": NURTURE_CAMPAIGN_SLOT,
+            "leadid_slot": NURTURE_LEADID_SLOT,
+            "note": ("synthesised — the templates carry no nurture frame. "
+                     "URI-VALUED, matching production, which has zero "
+                     "hasEntitySlotValue and an empty frame_entity table."),
+            "fitted_to": {
+                "space": "prod_kg", "measured": "2026-09-04",
+                "uri_slot_rows": 53937, "uri_slot_distinct": 5176,
+                "head_share": 0.786, "singleton_values": 2679,
+            },
+        },
         # Exact tallies of what was emitted — assert against THESE, not the
         # analytic expectation above, which is only a distributional target.
         "actual_matches": {
@@ -430,6 +608,14 @@ def generate(template_dir: Path, out_dir: Path, n_entities: int, seed: int,
             "mqlv2_total": sampler.mqlv2_total,
             "companystatecode_eq": dict(sorted(sampler.state_counts.items(),
                                                key=lambda kv: -kv[1])),
+            # THE NURTURE SHAPE. A bench pairs a head of this list (COMMON,
+            # thousands of entities) with an sfleadid (RARE, exactly one) or an
+            # absent id (ZERO) — the two-ended query the fixture could not
+            # express before.
+            "nurturecampaign_eq": dict(sorted(sampler.campaign_counts.items(),
+                                              key=lambda kv: -kv[1])),
+            "sfleadid_eq": 1,
+            "nurturecampaign_singletons": sampler.campaign_singletons,
             "ratingpoints_total": sampler.n_ratingpoints,
             "ratingpoints_gte": {str(t): c
                                  for t, c in sampler.ratingpoints_gte.items()},

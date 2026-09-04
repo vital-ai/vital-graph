@@ -2,7 +2,7 @@
 """Rebuild `{space}_rdf_pred_stats` for spaces whose predicates went unrecorded.
 
 THE DRIFT. `rdf_pred_stats` holds one row per predicate with its quad count. It
-is maintained incrementally by `sync_stats_after_insert` on the write paths, so
+was maintained incrementally by the write paths (removed 2026-09-03), so
 a predicate that was written by a path which did NOT sync gets no row — ever.
 The count does not merely go stale; the predicate is INVISIBLE to every reader.
 
@@ -10,7 +10,7 @@ WHAT WROTE WITHOUT SYNCING. The server-property quads —
 `vital-aimp#hasObjectCreationTime`, `vital#hasObjectModificationDateTime`, and
 `vital-aimp#hasObjectStatusType` — were stamped onto imported objects by a path
 that did not sync stats. Both writers now cover them (the bulk loader folds them
-into `quad_rows` before `sync_stats_after_insert`, and the backfill in
+into `quad_rows` before the stats sync, and the backfill in
 `kg_server_properties` syncs what it wrote), so nothing new drifts. This repairs
 spaces loaded before those fixes.
 
@@ -29,7 +29,7 @@ ORDER MATTERS. Run this BEFORE `migrate_value_stats_pred_rows.py`: the backfill
 copies `row_count` out of `rdf_pred_stats`, so backfilling first just writes
 NULL again. This runs the backfill itself for that reason.
 
-COST. A full `resync_stats_tables` scans `rdf_quad`. Measured: 19s for 8.9M
+COST. A full `recompute_stats_tables` scans `rdf_quad`. Measured: 19s for 8.9M
 quads. It does not lock the table against readers.
 
     python scripts/repair_stats_tables.py --all --dry-run
@@ -128,10 +128,19 @@ async def survey_space(conn, space_id: str) -> dict | None:
 
 
 async def repair_space(conn, space_id: str) -> dict:
-    from vitalgraph.db.sparql_sql.sync_stats_tables import resync_stats_tables
+    # `recompute_stats_tables`, the SAME function the maintenance job runs.
+    #
+    # Not `resync_stats_tables`, which is what this used to call and which now
+    # means something different: it keeps `row_count = 1` pairs and DROPS
+    # everything above STATS_MAX_ROW_COUNT, while the recompute has a floor of 2
+    # and no upper bound. Repairing with the old one would have put rdf_stats
+    # back into the shape the recompute replaces — without the large pairs that
+    # are 36% of all quads and the structural anchors the join reorder most
+    # needs — and reported it as a repair.
+    from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
 
     t0 = time.time()
-    result = await resync_stats_tables(conn, space_id)
+    result = await recompute_stats_tables(conn, space_id)
     out = {"seconds": round(time.time() - t0, 1),
            "pred_stats": result.get("pred_stats")}
 

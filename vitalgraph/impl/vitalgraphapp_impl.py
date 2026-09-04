@@ -684,7 +684,9 @@ class VitalGraphAppImpl:
                             signal_manager = self.db_impl.get_signal_manager() if self.db_impl else None
                         if signal_manager:
                             from vitalgraph.signal.signal_manager import CHANNEL_CACHE_INVALIDATE
-                            from vitalgraph.db.sparql_sql.generator import invalidate_datatype_cache, invalidate_stats_cache
+                            from vitalgraph.db.sparql_sql.generator import (
+                                invalidate_datatype_cache, invalidate_stats_cache,
+                                invalidate_term_cache)
 
                             async def _handle_cache_invalidate(data: dict):
                                 cache_type = data.get("cache_type", "")
@@ -695,6 +697,19 @@ class VitalGraphAppImpl:
                                 elif cache_type == "stats" and space_id:
                                     invalidate_stats_cache(space_id)
                                     self.logger.debug(f"Cache invalidation: cleared stats cache for {space_id}")
+                                elif cache_type == "term" and space_id:
+                                    # A bulk import TRUNCATES and reloads the term
+                                    # table, so every cached (text,type,lang,dt) ->
+                                    # uuid mapping for that space is stale — the
+                                    # same literal gets a new uuid if its datatype
+                                    # changed. A server that keeps the old one
+                                    # resolves constants to terms that no longer
+                                    # exist and every affected query silently
+                                    # returns 0 rows.
+                                    invalidate_term_cache(space_id)
+                                    self.logger.info(
+                                        "Cache invalidation: cleared TERM cache for %s "
+                                        "(a reload changes term uuids)", space_id)
 
                             signal_manager.register_callback(
                                 CHANNEL_CACHE_INVALIDATE,

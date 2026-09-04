@@ -98,17 +98,43 @@ def test_a_timeout_is_reported_at_warning_with_its_consequence(caplog):
         "must name the consequence, not just the error")
 
 
-def test_the_benign_case_stays_quiet():
-    """A non-KG space has no such table, and that is not news every 300s."""
-    import inspect
-    src = inspect.getsource(M)
-    assert src.count("except asyncpg.UndefinedTableError:") == 3, (
-        "all three drift probes must distinguish 'no table' from 'could not "
-        "answer'; a bare except on any of them is issues/144 again")
-    assert src.count("log_probe_failure(") == 4, (
-        "3 call sites + 1 definition — every probe reports its non-benign "
-        "failures")
+def test_no_REPAIR_step_swallows_a_failure_silently():
+    """`issues/144`: `except Exception: continue` with a comment asserting a
+    benign cause. The clause caught statement timeouts too, so a total failure
+    of the repair path looked identical to a non-KG space, for months.
 
+    Scoped to the steps that REPAIR. A swallowed failure there means the repair
+    silently did not happen, which is the defect. Elsewhere in this module there
+    are handlers that are deliberately quiet and correct — a fail-safe that
+    returns "do the work anyway", a best-effort timeout restore — and a guard
+    that flags those teaches people to edit the guard.
+
+    KNOWN AND NOT COVERED, found while writing this: `_run_value_stats_refresh`
+    and one branch of the stats path still use `except Exception: continue` with
+    a "non-KG space" comment. Same shape as issues/144. Worth narrowing, not
+    done here.
+    """
+    import inspect
+    import re
+    for name in ("_run_edge_integrity", "_run_frame_entity_integrity",
+                 "_run_entity_slot_sort_integrity", "_run_stats_recompute"):
+        src = inspect.getsource(getattr(M.MaintenanceJob, name))
+        lines = src.split("\n")
+        for i, line in enumerate(lines):
+            if not re.match(r"\s*except Exception(\s+as \w+)?\s*:\s*$", line):
+                continue
+            ind = len(line) - len(line.lstrip())
+            body = []
+            for nxt in lines[i + 1:]:
+                if nxt.strip() and (len(nxt) - len(nxt.lstrip())) <= ind:
+                    break
+                body.append(nxt)
+            text = "\n".join(body)
+            assert re.search(
+                r"logger\.(warning|error|exception)|log_probe_failure|raise", text), (
+                f"{name} swallows a failure without reporting it at WARNING or "
+                f"above — production runs at INFO, so DEBUG is invisible, which "
+                f"is exactly how issues/144 hid a dead repair path")
 
 def test_the_stats_integrity_guard_is_not_a_debug_swallow():
     """`issues/148`. One `except` guards BOTH the coverage audit (141) and the
@@ -122,14 +148,17 @@ def test_the_stats_integrity_guard_is_not_a_debug_swallow():
     nothing said so above DEBUG.
     """
     import inspect
-    src = inspect.getsource(M.MaintenanceJob._run_stats_integrity)
+    # `_run_stats_integrity` is gone with the accumulator (`issues/142`); the
+    # step that inherited its "if this stops working nothing notices" role is
+    # the recompute, which is now the ONLY thing keeping rdf_stats correct.
+    src = inspect.getsource(M.MaintenanceJob._run_stats_recompute)
     tail = src[src.rindex("except"):]
     assert "logger.debug" not in tail, (
-        "a swallowed integrity check must not be invisible at INFO")
+        "a swallowed recompute failure must not be invisible at INFO")
     assert "logger.warning" in tail
-    assert "SKIPPED" in tail and "unmonitored" in tail, (
-        "the message must name the consequence — that the audit and the repair "
-        "did not run — not merely that something was skipped")
+    assert "FAILED" in tail, (
+        "the message must name the consequence — that the join reorder plans "
+        "on whatever is in rdf_stats until the next cycle")
     assert "exc_info=True" in tail, (
         "the message alone was not enough to diagnose this; the failing "
         "statement is the useful part")
@@ -184,7 +213,7 @@ def test_every_repair_runs_under_the_maintenance_budget():
     lines = inspect.getsource(M).split("\n")
     calls = ("backfill_entity_slot_sort_batch(", "backfill_edge_table(",
              "backfill_frame_entity_table(", "cleanup_orphan_edges(",
-             "cleanup_stale_frame_entity(", "prune_stats_tables(",
+             "cleanup_stale_frame_entity(", "recompute_stats_tables(",
              "resync_value_stats(", "StatsRebuildOp(")
     unwrapped = []
     for i, line in enumerate(lines):
@@ -264,7 +293,7 @@ def test_long_running_sync_helpers_accept_and_use_a_client_timeout():
     """The guard above only reads `maintenance_job`. That is not enough.
 
     Fixing the audit's client timeout moved the failure ONE LEVEL DOWN: the
-    audit's response to a coverage gap is `resync_stats_tables`, whose own
+    audit's response to a coverage gap was a full rebuild, whose own
     aggregate measured 19.6-49.0 s on production against the same 60 s
     `command_timeout`. Its nine queries had no `timeout=` at all, so the rebuild
     would die in the driver and roll back, leaving the stats as corrupt as
@@ -277,7 +306,7 @@ def test_long_running_sync_helpers_accept_and_use_a_client_timeout():
     from vitalgraph.db.sparql_sql import sync_stats_tables as S
     from vitalgraph.db.sparql_sql import sync_entity_slot_sort as E
 
-    for fn in (S.resync_stats_tables, S._resync_stats_locked,
+    for fn in (S.recompute_stats_tables,
                E.entity_slot_sort_drift, E.entity_slot_sort_coverage,
                E.backfill_entity_slot_sort_batch):
         sig = inspect.signature(fn)
@@ -285,9 +314,44 @@ def test_long_running_sync_helpers_accept_and_use_a_client_timeout():
             f"{fn.__name__} runs for tens of seconds and cannot be bounded by "
             f"the caller without a timeout parameter")
 
-    body = inspect.getsource(S._resync_stats_locked)
-    calls = body.count("await conn.execute(")
+    body = inspect.getsource(S.recompute_stats_tables)
+    # `SET enable_hashagg` is excluded by name, not by loosening the count. The
+    # claim is about statements that can RUN LONG and so must carry the client
+    # timeout; a planner GUC assignment returns immediately and would never hit
+    # `command_timeout` no matter what it was set to. Naming it keeps the check
+    # exact — a new unbounded AGGREGATE still fails here.
+    calls = body.count("await conn.execute(") - body.count("SET enable_hashagg")
     used = body.count("timeout=timeout")
     assert used >= calls, (
-        f"{calls} queries in the stats rebuild, only {used} pass the client "
-        f"timeout — the unbounded ones die at command_timeout=60")
+        f"{calls} long-running queries in the stats rebuild, only {used} pass "
+        f"the client timeout — the unbounded ones die at command_timeout=60")
+
+
+def test_tracker_calls_match_the_real_signature():
+    """A mock that accepts **kwargs hides a TypeError until runtime.
+
+    `_run_entity_slot_sort_integrity` called
+    `create_process("...", space_id=...)`. `ProcessTracker.create_process` takes
+    `process_subtype`, not `space_id`. Every unit test passed — the tracker is
+    mocked — and the first real cycle on vg-test raised TypeError and ABORTED
+    the whole run: "every later step was SKIPPED, not clean". So one wrong
+    kwarg in one step silently disabled ANALYZE, VACUUM, every integrity check
+    and the stats recompute.
+
+    Checks the call sites against the actual signature by binding them.
+    """
+    import inspect
+    import re
+    from vitalgraph.process.process_tracker import ProcessTracker
+
+    sig = inspect.signature(ProcessTracker.create_process)
+    allowed = set(sig.parameters) - {"self"}
+    src = inspect.getsource(M)
+    bad = []
+    for m in re.finditer(r"create_process\(\s*([^)]*)\)", src, re.S):
+        for kw in re.findall(r"(\w+)\s*=", m.group(1)):
+            if kw not in allowed:
+                bad.append(kw)
+    assert not bad, (
+        f"create_process called with kwargs it does not accept: {sorted(set(bad))}; "
+        f"accepted: {sorted(allowed)}")

@@ -939,10 +939,14 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 # a raise on any statement rolls back cleanly rather than leaving
                 # the pooled connection in an aborted state (issue 019 hardening).
                 async with conn.transaction():
-                    s_uuid = await self._ensure_term(conn, t, s)
-                    p_uuid = await self._ensure_term(conn, t, p)
-                    o_uuid = await self._ensure_term(conn, t, o)
-                    g_uuid = await self._ensure_term(conn, t, g)
+                    # Ordered even for one quad: its four terms are four locks,
+                    # and two single-quad writers sharing terms can cycle on
+                    # them exactly as two batches can (`issues/152`).
+                    term_ids = await self._ensure_terms(conn, t, [s, p, o, g])
+                    s_uuid = term_ids[s]
+                    p_uuid = term_ids[p]
+                    o_uuid = term_ids[o]
+                    g_uuid = term_ids[g]
                     await conn.execute(
                         f"INSERT INTO {t['rdf_quad']} "
                         f"(subject_uuid, predicate_uuid, object_uuid, context_uuid) "
@@ -965,9 +969,6 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     # sync" — and stats were simply not part of that thought,
                     # so rdf_pred_stats and rdf_stats silently under-counted
                     # every quad inserted here. Same reasoning, same fix.
-                    from .sync_stats_tables import sync_stats_after_insert
-                    await sync_stats_after_insert(
-                        conn, space_id, [(s_uuid, p_uuid, o_uuid, g_uuid)])
             self._invalidate_counts_for_quads(space_id, [quad])
             return True
         except Exception as e:
@@ -999,9 +1000,6 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     await sync_entity_slot_sort_before_delete(conn, space_id, [s_uuid])
                     from .sync_edge_table import sync_edge_table_before_delete
                     await sync_edge_table_before_delete(conn, space_id, [s_uuid])
-                    from .sync_stats_tables import sync_stats_after_delete
-                    await sync_stats_after_delete(
-                        conn, space_id, [(s_uuid, p_uuid, o_uuid, g_uuid)])
                     await conn.execute(
                         f"DELETE FROM {t['rdf_quad']} "
                         f"WHERE subject_uuid = $1 AND predicate_uuid = $2 "
@@ -1215,11 +1213,18 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
             async def _do(conn):
                 nonlocal inserted
+                # ALL of the batch's terms first, in term_uuid order. Resolving
+                # them per quad inside the loop locked the term PK in quad
+                # order, which deadlocked two concurrent writers sharing terms
+                # (`issues/152`). Also collapses 4 statements per quad into one
+                # deduplicated executemany.
+                term_ids = await self._ensure_terms(
+                    conn, t, [x for quad in quads for x in quad[:4]])
                 for s, p, o, g in quads:
-                    s_uuid = await self._ensure_term(conn, t, s)
-                    p_uuid = await self._ensure_term(conn, t, p)
-                    o_uuid = await self._ensure_term(conn, t, o)
-                    g_uuid = await self._ensure_term(conn, t, g)
+                    s_uuid = term_ids[s]
+                    p_uuid = term_ids[p]
+                    o_uuid = term_ids[o]
+                    g_uuid = term_ids[g]
                     result = await conn.execute(
                         f"INSERT INTO {t['rdf_quad']} "
                         f"(subject_uuid, predicate_uuid, object_uuid, context_uuid) "
@@ -1250,16 +1255,18 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     await sync_frame_entity_after_edge_insert(conn, space_id, list(subjects))
                     from .sync_entity_slot_sort import sync_entity_slot_sort_after_edge_insert
                     await sync_entity_slot_sort_after_edge_insert(conn, space_id, list(subjects))
-                # rdf_stats too. Only the BULK path synced these, so every quad
-                # written through this one left the planner's cardinality
-                # estimates behind — the same write-path gap as the edge table
-                # (edge_table_integrity_bug), and worse, because nothing
-                # self-heals stats: the maintenance job prunes them and never
-                # resyncs. A stale count does not produce a wrong answer, it
-                # produces a wrong PLAN, silently.
-                if inserted_rows:
-                    from .sync_stats_tables import sync_stats_after_insert
-                    await sync_stats_after_insert(conn, space_id, inserted_rows)
+                # rdf_stats is deliberately NOT synced here. This comment used
+                # to explain why it was: "nothing self-heals stats: the
+                # maintenance job prunes them and never resyncs". That premise
+                # is gone — `recompute_stats_tables` rebuilds the whole table on
+                # a per-space schedule and is the only writer (`issues/142`).
+                #
+                # Leaving them stale is the designed trade. A stale count does
+                # not produce a wrong answer, it produces a wrong PLAN; an
+                # incrementally maintained one produced a wrong plan too, and
+                # silently, because it decremented on delete and refused to
+                # re-add for a pruned predicate until the table drained to
+                # single digits. Stale and rebuilt on a clock beats drifting.
 
             if connection:
                 # Caller owns the connection/transaction — don't open a nested one.
@@ -1322,7 +1329,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             #    eventually. Doing it here rather than in the background
             #    backfill means they ride the same COPY, the same index rebuild
             #    and the same transaction — and, critically, they are in
-            #    `quad_rows` when `sync_stats_after_insert` runs below. Added
+            #    `quad_rows` for the write itself. Added
             #    afterwards by raw SQL they were not: measured on two freshly
             #    loaded fixtures, `rdf_pred_stats` held 21 of 24 predicates,
             #    missing exactly these three at 10,000 rows each, so every
@@ -1490,11 +1497,6 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 # keeps working after this returns holds the hot rows for the
                 # rest of its transaction, so it can take the deltas instead
                 # and apply them once, at the end (issues/115).
-                if stats_sink is None:
-                    from .sync_stats_tables import sync_stats_after_insert
-                    await sync_stats_after_insert(conn, space_id, quad_rows)
-                else:
-                    stats_sink.append(("insert", quad_rows))
 
                 # Value histograms, for a BULK load only.
                 #
@@ -1673,7 +1675,6 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 # read-before-delete scan of the same rows (100x mitigation #10;
                 # halves delete-path I/O). Edge/frame_entity sync stayed BEFORE
                 # the delete (they need the quads); only stats moves after.
-                from .sync_stats_tables import sync_stats_after_delete
                 deleted_rows = await conn.fetch(
                     f"DELETE FROM {t['rdf_quad']} "
                     f"WHERE subject_uuid = ANY($1) AND context_uuid = $2 "
@@ -1681,10 +1682,6 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     subject_uuids, g_uuid,
                 )
                 deleted = len(deleted_rows)
-                if deleted_rows:
-                    quad_rows = [(r['subject_uuid'], r['predicate_uuid'],
-                                  r['object_uuid'], r['context_uuid']) for r in deleted_rows]
-                    await sync_stats_after_delete(conn, space_id, quad_rows)
 
                 # VERIFY, because the membership query above cannot be
                 # trusted to have seen the whole graph. It matches on a
@@ -1837,11 +1834,6 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 # the hot row was held for 98.4% of the transaction, against 7.7%
                 # for a plain insert, whose sync already sat at the end
                 # (issues/115).
-                if stats_sink is None:
-                    from .sync_stats_tables import sync_stats_after_delete
-                    await sync_stats_after_delete(conn, space_id, delete_rows)
-                else:
-                    stats_sink.append(("delete", delete_rows))
                 _t1 = _time.monotonic()
                 logger.info("⏱️  BULK remove_quads: %.3fs (%d quads, %d edges)",
                             _t1 - _t0, len(delete_rows), edge_deleted)
@@ -1928,8 +1920,6 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 from .sync_edge_table import sync_edge_table_before_delete
                 await sync_edge_table_before_delete(
                     conn, space_id, unique_subjects)
-                from .sync_stats_tables import sync_stats_after_delete
-                await sync_stats_after_delete(conn, space_id, delete_rows)
 
                 for s_uuid, p_uuid, o_uuid, g_uuid in delete_rows:
                     result = await conn.execute(
@@ -2427,18 +2417,25 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                         # Referential sweep, bounded, and only for updates that
                         # actually deferred something: the anti-join is real
                         # work and the all-concrete case is the common one.
-                        # rdf_stats: execute_sparql_update maintained none at
-                        # all, and nothing else repairs them — the maintenance
-                        # job prunes stats and never resyncs. Recompute the
-                        # predicates this update touched; bounded per predicate.
-                        pred_uris = _concrete_predicates_from_update_ops(cr.update_ops)
-                        if pred_uris:
-                            from .sync_stats_tables import resync_stats_for_predicates
-                            pred_uuids = [_generate_term_uuid(u, 'U') for u in pred_uris]
-                            async with conn.transaction():
-                                await resync_stats_for_predicates(
-                                    conn, space_id, pred_uuids)
-
+                        # rdf_stats is NOT touched here any more. This used to
+                        # call `resync_stats_for_predicates` for the predicates
+                        # an update named, and its reason was explicit: "nothing
+                        # else repairs them — the maintenance job prunes stats
+                        # and never resyncs". That premise is gone.
+                        # `recompute_stats_tables` rebuilds the whole table on a
+                        # per-space schedule (`issues/142`), so the repair this
+                        # stood in for now happens on its own.
+                        #
+                        # Removing it is not just tidying. It was a SECOND
+                        # WRITER, and it wrote a different table: per-predicate
+                        # DELETE + INSERT under the old `<= STATS_MAX_ROW_COUNT`
+                        # rule, so an update could silently drop exactly the
+                        # large pairs the recompute exists to keep. It also
+                        # deadlocked against itself — two updates touching the
+                        # same predicates in different orders, observed as
+                        # `DELETE FROM …_rdf_stats WHERE predicate_uuid = $1`
+                        # against the matching INSERT (the issues/152 shape, one
+                        # table over).
                         if _has_where_bound_delete(cr.update_ops):
                             from .sync_edge_table import mark_sweep_needed
                             mark_sweep_needed(space_id)
@@ -2606,7 +2603,71 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
     async def _ensure_term(self, conn, tables: Dict[str, str],
                            term: Identifier,
                            force_type: Optional[str] = None) -> uuid.UUID:
-        """Ensure a term exists in the term table, return its UUID."""
+        """Ensure a term exists in the term table, return its UUID.
+
+        ONE term. Callers writing several should use `_ensure_terms`, which
+        takes the same locks in a defined order — see `issues/152`.
+        """
+        args = await self._term_row(conn, tables, term, force_type)
+        await conn.execute(
+            f"INSERT INTO {tables['term']} "
+            f"(term_uuid, term_text, term_type, lang, datatype_id) "
+            f"VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING", *args)
+        return args[0]
+
+    async def _ensure_terms(self, conn, tables: Dict[str, str],
+                            terms) -> Dict[Identifier, uuid.UUID]:
+        """Ensure many terms exist, inserting them in `term_uuid` ORDER.
+
+        `issues/152`, which is `issues/115` in a path that fix never reached.
+        Resolving terms one at a time inside a per-quad loop takes locks on the
+        term primary key in the caller's quad order, so two concurrent writers
+        whose batches share terms in different orders take the same locks in
+        opposite order — a cycle, and one transaction is aborted with 40P01
+        with its whole batch discarded. Nothing retries, and in the
+        segmentation worker (`_MAX_CONCURRENT = 4`, jobs claimed FOR UPDATE
+        SKIP LOCKED) a transient abort is recorded as a permanent job failure.
+
+        Shared terms are the normal case, not an unlucky one: predicates and
+        graph URIs repeat across nearly every batch.
+
+        Sorting gives every writer ONE global lock order, so there is no cycle
+        to find. It is the same fix, and the same reasoning, as the bulk path's
+        `sorted(seen_terms)` in `add_rdf_quads_batch_bulk`.
+
+        Returns a map from the ORIGINAL term to its uuid. Keying on the rdflib
+        term is safe because its class and value determine the row: `URIRef`
+        and `Literal` of the same text are unequal, and a Literal compares its
+        datatype and language too, so two keys that collide here would have
+        produced the same term_uuid anyway.
+        """
+        rows: Dict[uuid.UUID, tuple] = {}
+        out: Dict[Identifier, uuid.UUID] = {}
+        for term in terms:
+            if term in out:
+                continue
+            args = await self._term_row(conn, tables, term)
+            out[term] = args[0]
+            rows.setdefault(args[0], args)
+        if rows:
+            # One statement, deduplicated: a batch repeating a predicate 10,000
+            # times inserted it 10,000 times before this.
+            await conn.executemany(
+                f"INSERT INTO {tables['term']} "
+                f"(term_uuid, term_text, term_type, lang, datatype_id) "
+                f"VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
+                [rows[k] for k in sorted(rows)])
+        return out
+
+    async def _term_row(self, conn, tables: Dict[str, str],
+                        term: Identifier,
+                        force_type: Optional[str] = None) -> tuple:
+        """Build the term table row for `term`, without writing it.
+
+        Split out of `_ensure_term` so the insert can be ordered across a whole
+        batch (`issues/152`). Resolving the datatype may itself insert, which is
+        why this still needs a connection.
+        """
         term_text = str(term)
         if force_type:
             term_type = force_type
@@ -2636,13 +2697,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 )
 
         term_uuid = _generate_term_uuid(term_text, term_type, lang, datatype_id)
-        await conn.execute(
-            f"INSERT INTO {tables['term']} "
-            f"(term_uuid, term_text, term_type, lang, datatype_id) "
-            f"VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
-            term_uuid, term_text, term_type, lang, datatype_id,
-        )
-        return term_uuid
+        return (term_uuid, term_text, term_type, lang, datatype_id)
 
     async def _resolve_datatype_id(self, conn, tables: Dict[str, str],
                                     datatype_uri: str) -> Optional[int]:

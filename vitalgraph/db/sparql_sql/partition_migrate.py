@@ -123,8 +123,8 @@ async def migrate_space_to_partitioned(conn, space_id: str,
         await conn.execute(stmt)
 
     # 5. rebuild stats over the migrated quads
-    from .sync_stats_tables import resync_stats_tables
-    await resync_stats_tables(conn, space_id)
+    from .sync_stats_tables import recompute_stats_tables
+    await recompute_stats_tables(conn, space_id)
 
     logger.info("migrate_space_to_partitioned(%s): %d -> %d quads (%d dupes dropped), "
                 "%d partitions", space_id, old_quads, new_quads,

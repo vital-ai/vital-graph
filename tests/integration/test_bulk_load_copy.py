@@ -71,12 +71,37 @@ async def test_copy_rebuild_matches_executemany(space_impl, two_spaces):
             assert await conn.fetchval(
                 "SELECT 1 FROM pg_indexes WHERE indexname = $1", idx), idx
 
-        # rdf_stats stayed in sync through the copy+rebuild path.
+        # rdf_stats after a recompute — the copy+rebuild path does not write it
+        # any more. `recompute_stats_tables` is the only writer (`issues/142`),
+        # so what has to hold is that the COPY path leaves the quads in a state
+        # the recompute reads correctly, which is the same thing this was
+        # checking through the accumulator.
+        from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
         t = __import__("vitalgraph.db.sparql_sql.sparql_sql_schema",
                        fromlist=["SparqlSQLSchema"]).SparqlSQLSchema.get_table_names(auto_sid)
-        stat_total = await conn.fetchval(
-            f"SELECT COALESCE(sum(row_count), 0) FROM {t['rdf_stats']}")
-        assert stat_total == N, stat_total
+        assert 0 == await conn.fetchval(
+            f"SELECT COALESCE(sum(row_count), 0) FROM {t['rdf_stats']}"), (
+            "the copy+rebuild path wrote rdf_stats; it has one writer")
+
+        await recompute_stats_tables(conn, auto_sid)
+
+        # rdf_stats is legitimately EMPTY here, and asserting the total was N
+        # only ever passed because the accumulator counted every quad. The
+        # fixture gives every quad a DISTINCT object (`value {i}`), so every
+        # (predicate, object) pair holds exactly one row — all of them below
+        # STATS_MIN_ROW_COUNT, none of them stored. A pair the join reorder can
+        # never use is the one thing this table is defined not to keep.
+        assert 0 == await conn.fetchval(
+            f"SELECT COALESCE(sum(row_count), 0) FROM {t['rdf_stats']}"), (
+            "rdf_stats holds a singleton pair; the floor is what keeps this "
+            "table from reaching 50-200M rows at scale")
+
+        # rdf_pred_stats is where the quads are accounted for: it is the
+        # per-predicate total and has no floor, so it must sum to N whichever
+        # write path produced the rows.
+        pred_total = await conn.fetchval(
+            f"SELECT COALESCE(sum(row_count), 0) FROM {t['rdf_pred_stats']}")
+        assert pred_total == N, pred_total
 
 
 async def test_second_batch_into_nonempty_uses_executemany(space_impl, two_spaces):

@@ -405,7 +405,7 @@ def server_property_quads_for_import(quads, now: datetime):
       * **They land in the COPY**, with the same index rebuild and the same
         transaction as everything else.
       * **The derived tables stay correct.** `add_rdf_quads_batch_bulk` already
-        calls `sync_stats_after_insert` with the quads it wrote, so properties
+        wrote quads directly, so properties
         added HERE are counted. Added later by raw SQL they were not: measured
         on two freshly loaded fixtures, `rdf_pred_stats` held 21 of 24
         predicates, missing exactly these, at 10,000 rows each. Everything keyed
@@ -597,15 +597,6 @@ async def _backfill_one_batch_sql(
         # over-count, which the next full resync corrects — the alternative is
         # RETURNING per row, and an occasional small over-count is a far better
         # error than a predicate that does not appear at all.
-        if written:
-            try:
-                from ..db.sparql_sql.sync_stats_tables import sync_stats_after_insert
-                await sync_stats_after_insert(conn, space_id, written)
-            except Exception as exc:
-                logger.warning(
-                    "server-property backfill: stats sync failed for %s (%d quads); "
-                    "run resync_stats_tables: %s", space_id, len(written), exc)
-
         return patched_uris
 
 

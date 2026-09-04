@@ -129,6 +129,14 @@ async def test_pred_stats_counts_the_stamped_predicates(space_impl, loaded_space
     """
     sid = loaded_space
     async with space_impl.get_db_connection() as conn:
+        # The load no longer maintains pred_stats — `recompute_stats_tables` is
+        # the only writer (`issues/142`) and runs on its own schedule — so the
+        # counts are asserted after a recompute. The claim is unchanged: the
+        # stamped predicates must be COUNTED, checked against the live quad
+        # table rather than a constant, so it still fails the same way whether
+        # the stamp goes missing or the stats do.
+        from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
+        await recompute_stats_tables(conn, sid)
         rows = await conn.fetch(f"""
             SELECT t.term_text AS predicate, a.n AS actual, ps.row_count AS in_stats
             FROM (SELECT predicate_uuid, count(*) n FROM {sid}_rdf_quad GROUP BY 1) a

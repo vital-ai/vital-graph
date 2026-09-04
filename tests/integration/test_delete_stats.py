@@ -34,6 +34,18 @@ async def del_space(make_space):
     return await make_space(f"{TEST_SPACE_PREFIX}delstats_{uuid.uuid4().hex[:8]}")
 
 
+async def _remaining_pairs(space_impl, sid) -> int:
+    """Distinct (predicate, object) pairs left in the quad table.
+
+    The stats table cannot answer this once the survivors are singletons, and
+    "the delete removed exactly the right quads" is the claim that matters.
+    """
+    async with space_impl.db_impl.connection_pool.acquire() as conn:
+        return await conn.fetchval(
+            f"SELECT count(*) FROM (SELECT DISTINCT predicate_uuid, object_uuid "
+            f"FROM {sid}_rdf_quad) x")
+
+
 async def _stats(conn, sid):
     return {r["k"]: r["row_count"] for r in await conn.fetch(
         f"SELECT predicate_uuid::text||'|'||object_uuid::text AS k, row_count "
@@ -41,7 +53,7 @@ async def _stats(conn, sid):
 
 
 async def test_fused_delete_keeps_stats_correct(space_impl, del_space):
-    from vitalgraph.db.sparql_sql.sync_stats_tables import resync_stats_tables
+    from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
 
     sid, g, e = del_space, "urn:g", "urn:e1"
     gu = URIRef(g)
@@ -58,14 +70,27 @@ async def test_fused_delete_keeps_stats_correct(space_impl, del_space):
     assert deleted == 6                          # s1+s2 × 3 quads
 
     async with space_impl.db_impl.connection_pool.acquire() as conn:
-        incremental = await _stats(conn, sid)        # includes any leftover 0-rows
-        await resync_stats_tables(conn, sid)
-        resynced = await _stats(conn, sid)
+        # The delete no longer decrements anything — `recompute_stats_tables`
+        # is the only writer (`issues/142`) — so this compares the rebuilt table
+        # against the QUADS rather than an incremental result against a resync.
+        #
+        # That is the stronger comparison. The old one could only show that two
+        # implementations agreed, and they agreed while both were wrong: the
+        # accumulator decremented on delete and refused to re-add for a pruned
+        # predicate, so counts ratcheted toward zero with every individual delta
+        # looking correct.
+        await recompute_stats_tables(conn, sid, keep_top_n=10_000)
+        rebuilt = await _stats(conn, sid)
+        truth = {f"{r['p']}|{r['o']}": r["n"] for r in await conn.fetch(
+            f"SELECT predicate_uuid::text AS p, object_uuid::text AS o, "
+            f"count(*) AS n FROM {sid}_rdf_quad GROUP BY 1, 2 HAVING count(*) >= 2")}
 
-    # After deleting s1/s2, only sX's two (pred,obj) pairs remain, each count 1.
-    # The delete path prunes zeroed rows, so it converges exactly on a resync.
-    assert incremental == resynced == {k: 1 for k in resynced}, (incremental, resynced)
-    assert len(resynced) == 2
+    # After deleting s1/s2 only sX's two (pred,obj) pairs remain, each count 1 —
+    # below STATS_MIN_ROW_COUNT, so the correct rebuilt table is EMPTY. Absence
+    # means one thing now, and this pins that it means it here.
+    assert rebuilt == truth == {}, (rebuilt, truth)
+    assert 2 == await _remaining_pairs(space_impl, sid), (
+        "sX's two pairs should have survived the delete")
 
 
 async def test_delete_removes_an_entity_that_lacks_its_own_self_link(space_impl, del_space):
@@ -104,7 +129,7 @@ async def test_delete_reports_members_that_arrive_after_the_membership_snapshot(
     removing it would be a second unbounded pass over rows the caller never
     named, and the safe half of the fix is for the delete to stop being silent.
     """
-    from vitalgraph.db.sparql_sql import sync_stats_tables
+    from vitalgraph.db.sparql_sql import sync_entity_slot_sort
     from vitalgraph.db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
 
     sid, g, e = del_space, "urn:g3", "urn:e3"
@@ -114,7 +139,14 @@ async def test_delete_reports_members_that_arrive_after_the_membership_snapshot(
         (URIRef("urn:m3"), URIRef(HGU), URIRef(e), gu)])
 
     pool = space_impl.db_impl.connection_pool
-    real = sync_stats_tables.sync_stats_after_delete
+    # The seam used to be `sync_stats_after_delete`, which ran inside the delete
+    # transaction after the DELETE. That function is gone (`issues/142`: the
+    # write path no longer maintains stats), so the race is injected at the
+    # slot-sort sync instead. It runs AFTER the membership snapshot, which is
+    # the only property this test needs from the injection point — the late
+    # quad survives the DELETE because its subject was never in the snapshot,
+    # not because of when it was written relative to the DELETE.
+    real = sync_entity_slot_sort.sync_entity_slot_sort_before_delete
 
     late_s = _generate_term_uuid("urn:late3", "U")
     p_uuid = _generate_term_uuid(HGU, "U")
@@ -124,20 +156,22 @@ async def test_delete_reports_members_that_arrive_after_the_membership_snapshot(
             f"INSERT INTO {sid}_term (term_uuid, term_text, term_type) "
             f"VALUES ($1, 'urn:late3', 'U') ON CONFLICT DO NOTHING", late_s)
 
-    async def racing_writer(conn, space_id, quad_rows):
+    async def racing_writer(conn, space_id, subject_uuids, **kw):
         # Commits on its own connection after the snapshot, as an ingest would.
-        # Raw INSERT, not add_rdf_quads_batch_bulk: that path would update the
-        # rdf_stats rows this still-open delete transaction holds, and wait on a
-        # transaction that cannot commit until this callback returns.
-        await real(conn, space_id, quad_rows)
+        # Raw INSERT, not add_rdf_quads_batch_bulk: that path takes locks this
+        # still-open delete transaction holds, and would wait on a transaction
+        # that cannot commit until this callback returns.
+        result = await real(conn, space_id, subject_uuids, **kw)
         async with pool.acquire() as other:
             await other.execute(
                 f"INSERT INTO {sid}_rdf_quad "
                 f"(subject_uuid, predicate_uuid, object_uuid, context_uuid) "
                 f"VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
                 late_s, p_uuid, o_uuid, g_uuid)
+        return result
 
-    monkeypatch.setattr(sync_stats_tables, "sync_stats_after_delete", racing_writer)
+    monkeypatch.setattr(sync_entity_slot_sort,
+                        "sync_entity_slot_sort_before_delete", racing_writer)
 
     with caplog.at_level("WARNING"):
         await space_impl.delete_entity_graph_bulk(sid, g, e)

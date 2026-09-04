@@ -675,3 +675,46 @@ async def entity_slot_sort_drift(conn, space_id: str,
         f"SELECT count(*) FROM (SELECT DISTINCT slot_uuid, context_uuid FROM ("
         f"{_select_rows(space_id, 'TRUE')}) s) d", *args, timeout=timeout)
     return int(expected or 0), int(actual or 0)
+
+
+async def entity_slot_sort_all_types(conn, space_id: str,
+                                     timeout: float | None = None) -> list[dict]:
+    """Coverage for EVERY entity type, complete ones included.
+
+    `entity_slot_sort_coverage` answers "where is the worst gap" and carries
+    `HAVING in_table < of_type`, so it is empty exactly when everything is
+    covered. That makes it useless for the opposite question — "is this type
+    safe to serve a FILTER from" — which needs a positive statement of
+    completeness, not the absence of a complaint (`issues/161`).
+
+    Same shape and the same deliberate choice about the numerator: presence is
+    tested by `entity_uuid`, never by the table's own `entity_type_uuid`, so the
+    probe cannot be fooled by a derived column disagreeing with the quads. That
+    mistake measured 1.54% against a true 100% (`issues/149`).
+
+    No LIMIT: a caller recording markers needs all of them, and the row count is
+    the number of distinct entity types in the space, which is small.
+    """
+    rows = await conn.fetch(f"""
+        WITH of_type AS (
+            SELECT DISTINCT q.object_uuid AS ty, q.subject_uuid AS entity_uuid
+              FROM {space_id}_rdf_quad q
+              JOIN {space_id}_term p ON p.term_uuid = q.predicate_uuid
+               AND p.term_text = $1)
+        SELECT t.term_text AS entity_type,
+               o.ty        AS entity_type_uuid,
+               count(*) FILTER (WHERE EXISTS (
+                   SELECT 1 FROM {space_id}_entity_slot_sort e
+                    WHERE e.entity_uuid = o.entity_uuid)) AS in_table,
+               count(*) AS of_type
+          FROM of_type o
+          JOIN {space_id}_term t ON t.term_uuid = o.ty
+         GROUP BY 1, 2
+    """, ENTITY_TYPE_URI, timeout=timeout)
+    return [
+        {"entity_type": r["entity_type"],
+         "entity_type_uuid": r["entity_type_uuid"],
+         "in_table": int(r["in_table"]),
+         "of_type": int(r["of_type"])}
+        for r in rows
+    ]

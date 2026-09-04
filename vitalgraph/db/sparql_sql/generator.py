@@ -306,10 +306,34 @@ async def _load_quad_stats(
             # reorder heuristic only needs the most selective (lowest row_count)
             # pairs, so take the top 10K by ascending row_count. Uses
             # idx_{space}_rdf_stats_rc. (100x mitigation #4.)
+            # NO `ORDER BY row_count ASC LIMIT n`, and no upper bound.
+            #
+            # That form starved the tail. Measured on production against the
+            # real distribution: 1,195,155 pairs over 22 predicates, and
+            # `ORDER BY row_count ASC LIMIT 10000` returned 10,000 rows drawn
+            # from SIX predicates, every one of them `row_count = 2`. Sixteen
+            # predicates got nothing and no pair above 2 was ever visible to the
+            # join reorder — including every structural anchor.
+            #
+            # It is `issues/147` one layer up: a global LIMIT over an ASC
+            # ordering, with no per-predicate fairness. `342efc5` removed the
+            # identical pattern from the prune. Simulating a perfectly fair
+            # 50,000-row table and applying the OLD reader to it still returned
+            # 10 predicates and max row_count 2 — so fixing the table alone
+            # could never have fixed this.
+            #
+            # The table is bounded at STATS_KEEP_DEFAULT rows by construction
+            # (see `sync_stats_tables`), so a second bound here is redundant as
+            # well as harmful: it discarded 80% of a table already sized for
+            # this reader.
+            #
+            # The upper bound goes for the same reason. Pairs above the old cap
+            # are the 24 that matter most (36% of all quads); excluding them
+            # sent the semi-join gate to a 10.4s runtime probe that saturates
+            # and tells it nothing.
             f"SELECT predicate_uuid::text, object_uuid::text, row_count "
             f"FROM {space_id}_rdf_stats "
-            f"WHERE row_count >= 2 AND row_count <= 200000 "
-            f"ORDER BY row_count ASC LIMIT 10000",
+            f"WHERE row_count >= 2",
             conn_params=conn_params, conn=conn,
             lock_timeout_ms=STATS_LOCK_TIMEOUT_MS,
         )
@@ -1306,13 +1330,21 @@ async def _generate_sql(
                 # driving sets the direction choice compares (issues/090).
                 # Without it a constrained end cannot be priced and the gate
                 # falls back to "no driving set".
-                # BOTH stats sources. `quad_stats` caps at the 10,000
-                # LEAST-common pairs, so a constrained end of any size is
-                # usually absent from it — the measured one holds 5,726 rows in
-                # a space whose rdf_stats has 13,139 entries, and was simply not
-                # loaded. `extra_quad_stats` is the on-demand lookup that exists
-                # for this exact reason, and reading only the preload made a
-                # priced end look unknown (issues/090).
+                # BOTH stats sources. This used to matter far more: `quad_stats`
+                # capped at the 10,000 LEAST-common pairs, so a constrained end
+                # of any size was usually absent from it — the measured one held
+                # 5,726 rows in a space whose rdf_stats has 13,139 entries, and
+                # was simply not loaded. Reading only the preload made a priced
+                # end look unknown (issues/090).
+                #
+                # The preload no longer caps, so "in the table but not loaded"
+                # is gone as a category and `extra_quad_stats` is now belt and
+                # braces rather than the main repair. It is kept because the two
+                # populate on different paths and a pair absent from BOTH is
+                # still possible — the table itself is bounded (keep_top_n), and
+                # what that bound drops is genuinely not stored anywhere, so the
+                # on-demand lookup below returns nothing for it and the end
+                # correctly stays unpriced.
                 _pairs = dict(getattr(aliases, "quad_stats", None) or {})
                 _pairs.update(getattr(aliases, "extra_quad_stats", None) or {})
                 # The chain's own constraint pairs, fetched if neither source
@@ -1339,8 +1371,34 @@ async def _generate_sql(
                     except Exception as exc:
                         logger.debug("traversal: pair stat lookup failed: %s", exc)
 
+                # What an ABSENT pair implies, per predicate (`issues/153`).
+                #
+                # Derived from the PRELOAD, not from `_pairs`. The preload is
+                # the stored table verbatim; `_pairs` has on-demand lookups
+                # merged into it, and an extra row for one predicate would shift
+                # the inferred cut depth and mislabel a predicate as cut.
+                #
+                # Without this a constrained end missing from rdf_stats priced
+                # as None, and `choose_direction` drove from whichever end it
+                # COULD price — which, now that the table keeps each predicate's
+                # LARGEST pairs, is the huge one. The rare constraining end is
+                # exactly what the cap drops, so the common shape (one end rare,
+                # one end common) was being driven from the wrong side.
+                # `pred_stats` too, and not as a nicety: it holds EVERY
+                # predicate, including the ones with no stored pair because all
+                # of their objects are singletons. That is the shape of a
+                # high-cardinality id predicate — the widest predicate on
+                # `sp_lead_synth_10k` has none of its own pairs stored — and it
+                # is exactly what a query constrains when it looks one id up.
+                # Without it, the end a query most wants to drive from is the
+                # one that stays unpriced.
+                from .sync_stats_tables import absence_bounds
+                _bounds = absence_bounds(getattr(aliases, "quad_stats", None),
+                                         getattr(aliases, "pred_stats", None))
+
                 aliases.traversal_decision = decide_for_plan(
-                    _chains, _crit, _pred, pair_rows=_pairs)
+                    _chains, _crit, _pred, pair_rows=_pairs,
+                    pair_bounds=_bounds)
                 # Whether rows may be deduplicated BETWEEN hops depends on what
                 # the operators ABOVE the traversal do with path multiplicity,
                 # which `emit_bgp` cannot see — so the ROOT is handed to it and

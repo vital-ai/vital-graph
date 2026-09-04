@@ -47,6 +47,8 @@ class ImportProgress:
 
 
 # Type alias for progress callback
+_XSD = "http://www.w3.org/2001/XMLSchema#"
+
 ProgressCallback = Callable[[ImportProgress], None]
 
 
@@ -61,9 +63,73 @@ def _term_uuid(text: str, ttype: str, lang: Optional[str] = None,
     return str(uuid_mod.uuid5(_NS, "\x00".join(parts)))
 
 
+async def _resolve_datatype_ids(conn, space_id: str,
+                                uris) -> Dict[str, int]:
+    """Map datatype URI -> the space's integer id, creating any that are new.
+
+    `_term_uuid` hashes the datatype_ID, not the URI, so this has to run BEFORE
+    the terms are hashed — otherwise the import mints uuids against ids it has
+    not resolved yet and no other writer would agree with them (`issues/157`).
+
+    The insert is `ON CONFLICT DO NOTHING` followed by a re-read rather than
+    `RETURNING`, because a concurrent importer may have created the same row:
+    RETURNING gives nothing for the conflicting insert and the id would come
+    back None for a datatype that plainly exists.
+    """
+    uris = {u for u in uris if u}
+    if not uris:
+        return {}
+    t_dt = f"{space_id}_datatype"
+    await conn.executemany(
+        f"INSERT INTO {t_dt} (datatype_uri) VALUES ($1) ON CONFLICT DO NOTHING",
+        [(u,) for u in sorted(uris)])
+    rows = await conn.fetch(
+        f"SELECT datatype_uri, datatype_id FROM {t_dt} "
+        f"WHERE datatype_uri = ANY($1::text[])", list(uris))
+    return {r["datatype_uri"]: r["datatype_id"] for r in rows}
+
+
+def _scan_datatype_uris(file_path: str) -> set:
+    """Every literal datatype URI in the file.
+
+    A separate cheap pass rather than folding it into pass 1: the ids must be
+    known before the first term is hashed, and pass 1 is where the hashing
+    happens.
+    """
+    from pyoxigraph import parse as ox_parse
+    out = set()
+    with open(file_path, "rb") as f:
+        for triple in ox_parse(f, "application/n-triples"):
+            o = triple.object
+            if type(o).__name__ == "Literal" and not o.language:
+                dt = getattr(o, "datatype", None)
+                if dt is not None:
+                    out.add(str(dt.value))
+    return out
+
+
 def _classify_node(node, bnode_scope: Optional[str] = None
-                   ) -> Tuple[str, str, Optional[str]]:
-    """Classify a pyoxigraph triple node into (value, term_type, lang).
+                   ) -> Tuple[str, str, Optional[str], Optional[str]]:
+    """Classify a pyoxigraph triple node into (value, term_type, lang, datatype).
+
+    THE DATATYPE IS PART OF THE TERM, not decoration (`issues/157`). This
+    returned a three-tuple and dropped `node.datatype` on the floor, with two
+    consequences:
+
+      * every typed comparator matched NOTHING on imported data — measured at
+        6,636 typed terms via the CSV loader against 26 via this path, and a
+        `MQLRating >= 65` criterion returning 698 rows on one and 0 on the
+        other, from the same generator;
+      * worse, `_term_uuid` HASHES the datatype, so a bulk-imported "58.0" got a
+        different uuid from the same literal written by `add_rdf_quads_batch` or
+        a SPARQL UPDATE. One value, two terms, and a query against either could
+        not see quads written through the other. Latent until a space is both
+        imported and incrementally written, which is the normal lifecycle.
+
+    pyoxigraph gives a Literal's datatype as an IRI whose `.value` is the URI.
+    `xsd:string` is returned as-is rather than normalised away: the writers this
+    has to agree with resolve it to a datatype_id like any other, and dropping
+    it here would recreate the same split for every plain string.
 
     `bnode_scope` skolemises blank-node labels against the document they came
     from. RDF scopes labels to the document, so two files using `_:b0` describe
@@ -76,7 +142,35 @@ def _classify_node(node, bnode_scope: Optional[str] = None
     cls_name = type(node).__name__
     if cls_name == "Literal":
         lang = str(node.language) if node.language else None
-        return node.value, "L", lang
+        dt = getattr(node, "datatype", None)
+        # A language-tagged literal is rdf:langString by definition; carrying
+        # both would double-key the same term.
+        dt_uri = str(dt.value) if (dt is not None and lang is None) else None
+        # `xsd:string` IS KEPT, because that is what the system actually does
+        # everywhere else — verified against production, not inferred.
+        #
+        #     space                 string    other typed    UNTYPED
+        #     prod_kg              375,186        525,022          0
+        #     lead_data            326,323        127,526          0
+        #     kg_crud_stress_test      499             25          0
+        #
+        # Zero untyped literals anywhere, including a space written through the
+        # CRUD path rather than loaded from a file. `rdflib.Literal("CA")`
+        # reports `datatype is None`, which is what led an earlier version of
+        # this to normalise xsd:string away — but the KG model emits TYPED
+        # values, so `_ensure_term` receives literals that already carry
+        # xsd:string and stores it.
+        #
+        # Normalising here would therefore SPLIT production terms rather than
+        # unify them: an import into an existing space would write "CA" untyped
+        # against 375,186 typed ones, which is `issues/157` reintroduced by its
+        # own fix.
+        #
+        # RDF 1.1 says a plain literal and an xsd:string literal denote the same
+        # value, so the stored form is arguably wrong — but it is CONSISTENTLY
+        # wrong, and consistency is what term identity needs. Changing it is a
+        # migration, not an importer edit (`issues/158`).
+        return node.value, "L", lang, dt_uri
     elif cls_name == "BlankNode":
         label = node.value
         if bnode_scope:
@@ -90,15 +184,15 @@ def _classify_node(node, bnode_scope: Optional[str] = None
             # another, so identity would drift instead of round-tripping.
             if not is_skolem_label(label):
                 label = skolem_label(bnode_scope, label)
-        return label, "B", None
+        return label, "B", None, None
     else:
         # One of our own Skolem IRIs read back becomes the blank node it was,
         # rather than an ordinary IRI — the export round-trip.
         from vitalgraph.db.sparql_sql.term_normalize import deskolemize_iri
         inner = deskolemize_iri(node.value)
         if inner is not None:
-            return inner, "B", None
-        return node.value, "U", None
+            return inner, "B", None, None
+        return node.value, "U", None, None
 
 
 def _unescape_nquads_string(s: str) -> str:
@@ -206,7 +300,7 @@ class ImportEngine:
 
     Usage::
 
-        engine = ImportEngine(pool)
+        engine = ImportEngine(pool, signal_manager=signal_manager)
         result = await engine.import_ntriples_bulk(
             space_id="my_space",
             graph_uri="urn:my_space:main",
@@ -214,12 +308,41 @@ class ImportEngine:
         )
     """
 
-    def __init__(self, pool):
+    def __init__(self, pool, signal_manager=None):
         """
         Args:
             pool: asyncpg connection pool.
+            signal_manager: optional; used to tell OTHER processes to drop their
+                term cache after a load. A bulk import TRUNCATES the term table
+                and reloads it, so every cached literal->uuid mapping for the
+                space is stale — and a running server that keeps the old one
+                resolves constants to terms that no longer exist, so affected
+                queries return 0 rows and report success. The CLI has no signal
+                manager, which is exactly the case that bit: an import from the
+                command line cannot reach the server's memory, so the server
+                must be told or restarted.
         """
         self._pool = pool
+        self._signal_manager = signal_manager
+
+    async def _invalidate_term_cache(self, space_id: str) -> None:
+        """Drop this process's term cache for *space_id*, and tell the others."""
+        from vitalgraph.db.sparql_sql.generator import invalidate_term_cache
+        invalidate_term_cache(space_id)
+        sm = self._signal_manager
+        if sm is None:
+            logger.warning(
+                "Import of %s changed term uuids, but this process has no "
+                "SignalManager: any RUNNING server still holds the old "
+                "literal->uuid mappings and will return 0 rows for affected "
+                "queries until it is restarted.", space_id)
+            return
+        try:
+            await sm.notify_cache_invalidate("term", space_id)
+            logger.info("Notified term-cache invalidation for %s", space_id)
+        except Exception as exc:
+            logger.warning("Could not notify term-cache invalidation for %s: %s",
+                           space_id, exc)
 
     # ------------------------------------------------------------------
     # Shared helpers
@@ -248,13 +371,15 @@ class ImportEngine:
     @staticmethod
     def _parse_ntriples_terms(file_path: str, graph_uri: str,
                               progress_cb: Optional[ProgressCallback] = None,
+                              datatype_ids: Optional[Dict[str, int]] = None,
                               ) -> Tuple[Dict[Tuple, str], int]:
         """Pass 1: Parse N-Triples file and collect unique terms with UUIDs.
 
         Returns:
             (terms_dict, triple_count) where terms_dict maps
-            (text, type, lang) -> uuid_str.
+            (text, type, lang, datatype_uri) -> uuid_str.
         """
+        datatype_ids = datatype_ids or {}
         from pyoxigraph import parse as ox_parse
 
         terms: Dict[Tuple, str] = {}
@@ -266,10 +391,18 @@ class ImportEngine:
         # for one node and the quads would reference terms that do not exist.
         bnode_scope = _bnode_scope_for(graph_uri, file_path)
 
-        def ensure(text: str, ttype: str, lang: Optional[str] = None) -> str:
-            key = (text, ttype, lang)
+        # The datatype is part of the KEY and of the HASH. `_term_uuid` mixes
+        # `datatype_id` in, so omitting it here minted a uuid no other writer
+        # would ever produce for the same literal (`issues/157`).
+        #
+        # `datatype_ids` maps uri -> the space's integer id; it is resolved
+        # BEFORE this pass so the hash can use the same id the row will carry.
+        def ensure(text: str, ttype: str, lang: Optional[str] = None,
+                   dt_uri: Optional[str] = None) -> str:
+            key = (text, ttype, lang, dt_uri)
             if key not in terms:
-                terms[key] = _term_uuid(text, ttype, lang=lang)
+                terms[key] = _term_uuid(text, ttype, lang=lang,
+                                        datatype_id=datatype_ids.get(dt_uri))
             return terms[key]
 
         # Pre-register graph URI
@@ -277,11 +410,11 @@ class ImportEngine:
 
         with open(file_path, "rb") as f:
             for triple in ox_parse(f, "application/n-triples"):
-                s_val, s_type, _ = _classify_node(triple.subject, bnode_scope)
+                s_val, s_type, _, _ = _classify_node(triple.subject, bnode_scope)
                 ensure(s_val, s_type)
                 ensure(triple.predicate.value, "U")
-                o_val, o_type, o_lang = _classify_node(triple.object, bnode_scope)
-                ensure(o_val, o_type, o_lang)
+                o_val, o_type, o_lang, o_dt = _classify_node(triple.object, bnode_scope)
+                ensure(o_val, o_type, o_lang, o_dt)
                 triple_count += 1
 
                 if progress_cb and triple_count % 500_000 == 0:
@@ -364,8 +497,17 @@ class ImportEngine:
             progress_cb(ImportProgress(phase="parse_terms", message="Collecting terms..."))
 
         t0 = time.time()
+        # Datatypes FIRST. `_term_uuid` hashes the datatype_id, so the ids have
+        # to exist before a single term is hashed (`issues/157`).
+        async with self._pool.acquire() as conn:
+            datatype_ids = await _resolve_datatype_ids(
+                conn, space_id, _scan_datatype_uris(file_path))
+        if datatype_ids:
+            logger.info("Resolved %d literal datatype(s) for %s",
+                        len(datatype_ids), space_id)
+
         terms, triple_count = self._parse_ntriples_terms(
-            file_path, graph_uri, progress_cb)
+            file_path, graph_uri, progress_cb, datatype_ids)
         phases['parse_terms'] = time.time() - t0
 
         if cancel_event and cancel_event.is_set():
@@ -381,13 +523,14 @@ class ImportEngine:
 
         t0 = time.time()
         term_records = [
-            (uid, text, ttype, lang, "primary")
-            for (text, ttype, lang), uid in terms.items()
+            (uid, text, ttype, lang, datatype_ids.get(dt_uri), "primary")
+            for (text, ttype, lang, dt_uri), uid in terms.items()
         ]
         async with self._pool.acquire() as conn:
             await conn.copy_records_to_table(
                 term_tbl,
-                columns=["term_uuid", "term_text", "term_type", "lang", "dataset"],
+                columns=["term_uuid", "term_text", "term_type", "lang",
+                         "datatype_id", "dataset"],
                 records=term_records,
             )
         phases['copy_terms'] = time.time() - t0
@@ -406,7 +549,7 @@ class ImportEngine:
 
         from pyoxigraph import parse as ox_parse
 
-        graph_uuid = terms[(graph_uri, "U", None)]
+        graph_uuid = terms[(graph_uri, "U", None, None)]
         quad_batch: List[Tuple] = []
         total_quads = 0
         t0 = time.time()
@@ -431,11 +574,11 @@ class ImportEngine:
 
         with open(file_path, "rb") as f:
             for triple in ox_parse(f, "application/n-triples"):
-                s_val, s_type, _ = _classify_node(triple.subject, bnode_scope)
-                s_uuid = terms[(s_val, s_type, None)]
-                p_uuid = terms[(triple.predicate.value, "U", None)]
-                o_val, o_type, o_lang = _classify_node(triple.object, bnode_scope)
-                o_uuid = terms[(o_val, o_type, o_lang)]
+                s_val, s_type, _, _ = _classify_node(triple.subject, bnode_scope)
+                s_uuid = terms[(s_val, s_type, None, None)]
+                p_uuid = terms[(triple.predicate.value, "U", None, None)]
+                o_val, o_type, o_lang, o_dt = _classify_node(triple.object, bnode_scope)
+                o_uuid = terms[(o_val, o_type, o_lang, o_dt)]
 
                 quad_batch.append((s_uuid, p_uuid, o_uuid, graph_uuid, "primary"))
 
@@ -482,6 +625,10 @@ class ImportEngine:
         async with self._pool.acquire() as conn:
             resync_result = await resync_all_auxiliary_tables(conn, space_id)
         phases['resync'] = time.time() - t0
+
+        # --- Drop stale literal->uuid mappings ---
+        # AFTER the data is in, so nothing re-caches the old terms in between.
+        await self._invalidate_term_cache(space_id)
 
         # --- Register graph ---
         async with self._pool.acquire() as conn:
@@ -597,6 +744,13 @@ class ImportEngine:
         # Document scope for blank-node labels (issues/076 facet 2).
         bnode_scope = _bnode_scope_for(graph_uri, file_path)
 
+        # Datatypes first, for the same reason as the bulk path: the id is
+        # hashed into the term uuid, so it must exist before any term is hashed
+        # (`issues/157`).
+        async with self._pool.acquire() as conn:
+            datatype_ids = await _resolve_datatype_ids(
+                conn, space_id, _scan_datatype_uris(file_path))
+
         with open(file_path, "rb") as f:
             if checkpoint_offset > 0:
                 f.seek(checkpoint_offset)
@@ -604,19 +758,22 @@ class ImportEngine:
 
             for triple in ox_parse(f, "application/n-triples"):
                 # Subject
-                s_val, s_type, _ = _classify_node(triple.subject, bnode_scope)
+                s_val, s_type, _, _ = _classify_node(triple.subject, bnode_scope)
                 s_uuid = _term_uuid(s_val, s_type)
-                term_batch.append((s_uuid, s_val, s_type, None, "primary"))
+                term_batch.append((s_uuid, s_val, s_type, None, None, "primary"))
 
                 # Predicate
                 p_val = triple.predicate.value
                 p_uuid = _term_uuid(p_val, "U")
-                term_batch.append((p_uuid, p_val, "U", None, "primary"))
+                term_batch.append((p_uuid, p_val, "U", None, None, "primary"))
 
-                # Object
-                o_val, o_type, o_lang = _classify_node(triple.object, bnode_scope)
-                o_uuid = _term_uuid(o_val, o_type, lang=o_lang)
-                term_batch.append((o_uuid, o_val, o_type, o_lang, "primary"))
+                # Object. The datatype goes into BOTH the hash and the row —
+                # see `_classify_node` and `issues/157`. Dropping it here would
+                # mint a uuid the bulk path and the write path never produce.
+                o_val, o_type, o_lang, o_dt = _classify_node(triple.object, bnode_scope)
+                o_dt_id = datatype_ids.get(o_dt)
+                o_uuid = _term_uuid(o_val, o_type, lang=o_lang, datatype_id=o_dt_id)
+                term_batch.append((o_uuid, o_val, o_type, o_lang, o_dt_id, "primary"))
 
                 # Quad
                 quad_batch.append((s_uuid, p_uuid, o_uuid, graph_uuid, "primary"))
@@ -667,7 +824,7 @@ class ImportEngine:
         # Incremental aux table sync
         from vitalgraph.db.sparql_sql.sync_edge_table import resync_edge_table
         from vitalgraph.db.sparql_sql.sync_frame_entity_table import resync_frame_entity_table
-        from vitalgraph.db.sparql_sql.sync_stats_tables import resync_stats_tables
+        from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
 
         if progress_cb:
             progress_cb(ImportProgress(
@@ -678,7 +835,7 @@ class ImportEngine:
         async with self._pool.acquire() as conn:
             await resync_edge_table(conn, space_id)
             await resync_frame_entity_table(conn, space_id)
-            await resync_stats_tables(conn, space_id)
+            await recompute_stats_tables(conn, space_id)
 
         # Register graph
         async with self._pool.acquire() as conn:
@@ -867,7 +1024,7 @@ class ImportEngine:
         # Incremental aux table sync
         from vitalgraph.db.sparql_sql.sync_edge_table import resync_edge_table
         from vitalgraph.db.sparql_sql.sync_frame_entity_table import resync_frame_entity_table
-        from vitalgraph.db.sparql_sql.sync_stats_tables import resync_stats_tables
+        from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
 
         if progress_cb:
             progress_cb(ImportProgress(
@@ -878,7 +1035,7 @@ class ImportEngine:
         async with self._pool.acquire() as conn:
             await resync_edge_table(conn, space_id)
             await resync_frame_entity_table(conn, space_id)
-            await resync_stats_tables(conn, space_id)
+            await recompute_stats_tables(conn, space_id)
 
         # Register graph
         async with self._pool.acquire() as conn:
@@ -1054,7 +1211,7 @@ class ImportEngine:
         # Incremental aux table sync
         from vitalgraph.db.sparql_sql.sync_edge_table import resync_edge_table
         from vitalgraph.db.sparql_sql.sync_frame_entity_table import resync_frame_entity_table
-        from vitalgraph.db.sparql_sql.sync_stats_tables import resync_stats_tables
+        from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
 
         if progress_cb:
             progress_cb(ImportProgress(
@@ -1065,7 +1222,7 @@ class ImportEngine:
         async with self._pool.acquire() as conn:
             await resync_edge_table(conn, space_id)
             await resync_frame_entity_table(conn, space_id)
-            await resync_stats_tables(conn, space_id)
+            await recompute_stats_tables(conn, space_id)
 
         # Register graph
         async with self._pool.acquire() as conn:
@@ -1116,8 +1273,9 @@ class ImportEngine:
                 if unique_terms:
                     await conn.executemany(
                         f"INSERT INTO {term_tbl} "
-                        f"(term_uuid, term_text, term_type, lang, dataset) "
-                        f"VALUES ($1, $2, $3, $4, $5) "
+                        f"(term_uuid, term_text, term_type, lang, "
+                        f"datatype_id, dataset) "
+                        f"VALUES ($1, $2, $3, $4, $5, $6) "
                         f"ON CONFLICT (term_uuid) DO NOTHING",
                         unique_terms,
                     )

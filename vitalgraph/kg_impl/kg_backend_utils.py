@@ -1210,14 +1210,6 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                     await self.backend.add_rdf_quads_batch_bulk(
                         space_id, insert_quads, connection=conn, stats_sink=sink)
 
-                from vitalgraph.db.sparql_sql.sync_stats_tables import (
-                    sync_stats_after_delete, sync_stats_after_insert)
-                for op, rows in sink:
-                    if op == "delete":
-                        await sync_stats_after_delete(conn, space_id, rows)
-                    else:
-                        await sync_stats_after_insert(conn, space_id, rows)
-
             from vitalgraph.db.sparql_sql.deadlock_retry import with_deadlock_retry
             await with_deadlock_retry(
                 self.backend.db_impl.connection_pool, _do_update,
@@ -1267,8 +1259,6 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                         await sync_frame_entity_before_delete(conn, space_id, subject_uuids, context_uuid=g_uuid)
                         from ..db.sparql_sql.sync_edge_table import sync_edge_table_before_delete
                         await sync_edge_table_before_delete(conn, space_id, subject_uuids, context_uuid=g_uuid)
-                        from ..db.sparql_sql.sync_stats_tables import sync_stats_for_deleted_subjects
-                        await sync_stats_for_deleted_subjects(conn, space_id, subject_uuids, context_uuid=g_uuid)
 
                         # Step 3: Delete all quads for those subjects
                         result = await conn.execute(
@@ -1315,11 +1305,6 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
 
             async with self.backend.db_impl.connection_pool.acquire() as conn:
                 async with conn.transaction():
-                    # Sync stats before delete (decrement counts for old quads)
-                    from ..db.sparql_sql.sync_stats_tables import sync_stats_for_deleted_subjects
-                    await sync_stats_for_deleted_subjects(
-                        conn, space_id, [entity_uuid], context_uuid=g_uuid)
-
                     # Delete only entity's own quads
                     result = await conn.execute(
                         f"DELETE FROM {t['rdf_quad']} "
@@ -1384,8 +1369,6 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                         from ..db.sparql_sql.sync_edge_table import sync_edge_table_before_delete
                         await sync_edge_table_before_delete(conn, space_id, s_uuids, context_uuid=g_uuid)
                         _s2 = _time.monotonic()
-                        from ..db.sparql_sql.sync_stats_tables import sync_stats_for_deleted_subjects
-                        await sync_stats_for_deleted_subjects(conn, space_id, s_uuids, context_uuid=g_uuid)
                         _s3 = _time.monotonic()
 
                         # Delete all quads for these subjects in this graph

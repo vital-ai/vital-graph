@@ -385,7 +385,11 @@ class ImportExportJobManager:
         if not file_path:
             return {"success": False, "error": "No file_path provided for import"}
 
-        engine = ImportEngine(self._pool)
+        # The signal manager goes IN, so the load can tell other processes to
+        # drop their term cache (`issues/158`). This manager has held one since
+        # it was written; it simply was not handed on, and the import path is
+        # the one that invalidates those mappings.
+        engine = ImportEngine(self._pool, signal_manager=self._signal)
         config = job.get('config') or {}
         if isinstance(config, str):
             config = json.loads(config)

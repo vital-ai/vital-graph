@@ -166,8 +166,8 @@ async def main():
                 # leave those matching. Run against 5 changed spaces it found 3
                 # and passed the other 2 as clean.
                 from vitalgraph.db.sparql_sql.sync_stats_tables import (
-                    resync_stats_tables)
-                await resync_stats_tables(conn, sid)
+                    recompute_stats_tables)
+                await recompute_stats_tables(conn, sid)
                 needs_stats.append(sid)
             logger.info("%s: dropped %s duplicate(s), PK narrowed, stats "
                         "resynced, %.1fs",

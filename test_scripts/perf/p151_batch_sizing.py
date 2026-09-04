@@ -44,9 +44,12 @@ async def main():
         sel, ins = await E.backfill_entity_slot_sort_batch(c, sp, etype, batch_size=bs)
         el=(time.time()-t)*1000
         print(f"    batch={bs:<5} selected={sel:<5} inserted={ins:<5} {el:7.0f} ms  ({el/max(sel,1):.2f} ms/entity)")
-    for st in (f"DROP TABLE IF EXISTS {sp}_entity_slot_sort", f"DROP TABLE IF EXISTS {sp}_edge",
-               f"DROP TABLE IF EXISTS {sp}_rdf_quad", f"DROP TABLE IF EXISTS {sp}_term"):
-        try: await c.execute(st)
-        except Exception: pass
+    # Use drop_space, NOT a hand-written list. A space has ~24 tables; this
+    # script originally dropped four and leaked twenty, which is the exact
+    # failure `drop_space`'s self-healing sweep exists to prevent (see
+    # tests/unit/test_drop_space_orphan_sweep.py: one forgotten table meant
+    # "every space ever created leaked one table — 116 orphans on one local
+    # stack").
+    await SparqlSQLSchema.drop_space(c, sp)
     await c.close()
 asyncio.run(main())

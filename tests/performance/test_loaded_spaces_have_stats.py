@@ -1,7 +1,7 @@
 """A space that holds quads must hold statistics for them (issues/103).
 
-THE STATE THIS EXISTS TO CATCH. `resync_stats_tables` TRUNCATEs and repopulates.
-On 2026-08-17 a load died between those two steps and left `sp_lead_synth_100k`
+THE STATE THIS EXISTS TO CATCH. The rebuild TRUNCATEs and repopulates. On
+2026-08-17 a load died between those two steps and left `sp_lead_synth_100k`
 with 50,436,200 quads and a 136-row `rdf_stats`. The load reported failure and
 exited; the quads were already committed; nothing else noticed.
 
@@ -20,9 +20,15 @@ the previous contents are empty, so a failed first rebuild still leaves nothing.
 Hence this check, which is the mark the next reader trips over.
 
 WHY pred_stats AND NOT rdf_stats. `rdf_pred_stats` gets one row per predicate
-with no threshold, so a space with quads always has rows. `rdf_stats` is capped
-(`STATS_MAX_ROW_COUNT`) and legitimately empty for a space whose every pair
-exceeds the cap, which would make an assertion on it fire on healthy data.
+with no threshold, so a space with quads always has rows. `rdf_stats` holds only
+pairs reaching `STATS_MIN_ROW_COUNT`, and is legitimately EMPTY for a space whose
+every (predicate, object) pair is a singleton — which is the normal shape of a
+space keyed by distinct ids. Asserting on it would fire on healthy data.
+
+The reason used to be the opposite one: rdf_stats was capped ABOVE at
+`STATS_MAX_ROW_COUNT` and so could be empty for a space whose pairs were all too
+LARGE. That cap is gone with `issues/142` — the recompute keeps the largest pairs
+deliberately — so the empty case now comes from the floor, not the ceiling.
 """
 
 from __future__ import annotations

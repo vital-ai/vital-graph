@@ -270,8 +270,18 @@ class TestRestDeletePathsSyncTheEdgeTable:
         A path can remove its edge rows correctly and still leave
         rdf_pred_stats counting quads that no longer exist, which is what makes
         a predicate look larger than it is to the join reorder.
+
+        The delete no longer decrements anything — `recompute_stats_tables` is
+        the only writer (`issues/142`) — so the count is taken AFTER a recompute
+        on each side. That is not a weaker check. Decrementing was the specific
+        mechanism that broke: it subtracted on delete and, for a pruned
+        predicate, refused to add back on insert, so the count ratcheted to zero
+        while every individual delta looked right. Comparing a rebuilt count
+        against the quads catches the overstatement this test was written for
+        AND the understatement the decrement caused.
         """
         uris = await _seed(space_impl, test_space, 4, "reststats")
+        await TestSingleQuadInsertMaintainsStats._refresh(pg_conn, test_space)
         src_pred = await pg_conn.fetchval(
             f"SELECT term_uuid FROM {test_space}_term WHERE term_text = $1",
             str(HAS_EDGE_SOURCE))
@@ -283,28 +293,45 @@ class TestRestDeletePathsSyncTheEdgeTable:
         quads = [(URIRef(u), HAS_EDGE_SOURCE,
                   URIRef(u.replace(":edge:", ":src:")), GRAPH) for u in uris]
         await space_impl.remove_rdf_quads_batch(test_space, quads)
+        await TestSingleQuadInsertMaintainsStats._refresh(pg_conn, test_space)
 
         after = await pg_conn.fetchval(
             f"SELECT row_count FROM {test_space}_rdf_pred_stats "
             f"WHERE predicate_uuid = $1", src_pred)
-        assert after == before - 4, (
-            f"pred_stats went {before} -> {after} after deleting 4 quads; "
-            f"expected {before - 4}. The delete path is not decrementing stats.")
+        actual = await pg_conn.fetchval(
+            f"SELECT count(*) FROM {test_space}_rdf_quad WHERE predicate_uuid = $1",
+            src_pred)
+        assert after == before - 4 and after == actual, (
+            f"pred_stats went {before} -> {after} after deleting 4 quads "
+            f"({actual} actually remain); expected {before - 4}. A recompute "
+            f"that does not reflect a delete leaves the predicate looking "
+            f"larger than it is to the join reorder.")
 
 
 class TestSingleQuadInsertMaintainsStats:
-    """`add_rdf_quad` — the last write path that did not maintain stats.
+    """`add_rdf_quad` — stats are true after a recompute, not after the write.
 
-    It syncs edge and frame_entity, and its own comment explains why: "this
-    path bypasses the bulk sync, so edge quads inserted here would otherwise
-    never reach the edge table". Stats were not part of that thought, so
-    rdf_pred_stats under-counted every quad inserted through it — which makes a
-    predicate look SMALLER than it is to the join reorder, the direction that
-    gets it driven first.
+    ORIGINALLY this asserted that the write path itself maintained stats: it was
+    the last path that did not, so rdf_pred_stats under-counted every quad
+    inserted through it — which makes a predicate look SMALLER than it is to the
+    join reorder, the direction that gets it driven first.
 
-    Asserted as a delta rather than an absolute, so the test does not depend on
-    what else the fixture has written.
+    That whole mechanism is gone. `recompute_stats_tables` is now the only
+    writer (`issues/142`), because incremental maintenance decremented on delete
+    and refused to re-increment for a pruned predicate, ratcheting the table to
+    zero under ordinary churn. So the write path leaving stats untouched is now
+    CORRECT, and the property worth pinning moved: after a recompute the counts
+    must equal reality — for quads written through this path too, which is the
+    coverage this class still contributes.
+
+    Kept as a delta where it was a delta, so the test does not depend on what
+    else the fixture has written.
     """
+
+    @staticmethod
+    async def _refresh(conn, space_id):
+        from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
+        await recompute_stats_tables(conn, space_id)
 
     async def test_add_rdf_quad_increments_pred_stats(
         self, test_space, space_impl, pg_conn
@@ -320,6 +347,7 @@ class TestSingleQuadInsertMaintainsStats:
                 test_space, (URIRef(f"urn:test:singlequad:s:{i}"), pred,
                              URIRef(f"urn:test:singlequad:o:{i}"), GRAPH))
             assert ok
+        await self._refresh(pg_conn, test_space)
 
         after = await pg_conn.fetchval(
             f"SELECT row_count FROM {test_space}_rdf_pred_stats ps "
@@ -344,6 +372,7 @@ class TestSingleQuadInsertMaintainsStats:
             await space_impl.add_rdf_quad(
                 test_space, (URIRef(f"urn:test:singlequad2:s:{i}"), pred,
                              URIRef(f"urn:test:singlequad2:o:{i}"), GRAPH))
+        await self._refresh(pg_conn, test_space)
 
         recorded, actual = await pg_conn.fetchrow(
             f"""SELECT

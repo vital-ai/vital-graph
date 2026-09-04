@@ -157,15 +157,14 @@ async def repair_space(conn, space_id: str, s: dict) -> int:
             f"INSERT INTO {space_id}_rdf_quad "
             f"(subject_uuid, predicate_uuid, object_uuid, context_uuid) "
             f"VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING", written)
-        # Quads written with raw SQL fire none of the incremental hooks in
-        # sparql_sql_space_impl, which is exactly how rdf_pred_stats came to be
-        # missing predicates entirely. Sync what was written.
-        try:
-            from vitalgraph.db.sparql_sql.sync_stats_tables import sync_stats_after_insert
-            await sync_stats_after_insert(conn, space_id, written)
-        except Exception as exc:
-            logger.warning("%s: stats sync failed (%d quads) — run "
-                           "repair_stats_tables: %s", space_id, len(written), exc)
+        # No stats sync needed. `rdf_stats` and `rdf_pred_stats` are RECOMPUTED
+        # from the quads by the maintenance job, not maintained incrementally,
+        # so quads written here appear at the next recompute whatever path wrote
+        # them. This used to call `sync_stats_after_insert` because a raw-SQL
+        # write fired none of the incremental hooks — the reason
+        # `rdf_pred_stats` once ended up missing predicates entirely — and that
+        # class of bug is now impossible by construction. See
+        # planning/planning_performance/rdf_stats_recompute_not_accumulate_plan.md
     return len(written)
 
 

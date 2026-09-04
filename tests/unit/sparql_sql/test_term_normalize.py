@@ -214,7 +214,9 @@ class TestAllIngestPathsScopeBlankNodes:
         class _BlankNode:                    # shaped like pyoxigraph's
             def __init__(self, v): self.value = v
         _BlankNode.__name__ = "BlankNode"
-        return _classify_node(_BlankNode(label), scope)
+        # [:3]: the fourth element is the literal datatype (`issues/157`),
+        # which is None for a blank node and irrelevant to scoping.
+        return _classify_node(_BlankNode(label), scope)[:3]
 
     def test_the_ntriples_classifier_scopes_labels(self):
         a = self._classify("b0", "docA")
@@ -237,7 +239,10 @@ class TestAllIngestPathsScopeBlankNodes:
         class _NamedNode:
             def __init__(self, v): self.value = v
         _NamedNode.__name__ = "NamedNode"
-        assert _classify_node(_NamedNode(skolem_iri(label))) == (label, "B", None)
+        # [:3] — `_classify_node` gained a fourth element, the literal's
+        # datatype (`issues/157`). It is always None for an IRI or blank node;
+        # slicing keeps this test about the scoping it was written for.
+        assert _classify_node(_NamedNode(skolem_iri(label)))[:3] == (label, "B", None)
 
     def test_an_ordinary_iri_is_untouched(self):
         from vitalgraph.endpoint.impl.data_import_impl import _classify_node
@@ -245,7 +250,7 @@ class TestAllIngestPathsScopeBlankNodes:
         class _NamedNode:
             def __init__(self, v): self.value = v
         _NamedNode.__name__ = "NamedNode"
-        assert _classify_node(_NamedNode("http://example.org/x")) == \
+        assert _classify_node(_NamedNode("http://example.org/x"))[:3] == \
             ("http://example.org/x", "U", None)
 
     def test_both_ntriples_passes_use_the_same_scope(self):

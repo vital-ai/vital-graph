@@ -120,11 +120,28 @@ services:
       - work_mem=64MB
       - -c
       - dynamic_shared_memory_type=sysv
-    # No volumes: PGDATA lives in the container's writable layer, so it is
-    # wiped when the CONTAINER is recreated — not when the image is rebuilt.
-    # A recreate therefore costs every loaded fixture (~22GB, about an hour to
-    # reload). Prefer `docker restart` plus ALTER SYSTEM where a setting allows
-    # it; only shm_size genuinely requires the recreate.
+    # No named volume here — but PGDATA is NOT in the container's writable
+    # layer, which this comment used to claim and which is wrong in the one way
+    # that matters. `postgres:18` declares VOLUME /var/lib/postgresql, so Docker
+    # creates an ANONYMOUS volume and PGDATA (18/docker beneath it) lives there.
+    #
+    # The practical difference: recreating the container does not DELETE the
+    # data, it ORPHANS it. A new anonymous volume is created and the old one
+    # stays on disk, full, unreferenced, and invisible to `docker volume ls`
+    # unless you look for it. That is worth knowing in both directions — a
+    # recreate still costs you every loaded fixture (~22GB, about an hour to
+    # reload) because the new volume is empty, but the previous one is
+    # RECOVERABLE until something prunes it. See docker-compose.test.persist.yml
+    # for how to reattach one.
+    #
+    # It also means any change to this service's volume configuration — most
+    # easily by layering docker-compose.test.persist.yml onto a stack that was
+    # started without it — silently SWAPS which dataset postgres serves. The
+    # fixtures do not appear corrupted; they appear absent.
+    #
+    # Prefer `docker restart` plus ALTER SYSTEM where a setting allows it; only
+    # shm_size genuinely requires the recreate. Rebuilding the APP image does
+    # not touch this container at all, so scope the command to that service.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 2s

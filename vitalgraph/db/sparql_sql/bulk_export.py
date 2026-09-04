@@ -144,10 +144,10 @@ async def import_space(conn, space_id: str, paths: Dict[str, str],
     if resync:
         from .sync_edge_table import resync_edge_table
         from .sync_frame_entity_table import resync_frame_entity_table
-        from .sync_stats_tables import resync_stats_tables
+        from .sync_stats_tables import recompute_stats_tables
         await resync_edge_table(conn, space_id)
         await resync_frame_entity_table(conn, space_id)
-        await resync_stats_tables(conn, space_id)
+        await recompute_stats_tables(conn, space_id)
 
     # Register the graphs the restored quads are in. COPY writes context_uuid
     # and nothing else, so none of the impl's write hooks fire and the

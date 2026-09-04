@@ -77,7 +77,7 @@ logger = logging.getLogger("migrate_space_schema")
 DERIVED = {
     "geo",                    # resync_all rebuilds from geo-typed quads
     "fuzzy_band", "fuzzy_phonetic_band",   # rebuilt by the fuzzy populator
-    "rdf_stats", "rdf_pred_stats",         # resync_stats_tables
+    "rdf_stats", "rdf_pred_stats",         # recompute_stats_tables
     "rdf_value_stats", "edge_fanout",      # resync_all
 }
 

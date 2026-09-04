@@ -485,6 +485,20 @@ def _insert_data_sql(quads: List[QuadPattern], space_id: str,
     quad_table = f"{space_id}_rdf_quad"
     stmts: List[str] = []
     seen_terms: Set[Tuple[str, str, Optional[int], Optional[str]]] = set()
+    # Term upserts are collected here and emitted SORTED BY term_uuid ahead of
+    # the quad inserts, rather than appended to `stmts` in quad order.
+    #
+    # `issues/152`, which is `issues/115` a third time. Locking the term primary
+    # key in quad order lets two concurrent writers whose statements share terms
+    # take the same locks in opposite order — a cycle, and one transaction is
+    # aborted with 40P01 and its whole batch discarded.
+    #
+    # The order has to be term_uuid specifically, not merely deterministic. It
+    # is what `add_rdf_quads_batch_bulk` and `_ensure_terms` already sort by,
+    # and writers only avoid deadlocking each other if they ALL agree on one
+    # order — a SPARQL UPDATE and a batch insert running concurrently is exactly
+    # the case a per-path convention would miss.
+    term_stmts: Dict[_uuid.UUID, str] = {}
 
     # SPARQL 1.1 §19.6: blank nodes in an INSERT DATA block are FRESH. They must
     # not merge with blank nodes already in the store, and each execution
@@ -533,14 +547,17 @@ def _insert_data_sql(quads: List[QuadPattern], space_id: str,
             key = (text, ttype, dt_id, lang)
             if key not in seen_terms:
                 seen_terms.add(key)
-                stmts.append(_term_upsert(term_table, text, ttype, lang,
-                                          datatype_id=dt_id))
+                term_stmts[_generate_term_uuid(text, ttype, lang=lang,
+                                               datatype_id=dt_id)] = \
+                    _term_upsert(term_table, text, ttype, lang,
+                                 datatype_id=dt_id)
 
         # Graph term
         key = (graph_uri, graph_type, None, None)
         if key not in seen_terms:
             seen_terms.add(key)
-            stmts.append(_term_upsert(term_table, graph_uri, graph_type))
+            term_stmts[_generate_term_uuid(graph_uri, graph_type)] = \
+                _term_upsert(term_table, graph_uri, graph_type)
 
         # Insert quad using deterministic UUID references
         s_uuid = _term_uuid_subquery(term_table, _node_text(q.subject), _node_type(q.subject))
@@ -559,7 +576,10 @@ def _insert_data_sql(quads: List[QuadPattern], space_id: str,
             f"WHERE subject_uuid = {s_uuid} AND predicate_uuid = {p_uuid} "
             f"AND object_uuid = {o_uuid} AND context_uuid = {g_uuid})"
         )
-    return ";\n".join(stmts)
+    # Terms first, in uuid order. Hoisting them ahead of the quad inserts is
+    # also required rather than merely tidy: a quad references its terms, so
+    # every term must exist before any quad that uses it.
+    return ";\n".join([term_stmts[k] for k in sorted(term_stmts)] + stmts)
 
 
 # ===========================================================================

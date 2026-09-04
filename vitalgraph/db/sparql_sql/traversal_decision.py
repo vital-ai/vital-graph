@@ -133,13 +133,29 @@ class Decision:
         return f"Decision({'hop-wise' if self.hop_wise else 'as-is'}: {self.reason}{d})"
 
 
-def _end_sizes(chain, pair_rows):
+def _end_sizes(chain, pair_rows, pair_bounds=None):
     """How many rows each end admits, when that is knowable.
 
-    A PINNED end admits one row by definition. A CONSTRAINED end admits
-    whatever `rdf_stats` says its (predicate, object) pair holds. An open end
-    is unknown and returns None — and unknown is not "large", so it must never
-    be compared as if it were.
+    A PINNED end admits one row by definition. A CONSTRAINED end admits whatever
+    `rdf_stats` says its (predicate, object) pair holds. An OPEN end is unknown
+    and returns None — and unknown is not "large", so it must never be compared
+    as if it were.
+
+    A CONSTRAINED END MISSING FROM rdf_stats IS NOT UNKNOWN ANY MORE, and this
+    is the point of `pair_bounds` (`issues/153`). `recompute_stats_tables` keeps
+    each predicate's LARGEST pairs, so a pair that is absent is smaller than
+    every pair stored for its predicate — an upper bound, not a mystery.
+
+    That matters because it is the common shape, not a corner: one end
+    constrained to a rare value and the other to a common one. The rare end is
+    exactly the one the cap drops, so without a bound this returned None for it
+    and `choose_direction` drove from the HUGE end — the opposite of the point
+    of the table. `issues/090` measured 9.2x for driving from the smaller end.
+
+    An upper bound is sound to compare directly: if bound < other, the true size
+    is also < other and the choice is right. If bound >= other the comparison is
+    inconclusive and picking the other end is the conservative outcome, which is
+    what falls out anyway.
     """
     def size(pinned, constraint):
         if pinned:
@@ -150,14 +166,23 @@ def _end_sizes(chain, pair_rows):
             # strings. A lookup that knows only one of them silently misses, and
             # a missing price reads as "unknown end", which is exactly how this
             # gate fails closed and does nothing.
-            return (pair_rows.get(constraint)
-                    or pair_rows.get((str(constraint[0]), str(constraint[1]))))
+            got = (pair_rows.get(constraint)
+                   or pair_rows.get((str(constraint[0]), str(constraint[1]))))
+            if got is not None:
+                return got
+        if constraint and pair_bounds:
+            # Absent. Fall back to what absence implies for THIS predicate.
+            b = (pair_bounds.get(constraint[0])
+                 if constraint[0] in pair_bounds
+                 else pair_bounds.get(str(constraint[0])))
+            if b is not None:
+                return b
         return None
     return (size(chain.pinned_head, chain.head_constraint),
             size(chain.pinned_tail, chain.tail_constraint))
 
 
-def choose_direction(chain, pair_rows=None) -> Optional[str]:
+def choose_direction(chain, pair_rows=None, pair_bounds=None) -> Optional[str]:
     """Which end to drive from — the smaller one, when both are known.
 
     issues/090, re-measured 2026-08-16 on a 5.1M-quad space:
@@ -174,10 +199,33 @@ def choose_direction(chain, pair_rows=None) -> Optional[str]:
     counts come from statistics already loaded — a pinned end is 1 by
     definition, a constrained end is one `rdf_stats` lookup.
 
-    Returns None when only one end is knowable, because a comparison needs two
-    numbers and guessing at the other is how a 4.2x regression gets shipped.
+    ONE KNOWABLE END IS STILL USED -- this used to say the opposite ("returns
+    None when only one end is knowable"), which contradicted both the code and
+    `test_one_knowable_end_is_used`. The usual one-known case is a PINNED end,
+    which is 1 row by definition and unbeatable, so declining there would give
+    up the whole issues/090 win to avoid a comparison that is not in doubt.
+
+    THE CASE THAT IS IN DOUBT is one end priced and the other absent from
+    `rdf_stats`, where this drives from the priced end because the other has no
+    number. Since the recompute, absence is no longer uninformative -- but what
+    it means depends on the PREDICATE, not on the pair:
+
+      * predicate not cut (the common case: 13 of 15, 18 of 19, 19 of 23 on the
+        spaces measured) -- every pair with count >= 2 is stored, so an absent
+        pair holds exactly ONE row. The best driving set available, and this
+        currently passes it over.
+      * predicate cut by `keep_top_n` -- the cap keeps a predicate's LARGEST
+        pairs, so an absent pair is <= every stored pair for that predicate.
+
+    Both are UPPER bounds: absence cannot hide a huge end.
+
+    Both are comparable, and both are recoverable from the loaded table without
+    a schema change. Not done here: it is a plan change and issues/090's numbers
+    swing 9.2x one way and 4.2x the other, so it wants measurement. See
+    `issues/153`, which also records that an earlier reading of this had the
+    direction backwards.
     """
-    head, tail = _end_sizes(chain, pair_rows)
+    head, tail = _end_sizes(chain, pair_rows, pair_bounds)
     if head is not None and tail is not None:
         return "head" if head <= tail else "tail"
     if head is not None:
@@ -190,7 +238,8 @@ def choose_direction(chain, pair_rows=None) -> Optional[str]:
 def decide(chain: Optional[TraversalChain],
            criterion_rows: Optional[int] = None,
            predicate_rows: Optional[int] = None,
-           pair_rows: Optional[dict] = None) -> Decision:
+           pair_rows: Optional[dict] = None,
+           pair_bounds: Optional[dict] = None) -> Decision:
     """Choose an evaluation shape for one chain.
 
     `criterion_rows` / `predicate_rows` come from the value histograms
@@ -213,7 +262,7 @@ def decide(chain: Optional[TraversalChain],
     # Without a pinned end there is no small driving set, so every hop would
     # materialise the whole relation. Untested, and the one shape with an
     # obvious mechanism for being worse — so it declines.
-    direction = choose_direction(chain, pair_rows)
+    direction = choose_direction(chain, pair_rows, pair_bounds)
     if direction is None:
         SHAPE.decline("neither end pinned or constrained, so there is no small "
                       "driving set and every hop would materialise the whole "
@@ -274,7 +323,7 @@ def decide(chain: Optional[TraversalChain],
 
 
 def decide_for_plan(chains, criterion_rows=None, predicate_rows=None,
-                    pair_rows=None) -> Decision:
+                    pair_rows=None, pair_bounds=None) -> Decision:
     """Decide for the deepest chain in a plan, and log it.
 
     The deepest is the one that matters: cost compounds per hop, and a plan
@@ -283,6 +332,7 @@ def decide_for_plan(chains, criterion_rows=None, predicate_rows=None,
     if not chains:
         SHAPE.decline("the plan holds no traversal chain")
         return Decision(False, "no chain")
-    decision = decide(chains[0], criterion_rows, predicate_rows, pair_rows)
+    decision = decide(chains[0], criterion_rows, predicate_rows, pair_rows,
+                      pair_bounds)
     logger.info("traversal decision: %s", decision)
     return decision
