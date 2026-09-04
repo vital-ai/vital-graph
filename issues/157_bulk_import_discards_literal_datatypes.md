@@ -90,3 +90,46 @@ comparator coverage runs against a CSV-loaded fixture, which is why it passes.
     shape of failure: correct answers, or plausible ones, with no signal.
   * `planning/planning_performance/lead_fixture_production_shape_plan.md` — the
     fixture work that surfaced this.
+
+## Migration: spaces imported BEFORE this fix hold untyped terms
+
+Established 2026-09-04, after the fix landed (`be56aeb`).
+
+The write path (`sparql_sql_space_impl._generate_term_uuid`) has hashed
+`datatype_id` since before this work — verified at `HEAD~2`. So the divergence
+was always IMPORT vs WRITE, not a global change of term identity. That bounds
+the migration: only terms created by the OLD import code are affected.
+
+Observed directly on the test stack, same literal, one space:
+
+    term_uuid                              datatype_id
+    5b4e3119-152a-5427-aa1d-9e20f4ad2ea8   1     (xsd:string — imported after)
+    a38727f0-4057-5dee-b0df-11c44b3cf346   NULL  (imported before)
+
+Two rows, two uuids, one literal. Quads written against the second do not join
+anything written against the first, and no error is raised at any point.
+
+### Detecting it
+
+A literal with no language and no datatype is the signature — RDF 1.1 has no
+such term, so a NULL here means the row was minted by the old import:
+
+    SELECT count(*) FROM {space}_term
+     WHERE term_type = 'L' AND lang IS NULL AND datatype_id IS NULL;
+
+Production measured ZERO untyped literals across the three spaces sampled while
+this was investigated, which is consistent with those spaces not having been
+loaded through the broken path. That is a sample, not a proof — run the query
+per space before concluding.
+
+### Remediating it
+
+**Re-import the affected space.** There is no cheap in-place repair: the term
+uuid is the primary key and is referenced from every quad position, so
+correcting it means rewriting `{space}_rdf_quad` as well as `{space}_term`. A
+re-import through the fixed code mints the right uuids from the start.
+
+Do NOT attempt to "backfill" `datatype_id` on the existing rows. Setting the
+column without changing the uuid leaves the row LOOKING correct while still
+hashing to the old identity, which is strictly worse than the current state:
+the detection query above would then report clean.
