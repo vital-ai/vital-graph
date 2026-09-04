@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 import uuid as uuid_mod
 from dataclasses import dataclass, field
@@ -108,6 +109,35 @@ def _scan_datatype_uris(file_path: str) -> set:
     return out
 
 
+_XSD_STRING = "http://www.w3.org/2001/XMLSchema#string"
+
+_DATATYPE_IN_TEXT = re.compile(r'\^\^<([^>]+)>')
+
+
+def _scan_datatype_uris_raw(file_path: str) -> set:
+    """Every ``^^<uri>`` in the file, whatever the container.
+
+    `_scan_datatype_uris` parses the file as N-Triples, which the JSONL-quads
+    and vital-block formats are not. Both of those carry N-Quads-ENCODED terms
+    inside another structure, and `^^<...>` survives that encoding intact — JSON
+    escapes the surrounding quotes, not the datatype IRI — so a textual scan
+    finds them without needing a parser per format.
+
+    Line-oriented rather than chunked, because a fixed-size read can split a
+    `^^<uri>` across a boundary and lose it. Both formats are line-delimited.
+    """
+    # `xsd:string` ALWAYS, whether or not it is written out. A plain `"v"` is
+    # an xsd:string in RDF 1.1 and `_parse_nquads_term_typed` returns it as one,
+    # so its id must resolve — otherwise every plain literal hashes with
+    # datatype_id=None here and with the real id on the bulk path, and the uuids
+    # diverge for the most common term in any file.
+    out = {_XSD_STRING}
+    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            out.update(_DATATYPE_IN_TEXT.findall(line))
+    return out
+
+
 def _classify_node(node, bnode_scope: Optional[str] = None
                    ) -> Tuple[str, str, Optional[str], Optional[str]]:
     """Classify a pyoxigraph triple node into (value, term_type, lang, datatype).
@@ -184,7 +214,7 @@ def _classify_node(node, bnode_scope: Optional[str] = None
             # another, so identity would drift instead of round-tripping.
             if not is_skolem_label(label):
                 label = skolem_label(bnode_scope, label)
-        return label, "B", None, None
+        return label, "B", None, None, None
     else:
         # One of our own Skolem IRIs read back becomes the blank node it was,
         # rather than an ordinary IRI — the export round-trip.
@@ -225,12 +255,37 @@ def _parse_nquads_term_for_import(
         bnode_scope: Optional[str] = None) -> Tuple[str, str, Optional[str]]:
     """Parse an N-Quads-encoded term into (text, term_type, lang).
 
+    The 3-tuple form, kept for callers that genuinely do not need the datatype.
+    `_parse_nquads_term_typed` is the same parse WITH it; this drops the fourth
+    value rather than re-implementing the parse.
+    """
+    text, ttype, lang, _dt = _parse_nquads_term_typed(term_str, bnode_scope)
+    return text, ttype, lang
+
+
+def _parse_nquads_term_typed(
+        term_str: str,
+        bnode_scope: Optional[str] = None
+) -> Tuple[str, str, Optional[str], Optional[str]]:
+    """Parse an N-Quads-encoded term into (text, term_type, lang, datatype).
+
     Returns values matching the term table schema:
-      ``<http://...>``                → (``http://...``, ``"U"``, None)
-      ``_:label``                     → (``label``,      ``"B"``, None)
-      ``"value"``                     → (``value``,      ``"L"``, None)
-      ``"value"^^<http://...>``       → (``value``,      ``"L"``, None)
-      ``"value"@en``                  → (``value``,      ``"L"``, ``"en"``)
+      ``<http://...>``                → (``http://...``, ``"U"``, None, None)
+      ``_:label``                     → (``label``,      ``"B"``, None, None)
+      ``"value"``                     → (``value``,      ``"L"``, None, None)
+      ``"value"^^<http://...>``       → (``value``,      ``"L"``, None, ``http://...``)
+      ``"value"@en``                  → (``value``,      ``"L"``, ``"en"``, None)
+
+    THE DATATYPE IS PART OF TERM IDENTITY (`issues/157`), so discarding it here
+    mints a different uuid from the one the bulk path and the write path produce
+    for the same literal. That divergence was real: the bulk and n-triples paths
+    were made datatype-aware while the JSONL-quads and vital-block paths, which
+    parse through here, were not — so the SAME typed literal landed under two
+    different uuids depending on which format imported it.
+
+    A language-tagged literal is `rdf:langString` by definition and carries no
+    separate datatype, which is why the `@lang` branch returns None for it —
+    the same rule `_classify_node` follows.
     """
     term_str = term_str.strip()
 
@@ -242,8 +297,8 @@ def _parse_nquads_term_for_import(
         from vitalgraph.db.sparql_sql.term_normalize import deskolemize_iri
         inner = deskolemize_iri(term_str[1:-1])
         if inner is not None:
-            return inner, "B", None
-        return term_str[1:-1], "U", None
+            return inner, "B", None, None
+        return term_str[1:-1], "U", None, None
 
     # Blank node
     if term_str.startswith('_:'):
@@ -268,7 +323,7 @@ def _parse_nquads_term_for_import(
             # another, so identity would drift instead of round-tripping.
             if not is_skolem_label(label):
                 label = skolem_label(bnode_scope, label)
-        return label, "B", None
+        return label, "B", None, None
 
 
     # Literal
@@ -287,12 +342,21 @@ def _parse_nquads_term_for_import(
 
         if rest.startswith('@'):
             lang = rest[1:]
-            return lexical, "L", lang
-        # Typed literals and plain strings both stored as "L" with no lang
-        return lexical, "L", None
+            return lexical, "L", lang, None
+        # `"v"^^<uri>` — the datatype is carried, not dropped.
+        rest = rest.strip()
+        if rest.startswith('^^<') and rest.endswith('>'):
+            return lexical, "L", None, rest[3:-1]
+        # A PLAIN literal is `xsd:string` (RDF 1.1), and that is not a
+        # formality here: pyoxigraph gives the bulk path `xsd:string` for the
+        # same token, so returning None would mint a DIFFERENT uuid for
+        # `"plain"` depending on which format imported it — the very
+        # divergence this parse exists to close. Production has zero untyped
+        # literals, which is the same statement from the other end.
+        return lexical, "L", None, _XSD_STRING
 
     # Fallback: treat as URI
-    return term_str, "U", None
+    return term_str, "U", None, None
 
 
 class ImportEngine:
@@ -739,7 +803,7 @@ class ImportEngine:
             ))
 
         # Ensure graph term exists
-        term_batch.append((graph_uuid, graph_uri, "U", None, "primary"))
+        term_batch.append((graph_uuid, graph_uri, "U", None, None, "primary"))
 
         # Document scope for blank-node labels (issues/076 facet 2).
         bnode_scope = _bnode_scope_for(graph_uri, file_path)
@@ -931,8 +995,17 @@ class ImportEngine:
                 message="Starting JSONL quads import...",
             ))
 
+        # Datatypes first: the id is hashed into the term uuid, so it must exist
+        # before any term is hashed (`issues/157`). The RAW scanner, because
+        # this format is not N-Triples and the N-Triples parser cannot read it —
+        # without this the uuids here would disagree with the ones the bulk and
+        # n-triples paths mint for the SAME typed literal.
+        async with self._pool.acquire() as conn:
+            datatype_ids = await _resolve_datatype_ids(
+                conn, space_id, _scan_datatype_uris_raw(file_path))
+
         # Ensure default graph term exists
-        term_batch.append((default_graph_uuid, graph_uri, "U", None, "primary"))
+        term_batch.append((default_graph_uuid, graph_uri, "U", None, None, "primary"))
 
         with open(file_path, "r", encoding="utf-8") as f:
             if checkpoint_offset > 0:
@@ -957,23 +1030,24 @@ class ImportEngine:
                 g_str = quad.get("g")
 
                 # Parse N-Quads-encoded terms → (text, type, lang)
-                s_text, s_type, s_lang = _parse_nquads_term_for_import(s_str, bnode_scope)
-                p_text, p_type, _      = _parse_nquads_term_for_import(p_str, bnode_scope)
-                o_text, o_type, o_lang = _parse_nquads_term_for_import(o_str, bnode_scope)
+                s_text, s_type, s_lang, _ = _parse_nquads_term_typed(s_str, bnode_scope)
+                p_text, p_type, _, _      = _parse_nquads_term_typed(p_str, bnode_scope)
+                o_text, o_type, o_lang, o_dt = _parse_nquads_term_typed(o_str, bnode_scope)
+                o_dt_id = datatype_ids.get(o_dt)
 
                 s_uuid = _term_uuid(s_text, s_type, lang=s_lang)
                 p_uuid = _term_uuid(p_text, p_type)
-                o_uuid = _term_uuid(o_text, o_type, lang=o_lang)
+                o_uuid = _term_uuid(o_text, o_type, lang=o_lang, datatype_id=o_dt_id)
 
-                term_batch.append((s_uuid, s_text, s_type, s_lang, "primary"))
-                term_batch.append((p_uuid, p_text, p_type, None, "primary"))
-                term_batch.append((o_uuid, o_text, o_type, o_lang, "primary"))
+                term_batch.append((s_uuid, s_text, s_type, s_lang, None, "primary"))
+                term_batch.append((p_uuid, p_text, p_type, None, None, "primary"))
+                term_batch.append((o_uuid, o_text, o_type, o_lang, o_dt_id, "primary"))
 
                 # Determine graph UUID: use per-line g if present, else default
                 if g_str:
                     g_text, g_type, _ = _parse_nquads_term_for_import(g_str, bnode_scope)
                     g_uuid = _term_uuid(g_text, g_type)
-                    term_batch.append((g_uuid, g_text, g_type, None, "primary"))
+                    term_batch.append((g_uuid, g_text, g_type, None, None, "primary"))
                 else:
                     g_uuid = default_graph_uuid
 
@@ -1130,7 +1204,16 @@ class ImportEngine:
             ))
 
         # Ensure graph term exists
-        term_batch.append((graph_uuid, graph_uri, "U", None, "primary"))
+        # Datatypes first: the id is hashed into the term uuid, so it must exist
+        # before any term is hashed (`issues/157`). The RAW scanner, because
+        # this format is not N-Triples and the N-Triples parser cannot read it —
+        # without this the uuids here would disagree with the ones the bulk and
+        # n-triples paths mint for the SAME typed literal.
+        async with self._pool.acquire() as conn:
+            datatype_ids = await _resolve_datatype_ids(
+                conn, space_id, _scan_datatype_uris_raw(file_path))
+
+        term_batch.append((graph_uuid, graph_uri, "U", None, None, "primary"))
 
         block_file = VitalBlockFile(file_path)
         reader = VitalBlockReader(block_file)
@@ -1146,23 +1229,24 @@ class ImportEngine:
             quads = graphobjects_to_quad_list(block.objects, graph_uri)
 
             for quad in quads:
-                s_text, s_type, s_lang = _parse_nquads_term_for_import(quad.s)
-                p_text, p_type, _      = _parse_nquads_term_for_import(quad.p)
-                o_text, o_type, o_lang = _parse_nquads_term_for_import(quad.o)
+                s_text, s_type, s_lang, _ = _parse_nquads_term_typed(quad.s)
+                p_text, p_type, _, _      = _parse_nquads_term_typed(quad.p)
+                o_text, o_type, o_lang, o_dt = _parse_nquads_term_typed(quad.o)
+                o_dt_id = datatype_ids.get(o_dt)
 
                 s_uuid = _term_uuid(s_text, s_type, lang=s_lang)
                 p_uuid = _term_uuid(p_text, p_type)
-                o_uuid = _term_uuid(o_text, o_type, lang=o_lang)
+                o_uuid = _term_uuid(o_text, o_type, lang=o_lang, datatype_id=o_dt_id)
 
-                term_batch.append((s_uuid, s_text, s_type, s_lang, "primary"))
-                term_batch.append((p_uuid, p_text, p_type, None, "primary"))
-                term_batch.append((o_uuid, o_text, o_type, o_lang, "primary"))
+                term_batch.append((s_uuid, s_text, s_type, s_lang, None, "primary"))
+                term_batch.append((p_uuid, p_text, p_type, None, None, "primary"))
+                term_batch.append((o_uuid, o_text, o_type, o_lang, o_dt_id, "primary"))
 
                 # Graph from the quad (set by graphobjects_to_quad_list)
                 if quad.g:
                     g_text, g_type, _ = _parse_nquads_term_for_import(quad.g)
                     g_uuid = _term_uuid(g_text, g_type)
-                    term_batch.append((g_uuid, g_text, g_type, None, "primary"))
+                    term_batch.append((g_uuid, g_text, g_type, None, None, "primary"))
                 else:
                     g_uuid = graph_uuid
 
