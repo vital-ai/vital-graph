@@ -96,10 +96,22 @@ class TestTheHandlerBranchExists:
     this was in before — `notify_cache_invalidate("term", ...)` had no branch."""
 
     def test_the_app_handles_a_term_invalidation(self):
-        import inspect
-        from vitalgraph.impl import vitalgraphapp_impl
+        """READ the module, do not IMPORT it.
 
-        src = inspect.getsource(vitalgraphapp_impl)
+        `inspect.getsource` would need the import, and importing
+        `vitalgraphapp_impl` pulls the whole server chain —
+        `starlette.middleware.sessions` -> `itsdangerous`, which the Tier 1 unit
+        environment does not install. That failed CI while passing locally,
+        which is the same shape as `c504abe` ("take the validation helpers out
+        from behind the server import chain").
+
+        The assertion is about SOURCE TEXT, so it never needed the import.
+        """
+        from pathlib import Path
+
+        src = (Path(__file__).resolve().parents[2]
+               / "vitalgraph" / "impl" / "vitalgraphapp_impl.py").read_text(
+                   encoding="utf-8")
         assert 'cache_type == "term"' in src, \
             "no handler branch for term invalidation; the notify goes nowhere"
         assert "invalidate_term_cache(space_id)" in src
