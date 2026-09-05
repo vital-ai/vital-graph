@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import pg_kwargs  # noqa: E402
 
 from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema  # noqa: E402
-from vitalgraph.db.sparql_sql.sparql_sql_admin import _VITALGRAPH_TERM_UUID_DDL  # noqa: E402
+from vitalgraph.db.sparql_sql.sparql_sql_admin import FUNCTION_DDL  # noqa: E402
 
 EXTENSIONS = ["pg_trgm", "pgcrypto", "vector", "postgis"]
 
@@ -67,7 +67,10 @@ async def main() -> int:
             except Exception as exc:                      # optional extensions
                 print(f"  ⚠️  extension {ext}: {exc}")
 
-        await conn.execute(_VITALGRAPH_TERM_UUID_DDL)
+        # ALL of them, from the shared tuple — this used to name a single
+        # DDL and silently missed `vitalgraph_iso_to_utc`.
+        for fn_ddl in FUNCTION_DDL:
+            await conn.execute(fn_ddl)
 
         schema = SparqlSQLSchema()
         for stmt in schema.create_admin_tables_sql():

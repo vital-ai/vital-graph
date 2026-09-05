@@ -92,6 +92,26 @@ $$ LANGUAGE plpgsql IMMUTABLE;
 """
 
 
+# EVERY function the schema needs, in one place.
+#
+# There are two installers — `SparqlSQLAdmin.init_tables` (the app/admin path)
+# and `scripts/perf_init_db.py` (the perf runner, which talks to a raw asyncpg
+# connection rather than a db_impl). They drifted: perf_init_db installed
+# `vitalgraph_term_uuid` and not `vitalgraph_iso_to_utc`, so a genuinely fresh
+# perf database raised
+#
+#     asyncpg.exceptions.UndefinedFunctionError:
+#       function vitalgraph_iso_to_utc(text) does not exist
+#
+# and every space-creating bench errored at setup. It went unnoticed because the
+# test stack reused a data volume that already had the function, so only a truly
+# clean database — which is what pinning the postgres minor forced — exposed it.
+#
+# Both installers now iterate this tuple. Add a function here and both paths get
+# it; that is the point.
+FUNCTION_DDL = (_VITALGRAPH_TERM_UUID_DDL, _VITALGRAPH_ISO_TO_UTC_DDL)
+
+
 class SparqlSQLAdmin(DbAdminInterface):
     """Admin operations for the sparql_sql backend."""
 
@@ -125,8 +145,8 @@ class SparqlSQLAdmin(DbAdminInterface):
         await db_impl.execute_update("CREATE EXTENSION IF NOT EXISTS pgcrypto")
         await db_impl.execute_update("CREATE EXTENSION IF NOT EXISTS vector")
         await db_impl.execute_update("CREATE EXTENSION IF NOT EXISTS postgis")
-        await db_impl.execute_update(_VITALGRAPH_TERM_UUID_DDL)
-        await db_impl.execute_update(_VITALGRAPH_ISO_TO_UTC_DDL)
+        for _fn_ddl in FUNCTION_DDL:
+            await db_impl.execute_update(_fn_ddl)
 
         status = await self.check_admin_tables(db_impl)
 

@@ -139,9 +139,30 @@ RANGE_VS_EQUALITY_MAX = 8.0
 #
 # So the extreme gets its own bound, deliberately loose. Fewer matches amortise
 # the fixed cost of a page over fewer rows, so some penalty is real and not a
-# defect. Measured after the fix: 9.8x at 100k and 1.9x at 10k. 20.0 clears both
-# with headroom and still catches the 628x by a factor of thirty.
-EXTREME_VS_EQUALITY_MAX = 20.0
+# defect. Measured after the fix: 9.8x at 100k and 1.9x at 10k.
+#
+# THAT BOUND WAS A RATIO, AND A RATIO GATE FAILS WHEN ITS DENOMINATOR IMPROVES.
+# Measured 2026-09-04: the extreme sat at 58.1 buffers per match — indistinguish-
+# able from the 57.8 the 9.8x implies against the 5.9 equality of the day — while
+# equality itself had fallen to 2.4. The range had not moved; equality got ~2.5x
+# cheaper, and 58.1/2.4 = 24.6 tripped a limit of 20.0. Raising the limit would
+# have been the wrong repair twice over: it hides the next real regression, and
+# it re-arms the same false positive the next time equality improves.
+#
+# THE PATHOLOGY IS ABSOLUTE, so the gate is now absolute. A range criterion that
+# "pays for every candidate" is broken at 3,705 buffers per match whatever
+# equality happens to cost that week; `issues/111` measured exactly that, and
+# 2,972 on the 10k fixture. The ratio is still COMPUTED, RECORDED and PRINTED —
+# it is the attribution signal, and it is what showed equality had improved — it
+# just no longer decides pass/fail.
+#
+# 500 clears today's 58.1 by 8.6x and still catches the recorded pathology by
+# 7.4x. Deliberately loose, for the reason above and because the two fixtures are
+# gated by one number: 10k's post-fix extreme was not re-measured here (pytest
+# swallows stdout for the passing parametrisation), and a bound tightened to a
+# number nobody has seen is how a gate starts failing for the wrong reasons.
+# Tighten it per fixture once a comparable run records both.
+EXTREME_BUFFERS_PER_MATCH_MAX = 500.0
 # A specific entity type is a *more* selective anchor than the generic
 # vitaltype, so it should never cost materially more. It measured 646x
 # worse before issues/045.
@@ -510,12 +531,14 @@ async def test_range_comparator_pays_for_every_candidate(perf_conn, perf_record,
                f"reads {measured[tight]:,} buffers — the candidate set, not the "
                f"match set (issues/040)"))
 
-    assert extreme_vs_equality <= EXTREME_VS_EQUALITY_MAX, (
+    assert per_match_extreme <= EXTREME_BUFFERS_PER_MATCH_MAX, (
         f"[{fx.label}] the MOST selective range ({extreme_matches:,} matches at "
-        f"t={extreme}) cost {per_match_extreme:,.1f} buffers per match against "
-        f"equality's {eq_per_match:,.1f} — {extreme_vs_equality:.1f}x, limit "
-        f"{EXTREME_VS_EQUALITY_MAX}. This is the end the gate below does NOT "
-        f"judge, and the end that sat at 628x unnoticed. See issues/111.")
+        f"t={extreme}) cost {per_match_extreme:,.1f} buffers per match, limit "
+        f"{EXTREME_BUFFERS_PER_MATCH_MAX}. Equality is {eq_per_match:,.1f} for "
+        f"reference ({extreme_vs_equality:.1f}x) — reported, NOT gated, because "
+        f"equality improving must not fail this test. This is the end the gate "
+        f"below does NOT judge, and the end that sat at 3,705 buffers per match "
+        f"unnoticed. See issues/111.")
 
     assert vs_equality <= RANGE_VS_EQUALITY_MAX, (
         f"a range comparator matching {tight_matches:,} rows cost "
