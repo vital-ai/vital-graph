@@ -311,7 +311,26 @@ class TestSlice:
     async def test_offset(
         self, test_space, sparql_update, sparql_execute
     ):
-        """OFFSET + LIMIT returns correct slice."""
+        """OFFSET + LIMIT returns correct slice.
+
+        SEEDS ITS OWN DATA. It used to read whatever `test_limit` had inserted,
+        which held only because the two run in file order in the same space.
+        Under `-n 4` — which `check.sh perf` uses — the two land on different
+        xdist workers and this saw an empty graph: `assert 0 == 2`, roughly one
+        run in three. INSERT DATA is idempotent on these exact triples, so
+        seeding here costs nothing when `test_limit` has already run.
+        """
+        insert = """
+        INSERT DATA {
+            <http://example.org/lim/a> <http://example.org/seq> "1" .
+            <http://example.org/lim/b> <http://example.org/seq> "2" .
+            <http://example.org/lim/c> <http://example.org/seq> "3" .
+            <http://example.org/lim/d> <http://example.org/seq> "4" .
+            <http://example.org/lim/e> <http://example.org/seq> "5" .
+        }
+        """
+        await sparql_update(insert, test_space)
+
         select = """
         SELECT ?v WHERE {
             ?s <http://example.org/seq> ?v .

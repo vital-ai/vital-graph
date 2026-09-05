@@ -1,11 +1,17 @@
 """L2 per-write curve: a small write's cost stays flat as the table grows.
 
-P2 validation. The incremental write path (executemany + scoped edge/frame/stats
-sync) must be O(batch), not O(table): the aux-sync scans only the touched
-subjects via ANY($), so inserting a fixed probe into a 900k-quad table should
-cost about what it costs into a 100k-quad table. Asserts the latency growth
-class is sub-linear, and structurally that the edge-sync scan never seq-scans
-rdf_quad.
+P2 validation. The incremental write path (executemany + scoped edge/frame sync)
+must be O(batch), not O(table): the aux-sync scans only the touched subjects via
+ANY($), so inserting a fixed probe into a 900k-quad table should cost about what
+it costs into a 100k-quad table. Asserts the latency growth class is sub-linear,
+and structurally that the edge-sync scan never seq-scans rdf_quad.
+
+STATS ARE NOT PART OF THIS PATH ANY MORE. `issues/142` replaced the incremental
+`sync_stats_after_insert` accumulator with `recompute_stats_tables` on the
+maintenance schedule. This bench measured the accumulator until that removal
+broke its import — which nothing caught, because `tests/performance` is not in
+the unit, integration or conformance runs, nor in CI's Tier 1+2. The perf tier
+failing to COLLECT is invisible until someone runs it.
 """
 
 from __future__ import annotations
@@ -23,7 +29,6 @@ from vitalgraph.db.sparql_sql.sync_edge_table import (
     sync_edge_table_after_insert, _EDGE_SRC_UUID, _EDGE_DST_UUID)
 from vitalgraph.db.sparql_sql.sync_frame_entity_table import (
     sync_frame_entity_after_edge_insert)
-from vitalgraph.db.sparql_sql.sync_stats_tables import sync_stats_after_insert
 from test_scripts.data.generate_scale_data import load_scale_space, HASNAME
 from .conftest import skip_no_pg
 from .harness import explain_json, has_seq_scan_on, assert_growth_class, node_types
@@ -66,7 +71,11 @@ async def _probe_latency(pool, sid, term_args, quad_rows, subjects, repeats=3):
             await insert_terms_quads_executemany(conn, t, term_args, quad_rows)
             await sync_edge_table_after_insert(conn, sid, subjects)
             await sync_frame_entity_after_edge_insert(conn, sid, subjects)
-            await sync_stats_after_insert(conn, sid, quad_rows)
+            # NO per-write stats sync. `issues/142` replaced the incremental
+            # accumulator with `recompute_stats_tables`, which runs on the
+            # maintenance schedule rather than on the write. Calling it here
+            # would measure a recompute of the WHOLE space per probe — O(table),
+            # which is the exact property this bench exists to disprove.
             best = min(best, time.monotonic() - t0)
             await tr.rollback()
     return best
