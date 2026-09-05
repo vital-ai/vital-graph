@@ -182,6 +182,65 @@ def _end_sizes(chain, pair_rows, pair_bounds=None):
             size(chain.pinned_tail, chain.tail_constraint))
 
 
+def refine_chain_constraints(chains, pair_rows=None, pair_bounds=None):
+    """Repoint each end at its MOST SELECTIVE constant, once statistics exist.
+
+    `_constrained` runs at chain DETECTION time, before stats are loaded, so it
+    takes the first priceable pair it finds — "type-ish" by its own docstring.
+    For an entity query that is the TYPE constant, which every row carries and
+    which therefore discriminates nothing:
+
+        head  hasKGEntityType = Lead                100,000
+        tail  hasKGSlotType   = NurtureCampaignURI  100,000   <- what was used
+              hasUriSlotValue = <campaign>           78,871   <- the real filter
+
+    `choose_direction` compared 100,000 against 100,000, tied, drove from head —
+    the entity end — and the walk seq-scanned 5,277,000 edge rows. Driving from
+    the slot end instead index-probes `(dest_node_uuid, source_node_uuid)`:
+    measured 519ms warm against a 55s timeout (`issues/161`).
+
+    So the end's SIZE and the constraint the emitter DRIVES from both have to
+    come from the most selective constant, not the first one. Detection cannot
+    know which that is; this runs where the statistics are.
+
+    Mutates in place and returns the chains. A chain whose ends carry only one
+    constant is unchanged, which is every chain that behaved correctly before.
+    """
+    def price(pair):
+        if pair_rows:
+            got = pair_rows.get(pair)
+            if got is None:
+                got = pair_rows.get((str(pair[0]), str(pair[1])))
+            if got is not None:
+                return got
+        if pair_bounds:
+            b = (pair_bounds.get(pair[0]) if pair[0] in pair_bounds
+                 else pair_bounds.get(str(pair[0])))
+            if b is not None:
+                return b
+        return None
+
+    for ch in chains or ():
+        for consts_attr, c_attr, a_attr in (
+                ("head_constants", "head_constraint", "head_constraint_alias"),
+                ("tail_constants", "tail_constraint", "tail_constraint_alias")):
+            consts = getattr(ch, consts_attr, ()) or ()
+            best = None
+            for entry in consts:
+                # ((pred, obj), alias); tolerate a bare pair from an older shape
+                pair, alias = entry if isinstance(entry, tuple) and len(entry) == 2 \
+                    and isinstance(entry[0], tuple) else (entry, None)
+                n = price(pair)
+                if n is None:
+                    continue
+                if best is None or n < best[0]:
+                    best = (n, pair, alias)
+            if best and best[2] is not None:
+                setattr(ch, c_attr, best[1])
+                setattr(ch, a_attr, best[2])
+    return chains
+
+
 def choose_direction(chain, pair_rows=None, pair_bounds=None) -> Optional[str]:
     """Which end to drive from — the smaller one, when both are known.
 

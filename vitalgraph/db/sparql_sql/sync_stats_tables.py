@@ -191,6 +191,40 @@ async def recompute_stats_tables(conn, space_id: str,
          That is the `(rdf:type, Edge_hasKGSlot) = 304,859` shape exactly: a
          high-cardinality predicate whose one enormous pair is the anchor.
 
+    PER GRAPH, AND THE FAIRNESS PARTITION GOES WITH IT (`issues/163`).
+
+    Every generated query is scoped to one graph, so a count taken across the
+    whole space is not the number the query will see -- it is inflated by
+    however many graphs share the pair. That is not a reporting error, because
+    these counts are what `choose_direction` compares: two ends inflated by
+    DIFFERENT factors can invert the comparison and send the walk down the
+    larger one.
+
+    The partition is `(predicate_uuid, context_uuid)`, not `predicate_uuid`, and
+    that follows from what absence has to mean. `absence_bounds` reads a missing
+    pair as "<= the smallest STORED pair of the same predicate", which only says
+    anything if that predicate has a stored pair to compare against. Once the
+    counts are per graph the bound is per (predicate, graph), so the round-robin
+    has to guarantee a floor per (predicate, graph) -- partitioning by predicate
+    alone would let one busy graph take every slot and leave the others with no
+    price at all, which is `issues/147` again one dimension over.
+
+    IT IS FREE WHERE IT BUYS NOTHING. For a single-graph space the context adds
+    nothing to the group key, so the row count is unchanged -- measured across
+    all SIXTEEN single-graph fixtures in the test database, IDENTICAL on every
+    one, up to 1,086,774 pairs uncapped. The three-graph `e2e_test_space` went
+    9 -> 7: splitting by graph pushes thin pairs BELOW `STATS_MIN_ROW_COUNT`, so
+    the table can shrink rather than grow.
+
+    THE STREAMING PRECONDITION STILL HOLDS, on an index that already exists.
+    The aggregate must not hash (see below), which needs the input pre-grouped.
+    `idx_{space}_quad_ctx_pred` is `(context_uuid, predicate_uuid, object_uuid)`
+    -- exactly this key in a different order -- and since `GROUP BY` is
+    order-insensitive the planner reorders the group key to match it. Verified
+    on `sp_lead_synth_10k`: `GroupAggregate` with
+    `Group Key: context_uuid, predicate_uuid, object_uuid` over an index-only
+    scan of that index. No new index, and no sort.
+
     NO UPPER BOUND on `row_count`. The old `<= STATS_MAX_ROW_COUNT` existed to
     bound an unbounded accumulator; `LIMIT` bounds this one. Keeping it would
     discard the 24 pairs above the cap -- 36% of all quads, and the structural
@@ -259,12 +293,12 @@ async def recompute_stats_tables(conn, space_id: str,
         try:
             await conn.execute(f"""
                 CREATE TEMP TABLE _new_stats ON COMMIT DROP AS
-                SELECT predicate_uuid, object_uuid, rc FROM (
-                  SELECT predicate_uuid, object_uuid, count(*) AS rc,
-                         row_number() OVER (PARTITION BY predicate_uuid
+                SELECT predicate_uuid, object_uuid, context_uuid, rc FROM (
+                  SELECT predicate_uuid, object_uuid, context_uuid, count(*) AS rc,
+                         row_number() OVER (PARTITION BY predicate_uuid, context_uuid
                                             ORDER BY count(*) DESC, object_uuid) AS rn
                     FROM {t_quad}
-                   GROUP BY 1, 2
+                   GROUP BY 1, 2, 3
                   HAVING count(*) >= {STATS_MIN_ROW_COUNT}) r
                      ORDER BY rn ASC, rc DESC
                      LIMIT {n}
@@ -284,8 +318,10 @@ async def recompute_stats_tables(conn, space_id: str,
 
         await conn.execute(f"TRUNCATE {t_stats}", timeout=timeout)
         res = await conn.execute(
-            f"INSERT INTO {t_stats} (predicate_uuid, object_uuid, row_count) "
-            f"SELECT predicate_uuid, object_uuid, rc FROM _new_stats",
+            f"INSERT INTO {t_stats} "
+            f"(predicate_uuid, object_uuid, context_uuid, row_count) "
+            f"SELECT predicate_uuid, object_uuid, context_uuid, rc "
+            f"FROM _new_stats",
             timeout=timeout)
         stats_count = int(res.split()[-1]) if res else 0
 

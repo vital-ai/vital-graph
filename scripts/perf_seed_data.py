@@ -50,7 +50,54 @@ import time
 import asyncpg
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from devtools.target import pg_kwargs  # noqa: E402
+# `devtools` is DELIBERATELY not in the package (pyproject's check-manifest
+# ignore: "shipping it would package a dependency of something the sdist does
+# not contain"), and this script runs INSIDE the app container, which is built
+# from the package. So the import cannot succeed there:
+#
+#     ModuleNotFoundError: No module named 'devtools'
+#
+# and `run-perf-tests.sh --seed-data` failed before loading a single dataset.
+#
+# The runner already passes every connection parameter into the container as
+# VG_TEST_PG_*, so nothing is actually missing — only the resolver. Import it
+# when it is available (running on the host, where it is the single source of
+# truth for stack selection) and fall back to the SAME environment family with
+# the SAME defaults when it is not.
+try:  # noqa: E402
+    from devtools.target import pg_kwargs
+except ModuleNotFoundError:  # in-container: devtools is not packaged
+    def pg_kwargs():  # type: ignore[misc]
+        """Mirror of `devtools.target.pg_kwargs` for the packaged environment.
+
+        Deliberately the same variable names, precedence and defaults. If those
+        ever diverge the two paths would target different databases while both
+        reporting success, so keep this in step with `devtools/target.py`.
+        """
+        def pick(*names, default):
+            for n in names:
+                v = os.environ.get(n)
+                if v:
+                    return v
+            return default
+
+        return {
+            "host": pick("VG_TEST_PG_HOST", "VG_PG_HOST", "PGHOST",
+                         default="localhost"),
+            "port": int(pick("VG_TEST_PG_PORT", "VG_PG_PORT", "PGPORT",
+                             default="5433")),
+            "database": pick("VG_TEST_PG_DATABASE", "VG_PG_DATABASE",
+                             "PGDATABASE", default="sparql_sql_graph"),
+            "user": pick("VG_TEST_PG_USER", "VG_PG_USER", "PGUSER",
+                         default="postgres"),
+            # An empty password is legitimate (trust auth), so this one is read
+            # by PRESENCE rather than truthiness — same as devtools.
+            "password": next(
+                (os.environ[n] for n in ("VG_TEST_PG_PASSWORD",
+                                         "VG_PG_PASSWORD", "PGPASSWORD")
+                 if n in os.environ),
+                "testpass"),
+        }
 
 from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema  # noqa: E402
 

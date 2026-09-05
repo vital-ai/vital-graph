@@ -105,7 +105,13 @@ def runner_stamp() -> Dict[str, Any]:
 # match, so every per-space table of a benchmark fixture is covered.
 STATS_FIXTURE_PREFIXES = ("sp_lead_synth_", "sp_graph_synth_", "sp_graph_skew_",
                           "sp_graph_forms_", "sp_lead_types", "wordnet_frames",
-                          "sp_sql_lead_dataset", "space_lead_dataset_test")
+                          "sp_sql_lead_dataset", "space_lead_dataset_test",
+                          # The 53M production-shaped Nurture fixture. Must stay
+                          # in step with VG_MAINTENANCE_EXCLUDE_SPACES in
+                          # docker-compose.test.yml — a space stamped here but not
+                          # excluded there reports "the fixtures were re-ANALYZEd"
+                          # for something maintenance was free to touch.
+                          "lead_nurture_100k")
 
 
 async def stats_stamp(conn) -> Dict[str, Any]:

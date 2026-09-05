@@ -115,6 +115,22 @@ class TraversalChain:
     # nothing. Recorded here, where the alias is already in hand (issues/090).
     head_constraint_alias: Optional[str] = None
     tail_constraint_alias: Optional[str] = None
+    # EVERY constant pair on each end, not just the one `_constrained` returns.
+    #
+    # `head_constraint` is deliberately "type-ish": the FIRST priceable pair,
+    # which is what direction pricing wants and what it has always used. But a
+    # chain end usually carries several — the Nurture slot node carries both
+    # `hasKGSlotType = <SFLeadId>` (names the shape) and
+    # `hasTextSlotValue = "..."` (the actual filter) — and picking the first
+    # silently drops the filtering one.
+    #
+    # That is why `issues/160`'s criterion gate could not find a criterion even
+    # after equality pricing was added: the value constant was never on the
+    # chain to price. Collected here so a consumer can choose which KIND of
+    # constant it needs, rather than re-deriving them from the plan.
+    # ((pred_uuid, obj_uuid), alias) per constant, not bare pairs — see above.
+    head_constants: tuple = ()
+    tail_constants: tuple = ()
 
     def reversed(self) -> "TraversalChain":
         """The same chain walked from the other end.
@@ -138,7 +154,9 @@ class TraversalChain:
             head_constraint=self.tail_constraint,
             tail_constraint=self.head_constraint,
             head_constraint_alias=self.tail_constraint_alias,
-            tail_constraint_alias=self.head_constraint_alias)
+            tail_constraint_alias=self.head_constraint_alias,
+            head_constants=self.tail_constants,
+            tail_constants=self.head_constants)
 
     @property
     def depth(self) -> int:
@@ -335,6 +353,32 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set) -> List[TraversalChain]:
         return None, None
 
 
+    def _all_constants(ref_id: str, col: str) -> tuple:
+        """EVERY priceable (pred, obj) constant whose subject is this end.
+
+        `_constrained` stops at the first; this returns them all, so a consumer
+        that needs the FILTERING constant rather than the type-ish one can find
+        it (`issues/160`).
+        """
+        end_var = col_var.get((ref_id, col))
+        if end_var is None:
+            return ()
+        out = []
+        for (alias, c) in list(leaf_terms):
+            if c != "predicate_uuid":
+                continue
+            if col_var.get((alias, "subject_uuid")) != end_var:
+                continue
+            pair = _as_uuid_pair(leaf_terms.get((alias, "predicate_uuid")),
+                                 leaf_terms.get((alias, "object_uuid")))
+            # (pair, alias): the emitter hoists a table BY ALIAS, so a
+            # constraint and the table carrying it must travel together. A
+            # refined constraint with the original's alias would hoist the
+            # wrong table.
+            if pair and not any(p == pair for p, _ in out):
+                out.append((pair, alias))
+        return tuple(out)
+
     chains: List[TraversalChain] = []
     seen: set = set()
     for ref_id in links:
@@ -354,7 +398,11 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set) -> List[TraversalChain]:
                 pinned_head=_pinned(ordered[0].ref_id, ordered[0].source_col),
                 pinned_tail=_pinned(ordered[-1].ref_id, ordered[-1].dest_col),
                 head_constraint=_head[0], head_constraint_alias=_head[1],
-                tail_constraint=_tail[0], tail_constraint_alias=_tail[1]))
+                tail_constraint=_tail[0], tail_constraint_alias=_tail[1],
+                head_constants=_all_constants(ordered[0].ref_id,
+                                              ordered[0].source_col),
+                tail_constants=_all_constants(ordered[-1].ref_id,
+                                              ordered[-1].dest_col)))
 
     # A cycle has no head, so the walk above never starts on it. Emit each
     # remaining link rather than dropping it silently.
@@ -368,7 +416,9 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set) -> List[TraversalChain]:
                 pinned_head=_pinned(ref_id, link.source_col),
                 pinned_tail=_pinned(ref_id, link.dest_col),
                 head_constraint=_head[0], head_constraint_alias=_head[1],
-                tail_constraint=_tail[0], tail_constraint_alias=_tail[1]))
+                tail_constraint=_tail[0], tail_constraint_alias=_tail[1],
+                head_constants=_all_constants(ref_id, link.source_col),
+                tail_constants=_all_constants(ref_id, link.dest_col)))
     return chains
 
 

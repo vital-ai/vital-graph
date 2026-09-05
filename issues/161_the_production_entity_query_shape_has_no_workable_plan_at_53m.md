@@ -177,3 +177,125 @@ now moot for THIS shape, because the shape no longer takes that plan. It stands
 for any equality filter the fast path declines (non-eq comparators, no entity
 type, a slot hanging directly off an entity), which still fall back to the BGP
 join. Those are correct but slow.
+
+## ROOT CAUSE 2026-09-05: the anchor is chosen structurally, not by selectivity
+
+The earlier sections treat this as a plan-choice problem. It is narrower and more
+fixable than that: the query cannot express the good plan at all.
+
+`semijoin._split_bgp` picks the anchor as
+
+    anchor_aliases = {a for a in quad_aliases if bound.get(a) == {key}}
+
+— "every quad table binding the projected variable AND NOTHING ELSE". For an
+entity query that is always `?entity hasKGEntityType <T>`, i.e. the whole
+population. The discriminating constants bind SLOT variables
+(`?slot_0_0 hasUriSlotValue <campaign>`), so they are structurally ineligible to
+anchor. Selectivity never enters the choice.
+
+Both reachable plans therefore start from 100,000 entities:
+
+    semijoin probe    EXISTS subplan runs ~49,000 times      -> timeout >55s
+    plain join        merge-joins ALL 5,277,000 edge rows,
+                      estimated cost 1,250,744,169           -> timeout >55s
+
+### What the data actually supports
+
+Driving from the selective end by hand — take the 78,871 matching campaign
+slots, walk up two edge hops on the existing
+`(dest_node_uuid, source_node_uuid)` index, count distinct entities:
+
+    cold   9,686 ms
+    warm   1,301 ms then 519 ms      correct answer, 78,871
+
+So **519 ms against a 55s timeout**, over the quad and edge tables, with no
+derived table and no new index. `entity_slot_sort` answers the same question in
+323 ms, but it is not required to get under a second.
+
+### The fix this points at
+
+Anchor on the most selective CONSTANT and confirm upward, rather than on the
+projected variable. The pieces already exist: `rdf_stats` prices every
+(predicate, object) pair exactly, and `absence_bounds` prices the absent ones,
+so the split could compare candidate counts before choosing an anchor instead of
+taking the only structurally eligible one.
+
+Note the hand-written query is ALSO badly estimated — PostgreSQL predicts 7 rows
+against 78,871, because the term lookups are InitPlans and opaque at plan time.
+It picks nested-loop index lookups almost by accident. Whatever emits the good
+plan should not rely on PostgreSQL costing it correctly.
+
+### What was tried, and what it bought
+
+`MAX_PROBE_CANDIDATES` (semijoin.py) declines the probe when the anchor exceeds
+10,000, on the ground that the probe runs once per candidate whatever the
+selectivity. Measured:
+
+    SFLeadId ABSENT   2,385 ms -> 61 ms      39x, probing 100,000 to return 0
+    SFLeadId present    200 ms -> 238 ms     unchanged
+    campaign head     timeout  -> timeout    unchanged
+    campaign+ABSENT   timeout  -> timeout    unchanged
+
+`tests/performance/test_kgquery_growth_curve.py`: 24 passed, 2 skipped — it does
+not give back the `issues/045` shapes. So it is a safe, partial win: it stops a
+bad probe, but it cannot create the good plan, because no plan the current split
+can express drives from the selective end.
+
+## THE ACTUAL DEFECT, 2026-09-05: independent criteria are CORRELATED, not intersected
+
+Two different things were being called "nesting", and only one of them is real:
+
+  * STRUCTURAL nesting — `frame -> frame -> slot` WITHIN one criterion, a
+    containment path along shared variables. This genuinely has to be walked.
+  * EVALUATION nesting — what the planner does BETWEEN two criteria: it re-runs
+    the second chain once per candidate of the first. This is a choice.
+
+Measured on the campaign + ABSENT shape:
+
+    Nested Loop  (cost ... 957,186,606, rows=46,079)
+      ->  Hash Join   (rows=46,079)                     the campaign chain
+      ->  Nested Loop (cost=1015.83..20,769.37)         the ABSENT chain, PER ROW
+
+    46,079 x 20,769 ~= 957,000,000
+
+### The criteria are provably independent
+
+Removing `?entity` from the BGP splits it into exactly two connected components
+with NO shared variable:
+
+    component 0:  frame_0, frame_edge_0, slot_0_0, slot_edge_0_0    campaign
+    component 1:  frame_1, frame_edge_1, slot_1_0, slot_edge_1_0    SFLeadId
+
+So each can be evaluated to a set of `?entity` independently and the sets
+INTERSECTED. Nothing about the frame structure requires correlating them.
+
+This explains every negative result on this shape: `MAX_PROBE_CANDIDATES`,
+the equality criterion, `refine_chain_constraints`, ANALYZE and the
+empty-constant sentinel all optimise WITHIN a component. None of them changes
+the fact that two independent components are correlated instead of intersected.
+`fast_slot_filter` answers the same question in 96 ms precisely because it
+INTERSECTs on `entity_uuid`.
+
+### The codebase already reasons this way
+
+Connected-component analysis over shared variables is an established technique
+here, not a new one:
+
+  * `rewrite_edge_table` — "Method 2: var_slots transitive co-reference
+    detection", which chains co-references through an intermediate quad rather
+    than requiring a direct link.
+  * `rewrite_frame_entity_table` — "Match slot quads to edge tables via shared
+    slot variable".
+  * `semijoin._split_bgp` — partitions a BGP around the projected variable
+    already; its defect is that it produces ONE anchor and ONE blob, and picks
+    the anchor structurally.
+
+So the component split generalises what those passes do rather than introducing
+a new idea: partition over the projected variable, evaluate each component to a
+set of that variable, intersect.
+
+### Why it matters beyond this shape
+
+It applies to ANY query with several independent criteria on one projected
+variable, with or without a derived table to serve them. The derived table makes
+each component cheap; the split is what stops them multiplying.

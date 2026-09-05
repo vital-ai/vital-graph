@@ -59,6 +59,7 @@ whether a variable escapes upward through a sibling.
 from __future__ import annotations
 
 import logging
+import os
 from typing import List, Optional, Set
 
 from .ir import (
@@ -79,6 +80,33 @@ logger = logging.getLogger(__name__)
 # The gate is the difference between this rewrite being a win and being a
 # catastrophe on exactly the queries that are cheap today.
 MIN_SELECTIVITY = 0.05
+
+# How many candidates a per-candidate PROBE is worth paying for.
+#
+# `MIN_SELECTIVITY` asks what FRACTION of the anchor the probe admits. It never
+# asks how big the anchor is — but the probe runs once per anchor row, so the
+# cost is O(candidates) whatever the fraction. A high selectivity does not make
+# a large anchor cheap; it only means most of those probes succeed.
+#
+# Measured on `lead_nurture_100k` (53M quads), the production Nurture shape:
+#
+#     anchor   hasKGEntityType = Lead        100,000 candidates
+#     probe    hasUriSlotValue = <campaign>   78,871 matches -> sel 0.79
+#     result   sel >= MIN_SELECTIVITY, split stands, EXISTS runs ~49,000 times
+#              -> 55s statement timeout, for a query returning 78,871 rows
+#
+# The anchor is the whole population because `_split_bgp` picks it
+# STRUCTURALLY — "every quad table binding the projected variable and nothing
+# else" — which for an entity query is always the type quad. The discriminating
+# constants bind SLOT variables and are structurally ineligible to anchor. So
+# this shape cannot get a small anchor, and the selectivity gate waves it
+# through precisely because its criterion is NOT discriminating.
+#
+# 10,000 is a STARTING POINT, not a measured optimum: at roughly 1ms per probe
+# it bounds the probe path near ten seconds. Establish the real number by
+# measuring the shapes `issues/045` fixed (24.5-32.3s -> 2ms) before trusting
+# it — a threshold set too low gives those back.
+MAX_PROBE_CANDIDATES = int(os.getenv("VG_SEMIJOIN_MAX_PROBE_CANDIDATES", "10000"))
 
 
 def _term_uuid(aliases, text: str, ttype: str, *_identity) -> Optional[str]:
@@ -933,6 +961,15 @@ def _selective_enough(left, right, aliases) -> bool:
         logger.debug("semijoin selectivity: %d/%d = %.3f is > 1 and therefore "
                      "not a selectivity — the two counts came from different "
                      "leaves, declining", matches, candidates, sel)
+        return False
+    if candidates > MAX_PROBE_CANDIDATES:
+        # The probe runs once per candidate; selectivity does not change that.
+        # A set-based join over the same two sides is O(anchor + probe) instead
+        # of O(anchor x probe_cost). See MAX_PROBE_CANDIDATES.
+        logger.debug("semijoin selectivity: %d candidates exceeds %d — a probe "
+                     "per candidate costs more than the join it replaces, "
+                     "declining (sel was %.3f)",
+                     candidates, MAX_PROBE_CANDIDATES, sel)
         return False
     ok = sel >= MIN_SELECTIVITY
     logger.debug("semijoin selectivity: %d/%d = %.3f -> %s",

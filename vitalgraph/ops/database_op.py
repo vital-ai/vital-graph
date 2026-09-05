@@ -154,27 +154,24 @@ class StatsRebuildOp(DatabaseOp):
         sid = self.space_id
         pred_stats = f"{sid}_rdf_pred_stats"
         rdf_stats = f"{sid}_rdf_stats"
-        quad_table = f"{sid}_rdf_quad"
 
+        # DELEGATED, not reimplemented. This used to carry its own pair
+        # aggregate, and it had silently drifted from the real one: no cap, no
+        # per-predicate fairness, and a `HAVING COUNT(*) <= 200000` upper bound
+        # that `recompute_stats_tables` removed on evidence -- it discards the
+        # two dozen largest pairs, which are 36% of all quads and every
+        # structural anchor the join reorder depends on. So this operation
+        # rebuilt the table into the shape the recompute exists to avoid, and
+        # nothing downstream could tell which writer had run last.
+        #
+        # `recompute_stats_tables` documents itself as THE ONLY WRITER. It now
+        # is one. It also keeps this path correct by construction as the table
+        # changes -- the per-graph key (`issues/163`) would otherwise have had
+        # to be duplicated here, into an implementation already known wrong.
         try:
-            self.update_progress("Rebuilding predicate stats...")
-            await self.conn.execute(f"TRUNCATE {pred_stats}")
-            await self.conn.execute(f"""
-                INSERT INTO {pred_stats} (predicate_uuid, row_count)
-                SELECT predicate_uuid, COUNT(*)
-                FROM {quad_table}
-                GROUP BY predicate_uuid
-            """)
-
-            self.update_progress("Rebuilding predicate-object stats...")
-            await self.conn.execute(f"TRUNCATE {rdf_stats}")
-            await self.conn.execute(f"""
-                INSERT INTO {rdf_stats} (predicate_uuid, object_uuid, row_count)
-                SELECT predicate_uuid, object_uuid, COUNT(*)
-                FROM {quad_table}
-                GROUP BY predicate_uuid, object_uuid
-                HAVING COUNT(*) <= 200000
-            """)
+            self.update_progress("Rebuilding predicate and pair stats...")
+            from ..db.sparql_sql.sync_stats_tables import recompute_stats_tables
+            await recompute_stats_tables(self.conn, sid)
 
             return OperationResult(
                 status=OperationStatus.SUCCESS,

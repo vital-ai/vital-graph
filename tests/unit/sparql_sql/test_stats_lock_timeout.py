@@ -169,7 +169,8 @@ async def test_a_transient_failure_is_not_cached(monkeypatch, caplog, exc):
     would plan every later query for the space without stats — the `issues/140`
     shape: degrade correctly, say nothing, stay degraded.
     """
-    G._stats_cache.pop("sp_x", None)
+    # Keyed (space_id, graph_lock_uri) since `issues/163`; unlocked is None.
+    G._stats_cache.pop(("sp_x", None), None)
 
     async def _boom(*_a, **_k):
         raise exc
@@ -180,7 +181,8 @@ async def test_a_transient_failure_is_not_cached(monkeypatch, caplog, exc):
     with caplog.at_level("WARNING"):
         await G._load_quad_stats(aliases, "sp_x")
 
-    assert "sp_x" not in G._stats_cache, "a transient failure must not be memoised"
+    assert ("sp_x", None) not in G._stats_cache, \
+        "a transient failure must not be memoised"
     assert aliases.quad_stats == {} and aliases.pred_stats == {}
     assert any("without stats" in r.message or "transiently" in r.message
                for r in caplog.records), "a silent degrade is what 140 was"
@@ -190,7 +192,7 @@ async def test_a_transient_failure_is_not_cached(monkeypatch, caplog, exc):
 async def test_a_genuinely_absent_table_is_still_cached(monkeypatch):
     """The behaviour fix 1 must not regress: when the tables do not exist, keep
     memoising the miss rather than re-querying on every request."""
-    G._stats_cache.pop("sp_y", None)
+    G._stats_cache.pop(("sp_y", None), None)
 
     async def _missing(*_a, **_k):
         raise asyncpg.UndefinedTableError("relation does not exist")
@@ -200,5 +202,5 @@ async def test_a_genuinely_absent_table_is_still_cached(monkeypatch):
 
     await G._load_quad_stats(aliases, "sp_y")
 
-    assert G._stats_cache.get("sp_y") == ({}, {})
-    G._stats_cache.pop("sp_y", None)
+    assert G._stats_cache.get(("sp_y", None)) == ({}, {})
+    G._stats_cache.pop(("sp_y", None), None)

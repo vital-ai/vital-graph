@@ -52,7 +52,14 @@ class AliasGenerator:
         # would silently widen every such query to the whole space.
         self.dataset_default_graphs: Optional[List[str]] = None
         self.dataset_named_graphs: Optional[List[str]] = None
-        # Predicate cardinality stats
+        # Predicate cardinality stats.
+        #
+        # Keyed by (predicate, object). `{space}_rdf_stats` is stored per
+        # (predicate, object, GRAPH) since `issues/163`, and the loader collapses
+        # it to this shape: narrowed to `graph_lock_uri` when the query is
+        # confined to one graph, summed over graphs when it is not. So the
+        # meaning is "rows this query can see", and no consumer has to know
+        # which of the two happened.
         self.quad_stats: Dict[Tuple[str, str], int] = {}
         self.pred_stats: Dict[str, int] = {}
         # SPARQL→SQL variable name mapping: opaque sql_name → original sparql_name

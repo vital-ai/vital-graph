@@ -697,8 +697,22 @@ class SparqlSQLSchema:
             CREATE TABLE IF NOT EXISTS {t['rdf_stats']} (
                 predicate_uuid UUID NOT NULL,
                 object_uuid    UUID NOT NULL,
+                -- PER GRAPH, because every generated query is graph-scoped
+                -- (`issues/163`). Counting a pair across the whole space
+                -- reports a number no query will ever see, inflated by however
+                -- many graphs share the pair, and these counts are the
+                -- planner's inputs rather than a report: `choose_direction`
+                -- compares two ends, and two ends inflated by DIFFERENT factors
+                -- can invert the comparison and drive the walk from the larger.
+                --
+                -- Costs nothing where it buys nothing. Adding this to the
+                -- recompute's GROUP BY leaves a single-graph space with exactly
+                -- the same number of rows -- verified across all sixteen
+                -- single-graph fixtures, identical on every one -- so the extra
+                -- rows are paid only by spaces that genuinely span graphs.
+                context_uuid   UUID NOT NULL,
                 row_count      BIGINT NOT NULL DEFAULT 0,
-                PRIMARY KEY (predicate_uuid, object_uuid)
+                PRIMARY KEY (predicate_uuid, object_uuid, context_uuid)
             )
         ''')
 

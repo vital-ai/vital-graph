@@ -62,6 +62,7 @@ shape is not exactly what it expects.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from typing import Optional, Tuple
 
@@ -81,10 +82,31 @@ VALUE_LANE = {
     f"{_H}hasDateTimeSlotValue": "value_dt",
 }
 
-# Only the ordering comparators. Equality is deliberately excluded: it already
-# reaches the term semi-join with an accurate estimate, and it is the shape the
-# criterion gate is built around.
+# Only the ordering comparators. Equality is deliberately excluded HERE: it
+# already reaches the term semi-join with an accurate estimate, and it is the
+# shape the criterion gate is built around.
+#
+# That rationale holds for the shapes it was written about and NOT for the
+# production Nurture shape, where an equality on a URI slot value timed out at
+# 55s while the same answer driven from the slot set measured 519 ms
+# (`issues/162`). Equality is served by `slot_equality_constraints` below, on
+# its own lane map, so this decision is narrowed rather than overturned.
 RANGE_OPS = {">=", ">", "<=", "<"}
+
+# Lanes for EQUALITY narrowing. Separate from `VALUE_LANE` on purpose: adding
+# text predicates there would also admit them to the RANGE path, where `>=` on a
+# lexical form is valid SQL and almost never the intended comparison, and where
+# `_is_selective` reasons in numeric terms.
+#
+# Text covers the URI and string-shaped slots — `entity_slot_sort.value_text`
+# stores the lexical form for all of them, which is why the campaign URI matches
+# `value_text = 'urn:acme:campaign:000'` exactly.
+EQUALITY_LANE = dict(VALUE_LANE)
+for _eq_n in ("Text", "Uri", "Choice", "Json", "Boolean", "Code", "LongText",
+              "MultiChoice", "MultiTaxonomy", "Taxonomy", "Audio", "Image",
+              "Video", "FileUpload", "GeoLocation", "PropertyFrameType", "Run",
+              "Entity"):
+    EQUALITY_LANE[f"{_H}has{_eq_n}SlotValue"] = "value_text"
 
 _PRED_RE = re.compile(r"(\w+)\.predicate_uuid\s*=\s*__CONST_(c_\d+)__")
 _OBJ_RE = re.compile(r"(\w+)\.object_uuid\s*=\s*__CONST_(c_\d+)__")
@@ -140,9 +162,29 @@ def _is_selective(aliases, value_pred_uri: str, op: str, literal,
 
 
 def _const_uris(aliases) -> dict:
-    """`__CONST_c_N__` token -> the URI it stands for."""
+    """`__CONST_c_N__` token -> the URI it stands for. URIs ONLY.
+
+    Predicates are always URIs, which is what this is for. It must not be used
+    to read a slot VALUE: a text slot's value is a LITERAL, `.get()` returns the
+    default, and the caller silently compares against an empty string. That is
+    exactly what happened — `value_text = ''` matched nothing and the
+    intersection removed every row, turning a 1-row answer into 0
+    (`issues/162`). Use `_const_terms` for anything that may be a literal.
+    """
     return {col: text for (text, ttype, _lg, _dt), col in aliases.constants.items()
             if ttype == "U"}
+
+
+def _const_terms(aliases) -> dict:
+    """`__CONST_c_N__` token -> its lexical form, WHATEVER the term type.
+
+    `entity_slot_sort.value_text` stores the lexical form for URIs and literals
+    alike, so a value comparison needs the text of both. Keeping this separate
+    from `_const_uris` rather than widening it: predicate lookups genuinely want
+    URIs only, and a literal predicate would be a different bug.
+    """
+    return {col: text
+            for (text, _tt, _lg, _dt), col in aliases.constants.items()}
 
 
 def slot_range_constraint(bgp, aliases, space_id: str, value_var: str,
@@ -246,3 +288,141 @@ def slot_range_constraint(bgp, aliases, space_id: str, value_var: str,
     logger.debug("slot-sort range: %s %s %s narrowed via %s", slot_var, op,
                  literal, ess)
     return (alias, sql)
+
+
+# OFF BY DEFAULT — `slot_equality_constraints` RETURNS WRONG ROWS.
+#
+# Measured 2026-09-05 on `lead_nurture_100k`: `SFLeadId = "SYN000000000"`
+# returned 0 where the correct answer is 1, in 238 ms. The narrowing is an
+# INTERSECTION, so a mistake in it silently REMOVES rows — a fast, confident,
+# empty result with no error, which is the worst failure mode available here and
+# strictly worse than the 55s timeout it was built to fix.
+#
+# Kept rather than reverted (`issues/162`) so the diagnosis has something to run
+# against, but a wrong answer is not a tuning problem and this must not be the
+# default until the cause is found and a correctness test pins it.
+EQUALITY_NARROWING_ENABLED = (
+    os.getenv("VG_SLOT_SORT_EQUALITY_NARROWING", "0") == "1")
+
+
+def slot_equality_constraints(bgp, aliases, space_id: str) -> list:
+    """`[(alias, sql)]` narrowing each slot fixed to a CONSTANT value.
+
+    DISABLED by default — see `EQUALITY_NARROWING_ENABLED`. It returns wrong
+    rows on at least one measured shape.
+
+    The equality twin of `slot_range_constraint`, and sound for the same reason:
+    it ADDS a constraint the chain already implies, anchored on the SLOT.
+
+        ?slot hasKGSlotType <T> . ?slot has<X>SlotValue <V>
+
+    already requires `?slot` to be a slot of type T whose value is V, and
+    `entity_slot_sort` is keyed on `(slot_uuid, context_uuid)` with that slot's
+    type and value on the row. So
+
+        <slot>.<col> IN (SELECT slot_uuid FROM {space}_entity_slot_sort
+                         WHERE slot_type_uuid = <T> AND value_text = '<V>')
+
+    cannot change the answer; it can only hand PostgreSQL a small indexed set to
+    drive from. Nothing is replaced and no var_slot is dropped.
+
+    WHY THIS RATHER THAN A REWRITE. Collapsing the walk onto `entity_slot_sort`
+    outright would have to re-home the edge variables (`?frame_edge_0` binds
+    `edge_uuid`, which this table does not have), translate a term-uuid constant
+    into the TEXT the value column stores, and match `frame_type_path` exactly —
+    where a near-miss returns WRONG ROWS. Anchoring on the slot needs none of
+    that: the slot identity carries no path.
+
+    WHY THE VALUE IS A LITERAL AND NOT A `__CONST__` TOKEN. Those tokens resolve
+    to TERM UUIDS; `value_text` holds the lexical form. Comparing the two matches
+    nothing and would return a confident empty result — the worst failure
+    available here — so the text is taken from the constant map and quoted.
+
+    Measured on `lead_nurture_100k` (53M quads), the shape this exists for:
+    the edge walk timed out at 55s; the same answer driven from the slot set is
+    519 ms by hand (`issues/161`).
+    """
+    if not EQUALITY_NARROWING_ENABLED:
+        return []
+
+    const = _const_uris(aliases)        # predicates: URIs
+    terms = _const_terms(aliases)       # values: URI or literal
+    if not const:
+        return []
+
+    pred_of, obj_of, obj_token = {}, {}, {}
+    for _owner, sql in (bgp.tagged_constraints or []):
+        m = _PRED_RE.search(sql)
+        if m:
+            pred_of[m.group(1)] = const.get(m.group(2), "")
+        m = _OBJ_RE.search(sql)
+        if m:
+            # From `terms`, not `const`: a literal is not in the URI map and
+            # would read as "" — see `_const_uris`.
+            if m.group(2) in terms:
+                obj_of[m.group(1)] = terms[m.group(2)]
+                obj_token[m.group(1)] = f"__CONST_{m.group(2)}__"
+    for (alias, col), _t in (bgp.leaf_terms or {}).items():
+        text, ttype = _t[0], _t[1]
+        if col == "predicate_uuid":
+            pred_of.setdefault(alias, text)
+        elif col == "object_uuid":
+            obj_of.setdefault(alias, text)
+
+    out = []
+    seen = set()
+    for alias, pred_uri in pred_of.items():
+        lane = EQUALITY_LANE.get(pred_uri)
+        if not lane:
+            continue
+        # The value must be a CONSTANT here — that is what makes it an equality
+        # rather than the FILTER shape `slot_range_constraint` serves.
+        value_text = obj_of.get(alias)
+        if not value_text or obj_token.get(alias) is None:
+            # An EMPTY value is the signature of a constant that could not be
+            # resolved. Emitting `value_text = ''` would match nothing and, in
+            # an intersection, delete every row.
+            continue
+
+        # Its subject is the slot; that slot must also carry a constant type.
+        slot_var = None
+        for var, vslot in (bgp.var_slots or {}).items():
+            if any(a == alias and c == "subject_uuid"
+                   for a, c in (vslot.positions or [])):
+                slot_var = var
+                break
+        if not slot_var:
+            continue
+        sslot = (bgp.var_slots or {}).get(slot_var)
+        type_token = None
+        for a, c in (sslot.positions or []):
+            if c == "subject_uuid" and pred_of.get(a) == SLOT_TYPE_PRED:
+                type_token = obj_token.get(a)
+                if type_token:
+                    break
+        if not type_token:
+            continue
+
+        anchor = next(((a, c) for a, c in (sslot.positions or [])
+                       if c == "subject_uuid"), None)
+        if anchor is None:
+            continue
+
+        if lane != "value_text":
+            # Numeric/datetime equality needs the literal in that column's type
+            # and a quoted lexical form would not compare. Deferred, not
+            # rejected — `issues/162` records it as unmeasured.
+            continue
+
+        ess = f"{space_id}_entity_slot_sort"
+        lit = str(value_text).replace("'", "''")
+        sql = (f"{anchor[0]}.{anchor[1]} IN (SELECT slot_uuid FROM {ess} "
+               f"WHERE slot_type_uuid = {type_token} "
+               f"AND value_text = '{lit}')")
+        key = (anchor[0], sql)
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+            logger.debug("slot-sort equality: %s = %s narrowed via %s",
+                         slot_var, value_text, ess)
+    return out

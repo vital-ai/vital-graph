@@ -253,7 +253,17 @@ def invalidate_datatype_cache(space_id: Optional[str] = None) -> None:
 # Predicate cardinality stats for join reordering
 # ---------------------------------------------------------------------------
 
-_stats_cache: Dict[str, tuple] = {}
+# KEYED BY (space_id, scoping graph), not by space alone.
+#
+# The pair counts are per graph now (`issues/163`) and the preload narrows to
+# the query's graph when there is one, so two queries against the same space
+# under different `graph_lock_uri` values want DIFFERENT entries. Keyed by space
+# alone the first would serve its graph's counts to the second -- silently, and
+# in whichever direction the two graphs happen to differ.
+#
+# `invalidate_stats_cache` drops every graph's entry for a space, because a
+# recompute rewrites all of them.
+_stats_cache: Dict[tuple, tuple] = {}
 
 
 def invalidate_stats_cache(space_id: str) -> None:
@@ -265,13 +275,30 @@ def invalidate_stats_cache(space_id: str) -> None:
     that has just been made correct — and a surviving "fresh" one would vouch
     for boundaries that have changed underneath it.
     """
-    _stats_cache.pop(space_id, None)
+    for k in [k for k in _stats_cache if k[0] == space_id]:
+        _stats_cache.pop(k, None)
     _value_stats_cache.pop(space_id, None)
     try:
         from .sync_value_stats import invalidate_freshness_cache
         invalidate_freshness_cache(space_id)
     except Exception:  # pragma: no cover - import guard only
         pass
+
+
+def _ctx_filter(space_id: str, lock_uri: Optional[str], alias: str = "") -> str:
+    """An AND clause narrowing rdf_stats to one graph, or "" for all of them.
+
+    The graph is named by URI here and stored as a term uuid, so this resolves
+    it inline rather than costing a round trip. `LIMIT 1` because a URI is one
+    term; the subquery yields NULL for a graph with no term, and `context_uuid =
+    NULL` is never true -- which is the right answer, since a graph absent from
+    the term table holds no quads.
+    """
+    if not lock_uri:
+        return ""
+    col = f"{alias}.context_uuid" if alias else "context_uuid"
+    return (f" AND {col} = (SELECT term_uuid FROM {space_id}_term "
+            f"WHERE term_text = '{_esc(lock_uri)}' AND term_type = 'U' LIMIT 1)")
 
 
 async def _load_quad_stats(
@@ -285,8 +312,23 @@ async def _load_quad_stats(
     Populates aliases.quad_stats and aliases.pred_stats for use by
     the join reorder heuristic.
     """
-    if space_id in _stats_cache:
-        aliases.quad_stats, aliases.pred_stats = _stats_cache[space_id]
+    # THE GRAPH THIS QUERY IS CONFINED TO, when it is confined to one.
+    #
+    # `graph_lock_uri` is applied to EVERY quad alias by `collect` as a scoping
+    # and security constraint, so when it is set no pattern in the query can
+    # read outside it. That is the guarantee this needs: the counts loaded here
+    # then describe exactly the rows the query can see, rather than the space.
+    #
+    # NOT `default_graph`, and not a dataset clause. Those scope the OUTER BGPs
+    # only -- a `GRAPH ?g` block in the same query ranges over other graphs, and
+    # narrowing the stats to the default graph would UNDER-price those patterns.
+    # An undercount makes a huge end look small and the walk drives from it,
+    # which is the one direction of error that must not be introduced silently.
+    # Unlocked queries keep the space-wide sum, which is what they had before.
+    lock_uri = getattr(aliases, "graph_lock_uri", None)
+    ck = (space_id, lock_uri)
+    if ck in _stats_cache:
+        aliases.quad_stats, aliases.pred_stats = _stats_cache[ck]
         return
 
     from . import db_provider as db
@@ -331,20 +373,32 @@ async def _load_quad_stats(
             # are the 24 that matter most (36% of all quads); excluding them
             # sent the semi-join gate to a 10.4s runtime probe that saturates
             # and tells it nothing.
-            f"SELECT predicate_uuid::text, object_uuid::text, row_count "
+            f"SELECT predicate_uuid::text, object_uuid::text, "
+            f"context_uuid::text, row_count "
             f"FROM {space_id}_rdf_stats "
-            f"WHERE row_count >= 2",
+            f"WHERE row_count >= 2{_ctx_filter(space_id, lock_uri)}",
             conn_params=conn_params, conn=conn,
             lock_timeout_ms=STATS_LOCK_TIMEOUT_MS,
         )
-        quad_stats = {
-            (r["predicate_uuid"], r["object_uuid"]): r["row_count"]
-            for r in quad_rows
-        }
+        # SUMMED, NOT ASSIGNED, and getting this wrong would be silent.
+        #
+        # The table is per (predicate, object, GRAPH) now (`issues/163`), so an
+        # UNSCOPED load sees a pair once per graph it appears in. A dict
+        # comprehension keyed by the pair alone still builds -- it just keeps
+        # whichever row arrived last and discards the others, so a pair spread
+        # over ten graphs would price as roughly a tenth of itself.
+        #
+        # Scoped by `lock_uri` there is exactly one row per pair and the sum is
+        # that row, so this expression is right in both cases and the consumers
+        # below need to know nothing about which one happened.
+        quad_stats: dict = {}
+        for r in quad_rows:
+            k = (r["predicate_uuid"], r["object_uuid"])
+            quad_stats[k] = quad_stats.get(k, 0) + r["row_count"]
 
         aliases.quad_stats = quad_stats
         aliases.pred_stats = pred_stats
-        _stats_cache[space_id] = (quad_stats, pred_stats)
+        _stats_cache[ck] = (quad_stats, pred_stats)
         logger.debug("Loaded %d pred stats, %d quad stats for %s",
                      len(pred_stats), len(quad_stats), space_id)
 
@@ -368,7 +422,7 @@ async def _load_quad_stats(
             aliases.quad_stats, aliases.pred_stats = {}, {}
             return
         logger.debug("No quad stats for %s (MV may not exist): %s", space_id, e)
-        _stats_cache[space_id] = ({}, {})
+        _stats_cache[ck] = ({}, {})
 
 
 # ---------------------------------------------------------------------------
@@ -414,13 +468,27 @@ async def warm_stats_cache(
     space_id: str,
     conn_params: Optional[Dict[str, Any]] = None,
     conn=None,
+    graph_lock_uri: Optional[str] = None,
 ) -> None:
-    """Pre-load predicate cardinality stats into the global cache."""
-    if space_id in _stats_cache:
+    """Pre-load predicate cardinality stats into the global cache.
+
+    THE ENTRY WARMED IS THE ONE THE QUERY WILL READ, which is why the lock is a
+    parameter. Cache entries are keyed `(space_id, graph_lock_uri)` since
+    `issues/163` — a graph-locked query reads its own graph's counts — so
+    warming the unlocked entry leaves a locked query to load its own on the
+    first request, exactly the cold read this exists to avoid.
+
+    The guard checks that same key. It used to be `space_id in _stats_cache`,
+    which after the rekey could never be true: the warm would re-run on every
+    call, which is harmless only because `_load_quad_stats` checks the cache
+    itself.
+    """
+    if (space_id, graph_lock_uri) in _stats_cache:
         return
 
     from .ir import AliasGenerator
     dummy = AliasGenerator()
+    dummy.graph_lock_uri = graph_lock_uri
     await _load_quad_stats(dummy, space_id,
                            conn_params=conn_params, conn=conn)
 
@@ -755,12 +823,22 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
         # skipped both — measured on a filtered 3-hop traversal: 3 pairs needed,
         # 0 missing, so the one range criterion the query depends on was never
         # counted and the join order was chosen without it (issues/090).
+        _lock = getattr(aliases, "graph_lock_uri", None)
         if missing:
             values = ", ".join(f"('{p}'::uuid, '{o}'::uuid)" for p, o in missing)
             rows = await db.execute_query(
-                f"SELECT predicate_uuid::text, object_uuid::text, row_count "
+                # SUMMED IN SQL, and NARROWED THE SAME WAY THE PRELOAD WAS.
+                # One pair is one row per graph now (`issues/163`); these counts
+                # are merged into the preload's dict and compared against its
+                # values, so a space-wide figure here against a graph-scoped one
+                # there would make the on-demand pairs look larger than
+                # everything around them purely by how they were fetched.
+                f"SELECT predicate_uuid::text, object_uuid::text, "
+                f"sum(row_count)::bigint AS row_count "
                 f"FROM {space_id}_rdf_stats "
-                f"WHERE (predicate_uuid, object_uuid) IN ({values})",
+                f"WHERE (predicate_uuid, object_uuid) IN ({values})"
+                f"{_ctx_filter(space_id, _lock)} "
+                f"GROUP BY 1, 2",
                 conn=conn, conn_params=conn_params,
                 lock_timeout_ms=STATS_LOCK_TIMEOUT_MS)
             aliases.extra_quad_stats = {
@@ -773,16 +851,25 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
             # only needs to know whether a pair is large, not how large, so a
             # capped count answers it at fixed cost. Cached per process because
             # these move slowly and the alternative is paying it per query.
+            #
+            # SCOPED TO THE LOCK GRAPH TOO, and keyed by it. This counts the
+            # quad table directly, so without the filter it would report
+            # space-wide numbers into a dict whose other entries are the locked
+            # graph's -- the two are then compared against each other by the
+            # gate that ranks criteria. Over-counting is the safe direction on
+            # its own, but the CACHE is not: keyed by the pair alone it hands
+            # one graph's count to a query on another.
             still = [pr for pr in missing if pr not in aliases.extra_quad_stats]
             for p_uuid, o_uuid in still:
-                ck = (space_id, p_uuid, o_uuid)
+                ck = (space_id, p_uuid, o_uuid, _lock)
                 if ck in _pair_count_cache:
                     aliases.extra_quad_stats[(p_uuid, o_uuid)] = _pair_count_cache[ck]
                     continue
                 crows = await db.execute_query(
                     f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_rdf_quad "
                     f"WHERE predicate_uuid = '{p_uuid}'::uuid "
-                    f"AND object_uuid = '{o_uuid}'::uuid "
+                    f"AND object_uuid = '{o_uuid}'::uuid"
+                    f"{_ctx_filter(space_id, _lock)} "
                     f"LIMIT {_PAIR_COUNT_CAP}) s",
                     conn=conn, conn_params=conn_params)
                 n = crows[0]["n"] if crows else 0
@@ -910,7 +997,14 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                 disjuncts.append(cond + ")")
             try:
                 rows = await db.execute_query(
-                    f"SELECT count(*) AS n_terms, "
+                    # DISTINCT ON THE TERM. `s` has one row per graph now
+                    # (`issues/163`), so a plain count(*) counts (term, graph)
+                    # pairs and reports more terms covered than exist -- which
+                    # passes the `n_terms < n_values` gate below on an
+                    # UNDERCOUNTED total, the exact combination it guards
+                    # against. `sum` is unaffected: summing every graph's rows
+                    # is the space-wide count it already meant.
+                    f"SELECT count(DISTINCT t.term_uuid) AS n_terms, "
                     f"       COALESCE(sum(s.row_count), 0)::bigint AS total "
                     f"FROM {space_id}_term t "
                     f"JOIN {space_id}_rdf_stats s ON s.object_uuid = t.term_uuid "
@@ -1014,6 +1108,117 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
         # together: at WARNING without that fix, this floods the log.
         logger.warning("semijoin gate: pair stats lookup failed, plan will be "
                        "chosen without leaf statistics: %s", e, exc_info=True)
+
+
+_HALEY = "http://vital.ai/ontology/haley-ai-kg#"
+
+# The predicates whose OBJECT is a value the query filters on. A constant under
+# any of these is a criterion; a constant under a TYPE predicate
+# (hasKGSlotType, hasKGFrameType, hasKGEntityType, vitaltype) names the shape
+# being walked and is not.
+#
+# `issues/160` turns on this distinction. The first attempt fed EVERY chain
+# constraint into the selectivity contest, structural constants included. Those
+# appear on every query of this shape, and one of them won at "2% selectivity"
+# and drove a nested loop: three of four measured shapes got worse — including
+# a 1-in-1,150,000 equality that went from 4ms to a timeout — and the change was
+# reverted. Rarity was never the problem; WHICH constant drove the walk was.
+_SLOT_VALUE_PREDICATES = tuple(f"{_HALEY}has{n}SlotValue" for n in (
+    "Audio", "Boolean", "Choice", "Code", "Currency", "DateTime", "Double",
+    "Entity", "FileUpload", "GeoLocation", "Image", "Integer", "Json", "Long",
+    "LongText", "MultiChoice", "MultiTaxonomy", "PropertyFrameType", "Run",
+    "Taxonomy", "Text", "Uri", "Video"))
+
+
+def _slot_value_predicate_uuids():
+    """UUIDs of the slot-VALUE predicates, computed rather than looked up.
+
+    `_generate_term_uuid` is a deterministic UUIDv5, so this needs no database
+    round trip and cannot go stale against one.
+    """
+    from .sparql_sql_space_impl import _generate_term_uuid
+    out = set()
+    for uri in _SLOT_VALUE_PREDICATES:
+        u = _generate_term_uuid(uri, "U")
+        out.add(u)
+        out.add(str(u))
+    return frozenset(out)
+
+
+_SLOT_VALUE_PRED_UUIDS = None
+
+
+def _equality_criterion(chains, pair_rows, pair_bounds, pred_stats,
+                        saturated, crit, pred):
+    """Fold a FILTERING equality into the most-selective criterion contest.
+
+    `issues/160`. `range_stats` (ops >,>=,<,<=), `in_stats` and `text_stats` are
+    the only sources `criterion_rows` came from, and an equality is none of
+    those — it is a CONSTANT in the BGP, priced by `rdf_stats` as a
+    (predicate, object) pair and by `absence_bounds` when the cap dropped it. So
+    an equality-only query reported "no measured criterion" and declined to the
+    as-is fan-out. That is the whole production Nurture shape.
+
+    ONLY constants under a slot-VALUE predicate qualify. A constant under a TYPE
+    predicate names the shape rather than filtering it, and admitting those is
+    what made the first attempt regress — see `_SLOT_VALUE_PREDICATES`.
+
+    Returns `(crit, pred)`; the contest CONTINUES, so a query carrying both an
+    equality and a range still reports whichever is narrower.
+
+    A bound is an UPPER bound, so it can only UNDERSTATE selectivity here, which
+    is safe because `decide` REPORTS selectivity rather than thresholding on it.
+    A SATURATED pair is skipped: its count hit the loader's cap and is a LOWER
+    bound, and a lower bound used as a measurement OVERSTATES selectivity — the
+    one direction that is not safe.
+    """
+    global _SLOT_VALUE_PRED_UUIDS
+    if _SLOT_VALUE_PRED_UUIDS is None:
+        _SLOT_VALUE_PRED_UUIDS = _slot_value_predicate_uuids()
+
+    def _get(d, k):
+        if k in d:
+            return d[k]
+        return d.get(str(k))
+
+    for ch in chains:
+        # EVERY constant on each end, not just `head_constraint`. That field is
+        # the FIRST priceable pair — "type-ish" by design, for direction pricing
+        # — and on the Nurture slot node it is `hasKGSlotType`, so the filtering
+        # `hasTextSlotValue` constant was never offered here at all. Falling
+        # back to the single field keeps this working for chains detected before
+        # `head_constants` existed.
+        raw = (tuple(getattr(ch, "head_constants", ()) or ())
+               + tuple(getattr(ch, "tail_constants", ()) or ()))
+        # Entries are ((pred, obj), alias); older shapes may hand back a bare
+        # pair, and the single-constraint fields are the fallback for chains
+        # detected before `head_constants` existed.
+        ends = tuple(e[0] if (isinstance(e, tuple) and len(e) == 2
+                              and isinstance(e[0], tuple)) else e
+                     for e in raw) \
+            or tuple(x for x in (getattr(ch, "head_constraint", None),
+                                 getattr(ch, "tail_constraint", None)) if x)
+        for c in ends:
+            if not c:
+                continue
+            # THE FILTER. Everything below prices a criterion; this decides
+            # whether the constant IS one.
+            if c[0] not in _SLOT_VALUE_PRED_UUIDS \
+                    and str(c[0]) not in _SLOT_VALUE_PRED_UUIDS:
+                continue
+            if c in saturated or (str(c[0]), str(c[1])) in saturated:
+                continue
+            n = _get(pair_rows, c)
+            if n is None:
+                n = _get(pair_rows, (str(c[0]), str(c[1])))
+            if n is None:
+                n = _get(pair_bounds or {}, c[0])
+            if n is None:
+                continue
+            total = _get(pred_stats, c[0])
+            if total and (crit is None or n / total < crit / pred):
+                crit, pred = n, total
+    return crit, pred
 
 
 async def generate_sql(
@@ -1202,6 +1407,135 @@ async def _generate_sql(
                 from .rewrite_frame_entity_table import rewrite_frame_entity_table
                 plan = rewrite_frame_entity_table(plan, aliases, space_id)
 
+            # Stage 2a.2a: a REQUIRED constant that resolves to no term makes
+            # the whole query provably empty.
+            #
+            # `materialize_constants` records only the constants it could
+            # resolve, so a value absent from the term table never lands in
+            # `resolved_constants`. The generated SQL is already CORRECT in that
+            # case — the `_const` CTE yields no row and the joins produce
+            # nothing — it just does all the work first. Measured on
+            # `lead_nurture_100k`: a campaign equality AND an absent SFLeadId
+            # cost 957,190,410 and timed out at 55s, to return the 0 rows the
+            # unresolved constant guaranteed before a single table was touched
+            # (`issues/161`, defect 1).
+            #
+            # ONLY for a purely conjunctive plan. Under OPTIONAL, UNION or MINUS
+            # an unmatched constant does NOT make the result empty — it makes
+            # one branch empty — and short-circuiting there would DELETE rows the
+            # query should return. That is the same asymmetry that made the
+            # slot-sort narrowing dangerous, so the guard is a whitelist of node
+            # kinds rather than a blacklist.
+            try:
+                from .ir import (KIND_BGP, KIND_JOIN, KIND_PROJECT,
+                                 KIND_DISTINCT, KIND_REDUCED, KIND_SLICE,
+                                 KIND_ORDER)
+                _CONJUNCTIVE = {KIND_BGP, KIND_JOIN, KIND_PROJECT,
+                                KIND_DISTINCT, KIND_REDUCED, KIND_SLICE,
+                                KIND_ORDER}
+
+                def _only_conjunctive(node) -> bool:
+                    if getattr(node, "kind", None) not in _CONJUNCTIVE:
+                        return False
+                    return all(_only_conjunctive(c)
+                               for c in (getattr(node, "children", None) or []))
+
+                _unresolved = [col for col in aliases.constants.values()
+                               if col not in (aliases.resolved_constants or {})]
+                if _unresolved and _only_conjunctive(plan):
+                    def _mark_empty(node):
+                        # The OWNER must be a real table alias. `_place` hangs a
+                        # constraint on the table it names, so an invented owner
+                        # like "__empty__" is silently dropped and the sentinel
+                        # never reaches the SQL — which is exactly what happened
+                        # the first time, logging success while doing nothing.
+                        tbls = getattr(node, "tables", None)
+                        if tbls:
+                            owner = tbls[0].alias or tbls[0].ref_id
+                            sentinel = (owner, "1 = 0")
+                            if sentinel not in node.tagged_constraints:
+                                node.tagged_constraints.append(sentinel)
+                            return True
+                        return any(_mark_empty(c)
+                                   for c in (getattr(node, "children", None) or []))
+
+                    if _mark_empty(plan):
+                        logger.info(
+                            "empty-constant short circuit: %d constant(s) "
+                            "resolve to no term, so this query cannot match — "
+                            "emitting an empty result instead of walking",
+                            len(_unresolved))
+            except Exception as exc:
+                # Advisory: without it the query is slow, never wrong.
+                logger.warning("empty-constant check skipped: %s", exc,
+                               exc_info=True)
+
+            # Stage 2a.2c: intersect INDEPENDENT criteria on the projected
+            # variable instead of letting them correlate (`issues/161`).
+            # Uncorrelated `IN` per component, so N criteria cost N lookups
+            # rather than multiplying — 46,079 x 20,769 was the 957M plan.
+            try:
+                from .component_intersect import component_intersect_constraints
+
+                # The projected variable is found PER NODE. `var_slots` lives on
+                # the BGP, not on the PROJECT/SLICE wrapper above it — looking on
+                # the top-level plan found nothing and the pass silently never
+                # ran, which is how the two attempts before this one shipped as
+                # dead code.
+                def _intersect(node):
+                    if getattr(node, "tables", None):
+                        vs = getattr(node, "var_slots", None) or {}
+                        proj = "entity" if "entity" in vs else None
+                        if proj:
+                            for extra in component_intersect_constraints(
+                                    node, aliases, space_id, proj):
+                                if extra not in node.tagged_constraints:
+                                    node.tagged_constraints.append(extra)
+                    for ch in (getattr(node, "children", None) or []):
+                        _intersect(ch)
+
+                _intersect(plan)
+            except Exception as exc:
+                logger.warning("component intersect skipped: %s", exc,
+                               exc_info=True)
+
+            # Stage 2a.2b: narrow each slot fixed to a CONSTANT value against
+            # `entity_slot_sort` — the equality twin of what `slot_sort_range`
+            # already does for ranges. It ADDS a constraint the surrounding
+            # chain already implies and removes nothing, so it cannot change an
+            # answer; see `slot_equality_constraints` for why anchoring on the
+            # SLOT needs no frame path and no constant translation.
+            #
+            # The shape it exists for timed out at 55s on a 53M-quad space,
+            # where the same answer driven from the slot set measured 519 ms
+            # (`issues/161`).
+            try:
+                from .slot_sort_range import slot_equality_constraints
+
+                _added = [0]
+
+                def _narrow_slots(node):
+                    if getattr(node, "tables", None):
+                        for extra in slot_equality_constraints(
+                                node, aliases, space_id):
+                            if extra not in node.tagged_constraints:
+                                node.tagged_constraints.append(extra)
+                                _added[0] += 1
+                    for ch in (getattr(node, "children", None) or []):
+                        _narrow_slots(ch)
+
+                _narrow_slots(plan)
+                if _added[0]:
+                    logger.info("slot-sort equality: narrowed %d slot(s) via "
+                                "entity_slot_sort", _added[0])
+            except Exception as exc:
+                # Additive and optional: losing it costs speed, never an answer.
+                # At WARNING, not debug: production runs at INFO, and an
+                # optimisation that silently stops applying is indistinguishable
+                # from one that was never deployed.
+                logger.warning("slot-sort equality narrowing skipped: %s", exc,
+                               exc_info=True)
+
         # Stage 2a.3: Build the plans inside FILTER EXISTS / NOT EXISTS bodies.
         #
         # Has to happen HERE — after the rewrites, so the bodies get the same
@@ -1357,13 +1691,17 @@ async def _generate_sql(
                          if c and (c not in _pairs
                                    and (str(c[0]), str(c[1])) not in _pairs)}
                 if _want:
+                    _tlock = getattr(aliases, "graph_lock_uri", None)
                     try:
                         _vals = ", ".join(f"('{pr}'::uuid, '{ob}'::uuid)"
                                           for pr, ob in _want)
                         _rows = await db.execute_query(
                             f"SELECT predicate_uuid::text, object_uuid::text, "
-                            f"row_count FROM {space_id}_rdf_stats "
-                            f"WHERE (predicate_uuid, object_uuid) IN ({_vals})",
+                            f"sum(row_count)::bigint AS row_count "
+                            f"FROM {space_id}_rdf_stats "
+                            f"WHERE (predicate_uuid, object_uuid) IN ({_vals})"
+                            f"{_ctx_filter(space_id, _tlock)} "
+                            f"GROUP BY 1, 2",
                             conn=conn, conn_params=conn_params)
                         for r in _rows:
                             _pairs[(r["predicate_uuid"], r["object_uuid"])] = \
@@ -1395,6 +1733,25 @@ async def _generate_sql(
                 from .sync_stats_tables import absence_bounds
                 _bounds = absence_bounds(getattr(aliases, "quad_stats", None),
                                          getattr(aliases, "pred_stats", None))
+
+                # Repoint each chain end at its most selective constant before
+                # anything reads it. `_constrained` took the first — the TYPE
+                # constant — so both ends priced 100,000, the comparison tied,
+                # and the walk drove from the entity end and seq-scanned the
+                # edge table (`issues/161`).
+                from .traversal_decision import refine_chain_constraints
+                refine_chain_constraints(_chains, pair_rows=_pairs,
+                                         pair_bounds=_bounds)
+
+                # `issues/160`. An equality is a CONSTANT in the BGP, so none of
+                # the histograms above see it. Only slot-VALUE constants count —
+                # a type constant names the shape, and admitting those is what
+                # made the first attempt regress.
+                _crit, _pred = _equality_criterion(
+                    _chains, _pairs, _bounds,
+                    getattr(aliases, "pred_stats", None) or {},
+                    getattr(aliases, "saturated_pairs", None) or set(),
+                    _crit, _pred)
 
                 aliases.traversal_decision = decide_for_plan(
                     _chains, _crit, _pred, pair_rows=_pairs,

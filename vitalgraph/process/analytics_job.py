@@ -128,20 +128,40 @@ class AnalyticsJob:
                 logger.warning("AnalyticsJob: space tables not found for %s, skipping", space_id)
                 return {"space_id": space_id, "skipped": True}
 
-            # Resolve graph filter to graph_id if provided
-            graph_id = None
+            # Resolve the graph to the CONTEXT UUID the quads are keyed by.
+            #
+            # This used to resolve `graph.graph_id` and filter with
+            # `AND q.graph_id = N`. The quad table has no `graph_id` column --
+            # it has `context_uuid` -- so that clause was invalid SQL and EVERY
+            # graph-filtered analytics request failed with `column q.graph_id
+            # does not exist`. Unfiltered requests never built the clause, which
+            # is why it survived: the only caller exercised in tests passes no
+            # graph.
+            #
+            # `graph` still gates existence, so "Graph not found" keeps its
+            # meaning; the term lookup is what the filter actually needs. A
+            # registered graph whose URI is not a term in this space has no
+            # quads, and is reported the same way rather than silently
+            # analysing the whole space.
+            graph_ctx = None
             if graph_uri:
-                graph_id = await conn.fetchval(
+                known = await conn.fetchval(
                     "SELECT graph_id FROM graph WHERE space_id = $1 AND graph_uri = $2",
                     space_id, graph_uri
                 )
-                if graph_id is None:
+                if known is None:
+                    return {"space_id": space_id, "error": f"Graph not found: {graph_uri}"}
+                graph_ctx = await conn.fetchval(
+                    f"SELECT term_uuid FROM {space_id}_term WHERE term_text = $1",
+                    graph_uri
+                )
+                if graph_ctx is None:
                     return {"space_id": space_id, "error": f"Graph not found: {graph_uri}"}
 
-            entity_analytics = await self._compute_entity_analytics(conn, space_id, graph_id)
-            frame_analytics = await self._compute_frame_analytics(conn, space_id, graph_id)
-            relation_analytics = await self._compute_relation_analytics(conn, space_id, graph_id)
-            property_analytics = await self._compute_property_analytics(conn, space_id, graph_id)
+            entity_analytics = await self._compute_entity_analytics(conn, space_id, graph_ctx)
+            frame_analytics = await self._compute_frame_analytics(conn, space_id, graph_ctx)
+            relation_analytics = await self._compute_relation_analytics(conn, space_id, graph_ctx)
+            property_analytics = await self._compute_property_analytics(conn, space_id, graph_ctx)
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
 
@@ -169,30 +189,83 @@ class AnalyticsJob:
     # Entity analytics
     # ------------------------------------------------------------------
 
-    def _graph_filter(self, graph_id: Optional[int], alias: str = 'q') -> str:
-        """Return a SQL AND clause filtering by graph_id if provided."""
-        if graph_id is not None:
-            return f" AND {alias}.graph_id = {int(graph_id)}"
+    def _graph_filter(self, graph_ctx, alias: str = 'q') -> str:
+        """Return a SQL AND clause restricting `alias` to one graph.
+
+        On `context_uuid`, which is the column the quad table actually has.
+        """
+        if graph_ctx is not None:
+            return f" AND {alias}.context_uuid = '{graph_ctx}'::uuid"
         return ""
 
-    async def _compute_entity_analytics(self, conn, space_id: str, graph_id: Optional[int] = None) -> Dict[str, Any]:
+    async def _compute_entity_analytics(self, conn, space_id: str, graph_ctx=None) -> Dict[str, Any]:
         """Compute entity type distribution and frame relationship stats."""
         t_quad = f"{space_id}_rdf_quad"
         t_term = f"{space_id}_term"
-        gf = self._graph_filter(graph_id)
+        gf = self._graph_filter(graph_ctx)
 
-        # Get type distribution for entities (vitaltype containing 'Entity')
-        type_rows = await conn.fetch(f"""
-            SELECT o_term.term_text AS type_uri, COUNT(DISTINCT q.subject_uuid) AS cnt
-            FROM {t_quad} q
-            JOIN {t_term} p_term ON q.predicate_uuid = p_term.term_uuid
-            JOIN {t_term} o_term ON q.object_uuid = o_term.term_uuid
-            WHERE p_term.term_text = $1
-              AND o_term.term_text LIKE '%Entity%'{gf}
-            GROUP BY o_term.term_text
-            ORDER BY cnt DESC
-            LIMIT 50
-        """, _VITALTYPE)
+        # Type distribution. `rdf_stats` ALREADY HOLDS THIS EXACTLY.
+        #
+        # `vitaltype` is single-valued per object, so COUNT(DISTINCT subject) for
+        # a (vitaltype, type) pair IS the `row_count` the stats table stores. The
+        # quad form re-derives from every vitaltype quad with two term joins;
+        # measured on a 53M-quad space, identical answers:
+        #
+        #     quad form   6,282 ms      rdf_stats   14 ms      440x
+        #
+        # That matters beyond this job. These counts were measured contending
+        # with user queries — 20 statements over 1s totalling ~110s in one
+        # 3-minute window — and a read queueing behind them cannot be
+        # sub-second however well it is planned (`issues/161`).
+        #
+        # GRAPH-SCOPED REQUESTS USE IT TOO, since `issues/163` put a
+        # `context_uuid` on the table. This was gated to whole-space requests
+        # while the stats answered only for the space; the gate is gone and the
+        # graph filter is applied to the stats rows directly. `sum` over graphs
+        # is what the unfiltered case wants, and it is exact either way: one
+        # stored row per (pair, graph) means no double counting in either shape.
+        #
+        # ONE PRECONDITION REMAINS, and it is hard: the table keeps only pairs
+        # with row_count >= STATS_MIN_ROW_COUNT (2), so a type with exactly ONE
+        # entity is absent. Acceptable for a top-50 distribution ordered by
+        # count; not acceptable silently, hence this note and the fallback when
+        # the table yields nothing.
+        #
+        # Per graph that threshold bites slightly harder -- a type with one
+        # entity in each of three graphs is stored space-wide and absent from
+        # all three per-graph views -- which is the same tail, counted where the
+        # query actually looks.
+        sf = self._graph_filter(graph_ctx, alias='s')
+        type_rows = []
+        try:
+            type_rows = await conn.fetch(f"""
+                SELECT o.term_text AS type_uri, sum(s.row_count)::bigint AS cnt
+                FROM {space_id}_rdf_stats s
+                JOIN {t_term} p ON p.term_uuid = s.predicate_uuid
+                JOIN {t_term} o ON o.term_uuid = s.object_uuid
+                WHERE p.term_text = $1 AND o.term_text LIKE '%Entity%'{sf}
+                GROUP BY o.term_text
+                ORDER BY cnt DESC
+                LIMIT 50
+            """, _VITALTYPE)
+        except Exception as exc:
+            # A space predating the table, or one never recomputed.
+            logger.debug("analytics: rdf_stats type distribution "
+                         "unavailable for %s (%s)", space_id, exc)
+            type_rows = []
+
+        if not type_rows:
+            type_rows = await conn.fetch(f"""
+                SELECT o_term.term_text AS type_uri, COUNT(DISTINCT q.subject_uuid) AS cnt
+                FROM {t_quad} q
+                JOIN {t_term} p_term ON q.predicate_uuid = p_term.term_uuid
+                JOIN {t_term} o_term ON q.object_uuid = o_term.term_uuid
+                WHERE p_term.term_text = $1
+                  AND o_term.term_text LIKE '%Entity%'{gf}
+                GROUP BY o_term.term_text
+                ORDER BY cnt DESC
+                LIMIT 50
+            """, _VITALTYPE)
 
         type_distribution = [
             {"type_uri": row["type_uri"], "type_name": _short_name(row["type_uri"]), "count": row["cnt"]}
@@ -241,11 +314,11 @@ class AnalyticsJob:
     # Frame analytics
     # ------------------------------------------------------------------
 
-    async def _compute_frame_analytics(self, conn, space_id: str, graph_id: Optional[int] = None) -> Dict[str, Any]:
+    async def _compute_frame_analytics(self, conn, space_id: str, graph_ctx=None) -> Dict[str, Any]:
         """Compute frame and slot type distributions."""
         t_quad = f"{space_id}_rdf_quad"
         t_term = f"{space_id}_term"
-        gf = self._graph_filter(graph_id)
+        gf = self._graph_filter(graph_ctx)
 
         # SIZE GUARD, checked before anything expensive runs.
         #
@@ -363,11 +436,11 @@ class AnalyticsJob:
     # Relation analytics
     # ------------------------------------------------------------------
 
-    async def _compute_relation_analytics(self, conn, space_id: str, graph_id: Optional[int] = None) -> Dict[str, Any]:
+    async def _compute_relation_analytics(self, conn, space_id: str, graph_ctx=None) -> Dict[str, Any]:
         """Compute edge type distribution and classification."""
         t_quad = f"{space_id}_rdf_quad"
         t_term = f"{space_id}_term"
-        gf = self._graph_filter(graph_id)
+        gf = self._graph_filter(graph_ctx)
 
         # Edge type distribution
         edge_rows = await conn.fetch(f"""
@@ -435,7 +508,7 @@ class AnalyticsJob:
     # Property analytics
     # ------------------------------------------------------------------
 
-    async def _compute_property_analytics(self, conn, space_id: str, graph_id: Optional[int] = None) -> Dict[str, Any]:
+    async def _compute_property_analytics(self, conn, space_id: str, graph_ctx=None) -> Dict[str, Any]:
         """Compute predicate usage and literal type distributions.
 
         For large spaces (>5M quads), skips the expensive GROUP BY queries
@@ -443,7 +516,7 @@ class AnalyticsJob:
         """
         t_quad = f"{space_id}_rdf_quad"
         t_term = f"{space_id}_term"
-        gf = self._graph_filter(graph_id)
+        gf = self._graph_filter(graph_ctx)
 
         # Quick row estimate to decide whether full analytics is feasible
         quad_estimate = await conn.fetchval(
