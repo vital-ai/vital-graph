@@ -292,6 +292,12 @@ ignore = [
     "e2e/**",
     "docker/**",
     "docker-compose.test.yml",
+    # Same reason as the line above: a test-stack overlay, not part of the
+    # package. It became tracked (rather than caught by .gitignore's blanket
+    # `**/*.yml`) so the volume-recovery procedure it documents reaches other
+    # clones — which put it in version control and therefore in front of
+    # check-manifest, hence this entry.
+    "docker-compose.test.persist.yml",
     ".devin/**",
     "issues/**",
     "load_test_scripts/**",
