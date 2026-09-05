@@ -159,6 +159,22 @@ less selective than it is and is passed over rather than wrongly chosen as the
 driver. Worth fixing, not urgent, and it is recorded here rather than left to be
 rediscovered.
 
+## Known gap: an unresolvable lock loads no statistics
+
+`_ctx_filter` resolves the graph URI inline, and the subquery yields NULL for a
+URI with no term -- so `context_uuid = NULL` matches nothing and the preload
+returns EMPTY. For a data filter that is correct. For STATISTICS it is not:
+absent statistics mean "unknown", not "no rows", and `emit_slice` declines on
+unknown selectivity by design. An unresolvable lock therefore disables
+optimisations silently rather than failing.
+
+Nothing measured reaches it -- every fixture's graph resolves, and a
+single-graph space loads identical counts scoped or summed -- and the fix is not
+a one-liner: distinguishing a FAILED RESOLUTION (fall back to space-wide) from a
+graph that genuinely holds no frequent pairs (keep the empty answer) needs a
+separate lookup, and the two cases want opposite fallbacks. Recorded rather than
+guessed at.
+
 ## Found on the way
 
 `issues/164` — graph-filtered analytics filtered on `q.graph_id`, a column the

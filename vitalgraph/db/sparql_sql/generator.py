@@ -290,9 +290,23 @@ def _ctx_filter(space_id: str, lock_uri: Optional[str], alias: str = "") -> str:
 
     The graph is named by URI here and stored as a term uuid, so this resolves
     it inline rather than costing a round trip. `LIMIT 1` because a URI is one
-    term; the subquery yields NULL for a graph with no term, and `context_uuid =
-    NULL` is never true -- which is the right answer, since a graph absent from
-    the term table holds no quads.
+    term.
+
+    KNOWN GAP, stated because the obvious reading of it is wrong. The subquery
+    yields NULL for a graph with no term and `context_uuid = NULL` is never
+    true, so an unresolvable lock loads NO STATISTICS. For a data filter that
+    would be correct -- a graph absent from the term table holds no quads -- but
+    these are STATISTICS, and absent statistics do not mean "no rows", they mean
+    "unknown". `emit_slice` treats unknown selectivity as a reason to decline
+    (deliberately: "guessing favourably is how a rewrite ships looking correct
+    and behaves badly on the shapes nobody profiled"), so an unresolvable lock
+    silently disables optimisations rather than erroring.
+
+    Not reached by anything measured -- every fixture resolves, and a
+    single-graph space loads the same counts either way -- so it is recorded in
+    `issues/163` rather than fixed here with untested machinery. Telling a
+    FAILED RESOLUTION from a graph that genuinely has no frequent pairs needs a
+    separate lookup, and the two want opposite fallbacks.
     """
     if not lock_uri:
         return ""
@@ -498,6 +512,54 @@ async def warm_stats_cache(
 # ---------------------------------------------------------------------------
 
 _XSD_STRING = "http://www.w3.org/2001/XMLSchema#string"
+
+
+
+def _plan_constraints(node, out=None):
+    """Every constraint string in the plan, this node's and its children's."""
+    if out is None:
+        out = []
+    for t in (getattr(node, "tagged_constraints", None) or []):
+        out.append(t[1] if isinstance(t, tuple) else str(t))
+    for t in (getattr(node, "constraints", None) or []):
+        out.append(str(t))
+    for c in (getattr(node, "children", None) or []):
+        _plan_constraints(c, out)
+    return out
+
+
+def required_missing_constants(plan, unresolved):
+    """Of `unresolved`, those a constraint genuinely REQUIRES.
+
+    Extracted from the caller so the rule can be tested directly: it decides
+    whether a query is rewritten to return nothing, so being wrong here is a
+    silent wrong answer rather than a slow one.
+
+    TWO WAYS AN UNRESOLVED CONSTANT IS NOT A REQUIRED ONE, and the check missed
+    both when it simply counted unresolved constants:
+
+      * NO CONSTRAINT MENTIONS IT. `aliases.constants` registers every constant
+        OFFERED during collection, not the ones the query depends on -- a
+        rewrite can register a term and drop it, and a type list registers every
+        alternative it was given. Measured on the `mql` KG shape: three
+        unresolved constants (entity types absent from that space) against 72
+        plan constraints, NONE referencing any of them. The query matched
+        thousands of rows through the types that DO exist, and the caller
+        emitted `1 = 0`.
+      * THE OPERATOR MAKES ABSENCE HARMLESS. `col = <missing>` can never hold;
+        `col IS DISTINCT FROM <missing>` always holds. `collect` emits the
+        second for every `GRAPH ?g`, so reading it as fatal returns zero rows
+        for any such query with an empty default graph -- `issues/093`, found
+        and fixed once already. `_dead_constant_is_required` is that fix, and is
+        reused here rather than re-decided.
+    """
+    from .prune_union import _dead_constant_is_required
+    cons = _plan_constraints(plan)
+    return [
+        col for col in unresolved
+        if any(_dead_constant_is_required(c, f"{_CONST_PREFIX}{col}{_CONST_SUFFIX}")
+               for c in cons)
+    ]
 
 
 def _norm_key(key):
@@ -1442,7 +1504,43 @@ async def _generate_sql(
 
                 _unresolved = [col for col in aliases.constants.values()
                                if col not in (aliases.resolved_constants or {})]
-                if _unresolved and _only_conjunctive(plan):
+
+                # AN UNRESOLVED CONSTANT IS NOT A REQUIRED ONE, and treating it
+                # as one returned ZERO ROWS for queries with answers.
+                #
+                # `aliases.constants` registers every constant OFFERED during
+                # collection, not the ones the query depends on. A rewrite can
+                # register a term and then drop it, and a type disjunction
+                # registers every alternative it was given. Measured on the
+                # `mql` KG shape: three unresolved constants
+                # (KGNewsEntity / KGProductEntity / KGWebEntity, types this
+                # space does not contain) against 72 plan constraints, NONE of
+                # which referenced any of them. The query matched thousands of
+                # rows through the types that DO exist, and this emitted
+                # `1 = 0`.
+                #
+                # So the test is not "is some constant unresolved" but "does a
+                # constraint that MUST hold require one".
+                #
+                # `prune_union._dead_constant_is_required` ALREADY DECIDES THIS,
+                # correctly, and is the function to use rather than a second
+                # opinion. It is operator-aware, which a textual test is not:
+                #
+                #     col = <missing>                 can never hold -> required
+                #     col IS DISTINCT FROM <missing>  always holds   -> NOT
+                #
+                # `collect` emits the second for every `GRAPH ?g`, and reading it
+                # as fatal returned zero rows for any such query with an empty
+                # default graph -- that is `issues/093`, already found and fixed
+                # once. An "unresolved implies required" test here reintroduces
+                # it one module over.
+                #
+                # The node-kind whitelist below is still necessary and still not
+                # sufficient: it sees UNION-shaped disjunction, while a type list
+                # is a CONSTRAINT inside one BGP node and invisible to it. That
+                # gap is what this closes.
+                _required = required_missing_constants(plan, _unresolved)
+                if _required and _only_conjunctive(plan):
                     def _mark_empty(node):
                         # The OWNER must be a real table alias. `_place` hangs a
                         # constraint on the table it names, so an invented owner
@@ -1461,10 +1559,11 @@ async def _generate_sql(
 
                     if _mark_empty(plan):
                         logger.info(
-                            "empty-constant short circuit: %d constant(s) "
-                            "resolve to no term, so this query cannot match — "
-                            "emitting an empty result instead of walking",
-                            len(_unresolved))
+                            "empty-constant short circuit: %d REQUIRED "
+                            "constant(s) resolve to no term (of %d unresolved), "
+                            "so this query cannot match — emitting an empty "
+                            "result instead of walking",
+                            len(_required), len(_unresolved))
             except Exception as exc:
                 # Advisory: without it the query is slow, never wrong.
                 logger.warning("empty-constant check skipped: %s", exc,
