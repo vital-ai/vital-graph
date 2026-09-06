@@ -449,15 +449,16 @@ class KGQueriesEndpoint:
                 # move OFF the restore's transaction, which is the point of
                 # doing it.
                 from ..db.sparql_sql.fast_slot_filter import (
-                    slot_sort_coverage_is_complete)
-                if not await slot_sort_coverage_is_complete(
+                    slot_sort_is_blocked)
+                if await slot_sort_is_blocked(
                         conn, space_id, entity_criteria.entity_type):
                     key = (space_id, entity_criteria.entity_type, "sort")
                     if key not in _COVERAGE_WARNED:
                         _COVERAGE_WARNED.add(key)
                         self.logger.warning(
-                            "kgquery: entity_slot_sort coverage is not marked "
-                            "complete for space=%s type=%s, so the SORT fast "
+                            "kgquery: entity_slot_sort is BLOCKED for "
+                            "space=%s type=%s — an operation is in flight or a "
+                            "shortfall is being repaired — so the SORT fast "
                             "path is OFF and this query is ordered by the "
                             "general SPARQL path. Run "
                             "`scripts/backfill_slot_sort_coverage.py --space %s`.",
@@ -510,7 +511,7 @@ class KGQueriesEndpoint:
         """
         from ..db.sparql_sql.fast_slot_filter import (
             can_serve_filter, fast_slot_filter_page, fast_slot_filter_count,
-            slot_sort_coverage_is_complete)
+            slot_sort_is_blocked)
         if not can_serve_filter(entity_criteria):
             return None
         pool = getattr(getattr(backend, 'db_impl', None), 'connection_pool', None)
@@ -519,7 +520,7 @@ class KGQueriesEndpoint:
         try:
             t0 = _time.monotonic()
             async with pool.acquire() as conn:
-                if not await slot_sort_coverage_is_complete(
+                if await slot_sort_is_blocked(
                         conn, space_id, entity_criteria.entity_type):
                     # DECLINING IS CORRECT. Being SILENT about it is not.
                     #
@@ -540,12 +541,12 @@ class KGQueriesEndpoint:
                     if key not in _COVERAGE_WARNED:
                         _COVERAGE_WARNED.add(key)
                         self.logger.warning(
-                            "kgquery: entity_slot_sort coverage is not marked "
-                            "complete for space=%s type=%s, so the FILTER fast "
+                            "kgquery: entity_slot_sort is BLOCKED for "
+                            "space=%s type=%s — an operation is in flight or a "
+                            "shortfall is being repaired — so the FILTER fast "
                             "path is OFF and this query is served by the "
                             "general SPARQL path. Answers are correct but can "
-                            "be orders of magnitude slower. Run the maintenance "
-                            "coverage probe, or "
+                            "be orders of magnitude slower. Clear it by running "
                             "`scripts/backfill_slot_sort_coverage.py --space %s`.",
                             space_id, entity_criteria.entity_type, space_id)
                     return None

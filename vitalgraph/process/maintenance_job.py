@@ -1824,14 +1824,46 @@ class MaintenanceJob:
                 from ..db.sparql_sql.sync_entity_slot_sort import (
                     entity_slot_sort_all_types)
                 from ..db.sparql_sql.fast_slot_filter import (
-                    record_slot_sort_coverage)
+                    record_slot_sort_coverage, slot_sort_alarms)
                 async with self._pool.acquire() as conn:
                     async with maintenance_timeouts(conn):
-                        for cov in await entity_slot_sort_all_types(
-                                conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S):
+                        covs = await entity_slot_sort_all_types(
+                            conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
+                        # ALARMS FIRST. `record_slot_sort_coverage` takes a
+                        # block for every short type, so running this after it
+                        # would erase the evidence for the alarm that matters:
+                        # a shortfall found with NO block already held
+                        # (`issues/167`).
+                        alarms = await slot_sort_alarms(conn, space_id, covs)
+                        for cov in covs:
                             await record_slot_sort_coverage(
                                 conn, space_id, cov["entity_type_uuid"],
                                 cov["in_table"], cov["of_type"])
+                for a in alarms:
+                    if a["kind"] == "undeclared_shortfall":
+                        # A BUG IN THE CODE, not a problem with the data.
+                        # Something made the table incomplete without declaring
+                        # it, so queries were served from a short table until
+                        # this probe ran. Under the old allow-list that was
+                        # merely slow; under a block-list it is a wrong answer.
+                        # ERROR, because the fix is a missing block in some
+                        # write path and nothing else will report it.
+                        logger.error(
+                            "entity_slot_sort UNDECLARED SHORTFALL: %s type %s "
+                            "has %d of %d rows and NO block was held. A write "
+                            "path made this table incomplete without taking "
+                            "one — queries were served from it. See "
+                            "issues/167.",
+                            a["space_id"], a["entity_type_uuid"],
+                            a["in_table"], a["of_type"])
+                    else:
+                        logger.warning(
+                            "entity_slot_sort STALE BLOCK: %s type %s held "
+                            "since %s (%s). The fast path stays OFF until it "
+                            "clears; the repair is not converging, or nothing "
+                            "is working on it.",
+                            a["space_id"], a["entity_type_uuid"],
+                            a["since"], a["reason"])
             except Exception as exc:
                 # Not silent, at WARNING. Failing to record is SAFE — an unset
                 # marker makes the filter path decline, which is slow and

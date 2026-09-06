@@ -44,8 +44,15 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
     # coverage probe, which runs on its own schedule and never runs for a
     # maintenance-exempt space, so a repair silently disabled the fast path it
     # was supposed to restore (`issues/161`).
-    from .fast_slot_filter import clear_slot_sort_coverage
+    from .fast_slot_filter import (clear_slot_sort_coverage,
+                                   take_slot_sort_block)
     await clear_slot_sort_coverage(conn, space_id)
+    # AND TAKE A WHOLE-SPACE BLOCK (`issues/167`). Clearing the measurements is
+    # not by itself a refusal any more: under a block-list, absence means SERVE.
+    # The block is what stops the read paths using a table this function is in
+    # the middle of rebuilding, and it covers every type at once — which is what
+    # a full resync needs, since it does not know their uuids at this point.
+    await take_slot_sort_block(conn, space_id, None, reason="resync_all in flight")
 
     # 1. Edge table (frame_entity depends on this)
     edge_count = await resync_edge_table(conn, space_id)
@@ -225,6 +232,11 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
                     conn, space_id, cov["entity_type_uuid"],
                     cov["in_table"], cov["of_type"])
                 coverage.append((cov["in_table"], cov["of_type"]))
+        # Release the whole-space block taken at step 0. Per-type blocks are
+        # already correct: `record_slot_sort_coverage` took or released each one
+        # from the measurement it had just made.
+        from .fast_slot_filter import release_slot_sort_block
+        await release_slot_sort_block(conn, space_id, None)
         complete = sum(1 for a, b in coverage if a >= b)
         if coverage:
             logger.info(

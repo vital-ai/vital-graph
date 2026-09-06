@@ -1,8 +1,8 @@
 # Remove The Slot-Sort Coverage Marker — Make Completeness An Invariant
 
-## Status: OPEN, design. The marker is a workaround for a gap that should not
-## exist, and every bug it has caused was in its own lifecycle rather than in
-## the data it describes.
+## Status: IMPLEMENTED. The gate is inverted, the alarms are in, and the
+## upgrade path is written. What remains is running the alarms in production
+## long enough to trust the invariant they check.
 
 ## THE TARGET, REVISED: INVERT THE REGISTER
 
@@ -255,3 +255,68 @@ the difference is only which way absence reads. Deleting the mechanism outright
 would leave the `issues/149` shape — a genuinely short table with no one
 watching — served silently and wrongly, which is worse than the cliff this
 replaces.
+
+
+---
+
+# WHAT LANDED
+
+  * `slot_sort_block` — a row means KNOWN AT RISK, absence means SERVE.
+    `entity_type_uuid IS NULL` blocks the whole space, which is what a restore
+    or full resync needs since it does not know the type uuids when it starts.
+    `NULLS NOT DISTINCT` makes that a real unique key.
+  * `take_slot_sort_block` / `release_slot_sort_block` / `slot_sort_is_blocked`.
+    The read gate DEFAULTS TO BLOCKED on any uncertainty — unreadable table,
+    missing table, error — so a deployment whose schema predates this declines
+    everything until it is created. Slow and correct.
+  * BOTH read paths gated on it. The sort path was previously ungated at all,
+    which was a live hole of its own (`issues/168`).
+  * `record_slot_sort_coverage` takes or releases the per-type block FROM THE
+    MEASUREMENT IT JUST MADE. One function owns measurement and gate together,
+    because splitting them is what produced every marker-lifecycle bug in
+    `issues/161`.
+  * `resync_all` and `import_space` take a whole-space block at the start of the
+    risky work, in the transaction that begins it.
+  * TWO ALARMS in the maintenance probe, computed BEFORE recording because
+    recording takes a block and would erase the evidence:
+      - UNDECLARED SHORTFALL — a type short with no block held. A bug in the
+        CODE: some write path made the table incomplete without declaring it,
+        so queries were served from it. Logged at ERROR.
+      - STALE BLOCK — a block older than 24h. Slow-and-correct but indefinite,
+        and nothing else would report it. WARNING.
+  * `scripts/migrate_slot_sort_blocks.py` — the upgrade path.
+
+# THE UPGRADE GAP, which the tests could not have caught
+
+An existing deployment holds `complete = false` coverage rows and an EMPTY block
+table, because blocks did not exist when those rows were written. The moment the
+inverted read path ships, every one of those types goes from DECLINED AND SLOW
+to SERVED AND WRONG. That is the inverted failure mode arriving live, on
+upgrade, with no code change required to trigger it.
+
+Measured on the test database: 27 short types across 7 spaces, plus one space
+(`sp_kg_types`) never measured at all — the "created but never populated" case
+this issue predicted. The migration seeds a block for every short type and a
+whole-space block for every space with no coverage rows.
+
+RUN IT BEFORE DEPLOYING THE INVERTED READ PATH, not after.
+
+# VERIFIED
+
+    lead_nurture_100k / Lead        complete   -> served, no row needed, ~21ms
+    wordnet_frames / NounSynsetNode short      -> blocked
+    wordnet_frames / unknown type   unmeasured -> served
+    16 spaces swept                            -> 0 undeclared, 0 stale
+
+The sweep is the first time the design reports on itself, and a clean result is
+meaningful: the alarm would have fired had the migration missed anything.
+
+# STILL TRUE, AND THE REASON THE ALARMS EXIST
+
+No audit can prove a FUTURE write path will take a block. The third row above is
+the shape of the residual risk: a type nobody has measured is served. It is
+bounded by the coverage probe measuring every type on every cycle, so an
+undeclared shortfall is detected within one cycle rather than never — but
+"detected within a cycle" is not "cannot happen", and the honest statement of
+this design is that it trades a permanent slow failure for a bounded wrong one,
+with an alarm on the window.

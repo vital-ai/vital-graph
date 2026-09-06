@@ -215,8 +215,17 @@ async def import_space(conn, space_id: str, paths: Dict[str, str],
             # A space predating the table. Nothing to empty, nothing stale.
             logger.debug("import_space(%s): no entity_slot_sort to clear (%s)",
                          space_id, exc)
-        from .fast_slot_filter import clear_slot_sort_coverage
+        from .fast_slot_filter import (clear_slot_sort_coverage,
+                                       take_slot_sort_block)
         await clear_slot_sort_coverage(conn, space_id)
+        # The block is what makes the deferral safe (`issues/167`). Clearing the
+        # measurements is not a refusal under a block-list — absence means
+        # SERVE — so without this the emptied table would be served as an
+        # authoritative empty answer. Released by the backfill job when it
+        # verifies coverage, not by this function.
+        await take_slot_sort_block(
+            conn, space_id, None,
+            reason="restored; entity_slot_sort awaiting backfill")
         logger.info(
             "import_space(%s): edge/frame_entity/stats rebuilt inline; "
             "entity_slot_sort emptied and its coverage cleared — the fast "
@@ -228,8 +237,12 @@ async def import_space(conn, space_id: str, paths: Dict[str, str],
         # marker makes `fast_slot_filter` decline, which is slow and correct;
         # leaving a stale one makes it serve rows for entities that no longer
         # exist.
-        from .fast_slot_filter import clear_slot_sort_coverage
+        from .fast_slot_filter import (clear_slot_sort_coverage,
+                                       take_slot_sort_block)
         await clear_slot_sort_coverage(conn, space_id)
+        await take_slot_sort_block(
+            conn, space_id, None,
+            reason="restored with resync=False; derived tables not rebuilt")
         logger.warning(
             "import_space(%s): resync=False — the derived tables still describe "
             "the PREVIOUS contents. Slot-sort coverage cleared so the filter "

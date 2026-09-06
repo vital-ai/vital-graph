@@ -207,6 +207,135 @@ async def fast_slot_filter_page(
     return [r[0] for r in rows]
 
 
+async def take_slot_sort_block(conn, space_id: str, entity_type_uuid=None,
+                               reason: str = "") -> None:
+    """Declare this space (or one type in it) AT RISK until released.
+
+    `issues/167`. Taken by the operation that creates the risk, in the same
+    transaction that begins it — never by a caller remembering to afterwards. If
+    taking the block and starting the work can come apart, they will: `resync_all`
+    clearing a marker and leaving it cleared, and `bulk_export.import_space`
+    registering no graphs, are both that failure already.
+
+    `entity_type_uuid=None` blocks the WHOLE SPACE, which is what a restore or a
+    full resync needs: it invalidates every type at once and does not know their
+    uuids when it starts.
+
+    A block is a ROW, so it survives a crash. That fails in the correct
+    direction — a stuck block is slow and right, and is visible.
+    """
+    await conn.execute(
+        "INSERT INTO slot_sort_block (space_id, entity_type_uuid, reason)"
+        " VALUES ($1, $2, $3)"
+        " ON CONFLICT (space_id, entity_type_uuid) DO UPDATE"
+        "   SET reason = EXCLUDED.reason, created_at = NOW()",
+        space_id, entity_type_uuid, reason or "unspecified")
+
+
+async def release_slot_sort_block(conn, space_id: str,
+                                  entity_type_uuid=None) -> None:
+    """Release a block. ONLY call this having just MEASURED coverage.
+
+    Releasing because a job finished running is not the same as releasing
+    because the table is now complete, and the difference is a wrong answer.
+    """
+    if entity_type_uuid is None:
+        await conn.execute(
+            "DELETE FROM slot_sort_block"
+            " WHERE space_id = $1 AND entity_type_uuid IS NULL", space_id)
+    else:
+        await conn.execute(
+            "DELETE FROM slot_sort_block"
+            " WHERE space_id = $1 AND entity_type_uuid = $2",
+            space_id, entity_type_uuid)
+
+
+async def slot_sort_is_blocked(conn, space_id: str,
+                               entity_type_uri: str) -> bool:
+    """Is the slot-sort table KNOWN to be at risk for this space/type?
+
+    The read-path gate, and the inverse of what `slot_sort_coverage_is_complete`
+    asked. Absence of a block means SERVE: normal writes derive the table inline
+    in the caller's transaction, so it is correct unless something is actively
+    making it otherwise.
+
+    DEFAULTS TO BLOCKED ON ANY UNCERTAINTY — an unreadable table, a missing one,
+    an error. That keeps the asymmetry the allow-list had, in the one place it
+    still applies: not knowing is not the same as knowing it is fine, and the
+    cost of being wrong here is a confident subset rather than a slow answer.
+    A deployment whose schema predates this table therefore declines everything
+    until it is created, which is slow and correct.
+    """
+    try:
+        row = await conn.fetchrow(
+            "SELECT 1 FROM slot_sort_block WHERE space_id = $1"
+            "   AND (entity_type_uuid IS NULL OR entity_type_uuid = $2) LIMIT 1",
+            space_id, _term_uuid(entity_type_uri))
+    except Exception as exc:
+        logger.debug("slot_sort_block unreadable for %s: %s", space_id, exc)
+        return True
+    return row is not None
+
+
+async def slot_sort_alarms(conn, space_id: str, coverage_rows,
+                           stale_after_hours: int = 24) -> list:
+    """The two bugs a block-list can have. `issues/167`.
+
+    MUST BE CALLED BEFORE `record_slot_sort_coverage`, which takes a block for
+    any short type — running it afterwards erases the evidence for the first
+    alarm, which is the whole point of having it.
+
+    UNDECLARED SHORTFALL. A type measured short with NO block already held means
+    something made the table incomplete WITHOUT DECLARING IT. Under an
+    allow-list that was merely slow; under a block-list it means queries were
+    being served from a short table until this probe happened to run. It is the
+    detector for the design's one real hole — a write path that does not take a
+    block — and it names a hole in the code, not a problem with the data.
+
+    STALE BLOCK. A block older than `stale_after_hours` means the job that
+    should clear it is not converging, or nothing is working on it at all. That
+    is slow-and-correct rather than wrong, but it is indefinite: the fast path
+    stays off until someone acts, and nothing else would say so.
+
+    Returns findings rather than logging, so the caller decides severity and
+    this stays testable without a log capture.
+    """
+    findings: list = []
+    try:
+        held = {r["entity_type_uuid"]: r for r in await conn.fetch(
+            "SELECT entity_type_uuid, reason, created_at,"
+            "       (NOW() - created_at) > ($2 || ' hours')::interval AS stale"
+            "  FROM slot_sort_block WHERE space_id = $1",
+            space_id, str(int(stale_after_hours)))}
+    except Exception as exc:
+        logger.debug("slot_sort_block unreadable for %s: %s", space_id, exc)
+        return findings
+
+    # A whole-space block covers every type, so a shortfall under one is
+    # declared, not undeclared.
+    space_blocked = None in held
+
+    for cov in coverage_rows or []:
+        short = not (cov["in_table"] >= cov["of_type"] and cov["of_type"] > 0)
+        if short and not space_blocked and cov["entity_type_uuid"] not in held:
+            findings.append({
+                "kind": "undeclared_shortfall",
+                "space_id": space_id,
+                "entity_type_uuid": cov["entity_type_uuid"],
+                "in_table": cov["in_table"], "of_type": cov["of_type"],
+            })
+
+    for type_uuid, row in held.items():
+        if row["stale"]:
+            findings.append({
+                "kind": "stale_block",
+                "space_id": space_id,
+                "entity_type_uuid": type_uuid,
+                "reason": row["reason"], "since": row["created_at"],
+            })
+    return findings
+
+
 async def slot_sort_coverage_is_complete(conn, space_id: str,
                                          entity_type_uri: str) -> bool:
     """Is `{space}_entity_slot_sort` known COMPLETE for this entity type?
@@ -256,6 +385,23 @@ async def record_slot_sort_coverage(conn, space_id: str, entity_type_uuid,
             "  verified_at       = EXCLUDED.verified_at",
             space_id, entity_type_uuid, int(in_table), int(of_type),
             bool(in_table >= of_type and of_type > 0))
+        # AND KEEP THE BLOCK IN STEP WITH IT (`issues/167`).
+        #
+        # This function is the only place that MEASURES coverage, so it is the
+        # only place entitled to decide whether the type is at risk. Splitting
+        # the measurement from the gate is what produced every marker-lifecycle
+        # bug in `issues/161`: something cleared one and did not restore it, or
+        # recorded one and never took the other.
+        #
+        # A type that is short takes a block; a type that is complete releases
+        # one. Releasing here is safe by construction because coverage was just
+        # measured, which is the condition `release_slot_sort_block` requires.
+        if in_table >= of_type and of_type > 0:
+            await release_slot_sort_block(conn, space_id, entity_type_uuid)
+        else:
+            await take_slot_sort_block(
+                conn, space_id, entity_type_uuid,
+                reason=f"coverage {in_table}/{of_type}")
     except Exception as exc:
         logger.debug("could not record slot_sort_coverage for %s: %s",
                      space_id, exc)

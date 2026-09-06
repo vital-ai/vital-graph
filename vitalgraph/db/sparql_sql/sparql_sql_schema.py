@@ -386,6 +386,32 @@ class SparqlSQLSchema:
                 PRIMARY KEY (space_id, entity_type_uuid)
             )
         '''),
+        # `issues/167`. The BLOCK-LIST that replaces reading `slot_sort_coverage`
+        # as an allow-list.
+        #
+        # A row means "this space, or this type within it, is KNOWN TO BE AT
+        # RISK right now" — an operation is in flight that makes the derived
+        # table disagree with the quads, or a shortfall was found and a job is
+        # converging on it. ABSENCE MEANS SERVE.
+        #
+        # That is the inversion. Read as an allow-list, absence meant DECLINE,
+        # and absence is the common case: nine spaces measured with complete,
+        # correct tables were served by the slow path purely because no row
+        # existed. Read as a block-list those nine need no row at all.
+        #
+        # NULL `entity_type_uuid` blocks the WHOLE SPACE, which is what a restore
+        # or a full resync needs — it invalidates every type at once and does not
+        # know their uuids at the moment it starts. `NULLS NOT DISTINCT` makes
+        # that a real unique key rather than one that admits duplicates.
+        ("slot_sort_block", '''
+            CREATE TABLE IF NOT EXISTS slot_sort_block (
+                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
+                entity_type_uuid UUID,
+                reason TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE NULLS NOT DISTINCT (space_id, entity_type_uuid)
+            )
+        '''),
         ("space_analytics", '''
             CREATE TABLE IF NOT EXISTS space_analytics (
                 id SERIAL PRIMARY KEY,
