@@ -10,7 +10,7 @@ value is a measurement, not a boolean — running it accidentally on a contended
 machine produces numbers that mean nothing, which is the exact failure mode the
 test exists to stop the repository making.
 
-THE JOBS ARE THE POINT. `lead_nurture_100k` sits in
+THE JOBS ARE THE POINT. The nurture fixture sits in
 `VG_MAINTENANCE_EXCLUDE_SPACES` so periodic work does not perturb benchmarks
 (`issues/112`). That exclusion is what makes every other measurement clean and
 unrealistic. Here the maintenance work is invoked DELIBERATELY, concurrently
@@ -38,8 +38,8 @@ pytestmark = [
                        reason="load test is opt-in: set VG_RUN_LOAD_TEST=1"),
 ]
 
-SPACE = os.environ.get("VG_LOAD_SPACE", "lead_nurture_100k")
-GRAPH = os.environ.get("VG_LOAD_GRAPH", "urn:lead_nurture_100k")
+SPACE = os.environ.get("VG_LOAD_SPACE", "lead_nurture_grouped")
+GRAPH = os.environ.get("VG_LOAD_GRAPH", "urn:lead_nurture_grouped")
 # A MINIMUM, not a bound: the harness keeps the readers running until the jobs
 # finish, so a slow maintenance pass extends the measured window rather than
 # escaping it.

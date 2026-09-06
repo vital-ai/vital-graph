@@ -1,7 +1,8 @@
 # Filter + Sort Is Served By Neither Fast Path
 
-## Status: OPEN. Found by reading what the consuming portal actually asks for,
-## not by a failing test. Likely the shape behind the production timeouts.
+## Status: OPEN, and now MEASURED. Filter alone answers in 5ms; the same
+## filter with a sort does not finish in 120s. Found by reading what the
+## consuming portal asks for, then confirmed on a 74M-quad fixture.
 
 ## The gap
 
@@ -154,3 +155,75 @@ on a 50M+ space, with the fast-path cliff above both present and absent. If A is
 fast and B dominates, the fix is to split the response. If A is slow because of
 the cliff, splitting changes nothing until the cliff is fixed — and that
 ordering is the whole reason to measure before proposing.
+
+
+---
+
+# MEASURED, on `lead_nurture_grouped` (74.2M quads, page 50)
+
+The gates decline it, as read:
+
+    filter only   filter_path=True    sort_path=False
+    filter+sort   filter_path=False   sort_path=False
+
+And the fallback does not merely degrade:
+
+    general pipeline, filter only          5 ms      50 rows
+    general pipeline, filter + SORT        TIMED OUT at 120s
+
+    (the same filter on the fast path:    21 ms count / 22 ms page 50,
+     78,496 matches; the page's 50 graphs batched: 49 ms / 37,760 triples)
+
+So the cliff is not a factor. It is the difference between 5ms and never.
+
+Worth noting the filter-only case is FASTER through the general pipeline (5ms)
+than through the fast path (21ms). The fast path is not what makes filtering
+work here; the sort is what makes it fail.
+
+## WHY: the sort defeats early termination
+
+`EXPLAIN` on the filter+sort SQL gives a cost of 23,173,646,587 — twenty-three
+billion — over this shape:
+
+    Limit 50
+      Sort            (p0.v11, p0.v0)
+        Subquery Scan
+          Sort        (e0.v10 COLLATE "C", e0.v0)
+            GroupAggregate
+              Sort
+                Nested Loop  ... cost 23,173,611,670
+
+Three nested sorts and an aggregate above a nested loop. The filter-only query
+stops as soon as it has 50 rows; the sorted one must resolve ALL 78,496 matching
+entities and their sort keys before it can take the first 50. Every row of the
+match set is paid for to return a page of fifty.
+
+That is exactly the property `emit_slice._emit_two_phase` documents itself as
+depending on — "only O(page) while the planner drives it from an ordered,
+early-terminating scan" — and exactly what the slot-sort table exists to
+provide.
+
+## THE FIX IS AVAILABLE IN THE TABLE THAT ALREADY EXISTS
+
+Both halves of this query are answerable from `{space}_entity_slot_sort`:
+
+    the FILTER   entities whose (frame_type_path, slot_type, value_text) match
+                 the campaign criterion
+    the SORT     the same entities' value_text for the sort slot
+
+and `idx_{space}_ess_text` is
+`(context_uuid, entity_type_uuid, frame_type_path, slot_type_uuid, value_text,
+entity_uuid)` — leading columns for the filter, and an ORDERED value_text for
+the sort. A filtered, sorted page is two index scans on one table intersected on
+`entity_uuid`, ordered by the sort scan's `value_text`, limited to the page.
+
+The sort path's stated objection — "The table sorts a population; it does not
+select one" — is a statement about the current implementation, not about the
+table. The table can do both, and this measurement is the reason to make it.
+
+## What this does NOT show
+
+Only one filter shape and one sort key, on one fixture, with a warm cache. It
+does not show where the cliff STARTS: a smaller match set may sort acceptably,
+and the interesting number for a product decision is the match count at which
+this becomes unservable, not that 78,496 does.

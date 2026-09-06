@@ -194,7 +194,7 @@ services:
       # Found 2026-08-23: sp_lead_types and space_lead_dataset_test were stamped
       # but not excluded, so a maintenance ANALYZE of one of them produced a
       # spurious environment NOTE on a run whose actual fixtures had not moved.
-      - VG_MAINTENANCE_EXCLUDE_SPACES=${VG_MAINTENANCE_EXCLUDE_SPACES:-sp_lead_synth_100k,sp_lead_synth_10k,sp_lead_dup,sp_sql_lead_dataset,wordnet_frames,sp_graph_synth_100k,sp_graph_synth_10k,sp_graph_skew_2k,sp_graph_forms_20k,sp_lead_types,space_lead_dataset_test,lead_nurture_100k}
+      - VG_MAINTENANCE_EXCLUDE_SPACES=${VG_MAINTENANCE_EXCLUDE_SPACES:-sp_lead_synth_100k,sp_lead_synth_10k,sp_lead_dup,sp_sql_lead_dataset,wordnet_frames,sp_graph_synth_100k,sp_graph_synth_10k,sp_graph_skew_2k,sp_graph_forms_20k,sp_lead_types,space_lead_dataset_test,lead_nurture_grouped}
       # Storage
       - STORAGE_ENDPOINT=http://minio:9000
       - STORAGE_ACCESS_KEY=minioadmin
