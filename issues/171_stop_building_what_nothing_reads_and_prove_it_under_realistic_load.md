@@ -335,3 +335,53 @@ The unit of measurement is the PAGE LOAD, not the query:
 The load test has not been restructured for this. The numbers reported above
 (zero timeouts, p99 226ms) are true for the shape they measured and do not
 support a claim about page-load latency, which is the number the product has.
+
+
+---
+
+# THE WRITER NOW DERIVES, and it costs what you would expect
+
+GAP 2 above is closed. The writer INSERTed raw quads, so none of the sync hooks
+fired and the run measured lock and I/O contention only — proved by its own
+cleanup line, `{'entity_slot_sort': 0, 'edge': 0, 'frame_entity': 0}`.
+
+It now runs `sync_edge_table_after_insert`,
+`sync_frame_entity_after_edge_insert` and
+`sync_entity_slot_sort_after_edge_insert` on the subject just written, inside
+one transaction, as every real write path does.
+
+    before (raw quads)     p99 226 ms   676 writes   5,932 queries
+    after  (deriving)      p99 543 ms   112 writes  23,859 queries
+
+Zero timeouts either way. The write-side cost is now visible: p99 more than
+doubled and write throughput fell six-fold, because each write holds its locks
+across three derivations while readers run. That is the contention this test
+exists to expose and was previously not measuring.
+
+STILL NOT A REAL INGEST. The derivations run but produce no rows — a synthetic
+subject of random uuids forms no shape any of them recognise — so this measures
+the COST OF RUNNING them, not of writing derived rows. Closing that needs the
+writer to construct a real entity/edge/frame/slot shape, which is more fixture
+than test.
+
+# PRODUCTION QUERY SHAPES: NOT AVAILABLE, and worth recording why
+
+`pg_stat_statements` on the reachable production instance covers 2,033 hours
+(85 days) and contains NO KG QUERIES AT ALL — the only statement matching the
+quad, slot-sort or edge tables is an unrelated INSERT that merely mentions a
+column name. Against a 26.8M-quad space.
+
+Either the serving traffic goes to a second, newer instance named in the
+deployment config but not reachable from here, or the KG on this instance is
+loaded and not served. `issues/161` cites a 45M-quad space where this one holds
+26.8M, which favours the first.
+
+So the load test's query mix stays as it is: derived from the consuming portal's
+routers and its `case_kgquery_*` diagnostics. That is second-best to production
+telemetry and is what is available.
+
+One thing the visit did establish: THE INSTANCE IS SHARED. Its heaviest
+statement is an unrelated application's polling query at 35.7 hours cumulative
+and a 60s maximum. Whatever the KG does there competes with that — concurrent
+contention arriving from a direction this load test does not model, since it
+assumes the database is otherwise ours.

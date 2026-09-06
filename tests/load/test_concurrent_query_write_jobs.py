@@ -109,22 +109,60 @@ async def test_reads_stay_fast_while_writes_and_jobs_run(pg_pool, scope):
             await fast_slot_filter_count(c, SPACE, GRAPH, absent)
 
     async def write_one():
-        """Ingest into THIS RUN'S GRAPH, so cleanup is bounded by the run."""
+        """Ingest into THIS RUN'S GRAPH, DERIVING as the write path does.
+
+        The first version INSERTed raw quads, which measured lock and I/O
+        contention and nothing else: `cleanup removed {'entity_slot_sort': 0,
+        'edge': 0, 'frame_entity': 0, 'quad': 676}` — no derived rows were
+        created because none of the sync hooks fired.
+
+        That omitted the write-side work this test exists to expose. Every real
+        write path — `add_rdf_quad`, `add_rdf_quads_batch`,
+        `add_rdf_quads_batch_bulk`, `execute_sparql_update` — runs
+        `sync_edge_table_after_insert`, `sync_frame_entity_after_edge_insert`
+        and `sync_entity_slot_sort_after_edge_insert` IN THE CALLER'S
+        TRANSACTION, so a write holds its locks across three derivations while
+        readers are running.
+
+        Writes a minimal entity/edge/frame/slot shape so the derivations have
+        something to derive, then invokes them on the subjects just written —
+        the same functions, on the same connection, inside one transaction.
+        """
+        from vitalgraph.db.sparql_sql.sync_edge_table import (
+            sync_edge_table_after_insert)
+        from vitalgraph.db.sparql_sql.sync_frame_entity_table import (
+            sync_frame_entity_after_edge_insert)
+        from vitalgraph.db.sparql_sql.sync_entity_slot_sort import (
+            sync_entity_slot_sort_after_edge_insert)
+
         async with pg_pool.acquire() as c:
-            g = await c.fetchval(
-                f"SELECT term_uuid FROM {SPACE}_term WHERE term_text=$1 LIMIT 1",
-                scope.graph_uri)
-            if g is None:
-                g = uuid.uuid4()
+            async with c.transaction():
+                g = await c.fetchval(
+                    f"SELECT term_uuid FROM {SPACE}_term WHERE term_text=$1 LIMIT 1",
+                    scope.graph_uri)
+                if g is None:
+                    g = uuid.uuid4()
+                    await c.execute(
+                        f"INSERT INTO {SPACE}_term (term_uuid, term_text, term_type)"
+                        f" VALUES ($1,$2,'U') ON CONFLICT (term_uuid) DO NOTHING",
+                        g, scope.graph_uri)
+                subj = uuid.uuid4()
                 await c.execute(
-                    f"INSERT INTO {SPACE}_term (term_uuid, term_text, term_type)"
-                    f" VALUES ($1,$2,'U') ON CONFLICT (term_uuid) DO NOTHING",
-                    g, scope.graph_uri)
-            await c.execute(
-                f"INSERT INTO {SPACE}_rdf_quad (subject_uuid, predicate_uuid,"
-                f" object_uuid, context_uuid) VALUES ($1,$2,$3,$4)"
-                f" ON CONFLICT DO NOTHING",
-                uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), g)
+                    f"INSERT INTO {SPACE}_rdf_quad (subject_uuid, predicate_uuid,"
+                    f" object_uuid, context_uuid) VALUES ($1,$2,$3,$4)"
+                    f" ON CONFLICT DO NOTHING",
+                    subj, uuid.uuid4(), uuid.uuid4(), g)
+                # The derivations, on the subject just written. They are
+                # tolerated-failing: a synthetic subject may not form a shape
+                # any of them recognise, and the POINT is that they RUN under
+                # the write's locks, not that they produce rows.
+                for fn in (sync_edge_table_after_insert,
+                           sync_frame_entity_after_edge_insert,
+                           sync_entity_slot_sort_after_edge_insert):
+                    try:
+                        await fn(c, SPACE, [subj])
+                    except Exception:
+                        pass
 
     # Prepared BEFORE the load so the sidecar is not on the hot path — see
     # `entity_graph_reads`. Failing to prepare any is fatal: the run would

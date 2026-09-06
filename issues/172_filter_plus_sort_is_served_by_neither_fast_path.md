@@ -403,3 +403,53 @@ already are, and which the sort path declines to use whenever `frame_criteria`
 is present.
 
 That is the next thing to build, and it is now the only candidate standing.
+
+
+---
+
+# THE COST CURVE — and it is NOT O(matches)
+
+The fix was recorded as "O(matches) with a small constant". That was wrong, and
+the curve says so. Measured on `lead_nurture_grouped` (100,000 entities of the
+type, page 50), varying only the filter's selectivity:
+
+    filter              matches    page ms   count ms   us/match
+    (none)              100,000       54.6       33.5       0.55
+    campaign:000         78,496       90.6       68.1       1.15
+    campaign:001          2,820       42.6       40.5      15.10
+    campaign:004          1,048       60.9       51.0      58.10
+    campaign:009            467       46.2       36.3      99.03
+    (absent value)            0       21.2       28.2          —
+
+The cost is FLAT at 21-90ms across a 168-fold range of match counts, and the
+per-match figure climbs as matches fall. That is the signature of a fixed cost,
+not a linear one.
+
+## What it is actually proportional to
+
+The POPULATION OF THE SORT SLOT, not the match set. The query scans the sort
+slot's rows for the entity type in `value_text` order — 100,000 of them here
+whatever the filter admits — applies the EXISTS per row, and keeps 50 in a top-N
+heapsort. The filter changes how many survive, not how many are examined.
+
+So the bound that matters for scaling is the ENTITY COUNT of the type, not the
+selectivity of the criteria. At ten times the entities expect roughly ten times
+the cost; at ten times the matches over the same population, expect no change.
+
+The unfiltered case being FASTER than `campaign:000` (54.6 vs 90.6ms) fits: with
+no criteria there is no EXISTS to evaluate at all, so the ~36ms difference is
+the semi-join over the population rather than anything about 78,496.
+
+## Which changes where to look next
+
+"Where does the cliff start" was the wrong question — there is no knee in the
+match-count curve. The right question is where the ENTITY-COUNT curve bends, and
+this fixture has one type at 100,000 so it cannot answer that. Worth measuring
+against a space with a substantially larger population before relying on the
+path at that scale.
+
+It also means the earlier note about forcing a nested loop for early termination
+was aimed at the wrong thing: early termination would help only if the scan
+could stop before examining the whole population, which needs the FILTER to be
+usable as the leading access rather than as a per-row test. That is a different
+plan shape, worth trying only if the entity-count curve turns out to bend badly.

@@ -128,12 +128,21 @@ def can_serve(criteria) -> bool:
     # sort. Measured with the filter added as EXISTS clauses: 72ms warm, 938ms
     # cold, verified against a brute-force top-50.
     #
-    # NOT O(page). The planner uses a hash semi-join over the match set and a
-    # top-N heapsort, so this is O(matches) with a small constant rather than
-    # O(page). Forcing a nested loop to get early termination measured SLOWER
-    # (222ms against 72ms) and was not pursued. At much larger match counts this
-    # ordering may invert, and the honest bound is "linear in matches over a
-    # compact table", not "bounded by the page".
+    # NOT O(page), and NOT O(matches either) — it is O(POPULATION OF THE SORT
+    # SLOT). Measured across a 168-fold range of match counts on 100,000
+    # entities: 54.6ms unfiltered, 90.6ms at 78,496 matches, 42.6ms at 2,820,
+    # 46.2ms at 467, 21.2ms at none. Flat, because the scan walks the sort
+    # slot's rows in value order and tests each with the EXISTS; the filter
+    # changes how many SURVIVE, not how many are EXAMINED.
+    #
+    # So the bound that matters for scaling is the entity count of the type, not
+    # the selectivity of the criteria. Ten times the entities costs about ten
+    # times; ten times the matches over the same population costs nothing extra.
+    #
+    # Forcing a nested loop for early termination measured SLOWER (222ms against
+    # 72ms) and was not pursued. It would only help if the FILTER could be the
+    # leading access rather than a per-row test, which is a different plan
+    # shape — worth trying if the entity-count curve turns out to bend badly.
     filters = None
     if getattr(criteria, "frame_criteria", None):
         from .fast_slot_filter import _eq_criteria
