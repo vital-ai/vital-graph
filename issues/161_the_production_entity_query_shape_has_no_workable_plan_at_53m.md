@@ -440,3 +440,19 @@ The SPARQL fallback itself. It is genuinely slow on this shape (>90s) and that
 is worth fixing, but it is the path taken when the fast path CANNOT serve, and
 making the fast path reliable is what removes the timeouts. Tracked separately
 above; `issues/166` records why the semi-join gate is not the lever.
+
+
+---
+
+# FOLLOW-ON: `issues/167` removes the marker
+
+The four fixes above make the marker's lifecycle correct. `issues/167` proposes
+removing it from the read path entirely: normal writes already derive the table
+inline, exception paths should be closed to end in the derivation job, and the
+read path should then need no permission to use a table that is correct by
+construction.
+
+Recorded here because the two must not be confused. `issues/161` makes the
+existing design work. `issues/167` argues the design should not be needed, and
+notes the constraint that makes it a staged change rather than a deletion:
+removing the gate turns a short table from SLOW into SILENTLY WRONG.
