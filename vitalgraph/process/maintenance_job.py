@@ -725,18 +725,60 @@ class MaintenanceJob:
         Empty by default. Set it in the environment that runs benchmarks:
 
             VG_MAINTENANCE_EXCLUDE_SPACES=sp_lead_synth_100k,wordnet_frames
+
+        IT ALSO WITHHOLDS THE SLOT-SORT COVERAGE MARKER, which is not obvious
+        from the name and is the more expensive consequence (`issues/161`). The
+        marker is written by this job's coverage probe, and `fast_slot_filter`
+        declines without it — so an exempt space loses the FILTER fast path
+        permanently, with no error and correct answers. Measured on
+        `lead_nurture_100k`: ~20ms with the marker, >90s without, against a
+        table that was complete and correct the whole time.
+
+        An exempt space therefore needs
+        `scripts/backfill_slot_sort_coverage.py` run against it whenever its
+        data changes. The warning below fires only when the exemption is
+        actually costing something.
         """
         if not self._excluded:
             return stats
         kept = {sid: v for sid, v in stats.items() if sid not in self._excluded}
-        skipped = len(stats) - len(kept)
-        if skipped:
+        dropped = sorted(self._excluded & set(stats))
+        if dropped:
             logger.info(
                 "MaintenanceJob: skipping %d space(s) declared exempt via "
                 "VG_MAINTENANCE_EXCLUDE_SPACES (%s). Their statistics and "
                 "bloat are NOT maintained — see issues/112.",
-                skipped, ", ".join(sorted(self._excluded & set(stats))))
+                len(dropped), ", ".join(dropped))
+            self._warn_exempt_lose_fast_path(dropped)
         return kept
+
+    def _warn_exempt_lose_fast_path(self, dropped: List[str]) -> None:
+        """Warn that exempt spaces keep a stale slot-sort marker (`issues/161`).
+
+        ONCE PER SPACE per process. The condition is a configuration choice, not
+        an event: it holds for every cycle until someone changes the environment,
+        so repeating it each cycle would train operators to filter it out.
+
+        NOT gated on the space actually having a slot-sort table. Checking would
+        need a query, and this runs inside the cycle's bookkeeping where a
+        failure would be noise at best; a plain RDF space that never had the
+        fast path gets one harmless line naming a script that will report
+        "no KG entity types" and change nothing.
+        """
+        if getattr(self, "_exempt_warned", None) is None:
+            self._exempt_warned = set()
+        fresh = [s for s in dropped if s not in self._exempt_warned]
+        if not fresh:
+            return
+        self._exempt_warned.update(fresh)
+        logger.warning(
+            "MaintenanceJob: %d exempt space(s) (%s) will NOT have their "
+            "entity_slot_sort coverage marker refreshed, so the FILTER fast "
+            "path stays OFF for them — correct answers, orders of magnitude "
+            "slower (issues/161). Run "
+            "`scripts/backfill_slot_sort_coverage.py --space <id>` after any "
+            "data change to those spaces.",
+            len(fresh), ", ".join(fresh))
 
     async def _registered_space_ids(self):
         """The spaces that actually exist, per the `space` registry.

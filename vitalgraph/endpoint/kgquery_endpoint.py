@@ -71,6 +71,12 @@ async def _gather_cancelling(*coros):
         raise
 
 
+# Warn-once keys for the slot-sort coverage decline (`issues/161`). Process-local
+# and never evicted: the set is bounded by (space, entity type) pairs actually
+# queried, and the condition it reports does not resolve on its own.
+_COVERAGE_WARNED: set = set()
+
+
 class BackendQueryError(RuntimeError):
     """The query engine reported that it did not run the query.
 
@@ -484,6 +490,33 @@ class KGQueriesEndpoint:
             async with pool.acquire() as conn:
                 if not await slot_sort_coverage_is_complete(
                         conn, space_id, entity_criteria.entity_type):
+                    # DECLINING IS CORRECT. Being SILENT about it is not.
+                    #
+                    # `issues/161`. An unset marker produces no error and a
+                    # correct answer down the general path — the only evidence
+                    # is latency, and the difference measured on a 53.4M-quad
+                    # space is ~20ms against a query that does not finish in
+                    # 90s. That is a performance cliff with no symptom, and it
+                    # is how this went unnoticed while the table underneath was
+                    # complete and correct the whole time.
+                    #
+                    # Once per (space, type) per process, because this is on the
+                    # request path and the condition persists until an operator
+                    # acts. WARNING to match `maintenance_job`, which already
+                    # logs a failed marker WRITE at WARNING for the same reason
+                    # — the read side was the half that stayed quiet.
+                    key = (space_id, entity_criteria.entity_type)
+                    if key not in _COVERAGE_WARNED:
+                        _COVERAGE_WARNED.add(key)
+                        self.logger.warning(
+                            "kgquery: entity_slot_sort coverage is not marked "
+                            "complete for space=%s type=%s, so the FILTER fast "
+                            "path is OFF and this query is served by the "
+                            "general SPARQL path. Answers are correct but can "
+                            "be orders of magnitude slower. Run the maintenance "
+                            "coverage probe, or "
+                            "`scripts/backfill_slot_sort_coverage.py --space %s`.",
+                            space_id, entity_criteria.entity_type, space_id)
                     return None
                 total = await fast_slot_filter_count(
                     conn, space_id, graph_id, entity_criteria)

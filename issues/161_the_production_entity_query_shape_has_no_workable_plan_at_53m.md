@@ -299,3 +299,144 @@ set of that variable, intersect.
 It applies to ANY query with several independent criteria on one projected
 variable, with or without a derived table to serve them. The derived table makes
 each component cheap; the split is what stops them multiplying.
+
+
+---
+
+# ROOT CAUSE ON A LOADED STACK: THE COVERAGE MARKER, NOT THE PLANNER
+
+Measured 2026-09-05 on `lead_nurture_100k` (53.4M quads), quiet database.
+
+The fast path already answers these shapes. Called directly:
+
+    campaign head          21.4 ms   total 78,871   correct
+    campaign + ABSENT      19.8 ms   total 0        correct
+    SFLeadId present       17.6 ms   total 1        correct
+
+against the SPARQL fallback, which does not finish inside a 90s statement
+timeout. So the capability was never missing. What was missing was permission
+to use it:
+
+    slot_sort_coverage_is_complete(lead_nurture_100k, Lead) -> False
+
+There was NO ROW for the space in `slot_sort_coverage`, and the marker defaults
+to False for every uncertainty by design -- a false NO is slow and correct, a
+false YES is silently short (`issues/149`). `_try_fast_slot_filter` therefore
+declined on every request and fell through to the plan that times out.
+
+The marker is written by the maintenance coverage probe, and this space is in
+`VG_MAINTENANCE_EXCLUDE_SPACES` precisely so periodic jobs leave the 50M copy
+alone. Excluded from the jobs means excluded from the probe that enables the
+fast path. Running it by hand takes 2.2s and reports 100,000 of 100,000 covered:
+
+    test_scripts/perf/_record_coverage.py lead_nurture_100k
+
+after which the marker reads True and the shapes above are served in ~20ms.
+
+## What this corrects
+
+  * The 55s Nurture timeout is NOT a planner problem and was not fixed by
+    `MAX_PROBE_CANDIDATES`. Measured with the probe declined, the count still
+    does not finish in 90s -- declining only changes WHICH slow plan runs
+    (`issues/166`).
+  * `component_intersect` does not fire on this shape at all. With
+    `VG_COMPONENT_INTERSECT` set and unset the generated SQL is byte-identical
+    (5,220 and 6,356 characters). An apparent 6x improvement from enabling it
+    was cache warming between consecutive runs, not the flag.
+  * The SPARQL path remains slow and is still worth fixing -- it is what serves
+    any shape `can_serve_filter` declines, and any type whose coverage is
+    genuinely short. But it is the FALLBACK, and the fallback being slow is not
+    why production timed out.
+
+## What has to be true in production
+
+The marker must exist and be true for each queried entity type. That means
+`entity_slot_sort` backfilled and the maintenance coverage probe running on the
+space -- the `issues/149` prerequisites, which are the actual deploy blocker for
+this performance work.
+
+An unset marker has NO SYMPTOM other than slowness: no error, correct answers,
+and a fast path that silently never engages. `maintenance_job` logs a failure to
+record at WARNING for exactly that reason; a space excluded from maintenance
+produces no warning at all, because nothing tried.
+
+
+---
+
+# PRODUCTION FIX PLAN — MAKING THE FAST PATH STAY ON
+
+The capability is built and measured (~20ms against a >90s fallback). Every
+remaining problem is about the MARKER being true when it should be, and the
+failure mode is always the same: no error, correct answers, and a silent
+reversion to the slow path. The four gaps below are what stands between "works
+when run by hand" and "works in production, permanently".
+
+## G1. `resync_all` disables the fast path and does not re-enable it
+
+It CLEARS the marker first -- correctly, because a marker describing the old
+contents would let the filter serve a confident subset while the rebuild is in
+flight -- then rebuilds `entity_slot_sort` COMPLETELY via
+`resync_entity_slot_sort`, and stops. The comment defers re-establishment to
+"the maintenance coverage probe afterwards".
+
+So every repair, bulk import and `repair_derived_tables.py` run switches the
+fast path OFF for the space, and it stays off until an unrelated periodic job
+happens to run. On a space excluded from maintenance it stays off forever. That
+is exactly how `lead_nurture_100k` came to time out with a fully populated,
+completely correct table underneath it.
+
+FIX: record coverage at the END of `resync_all`, in the same call that cleared
+it. The table was just rebuilt in full, so the probe's answer is known-good and
+costs 2.2s on a 53M-quad space. Clearing and re-establishing then belong to one
+operation instead of two, and the window is bounded by the rebuild rather than
+by a scheduler.
+
+## G2. An excluded space loses the fast path silently
+
+`VG_MAINTENANCE_EXCLUDE_SPACES` exists so benchmark fixtures are not re-ANALYZEd
+mid-session, and it is empty in production by default -- so this is not a
+production defect today. It IS a trap: exclusion is documented as "statistics
+and bloat are NOT maintained", and nothing says it also withholds the marker
+that enables the FILTER path. Anyone excluding a space for cost gets a
+permanent, symptomless performance cliff.
+
+FIX: name the consequence where the exclusion is logged, and warn per cycle when
+an excluded space has an `entity_slot_sort` table -- i.e. when the exclusion is
+actually costing something.
+
+## G3. The decline has no symptom
+
+`_try_fast_slot_filter` returns None when the marker is not complete, with no
+log. That is the correct BEHAVIOUR -- decline, be slow, be right -- but it makes
+the cliff invisible: the request succeeds, the answer is correct, and the only
+evidence is latency. `maintenance_job` already logs a failed marker WRITE at
+WARNING for this reason; the READ side should be equally visible.
+
+FIX: log once per (space, type) when the filter path declines on coverage, at
+WARNING, naming what to run. Throttled, because it is per request.
+
+## G4. Nothing brings a space to complete on demand
+
+Maintenance repairs one BOUNDED BATCH per cycle, deliberately -- a full backfill
+on a large space is not something a periodic job should attempt. That is right
+for steady state and wrong for a deploy: a freshly migrated production space
+would converge over an unknown number of cycles, with the fast path off
+throughout.
+
+FIX: an operator script that drives `backfill_entity_slot_sort_batch` to
+completion for one space or all, then records coverage -- the deploy-time
+counterpart to the steady-state job, reporting what it covered so the operator
+can see the fast path is actually on.
+
+## Ordering, and what each is worth
+
+G1 is the one that caused the measured outage and is the smallest change. G4 is
+what a deploy needs. G3 is what stops the next occurrence being invisible. G2 is
+a documentation-and-warning change guarding a foot-gun this session walked into.
+
+## NOT in scope
+
+The SPARQL fallback itself. It is genuinely slow on this shape (>90s) and that
+is worth fixing, but it is the path taken when the fast path CANNOT serve, and
+making the fast path reliable is what removes the timeouts. Tracked separately
+above; `issues/166` records why the semi-join gate is not the lever.

@@ -39,7 +39,11 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
     #
     # Cleared at the START rather than the end so the window where the quads and
     # the derived tables disagree is never a window where the marker says they
-    # agree. The maintenance coverage probe re-establishes them afterwards.
+    # agree. STEP 8 RE-RECORDS THEM once the rebuild is done -- this function
+    # owns both halves. It used to leave re-establishment to the maintenance
+    # coverage probe, which runs on its own schedule and never runs for a
+    # maintenance-exempt space, so a repair silently disabled the fast path it
+    # was supposed to restore (`issues/161`).
     from .fast_slot_filter import clear_slot_sort_coverage
     await clear_slot_sort_coverage(conn, space_id)
 
@@ -163,10 +167,59 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
     except Exception as e:
         logger.debug("Stats cache invalidation notify failed (non-critical): %s", e)
 
+    # 8. RE-ESTABLISH the slot-sort markers this function cleared at step 0.
+    #
+    # `issues/161`. Clearing them first is right -- a marker describing the
+    # PREVIOUS contents would let `fast_slot_filter` serve a confident subset
+    # while the rebuild is in flight. But clearing without re-recording turns
+    # the FILTER fast path OFF for the space and leaves it off: the comment at
+    # the top used to defer this to "the maintenance coverage probe
+    # afterwards", which is a job that runs on its own schedule and does not
+    # run at all for a space in VG_MAINTENANCE_EXCLUDE_SPACES.
+    #
+    # That is not hypothetical. It is how `lead_nurture_100k` came to time out
+    # at >90s with a COMPLETE and CORRECT table underneath it, while the same
+    # queries answered in ~20ms once the marker was written by hand.
+    #
+    # Safe to record here precisely because `resync_entity_slot_sort` above
+    # rebuilt the table IN FULL rather than incrementally, so the probe's answer
+    # describes what was just written. Measured at 2.2s on a 53M-quad space
+    # against a rebuild costing far more, so it adds nothing meaningful to a
+    # resync -- and the clear/record pair is now ONE operation with a window
+    # bounded by this function instead of by a scheduler.
+    #
+    # FAIL-SAFE, and deliberately last: an unwritten marker leaves the filter
+    # path declining, which is slow and correct. Failing the whole resync over
+    # it would be worse than the cliff it prevents.
+    coverage = []
+    try:
+        from .sync_entity_slot_sort import entity_slot_sort_all_types
+        from .fast_slot_filter import record_slot_sort_coverage
+        for cov in await entity_slot_sort_all_types(conn, space_id):
+            await record_slot_sort_coverage(
+                conn, space_id, cov["entity_type_uuid"],
+                cov["in_table"], cov["of_type"])
+            coverage.append((cov["in_table"], cov["of_type"]))
+        complete = sum(1 for a, b in coverage if a >= b)
+        if coverage:
+            logger.info(
+                "resync_all(%s): slot-sort coverage recorded for %d type(s), "
+                "%d complete — the FILTER fast path is %s",
+                space_id, len(coverage), complete,
+                "ON" if complete else "OFF for every type")
+    except Exception as exc:
+        logger.warning(
+            "resync_all(%s): slot-sort coverage NOT recorded (%s). The FILTER "
+            "fast path stays off for this space until the maintenance coverage "
+            "probe runs — and never, if the space is maintenance-exempt.",
+            space_id, exc)
+
     result = {
         'edge_rows': edge_count,
         'frame_entity_rows': fe_count,
         'entity_slot_sort_rows': ess_count,
+        'slot_sort_types_complete': sum(1 for a, b in coverage if a >= b),
+        'slot_sort_types_total': len(coverage),
         'value_stats_rows': vstats.get('rows', 0),
         'pred_stats_rows': stats['pred_stats'],
         'quad_stats_rows': stats['quad_stats'],
