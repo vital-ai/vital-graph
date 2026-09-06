@@ -384,6 +384,35 @@ def _edge(uri: str, src: str, dst: str, vitaltype: str) -> list[str]:
     ]
 
 
+def _grouping(uris: list[str], entity_uri: str,
+              frame_uri: str | None = None) -> list[str]:
+    """The DUAL grouping URIs every object in a KG graph carries.
+
+    `issues/171`. The write path sets these — `KGGroupingURIManager.
+    set_dual_grouping_uris_with_frame_separation`, called from the entity and
+    frame endpoints — and the generator did not, so the fixture could not answer
+    the query production actually uses to open an entity.
+
+    Measured before adding this: `hasKGGraphURI` appeared ZERO times in the
+    53M-quad `lead_nurture_100k` term table, so
+    `GroupingURIQueryBuilder.build_complete_entity_graph_query` returned 0 rows
+    in 1ms. A load test using the production query would have passed
+    beautifully while measuring nothing.
+
+    TWO LEVELS, and both are needed:
+
+        hasKGGraphURI     -> the ENTITY. On every object in the entity graph, so
+                             "give me this entity's whole graph" is one indexed
+                             predicate rather than a four-way UNION walk.
+        hasFrameGraphURI  -> the FRAME. On the frame and the objects belonging to
+                             it, so the same question can be asked of one frame.
+    """
+    out = [f"<{u}> <{KG}hasKGGraphURI> <{entity_uri}> ." for u in uris]
+    if frame_uri is not None:
+        out += [f"<{u}> <{KG}hasFrameGraphURI> <{frame_uri}> ." for u in uris]
+    return out
+
+
 def nurture_triples(entity_uri: str, new_id: str, sampler: Sampler) -> list[str]:
     """The nurture frame: one COMMON entity-valued slot, one UNIQUE text slot.
 
@@ -424,6 +453,18 @@ def nurture_triples(entity_uri: str, new_id: str, sampler: Sampler) -> list[str]
     out.append(f"<{l_slot}> <{KG}hasTextSlotValue> {lit(new_id, 'string')} .")
     out += _edge(f"{frame}:edge:to_slot_sfleadid",
                  frame, l_slot, "Edge_hasKGSlot")
+
+    # GROUPING URIs, matching what the write path sets. Every object in this
+    # frame belongs to the entity's graph AND to the frame's graph; the entity
+    # itself belongs to its own graph but to no frame's.
+    frame_objects = [
+        frame, c_slot, l_slot,
+        f"{entity_uri}:edge:entity_to_nurtureinfoframe_0",
+        f"{frame}:edge:to_slot_nurturecampaign",
+        f"{frame}:edge:to_slot_sfleadid",
+    ]
+    out += _grouping(frame_objects, entity_uri, frame)
+    out += _grouping([entity_uri], entity_uri)
     return out
 
 
@@ -494,6 +535,45 @@ def render_entity(lead_id: str, lines: list[str], new_id: str,
     # is the reason the fixture can express the criteria at all.
     out += nurture_triples(entity_uri, new_id, sampler)
 
+    # GROUPING URIs FOR THE WHOLE ENTITY GRAPH, including the CLONED objects.
+    #
+    # `nurture_triples` groups the frame it synthesises. Everything else in this
+    # entity comes from a template file that has no grouping URIs, so grouping
+    # only the nurture frame would leave the production query
+    # (`GroupingURIQueryBuilder.build_complete_entity_graph_query`) returning a
+    # fraction of the graph — which is a worse fixture than one returning
+    # nothing, because it looks like it works.
+    #
+    # Derived from the URIs rather than from the ontology: every URI in this
+    # model is `{entity}:frame:{name}:{n}...`, so an object's frame is its URI
+    # truncated at the frame segment. That is the same substitution the cloning
+    # itself relies on.
+    seen: set[str] = set()
+    grouping: list[str] = []
+    for line in out:
+        m = TRIPLE_RE.match(line)
+        if not m:
+            continue
+        subj = m.group(1)
+        if subj in seen or not subj.startswith(entity_uri):
+            continue
+        seen.add(subj)
+        if subj.endswith(":hasKGGraphURI"):
+            continue
+        grouping.append(f"<{subj}> <{KG}hasKGGraphURI> <{entity_uri}> .")
+        # `...:frame:leadstatusframe:0` — take through the ordinal, so a slot
+        # and its frame group together and two frames do not merge.
+        parts = subj.split(":frame:")
+        if len(parts) > 1:
+            tail = parts[1].split(":")
+            if len(tail) >= 2:
+                frame_uri = f"{parts[0]}:frame:{tail[0]}:{tail[1]}"
+                grouping.append(
+                    f"<{subj}> <{KG}hasFrameGraphURI> <{frame_uri}> .")
+
+    # De-duplicate against what nurture_triples already emitted.
+    existing = set(out)
+    out += [g for g in grouping if g not in existing]
     return out
 
 

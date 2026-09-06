@@ -105,8 +105,17 @@ class KGEntityListProcessor:
           property fetch.  Count query runs concurrently.
 
         Graph path (include_entity_graph=True):
-          Count + URI query run concurrently, then entity graphs
-          fetched in parallel via asyncio.gather.
+          Count + URI query run concurrently, then EVERY ENTITY GRAPH ON THE
+          PAGE IN ONE QUERY.
+
+          It is not a per-URI `asyncio.gather` any more, and this docstring said
+          it was long after it stopped being true. That is not a cosmetic drift:
+          the gather was an N+1 the concurrency hid rather than removed —
+          measured at exactly `page_size` SQL statements per request, 33.5ms
+          each, tracking the 321ms response almost exactly — and anyone reading
+          this to reason about load would conclude the system fans out
+          page_size-wide per request when it does not. See the block comment at
+          the batched fetch below.
 
         sort_by: Optional property URI to sort by (e.g. vital-core:hasName).
         sort_order: 'asc' or 'desc'.

@@ -9,18 +9,34 @@
 # PART 1 — FLAGS TO STOP BUILDING REDUNDANT THINGS
 
 A run of performance firefighting added several derived structures in quick
-succession. At least two of them cost work and return nothing.
+succession. ONE of them provably returns nothing; a second looked redundant and
+turned out to be a documented diagnostic, recorded below because the correction
+matters more than the original claim.
 
-## `{space}_entity_fanout` — built, indexed, never read
+## `{space}_entity_fanout` — NOT REDUNDANT. This claim was wrong.
 
-Every reference outside its own module: `resync_all` rebuilds it and reports its
-row count, `sparql_sql_schema` creates it and an `idx_*_entity_fanout_top` index
-for it, `drop_space` drops it. NO QUERY PATH READS IT. It is rebuilt in full on
-every resync — "a periodic full rebuild, never incremental", by its own comment
-— and consumed by nothing.
+Recorded because the correction is the useful part. It is true that no query
+path reads this table — but that is DELIBERATE and documented, not an oversight.
+`sync_entity_fanout.py` opens with:
 
-Either its reader was superseded by `edge_fanout` and the traversal-direction
-work, or it was never written.
+    AN OPERATOR DIAGNOSTIC. NOT A QUERY-PATH INPUT. Decided 2026-08-15.
+    Nothing in the SQL pipeline reads this table and nothing should start to
+    without new evidence.
+
+and goes on to record that the obvious planner use — choosing the emission shape
+by the start entity's fan-out — was TESTED AND REJECTED on measured data: dedup
+won 5 of the 6 hub cases, and the single loss needed a three-way conjunction on
+one data point.
+
+The cost is also small. Measured rebuild:
+
+    sp_lead_synth_100k     276 ms
+    wordnet_frames         761 ms
+    lead_nurture_100k       24 ms
+
+So there is nothing to reclaim and no flag worth adding. "Nothing reads it" was
+the right observation and the wrong conclusion — a grep found the absence of
+readers, and the module header already explained it.
 
 ## `component_intersect.py` — provably does not fire
 
@@ -176,3 +192,146 @@ rather than the fast path, and a perf tier that has never run with maintenance
 enabled — suggests the concurrent picture is worse than the serial one, not
 equal to it. That is the reason to build it, and a reason not to schedule the
 work as if it were a formality.
+
+
+---
+
+# FIRST RESULTS, AND WHAT THEY DO NOT YET COVER
+
+Built: `tests/load/concurrent_load.py` (harness),
+`tests/load/run_scoped_data.py` (graph-scoped write + verified cleanup),
+`tests/load/test_concurrent_query_write_jobs.py` (opt-in via
+`VG_RUN_LOAD_TEST=1`).
+
+Against `lead_nurture_100k` — 53,457,500 quads, 4,064,500 slot-sort rows — with
+`recompute_stats_tables` and the coverage probe running concurrently and
+continuous ingest:
+
+    queries 5932   ok 5932   timeouts 0   failures 0
+    p50 81.0ms     p99 226.0ms            max 517.6ms
+    writes 676     write_errors 0         seconds 57.5
+
+Zero timeouts, and cleanup verified clean.
+
+## The first version of this test measured the wrong window
+
+It slept `duration_s` and stopped everything. Measured: 45s of readers against
+jobs that ran 133.7s, so roughly TWO THIRDS of the job execution had no queries
+observing it, and it reported p99 164.5ms for a window that was mostly quiet.
+
+Readers now run until the jobs finish. p99 moved 164.5 -> 226.0ms on the same
+workload, which is the size of the error and the reason the fix was worth
+making. A contention test that stops before the contention ends measures the
+recovery.
+
+## GAP 1 — the worst case is still unmeasured
+
+The two runs differed enormously in job cost: 133.7s and 57.5s. The difference
+is cache warmth — the first pulled 53M quads through the stats aggregate cold,
+the second found them in shared buffers.
+
+So the EXPENSIVE run is the one whose readers did not cover the jobs, and the
+run with full coverage had cheap jobs. "Cold jobs with full reader coverage" —
+the actual worst case — HAS NOT BEEN MEASURED. It needs a cache-cold start
+(restart PostgreSQL, or a large enough unrelated scan) before the run.
+
+Do not read the 226ms p99 as the ceiling. It is the warm-cache number.
+
+## GAP 2 — the writer does not exercise the derivations
+
+`cleanup removed={'entity_slot_sort': 0, 'edge': 0, 'frame_entity': 0,
+'quad': 676}` — the writer inserts raw quads directly, so nothing derived was
+created and nothing needed removing.
+
+That is honest for what it writes and it is NOT the production write path.
+`add_rdf_quad`, `add_rdf_quads_batch` and `execute_sparql_update` all run
+`sync_edge_table_after_insert`, `sync_frame_entity_after_edge_insert` and
+`sync_entity_slot_sort_after_edge_insert` IN THE CALLER'S TRANSACTION — which is
+exactly the write-side work that can contend with reads, and precisely what this
+test was built to expose.
+
+The current writer measures lock and I/O contention from inserts. Routing it
+through `add_rdf_quads_batch` would measure the real thing, and the cleanup path
+already handles the derived rows it would produce.
+
+## GAP 3 — the job set is a guess
+
+Two jobs run concurrently: the stats recompute and the coverage probe. The
+analytics job is NOT in the set, and `with_frames_count` inside it is still
+13-15s (a four-way join with `COUNT(DISTINCT src_term.term_text)`). Deciding
+what production actually runs concurrently is listed above as part of this work
+and has not been done — the current set is what was easy to invoke, not what was
+argued for.
+
+## GAP 4 — one space, three shapes, one machine
+
+The shapes are the campaign count, the campaign page and an absent-value count.
+That is the family the timeouts came from, not the family production runs. Read
+concurrency is 3 per shape on a developer machine, which is not a production
+concurrency level and cannot be extrapolated to one.
+
+
+---
+
+# THE REAL QUERY SHAPE: A PAGE LOAD IS A FAN-OUT, NOT A QUERY
+
+Taken from the consuming portal application's backend — the routers that build
+KG queries, and its `case_kgquery_*` diagnostic cases — rather than from shapes
+chosen here. This corrects the mix described above.
+
+## What a portal page load actually issues
+
+`kgentity_list_impl.list_entities` has two paths, and the one the portal uses
+for a list view is the second:
+
+    include_entity_graph=False   ONE SPARQL query: a pagination subquery joined
+                                 with a property fetch, count running
+                                 concurrently.
+    include_entity_graph=True    Count + URI query run CONCURRENTLY, then the
+                                 entity graphs fetched IN PARALLEL via
+                                 asyncio.gather — one per row.
+
+The portal's entity router exposes exactly this as
+`include_graphs` — "Include each entity's full graph in the response", commented
+as avoiding N per-row fetches from the CLIENT. It does not avoid them from the
+DATABASE; it moves the fan-out server-side and makes it concurrent.
+
+Page sizes in the diagnostic cases: 5, 20 and 50.
+
+## So one user action is 1 + 1 + N queries, N up to 50, N of them parallel
+
+That is the shape this whole investigation should have been measuring. It is
+also where a timeout would come from first: fifty concurrent entity-graph
+queries per request, multiplied by concurrent users, against a connection pool
+that does not grow.
+
+## What the load test currently does instead, and why that is wrong
+
+It issues independent, sequential reads: three find shapes and one entity-graph
+open, each on its own connection, paced. That measures per-query latency under
+background load. It does NOT measure:
+
+  * the FAN-OUT — 20-50 graph fetches issued together and awaited together, so
+    the user-visible latency is the SLOWEST of them, not the median;
+  * POOL EXHAUSTION — the fan-out competes for connections with itself, and a
+    pool sized for steady traffic behaves differently under a burst of 50;
+  * the COUNT running CONCURRENTLY with the page query, which is what the
+    implementation actually does.
+
+A p99 of 226ms per query says nothing about a page load that awaits 50 of them.
+
+## What the test should assert
+
+The unit of measurement is the PAGE LOAD, not the query:
+
+  * time from request to all N graphs returned, at p99;
+  * with N drawn from the real page sizes (5, 20, 50);
+  * with count and page issued concurrently, as the implementation does;
+  * and the per-query numbers kept as a secondary diagnostic, because they are
+    what tells you WHICH part of a slow page load was slow.
+
+## NOT YET DONE
+
+The load test has not been restructured for this. The numbers reported above
+(zero timeouts, p99 226ms) are true for the shape they measured and do not
+support a claim about page-load latency, which is the number the product has.
