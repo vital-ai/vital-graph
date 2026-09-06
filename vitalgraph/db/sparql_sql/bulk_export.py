@@ -123,9 +123,28 @@ async def import_space(conn, space_id: str, paths: Dict[str, str],
 
     TRUNCATEs the core tables first (a fresh space still has the seeded standard
     datatypes, which the import overwrites with the source's exact rows), COPYs
-    each file in, resets the datatype id sequence, and — when ``resync`` — rebuilds
-    the edge / frame_entity / stats tables.  Returns core-table row counts.
-    Runs inside the caller's transaction.
+    each file in, resets the datatype id sequence, and — when ``resync`` —
+    rebuilds EVERY derived table.  Returns core-table row counts.  Runs inside
+    the caller's transaction.
+
+    REBUILDS VIA ``resync_all_auxiliary_tables``, NOT A HAND-PICKED LIST
+    (``issues/168``).  This used to name three resyncs — edge, frame_entity,
+    stats — and the list went stale when a fourth derived table arrived:
+    ``entity_slot_sort`` was never rebuilt and ``slot_sort_coverage`` was never
+    cleared.  Since this TRUNCATEs and re-COPYs, it is designed to restore OVER
+    an existing space, so a restore left the quads holding the NEW contents, the
+    slot-sort table holding rows derived from the OLD ones, and a marker still
+    vouching for it — and ``fast_slot_filter`` served a confident, plausible
+    answer computed from data that was no longer there.
+
+    The same omission this function already had once: ``graph_registry`` records
+    it copying a whole space in and registering NO graphs (``issues/116``).  Two
+    of one shape is why the fix is structural — the next derived table is
+    covered without editing this function.
+
+    ``resync=False`` CLEARS THE MARKER rather than leaving it.  A caller opting
+    out of the rebuild is opting into a derived set that does not describe the
+    restored quads, and the marker must not keep vouching for it.
     """
     t = SparqlSQLSchema.get_table_names(space_id)
     core = [_bare(t[k]) for k in _EXPORT_TABLES]
@@ -141,21 +160,35 @@ async def import_space(conn, space_id: str, paths: Dict[str, str],
         f"SELECT setval(pg_get_serial_sequence('{dt}', 'datatype_id'), "
         f"COALESCE((SELECT max(datatype_id) FROM {dt}), 1))")
 
-    if resync:
-        from .sync_edge_table import resync_edge_table
-        from .sync_frame_entity_table import resync_frame_entity_table
-        from .sync_stats_tables import recompute_stats_tables
-        await resync_edge_table(conn, space_id)
-        await resync_frame_entity_table(conn, space_id)
-        await recompute_stats_tables(conn, space_id)
-
     # Register the graphs the restored quads are in. COPY writes context_uuid
     # and nothing else, so none of the impl's write hooks fire and the
     # destination ended up holding data in a graph the catalog had never heard
     # of — the same space, exported and re-imported, disagreeing with itself
     # (issues/116).
+    #
+    # BEFORE the resync, not after. `resync_all_auxiliary_tables` populates the
+    # geo table by iterating the `graph` catalog, so a restore whose graphs were
+    # not yet registered would rebuild geo over an empty graph list and silently
+    # produce nothing.
     from .graph_registry import register_graphs_from_data
     await register_graphs_from_data(conn, space_id)
+
+    if resync:
+        from .resync_all import resync_all_auxiliary_tables
+        await resync_all_auxiliary_tables(conn, space_id)
+    else:
+        # The derived tables now describe the PREVIOUS contents. Absence of a
+        # marker makes `fast_slot_filter` decline, which is slow and correct;
+        # leaving a stale one makes it serve rows for entities that no longer
+        # exist.
+        from .fast_slot_filter import clear_slot_sort_coverage
+        await clear_slot_sort_coverage(conn, space_id)
+        logger.warning(
+            "import_space(%s): resync=False — the derived tables still describe "
+            "the PREVIOUS contents. Slot-sort coverage cleared so the filter "
+            "fast path declines; run resync_all_auxiliary_tables (or "
+            "scripts/backfill_slot_sort_coverage.py) before serving this space.",
+            space_id)
 
     counts = {}
     for key in _EXPORT_TABLES:

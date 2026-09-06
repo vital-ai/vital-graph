@@ -53,14 +53,33 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
     # 2. Frame-entity table
     fe_count = await resync_frame_entity_table(conn, space_id)
 
+    # EVERY OPTIONAL STEP BELOW RUNS IN ITS OWN SAVEPOINT (`issues/168`).
+    #
+    # These are all written `try: ... except: log a warning and continue`, on
+    # the reasoning that a derived table which only affects plan choice must
+    # not fail a whole resync. That reasoning is right and the implementation
+    # was not: inside a transaction, a statement that raises ABORTS THE
+    # TRANSACTION, so catching the exception does not let the next step run —
+    # every subsequent statement fails with "current transaction is aborted",
+    # including the caller's own work after this returns.
+    #
+    # It stayed hidden because the callers that mattered ran this outside a
+    # transaction. `import_space` runs inside the caller's, and one real
+    # failure (`compute_edge_fanout` on a NOT NULL column) cascaded into
+    # entity fan-out, geo and the final ANALYZE, none of which were broken.
+    #
+    # `conn.transaction()` opens a SAVEPOINT when already inside a transaction,
+    # so a failing step rolls back only itself and the fail-safe intent holds.
+
     # 2b. Entity/slot sort table (issues/096). Also derived from edge, so it
     # follows it for the same reason frame_entity does. Tolerated missing: a
     # space created before this table exists must still resync everything else,
     # and `repair_derived_tables.py` / `migrate_space_schema.py` are what add it.
     ess_count = 0
     try:
-        from .sync_entity_slot_sort import resync_entity_slot_sort
-        ess_count = await resync_entity_slot_sort(conn, space_id)
+        async with conn.transaction():
+            from .sync_entity_slot_sort import resync_entity_slot_sort
+            ess_count = await resync_entity_slot_sort(conn, space_id)
     except Exception as exc:
         logger.warning("resync_all(%s): entity_slot_sort skipped (%s)",
                        space_id, exc)
@@ -77,7 +96,8 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
     # Value histograms: rdf_stats answers equality on a small value set,
     # this answers ranges over a large one (issues/090).
     try:
-        vstats = await resync_value_stats(conn, space_id)
+        async with conn.transaction():
+            vstats = await resync_value_stats(conn, space_id)
     except Exception as exc:
         # A space whose tables predate this must still resync everything
         # else; a missing histogram degrades an estimate, it does not
@@ -90,8 +110,9 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
     # it incremental would mean maintaining a distribution under every write.
     fanout_rows = 0
     try:
-        from .sync_edge_fanout import compute_edge_fanout
-        fanout_rows = await compute_edge_fanout(conn, space_id)
+        async with conn.transaction():
+            from .sync_edge_fanout import compute_edge_fanout
+            fanout_rows = await compute_edge_fanout(conn, space_id)
     except Exception as exc:
         # A space predating the table should not fail a resync over a statistic
         # that only affects plan choice.
@@ -103,8 +124,9 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
     # failure here costs an optimisation and never an answer.
     entity_hubs = {}
     try:
-        from .sync_entity_fanout import resync_entity_fanout
-        entity_hubs = await resync_entity_fanout(conn, space_id)
+        async with conn.transaction():
+            from .sync_entity_fanout import resync_entity_fanout
+            entity_hubs = await resync_entity_fanout(conn, space_id)
     except Exception as exc:
         logger.warning("resync_all(%s): entity fan-out skipped (%s)",
                        space_id, exc)
@@ -112,25 +134,27 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
     # 4. Geo table — extract lat/lon from existing quads
     geo_points = 0
     try:
-        from ...vectorization.geo_populator import populate_geo
-        # List all graphs in the space
-        graph_rows = await conn.fetch(
-            "SELECT graph_uri FROM graph WHERE space_id = $1", space_id,
-        )
-        term_table = t.get('term', f"{space_id}_term")
-        for gr in graph_rows:
-            graph_uri = gr["graph_uri"]
-            # Resolve graph URI to context_uuid
-            ctx_row = await conn.fetchrow(
-                f"SELECT term_uuid FROM {term_table} "
-                f"WHERE term_text = $1 AND term_type = 'U' LIMIT 1",
-                graph_uri,
+        async with conn.transaction():
+            from ...vectorization.geo_populator import populate_geo
+            # List all graphs in the space
+            graph_rows = await conn.fetch(
+                "SELECT graph_uri FROM graph WHERE space_id = $1", space_id,
             )
-            if ctx_row:
-                geo_stats = await populate_geo(conn, space_id, ctx_row["term_uuid"])
-                geo_points += geo_stats.points_upserted
-        logger.info("resync geo(%s): %d points upserted across %d graphs",
-                     space_id, geo_points, len(graph_rows))
+            term_table = t.get('term', f"{space_id}_term")
+            for gr in graph_rows:
+                graph_uri = gr["graph_uri"]
+                # Resolve graph URI to context_uuid
+                ctx_row = await conn.fetchrow(
+                    f"SELECT term_uuid FROM {term_table} "
+                    f"WHERE term_text = $1 AND term_type = 'U' LIMIT 1",
+                    graph_uri,
+                )
+                if ctx_row:
+                    geo_stats = await populate_geo(
+                        conn, space_id, ctx_row["term_uuid"])
+                    geo_points += geo_stats.points_upserted
+            logger.info("resync geo(%s): %d points upserted across %d graphs",
+                        space_id, geo_points, len(graph_rows))
     except Exception as e:
         logger.warning("Geo resync failed (non-critical): %s", e)
 
@@ -193,13 +217,14 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
     # it would be worse than the cliff it prevents.
     coverage = []
     try:
-        from .sync_entity_slot_sort import entity_slot_sort_all_types
-        from .fast_slot_filter import record_slot_sort_coverage
-        for cov in await entity_slot_sort_all_types(conn, space_id):
-            await record_slot_sort_coverage(
-                conn, space_id, cov["entity_type_uuid"],
-                cov["in_table"], cov["of_type"])
-            coverage.append((cov["in_table"], cov["of_type"]))
+        async with conn.transaction():
+            from .sync_entity_slot_sort import entity_slot_sort_all_types
+            from .fast_slot_filter import record_slot_sort_coverage
+            for cov in await entity_slot_sort_all_types(conn, space_id):
+                await record_slot_sort_coverage(
+                    conn, space_id, cov["entity_type_uuid"],
+                    cov["in_table"], cov["of_type"])
+                coverage.append((cov["in_table"], cov["of_type"]))
         complete = sum(1 for a, b in coverage if a >= b)
         if coverage:
             logger.info(

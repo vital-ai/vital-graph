@@ -93,3 +93,50 @@ duration and release on verified completion. Fixing it now is a prerequisite for
 that inversion, not a substitute — inverting the register while this path exists
 would convert it from "wrong only if a marker happened to be set" into "wrong
 always".
+
+
+---
+
+## FOUND ON THE WAY: `resync_all` was not fail-safe inside a transaction
+
+Delegating to `resync_all_auxiliary_tables` failed the round-trip test with
+`current transaction is aborted, commands ignored until end of transaction
+block` — and the fault was not in the delegation.
+
+Every optional step in `resync_all` is written `try: ... except: warn and
+continue`, because a derived table that only affects plan choice must not fail a
+whole resync. The reasoning is right; the implementation was not. Inside a
+transaction a statement that raises ABORTS THE TRANSACTION, so catching the
+exception does not let the next step run: every later statement fails, including
+the caller's own work after the function returns.
+
+It stayed hidden because the callers that mattered ran `resync_all` OUTSIDE a
+transaction. `import_space` runs inside the caller's, so one genuine failure
+cascaded into three steps that were not broken:
+
+    edge fan-out      null value in column "edge_type_uuid"   <- the real one
+    entity fan-out    current transaction is aborted          <- collateral
+    geo               current transaction is aborted          <- collateral
+    final ANALYZE     current transaction is aborted          <- collateral
+
+Each optional step now runs in its own SAVEPOINT (`conn.transaction()` opens one
+when already inside a transaction), so a failure rolls back only itself. After
+the change the same run produces ONE warning — the real one — and nothing else.
+
+This is a latent fix for every caller, not just this one. Any code path running
+`resync_all` in a transaction had the same exposure.
+
+## STILL BROKEN, and now visible: edge fan-out on an imported space
+
+    resync_all(inttest_exp_dst_*): edge fan-out skipped
+      (null value in column "edge_type_uuid" of relation ...)
+
+`compute_edge_fanout` fails with a NOT NULL violation on every import round
+trip. It is pre-existing, unrelated to the marker, and was previously buried as
+the first line of a four-warning cascade that read like one failure.
+
+Consequence: a restored space has no edge fan-out statistics, so any plan choice
+that consults them is made without them. Degraded plans, not wrong answers.
+Worth its own investigation — the likely cause is that the fan-out derivation
+reads an edge type the restore has not populated at that point, which would make
+it an ORDERING problem rather than a data one.
