@@ -140,3 +140,61 @@ that consults them is made without them. Degraded plans, not wrong answers.
 Worth its own investigation — the likely cause is that the fan-out derivation
 reads an edge type the restore has not populated at that point, which would make
 it an ORDERING problem rather than a data one.
+
+
+---
+
+## REVISED FIX: defer the long derivation instead of holding a lock across it
+
+The first fix delegated to `resync_all_auxiliary_tables`, which rebuilds
+everything. It is correct and it is the WRONG PLACE to do it.
+
+`import_space` runs inside the caller's transaction and the TRUNCATE takes
+ACCESS EXCLUSIVE on the core tables, so every statement before COMMIT extends
+the window in which the space answers nothing. `resync_entity_slot_sort` is the
+longest derivation by far — minutes on a 53M-quad space — and holding an
+exclusive lock across it is precisely the failure this work exists to remove:
+rebuild work blocking the application queries it is meant to make fast
+(`issues/161`). Trading a wrong answer for an outage is not a fix.
+
+So the restore now:
+
+  * rebuilds INLINE only what a correct query cannot do without — edge,
+    frame_entity, stats;
+  * EMPTIES `entity_slot_sort` rather than leaving it stale, and clears the
+    marker;
+  * hands the long rebuild to `backfill_entity_slot_sort_batch`, which is
+    bounded per batch, fenced, and already runs on a duty cycle (`issues/150`).
+
+Queries are served throughout by the general SPARQL pipeline: slower, correct,
+and not blocked.
+
+## PREREQUISITE, and it was a live hole of its own: the SORT path was ungated
+
+Deferring is only safe because both read paths now decline on a cleared marker.
+The sort path did not check it. The stated reasoning was that a short table
+merely MIS-ORDERS a page where a short filter returns a subset — true for a
+table that is short, false for one that is EMPTY. `fast_slot_sort_page` ends in
+
+    return [r[0] for r in rows]
+
+so a table with no rows for the type returns an EMPTY PAGE, served as "no
+results": every result missing, not mis-ordered. Emptying the table without
+gating that path would have converted this issue's bug into a worse one.
+
+Both paths are now gated on the same marker, each warning once per
+(space, type).
+
+## STILL NOT REBUILT ON RESTORE, pre-existing and unchanged by this
+
+`import_space` has never rebuilt the geo table, the value histograms, or the
+edge/entity fan-out statistics — the original hand-picked list was three
+resyncs and remains three. Of these:
+
+    geo               DERIVED FROM QUADS -> can be wrong after a restore
+    value histograms  plan-only -> degraded plans, correct answers
+    fan-out           plan-only -> degraded plans, correct answers
+
+Geo is the same class of defect this issue is about, one table over, and is not
+fixed here. It wants the same treatment: emptied at restore and rebuilt by a
+job, or rebuilt inline if it is cheap enough to hold the lock for. Not measured.

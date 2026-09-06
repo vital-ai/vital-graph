@@ -127,20 +127,27 @@ async def import_space(conn, space_id: str, paths: Dict[str, str],
     rebuilds EVERY derived table.  Returns core-table row counts.  Runs inside
     the caller's transaction.
 
-    REBUILDS VIA ``resync_all_auxiliary_tables``, NOT A HAND-PICKED LIST
-    (``issues/168``).  This used to name three resyncs — edge, frame_entity,
-    stats — and the list went stale when a fourth derived table arrived:
-    ``entity_slot_sort`` was never rebuilt and ``slot_sort_coverage`` was never
-    cleared.  Since this TRUNCATEs and re-COPYs, it is designed to restore OVER
-    an existing space, so a restore left the quads holding the NEW contents, the
+    NOTHING IS LEFT DESCRIBING THE PREVIOUS CONTENTS (``issues/168``).  This
+    used to rebuild a hand-picked list — edge, frame_entity, stats — and the
+    list went stale when a fourth derived table arrived: ``entity_slot_sort``
+    was never rebuilt and ``slot_sort_coverage`` was never cleared.
+
+    Since this TRUNCATEs and re-COPYs, it is designed to restore OVER an
+    existing space, so a restore left the quads holding the NEW contents, the
     slot-sort table holding rows derived from the OLD ones, and a marker still
     vouching for it — and ``fast_slot_filter`` served a confident, plausible
     answer computed from data that was no longer there.
 
     The same omission this function already had once: ``graph_registry`` records
-    it copying a whole space in and registering NO graphs (``issues/116``).  Two
-    of one shape is why the fix is structural — the next derived table is
-    covered without editing this function.
+    it copying a whole space in and registering NO graphs (``issues/116``).
+
+    THE SHORT DERIVATIONS RUN INLINE, THE LONG ONE IS HANDED OFF.  This holds
+    ACCESS EXCLUSIVE on the core tables until the caller commits, so every
+    statement here extends the window in which the space answers nothing.
+    ``entity_slot_sort`` is rebuilt in MINUTES on a large space, so it is
+    emptied and left to the batched backfill job rather than rebuilt under the
+    lock — blocking application queries behind a rebuild is the outage this work
+    exists to remove, not a cost to pay for it.
 
     ``resync=False`` CLEARS THE MARKER rather than leaving it.  A caller opting
     out of the rebuild is opting into a derived set that does not describe the
@@ -166,16 +173,56 @@ async def import_space(conn, space_id: str, paths: Dict[str, str],
     # of — the same space, exported and re-imported, disagreeing with itself
     # (issues/116).
     #
-    # BEFORE the resync, not after. `resync_all_auxiliary_tables` populates the
-    # geo table by iterating the `graph` catalog, so a restore whose graphs were
-    # not yet registered would rebuild geo over an empty graph list and silently
-    # produce nothing.
+    # BEFORE the derivations, not after. Anything deriving per-graph reads this
+    # catalog, so registering afterwards means those steps see an empty graph
+    # list and silently produce nothing.
     from .graph_registry import register_graphs_from_data
     await register_graphs_from_data(conn, space_id)
 
     if resync:
-        from .resync_all import resync_all_auxiliary_tables
-        await resync_all_auxiliary_tables(conn, space_id)
+        # THE HEAVY DERIVATION IS DEFERRED, NOT SKIPPED (`issues/168`).
+        #
+        # This runs inside the caller's transaction, and the TRUNCATE above took
+        # ACCESS EXCLUSIVE on the core tables — so every statement between here
+        # and COMMIT extends the window in which this space answers nothing.
+        # `resync_entity_slot_sort` is by far the longest of the derivations
+        # (measured in MINUTES on a 53M-quad space), and holding an exclusive
+        # lock across it is the shape of outage this repository already has an
+        # issue about: rebuild work blocking the application queries it exists
+        # to make fast (`issues/161`).
+        #
+        # So the restore does the SHORT derivations that queries cannot be
+        # correct without — edge, frame_entity, stats — and hands the long one
+        # to the job that is built for it: `backfill_entity_slot_sort_batch`,
+        # bounded per batch, fenced, and already running on a duty cycle
+        # (`issues/150`).
+        #
+        # SAFE ONLY BECAUSE BOTH READ PATHS ARE GATED. The slot-sort table is
+        # emptied rather than left stale, and the marker is cleared, so the
+        # filter AND sort paths decline and every query is answered by the
+        # general SPARQL pipeline — slower, and correct. Before the sort path
+        # was gated this would have served empty pages as "no results".
+        from .sync_edge_table import resync_edge_table
+        from .sync_frame_entity_table import resync_frame_entity_table
+        from .sync_stats_tables import recompute_stats_tables
+        await resync_edge_table(conn, space_id)
+        await resync_frame_entity_table(conn, space_id)
+        await recompute_stats_tables(conn, space_id)
+        try:
+            async with conn.transaction():
+                await conn.execute(f"TRUNCATE {_bare(t['entity_slot_sort'])}")
+        except Exception as exc:
+            # A space predating the table. Nothing to empty, nothing stale.
+            logger.debug("import_space(%s): no entity_slot_sort to clear (%s)",
+                         space_id, exc)
+        from .fast_slot_filter import clear_slot_sort_coverage
+        await clear_slot_sort_coverage(conn, space_id)
+        logger.info(
+            "import_space(%s): edge/frame_entity/stats rebuilt inline; "
+            "entity_slot_sort emptied and its coverage cleared — the fast "
+            "paths decline until the backfill job converges, or until "
+            "scripts/backfill_slot_sort_coverage.py --space %s is run",
+            space_id, space_id)
     else:
         # The derived tables now describe the PREVIOUS contents. Absence of a
         # marker makes `fast_slot_filter` decline, which is slow and correct;

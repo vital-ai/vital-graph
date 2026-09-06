@@ -432,6 +432,37 @@ class KGQueriesEndpoint:
         try:
             t0 = _time.monotonic()
             async with pool.acquire() as conn:
+                # THE SORT PATH IS GATED TOO, on the same marker as the filter
+                # (`issues/168`).
+                #
+                # It was not, on the reasoning that a short table only
+                # MIS-ORDERS a page while a short filter returns a subset. That
+                # holds for a table that is short; it does not hold for one that
+                # is EMPTY or wholly stale. `fast_slot_sort_page` ends in
+                # `return [r[0] for r in rows]`, so a table with no rows for the
+                # type yields an EMPTY PAGE, which is served as "no results" --
+                # every result missing, not merely mis-ordered.
+                #
+                # That is reachable: a restore truncates and rebuilds, and any
+                # deferral of the rebuild leaves exactly this state. Gating both
+                # paths on one marker is also what lets the heavy derivation
+                # move OFF the restore's transaction, which is the point of
+                # doing it.
+                from ..db.sparql_sql.fast_slot_filter import (
+                    slot_sort_coverage_is_complete)
+                if not await slot_sort_coverage_is_complete(
+                        conn, space_id, entity_criteria.entity_type):
+                    key = (space_id, entity_criteria.entity_type, "sort")
+                    if key not in _COVERAGE_WARNED:
+                        _COVERAGE_WARNED.add(key)
+                        self.logger.warning(
+                            "kgquery: entity_slot_sort coverage is not marked "
+                            "complete for space=%s type=%s, so the SORT fast "
+                            "path is OFF and this query is ordered by the "
+                            "general SPARQL path. Run "
+                            "`scripts/backfill_slot_sort_coverage.py --space %s`.",
+                            space_id, entity_criteria.entity_type, space_id)
+                    return None
                 uris = await fast_slot_sort_page(
                     conn, space_id, graph_id, entity_criteria,
                     query_request.page_size, query_request.offset)
