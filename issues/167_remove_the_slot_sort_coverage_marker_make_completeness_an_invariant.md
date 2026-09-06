@@ -149,9 +149,39 @@ driven directly is not. `bulk_export.import_space` is the known-bad precedent
 here — `graph_registry` records that it copied a whole space in and registered
 no graphs, the identical shape of defect one layer over.
 
-STEP 1 IS THEREFORE AN AUDIT, not a code change: for each of the three, list the
-callers and state for each whether the derivation runs. That audit is the work;
-the fix afterwards is small.
+## THE AUDIT — DONE
+
+    module                 production callers            derivation runs?
+    bulk_load.py           add_rdf_quads_batch_bulk      YES
+    bulk_export.py         none (operator/test tool)     NO  -> issues/168
+    partition_migrate.py   none (operator/test tool)     n/a, data preserved
+
+BULK_LOAD IS COVERED. Its three entry points are reachable in production only
+through `add_rdf_quads_batch_bulk`, and BOTH branches there --
+`bulk_load_with_index_rebuild` and `insert_terms_quads_executemany` -- fall
+through to the same unconditional `sync_entity_slot_sort_after_edge_insert`,
+seeded from the subjects just written. `insert_terms_quads_copy` is internal to
+`bulk_load_with_index_rebuild`. Nothing to do.
+
+BULK_EXPORT IS A HOLE, and a live one: `import_space` rebuilds the edge,
+frame_entity and stats tables and NOT `entity_slot_sort`, and does not clear the
+coverage marker. Restoring over a space that had a complete marker leaves the
+fast path serving from rows derived from the PREVIOUS contents. That is a wrong
+answer today, independently of this issue -- `issues/168`.
+
+PARTITION_MIGRATE LOOKS FINE, unverified by test. It copies `rdf_quad`, `edge`
+and `frame_entity` into new partitioned tables and swaps; it does not touch
+`entity_slot_sort`, and it PRESERVES the quads rather than replacing them, so
+the existing rows still describe the data. The only change is deduplication
+against a slimmer PK, which removes duplicate quads and cannot change which
+entities exist. Worth a test before relying on it.
+
+WHAT THE AUDIT CHANGES ABOUT THIS ISSUE: the exception-path work is smaller than
+assumed -- one real hole, in a tool with no production caller -- and the block
+must be taken by `import_space` specifically. It also raises the priority of
+`issues/168`, which must be fixed BEFORE the inversion: under an allow-list that
+path is wrong only when a marker happens to be set, and under a block-list it
+would be wrong always.
 
 ## The job
 
