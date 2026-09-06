@@ -130,30 +130,48 @@ async def verify_clean(conn, scope: RunScope) -> List[str]:
     findings: List[str] = []
     before = scope.before or {}
 
-    now_q = await conn.fetchval(f"SELECT count(*) FROM {scope.space_id}_rdf_quad")
-    if before.get("quads") is not None and now_q != before["quads"]:
-        findings.append(
-            f"quads {before['quads']} -> {now_q} "
-            f"({now_q - before['quads']:+d} left behind)")
-
-    if before.get("entity_slot_sort") is not None:
-        try:
-            now_e = await conn.fetchval(
-                f"SELECT count(*) FROM {scope.space_id}_entity_slot_sort")
-            if now_e != before["entity_slot_sort"]:
-                findings.append(
-                    f"entity_slot_sort {before['entity_slot_sort']} -> {now_e} "
-                    f"({now_e - before['entity_slot_sort']:+d})")
-        except Exception:
-            pass
-
-    ctx = scope.context_uuid
+    # SCOPED TO THE RUN'S GRAPH, NOT TO THE WHOLE SPACE.
+    #
+    # An earlier version compared total quad counts before and after, and failed
+    # a run with `+26,400 left behind` when the run itself had written 142. The
+    # difference was `backfill_server_properties_task`, a background coroutine
+    # that stamps server-managed properties onto entities — 200 per batch, every
+    # few seconds, for as long as un-stamped data exists. A 74M-quad bulk load
+    # leaves it 100,000 entities of work, so it writes throughout any run that
+    # follows one.
+    #
+    # It was RIGHT to fail and the assertion was WRONG. Other jobs legitimately
+    # write to a shared space while the load runs; demanding the space be
+    # byte-identical afterwards makes the check fail for a healthy system, and a
+    # check that cries wolf gets deleted. What the run OWNS is its graph, and
+    # that is what it must leave empty.
+    #
+    # The space-wide totals are still reported, as CONTEXT rather than as a
+    # verdict — a large unexplained change is worth seeing even when it is not
+    # this run's fault.
+    # Resolved here rather than assumed: `verify_clean` must work whether or not
+    # `cleanup` has run, and it is the CLEANUP-DID-NOT-HAPPEN case that most
+    # needs checking.
+    ctx = await resolve_context(conn, scope)
     if ctx is not None:
         left = await conn.fetchval(
             f"SELECT count(*) FROM {scope.space_id}_rdf_quad "
             f" WHERE context_uuid = $1", ctx)
         if left:
             findings.append(f"{left} quads still in the run's graph")
+        try:
+            left_e = await conn.fetchval(
+                f"SELECT count(*) FROM {scope.space_id}_entity_slot_sort "
+                f" WHERE context_uuid = $1", ctx)
+            if left_e:
+                findings.append(
+                    f"{left_e} entity_slot_sort rows still in the run's graph")
+        except Exception:
+            pass
+
+    now_q = await conn.fetchval(f"SELECT count(*) FROM {scope.space_id}_rdf_quad")
+    if before.get("quads") is not None and now_q != before["quads"]:
+        scope.before["space_drift"] = now_q - before["quads"]
 
     now_b = await conn.fetchval(
         "SELECT count(*) FROM slot_sort_block WHERE space_id = $1",

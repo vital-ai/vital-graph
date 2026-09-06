@@ -385,3 +385,62 @@ statement is an unrelated application's polling query at 35.7 hours cumulative
 and a 60s maximum. Whatever the KG does there competes with that — concurrent
 contention arriving from a direction this load test does not model, since it
 assumes the database is otherwise ours.
+
+
+---
+
+# GAP 3 CLOSED, AND A FIFTH JOB NOBODY LISTED
+
+The production job set, from where they are registered rather than from memory:
+
+    db_maintenance      every 300 s     (5 minutes)
+    space_analytics     every 86,400 s  (once a day)
+    metrics_rollup      every 3,600 s   (hourly)
+    import/export cleanup
+    backfill_server_properties_task     NOT IN THE SCHEDULER AT ALL
+
+The load test ran two PIECES of maintenance and no analytics. Analytics is now
+in the set, scoped with `trigger_compute(SPACE)` rather than `run()`, which
+would walk every space and measure the fixture set instead of the workload.
+
+    without analytics    p99 543 ms   max 1,083 ms   0 timeouts
+    with analytics       p99 627 ms   max 1,734 ms   0 timeouts
+
+So the daily analytics pass costs ~84ms at p99 and pushes the worst query to
+1.7s. Visible, and nothing times out.
+
+## THE FIFTH JOB IS THE MOST ACTIVE ONE, and it is not a scheduler job
+
+`backfill_server_properties_task` is a background COROUTINE started directly by
+the app, not a registered job. It stamps server-managed properties onto
+entities: 200 per batch, event-driven via a nudge from loaders and the import
+endpoints, then polling every 0.5 s until a full cycle finds no work.
+
+A 74M-quad bulk load leaves it 100,000 entities of work. Measured: it wrote
+~57 quads/second continuously for the whole of a 464-second run and kept going
+afterwards, adding ~293,000 quads in total before draining.
+
+So the "production job set" this issue asked for was missing the job that runs
+every half-second, while listing the ones that run every five minutes and every
+day. Any benchmark taken against a freshly loaded space includes it, and nobody
+would know: it logs at INFO under its own module name and writes to the quad
+table like any other client.
+
+## AND IT BROKE THE CLEANUP CHECK — correctly
+
+`verify_clean` compared whole-space quad counts and failed a run with
+`+26,400 left behind` when the run itself had written 142. The DETECTION was
+right and the ASSERTION was wrong: other jobs legitimately write to a shared
+space while the load runs, so demanding the space be byte-identical afterwards
+fails for a healthy system, and a check that cries wolf gets deleted.
+
+It now verifies what the run OWNS — its own graph, quads and slot-sort rows —
+and reports space-wide drift as context rather than as a verdict. It also
+resolves its own context instead of relying on `cleanup` having run, because the
+cleanup-did-not-happen case is the one that most needs checking.
+
+## What this leaves
+
+Benchmarks taken while a load is draining are not baselines. The fixture is now
+quiet (0 batches in two minutes, 74,465,500 quads settled), so figures from here
+are comparable and the ones above are not, quite.

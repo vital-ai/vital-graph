@@ -194,6 +194,28 @@ async def test_reads_stay_fast_while_writes_and_jobs_run(pg_pool, scope):
             await c.execute("SET statement_timeout = '600s'")
             await entity_slot_sort_all_types(c, SPACE)
 
+    async def job_analytics():
+        """The ANALYTICS pass, which is what the original incident measured.
+
+        `issues/161` recorded ~110s of background analytics inside a three-minute
+        window while user queries were being timed, and every conclusion drawn in
+        that window was unreliable. It runs ONCE PER DAY in production
+        (`interval_seconds` default 86400) against maintenance's 300s, so it is
+        rare and heavy rather than constant — which is precisely the shape a
+        steady-state benchmark never sees and a user does.
+
+        Scoped to this space via `trigger_compute`, not `run()`: the latter
+        walks every space in the database and would measure the fixture set
+        rather than the workload.
+
+        `with_frames_count` inside it is still 13-15s (a four-way join with
+        COUNT(DISTINCT src_term.term_text)) and is unaddressed — so this is
+        expected to be the most disruptive job in the set, and that is the
+        reason to have it here.
+        """
+        from vitalgraph.process.analytics_job import AnalyticsJob
+        await AnalyticsJob(pg_pool).trigger_compute(SPACE)
+
     try:
         res = await run_load(
             readers={"find:count_campaign": count_campaign,
@@ -201,7 +223,11 @@ async def test_reads_stay_fast_while_writes_and_jobs_run(pg_pool, scope):
                      "find:count_absent": count_absent,
                      "open:entity_graph": open_entity_graph},
             writer=write_one,
-            jobs=[job_stats, job_coverage],
+            # The production set, by frequency: maintenance every 300s,
+            # analytics once a day. Both run here concurrently with the load
+            # because the question is what a user sees WHILE they run, not
+            # whether they finish.
+            jobs=[job_stats, job_coverage, job_analytics],
             duration_s=DURATION_S, read_concurrency=3, write_pace_s=0.02)
 
         print(f"  summary: {res.summary()}", flush=True)
