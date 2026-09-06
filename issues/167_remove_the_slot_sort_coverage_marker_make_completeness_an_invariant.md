@@ -4,6 +4,91 @@
 ## exist, and every bug it has caused was in its own lifecycle rather than in
 ## the data it describes.
 
+## THE TARGET, REVISED: INVERT THE REGISTER
+
+The gate does not disappear. It INVERTS. Today `slot_sort_coverage` is an
+ALLOW-LIST — a row saying "this type is proven complete", absence meaning
+decline. It becomes a BLOCK-LIST — a row saying "this space is known to be at
+risk right now", absence meaning SERVE.
+
+A block exists only while one of two things is true:
+
+  1. AN OPERATION IS IN FLIGHT that can make the table disagree with the quads —
+     a bulk load, a space import/export, a partition migration. The block is
+     taken when the operation starts and released when its derivation finishes.
+  2. A PROBLEM IS KNOWN AND A JOB IS FIXING IT — the coverage probe found a
+     short type, so a block is recorded and the repair job clears it on
+     convergence.
+
+Nothing else blocks. A space nobody is touching and nothing has flagged is
+served from the table, because normal writes derive it inline and it is correct.
+
+## Why this is better than either alternative
+
+Against TODAY'S allow-list: absence is the common case, and today absence means
+DECLINE. That is the entire defect — nine spaces measured with complete, correct
+tables served by the slow path because no row existed. Under a block-list those
+nine need no row at all and are served correctly by default.
+
+Against OUTRIGHT REMOVAL: a mechanism still exists for the case that genuinely
+needs one. The `issues/149` shape — a type at 1.05% coverage while its drift
+probe reported converged — is DETECTED and BLOCKED rather than either ignored
+(no gate) or permanently penalised (today).
+
+## THE FAILURE MODE INVERTS TOO, and this is the whole risk
+
+    today       forget to mark COMPLETE   ->  slow, correct
+    proposed    forget to mark AT RISK    ->  fast, WRONG
+
+That is not an argument against it; it is the specification for how blocks must
+be taken. Three rules follow, and none is optional:
+
+  * A BLOCK IS TAKEN BY THE OPERATION ITSELF, in the same transaction that
+    begins the risky work — never by a caller remembering to. If taking the
+    block and starting the load can come apart, they will: that is exactly how
+    `resync_all` cleared a marker and left it cleared, and how
+    `bulk_export.import_space` copied a space in and registered no graphs.
+  * A BLOCK SURVIVES A CRASH. It is a row, so a process dying mid-import leaves
+    it set. That fails in the correct direction — a stuck block is slow and
+    right, and is visible.
+  * A BLOCK IS CLEARED ONLY BY A VERIFIED COMPLETION. The job that clears it
+    must have just measured coverage, not merely finished running.
+
+## The case that is neither in-flight nor known-broken
+
+A space whose table was created but never populated — a fresh migration, a
+space predating the table — is incomplete, is not being worked on, and has
+nobody to flag it. Under a block-list it would be SERVED, and wrongly.
+
+So the block is also taken AT TABLE CREATION, and cleared by the first verified
+backfill. "No row" then means "nothing has ever put this space at risk", which
+is only reachable through a path that verified it — rather than meaning "no one
+has looked", which is what absence means today and why this is safe to invert.
+
+## Staging, revised
+
+The inverted gate is SAFER to ship than outright removal and should come first:
+it keeps a mechanism for the known-bad case while fixing the common case. The
+audit below is still its precondition — a bulk path that takes no block is
+exactly the "forget to mark at risk" failure.
+
+  1. Audit the three bypassing modules and their callers (below).
+  2. Make each take a block at the start of the operation and release it on
+     verified completion. This is where the work is.
+  3. Have the coverage probe RECORD A BLOCK on a short type instead of
+     withholding an allow-row.
+  4. Take a block at table creation.
+  5. Flip the read path from allow-list to block-list.
+  6. Keep the coverage computation permanently, as the alarm — a block that
+     persists past its job, or a shortfall on a space with no block, is the
+     signal that this design has a hole.
+
+Step 6 is what makes the inversion self-checking rather than merely optimistic:
+a shortfall found on a space with NO block is a bug in step 2, and it is
+detectable without waiting for a wrong answer to be noticed.
+
+## The original target, kept for reference
+
 ## The target
 
 `{space}_entity_slot_sort` is COMPLETE BY CONSTRUCTION:
@@ -122,10 +207,21 @@ argument for removing it.
 
 ## Exit criteria
 
-  * every quad-writing path either derives inline or ends in the job, listed
-    explicitly with its callers;
-  * a maintenance alarm on any short type, quiet in production across the write
-    paths above;
-  * `slot_sort_coverage_is_complete` gone from the read path, and
-    `fast_slot_filter` serving unconditionally;
-  * the coverage computation KEPT, as the alarm.
+  * every quad-writing path either derives inline or TAKES A BLOCK and releases
+    it on verified completion, listed explicitly with its callers;
+  * a block is taken at table creation and cleared by the first verified
+    backfill, so "no row" can only mean "verified, or never at risk";
+  * the coverage probe records a BLOCK on a short type rather than withholding
+    an allow-row;
+  * `fast_slot_filter` consults the block-list, and serves when there is no row;
+  * the coverage computation KEPT permanently as the alarm, reporting two
+    distinct bugs: a block outliving its job, and a shortfall on a space with no
+    block.
+
+## What "done" is NOT
+
+Not "the marker was deleted". The read path must still be able to refuse, and
+the difference is only which way absence reads. Deleting the mechanism outright
+would leave the `issues/149` shape — a genuinely short table with no one
+watching — served silently and wrongly, which is worse than the cliff this
+replaces.
