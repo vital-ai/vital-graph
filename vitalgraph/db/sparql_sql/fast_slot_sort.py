@@ -110,9 +110,39 @@ def can_serve(criteria) -> bool:
     # a wrong page rather than a slow one.
     if not (s.frame_path or []):
         return False
-    # The table sorts a population; it does not select one.
+    # FRAME CRITERIA ARE SERVED HERE NOW, when every one of them is an equality
+    # this table can answer (`issues/172`).
+    #
+    # This used to read "the table sorts a population; it does not select one",
+    # and declined. `can_serve_filter` symmetrically declines when a sort is
+    # present, so a FILTERED, SORTED LIST — the main list view — was served by
+    # neither and fell through to the general pipeline. Measured on a 74.2M-quad
+    # space: the filter alone answers in 4-5ms, and the same filter WITH a sort
+    # did not finish in 120s. The plan shows why: it materialises the whole
+    # match set through a GroupAggregate and sorts it three times before the
+    # LIMIT applies, so every one of 78,496 matches is paid for to return 50.
+    #
+    # Both halves are in ONE index. `idx_{space}_ess_text` is
+    # (context, entity_type, frame_type_path, slot_type, value_text, entity_uuid)
+    # — leading columns for each equality, and an ordered value_text for the
+    # sort. Measured with the filter added as EXISTS clauses: 72ms warm, 938ms
+    # cold, verified against a brute-force top-50.
+    #
+    # NOT O(page). The planner uses a hash semi-join over the match set and a
+    # top-N heapsort, so this is O(matches) with a small constant rather than
+    # O(page). Forcing a nested loop to get early termination measured SLOWER
+    # (222ms against 72ms) and was not pursued. At much larger match counts this
+    # ordering may invert, and the honest bound is "linear in matches over a
+    # compact table", not "bounded by the page".
+    filters = None
     if getattr(criteria, "frame_criteria", None):
-        return False
+        from .fast_slot_filter import _eq_criteria
+        filters = _eq_criteria(criteria.frame_criteria)
+        if filters is None:
+            # A comparator this table cannot answer disqualifies the whole
+            # query, exactly as it does on the filter path: a partially applied
+            # conjunction is a wrong answer, not a slow one.
+            return False
     if getattr(criteria, "entity_property_filters", None):
         return False
     if getattr(criteria, "entity_uris", None):
@@ -126,6 +156,49 @@ def can_serve(criteria) -> bool:
         # columns, so the scan would be the whole table.
         return False
     return True
+
+
+
+def _filter_exists(t: str, criteria, args: list) -> str:
+    """EXISTS clauses restricting the sorted population to the filter's matches.
+
+    `issues/172`. One clause per equality criterion, correlated on
+    `entity_uuid`, each hitting `idx_{space}_ess_text` on its own leading
+    columns. The planner turns them into semi-joins over a compact table, which
+    measured 72ms warm where the general pipeline did not finish in 120s.
+
+    Appends to `args` in step with the placeholders it emits, so the caller's
+    numbering stays correct however many criteria there are.
+    """
+    fcs = getattr(criteria, "frame_criteria", None)
+    if not fcs:
+        return ""
+    from .fast_slot_filter import _eq_criteria
+    parsed = _eq_criteria(fcs)
+    if not parsed:
+        return ""
+    out = []
+    for path, slot_type, lane, val in parsed:
+        args.append([_term_uuid(u) for u in path])
+        p_path = len(args)
+        args.append(_term_uuid(slot_type))
+        p_slot = len(args)
+        args.append(val)
+        p_val = len(args)
+        out.append(
+            f"AND EXISTS (SELECT 1 FROM {t} f{p_slot}"
+            f" WHERE f{p_slot}.context_uuid = $1"
+            f"   AND f{p_slot}.entity_type_uuid = $2"
+            f"   AND f{p_slot}.frame_type_path = ${p_path}"
+            f"   AND f{p_slot}.slot_type_uuid = ${p_slot}"
+            # `_LANE` yields the lane NAME ('text'/'num'/'dt'); the COLUMN is
+            # `value_text`/`value_num`/`value_dt`, which `_LANE_SQL` holds.
+            # Emitting the bare lane produced `f.text = $n` — a column that does
+            # not exist, so the count errored and the page silently returned
+            # nothing.
+            f"   AND f{p_slot}.{_LANE_SQL[lane][0]} = ${p_val}"
+            f"   AND f{p_slot}.entity_uuid = {t}.entity_uuid)")
+    return "\n              ".join(out)
 
 
 async def fast_slot_sort_page(
@@ -161,6 +234,9 @@ async def fast_slot_sort_page(
     # frame_type_path is part of the index's leading columns, so it is matched
     # rather than left unconstrained.
     args = [ctx, ent_t, slot_t, frame_path]
+    # Filters are appended to `args` and their placeholders numbered from it, so
+    # the page/offset placeholders below must be computed AFTER this.
+    where_filters = _filter_exists(t, criteria, args)
     n = len(args)
 
     sql = f"""
@@ -173,6 +249,7 @@ async def fast_slot_sort_page(
               AND slot_type_uuid = $3
               AND frame_type_path = $4
               AND {col} IS NOT NULL
+              {where_filters}
             GROUP BY entity_uuid
             ORDER BY sv {direction}, entity_uuid
             LIMIT ${n + 1} OFFSET ${n + 2}
@@ -213,6 +290,10 @@ async def fast_slot_sort_count(
     slot_t = _term_uuid(s.slot_type)
     frame_path = [_term_uuid(u) for u in s.frame_path]
     args = [ctx, ent_t, slot_t, frame_path]
+    # THE SAME FILTER AS THE PAGE. A count that ignores the criteria reports the
+    # whole population while the page shows the filtered subset — the paging
+    # control then offers pages that do not exist, and nothing errors.
+    where_filters = _filter_exists(t, criteria, args)
 
     try:
         return await conn.fetchval(f"""
@@ -220,6 +301,7 @@ async def fast_slot_sort_count(
             WHERE context_uuid = $1 AND entity_type_uuid = $2
               AND slot_type_uuid = $3 AND frame_type_path = $4
               AND {col} IS NOT NULL
+              {where_filters}
         """, *args)
     except Exception as exc:
         logger.debug("fast_slot_sort_count(%s) declined: %s", space_id, exc)
