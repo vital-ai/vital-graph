@@ -320,3 +320,54 @@ undeclared shortfall is detected within one cycle rather than never — but
 "detected within a cycle" is not "cannot happen", and the honest statement of
 this design is that it trades a permanent slow failure for a bounded wrong one,
 with an alarm on the window.
+
+
+---
+
+# THE ORDERING HAZARD IS CREATING THE TABLE, NOT MISSING IT
+
+Two states look similar and behave oppositely:
+
+    slot_sort_block ABSENT      -> is_blocked() defaults to True -> everything
+                                   declines -> SLOW AND CORRECT
+    slot_sort_block EMPTY       -> no row matches -> everything serves ->
+                                   WRONG for any type already short
+
+So an UNMIGRATED deployment is safe. The dangerous state is created by SCHEMA
+INIT, which now includes `slot_sort_block` in the table list and would create it
+EMPTY on an existing deployment that still holds `complete = false` coverage
+rows. That is the window in which the inverted read path serves short tables.
+
+`migrate_slot_sort_blocks.py` closes it by doing both in one run — CREATE, then
+seed from the coverage rows. On an EXISTING deployment it must therefore run
+BEFORE any schema-init step that would create the table, or immediately after
+one that already did. On a NEW deployment an empty block table is correct:
+there are no spaces and no coverage rows, so there is nothing to be wrong about.
+
+This repository creates schema only by explicit action, never as a startup side
+effect, which means these are two deliberate steps an operator sequences rather
+than a race. Sequence them the right way round.
+
+# WHERE IT HAS BEEN RUN
+
+    vg-test (docker, :5433 sparql_sql_graph)      DONE — 28 blocks
+    local dev (homebrew, :5432 sparql_sql_graph)  DONE — 130 blocks
+                                                  (63 whole-space, 67 per-type)
+
+Local dev is what the dev app container uses
+(`LOCAL_DB_HOST=host.docker.internal`, `LOCAL_DB_NAME=sparql_sql_graph`), and it
+had NO block table at all — 100 slot-sort tables and 79 coverage rows, 67 of
+them short across 30 spaces. It was in the safe state (absent table -> decline
+everything) and is now correctly seeded.
+
+NOT RUN, and deliberately not: the remote environments named in the dev app's
+configuration — `PROD_DB`, `NEW_PROD_DB` and `TEST_DB`, all `vitalgraphdb` on
+RDS. Those are deployments, not local state, and the migration against them is
+an operator action.
+
+Two vg-test tables are unaccounted for by design: `dawg_test` and
+`perf_covbench` have `entity_slot_sort` tables but no row in `space`, so the
+block table's foreign key cannot reference them. Both hold ZERO slot-sort rows
+and no KG entity types, so there is nothing to serve wrongly. Worth knowing
+rather than fixing: an unregistered space cannot be blocked, so if one ever did
+hold KG data it would be served unguarded.
