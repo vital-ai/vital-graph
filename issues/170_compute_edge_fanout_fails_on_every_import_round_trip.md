@@ -48,3 +48,10 @@ restore at all.
 
     python -m pytest tests/integration/test_bulk_export.py::test_export_import_round_trip \
         -q --log-cli-level=WARNING
+
+
+## Related
+
+`issues/171` — a statistic whose absence went unremarked this long should have
+to justify its rebuild. Unlike `entity_fanout` this one IS read, so it is a
+measurement question rather than a deletion.
