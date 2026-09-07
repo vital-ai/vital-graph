@@ -82,22 +82,54 @@ Two other things that entry got wrong or missed:
 
 So the live write path is one transaction, and the work splits cleanly.
 
-#### Phase 1 — lock the write transaction. Three lines of threading, one of lock.
+#### Phase 1 — lock the write transaction, keyed on the GRAPH ROOT
 
-The lock key MUST be the **entity URI**, not the frame subjects. Advisory locks
-only exclude writers using the same key: entity upsert and entity-graph delete
-both lock `entity_uri`, so a frame write locking its frame subjects instead
-would be mutually exclusive with neither. This is the part to get right; the
-rest is plumbing.
+**Not on the entity URI.** An earlier draft of this plan said to lock
+`entity_uri`, which is wrong for half the frames in the system: frames are
+either top-level **Assertions**, which have no enclosing entity at all, or
+**Aspects**, which are entity-enclosed *or* children of an Assertion. There is
+no entity URI to lock in the Assertion case.
+
+The concept that does generalise is the **grouping root** — the URI under which
+a write's subjects are grouped. Both paths already compute it:
+
+| path | processor | root | carried as |
+|---|---|---|---|
+| entity-enclosed (Aspect) | `kgentity_frame_create_impl` | the entity | `kGGraphURI` |
+| standalone (Assertion + its children) | `kgframe_create_impl` | the root frame | `frameGraphURI` |
+
+`kgframe_create_impl` states it outright: *"Does NOT use entity_uri or
+kGGraphURI. Uses only frameGraphURI for grouping... No entity_uri, no
+kGGraphURI, no Edge_hasEntityKGFrame."*
+
+**The two key spaces are disjoint, and that is correct rather than a gap.** An
+Assertion frame carries no `kGGraphURI` and no entity edge, so
+`delete_entity_graph_bulk` — which finds subjects by `kGGraphURI = entity` —
+can never touch one. There is nothing to be mutually excluded from. Aspect
+frames DO need the entity key, because entity upsert and entity-graph delete
+both lock it, and that is precisely the cross-path exclusion this phase buys.
+
+A standalone create may carry **several independent root frames in one call**.
+`lock_entities` sorts and deduplicates its keys, so passing the whole set is
+safe: the total order is what stops two multi-root writes deadlocking against
+each other.
 
 | file | change |
 |---|---|
-| `kg_backend_utils.py:1430` `update_subjects_graph` | accept `lock_uris=None`; `await lock_entities(conn, lock_uris)` as the first statement inside the transaction |
-| `kgentity_frame_create_impl.py:443` `execute_atomic_frame_update` | accept `entity_uri`, pass it as `lock_uris=[entity_uri]` |
-| `kgentity_frame_create_impl.py:203` call site | pass `entity_uri` — `create_entity_frame` already has it as a parameter (line 115) |
+| `kg_backend_utils.py:1430` `update_subjects_graph` | accept `lock_uris=None`; `await lock_entities(conn, lock_uris)` first inside the transaction |
+| `kgentity_frame_create_impl.py:443` `execute_atomic_frame_update` | accept the root, pass `lock_uris=[entity_uri]` |
+| `kgentity_frame_create_impl.py:203` | pass `entity_uri` — `create_entity_frame` already has it (line 115) |
+| `kgframe_create_impl.py:303` `execute_atomic_frame_update` | same, with the root frame URIs |
+| `kgframe_create_impl.py:285` `create_frame` | pass the distinct `frameGraphURI` values assigned in its step 2 |
 
-That gives frame writes mutual exclusion with each other AND with entity
-upsert/delete, because all three then contend on one key.
+Roughly seven lines across three files. Note there are **two** separate
+`execute_atomic_frame_update` implementations, one per processor — both write
+through `update_subjects_graph` and both need the argument, or the standalone
+path is left unserialized while looking done.
+
+`lock_entities` is named for its first caller but locks graph roots generally;
+worth a docstring line saying so rather than a rename, since entity upsert and
+delete already use it under the old name.
 
 #### Phase 2 — validation-to-write atomicity. Genuinely blocked.
 
@@ -123,9 +155,14 @@ entity-delete lock in item 1 needed its window widened to 2s before the race
 appeared at all — expect the same here, and treat a test that passes
 immediately as untrustworthy rather than as good news.
 
-Also assert the cross-path exclusion Phase 1 exists for: a frame write
+Also assert the cross-path exclusion Phase 1 exists for: an ASPECT frame write
 concurrent with an entity-graph delete on the same entity must serialize. That
-is what the entity-URI key buys, and nothing else tests it.
+is what the entity key buys, and nothing else tests it.
+
+And cover both frame kinds, because they take different keys and a test using
+only one would leave the other path unverified: two concurrent writes to one
+ASSERTION frame must serialize on its `frameGraphURI` root, with no entity
+involved anywhere.
 
 ### 3. Document segmentation — safer than assumed, one residual gap
 
