@@ -237,21 +237,49 @@ caller assembles a mixed key set. `lock_entities` would handle one safely if
 that ever changed, being sorted and deduplicated, but the plan does not need to
 provide for it.
 
-#### Phase 2 — validation-to-write atomicity. Genuinely blocked.
+#### Phase 2 — NOT RECOMMENDED as specified. The premise does not hold.
 
-`validate_frame_ownership` (`kgentity_frame_update_impl.py:110`) reads on its
-own connection, and the write happens much later in a different transaction.
-Phase 1 does not make the validation current: a frame reparented between the
-check and the write is still acted on from a stale read.
+Phase 2 was to make `validate_frame_ownership` atomic with the write, on the
+reasoning that the ownership check reads on its own connection long before the
+write and so acts on a stale snapshot. The connection plumbing to do it now
+exists (issues/175 class 2 — both the write methods and the SPARQL query path
+accept `conn=`). It should still not be built, for two reasons found on picking
+it up.
 
-Closing that means holding one lock from before the validation through to the
-commit, which needs a connection spanning both — the write-scope work in
-issues/175 class 2. **This is the part that is genuinely blocked**, and it was
-the whole of what the earlier entry described.
+**1. Ownership is asserted to be immutable, and the code already relies on it.**
+`validate_frame_ownership` caches positive hits with the comment *"Frames never
+switch entities, so a positive hit is reliable until the frame is deleted."* If
+that invariant holds, the validation cannot go stale in the way Phase 2 was
+meant to prevent — a frame validated as owned by E is still owned by E when the
+write lands. What can change is DELETION, which is a different concern: the
+write would resurrect a frame deleted in between, and no amount of read/write
+atomicity in this path prevents another path deleting it first.
 
-Its risk is also narrower than the corruption class: the failure is acting on
-stale ownership, not a single-valued predicate gaining a second value. Worth
-doing after class 2 exists; not worth a bespoke mechanism before then.
+**2. Making the read atomic would be incoherent with the cache in front of it.**
+`_ownership_cache` has a 300-second TTL, and its docstring says the TTL exists
+to *bound staleness from cross-instance deletes*. So the system has already
+decided that a five-minute-stale ownership answer is acceptable here. Threading
+a transaction through so the UNCACHED read is perfectly consistent, while the
+CACHED path continues to answer from up to five minutes ago, buys nothing — the
+cache short-circuits the very read the transaction would protect, for most
+frames, most of the time.
+
+**What to do instead, in order of what the evidence supports:**
+
+- **Nothing, for now.** No ownership-staleness defect has been observed, the
+  domain invariant argues one cannot arise by reparenting, and the write itself
+  is already serialised by phase 1.
+- **If the delete-then-resurrect case matters**, that is the concern to state
+  and test, and it is not solved by validate/write atomicity. It needs the
+  delete and the frame write to exclude each other — which phase 1 gives, since
+  both take the grouping key.
+- **If ownership is NOT actually immutable**, the cache is a bug independent of
+  any of this: it would serve a wrong owner for up to five minutes, and that is
+  worth establishing before building anything on top of the assumption.
+
+The connection plumbing is not wasted. It exists for composition generally —
+two writes in one unit of work, and a read that must see a write it follows —
+and both are tested. Phase 2 simply is not the use that justifies it.
 
 #### Verification
 
