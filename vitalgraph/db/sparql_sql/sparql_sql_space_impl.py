@@ -24,6 +24,7 @@ from rdflib.term import Identifier
 from ..space_backend_interface import SpaceBackendInterface, SparqlBackendInterface
 from .sparql_sql_db_impl import SparqlSQLDbImpl
 from .sparql_sql_db_objects import SparqlSQLDbObjects
+from .conn_scope import write_conn
 from .default_graph import is_default_graph
 from .sparql_sql_schema import SparqlSQLSchema, STANDARD_DATATYPES
 from .compile_cache import SparqlCompileCache
@@ -2044,7 +2045,13 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 return {'results': {'bindings': []}, 'success': False, 'error': cr.error}
 
             t_pre_acquire = _time.monotonic()
-            async with self._db._pool.acquire() as conn:
+            # A caller may supply the connection so a read can be made atomic
+            # with the write that follows it (`issues/175` class 2). Reading on a
+            # separate connection is why frame ownership can be validated and
+            # then acted on from a snapshot the write no longer agrees with.
+            # `conn=None` acquires as before, so nothing that does not opt in
+            # changes.
+            async with write_conn(self._db._pool, kwargs.get('conn')) as conn:
                 t_acquired = _time.monotonic()
                 gen = await generate_sql(
                     cr, space_id, conn=conn,

@@ -109,3 +109,42 @@ async def test_a_caller_commit_persists_the_write(space_impl, test_space, backen
         await space_impl.db_impl.connection_pool.release(conn)
 
     assert await _count(space_impl, sp, graph, subj) == 1
+
+
+class TestReadAndWriteInOneTransaction:
+    """A read can now join the write's transaction. `issues/175` class 2.
+
+    This is what frame Phase 2 needs. `validate_frame_ownership` reads through
+    the SPARQL query path on its own connection, then the write happens later on
+    another — so the validation is a snapshot the write no longer agrees with,
+    and locking the write cannot fix that. Both on one connection makes the pair
+    atomic.
+    """
+
+    async def test_a_read_on_the_same_connection_sees_the_uncommitted_write(
+            self, space_impl, test_space, backend_adapter):
+        sp, graph = test_space, f"urn:test:{test_space}"
+        subj = f"urn:test:s:{uuid.uuid4().hex[:8]}"
+        q = f'SELECT ?o WHERE {{ GRAPH <{graph}> {{ <{subj}> <{P}> ?o }} }}'
+        conn = await space_impl.db_impl.connection_pool.acquire()
+        try:
+            tx = conn.transaction()
+            await tx.start()
+            await backend_adapter.update_subjects_graph(
+                sp, graph, [subj], _quads(graph, subj, "urn:v:1"), conn=conn)
+
+            same = await space_impl.execute_sparql_query(sp, q, conn=conn)
+            other = await space_impl.execute_sparql_query(sp, q)
+
+            assert len(same.get("results", {}).get("bindings", [])) == 1, (
+                "a read on the writer's own connection did not see its "
+                "uncommitted write — the query path ignored the supplied "
+                "connection and acquired its own")
+            assert len(other.get("results", {}).get("bindings", [])) == 0, (
+                "a read on a DIFFERENT connection saw an uncommitted write, "
+                "which would mean the write had already committed")
+            await tx.rollback()
+        finally:
+            await space_impl.db_impl.connection_pool.release(conn)
+
+        assert await _count(space_impl, sp, graph, subj) == 0

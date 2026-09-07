@@ -132,26 +132,9 @@ async def fast_typed_subject_page(backend, space_id: str, graph_id: str,
         return None
 
 
-@contextlib.asynccontextmanager
-async def _write_conn(pool, conn=None):
-    """Yield the caller's connection, or acquire one for the duration.
-
-    `issues/175` class 2. Write methods each acquired their own connection, so a
-    caller could not compose two of them into one unit of work and a lock taken
-    in one was invisible to the other. Accepting a connection is the enabling
-    step: `conn=None` behaves exactly as before, so nothing that does not opt in
-    changes.
-
-    The transaction stays inside the write method rather than moving here.
-    Nested on a caller's connection it becomes a SAVEPOINT, which preserves what
-    each block was written for — a failure still rolls back only its own work,
-    and the commit boundary belongs to the caller once the caller owns the unit.
-    """
-    if conn is not None:
-        yield conn
-    else:
-        async with pool.acquire() as owned:
-            yield owned
+# `issues/175` class 2. Defined in the db layer, which kg_impl already
+# depends on; the reverse would invert the layering.
+from ..db.sparql_sql.conn_scope import write_conn as _write_conn
 
 
 @dataclass
