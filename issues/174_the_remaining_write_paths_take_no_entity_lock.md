@@ -185,20 +185,33 @@ path is left unserialized while looking done.
 worth a docstring line saying so rather than a rename, since entity upsert and
 delete already use it under the old name.
 
-#### Still open in this plan
+#### Phase 1c — frame DELETE takes the same key
 
-- **Frame DELETE is not covered.** This plan is create/update only.
-  `_delete_frame_by_uri` takes no lock, and once create/update serialize on the
-  grouping, a concurrent delete is the remaining way to interleave with them. It
-  should take the same key, and the code already resolves the owning entity for
-  cache invalidation, so the value is to hand. Not planned here because the
-  delete path's own risk was assessed separately (its read feeds a reported
-  count, not the delete's scope) and it deserves its own look rather than being
-  folded in.
-- **Which key a MIXED write takes.** If one call ever writes both entity-scoped
-  and standalone frames, it needs both keys. `lock_entities` handles a mixed set
-  safely — sorted and deduplicated — but no caller currently assembles one, and
-  whether that is possible has not been established.
+Folded in rather than deferred: once create and update serialize on the
+grouping, a concurrent delete is the only remaining way to interleave with them,
+and a plan that locked two of the three would leave the path open while reading
+as finished.
+
+`_delete_frame_by_uri` already resolves the owning entity — it does the
+`kGGraphURI` lookup for cache invalidation (see the fix in `af3c153`, which made
+that lookup unconditional). So the key is already in hand at the point the lock
+is needed; nothing new has to be read.
+
+Same rule as create/update: the entity when the frame is entity-scoped, the
+frame itself when it stands alone.
+
+Note this is a different concern from the one assessed earlier for frame delete.
+That assessment was about its own internal read-then-write — a count read that
+feeds the reported number rather than the delete's scope, hence "a reporting
+inaccuracy, not corruption". Both readings are true: it is low risk in
+isolation, and it still needs the key to be exclusive against the writers.
+
+#### Resolved: mixed writes
+
+No KG endpoint mixes entity-scoped and standalone frames in one call, so no
+caller assembles a mixed key set. `lock_entities` would handle one safely if
+that ever changed, being sorted and deduplicated, but the plan does not need to
+provide for it.
 
 #### Phase 2 — validation-to-write atomicity. Genuinely blocked.
 
@@ -234,6 +247,42 @@ ASSERTION frame must serialize on that frame's own URI, with no entity involved
 anywhere. Add the negative case too: concurrent writes to two DIFFERENT frames
 must NOT block each other, since they are independent units — a lock that
 serialized them would be over-broad and would show up as latency under load.
+
+### 5. Raw SPARQL update must join the same locking, or it defeats the rest
+
+Locking entity and frame writes still leaves `execute_sparql_update` free to
+modify the same subjects concurrently. It is not a hypothetical side door: it is
+the path the frame and entity endpoints themselves fall back to, and it is
+reachable directly.
+
+**The plumbing for this already exists, for a different reason.**
+`_concrete_subjects_from_update_ops` extracts the concrete subject URIs an
+update touches, so the edge, frame_entity and slot_sort tables can be
+resynchronised afterwards. The same set identifies what the update must lock —
+the analysis is already being done, and is currently used only after the write.
+
+**But subjects are not keys.** The lock key is the GROUPING — the entity for an
+entity-scoped subject, the frame itself for a standalone one — so the update
+must resolve each concrete subject to its grouping before locking. That is one
+read on the connection it already owns, ahead of the write transaction. Without
+that resolution it would lock subject URIs, contend with nobody, and produce the
+same false sense of protection this issue keeps finding.
+
+**One class cannot be covered, and that limit should be explicit rather than
+discovered.** Subjects bound by a WHERE clause "can't be enumerated without
+executing" — the extractor says so and skips them. An update whose deletes are
+WHERE-bound therefore cannot know which groupings it will touch, and cannot lock
+them. `_has_where_bound_delete` already detects exactly this case (it uses it to
+schedule a referential sweep), so the path can say so at WARNING rather than
+appear serialized when it is not.
+
+That residue is the strongest argument for issues/175: a constraint holds
+regardless of whether the writer could name its subjects in advance, and this is
+precisely the writer that cannot.
+
+**Ordering matters.** Whatever locks here must take keys in the same sorted
+order `lock_entities` uses, or a SPARQL update and an entity write acquiring the
+same pair in opposite orders will deadlock rather than queue.
 
 ### 3. Document segmentation — safer than assumed, one residual gap
 
@@ -357,8 +406,9 @@ expensive part, and only phase 2 of the frame work needs it:
 | path | cost |
 |---|---|
 | entity delete | one line — **done** |
-| frame create/update — phase 1 | ~4 lines; the write is already one transaction |
+| frame create/update/delete — phase 1 | ~7 lines; the write is already one transaction |
 | frame create/update — phase 2 | blocked on the write scope (issues/175 class 2) |
+| raw SPARQL update | subject→grouping resolution, plus a lock; WHERE-bound subjects cannot be covered at all |
 | segmentation enqueue | a partial unique index, so a migration script |
 | `touch_entity_modification_time` | ~30–40 lines, direct SQL (Option B above) |
 
