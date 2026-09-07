@@ -248,6 +248,25 @@ WATCH_INTERVAL_S = float(os.getenv("VITALGRAPH_WATCH_INTERVAL_S", "3600"))
 _watch_last_run: Dict[Tuple[str, str], float] = {}
 
 
+def _cardinality_is_single(uri: str) -> bool:
+    """True only when the ontology positively says the property is single-valued.
+
+    Three states collapsed to a boolean deliberately at the CALL site, not here:
+    unknown returns False, because "the ontology has no opinion" is a reason to
+    leave a predicate alone rather than to police it.
+    """
+    if uri == "http://vital.ai/ontology/vital-core#vitaltype":
+        return True          # structural: one type URI per object, no trait class
+    try:
+        from vital_ai_vitalsigns.vitalsigns import VitalSigns
+        cls = VitalSigns().get_registry().get_vitalsigns_property_class(uri)
+        if cls is None:
+            return False
+        return not bool(getattr(cls, "multiple_values", False))
+    except Exception:
+        return False
+
+
 def should_run_watch(name: str, space_id: str,
                      interval_s: Optional[float] = None,
                      now: Optional[float] = None) -> bool:
@@ -648,6 +667,7 @@ class MaintenanceJob:
                 ("frame_entity_integrity", self._run_frame_entity_integrity),
                 ("entity_slot_sort_integrity", self._run_entity_slot_sort_integrity),
                 ("grouping_self_link", self._run_grouping_self_link_check),
+                ("single_valued_integrity", self._run_single_valued_integrity),
                 ("graph_registration", self._run_graph_registration_check),
                 # Forced: an explicit trigger must not be declined by the
                 # per-space schedule (see `_run_stats_recompute`).
@@ -1047,6 +1067,141 @@ class MaintenanceJob:
                 await self._tracker.mark_failed(process_id, str(e))
             logger.error("VACUUM failed for space %s: %s", space_id, e)
             return {"space_id": space_id, "error": str(e)}
+
+    async def _run_single_valued_integrity(self, space_ids: List[str]) -> Optional[Dict]:
+        """Subjects holding two values where the KG layer allows one. `issues/175`.
+
+        WHY A PROBE AND NOT A CONSTRAINT. The obvious fix — a partial unique
+        index per predicate — was proposed and withdrawn. VitalGraph is a general
+        quad store: any predicate may be single- or multi-valued for any subject
+        at any time, and `multiple_values` on a VitalSigns property describes what
+        a MODEL expects of the objects it manages, not a contract the store makes
+        about every quad written through it. Worse, every quad insert uses a
+        targetless `ON CONFLICT DO NOTHING`, which applies to every unique index
+        on the table — so such an index would not reject legitimate multi-valued
+        RDF, it would silently discard it. Detection reports; a constraint would
+        have deleted.
+
+        THE SCOPING RULE, and both halves are needed. A duplicate is a defect
+        when the subject's `vitaltype` is a class the KG layer manages AND the
+        predicate is `multiple_values=False`. Neither alone works: on the
+        production space every violating subject carried a KG vitaltype, which
+        makes condition 1 look sufficient until `MultiChoiceSlot`, equally
+        KG-managed, whose 96 duplicated values are entirely correct. And
+        predicate cardinality alone would flag ordinary RDF loaded into the same
+        space, which the KG layer does not govern.
+
+        COST, measured: 64s for 22 predicates on a 46.6M-quad space. That is in
+        line with what this job already spends — `entity_slot_sort_drift` is
+        97-133s on a comparable space — and it is gated by `should_run_watch`, so
+        it runs hourly per space rather than every cycle.
+
+        This is a check on the write-path locks (`issues/173`, `issues/174`), not
+        a substitute for them. Serialised writers cannot produce this; the probe
+        exists because every confident "that path is covered" in those issues was
+        wrong at least once, and because imports, restores and manual SQL
+        introduce duplicates with no concurrency involved at all.
+        """
+        from ..db.sparql_sql.update_lock import HAS_KG_GRAPH_URI  # noqa: F401
+
+        findings: List[Dict] = []
+        for space_id in space_ids:
+            if not should_run_watch("single_valued_integrity", space_id):
+                continue
+            try:
+                async with self._pool.acquire() as conn:
+                    preds = await self._single_valued_predicates(conn, space_id)
+                    if not preds:
+                        continue
+                    async with maintenance_timeouts(conn):
+                        for uri, p_uuid in preds:
+                            # Per predicate, so one slow aggregate skips itself
+                            # rather than ending the probe for the whole space.
+                            # The client timeout is not optional here: asyncpg
+                            # abandons a statement at command_timeout regardless
+                            # of any server-side SET, and this phase measured
+                            # 116s across 22 predicates.
+                            # Grouped by (subject, context): the same subject may
+                            # legitimately hold different values in different
+                            # graphs, and collapsing them would invent defects.
+                            # AGGREGATE FIRST, then check the type. The
+                            # obvious shape puts the vitaltype EXISTS inside the
+                            # scan, which evaluates it per row — millions of
+                            # times — and does not finish. Duplicates are rare by
+                            # construction, so grouping first leaves a handful of
+                            # subjects for the type check to look at.
+                            try:
+                                n = await conn.fetchval(f"""
+                                    SELECT count(*) FROM (
+                                        SELECT subject_uuid, context_uuid
+                                          FROM {space_id}_rdf_quad
+                                         WHERE predicate_uuid = $1
+                                         GROUP BY 1, 2 HAVING count(*) > 1) d
+                                     WHERE EXISTS (
+                                         SELECT 1 FROM {space_id}_rdf_quad vt
+                                          WHERE vt.subject_uuid = d.subject_uuid
+                                            AND vt.predicate_uuid = $2)
+                                """, p_uuid, self._vitaltype_uuid(space_id),
+                                    timeout=PROBE_CLIENT_TIMEOUT_S)
+                            except (asyncio.TimeoutError, asyncpg.QueryCanceledError):
+                                logger.info(
+                                    "single-valued integrity: %s timed out on %s;"
+                                    " the other predicates still ran", space_id,
+                                    uri.rsplit("#", 1)[-1])
+                                continue
+                            if n:
+                                findings.append({"space_id": space_id,
+                                                 "predicate": uri, "subjects": n})
+            except asyncpg.UndefinedTableError:
+                continue          # not a KG space
+            except Exception as exc:
+                log_probe_failure("single_valued_integrity", space_id, exc)
+                continue
+
+        for f in findings:
+            # ERROR, not WARNING: a single-valued property holding two values is
+            # a write that should have been serialised and was not, and one such
+            # subject returned an EMPTY PAGE from the entity listing rather than
+            # a wrong one — silent, and only found because a customer saw it.
+            logger.error(
+                "single-valued integrity: %s has %d subject(s) holding more than "
+                "one %s. The KG layer treats this property as single-valued, so "
+                "these are write races or imported damage, not data. Repair with "
+                "scripts/repair_duplicate_single_valued.py (issues/175).",
+                f["space_id"], f["subjects"], f["predicate"].rsplit("#", 1)[-1])
+        return {"violations": findings} if findings else None
+
+    def _vitaltype_uuid(self, space_id: str):
+        from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+        return _generate_term_uuid(
+            "http://vital.ai/ontology/vital-core#vitaltype", "U")
+
+    async def _single_valued_predicates(self, conn, space_id: str):
+        """(uri, uuid) for predicates IN USE here that the ontology calls single.
+
+        Derived, never listed. A hand-picked set covered 5 of the 22 single-valued
+        predicates actually present on the production space and missed both that
+        were corrupted — the guarantee then applies to whatever someone last
+        remembered to add, which is the silent-absence failure these issues keep
+        finding. `{space}_rdf_pred_stats` gives what is in use for one small scan.
+
+        Unknown to the ontology is NOT treated as single-valued: `rdf:type` is
+        exactly that case and a resource may legitimately carry several types.
+        """
+        try:
+            rows = await conn.fetch(
+                f"SELECT s.predicate_uuid, t.term_text"
+                f"  FROM {space_id}_rdf_pred_stats s"
+                f"  JOIN {space_id}_term t ON t.term_uuid = s.predicate_uuid")
+        except Exception:
+            return []
+        out = []
+        for r in rows:
+            uri = r["term_text"]
+            if _cardinality_is_single(uri):
+                out.append((uri, r["predicate_uuid"]))
+        return out
+
 
     async def _run_grouping_self_link_check(self, space_ids: List[str]) -> Optional[Dict]:
         """Report grouping URIs that are not members of their own graph.
