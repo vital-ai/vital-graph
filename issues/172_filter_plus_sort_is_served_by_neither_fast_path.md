@@ -1,8 +1,8 @@
 # Filter + Sort Is Served By Neither Fast Path
 
-## Status: OPEN, and now MEASURED. Filter alone answers in 5ms; the same
-## filter with a sort does not finish in 120s. Found by reading what the
-## consuming portal asks for, then confirmed on a 74M-quad fixture.
+## Status: FIXED in `cc7cd3d` — 97ms where it did not finish in 120s. The
+## SCALING question is open: the bound is the entity count of the type, and
+## where that curve bends has not been measured.
 
 ## The gap
 
@@ -453,3 +453,49 @@ was aimed at the wrong thing: early termination would help only if the scan
 could stop before examining the whole population, which needs the FILTER to be
 usable as the leading access rather than as a per-row test. That is a different
 plan shape, worth trying only if the entity-count curve turns out to bend badly.
+
+
+---
+
+# FIXED, `cc7cd3d`
+
+`can_serve` on the sort path now accepts frame criteria when every one is an
+equality the table can answer, adding them as correlated EXISTS clauses to BOTH
+the page and the count. Measured on `lead_nurture_grouped` (74.2M quads,
+page 50):
+
+    sort only                55 ms   50 rows   total 100,000
+    filter + SORT            97 ms   50 rows   total  78,496
+
+The total matches the filter's independently measured count exactly, and the
+first row differs from the sort-only page in the way a brute-force top-50 check
+predicts. Was: did not finish in 120 s.
+
+No new index and no new table — `idx_{space}_ess_text` already had leading
+columns for the equalities and an ordered `value_text` for the sort. The fix was
+to stop DECLINING a query the table could already answer.
+
+## The bug in the first implementation, and what the tests now assert
+
+`_LANE` yields lane NAMES (`text`), the columns are `value_text`. The first
+version emitted `f.text = $n`: the count errored and the page silently returned
+ZERO ROWS — fast, plausible and wrong.
+
+So the tests assert that a filter CHANGES the result and that the count agrees
+with it, not merely that the shape is accepted and quick. A dropped filter would
+still return fifty plausible rows in 50 ms.
+
+## STILL OPEN
+
+  1. **Where the ENTITY-COUNT curve bends.** The cost is flat across match
+     counts because it scans the sort slot's population; the scaling variable is
+     the entity count of the type. The fixture has ONE type at 100,000, so it
+     cannot answer this. Production's largest is `NurtureAction` at 79,058 —
+     comparable, which is reassuring and is not a measurement.
+  2. **Portal questions Q2-Q4** (§ above): page sizes, whether the portal issues
+     separate counts the implementation already runs concurrently, and which
+     other criteria shapes miss the fast path. Q1 is answered.
+  3. **Splitting summaries from graphs.** Measured 22 ms for a filtered page of
+     50 against 49 ms for the same page's graphs — so a split saves ~49 ms of
+     ~71 ms. Real, and far below the cliff in priority. It is a response-shape
+     change to the API, not a query fix.
