@@ -90,28 +90,52 @@ either top-level **Assertions**, which have no enclosing entity at all, or
 **Aspects**, which are entity-enclosed *or* children of an Assertion. There is
 no entity URI to lock in the Assertion case.
 
-The concept that does generalise is the **grouping root** — the URI under which
-a write's subjects are grouped. Both paths already compute it:
+The concept that generalises is **the unit a write replaces**, and the two paths
+define it differently:
 
-| path | processor | root | carried as |
+| path | processor | lock unit | carried as |
 |---|---|---|---|
 | entity-enclosed (Aspect) | `kgentity_frame_create_impl` | the entity | `kGGraphURI` |
-| standalone (Assertion + its children) | `kgframe_create_impl` | the root frame | `frameGraphURI` |
+| standalone (Assertion) | `kgframe_create_impl` | **each frame, independently** | `hasFrameGraphURI` |
 
-`kgframe_create_impl` states it outright: *"Does NOT use entity_uri or
-kGGraphURI. Uses only frameGraphURI for grouping... No entity_uri, no
-kGGraphURI, no Edge_hasEntityKGFrame."*
+**THERE IS NO FRAME-GRAPH.** This is the part to get right, because the
+entity-graph analogy does not carry over and inventing one would send an
+implementer looking for an ancestor walk that has nothing to find. A frame is
+grouped with its OWN members and nothing else: each frame carries
+`hasFrameGraphURI` pointing at itself, and its slots and edges point at that
+frame. Deeply nested frames are not chained to an ancestor — each is an
+independent object.
+
+Confirmed on production: **482,096** subjects whose `hasFrameGraphURI` points at
+themselves (the frames), against **5,641,635** member rows pointing at
+**479,616** distinct targets. Distinct targets tracking the frame count is what
+"every frame groups only its own members" looks like; a chained hierarchy would
+show far fewer targets than frames.
+
+Two consequences for the lock:
+
+- **Each frame is its own lock unit.** Concurrent writes to two different frames
+  do not exclude each other, including when one is nested inside the other's
+  structure. That is correct, not a gap — they are independent objects with no
+  shared graph to corrupt.
+- **There is no root to fragment.** An earlier revision of this plan worried
+  that a deep hierarchy would split the key, so two writers "under one root"
+  would miss each other. That concern is void: there is no root.
+
+`kgframe_create_impl` says as much in its own header — *"Does NOT use entity_uri
+or kGGraphURI. Uses only frameGraphURI for grouping individual frame
+members."*
 
 **The two key spaces are disjoint, and that is correct rather than a gap.** An
 Assertion frame carries no `kGGraphURI` and no entity edge, so
 `delete_entity_graph_bulk` — which finds subjects by `kGGraphURI = entity` —
 can never touch one. There is nothing to be mutually excluded from. Aspect
-frames DO need the entity key, because entity upsert and entity-graph delete
-both lock it, and that is precisely the cross-path exclusion this phase buys.
+frames DO take the entity key, because entity upsert and entity-graph delete
+both hold it, and that cross-path exclusion is the point of this phase.
 
-A standalone create may carry **several independent root frames in one call**.
+A standalone create may write **several independent frames in one call**.
 `lock_entities` sorts and deduplicates its keys, so passing the whole set is
-safe: the total order is what stops two multi-root writes deadlocking against
+safe: the total order is what stops two multi-frame writes deadlocking against
 each other.
 
 | file | change |
@@ -119,7 +143,7 @@ each other.
 | `kg_backend_utils.py:1430` `update_subjects_graph` | accept `lock_uris=None`; `await lock_entities(conn, lock_uris)` first inside the transaction |
 | `kgentity_frame_create_impl.py:443` `execute_atomic_frame_update` | accept the root, pass `lock_uris=[entity_uri]` |
 | `kgentity_frame_create_impl.py:203` | pass `entity_uri` — `create_entity_frame` already has it (line 115) |
-| `kgframe_create_impl.py:303` `execute_atomic_frame_update` | same, with the root frame URIs |
+| `kgframe_create_impl.py:303` `execute_atomic_frame_update` | same, with the frame URIs |
 | `kgframe_create_impl.py:285` `create_frame` | pass the distinct frame URIs (the `hasFrameGraphURI` values assigned in its step 2 — one per frame, each pointing at itself) |
 
 Roughly seven lines across three files. Note there are **two** separate
