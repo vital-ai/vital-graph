@@ -48,6 +48,9 @@ class VitalGraphAuth:
         # Latches True once a real admin is observed — bootstrap never re-enables
         # within this process after that.
         self._bootstrap_retired: bool = False
+        # Reused by `authorize_token` so the WebSocket path applies exactly
+        # the same rules as the HTTP dependency rather than its own lookup.
+        self._get_current_user_fn = None
 
     def set_db_impl(self, db_impl) -> None:
         """Set or update the database implementation reference."""
@@ -394,3 +397,30 @@ class VitalGraphAuth:
             }
 
         return get_current_user
+
+    async def authorize_token(self, token: str) -> Dict:
+        """Resolve a token to a user with THE SAME RULES THE HTTP PATH USES.
+
+        The WebSocket handler used to do its own lookup — `verify_token` then
+        `_get_user_from_db`, rejecting when no row came back. That is not the
+        rule the HTTP dependency applies, and the gap was not academic: on a
+        deployment whose `user` table is still EMPTY, `admin` authenticates as
+        the first-run bootstrap admin, so login succeeds and every REST call
+        works via the bootstrap fallback, while the WebSocket rejected the very
+        same fresh token with "Invalid authentication token" — immediately, on
+        every connect.
+
+        Delegating rather than adding a second bootstrap check keeps ONE source
+        of truth for "may this token act as this user". The duplicate was the
+        bug; a second copy that merely agrees today is the same bug waiting. It
+        also picks up two things the WebSocket path silently lacked: the
+        `token_version` revocation check — a revoked token could still open a
+        socket — and failing closed when the database is unreachable, instead of
+        reporting a backend outage as a bad token.
+
+        Raises HTTPException exactly as the dependency does; callers already
+        handle that.
+        """
+        if self._get_current_user_fn is None:
+            self._get_current_user_fn = self.create_get_current_user_dependency()
+        return await self._get_current_user_fn(token)

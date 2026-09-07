@@ -36,14 +36,20 @@ class ConnectionManager:
             Username if authentication successful, None otherwise
         """
         try:
-            # Verify JWT token
-            payload = self.auth.jwt_auth.verify_token(token, "access")
-            username = payload.get("sub")
-            
-            # Verify user exists in database
-            user = await self.auth._get_user_from_db(username)
-            if user is None:
-                logger.warning(f"User not found: {username}")
+            # ONE AUTHORIZATION RULE, SHARED WITH THE HTTP PATH.
+            #
+            # This used to verify the token and then require a `user` row of its
+            # own, which is NOT what the HTTP dependency requires. On a
+            # deployment whose `user` table is still empty, `admin` authenticates
+            # as the first-run bootstrap admin: login succeeds and every REST
+            # call works through the bootstrap fallback, while this rejected the
+            # same fresh token with "Invalid authentication token" on every
+            # connect. Delegating also gains the `token_version` revocation check
+            # this path never had — a revoked token could still open a socket.
+            user = await self.auth.authorize_token(token)
+            username = user.get("username")
+            if not username:
+                logger.warning("Authorized token carried no username")
                 return None
             
             # Log connection details
