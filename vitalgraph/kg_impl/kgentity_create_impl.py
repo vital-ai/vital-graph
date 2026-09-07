@@ -289,6 +289,22 @@ class KGEntityCreateProcessor:
                 updated_uri=""
             )
 
+    async def _existing_creation_time(self, space_id: str, graph_id: str,
+                                      entity_uri: str):
+        """The creation time already stored for this entity, or None.
+
+        Returned as whatever the stored object carries, so it is written back
+        unchanged rather than reformatted — a round trip through a string form
+        is a chance to change the value, and this property is only ever meant to
+        be preserved here.
+        """
+        objs = await self.backend.get_objects_by_uris(space_id, [entity_uri], graph_id)
+        for o in objs or []:
+            prior = getattr(o, 'objectCreationTime', None)
+            if prior is not None:
+                return prior
+        return None
+
     async def _handle_upsert_mode(self, space_id: str, graph_id: str,
                                 entities: List[KGEntity], objects: List[GraphObject]) -> EntityUpdateResponse:
         """Handle UPSERT mode: create if not exists, update if exists."""
@@ -304,13 +320,52 @@ class KGEntityCreateProcessor:
                 else:
                     new_entities.append(entity)
             
-            # Delete existing entity data for clean upsert
+            # PRESERVE THE CREATION TIME OF AN ENTITY THAT ALREADY EXISTS.
+            #
+            # `stamp_entity_server_properties` was called with is_create=True
+            # for this whole path, so an upsert that REPLACES an entity rewrote
+            # its creation time to now. Creation time is not a property of the
+            # latest write (`issues/173`). Read the stored value and put it
+            # back; if it cannot be read, leave the fresh stamp rather than
+            # guessing, and say so.
             for entity in existing_entities:
-                entity_uri = str(entity.URI)
-                await self.backend.delete_object(space_id, graph_id, entity_uri)
-            
-            # Store all objects (both new and updated)
-            result = await self.backend.store_objects(space_id, graph_id, objects)
+                try:
+                    prior = await self._existing_creation_time(
+                        space_id, graph_id, str(entity.URI))
+                    if prior is not None:
+                        entity.objectCreationTime = prior
+                except Exception as _ce:
+                    self.logger.warning(
+                        "upsert: could not read the existing creation time for "
+                        "%s (%s) — it will be restamped to now", entity.URI, _ce)
+
+            # ATOMIC, LOCKED REPLACE WHERE THE BACKEND OFFERS ONE (`issues/173`).
+            #
+            # Delete-then-store as two separate operations let a retried request
+            # land between them: both writers saw nothing committed, so neither
+            # deleted, and both inserted. The atomic path takes an entity-scoped
+            # advisory lock before it reads, so the second writer waits and then
+            # sees the first one's committed state.
+            _atomic = getattr(self.backend, 'upsert_objects_atomic', None)
+            if _atomic is not None:
+                ok = await _atomic(space_id, graph_id,
+                                   [str(e.URI) for e in entities], objects)
+                result = BackendOperationResult(
+                    success=ok,
+                    message="upserted atomically" if ok else "atomic upsert failed")
+            else:
+                # A backend without the atomic path keeps the old sequence, and
+                # SAYS SO. Silence is what let this run unserialized in
+                # production for two months while the code read as though it
+                # were protected.
+                self.logger.warning(
+                    "upsert: backend %s has no atomic upsert; falling back to "
+                    "delete-then-store, which is NOT serialized — a retried "
+                    "request can duplicate single-valued properties "
+                    "(issues/173)", type(self.backend).__name__)
+                for entity in existing_entities:
+                    await self.backend.delete_object(space_id, graph_id, str(entity.URI))
+                result = await self.backend.store_objects(space_id, graph_id, objects)
             
             if result.success:
                 entity_uri = str(entities[0].URI)

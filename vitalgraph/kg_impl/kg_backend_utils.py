@@ -1219,6 +1219,95 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             self.logger.error("update_quads failed: %s", e)
             return False
 
+    async def upsert_objects_atomic(self, space_id: str, graph_id: str,
+                                    entity_uris: List[str],
+                                    objects: List[GraphObject]) -> bool:
+        """Replace one or more entity graphs in ONE locked transaction.
+
+        `issues/173`. UPSERT used to be `delete_object` then `store_objects`,
+        two independent operations with nothing holding them together. A client
+        that timed out and retried while the first request was still in flight
+        got: A sees nothing committed and starts storing; B also sees nothing
+        committed, so skips the delete, and stores too. Both landed.
+
+        Only the server-stamped timestamps showed the damage, which is why it
+        went unnoticed for two months: every client-supplied property carries
+        the same value on each attempt, so the quad primary key dedupes the
+        retry silently. The timestamps come from `datetime.now()` per request,
+        so each attempt wrote a distinct row that no constraint could collapse.
+
+        The lock is taken FIRST, before anything is read, so the existence check
+        the caller made outside this transaction cannot be acted on by two
+        writers at once. Everything else happens exactly as
+        `update_entity_graph` does it, per entity.
+        """
+        import time as _time
+        from ..db.sparql_sql.entity_lock import lock_entities
+        from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+        from ..db.sparql_sql.sync_frame_entity_table import sync_frame_entity_before_delete
+        from ..db.sparql_sql.sync_edge_table import sync_edge_table_before_delete
+        from rdflib import URIRef
+
+        try:
+            _t0 = _time.monotonic()
+            t = self.backend.schema.get_table_names(space_id)
+            g_uuid = _generate_term_uuid(graph_id, 'U')
+            p_uuid = _generate_term_uuid(
+                'http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI', 'U')
+            graph_uri = URIRef(graph_id)
+
+            def _build_quads():
+                out = []
+                for obj in objects:
+                    try:
+                        for sub, pred, o in obj.to_triples():
+                            out.append((sub, pred, o, graph_uri))
+                    except Exception:
+                        pass
+                return out
+
+            quads = await asyncio.to_thread(_build_quads)
+
+            async with self.backend.db_impl.connection_pool.acquire() as conn:
+                async with conn.transaction():
+                    # Sorted inside `lock_entities`, so a multi-entity upsert
+                    # cannot deadlock against one taking the same entities in a
+                    # different order.
+                    await lock_entities(conn, entity_uris)
+
+                    for entity_uri in entity_uris:
+                        e_uuid = _generate_term_uuid(entity_uri, 'U')
+                        rows = await conn.fetch(
+                            f"SELECT DISTINCT subject_uuid FROM {t['rdf_quad']} "
+                            f"WHERE predicate_uuid = $1 AND object_uuid = $2 "
+                            f"  AND context_uuid = $3",
+                            p_uuid, e_uuid, g_uuid)
+                        subject_uuids = [r['subject_uuid'] for r in rows]
+                        if not subject_uuids:
+                            continue
+                        # The auxiliary tables are derived from the quads, so
+                        # they have to be told before the rows go, not after.
+                        await sync_frame_entity_before_delete(
+                            conn, space_id, subject_uuids, context_uuid=g_uuid)
+                        await sync_edge_table_before_delete(
+                            conn, space_id, subject_uuids, context_uuid=g_uuid)
+                        await conn.execute(
+                            f"DELETE FROM {t['rdf_quad']} "
+                            f"WHERE subject_uuid = ANY($1) AND context_uuid = $2",
+                            subject_uuids, g_uuid)
+
+                    if quads:
+                        await self.backend.add_rdf_quads_batch_bulk(
+                            space_id, quads, connection=conn)
+
+            self.logger.info(
+                "\u23f1\ufe0f  upsert_objects_atomic: %.3fs (%d entit(y/ies), %d quads)",
+                _time.monotonic() - _t0, len(entity_uris), len(quads))
+            return True
+        except Exception as e:
+            self.logger.error("upsert_objects_atomic failed: %s", e)
+            return False
+
     async def update_entity_graph(self, space_id: str, graph_id: str,
                                    entity_uri: str,
                                    insert_quads: List[tuple]) -> bool:
@@ -1243,6 +1332,17 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
 
             async with self.backend.db_impl.connection_pool.acquire() as conn:
                 async with conn.transaction():
+                    # Step 0: SERIALIZE ON THE ENTITY (`issues/173`).
+                    #
+                    # This transaction was already atomic; it was not exclusive.
+                    # Two concurrent writers both run Step 1, both find the same
+                    # subjects (or both find none, for an entity that does not
+                    # exist yet), and both insert. Atomicity alone does not stop
+                    # that — neither transaction does anything invalid on its
+                    # own. The lock releases when this transaction ends.
+                    from ..db.sparql_sql.entity_lock import lock_entities
+                    await lock_entities(conn, [entity_uri])
+
                     # Step 1: Find all subjects in the entity graph
                     rows = await conn.fetch(
                         f"SELECT DISTINCT subject_uuid FROM {t['rdf_quad']} "
