@@ -135,21 +135,18 @@ hazard, and now the only structural answer available rather than one of two.
 
 ## Open questions
 
-- ~~Which predicates are genuinely single-valued?~~ **Answered.** VitalSigns
-  property trait classes carry `multiple_values`, and the migration consults it:
-  it refuses to index any predicate the ontology declares multi-valued, so a
-  hand-passed `--predicates` cannot create a constraint the model disagrees
-  with. Verified: the five default predicates report `multiple_values=False`
-  and `hasKGActionTypeList` reports `True`. `vitaltype` is structural rather
-  than a VitalSigns property and is listed explicitly, with that noted in the
-  code.
-- **How wide should the default set be?** Indexing every single-valued
-  predicate would be the stronger guarantee, but each index is write
-  amplification on a hot table. The default is the server-managed set — the
-  ones the system writes itself, and therefore the ones a race can corrupt with
-  no client involved.
-- **Per-graph or per-subject?** The proposed index keys on
-  `(subject, predicate, context)`, so the same subject may hold different values
-  in different graphs. That matches how the rest of the system scopes by
-  context, but it is a decision, not an obvious default.
-- **The remaining two spaces** on the instance have not been measured.
+The earlier list here concerned the index design and is void with that
+retracted. What remains:
+
+- **What runs the detection, how often, and scoped to what?** The issue argues
+  detection replaces enforcement, but nothing specifies it. A whole-table sweep
+  needs no predicate list, which is the property that makes it work on an
+  open-ended store — but it must be scoped to what the KG layer MANAGES, or it
+  will alarm on ordinary RDF where a repeated predicate is correct. That scoping
+  rule is not defined, and it is the substance of the proposal, not a detail.
+- **Nothing detects silent suppression**, and nothing will, now that no
+  constraint suppresses. Recorded here only so the earlier impact note is not
+  read as still applying.
+- **Class 2 (a write scope) is unchanged and still open** — a real architecture
+  change, gated on the `asyncio.gather` hazard, and now the only structural
+  answer rather than one of two.
