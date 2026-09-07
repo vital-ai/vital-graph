@@ -131,9 +131,50 @@ target: `store_objects`, `delete_object`, `update_subjects_graph`,
 
 - **`execute_sparql_update` opens three transactions** on the connection it
   acquires, and asyncpg turns a nested `conn.transaction()` into a `SAVEPOINT`.
-  Passing a connection in silently changes what all three mean — including one
-  whose comment states it runs separately so a sync failure leaves the committed
-  quads intact. Those semantics must be decided, not inherited.
+  Passing a connection in changes what all three mean, so the semantics have to
+  be decided rather than inherited. **Decided below.**
+
+#### Decision: accept savepoint semantics, and state them
+
+Keep all three `conn.transaction()` blocks. Nested, they become savepoints, and
+**a savepoint preserves the intent each block was written for** — what changes
+is only the commit boundary, which belongs to the caller by definition once the
+caller owns the unit of work.
+
+Block by block:
+
+| block | standalone intent | nested behaviour | preserved? |
+|---|---|---|---|
+| main write (`:2356`) | a failing statement rolls the batch back and leaves the pooled connection usable, never stuck in an aborted transaction (issues/019) | rollback to savepoint; the caller's transaction stays alive and usable | **yes** |
+| cleared-graph cleanup (`:2382`) | aux deletes for a dropped graph succeed or fail together (issues/064) | same, scoped to the savepoint | **yes** |
+| derived-table sync (`:2418`) | best-effort: a sync failure rolls back cleanly and leaves the committed quads intact, with background self-heal reconciling the gap | a sync failure rolls back to the savepoint; the quads remain in the caller's transaction and commit with it | **yes, restated** |
+
+The third is the one that looked broken, and the reinterpretation is exact
+rather than a fudge. "Leaves the committed quads intact" was written for the
+case where this function owns the transaction and commit is imminent. The
+equivalent under composition is **"a sync failure does not abort the caller's
+unit of work"** — which is precisely what a savepoint provides. The end state is
+the same either way: quads present, sync skipped, self-heal reconciles. If the
+caller subsequently rolls back, the quads go too, and that is correct — the
+caller aborted the unit of work those quads belonged to.
+
+Rejected alternatives:
+
+- **Refuse a caller connection when already in a transaction.** Safe and
+  useless; it forbids exactly the composition this consolidation exists to
+  enable.
+- **Defer the sync to commit time.** Would preserve the standalone wording
+  literally, at the cost of a deferred-work mechanism that does not exist, to
+  protect a guarantee the savepoint already gives.
+- **Split apply-quads from sync-derived-tables** so callers sequence them.
+  Cleanest on paper and a real refactor; worth revisiting if the sync needs to
+  outlive the write transaction for other reasons, but not justified by this.
+
+What this needs is a test, not new machinery: a caller-supplied transaction in
+which the derived-table sync is made to fail, asserting the quads still commit
+with the caller and the caller's transaction remains usable. The behaviour is
+inherited from PostgreSQL; the point of the test is that nobody later
+"simplifies" a nested `conn.transaction()` away on the belief it is redundant.
 - **Concurrent use of one connection.** asyncpg connections are not
   concurrency-safe and there are **28 `asyncio.gather` sites**, several running
   two database operations at once (`kgentity_list_impl.py:208` gathers
