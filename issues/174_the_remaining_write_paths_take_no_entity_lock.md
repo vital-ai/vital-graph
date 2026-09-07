@@ -209,6 +209,21 @@ IS available, adding it is one line and paths locking the same entities cannot
 deadlock against each other. The constraint is never the lock; it is whether the
 read and the write share a transaction to hang it on.
 
+## Superseded in part by issues/175
+
+Items 1 and 4 above are class-1 failures — a single-valued predicate holding two
+values. issues/175 argues those belong in a database constraint rather than in
+per-path locking, because a lock is opt-in per path and cannot protect a raw
+SPARQL update or an endpoint not yet written. A partial unique index would have
+prevented item 4 without modifying `touch_entity_modification_time` at all.
+
+Item 1's entity-delete race is NOT covered by that: an orphaned entity graph is
+not a uniqueness violation, and needs the read and the write to share a
+transaction. The lock added here remains the right fix for it.
+
+That split — invariant vs multi-statement consistency — is the distinction
+issues/175 draws, and it is why "add a lock everywhere" is not the whole answer.
+
 ## Verification, when a path is locked
 
 Follow issues/173: a test that fires two concurrent writers at the same entity
