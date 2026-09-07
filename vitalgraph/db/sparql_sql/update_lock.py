@@ -73,7 +73,9 @@ async def _groupings_for(conn, space_id: str, subjects: Iterable[str],
 
     1. **The change set.** A subject being CREATED has no row to look up, so a
        `hasKGGraphURI` triple the update itself writes is the only place its
-       grouping exists.
+       grouping exists. This is the ONLY reason the change set comes first —
+       frames are never reparented, so it is not about an update moving an
+       existing subject to a different owner.
     2. **The store.** An existing subject carries `hasKGGraphURI` pointing at its
        entity — slots and frames both do — so this resolves a change set that
        mentions only a slot value quad and nothing about the entity enclosing it.
@@ -142,9 +144,11 @@ async def acquire_update_locks(conn, space_id: str, plans: List[Any]) -> List[st
         # different orders queue rather than deadlock.
         await lock_entities(conn, sorted(new))
         held |= new
-        # Re-derive the GROUPING as well as the subjects on the next pass: a
-        # subject reparented between resolution and acquisition would otherwise
-        # keep the stale grouping for the life of the transaction.
+        # Re-derive the GROUPING as well as the subjects on each pass, not just
+        # the subjects. Frames are never reparented, so a frame's grouping does
+        # not move under us — but this path also resolves subjects the KG layer
+        # does not own, where nothing promises that, and re-deriving costs
+        # nothing because the resolution query runs per pass anyway.
     logger.warning(
         "update lock set still growing after %d passes for space=%s (%d groupings "
         "held); proceeding. The WHERE clause is matching new subjects faster than "

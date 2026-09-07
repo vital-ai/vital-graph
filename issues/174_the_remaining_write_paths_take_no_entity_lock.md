@@ -246,14 +246,18 @@ exists (issues/175 class 2 — both the write methods and the SPARQL query path
 accept `conn=`). It should still not be built, for two reasons found on picking
 it up.
 
-**1. Ownership is asserted to be immutable, and the code already relies on it.**
-`validate_frame_ownership` caches positive hits with the comment *"Frames never
-switch entities, so a positive hit is reliable until the frame is deleted."* If
-that invariant holds, the validation cannot go stale in the way Phase 2 was
-meant to prevent — a frame validated as owned by E is still owned by E when the
-write lands. What can change is DELETION, which is a different concern: the
-write would resurrect a frame deleted in between, and no amount of read/write
-atomicity in this path prevents another path deleting it first.
+**1. Ownership is immutable — CONFIRMED, not inferred.** Frames are never
+reparented. `validate_frame_ownership` already relies on this, caching positive
+hits with the comment *"Frames never switch entities, so a positive hit is
+reliable until the frame is deleted"*, and it was confirmed directly rather than
+read off that comment. So the validation cannot go stale in the way Phase 2 was
+meant to prevent: a frame validated as owned by E is still owned by E when the
+write lands.
+
+What can change is DELETION, which is a different concern. The write would
+resurrect a frame deleted in between, and no read/write atomicity in this path
+stops another path deleting it first — phase 1 does, since delete and frame
+write take the same grouping key.
 
 **2. Making the read atomic would be incoherent with the cache in front of it.**
 `_ownership_cache` has a 300-second TTL, and its docstring says the TTL exists
@@ -273,9 +277,8 @@ frames, most of the time.
   and test, and it is not solved by validate/write atomicity. It needs the
   delete and the frame write to exclude each other — which phase 1 gives, since
   both take the grouping key.
-- **If ownership is NOT actually immutable**, the cache is a bug independent of
-  any of this: it would serve a wrong owner for up to five minutes, and that is
-  worth establishing before building anything on top of the assumption.
+- ~~If ownership is NOT actually immutable, the cache is a bug.~~ **Closed.**
+  Reparenting does not occur, so the cache's premise holds and it is sound.
 
 The connection plumbing is not wasted. It exists for composition generally —
 two writes in one unit of work, and a read that must see a write it follows —

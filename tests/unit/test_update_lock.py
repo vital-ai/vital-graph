@@ -81,8 +81,11 @@ class TestGroupingResolution:
 
     @pytest.mark.asyncio
     async def test_change_set_wins_over_the_store(self):
-        # A subject being reparented by this very update: the row still says the
-        # old owner, and the update is what changes it.
+        # Precedence matters for a subject being CREATED, which has no row to
+        # look up — not for reparenting, which does not happen: frames never
+        # switch entities. The stale-row case below is contrived to pin the
+        # ORDER, so that a future change cannot quietly make the store win and
+        # leave a newly created subject unlockable.
         conn = FakeConn(owner_map={"urn:slot:1": "urn:entity:OLD"})
         got = await _groupings_for(conn, "sp", ["urn:slot:1"],
                                    {"urn:slot:1": "urn:entity:NEW"})
