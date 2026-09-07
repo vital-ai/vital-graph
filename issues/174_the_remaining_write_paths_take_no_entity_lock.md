@@ -120,7 +120,7 @@ each other.
 | `kgentity_frame_create_impl.py:443` `execute_atomic_frame_update` | accept the root, pass `lock_uris=[entity_uri]` |
 | `kgentity_frame_create_impl.py:203` | pass `entity_uri` — `create_entity_frame` already has it (line 115) |
 | `kgframe_create_impl.py:303` `execute_atomic_frame_update` | same, with the root frame URIs |
-| `kgframe_create_impl.py:285` `create_frame` | pass the distinct `frameGraphURI` values assigned in its step 2 |
+| `kgframe_create_impl.py:285` `create_frame` | pass the distinct frame URIs (the `hasFrameGraphURI` values assigned in its step 2 — one per frame, each pointing at itself) |
 
 Roughly seven lines across three files. Note there are **two** separate
 `execute_atomic_frame_update` implementations, one per processor — both write
@@ -161,8 +161,10 @@ is what the entity key buys, and nothing else tests it.
 
 And cover both frame kinds, because they take different keys and a test using
 only one would leave the other path unverified: two concurrent writes to one
-ASSERTION frame must serialize on its `frameGraphURI` root, with no entity
-involved anywhere.
+ASSERTION frame must serialize on that frame's own URI, with no entity involved
+anywhere. Add the negative case too: concurrent writes to two DIFFERENT frames
+must NOT block each other, since they are independent units — a lock that
+serialized them would be over-broad and would show up as latency under load.
 
 ### 3. Document segmentation — safer than assumed, one residual gap
 
