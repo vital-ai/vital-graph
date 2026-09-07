@@ -1354,6 +1354,25 @@ class SparqlSQLSchema:
             f"ON {t['segmentation_jobs']} (document_uri, created_at DESC)",
             f"CREATE INDEX IF NOT EXISTS {t['segmentation_jobs']}_space_idx "
             f"ON {t['segmentation_jobs']} (space_id, status)",
+            # ONE ACTIVE JOB PER DOCUMENT (`issues/174` item 3).
+            #
+            # `enqueue` cancels any pending/in_progress job for a document and
+            # then inserts, as two statements with nothing holding them
+            # together. Under READ COMMITTED a second enqueue does not see the
+            # first one's uncommitted INSERT, so its cancel matches nothing and
+            # both rows land — two active jobs for one document, which
+            # `claim_next` will hand to two workers. Its
+            # `FOR UPDATE SKIP LOCKED` stops two workers taking the SAME job; it
+            # cannot stop them taking two jobs that should never both exist.
+            #
+            # A partial unique index is the right shape here, unlike the one
+            # withdrawn in issues/175: this is a job queue the KG layer owns
+            # entirely, not a general quad store, so the invariant is ours to
+            # declare and cannot be contradicted by legitimately different data.
+            f"CREATE UNIQUE INDEX IF NOT EXISTS "
+            f"{t['segmentation_jobs']}_one_active_per_document_idx "
+            f"ON {t['segmentation_jobs']} (document_uri) "
+            f"WHERE status IN ('pending', 'in_progress')",
             f"CREATE INDEX IF NOT EXISTS "
             f"{t['document_segmentation_config']}_doc_type_idx "
             f"ON {t['document_segmentation_config']} (document_type_uri) "

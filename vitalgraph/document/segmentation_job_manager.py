@@ -110,25 +110,52 @@ class SegmentationJobManager:
                 )
                 return None
 
-        # Cancel any existing pending/in_progress jobs for this document
+        # SUPERSEDE THEN INSERT, ATOMICALLY (`issues/174` item 3).
+        #
+        # These were two independent statements. Under READ COMMITTED a second
+        # enqueue does not see the first one's uncommitted INSERT, so its cancel
+        # matches nothing and both rows land — two active jobs for one document,
+        # which `claim_next` hands to two workers. Its `FOR UPDATE SKIP LOCKED`
+        # prevents two workers taking the SAME job; it cannot prevent them taking
+        # two jobs that should never have coexisted.
+        #
+        # The transaction makes the pair atomic. The partial unique index on
+        # `(document_uri) WHERE status IN ('pending','in_progress')` is what
+        # actually enforces it, because atomicity alone does not stop the second
+        # writer from inserting a row the first never saw.
         cancel_sql = f"""
             UPDATE {self._table}
             SET status = 'cancelled', updated_at = NOW()
             WHERE document_uri = $1 AND status IN ('pending', 'in_progress')
         """
-        await self.conn.execute(cancel_sql, document_uri)
-
         sql = f"""
             INSERT INTO {self._table}
                 (space_id, graph_id, document_uri, status,
                  segment_method_uri, max_segment_tokens, content_hash)
             VALUES ($1, $2, $3, 'pending', $4, $5, $6)
+            ON CONFLICT (document_uri)
+                WHERE status IN ('pending', 'in_progress') DO NOTHING
             RETURNING job_id
         """
-        job_id = await self.conn.fetchval(
-            sql, self.space_id, graph_id, document_uri,
-            segment_method_uri, max_segment_tokens, content_hash,
-        )
+        async with self.conn.transaction():
+            await self.conn.execute(cancel_sql, document_uri)
+            job_id = await self.conn.fetchval(
+                sql, self.space_id, graph_id, document_uri,
+                segment_method_uri, max_segment_tokens, content_hash,
+            )
+            if job_id is None:
+                # The insert was suppressed: a concurrent enqueue committed an
+                # active job for this document between our cancel and our insert.
+                # Adopt it rather than raising — the caller asked for this
+                # document to be segmented and it is queued, which is what they
+                # wanted. Returning None would read as "skipped, unchanged".
+                job_id = await self.conn.fetchval(
+                    f"SELECT job_id FROM {self._table} WHERE document_uri = $1 "
+                    f"  AND status IN ('pending', 'in_progress') "
+                    f"ORDER BY created_at DESC LIMIT 1", document_uri)
+                logger.info(
+                    "enqueue for %s lost a race with a concurrent enqueue; "
+                    "adopting the job it queued (job_id=%s)", document_uri, job_id)
 
         # Wake any LISTEN-ing workers immediately
         try:
