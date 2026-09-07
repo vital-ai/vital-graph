@@ -148,3 +148,72 @@ class TestReadAndWriteInOneTransaction:
             await space_impl.db_impl.connection_pool.release(conn)
 
         assert await _count(space_impl, sp, graph, subj) == 0
+
+
+class TestTheWholeWritePathComposes:
+    """Every write the KG layer performs can join a caller's transaction.
+
+    Threading one method and not the rest would be worse than threading none:
+    a caller composing two operations would get one inside their transaction and
+    one outside it, and the failure — a partial unit of work that cannot be
+    rolled back — is silent.
+    """
+
+    async def test_store_objects_joins_the_callers_transaction(
+            self, space_impl, test_space, backend_adapter):
+        sp, graph = test_space, f"urn:test:{test_space}"
+        subj = f"urn:test:s:{uuid.uuid4().hex[:8]}"
+
+        class Obj:
+            URI = subj
+            def to_triples(self):
+                return [(URIRef(subj), URIRef(P), URIRef("urn:v:1"))]
+
+        conn = await space_impl.db_impl.connection_pool.acquire()
+        try:
+            tx = conn.transaction()
+            await tx.start()
+            await backend_adapter.store_objects(sp, graph, [Obj()], conn=conn)
+            await tx.rollback()
+        finally:
+            await space_impl.db_impl.connection_pool.release(conn)
+        assert await _count(space_impl, sp, graph, subj) == 0
+
+    async def test_a_sparql_update_joins_the_callers_transaction(
+            self, space_impl, test_space, backend_adapter):
+        sp, graph = test_space, f"urn:test:{test_space}"
+        subj = f"urn:test:s:{uuid.uuid4().hex[:8]}"
+        conn = await space_impl.db_impl.connection_pool.acquire()
+        try:
+            tx = conn.transaction()
+            await tx.start()
+            await space_impl.execute_sparql_update(
+                sp, f'INSERT DATA {{ GRAPH <{graph}> {{ <{subj}> <{P}> <urn:v:1> }} }}',
+                conn=conn)
+            await tx.rollback()
+        finally:
+            await space_impl.db_impl.connection_pool.release(conn)
+        assert await _count(space_impl, sp, graph, subj) == 0
+
+    async def test_a_write_and_a_sparql_update_abort_together(
+            self, space_impl, test_space, backend_adapter):
+        """The composition that motivated all of this: two different KINDS of
+        write in one unit. Previously each owned its own connection, so one
+        could commit while the other was rolled back."""
+        sp, graph = test_space, f"urn:test:{test_space}"
+        a = f"urn:test:s:{uuid.uuid4().hex[:8]}"
+        b = f"urn:test:s:{uuid.uuid4().hex[:8]}"
+        conn = await space_impl.db_impl.connection_pool.acquire()
+        try:
+            tx = conn.transaction()
+            await tx.start()
+            await backend_adapter.update_subjects_graph(
+                sp, graph, [a], _quads(graph, a, "urn:v:a"), conn=conn)
+            await space_impl.execute_sparql_update(
+                sp, f'INSERT DATA {{ GRAPH <{graph}> {{ <{b}> <{P}> <urn:v:b> }} }}',
+                conn=conn)
+            await tx.rollback()
+        finally:
+            await space_impl.db_impl.connection_pool.release(conn)
+        assert await _count(space_impl, sp, graph, a) == 0
+        assert await _count(space_impl, sp, graph, b) == 0

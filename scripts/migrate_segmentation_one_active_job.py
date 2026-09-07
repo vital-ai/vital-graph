@@ -37,7 +37,7 @@ logger = logging.getLogger("migrate_seg_one_active")
 
 async def migrate_space(conn, space_id: str, apply: bool) -> dict:
     table = f"{space_id}_segmentation_jobs"
-    name = f"{table}_one_active_per_document_idx"
+    name = f"{table}_active_doc_uq"
     if not await conn.fetchval(
             "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1",
             table):
@@ -46,6 +46,20 @@ async def migrate_space(conn, space_id: str, apply: bool) -> dict:
             "SELECT 1 FROM pg_class c JOIN pg_index i ON i.indexrelid=c.oid "
             " WHERE c.relname=$1 AND i.indisvalid", name):
         return {"space": space_id, "status": "already enforced"}
+
+    # An earlier revision of this script used a longer name that PostgreSQL
+    # truncated for long space ids. Drop it so a space is not left carrying two
+    # indexes enforcing the same thing.
+    for stale in (f"{table}_one_active_per_document_idx",
+                  f"{table}_one_active_per_document_idx"[:63]):
+        if await conn.fetchval(
+                "SELECT 1 FROM pg_class c JOIN pg_index i ON i.indexrelid=c.oid "
+                " WHERE c.relname=$1", stale):
+            if apply:
+                await conn.execute(f'DROP INDEX CONCURRENTLY IF EXISTS "{stale}"')
+                logger.info("  dropped superseded index %s", stale)
+            else:
+                logger.info("  would drop superseded index %s", stale)
 
     dupes = await conn.fetchval(
         f"SELECT count(*) FROM (SELECT document_uri FROM {table}"

@@ -95,6 +95,32 @@ async def test_the_schema_ships_the_index(pg_conn):
     """
     from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
     ddl = " ".join(SparqlSQLSchema().create_space_indexes_sql("probe_space"))
-    assert "one_active_per_document_idx" in ddl
+    assert "active_doc_uq" in ddl
     assert "CREATE UNIQUE INDEX" in ddl
     assert "WHERE status IN ('pending', 'in_progress')" in ddl
+
+
+def test_every_space_index_name_fits_postgres_identifier_limit():
+    """PostgreSQL truncates identifiers at 63 bytes, silently.
+
+    An index whose generated name overflows is still CREATED — under the
+    truncated name — so it enforces correctly while every lookup by the intended
+    name misses it. That is how the first version of the index above passed on
+    production, whose space ids are short, and failed only against a test space
+    with a longer one.
+
+    Checked against a deliberately long space id rather than a typical one,
+    since the limit is only reached at the long end.
+    """
+    from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+    import re
+
+    long_space = "inttest_" + "0" * 12          # the shape the suite generates
+    ddl = SparqlSQLSchema().create_space_indexes_sql(long_space)
+    names = [m.group(1) for stmt in ddl
+             for m in [re.search(r"INDEX (?:CONCURRENTLY )?(?:IF NOT EXISTS )?(\w+)", stmt)]
+             if m]
+    over = [(n, len(n)) for n in names if len(n) > 63]
+    assert not over, (
+        f"index name(s) exceed PostgreSQL's 63-byte identifier limit and will be "
+        f"silently truncated: {over}")

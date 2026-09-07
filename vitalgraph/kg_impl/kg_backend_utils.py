@@ -602,7 +602,8 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
             return []
     
     
-    async def delete_object(self, space_id: str, graph_id: str, uri: str) -> BackendOperationResult:
+    async def delete_object(self, space_id: str, graph_id: str, uri: str,
+                            conn=None) -> BackendOperationResult:
         """Delete object using SPARQL DELETE query."""
         try:
             # Get the proper space-specific graph URI
@@ -624,7 +625,8 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
             }}
             """
             
-            await self.backend.execute_sparql_update(space_id, delete_query)
+            await self.backend.execute_sparql_update(
+                space_id, delete_query, conn=conn)
             
             return BackendOperationResult(
                 success=True,
@@ -810,7 +812,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
     # ------------------------------------------------------------------
 
     async def store_objects(self, space_id: str, graph_id: str,
-                            objects: List[GraphObject]) -> BackendOperationResult:
+                            objects: List[GraphObject],
+                            conn=None) -> BackendOperationResult:
         try:
             import time as _time
             from rdflib import URIRef
@@ -834,7 +837,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             self.logger.info("⏱️  BACKEND to_triples: %.3fs (%d objects → %d quads)",
                              _t1 - _t0, len(objects), len(quads))
 
-            inserted = await self.backend.add_rdf_quads_batch_bulk(space_id, quads)
+            inserted = await self.backend.add_rdf_quads_batch_bulk(
+                space_id, quads, connection=conn)
             _t2 = _time.monotonic()
             self.logger.info("⏱️  BACKEND add_rdf_quads_batch_bulk: %.3fs (%d inserted)",
                              _t2 - _t1, inserted)
@@ -1092,7 +1096,7 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
     # ------------------------------------------------------------------
 
     async def delete_object(self, space_id: str, graph_id: str,
-                            uri: str) -> BackendOperationResult:
+                            uri: str, conn=None) -> BackendOperationResult:
         try:
             delete_query = f"""
                 DELETE {{
@@ -1102,7 +1106,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                     GRAPH <{graph_id}> {{ <{uri}> ?p ?o . }}
                 }}
             """
-            await self.backend.execute_sparql_update(space_id, delete_query)
+            await self.backend.execute_sparql_update(
+                space_id, delete_query, conn=conn)
             return BackendOperationResult(success=True, message=f"Deleted {uri}")
         except Exception as e:
             self.logger.error("delete_object failed: %s", e)
@@ -1227,7 +1232,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
 
     async def upsert_objects_atomic(self, space_id: str, graph_id: str,
                                     entity_uris: List[str],
-                                    objects: List[GraphObject]) -> bool:
+                                    objects: List[GraphObject],
+                                    conn=None) -> bool:
         """Replace one or more entity graphs in ONE locked transaction.
 
         `issues/173`. UPSERT used to be `delete_object` then `store_objects`,
@@ -1274,7 +1280,7 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
 
             quads = await asyncio.to_thread(_build_quads)
 
-            async with self.backend.db_impl.connection_pool.acquire() as conn:
+            async with _write_conn(self.backend.db_impl.connection_pool, conn) as conn:
                 async with conn.transaction():
                     # Sorted inside `lock_entities`, so a multi-entity upsert
                     # cannot deadlock against one taking the same entities in a

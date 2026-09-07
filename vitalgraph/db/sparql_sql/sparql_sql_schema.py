@@ -1369,8 +1369,15 @@ class SparqlSQLSchema:
             # withdrawn in issues/175: this is a job queue the KG layer owns
             # entirely, not a general quad store, so the invariant is ours to
             # declare and cannot be contradicted by legitimately different data.
+            # SHORT SUFFIX DELIBERATELY. PostgreSQL truncates identifiers at 63
+            # bytes, and the descriptive name this started with
+            # (`_one_active_per_document_idx`) overflowed for longer space ids —
+            # 66 bytes for a test space — so the index existed under a truncated
+            # name and the schema-completeness check could not find it. It fit
+            # for production's shorter ids, which is exactly why only the test
+            # caught it.
             f"CREATE UNIQUE INDEX IF NOT EXISTS "
-            f"{t['segmentation_jobs']}_one_active_per_document_idx "
+            f"{t['segmentation_jobs']}_active_doc_uq "
             f"ON {t['segmentation_jobs']} (document_uri) "
             f"WHERE status IN ('pending', 'in_progress')",
             f"CREATE INDEX IF NOT EXISTS "

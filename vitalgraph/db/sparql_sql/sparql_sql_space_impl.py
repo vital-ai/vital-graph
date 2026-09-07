@@ -1613,7 +1613,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             return []
 
     async def delete_entity_graph_bulk(self, space_id: str, graph_id: str,
-                                       entity_uri: str) -> int:
+                                       entity_uri: str, conn=None) -> int:
         """Delete all quads belonging to an entity graph in one SQL operation.
 
         Finds all subjects whose ``hasKGGraphURI`` points to *entity_uri*,
@@ -1736,10 +1736,21 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             # Retry a deadlock victim: this transaction takes stats-table
             # locks alongside a potentially large delete, and losing it
             # discards the whole delete (issues/115).
-            from .deadlock_retry import with_deadlock_retry
-            _result = await with_deadlock_retry(
-                self._db._pool, _do_delete,
-                what=f"delete_entity_graph_bulk({space_id}, {entity_uri})")
+            # RETRY ONLY WHEN WE OWN THE TRANSACTION (`issues/175` class 2).
+            #
+            # `with_deadlock_retry` re-runs its body in a fresh transaction, which
+            # is only sound while nothing else has work in flight. Given a
+            # caller's connection there may be uncommitted work either side of
+            # this call, and rolling back to retry would discard it silently —
+            # so a composed delete runs ONCE and hands the deadlock to the caller,
+            # who owns the unit and can decide.
+            if conn is not None:
+                _result = await _do_delete(conn)
+            else:
+                from .deadlock_retry import with_deadlock_retry
+                _result = await with_deadlock_retry(
+                    self._db._pool, _do_delete,
+                    what=f"delete_entity_graph_bulk({space_id}, {entity_uri})")
             if _result is None:
                 return 0
             subject_uuids, deleted, edge_deleted = _result
@@ -2343,7 +2354,12 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 logger.error("SPARQL update compile error: %s", cr.error)
                 return False
 
-            async with self._db._pool.acquire() as conn:
+            # A caller may supply the connection so this write joins their unit
+            # of work (`issues/175` class 2). The three transactions below then
+            # nest as SAVEPOINTs, which preserves what each was written for while
+            # the commit boundary moves to the caller — the semantics decided in
+            # issues/175 rather than inherited by accident.
+            async with write_conn(self._db._pool, kwargs.get('conn')) as conn:
                 gen = await generate_sql(cr, space_id, conn=conn)
                 if not gen.ok:
                     # `if sql:` treated a refused generation as nothing to do
