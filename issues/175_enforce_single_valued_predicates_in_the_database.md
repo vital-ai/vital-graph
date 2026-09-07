@@ -123,6 +123,45 @@ include the slot predicates. Every one checked reports False.
    exactly as for `lead_data`. 186 subjects across the two predicates block it
    on this space alone.
 
+### Does a unique index make sense when some properties ARE multi-valued?
+
+Yes, and the reason is worth writing down because it is the obvious objection.
+
+The index is **partial and per predicate** —
+`... (subject_uuid, context_uuid) WHERE predicate_uuid = '<one uuid>'`. It
+exists only for predicates the ontology declares single-valued. A multi-valued
+property has no such index and is entirely unconstrained: on the production
+space `hasMultiChoiceSlotValues` has 96 subjects, all 96 holding several values,
+and none of them are affected.
+
+**Cardinality has no class dimension**, so one decision per predicate is the
+right granularity. `multiple_values` is defined on the property trait class
+itself (`Property_hasName.multiple_values = False`), not on a class-property
+pair, and the registry exposes no domain-specific override. A property is
+therefore single- or multi-valued globally, however many classes use it — which
+is exactly what a per-predicate index can express.
+
+**And the data agrees with the model.** The check that matters is whether the
+residue being called corruption might be a legitimate pattern the ontology has
+simply not captured. It is not: of the 94 `hasTextSlotValue` violations, 92 sit
+on one slot type, `urn:*:slot:MsgContent`, which looked like it might be
+legitimately multi-valued — until the denominator:
+
+| | count |
+|---|---|
+| `MsgContent` slots | 302,523 |
+| holding more than one value | **92** |
+| | **0.03%** |
+
+A property that genuinely held several values would not do so 0.03% of the
+time. The concentration points the other way: message content is the most
+EDITED slot in the space, and updating is what races. That matches
+`hasKGSlotType` — written once at creation, never updated — being clean across
+2.8M subjects.
+
+So the constraint would reject only what the model already forbids, and the
+0.03% is the race showing through, not a modelling gap.
+
 ### Sequence
 
 1. Run `scripts/repair_duplicate_server_timestamps.py` per space, dry-run first.
