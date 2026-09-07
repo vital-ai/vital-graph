@@ -74,7 +74,80 @@ Residual risk is narrow: two *distinct* jobs targeting the same document URI,
 concurrently. Whether the queue admits that — whether jobs are unique per
 document — was not established here and is the question to answer before acting.
 
-## What to decide
+## Progress — 2026-09-07
+
+### 1. Entity delete — LOCKED. Race demonstrated, then closed.
+
+`lock_entities(conn, [entity_uri])` is now the first statement of
+`_do_delete` in `delete_entity_graph_bulk`.
+
+**The first test I wrote proved nothing** — it passed with and without the lock,
+because the window between the read and the delete is normally microseconds and
+the upsert's own lock plus row-level contention hid it. By the standard this
+issue sets, that test was worthless as evidence.
+
+Widening the read→delete window to 2s and removing the lock reproduced it
+**3 times out of 3**: a concurrent upsert committed in the window, its new
+member subject was invisible to the delete's snapshot, and the graph was left
+**orphaned — 1 subject of 4 remaining under an entity that reported as deleted**.
+Restoring the lock with the SAME widened window gave a consistent result 3 times
+out of 3.
+
+So the race is real and the lock closes it. It is also **narrow in production**:
+the window is normally tiny, which is why it has not been observed. It widens
+under load, a slow plan, or a lock wait.
+
+### 2. Frame create / update — read-then-write CONFIRMED, not a one-line fix
+
+Traced. `update_frames` reads (`validate_frame_ownership`), then assigns
+grouping URIs, then writes via `create_entity_frame` — across three processors
+with **no shared transaction**. There is no single connection to take a lock on,
+so serializing it means threading one through those layers first. That is a
+refactor, not an addition, and it is deliberately NOT done here.
+
+### 3. Document segmentation — safer than assumed, one residual gap
+
+`claim_next` uses `FOR UPDATE SKIP LOCKED`, so two workers cannot take the same
+job. `enqueue` also cancels any pending/in_progress job for the document before
+inserting.
+
+But that cancel-then-insert is itself unserialized, and the
+`segmentation_jobs` table has **no unique constraint on `document_uri`** — only
+a plain index. Two concurrent enqueues can therefore both cancel, both insert,
+and leave two pending jobs for one document, which two workers may then claim
+simultaneously. The fix is a partial unique index on `document_uri` where status
+is pending or in_progress; that needs a migration script, since schema changes
+here are made only by an explicit action.
+
+### 4. NEW — `touch_entity_modification_time` is a SECOND, still-live race
+
+Not in the original scope of this issue, and the more important finding.
+
+It writes `hasObjectModificationDateTime` with an unserialized SPARQL
+DELETE/INSERT. Two concurrent touches both match the old value, both delete it,
+and both insert their own — the exact corruption issues/173 repaired.
+
+**Evidence, from the backup taken before that repair:**
+
+| pattern | subjects | implies |
+|---|---|---|
+| both timestamps duplicated | 239 | the upsert race (writes both) |
+| **modification time only** | **4** | a different writer |
+| creation time only | 2 | — |
+
+The upsert race cannot explain the modification-only cases: it stamps both
+properties. Those four are dated 2026-07-27, 2026-08-07, 2026-09-02 and
+**2026-09-06** — spread out rather than clustered like the two upsert incidents,
+and the most recent is the day before this was written. This mechanism is
+active, and issues/173's fix does not cover it.
+
+It is not a one-line fix either: `execute_sparql_update` acquires its own
+connection internally, so the update cannot join a locked transaction. Closing
+it means either rewriting the touch as direct SQL in a locked transaction
+(straightforward — it is a single triple with a known subject, predicate and
+graph) or giving the SPARQL update path a way to run on a caller's connection.
+
+## What to decide## What to decide
 
 For each path: **is it actually concurrent in production?** Entity writes are,
 demonstrably — that is what issues/173 recorded, with a client retry at ~31s

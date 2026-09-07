@@ -1632,6 +1632,23 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             entity_uuid = _generate_term_uuid(entity_uri, 'U')
 
             async def _do_delete(conn):
+                # Step 0: SERIALIZE ON THE ENTITY (`issues/174`).
+                #
+                # Steps 1 and 2 are a read followed by a write: membership is
+                # resolved from `hasKGGraphURI`, then those subjects are
+                # deleted. The transaction makes that atomic, not exclusive —
+                # an upsert committing in between adds subjects this delete
+                # will never see, leaving orphaned rows under an entity that
+                # reports as deleted. The comment below already concedes the
+                # read is "a snapshot of ONE mutable predicate"; this is what
+                # stops the snapshot going stale before it is acted on.
+                #
+                # Same lock and same ordering as the upsert path (issues/173),
+                # so a delete and an upsert racing for one entity serialize
+                # against each other rather than interleaving.
+                from .entity_lock import lock_entities
+                await lock_entities(conn, [entity_uri])
+
                 # Step 1: Find all subject UUIDs with hasKGGraphURI = entity_uri
                 subject_rows = await conn.fetch(
                     f"SELECT DISTINCT subject_uuid FROM {t['rdf_quad']} "
