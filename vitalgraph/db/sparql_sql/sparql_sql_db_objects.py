@@ -480,9 +480,55 @@ class SparqlSQLDbObjects:
         if not all_entries:
             return []
 
-        return await asyncio.to_thread(
-            GraphObject.from_property_maps, all_entries
-        )
+        return await asyncio.to_thread(self._materialize, all_entries)
+
+    @staticmethod
+    def _materialize(all_entries: List[Dict[str, Any]]) -> List[Any]:
+        """Build GraphObjects, LETTING ONE BAD SUBJECT COST ONLY ITSELF.
+
+        `from_property_maps` is all-or-nothing over the batch it is given, so a
+        single malformed subject raised and the caller's `except` returned []
+        for the WHOLE PAGE. In production one entity carried three values for
+        `hasObjectCreationTime` and `hasCurrentModificationDateTime` — the
+        grouping above turns repeated predicates into a list, and a list is not
+        a datetime — and page 9 of the KG entity listing rendered zero of its
+        twenty-five rows. No error reached the UI: the page was simply empty,
+        while pages 1-8 and 10+ were fine, so it read as "paging breaks at 9"
+        rather than "one row is malformed".
+
+        The batch call stays the fast path and is tried first, because it is one
+        call for the whole page and the failure is rare. Only when it raises do
+        we pay a per-entry pass to find out WHICH subject is bad — the retry
+        costs a page-sized loop exactly once, on a page that would otherwise
+        have returned nothing at all.
+
+        A skipped subject is reported at ERROR with its URI, because it is a
+        DATA DEFECT that needs fixing at the source. Returning 24 of 25 rows
+        silently would trade a visible empty page for an invisible missing one,
+        and the missing one is worse: nothing downstream can tell that the page
+        is short.
+        """
+        from vital_ai_vitalsigns.model.GraphObject import GraphObject
+        try:
+            return GraphObject.from_property_maps(all_entries)
+        except Exception as exc:
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                "from_property_maps failed for a batch of %d subject(s) (%s) — "
+                "retrying per subject so one malformed object does not empty "
+                "the whole page", len(all_entries), exc)
+            objects: List[Any] = []
+            for entry in all_entries:
+                try:
+                    objects.extend(GraphObject.from_property_maps([entry]))
+                except Exception as one:
+                    logger.error(
+                        "SKIPPING malformed object %s: %s. This subject is a "
+                        "data defect — most often a single-valued property "
+                        "carrying repeated quads, which groups into a list. "
+                        "The rest of the page is returned without it.",
+                        entry.get("subject_uri"), one)
+            return objects
 
     async def _get_triples_for_uris(
         self,
