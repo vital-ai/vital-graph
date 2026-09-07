@@ -74,11 +74,16 @@ to be enforced where that meaning exists:
 3. **NOT in the quad table.** Whatever it gains for KG objects, it takes from
    the store's general contract.
 
-**Consequence for issues/174.** The WHERE-bound SPARQL update case has no
-backstop any more. The argument that "a constraint holds regardless of whether
-the writer can name its subjects" was the reason to accept that gap — with the
-constraint withdrawn, that path needs a real answer (a coarser lock, or
-resolving subjects inside the transaction), or it stays a known hole.
+**Consequence for issues/174 — smaller than first thought.** The retraction was
+argued to leave the WHERE-bound SPARQL update with no backstop. It does not: the
+emitted SQL materialises its change set into a temp table before writing
+anything, so those updates can take the same locks as every other path, with the
+lock step placed after materialisation. The claim that they "cannot be
+enumerated" came from a static AST helper and does not describe runtime. See
+issues/174 item 5.
+
+So withdrawing the constraint costs less than it appeared to. Locking covers
+every path, including the one this issue existed to backstop.
 
 ## Class 2: a write scope, and the hazard that shapes it
 
