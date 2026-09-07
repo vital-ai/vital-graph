@@ -7,14 +7,28 @@ minutes after login and the WebSocket reconnect loop reported "Invalid
 authentication token" indefinitely. Nothing covered this route, which is why it
 shipped.
 """
-import inspect
+import pathlib
 import re
 
 import pytest
 from fastapi import HTTPException
 
 from vitalgraph.auth.jwt_auth import JWTAuth
-from vitalgraph.impl.vitalgraphapp_impl import VitalGraphAppImpl
+
+# READ THE SOURCE, DO NOT IMPORT IT. `vitalgraphapp_impl` pulls in Starlette's
+# SessionMiddleware and therefore `itsdangerous`, which is a SERVER extra — the
+# tier 1 unit job installs only `.[dev]`, so importing it here fails in CI while
+# passing locally. Nothing below needs the module loaded; the assertions are
+# about the shape of a route declaration, which is text.
+_APP_IMPL = (pathlib.Path(__file__).resolve().parents[2]
+             / "vitalgraph" / "impl" / "vitalgraphapp_impl.py")
+
+
+def _auth_routes_source() -> str:
+    src = _APP_IMPL.read_text()
+    start = src.index("    def _init_auth_routes(self):")
+    end = src.index("\n    def ", start + 1)
+    return src[start:end]
 
 
 class TestRefreshTokenIsNotAnAccessToken:
@@ -46,7 +60,7 @@ class TestRefreshTokenIsNotAnAccessToken:
 
 class TestRefreshRouteHasNoAccessTokenDependency:
     def test_wrapper_does_not_depend_on_get_current_user(self):
-        src = inspect.getsource(VitalGraphAppImpl._init_auth_routes)
+        src = _auth_routes_source()
         # Non-greedy to the closing `):` of the def line, NOT `[^)]*` — the
         # first `)` belongs to `Body(..., embed=True)`, so a naive character
         # class stops before the parameter this test exists to catch, and the
@@ -60,6 +74,6 @@ class TestRefreshRouteHasNoAccessTokenDependency:
     def test_logout_still_does_depend_on_it(self):
         # The guard belongs on routes that act for an authenticated user; this
         # asserts the fix was surgical rather than a blanket removal.
-        src = inspect.getsource(VitalGraphAppImpl._init_auth_routes)
+        src = _auth_routes_source()
         sig = re.search(r"async def logout_wrapper\((.*?)\):\s*\n", src, re.S)
         assert sig and "get_current_user" in sig.group(1)
