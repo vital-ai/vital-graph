@@ -138,10 +138,35 @@ hazard, and now the only structural answer available rather than one of two.
 The earlier list here concerned the index design and is void with that
 retracted. What remains:
 
-- **What runs the detection, and how often?** Still open. The SCOPING half is
-  now answered — see below — but nothing decides whether this is a maintenance
-  job phase, a periodic script, or an on-demand tool, nor how a finding is
-  surfaced.
+- **Is detection needed at all once the write paths are fixed?** Not as a
+  guarantee — serialised writers cannot produce this corruption, and detection
+  is not a substitute for fixing the source. But three things argue for keeping
+  a cheap check, and the first is the strongest:
+
+  1. **This investigation is the evidence.** Every confident "that path is
+     covered" in issues/173 and issues/174 turned out to be wrong at least
+     once: `entity_lock_manager` existed and resolved to `None` on eight call
+     sites that read as locked; the frame path was assessed as unlockable
+     twice; WHERE-bound updates were called impossible to serialise twice; the
+     first repair covered one of two graphs. Detection is what separates "we
+     fixed it" from "we believe we fixed it", and belief has a poor record here.
+  2. **Locking does not cover every source.** Bulk imports, restores of old
+     snapshots, migrations and manual SQL can all introduce duplicates without
+     any concurrency involved.
+  3. **The failure is silent.** 186 subjects on one space, 62 and 188 on two
+     others, accrued over months. What eventually detected it was a customer
+     -visible page rendering zero rows.
+
+  **The proportionate form is one probe, not a subsystem.** `MaintenanceJob`
+  already runs five integrity phases — `edge_integrity`,
+  `frame_entity_integrity`, `entity_slot_sort_integrity`,
+  `grouping_self_link`, `graph_registration`. A sixth using the scoping rule
+  below fits the established pattern and needs no new infrastructure. It also
+  doubles as the verification that the 786-row repair worked and stays worked.
+
+  If it reports zero for a sustained period once the write paths are locked, it
+  can drop to an on-demand tool. Building alarms, dashboards or a standing
+  service around it would be over-engineering a check that is one query.
 
 ### The scoping rule, with evidence
 
