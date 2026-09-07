@@ -23,12 +23,11 @@ identified by reading, and the point of writing it down is to decide which paths
 are genuinely concurrent before adding locks speculatively. A lock on a path
 nothing contends for costs latency and buys nothing.
 
-## Ranked by how closely each resembles the bug that did happen
+## The paths, and where each stands — 2026-09-07
 
-### 1. Entity delete — same shape as the fixed bug, one-line fix
+### 1. Entity delete — LOCKED. Race demonstrated, then closed.
 
-`delete_entity_graph_bulk` (`sparql_sql_space_impl.py`) is atomic but **not
-exclusive** — exactly what `update_entity_graph` was before issues/173:
+`delete_entity_graph_bulk` resolves membership and then acts on it:
 
 ```python
 async def _do_delete(conn):
@@ -38,48 +37,14 @@ async def _do_delete(conn):
     # DELETE those subjects
 ```
 
-Membership is read, then acted on. An upsert committing between the read and the
-delete adds subjects the delete will not see, leaving **orphaned rows under a
-deleted entity** — a typed object with a partial graph, which is the failure
-`issues/091` already recorded once from a different cause.
+The read is of `hasKGGraphURI`, a mutable predicate — the code comment directly
+above it already concedes it is "a snapshot of ONE mutable predicate". An upsert
+committing between the read and the delete adds subjects the delete never sees,
+leaving orphaned rows under an entity that reports as deleted; `issues/091`
+recorded that same end state once already, from a different cause.
 
-The read is of `hasKGGraphURI`, a mutable predicate, and the code comment
-directly above already acknowledges it is "a snapshot of ONE mutable predicate".
-
-Fix: `await lock_entities(conn, [entity_uri])` as the first statement of
-`_do_delete`, identical to what `update_entity_graph` now does. This is the one
-recommendation here that needs no further investigation.
-
-### 2. Frame create / delete / update — read-modify-write on an entity's frames
-
-`delete_frame` reads a count, then issues a SPARQL DELETE. The read feeds the
-reported count rather than the delete's scope, so the visible risk is a count
-that disagrees with what was removed — a reporting inaccuracy, not corruption.
-
-The frame **create and update** paths are the ones worth checking: they modify
-the frame set belonging to an entity, and two concurrent writers to the same
-entity are exactly the pattern that produced issues/173. Whether they read
-current state before writing has NOT been traced here, and that determination
-should come before any lock is added.
-
-### 3. Document segmentation — largely already serialized
-
-Lowest risk, and the reason is worth recording so nobody adds a redundant lock:
-`SegmentationJobManager.claim_next` dequeues with `SELECT ... FOR UPDATE SKIP
-LOCKED`, so two workers cannot claim the same job. The advisory lock that used
-to wrap `_execute_segmentation` was guarding something the queue already
-guarantees.
-
-Residual risk is narrow: two *distinct* jobs targeting the same document URI,
-concurrently. Whether the queue admits that — whether jobs are unique per
-document — was not established here and is the question to answer before acting.
-
-## Progress — 2026-09-07
-
-### 1. Entity delete — LOCKED. Race demonstrated, then closed.
-
-`lock_entities(conn, [entity_uri])` is now the first statement of
-`_do_delete` in `delete_entity_graph_bulk`.
+`lock_entities(conn, [entity_uri])` is now the first statement of `_do_delete`,
+the same lock and ordering the upsert path uses.
 
 **The first test I wrote proved nothing** — it passed with and without the lock,
 because the window between the read and the delete is normally microseconds and
@@ -102,8 +67,18 @@ under load, a slow plan, or a lock wait.
 Traced. `update_frames` reads (`validate_frame_ownership`), then assigns
 grouping URIs, then writes via `create_entity_frame` — across three processors
 with **no shared transaction**. There is no single connection to take a lock on,
-so serializing it means threading one through those layers first. That is a
-refactor, not an addition, and it is deliberately NOT done here.
+so serializing it means threading one through those layers first.
+
+That is a refactor, not an addition, and rushing it would be worse than leaving
+it recorded. A lock taken on a connection other than the one doing the write
+protects nothing while looking as though it does — which is precisely the defect
+issues/173 documented, where eight endpoint call sites read as locked and none
+were. Half-serializing this path would recreate that, one layer down.
+
+`delete_frame` is separate and lower risk: it reads a count and then issues a
+SPARQL DELETE, but the read feeds the count it reports rather than the delete's
+scope. The exposure is a count that disagrees with what was removed — a
+reporting inaccuracy, not corruption.
 
 ### 3. Document segmentation — safer than assumed, one residual gap
 
@@ -147,16 +122,92 @@ it means either rewriting the touch as direct SQL in a locked transaction
 (straightforward — it is a single triple with a known subject, predicate and
 graph) or giving the SPARQL update path a way to run on a caller's connection.
 
-## What to decide## What to decide
+## Scoping the fix for item 4 — two options, measured
 
-For each path: **is it actually concurrent in production?** Entity writes are,
-demonstrably — that is what issues/173 recorded, with a client retry at ~31s
-intervals as the trigger. Whether frame writes and document segmentation see the
-same pattern is a question about how the callers behave, not about this code.
+### Option A — give `execute_sparql_update` a caller-supplied connection
 
-`lock_entities(conn, uris)` is available and takes keys in sorted order, so
-adding it to a path is a one-line change and multiple paths locking the same
-entities cannot deadlock against each other.
+The mechanical part is trivial; the semantic part is the entire cost.
+
+The function is **224 lines** and opens **three independent transactions** on
+the one connection it acquires:
+
+| line | purpose |
+|---|---|
+| 2356 | the main write — "whole batch rolls back cleanly" (issues/019) |
+| 2382 | cleared-graph auxiliary cleanup (issues/064) |
+| 2418 | edge / frame_entity / slot_sort sync |
+
+The 2418 block states its guarantee outright: *"run it in its OWN transaction …
+so a sync failure rolls back cleanly (leaving the committed quads intact)
+instead of poisoning the pooled connection."*
+
+**asyncpg turns a nested `conn.transaction()` into a `SAVEPOINT`** — confirmed
+in its source, not assumed. So a caller passing a connection already inside a
+transaction silently converts all three, and that guarantee becomes false: the
+quads are no longer committed, they are in the caller's transaction. A sync
+failure rolls back to a savepoint while the outer transaction continues, and if
+the outer one later rolls back, the quads go with it.
+
+Adding `conn=None` is about five lines and all **48 call sites** keep working,
+since it defaults. Making it CORRECT means deciding what each of those three
+blocks should mean when nested and re-establishing the guarantee each was
+written for — three separate issue-referenced behaviours on a hot write path.
+That is a design decision, not a refactor, and the five-line version is the
+dangerous one precisely because it looks finished.
+
+### Option B — rewrite `touch_entity_modification_time` as direct SQL
+
+Smaller, and touches nothing else:
+
+- **3 call sites**, all in `kgentities_endpoint.py`, all already wrapped in
+  try/except and logged as "non-critical".
+- The plumbing exists: `add_rdf_quads_batch_bulk` and
+  `remove_rdf_quads_batch_bulk` both already accept `connection=`, so term
+  interning and the stats tables stay correct inside a locked transaction.
+- It is a single triple with a known subject, predicate and graph, so it needs
+  no SPARQL at all — which also drops the Jena sidecar compile round trip and
+  makes it faster.
+- Roughly 30–40 lines in `kg_server_properties.py`, plus a concurrency test of
+  the shape now standard here (must fail without the lock).
+
+### Recommendation: B
+
+Option A is a plausible general capability, but adopting it to fix this race
+means changing transaction semantics for 48 call sites to solve a problem that 3
+call sites have — and the blast radius lands on exactly the guarantees three
+prior issues were written to establish.
+
+Option A is worth doing IF something later genuinely needs a SPARQL update
+inside a caller's transaction. That deserves its own issue, with the three
+nesting questions answered deliberately rather than as a side effect of an
+unrelated fix.
+
+## What to decide
+
+Two questions, and they are different for each remaining path.
+
+**Is it actually concurrent in production?** Entity writes demonstrably are —
+issues/173 recorded it, with a client retry at ~31s intervals as the trigger,
+and item 4 above shows a second mechanism still producing duplicates as recently
+as 2026-09-06. Whether frame writes and duplicate segmentation enqueues see the
+same pattern is a question about how the callers behave, not about this code,
+and is unanswered.
+
+**How much does locking it cost?** Only where a single connection already spans
+the read and the write is this a one-line change — that was true of items 1 and
+of the upsert in issues/173, and is NOT true of what remains:
+
+| path | cost |
+|---|---|
+| entity delete | one line — **done** |
+| frame create/update | thread a connection through three processors first |
+| segmentation enqueue | a partial unique index, so a migration script |
+| `touch_entity_modification_time` | ~30–40 lines, direct SQL (Option B above) |
+
+`lock_entities(conn, uris)` takes keys in sorted order, so wherever a connection
+IS available, adding it is one line and paths locking the same entities cannot
+deadlock against each other. The constraint is never the lock; it is whether the
+read and the write share a transaction to hang it on.
 
 ## Verification, when a path is locked
 
