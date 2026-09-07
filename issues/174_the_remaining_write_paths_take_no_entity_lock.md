@@ -445,19 +445,52 @@ iteration is ordinary Python, there is no quoting problem, and it reuses the
 lock helper every other path uses rather than a second SQL implementation of the
 same thing that could drift from it.
 
-**What it requires, and why this is a bigger change than the frame lock.** The
-emitter currently joins its statements with `";\n"` into one string
-(`emit_update.py:582` and friends), and `GenerateResult` carries only `sql`.
-Splitting that blob back apart in the caller is not safe — a literal containing
-the separator would split wrongly — so the emitter has to hand back structure
-instead: the statement list, the WHERE clause used to materialise, and the
-subject expressions the delete/insert templates reference. That is a change to
-the emitter's contract, not an addition beside it.
+#### The emitter contract change — additive, not breaking
 
-Worth stating plainly: this is materially larger than the ~7-line frame lock,
-and it is on the path every SPARQL write takes. It should be done deliberately,
-with the emitter contract change reviewed on its own, rather than folded in
-quietly.
+An earlier note here called this "a change to the emitter's contract, not an
+addition beside it". That was too pessimistic. `GenerateResult` already carries
+several optional fields added the same way over time — `vector_requests`,
+`fuzzy_requests`, `needs_ordered_scan` — each supplying structure a specific
+caller needs while `sql` stays exactly what it was. This follows that pattern.
+
+What stays true is that the blob cannot be taken apart afterwards. The emitter
+joins statements with `";\n"` (`emit_update.py:582` and siblings), and a literal
+containing that separator would split wrongly. So the structure has to come from
+the emitter, which knows the boundaries, rather than be recovered by the caller.
+
+**The addition:**
+
+```python
+@dataclass
+class UpdateLockPlan:
+    where_sql: str                 # the SELECT that materialises the bindings
+    subject_columns: List[str]     # _upd_bindings columns holding subject URIs
+    subject_constants: List[str]   # subject URIs fixed in the templates
+    bindings_table: str = "_upd_bindings"
+```
+
+Subjects come from the delete and insert templates, which the emitter already
+walks: a `URINode` subject is a constant, a `VarNode` subject resolves through
+`var_map` to a bindings column. Both kinds are needed — a template mixing a
+fixed subject with a bound one is ordinary.
+
+**The wiring, each step additive:**
+
+| layer | change |
+|---|---|
+| `_modify_sql` | records its plan into an optional collector; return value unchanged |
+| `update_to_sql` | takes `plans_out: Optional[List[UpdateLockPlan]] = None`; callers that omit it are unaffected |
+| `GenerateResult` | gains `update_lock_plans: List[UpdateLockPlan]`, defaulting empty |
+| `execute_sparql_update` | uses the plans when present; behaves exactly as now when the list is empty |
+
+Nothing that reads `gen.sql` today changes, which matters because that is every
+other consumer. An op with no WHERE clause — `INSERT DATA`, `CLEAR` — produces
+no plan and needs none: its subjects are already concrete and lockable without
+materialising anything.
+
+It is still the most intricate piece here and still on the path every SPARQL
+write takes; the point of the additive shape is that the risk is confined to the
+one caller that opts in.
 
 **Ordering matters.** Whatever locks here must take keys in the same sorted
 order `lock_entities` uses, or a SPARQL update and an entity write acquiring the
