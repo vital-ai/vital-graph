@@ -355,8 +355,9 @@ than a race. Sequence them the right way round.
                                                   (63 whole-space, 67 per-type)
 
 Local dev is what the dev app container uses
-(`LOCAL_DB_HOST=host.docker.internal`, `LOCAL_DB_NAME=sparql_sql_graph`), and it
-had NO block table at all — 100 slot-sort tables and 79 coverage rows, 67 of
+(`LOCAL_DB_HOST=host.docker.internal`, `LOCAL_DB_NAME=sparql_sql_graph`) and is
+where integration with the consuming applications is exercised — a peer of the
+test stack rather than a lesser copy of it. It had NO block table at all — 100 slot-sort tables and 79 coverage rows, 67 of
 them short across 30 spaces. It was in the safe state (absent table -> decline
 everything) and is now correctly seeded.
 
