@@ -276,9 +276,12 @@ them. `_has_where_bound_delete` already detects exactly this case (it uses it to
 schedule a referential sweep), so the path can say so at WARNING rather than
 appear serialized when it is not.
 
-That residue is the strongest argument for issues/175: a constraint holds
-regardless of whether the writer could name its subjects in advance, and this is
-precisely the writer that cannot.
+That residue HAS NO BACKSTOP. It was argued here that issues/175's constraint
+would cover it — a constraint holding regardless of whether the writer can name
+its subjects. **That constraint is withdrawn**: VitalGraph is a general quad
+store, any predicate may be single- or multi-valued at any time, and a unique
+index would silently discard legitimate data. So this path needs a real answer
+of its own, from the options below.
 
 #### The concrete case: a SPARQL update touching a slot inside an entity graph
 
@@ -333,8 +336,13 @@ them. Stated plainly so it is not mistaken for solved:
 
 | failure | concrete subjects | WHERE-bound subjects |
 |---|---|---|
-| second value on a single-valued predicate | lock (item 5) **or** constraint (issues/175) | constraint (issues/175) |
+| second value where the KG layer expects one | lock (item 5) | **nothing** |
 | **lost update** — write silently overwritten | lock (item 5) | **nothing** |
+
+Both cells on the right were previously filled by issues/175's constraint. It is
+withdrawn — the store is general, so uniqueness cannot be enforced there — which
+makes locking the only mechanism and this column an open gap rather than a
+covered one.
 
 A constraint cannot help with a lost update. Nothing duplicate is created; a
 value that was written simply is not there any more, and no invariant is

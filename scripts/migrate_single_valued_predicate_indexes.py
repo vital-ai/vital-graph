@@ -1,5 +1,33 @@
 #!/usr/bin/env python3
-"""Enforce single-valued predicates with partial unique indexes. `issues/175`.
+"""WITHDRAWN — do not run. Kept for its measurement logic. `issues/175`.
+
+THIS SCRIPT WOULD CORRUPT A GENERAL QUAD STORE. It creates partial unique
+indexes to enforce single-valued predicates, on the premise that a predicate's
+cardinality is fixed by the ontology. That premise is false here: VitalGraph is
+a general quad store, any predicate may be used single- or multi-valued by any
+subject at any time, and `multiple_values` on a VitalSigns property describes
+what a MODEL expects of the objects it manages — not a contract the store makes
+about every quad written through it.
+
+Worse, it would fail silently. Every quad insert uses a targetless
+`ON CONFLICT DO NOTHING`, which applies to every unique index on the table, so
+these indexes would not reject legitimate multi-valued data — they would discard
+the second value with no error. Loading ordinary RDF into a space would quietly
+lose triples.
+
+The per-predicate shape cannot work either, for the same reason: predicates are
+determined dynamically, so the index set is never complete and the guarantee
+would cover whatever someone last remembered to migrate.
+
+WHAT IS STILL USEFUL: `derive_predicates` and `_violations` measure which
+predicates hold more than one value per (subject, context). That measurement
+found 186 corrupted subjects on the production space and is worth keeping — as
+a REPORT. See `issues/175` for where enforcement actually belongs (the write
+paths, issues/174) and why it cannot live in the quad table.
+
+Original description follows.
+
+Enforce single-valued predicates with partial unique indexes. `issues/175`.
 
 WHY A CONSTRAINT AND NOT A LOCK
     `issues/173` found 243 entities holding two to four values for
