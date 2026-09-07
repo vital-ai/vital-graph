@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import uuid as _uuid
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..jena_sparql.jena_types import (
@@ -344,6 +345,7 @@ async def update_to_sql(
     conn_params: Optional[Dict[str, Any]] = None,
     conn=None,
     default_graph_uri: Optional[str] = None,
+    plans_out: Optional[List["UpdateLockPlan"]] = None,
 ) -> str:
     """Translate a list of update operations to SQL.
 
@@ -362,7 +364,8 @@ async def update_to_sql(
     parts: List[str] = []
     for op in ops:
         parts.append(await _dispatch_one(op, space_id, conn_params=conn_params,
-                                         conn=conn, default_graph_uri=dg))
+                                         conn=conn, default_graph_uri=dg,
+                                         plans_out=plans_out))
     return ";".join(parts)
 
 
@@ -372,6 +375,7 @@ async def _dispatch_one(
     conn_params: Optional[Dict[str, Any]] = None,
     conn=None,
     default_graph_uri: str = _FALLBACK_DEFAULT_GRAPH,
+    plans_out: Optional[List["UpdateLockPlan"]] = None,
 ) -> str:
     """Dispatch a single update operation to its SQL generator.
 
@@ -395,10 +399,12 @@ async def _dispatch_one(
                                 dt_map=dt_map)
     elif isinstance(op, UpdateModify):
         return await _modify_sql(op, space_id, conn_params=conn_params, conn=conn,
-                                 default_graph_uri=default_graph_uri)
+                                 default_graph_uri=default_graph_uri,
+                                 plans_out=plans_out)
     elif isinstance(op, UpdateDeleteWhere):
         return await _delete_where_sql(op, space_id, conn_params=conn_params,
-                                       conn=conn, default_graph_uri=default_graph_uri)
+                                       conn=conn, default_graph_uri=default_graph_uri,
+                                       plans_out=plans_out)
     elif isinstance(op, UpdateClear):
         return _clear_sql(op, space_id, default_graph_uri=default_graph_uri)
     elif isinstance(op, UpdateDrop):
@@ -432,7 +438,7 @@ def _freshen_insert_data_bnodes(quads: List[QuadPattern]) -> List[QuadPattern]:
     triples. Across requests nothing collides.
     """
     import uuid as _u
-    from dataclasses import replace as _replace
+    from dataclasses import dataclass, field
 
     scope: Dict[str, str] = {}
     salt = _u.uuid4().hex[:12]
@@ -635,6 +641,36 @@ def _delete_data_sql(quads: List[QuadPattern], space_id: str,
     return ";\n".join(stmts)
 
 
+@dataclass
+class UpdateLockPlan:
+    """What a WHERE-bound update needs in order to serialise itself.
+
+    `issues/174` item 5. An update whose subjects come from a WHERE clause cannot
+    name them before executing, so it cannot take the entity/frame locks every
+    other write path takes — and a raw SPARQL update modifying a slot inside an
+    entity graph is exactly the writer that races those paths.
+
+    It CAN name them a moment later. `_modify_sql` materialises the WHERE into
+    `_upd_bindings` as its first statement, before anything is written, so the
+    subjects are available at runtime even though static analysis of the AST
+    cannot see them (`_concrete_subjects_from_update_ops` says so, and is right
+    about the AST).
+
+    This carries what the caller needs to act on that: the SELECT to
+    re-materialise with, and where the subjects are. Subjects arrive two ways
+    because a template may mix them — `<urn:x> ?p ?o` has a fixed subject while
+    `?s ?p ?o` has a bound one, and an update may contain both.
+
+    Returned ALONGSIDE the SQL rather than replacing it. Every existing consumer
+    reads `GenerateResult.sql` and is unaffected; only a caller that opts in
+    looks at this.
+    """
+    where_sql: str
+    subject_columns: List[str] = field(default_factory=list)
+    subject_constants: List[str] = field(default_factory=list)
+    bindings_table: str = "_upd_bindings"
+
+
 # ===========================================================================
 # Tier 2: DELETE/INSERT WHERE (UpdateModify)
 # ===========================================================================
@@ -645,6 +681,7 @@ async def _modify_sql(
     conn_params: Optional[Dict[str, Any]] = None,
     conn=None,
     default_graph_uri: str = _FALLBACK_DEFAULT_GRAPH,
+    plans_out: Optional[List["UpdateLockPlan"]] = None,
 ) -> str:
     """DELETE/INSERT WHERE → combined SQL.
 
@@ -745,6 +782,29 @@ async def _modify_sql(
         f"CREATE TEMP TABLE _upd_bindings ON COMMIT DROP AS {where_sql}"
     )
 
+    # Record what a caller needs to serialise this update (`issues/174` item 5).
+    # Done HERE because this is the only scope holding both the templates and
+    # `var_map` — recovering the association later would mean re-deriving it.
+    if plans_out is not None:
+        _cols: List[str] = []
+        _consts: List[str] = []
+        for _q in list(op.delete_quads or []) + list(op.insert_quads or []):
+            _subj = getattr(_q, "subject", None)
+            if isinstance(_subj, URINode):
+                _consts.append(_subj.value)
+            elif isinstance(_subj, VarNode):
+                # Only variables the WHERE actually binds have a column. An
+                # unbound one contributes no triple at all (SPARQL 1.1 §3.1.3,
+                # and issue 023), so it names no subject to lock either.
+                _c = _sparql_to_sql_col(_subj.name, var_map)
+                if _c:
+                    _cols.append(_c)
+        plans_out.append(UpdateLockPlan(
+            where_sql=where_sql,
+            subject_columns=sorted(set(_cols)),
+            subject_constants=sorted(set(_consts)),
+        ))
+
     # Step 2: DELETE matching quads
     if op.delete_quads:
         for dq in op.delete_quads:
@@ -826,6 +886,7 @@ async def _delete_where_sql(
     conn_params: Optional[Dict[str, Any]] = None,
     conn=None,
     default_graph_uri: str = _FALLBACK_DEFAULT_GRAPH,
+    plans_out: Optional[List["UpdateLockPlan"]] = None,
 ) -> str:
     """DELETE WHERE → convert to UpdateModify with identical delete/where patterns.
 
@@ -869,6 +930,7 @@ async def _delete_where_sql(
         where_pattern=where_pattern,
     )
     return await _modify_sql(modify, space_id, conn_params=conn_params, conn=conn,
+                             plans_out=plans_out,
                              default_graph_uri=default_graph_uri)
 
 

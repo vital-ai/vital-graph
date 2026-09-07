@@ -54,6 +54,11 @@ class GenerateResult:
     # FuzzyRequests that need MinHash LSH + RapidFuzz resolution before execution.
     # Non-empty when the query uses vg:fuzzyMatch with a text argument.
     fuzzy_requests: List[Any] = field(default_factory=list)
+    # How a WHERE-bound UPDATE can serialise itself (`issues/174` item 5).
+    # One entry per operation that materialises its bindings; empty for
+    # everything else, including every read query and any update whose subjects
+    # are already concrete. A caller that ignores this behaves exactly as before.
+    update_lock_plans: List[Any] = field(default_factory=list)
     # True when the SQL's O(page) property depends on the planner picking an
     # ordered, early-terminating scan. The executor fences the statement so it
     # cannot fall back to a blocking sort over the whole match set
@@ -1334,10 +1339,13 @@ async def _generate_sql(
     # --- UPDATE dispatch ---
     if compile_result.update_ops:
         from .emit_update import update_to_sql
+        _lock_plans: List[Any] = []
         sql = await update_to_sql(compile_result.update_ops, space_id,
                                   conn_params=conn_params, conn=conn,
-                                  default_graph_uri=default_graph)
-        return GenerateResult(ok=True, sql=sql, var_map={}, sparql_vars=[])
+                                  default_graph_uri=default_graph,
+                                  plans_out=_lock_plans)
+        return GenerateResult(ok=True, sql=sql, var_map={}, sparql_vars=[],
+                              update_lock_plans=_lock_plans)
 
     algebra = compile_result.algebra
     meta = compile_result.meta
