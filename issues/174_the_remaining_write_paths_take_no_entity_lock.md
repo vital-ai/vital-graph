@@ -326,6 +326,48 @@ So this class is currently unrepaired and unprotected, and it is the direct
 answer to "what happens if a SPARQL update modifies a slot while an entity graph
 operation is underway": today, it corrupts, and 186 subjects show it has.
 
+#### NOT COVERED: the lost update, when subjects cannot be enumerated
+
+The two mechanisms in play cover different halves, and one corner falls between
+them. Stated plainly so it is not mistaken for solved:
+
+| failure | concrete subjects | WHERE-bound subjects |
+|---|---|---|
+| second value on a single-valued predicate | lock (item 5) **or** constraint (issues/175) | constraint (issues/175) |
+| **lost update** — write silently overwritten | lock (item 5) | **nothing** |
+
+A constraint cannot help with a lost update. Nothing duplicate is created; a
+value that was written simply is not there any more, and no invariant is
+violated at any instant. Only serialisation prevents it — and a WHERE-bound
+SPARQL update cannot be serialised on the right key, because it cannot name the
+subjects it will touch until it has executed.
+
+So: **a WHERE-bound SPARQL update racing an entity-graph replace can still lose
+its write silently, and nothing planned here changes that.**
+
+Options, none free, none yet chosen:
+
+- **Coarsen the lock for that case.** `_has_where_bound_delete` already
+  identifies it, so such an update could take a graph- or space-level lock
+  instead of per-entity. Correct, and it serialises those updates against ALL
+  entity writes — acceptable only if the shape is rare, which has not been
+  measured.
+- **Resolve subjects by executing the WHERE first**, inside the same
+  transaction, then lock what it found. Turns an un-enumerable update into an
+  enumerable one at the cost of an extra pass, and only works if the WHERE is
+  side-effect free and stable under the lock — which is the same ordering
+  problem one level down.
+- **Accept and report it.** `_has_where_bound_delete` fires, so the path can log
+  that it ran unserialised against concurrent entity writes. Does not fix
+  anything; does mean an operator can correlate a lost write with a log line
+  instead of disbelieving the report.
+
+The scope is at least bounded: this needs a WHERE-bound SPARQL update
+concurrent with an entity-graph operation on subjects it touches. No such loss
+has been observed — unlike the duplicate class, a lost update leaves no trace to
+find after the fact, which is itself the reason to decide about it deliberately
+rather than let it stay implicit.
+
 **Ordering matters.** Whatever locks here must take keys in the same sorted
 order `lock_entities` uses, or a SPARQL update and an entity write acquiring the
 same pair in opposite orders will deadlock rather than queue.
