@@ -62,23 +62,70 @@ So the race is real and the lock closes it. It is also **narrow in production**:
 the window is normally tiny, which is why it has not been observed. It widens
 under load, a slow plan, or a lock wait.
 
-### 2. Frame create / update — read-then-write CONFIRMED, not a one-line fix
+### 2. Frame create / update — PLANNED. Smaller than first assessed.
 
-Traced. `update_frames` reads (`validate_frame_ownership`), then assigns
-grouping URIs, then writes via `create_entity_frame` — across three processors
-with **no shared transaction**. There is no single connection to take a lock on,
-so serializing it means threading one through those layers first.
+**Correcting the earlier entry.** It said the read and the write "span three
+processors with no shared transaction, so there is no connection to take a lock
+on". That is wrong about the write. The mutation is already ONE transaction:
+`SparqlSQLBackendAdapter.update_subjects_graph` does subject-level delete +
+insert inside `async with conn.transaction()`, the same shape as
+`update_entity_graph`, and the production adapter has it. It is atomic but not
+exclusive — exactly the gap the other two paths had.
 
-That is a refactor, not an addition, and rushing it would be worse than leaving
-it recorded. A lock taken on a connection other than the one doing the write
-protects nothing while looking as though it does — which is precisely the defect
-issues/173 documented, where eight endpoint call sites read as locked and none
-were. Half-serializing this path would recreate that, one layer down.
+Two other things that entry got wrong or missed:
 
-`delete_frame` is separate and lower risk: it reads a count and then issues a
-SPARQL DELETE, but the read feeds the count it reports rather than the delete's
-scope. The exposure is a count that disagrees with what was removed — a
-reporting inaccuracy, not corruption.
+- `handle_frame_update_deletion` — the find-subjects-then-SPARQL-DELETE block
+  cited as the risky read-then-write — **has no callers.** It is dead code.
+- The SPARQL quad-diff fallback in `execute_atomic_frame_update` is dead for the
+  production adapter too, since it is guarded on
+  `hasattr(backend_adapter, 'update_subjects_graph')`, which is true.
+
+So the live write path is one transaction, and the work splits cleanly.
+
+#### Phase 1 — lock the write transaction. Three lines of threading, one of lock.
+
+The lock key MUST be the **entity URI**, not the frame subjects. Advisory locks
+only exclude writers using the same key: entity upsert and entity-graph delete
+both lock `entity_uri`, so a frame write locking its frame subjects instead
+would be mutually exclusive with neither. This is the part to get right; the
+rest is plumbing.
+
+| file | change |
+|---|---|
+| `kg_backend_utils.py:1430` `update_subjects_graph` | accept `lock_uris=None`; `await lock_entities(conn, lock_uris)` as the first statement inside the transaction |
+| `kgentity_frame_create_impl.py:443` `execute_atomic_frame_update` | accept `entity_uri`, pass it as `lock_uris=[entity_uri]` |
+| `kgentity_frame_create_impl.py:203` call site | pass `entity_uri` — `create_entity_frame` already has it as a parameter (line 115) |
+
+That gives frame writes mutual exclusion with each other AND with entity
+upsert/delete, because all three then contend on one key.
+
+#### Phase 2 — validation-to-write atomicity. Genuinely blocked.
+
+`validate_frame_ownership` (`kgentity_frame_update_impl.py:110`) reads on its
+own connection, and the write happens much later in a different transaction.
+Phase 1 does not make the validation current: a frame reparented between the
+check and the write is still acted on from a stale read.
+
+Closing that means holding one lock from before the validation through to the
+commit, which needs a connection spanning both — the write-scope work in
+issues/175 class 2. **This is the part that is genuinely blocked**, and it was
+the whole of what the earlier entry described.
+
+Its risk is also narrower than the corruption class: the failure is acting on
+stale ownership, not a single-valued predicate gaining a second value. Worth
+doing after class 2 exists; not worth a bespoke mechanism before then.
+
+#### Verification
+
+Same standard as the rest: two concurrent frame writes to one entity, asserting
+on rows rather than the API response, and it **must fail without the lock**. The
+entity-delete lock in item 1 needed its window widened to 2s before the race
+appeared at all — expect the same here, and treat a test that passes
+immediately as untrustworthy rather than as good news.
+
+Also assert the cross-path exclusion Phase 1 exists for: a frame write
+concurrent with an entity-graph delete on the same entity must serialize. That
+is what the entity-URI key buys, and nothing else tests it.
 
 ### 3. Document segmentation — safer than assumed, one residual gap
 
@@ -193,14 +240,17 @@ as 2026-09-06. Whether frame writes and duplicate segmentation enqueues see the
 same pattern is a question about how the callers behave, not about this code,
 and is unanswered.
 
-**How much does locking it cost?** Only where a single connection already spans
-the read and the write is this a one-line change — that was true of items 1 and
-of the upsert in issues/173, and is NOT true of what remains:
+**How much does locking it cost?** It depends on whether a single connection
+already spans the WRITE — which is more often true than first assessed, since
+both `update_entity_graph` and `update_subjects_graph` already run their
+mutation in one transaction. Making the READ atomic with the write is the
+expensive part, and only phase 2 of the frame work needs it:
 
 | path | cost |
 |---|---|
 | entity delete | one line — **done** |
-| frame create/update | thread a connection through three processors first |
+| frame create/update — phase 1 | ~4 lines; the write is already one transaction |
+| frame create/update — phase 2 | blocked on the write scope (issues/175 class 2) |
 | segmentation enqueue | a partial unique index, so a migration script |
 | `touch_entity_modification_time` | ~30–40 lines, direct SQL (Option B above) |
 
