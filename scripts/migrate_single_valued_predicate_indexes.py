@@ -55,48 +55,58 @@ from vitalgraph.db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid  
 
 logger = logging.getLogger("migrate_single_valued_indexes")
 
-# The system writes these itself, so a write race corrupts them without any
-# client asking for it — which is exactly what happened in issues/173.
-# `vitaltype` is a structural predicate rather than a VitalSigns property, so it
-# has no trait class to consult; it is single-valued by construction (one type
-# URI per object) and is listed explicitly for that reason.
-DEFAULT_PREDICATES = [
-    "http://vital.ai/ontology/vital-core#vitaltype",
-    "http://vital.ai/ontology/vital-aimp#hasObjectCreationTime",
-    "http://vital.ai/ontology/vital#hasObjectModificationDateTime",
-    "http://vital.ai/ontology/vital-aimp#hasObjectStatusType",
-    "http://vital.ai/ontology/haley-ai-kg#hasKGEntityType",
-]
+# Structural predicates the ontology has no trait class for. `vitaltype` is
+# single-valued by construction — one type URI per object — and is named here
+# because there is nothing to consult. Note `rdf:type` is deliberately NOT here:
+# a resource may legitimately have several rdf:type values.
 STRUCTURAL = {"http://vital.ai/ontology/vital-core#vitaltype"}
 
 
-def _ontology_rejects(uri: str) -> bool:
-    """True if the ontology says this predicate MAY hold multiple values.
-
-    Consulted so that a `--predicates` argument cannot create a constraint the
-    model disagrees with. An unknown property is NOT treated as multi-valued —
-    it is reported by the caller and skipped, because "the ontology has no
-    opinion" and "the ontology permits many" are different statements and only
-    the second is a reason to refuse.
-    """
+def _cardinality(uri: str):
+    """`False` single-valued, `True` multi-valued, `None` if the ontology has no
+    opinion. Three states, because "not single-valued" and "unknown" must not
+    collapse — the second is a reason to leave a predicate alone, not to index
+    it."""
     if uri in STRUCTURAL:
         return False
     try:
         from vital_ai_vitalsigns.vitalsigns import VitalSigns
         cls = VitalSigns().get_registry().get_vitalsigns_property_class(uri)
+        if cls is None:
+            return None
         return bool(getattr(cls, "multiple_values", False))
     except Exception:
-        return False
+        return None
 
 
-def _known_to_ontology(uri: str) -> bool:
-    if uri in STRUCTURAL:
-        return True
-    try:
-        from vital_ai_vitalsigns.vitalsigns import VitalSigns
-        return VitalSigns().get_registry().get_vitalsigns_property_class(uri) is not None
-    except Exception:
-        return False
+async def derive_predicates(conn, space_id: str):
+    """The single-valued predicates ACTUALLY PRESENT in this space.
+
+    DERIVED, NOT LISTED. An earlier version carried a hand-picked default set and
+    used the ontology only to VETO anything multi-valued in it. That covered 5 of
+    the 22 single-valued predicates present on the production space — and missed
+    both of the two that were actually corrupted, `hasTextSlotValue` and
+    `hasDateTimeSlotValue`. A predicate absent from the list got no index and no
+    warning, which is the same silent-absence failure this whole effort keeps
+    finding: the guarantee simply did not apply, and nothing said so.
+
+    The ontology can enumerate the set, so it should. `{space}_rdf_pred_stats`
+    gives the predicates in use for the cost of one small scan (24 rows on the
+    production space), and each is classified by its trait class.
+
+    Returns `(single_valued, multi_valued, unknown)` so the caller can report
+    what it declined as well as what it took — a predicate skipped because the
+    ontology has no opinion is a decision someone should see.
+    """
+    rows = await conn.fetch(
+        f"SELECT t.term_text FROM {space_id}_rdf_pred_stats s"
+        f"  JOIN {space_id}_term t ON t.term_uuid = s.predicate_uuid")
+    sv, mv, unk = [], [], []
+    for r in rows:
+        uri = r["term_text"]
+        c = _cardinality(uri)
+        (sv if c is False else mv if c is True else unk).append(uri)
+    return sorted(sv), sorted(mv), sorted(unk)
 
 
 def _index_name(space_id: str, uri: str) -> str:
@@ -134,15 +144,6 @@ async def migrate_space(conn, space_id: str, predicates, apply: bool) -> dict:
     made, skipped, blocked, invalid = [], [], [], []
     for uri in predicates:
         short = uri.rsplit("#", 1)[-1]
-        if _ontology_rejects(uri):
-            logger.warning("  %-34s SKIPPED — the ontology declares it "
-                           "multi-valued; a unique index would be wrong", short)
-            skipped.append(short)
-            continue
-        if not _known_to_ontology(uri):
-            logger.info("  %-34s not known to the ontology — indexing anyway on "
-                        "the caller's say-so", short)
-
         p_uuid = _generate_term_uuid(uri, "U")
         name = _index_name(space_id, uri)
         exists, valid = await _index_state(conn, name)
@@ -199,7 +200,8 @@ async def main() -> int:
     ap.add_argument("--space", help="space id")
     ap.add_argument("--all", action="store_true", help="every space in the database")
     ap.add_argument("--predicates", nargs="+", metavar="URI",
-                    help="override the default predicate set")
+                    help="index only these, instead of every single-valued "
+                         "predicate the space actually uses")
     ap.add_argument("--apply", action="store_true",
                     help="create the indexes (default is a dry run)")
     args = ap.parse_args()
@@ -207,10 +209,8 @@ async def main() -> int:
     if not args.space and not args.all:
         ap.error("one of --space or --all is required")
 
-    predicates = args.predicates or DEFAULT_PREDICATES
     print(f"\U0001F5C4  target: {describe_target(args)}", flush=True)
-    logger.info("%s — %d predicate(s)", "APPLY" if args.apply else "DRY RUN",
-                len(predicates))
+    logger.info("%s", "APPLY" if args.apply else "DRY RUN")
 
     import asyncpg
     conn = await asyncpg.connect(host=args.host, port=args.port,
@@ -228,6 +228,23 @@ async def main() -> int:
         any_blocked = False
         for sp in spaces:
             logger.info("\n%s:", sp)
+            if args.predicates:
+                predicates = args.predicates
+                bad = [u for u in predicates if _cardinality(u) is True]
+                if bad:
+                    logger.error("  refusing: the ontology declares %s "
+                                 "multi-valued", ", ".join(
+                                     u.rsplit("#", 1)[-1] for u in bad))
+                    predicates = [u for u in predicates if u not in bad]
+            else:
+                predicates, mv, unk = await derive_predicates(conn, sp)
+                logger.info("  %d single-valued predicate(s) in use; skipping "
+                            "%d multi-valued (%s) and %d the ontology does not "
+                            "describe (%s)",
+                            len(predicates), len(mv),
+                            ", ".join(u.rsplit("#", 1)[-1] for u in mv) or "none",
+                            len(unk),
+                            ", ".join(u.rsplit("#", 1)[-1] for u in unk) or "none")
             r = await migrate_space(conn, sp, predicates, apply=args.apply)
             if r.get("blocked") or r.get("invalid"):
                 any_blocked = True
