@@ -280,6 +280,52 @@ That residue is the strongest argument for issues/175: a constraint holds
 regardless of whether the writer could name its subjects in advance, and this is
 precisely the writer that cannot.
 
+#### The concrete case: a SPARQL update touching a slot inside an entity graph
+
+Worked through because it is the interleaving that matters most, and it is
+already happening.
+
+An entity operation holds `pg_advisory_xact_lock(entity_uri)` and is doing
+delete-then-insert over every subject with `kGGraphURI = entity`. A SPARQL
+update modifies a slot belonging to that entity graph. **The SPARQL update does
+not take the lock**, so the lock does not exclude it, and the outcome depends on
+commit order:
+
+- **SPARQL commits first.** The entity operation's full-graph replace then
+  deletes and rewrites that subject from the client payload, so the slot change
+  is **silently overwritten** — a lost update, with both writers reporting
+  success.
+- **SPARQL commits second.** Its `DELETE` targets the value the entity operation
+  has already replaced, matches nothing, and its `INSERT` then adds a **second
+  value** to a slot that may hold one.
+
+Row-level locking does not prevent either: it serialises writes to the same ROW,
+while both failures are about the SET of rows changing underneath a decision
+already made.
+
+**This is measurable on production, in the space already repaired:**
+
+| predicate | subjects | holding more than one value |
+|---|---|---|
+| `hasDateTimeSlotValue` | 390,756 | **92** |
+| `hasTextSlotValue` | 1,852,047 | **94** |
+| `hasKGSlotType` | 2,821,011 | 0 |
+
+The distribution is itself evidence for the mechanism. `hasKGSlotType` is set
+once when a slot is created and never modified — zero violations. The two VALUE
+predicates are the ones that get updated, and they are the ones corrupted.
+
+Both are `multiple_values=False` in the ontology, so both are invariant
+violations, not legitimate multi-valued data.
+
+**Neither existing remedy covers this today.** The repair in
+`scripts/repair_duplicate_server_timestamps.py` handles only the two
+entity-level timestamps. The default predicate set in issues/175 is
+entity-level too. And the lock does not reach a writer that does not take it.
+So this class is currently unrepaired and unprotected, and it is the direct
+answer to "what happens if a SPARQL update modifies a slot while an entity graph
+operation is underway": today, it corrupts, and 186 subjects show it has.
+
 **Ordering matters.** Whatever locks here must take keys in the same sorted
 order `lock_entities` uses, or a SPARQL update and an entity write acquiring the
 same pair in opposite orders will deadlock rather than queue.
