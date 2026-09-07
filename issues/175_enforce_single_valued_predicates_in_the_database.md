@@ -93,16 +93,71 @@ false premise, and it turned an unexamined space into a measured one.
    are made only by an explicit action, never as a side effect).
 3. `CREATE UNIQUE INDEX CONCURRENTLY`, since these tables are large and live.
 
-### The trade
+### The trade — it does NOT raise, and that changes the analysis
 
-A genuine race stops being silent corruption and becomes a loud unique
-violation the caller must handle. That is strictly better, and the pattern
-already exists — `with_deadlock_retry` retries a transaction whose body is
-repeatable, which is exactly the shape a losing writer needs.
+An earlier revision of this issue said a genuine race would become "a loud
+unique violation the caller must handle". **That is wrong**, and the reason
+matters more than the correction.
 
-Worth stating plainly: **this would have prevented every instance of corruption
-found in this session**, including the `touch_entity_modification_time` race in
-issues/174 item 4, without modifying that function at all.
+Every path that inserts a quad does so with a TARGETLESS
+`ON CONFLICT DO NOTHING`:
+
+| path | site |
+|---|---|
+| bulk insert | `sparql_sql_space_impl.py:951`, `:1229` |
+| bulk load | `bulk_load.py:53` |
+| SPARQL update | `emit_update.py:1019` |
+
+In PostgreSQL a targetless `ON CONFLICT DO NOTHING` applies to **every** unique
+constraint and index on the table, not just the primary key. So once the partial
+unique index exists, a second value for a single-valued predicate is not an
+error — it is **silently suppressed**.
+
+**What that buys.** No caller needs new error handling, no retry logic, no
+transaction aborts, and no risk of a deploy turning working writes into 500s.
+The invariant simply becomes unbreakable. It also covers the case locking cannot
+reach at all — a WHERE-bound SPARQL update, which by construction cannot
+enumerate the subjects it will touch, is nonetheless unable to produce a second
+value. That is the argument for doing this at the database level rather than
+path by path, stated at its strongest: **a constraint holds regardless of
+whether the writer could name its subjects in advance, and the SPARQL update
+path is precisely the writer that cannot.**
+
+**What it costs, and it is the recurring theme of this whole investigation.** A
+losing writer's value disappears with NO SIGNAL. Corruption becomes silent loss.
+For the two timestamps that is benign — two near-identical values, either is
+defensible. For a single-valued predicate whose value carries meaning, the
+system would quietly keep the first writer's value and discard the second, and
+nothing would say so.
+
+There is a second, subtler case in the same mechanism. `emit_update.py:1019`
+documents that its `ON CONFLICT DO NOTHING` exists to absorb duplicates the
+BINDING SET produces within one statement — the DAWG Halloween-problem shape,
+where a `DELETE/INSERT` maps two solutions onto one output quad. With the new
+index, a legitimate update that computes two DIFFERENT values for a
+single-valued predicate in one statement would also be silently reduced to one,
+**arbitrarily** — the surviving row is whichever the executor reached first.
+Previously it stored both, which was wrong but visible. Neither outcome is good;
+silence is the better of the two and still deserves to be known about.
+
+### Impact plan
+
+1. **No code changes are required to adopt it.** Nothing raises, so nothing
+   needs to handle a new exception. This is what makes the migration low risk.
+2. **Add detection for suppression, or the fix trades one silence for another.**
+   The bulk path is already positioned for this: `sparql_sql_space_impl.py:1236`
+   parses the real inserted count precisely because "ON CONFLICT DO NOTHING
+   means a duplicate quad row counted as written" — a suppressed row is already
+   countable there. `emit_update` reports nothing comparable and would need it.
+3. **Restores and imports become self-limiting.** A backup containing duplicates
+   no longer reimports them; the surplus is dropped on the way in. Worth knowing
+   before someone restores a pre-repair snapshot and wonders why the row counts
+   differ from the source.
+4. **Sequencing is unchanged and unblocked.** Repair per space, then create the
+   indexes concurrently. Because nothing raises, the indexes can go on before
+   the `touch_entity_modification_time` rewrite in issues/174 item 4 — that race
+   degrades to "the modification time does not advance", and all three of its
+   call sites already swallow failures as non-critical.
 
 ## Class 2: a write scope, and the hazard that shapes it
 
