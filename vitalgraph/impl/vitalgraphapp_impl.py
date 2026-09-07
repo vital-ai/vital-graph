@@ -1180,7 +1180,29 @@ class VitalGraphAppImpl:
         async def logout_wrapper(request: Request, current_user: Dict = Depends(self.get_current_user)):
             return await self.logout(request, current_user)
         
-        async def refresh_token_wrapper(refresh_token: str = Body(..., embed=True), current_user: Dict = Depends(self.get_current_user)):
+        async def refresh_token_wrapper(refresh_token: str = Body(..., embed=True)):
+            """Refresh an access token. DELIBERATELY NOT `Depends(get_current_user)`.
+
+            IT USED TO BE, AND THAT MADE REFRESH IMPOSSIBLE. `get_current_user`
+            verifies the Authorization header as an ACCESS token, so the endpoint
+            demanded a valid access token in order to replace an expired one —
+            useless in the only situation it exists for. The frontend sends the
+            REFRESH token in that header (as this route's own description says it
+            should), and `verify_token(..., "access")` rejects it on
+            `type != "access"` before the handler is ever reached. So every
+            session died 30 minutes after login: refresh 401s, the access token
+            stays expired, and the WebSocket reconnect loop reports "Invalid
+            authentication token" forever. The injected `current_user` was not
+            even used.
+
+            Dropping the dependency does not drop authentication. The refresh
+            token in the BODY is the credential and `VitalGraphAPI.refresh_token`
+            validates it fully: signature and expiry via
+            `verify_token(refresh_token, "refresh")`, which also rejects an access
+            token passed here by type; that the user still exists and is active;
+            and that `token_version` has not been bumped by a revocation. That is
+            strictly more checking than the access-token dependency performed.
+            """
             return await self.refresh_token(refresh_token)
 
         # Health check endpoint (no authentication required)
