@@ -56,23 +56,34 @@ matching the production term table exactly.
 
 ### But other spaces are NOT clean, and that is the real finding here
 
-`prod_kg` is clean only because it was just repaired. Checking the other spaces
-on the same instance:
+`prod_kg` is clean only because it was just repaired. Surveying all five spaces
+on the instance with `scripts/migrate_single_valued_predicate_indexes.py`:
 
-| space | violating subjects (creation) | redundant rows |
-|---|---|---|
-| `prod_kg` | 0 (repaired 2026-09-07) | — |
-| `lead_data` | **62** | 165 creation + 165 modification |
-| `lead_prod` | 0 | — |
+| space | vitaltype | creation | modification | status | entityType |
+|---|---|---|---|---|---|
+| `prod_kg` | ok | ok | ok | ok | ok |
+| `lead_data` | ok | **62** | **62** | ok | ok |
+| `lead_prod` | ok | ok | **42** | ok | ok |
+| `sp_kg_types` | ok | ok | ok | ok | ok |
+| `testspace` | ok | ok | ok | ok | ok |
 
-So the corruption was never confined to the space that surfaced it, and
-`lead_data` was never examined because nothing there had failed visibly yet.
-**Adding the index would fail to build on `lead_data` until it is repaired** —
-which is a feature, not an obstacle: the constraint refuses to be added while
-the data contradicts it, so it cannot be enabled on a false premise.
+Two findings in that table.
 
-There are 5 spaces on the instance; only three are named above because the other
-two were not measured. All need checking.
+**The corruption was never confined to the space that surfaced it.** `lead_data`
+has 62 violating subjects and was never examined, because nothing there had
+failed visibly. It is the same both-predicates signature as the upsert race.
+
+**`lead_prod` corroborates the second mechanism.** 42 subjects, on
+`hasObjectModificationDateTime` ONLY, with creation time clean. The upsert race
+cannot produce that — it stamps both. This is the signature issues/174 item 4
+inferred from just 4 subjects on `prod_kg`, now visible at ten times the scale
+on a different space. `touch_entity_modification_time` is not a marginal
+hypothesis; it is the dominant source of modification-time corruption on this
+instance.
+
+**The index refuses to build where the data contradicts it**, which is the
+behaviour that makes the constraint worth having. It cannot be enabled on a
+false premise, and it turned an unexamined space into a measured one.
 
 ### Sequence
 
@@ -132,10 +143,19 @@ constraints cannot address.
 
 ## Open questions
 
-- **Which predicates are genuinely single-valued?** The six above are inferred
-  from server-managed semantics and confirmed by data. The authority is the
-  ontology, and VitalSigns knows cardinality — the list should come from there
-  rather than from a hand-curated constant that drifts.
+- ~~Which predicates are genuinely single-valued?~~ **Answered.** VitalSigns
+  property trait classes carry `multiple_values`, and the migration consults it:
+  it refuses to index any predicate the ontology declares multi-valued, so a
+  hand-passed `--predicates` cannot create a constraint the model disagrees
+  with. Verified: the five default predicates report `multiple_values=False`
+  and `hasKGActionTypeList` reports `True`. `vitaltype` is structural rather
+  than a VitalSigns property and is listed explicitly, with that noted in the
+  code.
+- **How wide should the default set be?** Indexing every single-valued
+  predicate would be the stronger guarantee, but each index is write
+  amplification on a hot table. The default is the server-managed set — the
+  ones the system writes itself, and therefore the ones a race can corrupt with
+  no client involved.
 - **Per-graph or per-subject?** The proposed index keys on
   `(subject, predicate, context)`, so the same subject may hold different values
   in different graphs. That matches how the rest of the system scopes by
