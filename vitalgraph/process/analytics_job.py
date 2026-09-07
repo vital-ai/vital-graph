@@ -236,6 +236,15 @@ class AnalyticsJob:
         # all three per-graph views -- which is the same tail, counted where the
         # query actually looks.
         sf = self._graph_filter(graph_ctx, alias='s')
+        # `{space}_edge` carries context_uuid too, and unaliased here.
+        ef_gf = (f" AND context_uuid = '{graph_ctx}'::uuid"
+                 if graph_ctx is not None else "")
+        # The quad-form fallback below aliases its quad tables `type_q`/`src_q`,
+        # NOT `q`. Reusing `gf` there emitted `AND q.context_uuid = ...` against
+        # a query with no `q`, which is an UndefinedTableError rather than a
+        # wrong answer — caught by the graph-scope tests, which is what they are
+        # for.
+        tq_gf = self._graph_filter(graph_ctx, alias='type_q')
         type_rows = []
         try:
             type_rows = await conn.fetch(f"""
@@ -273,33 +282,82 @@ class AnalyticsJob:
         ]
         total_count = sum(row["cnt"] for row in type_rows)
 
-        # Count entities with at least one frame (via Edge_hasEntityKGFrame)
-        with_frames_count = await conn.fetchval(f"""
-            SELECT COUNT(DISTINCT src_term.term_text)
-            FROM {t_quad} type_q
-            JOIN {t_term} type_p ON type_q.predicate_uuid = type_p.term_uuid
-            JOIN {t_term} type_o ON type_q.object_uuid = type_o.term_uuid
-            JOIN {t_quad} src_q ON type_q.subject_uuid = src_q.subject_uuid
-            JOIN {t_term} src_p ON src_q.predicate_uuid = src_p.term_uuid
-            JOIN {t_term} src_term ON src_q.object_uuid = src_term.term_uuid
-            WHERE type_p.term_text = $1
-              AND type_o.term_text = $2
-              AND src_p.term_text = $3
-        """, _VITALTYPE, _EDGE_HAS_ENTITY_KG_FRAME, _HAS_EDGE_SOURCE) or 0
+        # Entities with at least one frame. THE EDGE TABLE ALREADY HOLDS THIS.
+        #
+        # The quad form re-derived it with a SIX-WAY JOIN — two quad scans and
+        # four term joins — to answer "which subjects are the source of an
+        # Edge_hasEntityKGFrame edge", which is one indexed predicate on
+        # `{space}_edge`. Measured on a 74.2M-quad space, IDENTICAL answers:
+        #
+        #     quad form   41,257 ms      edge table   29 ms      1421x
+        #
+        # Same correction as the type distribution above (6,282 ms -> 14 ms):
+        # the derived table exists precisely so these questions are not
+        # re-derived from the quads, and this one was still doing it.
+        #
+        # PRECONDITION, and it is the same one the edge table always carries: a
+        # short or unbuilt `{space}_edge` under-counts silently. That is
+        # `issues/041`, and it is why the quad form is kept as a fallback rather
+        # than deleted — a space whose edge table predates the derivation, or
+        # whose backfill has not converged, gets a slow correct answer instead of
+        # a fast wrong one.
+        with_frames_count = 0
+        try:
+            _ef = await conn.fetchval(
+                f"SELECT term_uuid FROM {t_term} WHERE term_text = $1 "
+                f" AND term_type = 'U' LIMIT 1", _EDGE_HAS_ENTITY_KG_FRAME)
+            if _ef is not None:
+                with_frames_count = await conn.fetchval(
+                    f"SELECT COUNT(DISTINCT source_node_uuid) "
+                    f"  FROM {space_id}_edge WHERE edge_type_uuid = $1{ef_gf}",
+                    _ef) or 0
+        except Exception as exc:
+            logger.debug("analytics: edge-table frame count unavailable for "
+                         "%s (%s)", space_id, exc)
+            with_frames_count = 0
+
+        if not with_frames_count:
+            with_frames_count = await conn.fetchval(f"""
+                SELECT COUNT(DISTINCT src_term.term_text)
+                FROM {t_quad} type_q
+                JOIN {t_term} type_p ON type_q.predicate_uuid = type_p.term_uuid
+                JOIN {t_term} type_o ON type_q.object_uuid = type_o.term_uuid
+                JOIN {t_quad} src_q ON type_q.subject_uuid = src_q.subject_uuid
+                JOIN {t_term} src_p ON src_q.predicate_uuid = src_p.term_uuid
+                JOIN {t_term} src_term ON src_q.object_uuid = src_term.term_uuid
+                WHERE type_p.term_text = $1
+                  AND type_o.term_text = $2
+                  AND src_p.term_text = $3{tq_gf}
+            """, _VITALTYPE, _EDGE_HAS_ENTITY_KG_FRAME, _HAS_EDGE_SOURCE) or 0
 
         orphan_count = max(0, total_count - with_frames_count)
 
         # Average frames per entity
         avg_frames = 0.0
         if with_frames_count > 0:
-            total_frame_edges = await conn.fetchval(f"""
-                SELECT COUNT(*)
-                FROM {t_quad} q
-                JOIN {t_term} p_term ON q.predicate_uuid = p_term.term_uuid
-                JOIN {t_term} o_term ON q.object_uuid = o_term.term_uuid
-                WHERE p_term.term_text = $1
-                  AND o_term.term_text = $2
-            """, _VITALTYPE, _EDGE_HAS_ENTITY_KG_FRAME) or 0
+            # Same table, same reason — this is the row COUNT where the one
+            # above is the DISTINCT SOURCE count, and both are one scan of the
+            # edges of a single type.
+            total_frame_edges = 0
+            try:
+                _ef2 = await conn.fetchval(
+                    f"SELECT term_uuid FROM {t_term} WHERE term_text = $1 "
+                    f" AND term_type = 'U' LIMIT 1", _EDGE_HAS_ENTITY_KG_FRAME)
+                if _ef2 is not None:
+                    total_frame_edges = await conn.fetchval(
+                        f"SELECT COUNT(*) FROM {space_id}_edge "
+                        f" WHERE edge_type_uuid = $1{ef_gf}", _ef2) or 0
+            except Exception:
+                total_frame_edges = 0
+            if not total_frame_edges:
+                total_frame_edges = await conn.fetchval(f"""
+                    SELECT COUNT(*)
+                    FROM {t_quad} q
+                    JOIN {t_term} p_term ON q.predicate_uuid = p_term.term_uuid
+                    JOIN {t_term} o_term ON q.object_uuid = o_term.term_uuid
+                    WHERE p_term.term_text = $1
+                      AND o_term.term_text = $2{gf}
+                """, _VITALTYPE, _EDGE_HAS_ENTITY_KG_FRAME) or 0
             avg_frames = round(total_frame_edges / max(with_frames_count, 1), 2)
 
         return {
@@ -441,9 +499,40 @@ class AnalyticsJob:
         t_quad = f"{space_id}_rdf_quad"
         t_term = f"{space_id}_term"
         gf = self._graph_filter(graph_ctx)
+        # `rdf_stats` is aliased `s` in the edge-type query below; the graph
+        # filter has to name that alias rather than the quad table's default.
+        sf = self._graph_filter(graph_ctx, alias='s')
 
-        # Edge type distribution
-        edge_rows = await conn.fetch(f"""
+        # Edge type distribution — from `rdf_stats`, the same correction as the
+        # ENTITY type distribution above and for the same reason: `vitaltype` is
+        # single-valued, so COUNT(DISTINCT subject) for a (vitaltype, type) pair
+        # IS the stored row_count. Measured on a 74.2M-quad space, identical
+        # answers across all three edge types:
+        #
+        #     quad form   9,830 ms      rdf_stats   4 ms
+        #
+        # Same precondition, same fallback: the table keeps only pairs with
+        # row_count >= STATS_MIN_ROW_COUNT, so a type with exactly one edge is
+        # absent, and an empty result falls through to the quad form below.
+        edge_rows = []
+        try:
+            edge_rows = await conn.fetch(f"""
+                SELECT o.term_text AS type_uri, sum(s.row_count)::bigint AS cnt
+                FROM {space_id}_rdf_stats s
+                JOIN {t_term} p ON p.term_uuid = s.predicate_uuid
+                JOIN {t_term} o ON o.term_uuid = s.object_uuid
+                WHERE p.term_text = $1 AND o.term_text LIKE '%Edge\\_%'{sf}
+                GROUP BY o.term_text
+                ORDER BY cnt DESC
+                LIMIT 50
+            """, _VITALTYPE)
+        except Exception as exc:
+            logger.debug("analytics: rdf_stats edge distribution unavailable "
+                         "for %s (%s)", space_id, exc)
+            edge_rows = []
+
+        if not edge_rows:
+            edge_rows = await conn.fetch(f"""
             SELECT o_term.term_text AS type_uri, COUNT(DISTINCT q.subject_uuid) AS cnt
             FROM {t_quad} q
             JOIN {t_term} p_term ON q.predicate_uuid = p_term.term_uuid
