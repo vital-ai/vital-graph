@@ -438,7 +438,7 @@ def _freshen_insert_data_bnodes(quads: List[QuadPattern]) -> List[QuadPattern]:
     triples. Across requests nothing collides.
     """
     import uuid as _u
-    from dataclasses import dataclass, field
+    from dataclasses import replace as _replace
 
     scope: Dict[str, str] = {}
     salt = _u.uuid4().hex[:12]
