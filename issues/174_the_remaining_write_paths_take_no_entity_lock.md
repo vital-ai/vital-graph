@@ -82,21 +82,46 @@ Two other things that entry got wrong or missed:
 
 So the live write path is one transaction, and the work splits cleanly.
 
-#### Phase 1 — lock the write transaction, keyed on the GRAPH ROOT
+#### Phase 1 — lock the write transaction, keyed on the GROUPING
 
-**Not on the entity URI.** An earlier draft of this plan said to lock
-`entity_uri`, which is wrong for half the frames in the system: frames are
-either top-level **Assertions**, which have no enclosing entity at all, or
-**Aspects**, which are entity-enclosed *or* children of an Assertion. There is
-no entity URI to lock in the Assertion case.
+**Not on the entity URI unconditionally.** An earlier draft said to lock
+`entity_uri`. Top-level frames have no enclosing entity — WordNet is the
+worked example, a space built entirely of them — so there is nothing to lock
+there.
+
+**And do NOT classify by form type.** `hasKGFormType` describes what a frame
+MEANS; `kGGraphURI` describes what it BELONGS TO, and only the second determines
+the lock. They come apart in practice. Measured on `prod_kg`:
+
+| | count |
+|---|---|
+| frames | 482,098 |
+| explicitly `KGFormType_Aspect` | 206,219 |
+| explicitly `KGFormType_Assertion` | **0** |
+| carrying `kGGraphURI` (entity-scoped) | **482,098 — all of them** |
+| carrying BOTH `kGGraphURI` and `hasFrameGraphURI` | 482,098 |
+
+So ~275,879 frames there have no form type set at all, which DEFAULTS TO
+ASSERTION — while still being entity-scoped. A lock keyed on form type would
+take the frame's own URI for every one of them and never contend with the entity
+writers, which is the failure this phase exists to prevent, delivered while
+looking correct.
+
+Key on the grouping the write actually uses: `kGGraphURI` present means the
+entity owns these subjects; absent means the frame stands alone.
 
 The concept that generalises is **the unit a write replaces**, and the two paths
 define it differently:
 
-| path | processor | lock unit | carried as |
+| path | processor | lock unit | decided by |
 |---|---|---|---|
-| entity-enclosed (Aspect) | `kgentity_frame_create_impl` | the entity | `kGGraphURI` |
-| standalone (Assertion) | `kgframe_create_impl` | **each frame, independently** | `hasFrameGraphURI` |
+| entity-scoped | `kgentity_frame_create_impl` | the entity | writes `kGGraphURI = entity` |
+| standalone (e.g. WordNet) | `kgframe_create_impl` | **each frame, independently** | writes no `kGGraphURI` at all |
+
+The processor already encodes the distinction, so the caller never has to infer
+it: each one knows which grouping it is writing. That is the safest place for
+the decision to live — inferring it from the data at write time would mean
+reading state the write is about to replace.
 
 **THERE IS NO FRAME-GRAPH.** This is the part to get right, because the
 entity-graph analogy does not carry over and inventing one would send an
@@ -126,12 +151,17 @@ Two consequences for the lock:
 or kGGraphURI. Uses only frameGraphURI for grouping individual frame
 members."*
 
-**The two key spaces are disjoint, and that is correct rather than a gap.** An
-Assertion frame carries no `kGGraphURI` and no entity edge, so
+**The two key spaces are disjoint, and that is correct rather than a gap.** A
+standalone frame carries no `kGGraphURI` and no entity edge, so
 `delete_entity_graph_bulk` — which finds subjects by `kGGraphURI = entity` —
-can never touch one. There is nothing to be mutually excluded from. Aspect
-frames DO take the entity key, because entity upsert and entity-graph delete
-both hold it, and that cross-path exclusion is the point of this phase.
+can never touch one. There is nothing to be mutually excluded from.
+Entity-scoped frames DO take the entity key, because entity upsert and
+entity-graph delete both hold it, and that cross-path exclusion is the point of
+this phase.
+
+Note the disjointness follows from the GROUPING, not the form type: an
+entity-scoped frame whose form type is unset (and therefore Assertion) still
+belongs to the entity and still takes the entity key.
 
 A standalone create may write **several independent frames in one call**.
 `lock_entities` sorts and deduplicates its keys, so passing the whole set is
@@ -154,6 +184,21 @@ path is left unserialized while looking done.
 `lock_entities` is named for its first caller but locks graph roots generally;
 worth a docstring line saying so rather than a rename, since entity upsert and
 delete already use it under the old name.
+
+#### Still open in this plan
+
+- **Frame DELETE is not covered.** This plan is create/update only.
+  `_delete_frame_by_uri` takes no lock, and once create/update serialize on the
+  grouping, a concurrent delete is the remaining way to interleave with them. It
+  should take the same key, and the code already resolves the owning entity for
+  cache invalidation, so the value is to hand. Not planned here because the
+  delete path's own risk was assessed separately (its read feeds a reported
+  count, not the delete's scope) and it deserves its own look rather than being
+  folded in.
+- **Which key a MIXED write takes.** If one call ever writes both entity-scoped
+  and standalone frames, it needs both keys. `lock_entities` handles a mixed set
+  safely — sorted and deduplicated — but no caller currently assembles one, and
+  whether that is possible has not been established.
 
 #### Phase 2 — validation-to-write atomicity. Genuinely blocked.
 
