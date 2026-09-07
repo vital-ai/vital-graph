@@ -420,6 +420,55 @@ loudly if the cap is hit: a WHERE whose result keeps changing under an
 accumulating lock set is a signal worth surfacing, not something to paper over
 by proceeding with whatever the last pass produced.
 
+#### Resolving a subject to its grouping — the slot-only change set
+
+The case that makes this necessary: a SPARQL update changes ONE slot value quad.
+The change set is `(slot, hasTextSlotValue, newValue)` and contains **no
+reference to the enclosing frame or entity at all** — yet that slot belongs to
+an entity graph an entity write may be replacing concurrently. Locking the
+subject would contend with nobody.
+
+**The cache already handles this case, and its mechanism cannot be reused.**
+`EntityGraphCache` resolves changed subjects to owning entities through
+`_sub_to_entity`, an index built at `put()` time from every subject in a cached
+entity graph, and its docstring is explicit that this is "pure in-memory — no DB
+queries". That is right for a cache and wrong for a lock:
+
+- it is **per-process**, so two replicas would derive different answers, and a
+  lock that does not collide protects nothing;
+- it only knows subjects that **happen to be cached**, so an uncached slot
+  resolves to nothing — a cache miss is harmless, a missing lock is not.
+
+So locking needs its own resolution, against the store rather than memory.
+
+**The rule, in precedence order, per concrete subject:**
+
+1. **The change set itself.** If it contains `(subject, hasKGGraphURI, X)`, the
+   grouping is `X`. This covers a subject being CREATED, which has no row to
+   look up yet — the same case the cache handles by inspecting the predicate.
+2. **The store.** Otherwise read `(subject, hasKGGraphURI, ?)` from the quad
+   table. Verified present: a slot carries both `hasKGGraphURI` (its entity) and
+   `hasFrameGraphURI` (its frame), so an existing slot always resolves.
+3. **Itself.** Otherwise the subject is its own grouping — a standalone frame,
+   or a non-KG subject in a general RDF graph that no entity write will touch.
+
+Rule 2 is the one this section exists for and the one an implementation would
+most easily omit, because every test written from the change set alone would
+pass without it.
+
+**Which grouping, when a subject carries both.** `hasKGGraphURI`, not
+`hasFrameGraphURI`. Entity upsert and entity-graph delete hold the entity key,
+so that is the key that must collide; a lock on the frame would be correct in
+isolation and useless against the writers it needs to exclude. For a standalone
+frame there is no `hasKGGraphURI` and rule 3 applies, which is the same answer
+phase 1 reached for frames.
+
+**Residual race, and why the loop bounds it.** A subject's grouping could change
+between resolution and lock acquisition — a slot reparented to another entity.
+The re-materialise loop already re-derives the subject set under the locks held;
+re-deriving the GROUPING on each pass, not just the subjects, closes this at no
+extra cost, since the resolution query runs per pass anyway.
+
 #### Where the lock loop should live — SQL or Python
 
 Both building blocks are confirmed present and agreeing with their Python
