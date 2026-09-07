@@ -21,6 +21,11 @@ from ai_haley_kg_domain.model.KGEntity import KGEntity
 
 # Property registry for datatype-aware sort handling (uri_list needs GROUP BY)
 from vitalgraph.model.kgentities_model import _FILTERABLE_ENTITY_PROPERTIES
+# The search term is interpolated into a SPARQL string literal below. It arrives
+# straight from the query string, so it must be escaped exactly as the criteria
+# path escapes its own `search_text` -- six sites here did not, which made a term
+# containing a double quote a broken query rather than a search for a quote.
+from vitalgraph.sparql.kg_query_builder import escape_sparql_string
 
 # Count cache — shared with the /kgentities/count endpoint; invalidated on writes.
 from vitalgraph.cache.count_cache import _count_cache
@@ -490,7 +495,7 @@ class KGEntityListProcessor:
         if search:
             search_clause = (
                 f"\n          ?s <http://vital.ai/ontology/vital-core#hasName> ?name ."
-                f"\n          FILTER(CONTAINS(LCASE(?name), LCASE(\"{search}\")))"
+                f"\n          FILTER(CONTAINS(LCASE(?name), LCASE(\"{escape_sparql_string(search)}\")))"
             )
 
         # Property filter clauses (status, date range, etc.)
@@ -571,7 +576,7 @@ class KGEntityListProcessor:
         if search:
             search_clause = (
                 "\n    ?entity <http://vital.ai/ontology/vital-core#hasName> ?name ."
-                f"\n    FILTER(CONTAINS(LCASE(?name), LCASE(\"{search}\")))"
+                f"\n    FILTER(CONTAINS(LCASE(?name), LCASE(\"{escape_sparql_string(search)}\")))"
             )
 
         pf_clause = ""
@@ -719,7 +724,7 @@ class KGEntityListProcessor:
             if search:
                 select_query_parts.extend([
                     "    ?entity <http://vital.ai/ontology/vital-core#hasName> ?name .",
-                    f"    FILTER(CONTAINS(LCASE(?name), LCASE(\"{search}\")))"
+                    f"    FILTER(CONTAINS(LCASE(?name), LCASE(\"{escape_sparql_string(search)}\")))"
                 ])
             
             select_query_parts.extend([
@@ -851,7 +856,7 @@ class KGEntityListProcessor:
         if search:
             query_parts.extend([
                 "    ?entity <http://vital.ai/ontology/vital-core#hasName> ?name .",
-                f"    FILTER(CONTAINS(LCASE(?name), LCASE(\"{search}\")))"
+                f"    FILTER(CONTAINS(LCASE(?name), LCASE(\"{escape_sparql_string(search)}\")))"
             ])
 
         # Property filter clauses (status, date range, etc.)
@@ -972,7 +977,7 @@ class KGEntityListProcessor:
         if search:
             subquery_parts.extend([
                 "          ?s ?sp ?so .",
-                f"          FILTER(CONTAINS(LCASE(STR(?so)), LCASE(\"{search}\")))"
+                f"          FILTER(CONTAINS(LCASE(STR(?so)), LCASE(\"{escape_sparql_string(search)}\")))"
             ])
         
         subquery_parts.extend([
@@ -1025,7 +1030,7 @@ class KGEntityListProcessor:
         if search:
             subquery_parts.extend([
                 "          ?entity ?sp ?so .",
-                f"          FILTER(CONTAINS(LCASE(STR(?so)), LCASE(\"{search}\")))"
+                f"          FILTER(CONTAINS(LCASE(STR(?so)), LCASE(\"{escape_sparql_string(search)}\")))"
             ])
         
         subquery_parts.extend([
