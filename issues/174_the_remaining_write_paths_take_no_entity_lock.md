@@ -420,6 +420,45 @@ loudly if the cap is hit: a WHERE whose result keeps changing under an
 accumulating lock set is a signal worth surfacing, not something to paper over
 by proceeding with whatever the last pass produced.
 
+#### Where the lock loop should live — SQL or Python
+
+Both building blocks are confirmed present and agreeing with their Python
+counterparts, which is what makes either approach viable:
+
+| need | SQL form | agrees with Python? |
+|---|---|---|
+| lock key from a URI | `('x'\|\|substr(encode(sha256(uri::bytea),'hex'),1,16))::bit(64)::bigint` | yes, byte-identical to `entity_lock_key` |
+| URI → term uuid, for the grouping lookup | `vitalgraph_term_uuid(text, type, lang, datatype_id)` | yes, matches `_generate_term_uuid` |
+
+**A `DO` block is the wrong place for the loop.** It keeps everything in one
+emitted blob, but the loop body has to re-execute the WHERE clause, which means
+embedding generated SQL inside a dollar-quoted block. That is arbitrary
+generated text inside a quoting construct, on the hottest write path, to
+implement iteration — the failure mode is a quoting collision that produces
+valid-looking SQL doing the wrong thing.
+
+**The loop belongs in `execute_sparql_update`**, which already owns the
+connection and the transaction. It becomes: run the materialise statement, read
+the subjects, resolve their groupings, call the existing `lock_entities`,
+re-materialise, repeat until the key set stops growing, then run the rest. The
+iteration is ordinary Python, there is no quoting problem, and it reuses the
+lock helper every other path uses rather than a second SQL implementation of the
+same thing that could drift from it.
+
+**What it requires, and why this is a bigger change than the frame lock.** The
+emitter currently joins its statements with `";\n"` into one string
+(`emit_update.py:582` and friends), and `GenerateResult` carries only `sql`.
+Splitting that blob back apart in the caller is not safe — a literal containing
+the separator would split wrongly — so the emitter has to hand back structure
+instead: the statement list, the WHERE clause used to materialise, and the
+subject expressions the delete/insert templates reference. That is a change to
+the emitter's contract, not an addition beside it.
+
+Worth stating plainly: this is materially larger than the ~7-line frame lock,
+and it is on the path every SPARQL write takes. It should be done deliberately,
+with the emitter contract change reviewed on its own, rather than folded in
+quietly.
+
 **Ordering matters.** Whatever locks here must take keys in the same sorted
 order `lock_entities` uses, or a SPARQL update and an entity write acquiring the
 same pair in opposite orders will deadlock rather than queue.
