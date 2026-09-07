@@ -8,7 +8,7 @@ import httpx
 from typing import Dict, Any, Optional, Union, List
 import logging
 
-from .base_endpoint import BaseEndpoint
+from .base_endpoint import BaseEndpoint, http_status_of
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
 from ..utils.format_helpers import (
@@ -109,7 +109,7 @@ class KGTypesEndpoint(BaseEndpoint):
                 KGTypesListResponse,
                 error_code=500,
                 error_message=str(e),
-                status_code=500
+                status_code=http_status_of(e)
             )
     
     async def get_kgtype(self, space_id: str, uri: str) -> KGTypeResponse:
@@ -168,7 +168,7 @@ class KGTypesEndpoint(BaseEndpoint):
                 KGTypeResponse,
                 error_code=500,
                 error_message=str(e),
-                status_code=500
+                status_code=http_status_of(e)
             )
     
     async def get_kgtypes_by_uris(self, space_id: str, uri_list: str) -> KGTypesListResponse:
@@ -222,7 +222,7 @@ class KGTypesEndpoint(BaseEndpoint):
                 KGTypesListResponse,
                 error_code=500,
                 error_message=str(e),
-                status_code=500
+                status_code=http_status_of(e)
             )
     
     async def create_kgtypes(self, space_id: str, objects: List[GraphObject]) -> KGTypeCreateResponse:
@@ -283,7 +283,7 @@ class KGTypesEndpoint(BaseEndpoint):
                 KGTypeCreateResponse,
                 error_code=500,
                 error_message=str(e),
-                status_code=500
+                status_code=http_status_of(e)
             )
     
     async def update_kgtypes(self, space_id: str, objects: List[GraphObject]) -> KGTypeUpdateResponse:
@@ -343,7 +343,7 @@ class KGTypesEndpoint(BaseEndpoint):
                 KGTypeUpdateResponse,
                 error_code=500,
                 error_message=str(e),
-                status_code=500
+                status_code=http_status_of(e)
             )
     
     async def delete_kgtype(self, space_id: str, uri: str) -> KGTypeDeleteResponse:
@@ -400,7 +400,7 @@ class KGTypesEndpoint(BaseEndpoint):
                 KGTypeDeleteResponse,
                 error_code=500,
                 error_message=str(e),
-                status_code=500
+                status_code=http_status_of(e)
             )
     
     async def delete_kgtypes_batch(self, space_id: str, uri_list: str) -> KGTypeDeleteResponse:
@@ -456,7 +456,7 @@ class KGTypesEndpoint(BaseEndpoint):
                 KGTypeDeleteResponse,
                 error_code=500,
                 error_message=str(e),
-                status_code=500
+                status_code=http_status_of(e)
             )
 
     # ── Relationships ──────────────────────────────────────────────
@@ -493,7 +493,7 @@ class KGTypesEndpoint(BaseEndpoint):
             return build_error_response(KGTypeRelationshipsResponse, error_code=e.status_code or 500, error_message=str(e), status_code=e.status_code or 500)
         except Exception as e:
             logger.error(f"Error getting type relationships: {e}")
-            return build_error_response(KGTypeRelationshipsResponse, error_code=500, error_message=str(e), status_code=500)
+            return build_error_response(KGTypeRelationshipsResponse, error_code=500, error_message=str(e), status_code=http_status_of(e))
 
     async def create_type_relationship(self, space_id: str, type_uri: str, edge_type: str, target_uri: str) -> KGTypeRelationshipCreateResponse:
         """
@@ -531,7 +531,7 @@ class KGTypesEndpoint(BaseEndpoint):
             return build_error_response(KGTypeRelationshipCreateResponse, error_code=e.status_code or 500, error_message=str(e), status_code=e.status_code or 500)
         except Exception as e:
             logger.error(f"Error creating type relationship: {e}")
-            return build_error_response(KGTypeRelationshipCreateResponse, error_code=500, error_message=str(e), status_code=500)
+            return build_error_response(KGTypeRelationshipCreateResponse, error_code=500, error_message=str(e), status_code=http_status_of(e))
 
     async def delete_type_relationship(self, space_id: str, type_uri: str, edge_uri: str) -> KGTypeRelationshipDeleteResponse:
         """
@@ -565,7 +565,7 @@ class KGTypesEndpoint(BaseEndpoint):
             return build_error_response(KGTypeRelationshipDeleteResponse, error_code=e.status_code or 500, error_message=str(e), status_code=e.status_code or 500)
         except Exception as e:
             logger.error(f"Error deleting type relationship: {e}")
-            return build_error_response(KGTypeRelationshipDeleteResponse, error_code=500, error_message=str(e), status_code=500)
+            return build_error_response(KGTypeRelationshipDeleteResponse, error_code=500, error_message=str(e), status_code=http_status_of(e))
 
     # ── Documentation ──────────────────────────────────────────────
 
@@ -602,7 +602,7 @@ class KGTypesEndpoint(BaseEndpoint):
             return build_error_response(KGTypeDocumentationResponse, error_code=e.status_code or 500, error_message=str(e), status_code=e.status_code or 500)
         except Exception as e:
             logger.error(f"Error getting type documentation: {e}")
-            return build_error_response(KGTypeDocumentationResponse, error_code=500, error_message=str(e), status_code=500)
+            return build_error_response(KGTypeDocumentationResponse, error_code=500, error_message=str(e), status_code=http_status_of(e))
 
     async def update_type_documentation(self, space_id: str, type_uri: str, content: str) -> KGTypeDocumentationUpdateResponse:
         """
@@ -638,7 +638,7 @@ class KGTypesEndpoint(BaseEndpoint):
             return build_error_response(KGTypeDocumentationUpdateResponse, error_code=e.status_code or 500, error_message=str(e), status_code=e.status_code or 500)
         except Exception as e:
             logger.error(f"Error updating type documentation: {e}")
-            return build_error_response(KGTypeDocumentationUpdateResponse, error_code=500, error_message=str(e), status_code=500)
+            return build_error_response(KGTypeDocumentationUpdateResponse, error_code=500, error_message=str(e), status_code=http_status_of(e))
 
     async def delete_type_documentation(self, space_id: str, type_uri: str) -> KGTypeDocumentationDeleteResponse:
         """
@@ -671,7 +671,7 @@ class KGTypesEndpoint(BaseEndpoint):
             return build_error_response(KGTypeDocumentationDeleteResponse, error_code=e.status_code or 500, error_message=str(e), status_code=e.status_code or 500)
         except Exception as e:
             logger.error(f"Error deleting type documentation: {e}")
-            return build_error_response(KGTypeDocumentationDeleteResponse, error_code=500, error_message=str(e), status_code=500)
+            return build_error_response(KGTypeDocumentationDeleteResponse, error_code=500, error_message=str(e), status_code=http_status_of(e))
 
     # ── Search ─────────────────────────────────────────────────────
 
@@ -716,7 +716,7 @@ class KGTypesEndpoint(BaseEndpoint):
             return build_error_response(KGTypeSearchResponse, error_code=e.status_code or 500, error_message=str(e), status_code=e.status_code or 500)
         except Exception as e:
             logger.error(f"Error searching types: {e}")
-            return build_error_response(KGTypeSearchResponse, error_code=500, error_message=str(e), status_code=500)
+            return build_error_response(KGTypeSearchResponse, error_code=500, error_message=str(e), status_code=http_status_of(e))
 
     # ── Description ────────────────────────────────────────────────
 

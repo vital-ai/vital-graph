@@ -63,7 +63,7 @@ async def _val(space_impl, space, expr):
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def da_space(space_impl, make_space):
-    sid = await make_space(f"{TEST_SPACE_PREFIX}dtacc_{uuid.uuid4().hex[:8]}")
+    sid = await make_space(f"{TEST_SPACE_PREFIX}dtacc_{uuid.uuid4().hex[:7]}")
     g = URIRef(G)
     await space_impl.add_rdf_quads_batch_bulk(sid, [
         (URIRef("urn:da:plain"), URIRef("urn:da:v"), Literal("abc"), g),

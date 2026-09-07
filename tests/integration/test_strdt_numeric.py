@@ -64,7 +64,7 @@ async def _val(space_impl, space, expr):
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def sd_space(make_space):
-    return await make_space(f"{TEST_SPACE_PREFIX}strdt_{uuid.uuid4().hex[:8]}")
+    return await make_space(f"{TEST_SPACE_PREFIX}strdt_{uuid.uuid4().hex[:7]}")
 
 
 # --- the defect ------------------------------------------------------------

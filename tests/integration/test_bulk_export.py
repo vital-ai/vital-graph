@@ -31,7 +31,7 @@ N_EDGES = 30
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def two_spaces(make_space):
-    return [await make_space(f"{TEST_SPACE_PREFIX}exp_{k}_{uuid.uuid4().hex[:8]}")
+    return [await make_space(f"{TEST_SPACE_PREFIX}ex{k}_{uuid.uuid4().hex[:4]}")
             for k in ("src", "dst")]
 
 

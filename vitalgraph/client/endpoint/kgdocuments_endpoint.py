@@ -8,7 +8,7 @@ Follows the same pattern as KGTypesEndpoint.
 import logging
 from typing import Dict, Any, Optional, List
 
-from .base_endpoint import BaseEndpoint
+from .base_endpoint import BaseEndpoint, http_status_of
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
 from ..utils.format_helpers import (
@@ -116,7 +116,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
                 KGDocumentsListResponse,
                 error_code=500,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
             )
 
     async def get_kgdocument(
@@ -172,7 +172,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
                 KGDocumentResponse,
                 error_code=500,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
             )
 
     async def list_segments(
@@ -227,7 +227,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
                 KGDocumentSegmentsResponse,
                 error_code=500,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
             )
 
     # ------------------------------------------------------------------
@@ -294,7 +294,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
                 KGDocumentCreateResponse,
                 error_code=500,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
             )
 
     # ------------------------------------------------------------------
@@ -354,7 +354,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
                 KGDocumentUpdateResponse,
                 error_code=500,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
             )
 
     # ------------------------------------------------------------------
@@ -416,7 +416,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
                 KGDocumentDeleteResponse,
                 error_code=500,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
             )
 
     async def delete_kgdocuments_batch(
@@ -469,7 +469,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
                 KGDocumentDeleteResponse,
                 error_code=500,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
             )
 
     # ------------------------------------------------------------------

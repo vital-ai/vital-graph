@@ -127,8 +127,8 @@ class TestSpaceIsolation:
 
     async def test_spaces_are_isolated(self, pg_pool, sparql_update, sparql_execute):
         """Data inserted into space A is not visible from space B."""
-        space_a = f"{TEST_SPACE_PREFIX}iso_a_{uuid.uuid4().hex[:8]}"
-        space_b = f"{TEST_SPACE_PREFIX}iso_b_{uuid.uuid4().hex[:8]}"
+        space_a = f"{TEST_SPACE_PREFIX}iso_a_{uuid.uuid4().hex[:7]}"
+        space_b = f"{TEST_SPACE_PREFIX}iso_b_{uuid.uuid4().hex[:7]}"
 
         try:
             async with pg_pool.acquire() as conn:

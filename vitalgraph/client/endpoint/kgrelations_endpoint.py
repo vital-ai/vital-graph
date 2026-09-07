@@ -12,7 +12,7 @@ from typing import Dict, Any, Optional, List
 
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 
-from .base_endpoint import BaseEndpoint
+from .base_endpoint import BaseEndpoint, http_status_of
 from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
 from ..response.client_response import (
     EntityResponse,
@@ -166,7 +166,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 PaginatedGraphObjectResponse,
                 error_code=1,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id
             )
@@ -225,7 +225,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 EntityResponse,
                 error_code=1,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id,
                 uri=relation_uri
@@ -290,7 +290,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 CreateEntityResponse,
                 error_code=1,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id
             )
@@ -353,7 +353,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 UpdateEntityResponse,
                 error_code=1,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id
             )
@@ -416,7 +416,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 UpdateEntityResponse,
                 error_code=1,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id
             )
@@ -482,7 +482,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 DeleteResponse,
                 error_code=1,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id
             )

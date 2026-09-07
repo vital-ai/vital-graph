@@ -48,7 +48,7 @@ GRAPH = URIRef("urn:lockorder:g")
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def lock_space(make_space):
-    return await make_space(f"{TEST_SPACE_PREFIX}lockorder_{uuid.uuid4().hex[:8]}")
+    return await make_space(f"{TEST_SPACE_PREFIX}lock_{uuid.uuid4().hex[:8]}")
 
 
 async def _writer(space_impl, sid, preds, tag, out):
@@ -124,7 +124,7 @@ async def test_a_recompute_reconciles_what_the_write_path_left_alone(
     from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
     from vitalgraph.kg_impl.kg_backend_utils import SparqlSQLBackendAdapter
 
-    sid = await make_space(f"{TEST_SPACE_PREFIX}defer_{uuid.uuid4().hex[:8]}")
+    sid = await make_space(f"{TEST_SPACE_PREFIX}defer_{uuid.uuid4().hex[:7]}")
     g = URIRef("urn:defer:g")
 
     def batch(tag, n):

@@ -6,7 +6,7 @@ listing and the poll — and ephemeral test spaces are created and deleted
 constantly. Each one produced:
 
     ERROR - Error in poll_space(inttest_raw_concurrency): relation
-    "inttest_raw_concurrency_segmentation_jobs" does not exist
+    "inttest_rawconc_segmentation_jobs" does not exist
     Traceback (most recent call last): ... 15 frames ...
 
 several times per deleted space, at ERROR with a full traceback, for something

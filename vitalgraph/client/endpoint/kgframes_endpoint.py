@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional, Union, List
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 
-from .base_endpoint import BaseEndpoint
+from .base_endpoint import BaseEndpoint, http_status_of
 from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
 from ..utils.format_helpers import (
     ClientWireFormat,
@@ -173,7 +173,7 @@ class KGFramesEndpoint(BaseEndpoint):
             logger.error(f"Error listing frames: {e}")
             return build_error_response(
                 PaginatedGraphObjectResponse,
-                error_code=1, error_message=str(e), status_code=500,
+                error_code=1, error_message=str(e), status_code=http_status_of(e),
                 space_id=space_id, graph_id=graph_id
             )
     
@@ -227,7 +227,7 @@ class KGFramesEndpoint(BaseEndpoint):
             logger.error(f"Error getting frame: {e}")
             return build_error_response(
                 FrameGraphResponse,
-                error_code=2, error_message=str(e), status_code=500,
+                error_code=2, error_message=str(e), status_code=http_status_of(e),
                 space_id=space_id, graph_id=graph_id,
                 requested_frame_uri=uri
             )
@@ -303,7 +303,7 @@ class KGFramesEndpoint(BaseEndpoint):
             response_class = MultiFrameGraphResponse if include_frame_graph else PaginatedGraphObjectResponse
             return build_error_response(
                 response_class,
-                error_code=2, error_message=str(e), status_code=500,
+                error_code=2, error_message=str(e), status_code=http_status_of(e),
                 space_id=space_id, graph_id=graph_id
             )
     
@@ -371,7 +371,7 @@ class KGFramesEndpoint(BaseEndpoint):
             logger.error(f"Error creating frames: {e}")
             return build_error_response(
                 CreateEntityResponse,
-                error_code=3, error_message=str(e), status_code=500
+                error_code=3, error_message=str(e), status_code=http_status_of(e)
             )
     
     async def update_kgframes(self, space_id: str, graph_id: str, objects: List[GraphObject],
@@ -434,7 +434,7 @@ class KGFramesEndpoint(BaseEndpoint):
             logger.error(f"Error updating frames: {e}")
             return build_error_response(
                 UpdateEntityResponse,
-                error_code=4, error_message=str(e), status_code=500
+                error_code=4, error_message=str(e), status_code=http_status_of(e)
             )
     
     async def delete_kgframe(self, space_id: str, graph_id: str, uri: str, recursive: bool = False) -> DeleteResponse:
@@ -494,7 +494,7 @@ class KGFramesEndpoint(BaseEndpoint):
         except Exception as e:
             logger.error(f"Error deleting frame: {e}")
             return build_error_response(
-                DeleteResponse, error_code=5, error_message=str(e), status_code=500,
+                DeleteResponse, error_code=5, error_message=str(e), status_code=http_status_of(e),
                 space_id=space_id, graph_id=graph_id, requested_uris=[uri]
             )
     
@@ -555,7 +555,7 @@ class KGFramesEndpoint(BaseEndpoint):
         except Exception as e:
             logger.error(f"Error deleting frames batch: {e}")
             return build_error_response(
-                DeleteResponse, error_code=5, error_message=str(e), status_code=500,
+                DeleteResponse, error_code=5, error_message=str(e), status_code=http_status_of(e),
                 space_id=space_id, graph_id=graph_id
             )
     
@@ -609,7 +609,7 @@ class KGFramesEndpoint(BaseEndpoint):
         except Exception as e:
             logger.error(f"Error getting frames with slots: {e}")
             return build_error_response(
-                PaginatedGraphObjectResponse, error_code=1, error_message=str(e), status_code=500
+                PaginatedGraphObjectResponse, error_code=1, error_message=str(e), status_code=http_status_of(e)
             )
     
     async def create_kgframes_with_slots(self, space_id: str, graph_id: str, objects: List[GraphObject],
@@ -657,7 +657,7 @@ class KGFramesEndpoint(BaseEndpoint):
             raise
         except Exception as e:
             logger.error(f"Error creating frames with slots: {e}")
-            return build_error_response(CreateEntityResponse, error_code=3, error_message=str(e), status_code=500)
+            return build_error_response(CreateEntityResponse, error_code=3, error_message=str(e), status_code=http_status_of(e))
     
     async def update_kgframes_with_slots(self, space_id: str, graph_id: str, objects: List[GraphObject],
                                   parent_uri: Optional[str] = None) -> UpdateEntityResponse:
@@ -702,7 +702,7 @@ class KGFramesEndpoint(BaseEndpoint):
             raise
         except Exception as e:
             logger.error(f"Error updating frames with slots: {e}")
-            return build_error_response(UpdateEntityResponse, error_code=4, error_message=str(e), status_code=500)
+            return build_error_response(UpdateEntityResponse, error_code=4, error_message=str(e), status_code=http_status_of(e))
     
     async def delete_kgframes_with_slots(self, space_id: str, graph_id: str, uri_list: str, recursive: bool = False) -> DeleteResponse:
         """
@@ -789,7 +789,7 @@ class KGFramesEndpoint(BaseEndpoint):
             raise
         except Exception as e:
             logger.error(f"Error creating frame slots: {e}")
-            return build_error_response(CreateEntityResponse, error_code=3, error_message=str(e), status_code=500)
+            return build_error_response(CreateEntityResponse, error_code=3, error_message=str(e), status_code=http_status_of(e))
     
     async def update_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, objects: List[GraphObject], parent_uri: Optional[str] = None) -> UpdateEntityResponse:
         """
@@ -834,7 +834,7 @@ class KGFramesEndpoint(BaseEndpoint):
             raise
         except Exception as e:
             logger.error(f"Error updating frame slots: {e}")
-            return build_error_response(UpdateEntityResponse, error_code=4, error_message=str(e), status_code=500)
+            return build_error_response(UpdateEntityResponse, error_code=4, error_message=str(e), status_code=http_status_of(e))
     
     async def delete_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, slot_uris: list[str]) -> DeleteResponse:
         """
@@ -879,7 +879,7 @@ class KGFramesEndpoint(BaseEndpoint):
         except Exception as e:
             logger.error(f"Error deleting frame slots: {e}")
             return build_error_response(
-                DeleteResponse, error_code=5, error_message=str(e), status_code=500,
+                DeleteResponse, error_code=5, error_message=str(e), status_code=http_status_of(e),
                 space_id=space_id, graph_id=graph_id, requested_uris=slot_uris
             )
     
@@ -937,7 +937,7 @@ class KGFramesEndpoint(BaseEndpoint):
         except Exception as e:
             logger.error(f"Error getting frame slots: {e}")
             return build_error_response(
-                PaginatedGraphObjectResponse, error_code=1, error_message=str(e), status_code=500
+                PaginatedGraphObjectResponse, error_code=1, error_message=str(e), status_code=http_status_of(e)
             )
     
     async def get_entity_frame_slots(self, space_id: str, graph_id: str, frame_uri: str,
@@ -1006,7 +1006,7 @@ class KGFramesEndpoint(BaseEndpoint):
             logger.error(f"Error getting entity frame slots: {e}")
             return build_error_response(
                 PaginatedGraphObjectResponse, error_code=1, error_message=str(e),
-                status_code=500
+                status_code=http_status_of(e)
             )
 
     # Frame-to-Frame Sub-Endpoint Operations
@@ -1051,7 +1051,7 @@ class KGFramesEndpoint(BaseEndpoint):
             raise
         except Exception as e:
             logger.error(f"Error creating child frames: {e}")
-            return build_error_response(CreateEntityResponse, error_code=3, error_message=str(e), status_code=500)
+            return build_error_response(CreateEntityResponse, error_code=3, error_message=str(e), status_code=http_status_of(e))
     
     async def update_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, objects: List[GraphObject]) -> UpdateEntityResponse:
         """
@@ -1095,7 +1095,7 @@ class KGFramesEndpoint(BaseEndpoint):
             raise
         except Exception as e:
             logger.error(f"Error updating child frames: {e}")
-            return build_error_response(UpdateEntityResponse, error_code=4, error_message=str(e), status_code=500)
+            return build_error_response(UpdateEntityResponse, error_code=4, error_message=str(e), status_code=http_status_of(e))
     
     async def delete_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, frame_uris: list[str], recursive: bool = False) -> DeleteResponse:
         """
@@ -1161,7 +1161,7 @@ class KGFramesEndpoint(BaseEndpoint):
         except Exception as e:
             logger.error(f"Error getting child frames: {e}")
             return build_error_response(
-                PaginatedGraphObjectResponse, error_code=1, error_message=str(e), status_code=500
+                PaginatedGraphObjectResponse, error_code=1, error_message=str(e), status_code=http_status_of(e)
             )
     
     async def list_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, frame_type: Optional[str] = None, 
@@ -1212,7 +1212,7 @@ class KGFramesEndpoint(BaseEndpoint):
         except Exception as e:
             logger.error(f"Error listing child frames: {e}")
             return build_error_response(
-                PaginatedGraphObjectResponse, error_code=1, error_message=str(e), status_code=500
+                PaginatedGraphObjectResponse, error_code=1, error_message=str(e), status_code=http_status_of(e)
             )
     
     # Enhanced Graph Operations
@@ -1320,7 +1320,7 @@ class KGFramesEndpoint(BaseEndpoint):
         except Exception as e:
             logger.error(f"Error listing frames with graphs: {e}")
             return build_error_response(
-                MultiFrameGraphResponse, error_code=1, error_message=str(e), status_code=500,
+                MultiFrameGraphResponse, error_code=1, error_message=str(e), status_code=http_status_of(e),
                 space_id=space_id, graph_id=graph_id
             )
     

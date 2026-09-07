@@ -29,7 +29,7 @@ pytestmark = [
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def kg_space(make_space):
     """Create an ephemeral space (via the space manager) for KG CRUD tests."""
-    return await make_space(f"{TEST_SPACE_PREFIX}kgcrud_{uuid.uuid4().hex[:8]}")
+    return await make_space(f"{TEST_SPACE_PREFIX}crud_{uuid.uuid4().hex[:8]}")
 
 
 @pytest.fixture

@@ -27,7 +27,7 @@ pytestmark = [
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def count_space(make_space):
     """Ephemeral space (via the space manager) for the count tests."""
-    return await make_space(f"{TEST_SPACE_PREFIX}count_{uuid.uuid4().hex[:8]}")
+    return await make_space(f"{TEST_SPACE_PREFIX}count_{uuid.uuid4().hex[:7]}")
 
 
 def _sparql_count(proc, backend_adapter, space_id, graph):

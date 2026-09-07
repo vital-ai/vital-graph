@@ -12,7 +12,7 @@ from typing import Dict, Any, Literal, Optional, List, Union, overload
 
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 
-from .base_endpoint import BaseEndpoint
+from .base_endpoint import BaseEndpoint, http_status_of
 from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
 from ..utils.format_helpers import (
     ClientWireFormat,
@@ -246,7 +246,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 response_class,
                 error_code=1,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id
             )
@@ -359,7 +359,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 response_class,
                 error_code=2,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id,
                 requested_uri=uri,
@@ -452,7 +452,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 response_class,
                 error_code=3,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id,
                 requested_reference_ids=reference_ids
@@ -540,7 +540,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 response_class,
                 error_code=3,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id
             )
@@ -605,7 +605,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 CreateEntityResponse,
                 error_code=4,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id
             )
@@ -670,7 +670,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 UpdateEntityResponse,
                 error_code=5,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id
             )
@@ -744,7 +744,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 UpdateEntityResponse,
                 error_code=5,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id
             )
@@ -811,7 +811,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 DeleteResponse,
                 error_code=6,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id,
                 requested_uris=[uri]
@@ -875,7 +875,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 DeleteResponse,
                 error_code=7,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id,
                 requested_uris=uri_list
@@ -1055,7 +1055,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 response_class,
                 error_code=8,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri
@@ -1128,7 +1128,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 FrameResponse,
                 error_code=9,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id
             )
@@ -1211,7 +1211,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 FrameResponse,
                 error_code=10,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id
             )
@@ -1296,7 +1296,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 DeleteResponse,
                 error_code=11,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id,
                 requested_uris=frame_uris
@@ -1307,7 +1307,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 DeleteResponse,
                 error_code=11,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id,
                 requested_uris=frame_uris
@@ -1376,7 +1376,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 QueryResponse,
                 error_code=12,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id,
                 query_criteria=query_criteria

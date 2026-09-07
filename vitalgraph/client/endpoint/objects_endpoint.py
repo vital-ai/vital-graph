@@ -8,7 +8,7 @@ import httpx
 from typing import Dict, Any, Optional, List
 import logging
 
-from .base_endpoint import BaseEndpoint
+from .base_endpoint import BaseEndpoint, http_status_of
 from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
 from ..utils.format_helpers import (
     ClientWireFormat,
@@ -100,7 +100,7 @@ class ObjectsEndpoint(BaseEndpoint):
                 ObjectsListResponse,
                 error_code=500,
                 error_message=str(e),
-                status_code=500
+                status_code=http_status_of(e)
             )
     
     async def get_object(self, space_id: str, graph_id: str, uri: str) -> ObjectResponse:
@@ -161,7 +161,7 @@ class ObjectsEndpoint(BaseEndpoint):
                 ObjectResponse,
                 error_code=500,
                 error_message=str(e),
-                status_code=500
+                status_code=http_status_of(e)
             )
     
     async def create_objects(self, space_id: str, graph_id: str, objects: List) -> ObjectCreateResponse:
@@ -215,7 +215,7 @@ class ObjectsEndpoint(BaseEndpoint):
                 ObjectCreateResponse,
                 error_code=500,
                 error_message=str(e),
-                status_code=500
+                status_code=http_status_of(e)
             )
     
     async def update_objects(self, space_id: str, graph_id: str, objects: List) -> ObjectUpdateResponse:
@@ -270,7 +270,7 @@ class ObjectsEndpoint(BaseEndpoint):
                 ObjectUpdateResponse,
                 error_code=500,
                 error_message=str(e),
-                status_code=500
+                status_code=http_status_of(e)
             )
     
     async def delete_object(self, space_id: str, graph_id: str, uri: str) -> ObjectDeleteResponse:
@@ -324,7 +324,7 @@ class ObjectsEndpoint(BaseEndpoint):
                 ObjectDeleteResponse,
                 error_code=500,
                 error_message=str(e),
-                status_code=500
+                status_code=http_status_of(e)
             )
     
     async def delete_objects_batch(self, space_id: str, graph_id: str, uri_list: str) -> ObjectDeleteResponse:
@@ -382,5 +382,5 @@ class ObjectsEndpoint(BaseEndpoint):
                 ObjectDeleteResponse,
                 error_code=500,
                 error_message=str(e),
-                status_code=500
+                status_code=http_status_of(e)
             )

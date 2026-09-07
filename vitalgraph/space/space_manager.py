@@ -14,6 +14,18 @@ class SpaceAlreadyExistsError(Exception):
     (issue 034).
     """
 
+class InvalidSpaceIdError(ValueError):
+    """A space id the schema cannot name objects for.
+
+    RAISED, not returned as False, for the same reason
+    `SpaceAlreadyExistsError` is: it is a caller error, the caller can fix it,
+    and a return value can be ignored. One fixture already calls
+    `create_space_with_tables` without checking the result, so a quiet False
+    would surface later as a pile of confusing setup errors instead of the one
+    sentence that explains it.
+    """
+
+
 
 @dataclass
 class SpaceRecord:
@@ -218,7 +230,32 @@ class SpaceManager:
             True if space created successfully, False otherwise
         """
         self.logger.info(f"Creating space with tables: '{space_id}'")
-        
+
+        # REFUSE AN OVER-LONG SPACE ID HERE, not at DDL time.
+        #
+        # Table and index names prefix this, and PostgreSQL truncates any
+        # identifier past 63 bytes WITHOUT warning — the object is created under
+        # the shortened name, enforces correctly, and every lookup by the name it
+        # was asked for misses it. That is how a unique index went missing from
+        # the schema-completeness check. Refusing here fails at the one moment
+        # someone can still choose a different id.
+        #
+        # The limit is derived from the schema's own longest name rather than
+        # written down, so it stays true when a name changes.
+        try:
+            from ..db.sparql_sql.sparql_sql_schema import max_space_id_bytes
+            _limit = max_space_id_bytes()
+        except Exception:
+            _limit = None
+        if _limit is not None and len(space_id.encode("utf-8")) > _limit:
+            raise InvalidSpaceIdError(
+                f"Cannot create space {space_id!r}: the id is "
+                f"{len(space_id.encode('utf-8'))} bytes and this schema can only "
+                f"name objects for ids up to {_limit}. Past that PostgreSQL "
+                f"silently truncates index and table names, and every lookup by "
+                f"the intended name stops matching. Use a shorter id.")
+
+
         # Use space_backend for all operations
         if not self.space_backend:
             self.logger.error(f"Cannot create space '{space_id}': No space backend available")

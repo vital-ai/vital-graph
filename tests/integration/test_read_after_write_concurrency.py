@@ -65,7 +65,7 @@ async def raw_space(raw_impl):
     from vitalgraph.space.space_manager import SpaceManager
 
     sm = SpaceManager(db_impl=getattr(raw_impl, "db_impl", None), space_backend=raw_impl)
-    space_id = "inttest_raw_concurrency"
+    space_id = "inttest_rawconc"
     try:
         await sm.delete_space_with_tables(space_id)
     except Exception:

@@ -29,7 +29,7 @@ pytestmark = [pytest.mark.integration, skip_no_infra,
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def reg_space(make_space):
-    return await make_space(f"{TEST_SPACE_PREFIX}graphreg_{uuid.uuid4().hex[:8]}")
+    return await make_space(f"{TEST_SPACE_PREFIX}greg_{uuid.uuid4().hex[:8]}")
 
 
 def _job(space_impl):

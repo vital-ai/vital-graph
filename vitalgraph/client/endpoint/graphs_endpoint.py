@@ -7,7 +7,7 @@ Client-side implementation for Graph management operations.
 import httpx
 from typing import Dict, Any, Optional, List
 
-from .base_endpoint import BaseEndpoint
+from .base_endpoint import BaseEndpoint, http_status_of
 from ..utils.client_utils import VitalGraphClientError, validate_required_params
 from ...model.sparql_model import GraphInfo, SPARQLGraphRequest, SPARQLGraphResponse, GraphCountsResponse
 from ..response.client_response import (
@@ -79,7 +79,7 @@ class GraphsEndpoint(BaseEndpoint):
                 graphs=[],
                 total=0,
                 error_code=1,
-                status_code=500,
+                status_code=http_status_of(e),
                 error_message=str(e)
             )
     
@@ -156,7 +156,7 @@ class GraphsEndpoint(BaseEndpoint):
             return GraphResponse(
                 graph=None,
                 error_code=1,
-                status_code=500,
+                status_code=http_status_of(e),
                 error_message=str(e)
             )
     
@@ -195,7 +195,7 @@ class GraphsEndpoint(BaseEndpoint):
                 graph_uri=graph_uri,
                 created=False,
                 error_code=1,
-                status_code=500,
+                status_code=http_status_of(e),
                 error_message=str(e)
             )
     
@@ -238,7 +238,7 @@ class GraphsEndpoint(BaseEndpoint):
                 graph_uri=graph_uri,
                 deleted=False,
                 error_code=1,
-                status_code=500,
+                status_code=http_status_of(e),
                 error_message=str(e)
             )
     
@@ -285,7 +285,7 @@ class GraphsEndpoint(BaseEndpoint):
                 cleared=False,
                 triples_removed=0,
                 error_code=1,
-                status_code=500,
+                status_code=http_status_of(e),
                 error_message=str(e)
             )
 

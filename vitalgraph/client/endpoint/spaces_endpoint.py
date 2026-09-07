@@ -7,7 +7,7 @@ Client-side implementation for Spaces operations.
 import httpx
 from typing import Dict, Any, Optional
 
-from .base_endpoint import BaseEndpoint
+from .base_endpoint import BaseEndpoint, http_status_of
 from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
 from ...model.spaces_model import Space, SpaceAnalyticsResponse
 from ..response.client_response import (
@@ -62,7 +62,7 @@ class SpacesEndpoint(BaseEndpoint):
                 spaces=[],
                 total=0,
                 error_code=1,
-                status_code=500,
+                status_code=http_status_of(e),
                 error_message=str(e)
             )
     
@@ -107,7 +107,7 @@ class SpacesEndpoint(BaseEndpoint):
                 created_count=0,
                 created_uris=[],
                 error_code=1,
-                status_code=500,
+                status_code=http_status_of(e),
                 error_message=str(e)
             )
     
@@ -167,7 +167,7 @@ class SpacesEndpoint(BaseEndpoint):
             return SpaceResponse(
                 space=None,
                 error_code=1,
-                status_code=500,
+                status_code=http_status_of(e),
                 error_message=str(e)
             )
     
@@ -216,7 +216,7 @@ class SpacesEndpoint(BaseEndpoint):
                 statistics=None,
                 quad_dump=None,
                 error_code=1,
-                status_code=500,
+                status_code=http_status_of(e),
                 error_message=str(e)
             )
     
@@ -289,7 +289,7 @@ class SpacesEndpoint(BaseEndpoint):
                 space=None,
                 updated_count=0,
                 error_code=1,
-                status_code=500,
+                status_code=http_status_of(e),
                 error_message=str(e)
             )
     
@@ -328,7 +328,7 @@ class SpacesEndpoint(BaseEndpoint):
                 deleted_count=0,
                 space_id=space_id,
                 error_code=1,
-                status_code=500,
+                status_code=http_status_of(e),
                 error_message=str(e)
             )
     
@@ -372,6 +372,6 @@ class SpacesEndpoint(BaseEndpoint):
                 spaces=[],
                 total=0,
                 error_code=1,
-                status_code=500,
+                status_code=http_status_of(e),
                 error_message=str(e)
             )

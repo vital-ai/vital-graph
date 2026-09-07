@@ -26,6 +26,32 @@ logger = logging.getLogger(__name__)
 T = TypeVar('T', bound=BaseModel)
 
 
+
+def http_status_of(exc, default: int = 500) -> int:
+    """The status the server actually returned, not a guess.
+
+    Every client method reported `status_code=500` for any failure, so a caller
+    branching on it could not tell "fix your input" from "the server is broken".
+    A 400 for an invalid space id arrived looking like a server fault.
+
+    The information was already there: `_status_error` builds
+    `VitalGraphClientError(msg, status_code=...)` from the response, and an
+    `httpx.HTTPStatusError` carries `.response.status_code`. This reads whichever
+    is present and falls back to 500 only when there genuinely was no response —
+    a transport failure, where "the server is broken" is the honest answer.
+
+    The server side hardened against the same defect one layer up: without its
+    `except HTTPException: raise`, a deliberate 400 came back as 500 and made
+    the status code untrustworthy (issue 034). This is that fix on the client.
+    """
+    v = getattr(exc, "status_code", None)
+    if isinstance(v, int) and v:
+        return v
+    v = getattr(getattr(exc, "response", None), "status_code", None)
+    if isinstance(v, int) and v:
+        return v
+    return default
+
 class BaseEndpoint:
     """Base class for VitalGraph client endpoints."""
     

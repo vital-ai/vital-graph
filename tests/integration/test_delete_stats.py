@@ -31,7 +31,7 @@ VITAL_NS = "http://vital.ai/ontology/vital-core#"
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def del_space(make_space):
-    return await make_space(f"{TEST_SPACE_PREFIX}delstats_{uuid.uuid4().hex[:8]}")
+    return await make_space(f"{TEST_SPACE_PREFIX}dstat_{uuid.uuid4().hex[:7]}")
 
 
 async def _remaining_pairs(space_impl, sid) -> int:

@@ -15,7 +15,7 @@ import asyncio
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 
-from .base_endpoint import BaseEndpoint
+from .base_endpoint import BaseEndpoint, http_status_of
 from ..utils.client_utils import (
     VitalGraphClientError,
     VitalGraphClientConnectionError,
@@ -126,7 +126,7 @@ class FilesEndpoint(BaseEndpoint):
                 FilesListResponse,
                 error_code=1,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id
             )
@@ -186,7 +186,7 @@ class FilesEndpoint(BaseEndpoint):
                 FileResponse,
                 error_code=2,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id,
                 requested_uri=uri
@@ -248,7 +248,7 @@ class FilesEndpoint(BaseEndpoint):
                 FilesListResponse,
                 error_code=3,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id
             )
@@ -299,7 +299,7 @@ class FilesEndpoint(BaseEndpoint):
                 FileCreateResponse,
                 error_code=4,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id
             )
@@ -350,7 +350,7 @@ class FilesEndpoint(BaseEndpoint):
                 FileUpdateResponse,
                 error_code=5,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id
             )
@@ -400,7 +400,7 @@ class FilesEndpoint(BaseEndpoint):
                 FileDeleteResponse,
                 error_code=6,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 space_id=space_id,
                 graph_id=graph_id,
                 requested_uris=[uri]
@@ -516,7 +516,7 @@ class FilesEndpoint(BaseEndpoint):
                 FileUploadResponse,
                 error_code=7,
                 error_message=str(e),
-                status_code=500,
+                status_code=http_status_of(e),
                 file_uri=file_uri,
                 space_id=space_id,
                 graph_id=graph_id
