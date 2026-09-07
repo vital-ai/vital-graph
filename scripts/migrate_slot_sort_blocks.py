@@ -41,6 +41,9 @@ from devtools.target import add_pg_arguments, describe_target  # noqa: E402
 
 logger = logging.getLogger("migrate_slot_sort_blocks")
 
+_GRANT_TO = None  # set from --grant-to
+
+
 async def _ensure_admin_tables(conn) -> list:
     """Create the global admin tables, FROM THE SCHEMA, before reading any.
 
@@ -80,15 +83,72 @@ async def _ensure_admin_tables(conn) -> list:
             # An index on a table this database does not use is not a reason to
             # fail the migration the caller actually asked for.
             pass
+    await _grant_admin_tables_to_app_role(conn, sch)
     return created
+
+
+async def _grant_admin_tables_to_app_role(conn, sch) -> None:
+    """GRANT the admin tables to the role the APPLICATION connects as.
+
+    THIS IS THE FAILURE THAT CAUSED THE PRODUCTION TIMEOUTS. This migration runs
+    as the RDS MASTER user, so the tables it creates are owned by `postgres` with
+    no grants — while every space table is owned by the application role, which
+    created them. The application could then not read `slot_sort_block`, and
+    `slot_sort_is_blocked` treats an unreadable table exactly like a missing one:
+    it returns BLOCKED. The FILTER fast path went off for every query in every
+    space, and the two-criterion entity shape, which has no workable plan in the
+    general pipeline at 46M quads, timed out at 60s.
+
+    It produced 316 `permission denied for table slot_sort_block` errors in the
+    PostgreSQL log in 33 minutes, and NOTHING in the application log: the read
+    path catches the error and declines at DEBUG, because declining is supposed
+    to be the safe outcome. It is safe, but here it was permanent.
+
+    Diagnosis was slow for a specific reason worth recording: every reproduction
+    connected as the master user, which has rights on everything, so the fast
+    path measured 128ms while production timed out on the same query against the
+    same rows. A permissions fault is invisible to any test that authenticates
+    as an administrator.
+
+    The role is DISCOVERED from the space tables rather than named, because the
+    app role differs across deployments and a wrong literal here would fail
+    exactly as silently. `--grant-to` overrides when there are no space tables
+    yet to infer from.
+    """
+    role = _GRANT_TO or await conn.fetchval(
+        "SELECT pg_get_userbyid(c.relowner) FROM pg_class c"
+        "  JOIN pg_namespace n ON n.oid = c.relnamespace"
+        " WHERE n.nspname = 'public' AND c.relkind = 'r'"
+        "   AND c.relname LIKE %s"
+        " GROUP BY 1 ORDER BY count(*) DESC LIMIT 1" % "'%\\_rdf\\_quad'")
+    if not role:
+        logger.warning(
+            "  could not infer the application role (no space tables found), so "
+            "the admin tables were NOT granted. If the application connects as a "
+            "role other than the one running this migration, it will read them as "
+            "BLOCKED and the FILTER fast path will stay off. Re-run with "
+            "--grant-to <role>.")
+        return
+    current = await conn.fetchval("SELECT current_user")
+    if role == current:
+        return  # created by the app role itself; it already owns them
+    for name, _ in sch.ADMIN_TABLE_DDL:
+        await conn.execute(
+            f'GRANT SELECT, INSERT, UPDATE, DELETE ON {name} TO "{role}"')
+    logger.info("  granted admin tables to the application role %r", role)
 
 
 async def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--grant-to", metavar="ROLE",
+                    help="application role to GRANT the admin tables to "
+                         "(default: inferred from the space tables' owner)")
     add_pg_arguments(ap)
     args = ap.parse_args()
+    global _GRANT_TO
+    _GRANT_TO = args.grant_to
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     print(f"\U0001F5C4  target: {describe_target(args)}", flush=True)
 

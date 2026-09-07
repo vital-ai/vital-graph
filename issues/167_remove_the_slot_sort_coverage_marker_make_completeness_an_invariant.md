@@ -380,22 +380,40 @@ hold KG data it would be served unguarded.
 The 60s timeouts on the NurtureAction dedup shape were caused by this issue's
 own gate, not by the query planner.
 
-**The chain.** `migrate_slot_sort_blocks.py` read `slot_sort_coverage` before
-creating it, so on a database that had neither admin table it failed before
-creating anything. `slot_sort_block` was therefore never created — and
-`slot_sort_is_blocked` deliberately DEFAULTS TO BLOCKED on a missing table:
+**The chain, verified in the PostgreSQL log.** This migration runs as the RDS
+MASTER user, so the admin tables it created are owned by `postgres` with no
+grants — while every space table is owned by `vitalgraph_user`, which created
+them. The application could not read `slot_sort_block`, and
+`slot_sort_is_blocked` treats an unreadable table exactly as it treats a missing
+one:
 
-> A deployment whose schema predates this table therefore declines everything
-> until it is created, which is slow and correct.
+> DEFAULTS TO BLOCKED ON ANY UNCERTAINTY — an unreadable table, a missing one,
+> an error.
 
-Slow and correct is exactly what happened. Every query, in every space,
-declined the FILTER fast path and fell to the general pipeline. The
-two-criterion shape has no workable plan there at 46M quads (issues/161), so it
-timed out at 60s; the one-criterion shapes stayed selective enough to answer in
-~0.3s. That asymmetry is what made it look like a planner problem specific to
-conjunctions.
+So the FILTER fast path went off for **every query in every space**. The
+two-criterion shape has no workable plan in the general pipeline at 46M quads
+(issues/161) and timed out at 60s; the one-criterion shapes stayed selective
+enough to answer in ~0.3s. That asymmetry is what made it look like a planner
+problem specific to conjunctions. It was a `GRANT`.
 
-**Measured after the tables were created** (2026-09-07 01:59:57Z), through
+The log is unambiguous: **316 `ERROR: permission denied for table
+slot_sort_block` from `vitalgraph_user` between 02:12:09 and 02:45:57Z** — and
+nothing whatsoever in the application log, because the read path catches the
+error and declines at DEBUG. Declining is supposed to be the safe outcome. It is
+safe; here it was also permanent.
+
+**Why this took so long to find.** Every reproduction connected as the master
+user, which has rights on everything. The same query against the same rows
+measured 128 ms for me and timed out for production, and I read that gap as
+evidence that the deployed build must differ. A permissions fault is invisible
+to any test that authenticates as an administrator — which is every diagnostic
+script in `test_scripts/`, and this migration's own rehearsal.
+
+**Fixed at 02:46Z** by granting SELECT/INSERT/UPDATE/DELETE on both admin tables
+to `vitalgraph_user`. Last permission error 02:47:10Z, last query cancellation
+02:46:26Z, none since; the app is now issuing `entity_slot_sort` queries.
+
+**Measured as the master user** (before the grant was found), through
 `_execute_entity_query` against live prod, 46.6M quads:
 
 | shape | result |
@@ -408,6 +426,12 @@ conjunctions.
 other `CtRefSFLeadId` values.
 
 **Three fixes, from a deploy rehearsal against a clean instance.**
+
+0. `_ensure_admin_tables` now GRANTS the admin tables to the application role,
+   discovering it from the space tables' owner rather than naming it — the app
+   role differs across deployments and a wrong literal would fail just as
+   silently. `--grant-to` overrides when there are no space tables to infer
+   from. This is the fix for the timeouts.
 
 1. `migrate_slot_sort_blocks.py` now creates every admin table from
    `SparqlSQLSchema.ADMIN_TABLE_DDL` before any read. Both local stacks already
