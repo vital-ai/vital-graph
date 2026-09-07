@@ -101,9 +101,51 @@ async def process_space(conn, space_id: str, *, dry_run: bool,
                                         cov["in_table"], cov["of_type"])
         if cov["in_table"] >= cov["of_type"]:
             complete += 1
+
+    # RELEASE THE WHOLE-SPACE BLOCK. Nothing else does, and without this the
+    # fast path stays off forever.
+    #
+    # `record_slot_sort_coverage` releases only the PER-TYPE block for a type it
+    # just measured complete. `migrate_slot_sort_blocks` seeds a WHOLE-SPACE
+    # block (`entity_type_uuid IS NULL`) for a space with no coverage rows —
+    # which is every space at upgrade — and `slot_sort_is_blocked` matches
+    # `entity_type_uuid IS NULL OR entity_type_uuid = $2`, so that one block
+    # declines every type regardless of how complete they measure.
+    #
+    # Before this, the only code that released a whole-space block was
+    # `resync_all`, which takes one itself. A block seeded by the migration had
+    # NO releaser: this script would measure everything, report `fast_path: ON`,
+    # and the fast path would still be off. Found on a production deploy, where
+    # the shape stayed at a 60 s timeout after a run that reported success —
+    # and not found here, because both local stacks already had per-type
+    # coverage rows, so the migration seeded per-type blocks rather than
+    # whole-space ones.
+    #
+    # RELEASED ON HAVING MEASURED, not on everything being complete. The block's
+    # reason is "coverage never measured"; once measured that is false whatever
+    # the result. A type that measures SHORT keeps its own per-type block, taken
+    # by `record_slot_sort_coverage` above, so releasing the space-wide one does
+    # not serve anything short.
+    released_space_block = False
+    if after:
+        from vitalgraph.db.sparql_sql.fast_slot_filter import (
+            release_slot_sort_block)
+        held = await conn.fetchval(
+            "SELECT 1 FROM slot_sort_block"
+            " WHERE space_id = $1 AND entity_type_uuid IS NULL", space_id)
+        if held:
+            await release_slot_sort_block(conn, space_id, None)
+            released_space_block = True
+
+    # `fast_path` reports whether a query can actually be served, which needs
+    # BOTH a complete type and no whole-space block still standing.
+    still_blocked = await conn.fetchval(
+        "SELECT count(*) FROM slot_sort_block WHERE space_id = $1"
+        "   AND entity_type_uuid IS NULL", space_id)
     return {"space": space_id, "status": "ok", "types": len(after),
             "complete": complete, "rows_added": filled,
-            "fast_path": "ON" if complete else "OFF"}
+            "space_block_released": released_space_block,
+            "fast_path": "ON" if (complete and not still_blocked) else "OFF"}
 
 
 async def main() -> int:
