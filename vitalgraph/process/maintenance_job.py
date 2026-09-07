@@ -1824,7 +1824,8 @@ class MaintenanceJob:
                 from ..db.sparql_sql.sync_entity_slot_sort import (
                     entity_slot_sort_all_types)
                 from ..db.sparql_sql.fast_slot_filter import (
-                    record_slot_sort_coverage, slot_sort_alarms)
+                    record_slot_sort_coverage, slot_sort_alarms,
+                    release_whole_space_block_if_complete)
                 async with self._pool.acquire() as conn:
                     async with maintenance_timeouts(conn):
                         covs = await entity_slot_sort_all_types(
@@ -1839,6 +1840,23 @@ class MaintenanceJob:
                             await record_slot_sort_coverage(
                                 conn, space_id, cov["entity_type_uuid"],
                                 cov["in_table"], cov["of_type"])
+                        # AND CLEAR A WHOLE-SPACE BLOCK IF THE SWEEP IS CLEAN.
+                        #
+                        # This loop is the only caller that measures EVERY type
+                        # in a space, so it is the only one entitled to release
+                        # the space-wide block — the per-type release above
+                        # cannot, because no single type knows it is the last.
+                        # Without this a space seeded with a block at upgrade
+                        # keeps the fast path off for every type FOREVER, which
+                        # is how two spaces on a clean deploy sat blocked over
+                        # complete tables until someone ran the DELETE by hand.
+                        if await release_whole_space_block_if_complete(
+                                conn, space_id, covs):
+                            logger.info(
+                                "entity_slot_sort: released the WHOLE-SPACE "
+                                "block on %s — all %d type(s) measured "
+                                "complete, so the FILTER fast path is back on.",
+                                space_id, len(covs))
                 for a in alarms:
                     if a["kind"] == "undeclared_shortfall":
                         # A BUG IN THE CODE, not a problem with the data.

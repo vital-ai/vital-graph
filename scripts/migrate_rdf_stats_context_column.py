@@ -72,20 +72,55 @@ async def migrate_space(conn, space_id: str, dry_run: bool = True) -> dict:
         return {"space": space_id, "status": "would migrate",
                 "rows_discarded": before}
 
-    async with conn.transaction():
-        await conn.execute(f"TRUNCATE {t}")
-        await conn.execute(f"ALTER TABLE {t} ADD COLUMN context_uuid UUID NOT NULL")
-        # The primary key names itself after the table, not after its columns,
-        # so it is dropped by discovering it rather than by guessing a name.
-        pk = await conn.fetchval(
-            "SELECT conname FROM pg_constraint "
-            "WHERE conrelid = to_regclass($1) AND contype = 'p'", t)
-        if pk:
-            await conn.execute(f'ALTER TABLE {t} DROP CONSTRAINT "{pk}"')
-        await conn.execute(
-            f"ALTER TABLE {t} ADD PRIMARY KEY "
-            f"(predicate_uuid, object_uuid, context_uuid)")
-        await recompute_stats_tables(conn, space_id)
+    # RETRY ON DEADLOCK — THIS RUNS AGAINST A LIVE APPLICATION.
+    #
+    # The migration takes ACCESS EXCLUSIVE on the stats table (TRUNCATE, ALTER)
+    # and then reads the quad table to recompute. The running app's maintenance
+    # recompute takes the same two in the OPPOSITE order, so the two deadlock
+    # and PostgreSQL kills one. Hit on a production deploy; a retry loop cleared
+    # it, but nothing in the script or the runbook said to expect it, so the
+    # first run looked like a migration that had failed rather than one that
+    # needed running again.
+    #
+    # The deadlock is the SAFE outcome: it aborts the whole transaction, so the
+    # table is either fully migrated or untouched, never half. Retrying is
+    # therefore sound rather than a way of forcing through a partial write.
+    #
+    # `lock_timeout` bounds each attempt so a run cannot sit behind the app's
+    # locks indefinitely — a stuck migration during a deploy window is worse
+    # than one that reports it could not get the lock. Backoff is linear and
+    # short: the competing job is a 300s-cycle maintenance pass, so the window
+    # reopens quickly and the contention is not self-inflicted load.
+    import asyncpg as _apg
+    attempts = 5
+    for attempt in range(1, attempts + 1):
+        try:
+            async with conn.transaction():
+                await conn.execute("SET LOCAL lock_timeout = '30s'")
+                await conn.execute(f"TRUNCATE {t}")
+                await conn.execute(f"ALTER TABLE {t} ADD COLUMN context_uuid UUID NOT NULL")
+                # The primary key names itself after the table, not after its
+                # columns, so it is dropped by discovering it rather than by
+                # guessing a name.
+                pk = await conn.fetchval(
+                    "SELECT conname FROM pg_constraint "
+                    "WHERE conrelid = to_regclass($1) AND contype = 'p'", t)
+                if pk:
+                    await conn.execute(f'ALTER TABLE {t} DROP CONSTRAINT "{pk}"')
+                await conn.execute(
+                    f"ALTER TABLE {t} ADD PRIMARY KEY "
+                    f"(predicate_uuid, object_uuid, context_uuid)")
+                await recompute_stats_tables(conn, space_id)
+            break
+        except (_apg.DeadlockDetectedError, _apg.LockNotAvailableError) as exc:
+            if attempt == attempts:
+                raise
+            logger.warning(
+                "  %s: %s on attempt %d/%d — the running application holds "
+                "these locks in the opposite order. The transaction rolled "
+                "back cleanly (nothing partial); retrying in %ds.",
+                space_id, type(exc).__name__, attempt, attempts, attempt * 5)
+            await asyncio.sleep(attempt * 5)
 
     after = await conn.fetchval(f"SELECT count(*) FROM {t}")
     graphs = await conn.fetchval(

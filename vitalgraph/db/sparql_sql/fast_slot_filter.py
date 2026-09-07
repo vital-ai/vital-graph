@@ -93,6 +93,42 @@ def _eq_criteria(frame_criteria):
     return out or None
 
 
+def filter_decline_reason(criteria) -> Optional[str]:
+    """WHY `can_serve_filter` would decline, or None if it would serve.
+
+    `can_serve_filter` returns a bare bool over NINE independent disqualifiers,
+    so a query that falls through to the general pipeline gives an operator no
+    way to tell which one applied. That matters because the two paths differ by
+    orders of magnitude — measured 21 ms against a 60 s timeout on the same
+    shape — and "it declined" is not an actionable fact.
+
+    Kept separate from `can_serve_filter` rather than folded into it: the gate is
+    on the request path and must stay a cheap bool, and a diagnostic that changes
+    the decision is a diagnostic that can change behaviour.
+    """
+    if not getattr(criteria, "frame_criteria", None):
+        return "no frame_criteria — nothing for the index to match"
+    if not getattr(criteria, "entity_type", None):
+        return ("no entity_type — the index cannot be probed on its leading "
+                "columns, so every probe degrades to a full scan")
+    if getattr(criteria, "sort_criteria", None):
+        return ("sort_criteria present — the SORT path serves those; if it "
+                "declines too, the query falls to the general pipeline "
+                "(issues/172)")
+    for attr in ("vector_criteria", "multi_vector_criteria", "geo_criteria",
+                 "entity_property_filters", "entity_uris", "search_string"):
+        if getattr(criteria, attr, None):
+            return (f"{attr} present — this table answers frame/slot equality "
+                    f"only, and a partially applied query is a wrong answer")
+    parsed = _eq_criteria(getattr(criteria, "frame_criteria", None))
+    if parsed is None:
+        return ("a criterion is outside what the index answers — a comparator "
+                "that is not `eq`, an unmapped slot_class_uri, a missing "
+                "slot_type, or a null value. A conjunction is served only when "
+                "EVERY conjunct is")
+    return None
+
+
 def can_serve_filter(criteria) -> bool:
     """Whether this criteria object is a FILTER the table answers exactly.
 
@@ -248,6 +284,44 @@ async def release_slot_sort_block(conn, space_id: str,
             "DELETE FROM slot_sort_block"
             " WHERE space_id = $1 AND entity_type_uuid = $2",
             space_id, entity_type_uuid)
+
+
+async def release_whole_space_block_if_complete(conn, space_id: str,
+                                               coverage_rows) -> bool:
+    """Clear a WHOLE-SPACE block once every type has measured complete.
+
+    THE WHOLE-SPACE BLOCK HAD NO RELEASER. `record_slot_sort_coverage` releases
+    per type, and the read gate matches `entity_type_uuid IS NULL OR = $2` — so
+    one whole-space row switches the fast path off for EVERY type in the space
+    and nothing ever took it back. A space seeded with one at upgrade
+    ("coverage never measured") therefore stayed off permanently, with correct
+    answers and no error, until an operator ran the DELETE by hand. Found on a
+    deploy rehearsal against a clean instance, where two spaces sat blocked
+    while their tables were complete the whole time.
+
+    Per-type release cannot fix this: the type that would clear the block does
+    not know it is the last one. Only a caller that has just measured EVERY
+    type in the space may release it, which is why `coverage_rows` is passed in
+    rather than re-read — it is the evidence, and requiring it as an argument
+    keeps the contract on `release_slot_sort_block` ("only having just MEASURED
+    coverage") true by construction.
+
+    Releases only when the sweep saw at least one type AND every one of them is
+    complete. An empty sweep is not evidence of completeness — it is a space
+    whose types could not be measured — so it holds the block.
+    """
+    rows = list(coverage_rows or [])
+    if not rows:
+        return False
+    if not all(r["in_table"] >= r["of_type"] and r["of_type"] > 0 for r in rows):
+        return False
+    try:
+        await release_slot_sort_block(conn, space_id, None)
+    except Exception as exc:
+        logger.debug("could not release whole-space block for %s: %s",
+                     space_id, exc)
+        return False
+    return True
 
 
 async def slot_sort_is_blocked(conn, space_id: str,

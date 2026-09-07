@@ -372,3 +372,68 @@ block table's foreign key cannot reference them. Both hold ZERO slot-sort rows
 and no KG entity types, so there is nothing to serve wrongly. Worth knowing
 rather than fixing: an unregistered space cannot be blocked, so if one ever did
 hold KG data it would be served unguarded.
+
+---
+
+## 2026-09-06 — the production timeouts, root-caused
+
+The 60s timeouts on the NurtureAction dedup shape were caused by this issue's
+own gate, not by the query planner.
+
+**The chain.** `migrate_slot_sort_blocks.py` read `slot_sort_coverage` before
+creating it, so on a database that had neither admin table it failed before
+creating anything. `slot_sort_block` was therefore never created — and
+`slot_sort_is_blocked` deliberately DEFAULTS TO BLOCKED on a missing table:
+
+> A deployment whose schema predates this table therefore declines everything
+> until it is created, which is slow and correct.
+
+Slow and correct is exactly what happened. Every query, in every space,
+declined the FILTER fast path and fell to the general pipeline. The
+two-criterion shape has no workable plan there at 46M quads (issues/161), so it
+timed out at 60s; the one-criterion shapes stayed selective enough to answer in
+~0.3s. That asymmetry is what made it look like a planner problem specific to
+conjunctions.
+
+**Measured after the tables were created** (2026-09-07 01:59:57Z), through
+`_execute_entity_query` against live prod, 46.6M quads:
+
+| shape | result |
+|---|---|
+| campaign + lead | **128 ms**, total=0 |
+| lead only | 223 ms, total=0 |
+| campaign only | 78 ms, total=77,831 |
+
+`total=0` is correct: that lead has no term rows in the space, against 78,251
+other `CtRefSFLeadId` values.
+
+**Three fixes, from a deploy rehearsal against a clean instance.**
+
+1. `migrate_slot_sort_blocks.py` now creates every admin table from
+   `SparqlSQLSchema.ADMIN_TABLE_DDL` before any read. Both local stacks already
+   had the coverage table, so every test run exercised the case where the
+   precondition already held — the rehearsal found what the tests could not.
+
+2. **The whole-space block had no releaser.** `record_slot_sort_coverage`
+   releases per type; the read gate matches
+   `entity_type_uuid IS NULL OR = $2`, so one whole-space row switches the fast
+   path off for EVERY type and nothing took it back. A space seeded with one at
+   upgrade stayed off permanently, with correct answers and no error, until an
+   operator ran the DELETE by hand. Per-type release cannot fix this: the type
+   that would clear the block does not know it is the last one. Added
+   `release_whole_space_block_if_complete`, called from the maintenance sweep —
+   the only caller that measures every type in a space — so the space now
+   self-heals within one 300s cycle. It holds the block on an empty sweep,
+   because "no types measured" is not evidence of completeness.
+
+3. `migrate_rdf_stats_context_column.py` deadlocks against the running app's
+   maintenance recompute, which takes the stats and quad tables in the opposite
+   order. The deadlock is the safe outcome — the transaction aborts whole, so
+   the table is never half-migrated — but the script reported it as a failure
+   rather than as something to retry. Added a bounded retry with `lock_timeout`.
+
+**Still open.** `sp_kg_types` and `testspace` carry seeded whole-space blocks on
+prod. They will clear on the next maintenance cycle with fix 2 deployed; until
+then those two spaces have the fast path off. `cardiff_kg` has only a per-type
+block (`KGEntityType_KGEntity`, coverage 0/1) which does not affect
+NurtureAction.

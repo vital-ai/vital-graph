@@ -76,6 +76,11 @@ async def _gather_cancelling(*coros):
 # queried, and the condition it reports does not resolve on its own.
 _COVERAGE_WARNED: set = set()
 
+# Warn-once keys for a fast-path decline, by (space, entity type, reason). The
+# reason is part of the key so a second, different decline on the same space is
+# still reported.
+_DECLINE_LOGGED: set = set()
+
 
 class BackendQueryError(RuntimeError):
     """The query engine reported that it did not run the query.
@@ -511,8 +516,27 @@ class KGQueriesEndpoint:
         """
         from ..db.sparql_sql.fast_slot_filter import (
             can_serve_filter, fast_slot_filter_page, fast_slot_filter_count,
-            slot_sort_is_blocked)
+            filter_decline_reason, slot_sort_is_blocked)
         if not can_serve_filter(entity_criteria):
+            # SAY WHICH OF THE NINE DISQUALIFIERS FIRED.
+            #
+            # This returned a bare False, so a query that fell through to the
+            # general pipeline gave no way to tell why — and the two paths
+            # differ by orders of magnitude (108 ms against a 60 s timeout on
+            # one measured production shape). "It declined" is not actionable;
+            # "entity_property_filters present" is.
+            #
+            # INFO, not debug: production runs at INFO, and a decline is the
+            # difference between a fast answer and a slow one. Once per
+            # (space, type, reason) so a hot endpoint cannot flood the log.
+            _why = filter_decline_reason(entity_criteria)
+            _k = (space_id, getattr(entity_criteria, "entity_type", None), _why)
+            if _k not in _DECLINE_LOGGED:
+                _DECLINE_LOGGED.add(_k)
+                self.logger.info(
+                    "kgquery: FILTER fast path declined for space=%s type=%s — "
+                    "%s. This query is served by the general SPARQL pipeline.",
+                    space_id, getattr(entity_criteria, "entity_type", None), _why)
             return None
         pool = getattr(getattr(backend, 'db_impl', None), 'connection_pool', None)
         if pool is None:
