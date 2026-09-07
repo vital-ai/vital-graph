@@ -458,6 +458,6 @@ other `CtRefSFLeadId` values.
 
 **Still open.** `sp_kg_types` and `testspace` carry seeded whole-space blocks on
 prod. They will clear on the next maintenance cycle with fix 2 deployed; until
-then those two spaces have the fast path off. `cardiff_kg` has only a per-type
+then those two spaces have the fast path off. `prod_kg` has only a per-type
 block (`KGEntityType_KGEntity`, coverage 0/1) which does not affect
 NurtureAction.
