@@ -355,20 +355,46 @@ This is safe with respect to lock ordering. Everything before the lock is a
 read, so no row locks are held when the advisory locks are acquired, and no
 inversion is possible against a writer that locked first.
 
-**One design decision remains: what to do about staleness.** Bindings computed
-in Step 1 may be out of date by the time the lock is granted, since another
-writer can commit in between. Two options:
+**DECIDED: lock, then re-materialise.** Bindings computed in Step 1 may be
+stale by the time the lock is granted, since another writer can commit in
+between. Re-running the WHERE under the lock closes that; applying the stale
+bindings only narrows the window and should not be described as closing it. The
+second evaluation is paid only by updates that are WHERE-bound.
 
-- **Lock, then re-materialise.** Re-run the WHERE under the lock, replacing
-  `_upd_bindings`, then apply. Correct, and costs a second evaluation of the
-  WHERE — paid only by updates that are WHERE-bound.
-- **Lock and apply the existing bindings.** Narrows the window to the gap
-  between Step 1 and the lock rather than closing it. Cheaper, and the DELETE
-  re-reads rows anyway under READ COMMITTED, so a binding pointing at a row that
-  has since gone simply deletes nothing.
+**The lock key is computable in SQL**, so this needs no application round trip
+and no restructuring of `execute_sparql_update` — the whole thing stays inside
+the emitted statement sequence:
 
-The first is the one to pick unless the second evaluation proves expensive; the
-second still leaves a window and should not be described as closing it.
+```sql
+('x' || substr(encode(sha256(uri::bytea), 'hex'), 1, 16))::bit(64)::bigint
+```
+
+Verified to produce byte-identical keys to `entity_lock.entity_lock_key` for the
+same URIs, which matters because a SPARQL update and an entity write must land
+on the same key or they will not exclude each other.
+
+**The loop is not optional, and this is the part to get right.** Re-materialising
+under the lock can reveal subjects the first pass did not see, belonging to
+groupings not yet locked — so one lock-then-remat pass is not a fixed point. The
+sequence has to iterate until the key set stops growing:
+
+1. materialise `_upd_bindings` from the WHERE
+2. derive the grouping keys it implies
+3. take any not already held, in sorted order
+4. re-materialise
+5. if the key set grew, go to 3; otherwise apply
+
+Advisory locks are transaction-scoped and accumulate, so nothing has to be
+released between iterations, and each pass blocks more concurrent writers than
+the last — which is why it converges rather than spinning. In the uncontended
+case, which is almost all of them, iteration 2 simply confirms stability and the
+cost is exactly two evaluations of the WHERE.
+
+Expressible as a `DO` block using `EXECUTE` for the WHERE text, keeping it one
+statement sequence rather than a client-side loop. Cap the iterations and fail
+loudly if the cap is hit: a WHERE whose result keeps changing under an
+accumulating lock set is a signal worth surfacing, not something to paper over
+by proceeding with whatever the last pass produced.
 
 **Ordering matters.** Whatever locks here must take keys in the same sorted
 order `lock_entities` uses, or a SPARQL update and an entity write acquiring the
