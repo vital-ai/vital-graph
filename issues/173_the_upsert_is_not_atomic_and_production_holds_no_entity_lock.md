@@ -71,10 +71,14 @@ if _lm:
     ...
 ```
 
-`EntityLockManager` is real and correct — a PostgreSQL advisory lock keyed by a
-SHA-256 of the URI, on a dedicated connection, with a per-entity `asyncio.Lock`
-layered on top because PG advisory locks are reentrant on one connection. It
-would serialize A and B above, across replicas.
+`EntityLockManager` — a PostgreSQL advisory lock keyed by a SHA-256 of the URI,
+held on a dedicated connection, with a per-entity `asyncio.Lock` layered on top
+because PG advisory locks are reentrant on one connection — would serialize A
+and B above.
+
+It is **Fuseki-backend code and is not to be reused.** It is described here only
+to record that the endpoints call into something that does not exist for the
+production backend; the fix below is native and does not depend on it.
 
 **It is defined only on `FusekiPostgreSQLSpaceImpl`.** Production runs
 `SparqlSQLSpaceImpl`, which has no such attribute — verified:
@@ -100,30 +104,68 @@ are not the same statement.
 
 ## Proposed fix
 
-Three parts, in order of how much they buy:
+**No Fuseki code is to be reused.** The lock manager above is Fuseki-backend
+code; the fix is native to `vitalgraph/db/sparql_sql/`, and it turns out to be
+smaller than porting anything would have been.
 
-1. **Make the upsert atomic.** `delete_object` + `store_objects` must be one
-   transaction, so a retry either sees the committed prior state and deletes it,
-   or blocks. `update_quads` already does exactly this shape correctly via
-   `with_deadlock_retry(pool, body, what=...)` — each attempt takes its own
-   connection and transaction, so a retry starts clean. Reuse it rather than
-   inventing a second pattern.
+The two defects collapse into **one** change. `with_deadlock_retry` already
+hands `body` a pooled connection inside an open transaction:
 
-2. **Give the SPARQL-SQL backend an entity lock manager.** `EntityLockManager`
-   takes a `postgresql_config` and is not Fuseki-specific in anything but its
-   location; the work is wiring, not design. Until then every advisory-lock call
-   site in the endpoints is decorative.
+```python
+async with pool.acquire() as conn:
+    async with conn.transaction():
+        return await body(conn)
+```
 
-3. **Stop failing open silently.** A backend with no lock manager should say so
-   once, at WARNING, naming the consequence — not read as though it locked.
-   Same argument as the `slot_sort_block` gate in issues/167: declining to
-   protect is defensible; being quiet about it is not.
+So make the upsert run as that `body`, and take a **transaction-scoped** advisory
+lock as its first statement:
+
+```python
+async def _upsert(conn):
+    await conn.execute("SELECT pg_advisory_xact_lock($1)", _entity_lock_key(uri))
+    # delete + store, now serialized and atomic together
+```
+
+That single change gives atomicity and serialization at once: request B blocks
+on the lock until A commits, then sees A's committed state and deletes it
+properly. The corruption cannot occur.
+
+`pg_advisory_xact_lock` is deliberately the *transaction*-scoped variant, and it
+is a better fit here than the session-scoped design it replaces:
+
+- **It releases at commit or rollback**, automatically. Nothing has to remember
+  to unlock, and a crashed request cannot strand a lock.
+- **It needs no dedicated connection**, so there is no single-connection
+  bottleneck and no shared-connection lifecycle to manage.
+- **It needs no `asyncio.Lock` layer.** That layer exists in the Fuseki design
+  only because session locks on one shared connection are reentrant — two
+  requests would both "acquire" the same key. Each transaction here has its own
+  pooled connection, so PostgreSQL serializes them directly and the reentrancy
+  problem never arises.
+
+Write `_entity_lock_key(uri) -> int` natively in the `sparql_sql` package: a
+SHA-256 of the URI truncated to a signed 64-bit integer. It is four lines and a
+standard technique; deriving it independently is cheaper than a dependency on
+another backend's module.
+
+Then, separately:
+
+- **Delete the dead ceremony.** Once serialization lives in the write path where
+  the transaction is, the eight
+  `getattr(space_impl.backend, 'entity_lock_manager', None)` blocks in the
+  endpoints are no-ops for this backend and should go, rather than being left to
+  read as protection. Locking belongs next to the transaction it protects, not
+  in an endpoint several layers above it.
+- **Stop failing open silently** wherever a capability is probed with
+  `getattr(..., None)`. Absence should say so once, at WARNING, naming the
+  consequence. Same argument as the `slot_sort_block` gate in issues/167:
+  declining to protect is defensible; being quiet about it is not.
 
 Independently: **`is_create` should not restamp `hasObjectCreationTime` on a
 subject that already has one.** Even with atomicity and locking, an upsert that
 replaces an existing entity currently rewrites its creation time to now, which
 is wrong on its own terms — creation time is not a property of the latest write.
-That is a separate small bug this investigation surfaced.
+A separate small bug this investigation surfaced.
 
 ## Verification
 
@@ -136,9 +178,11 @@ That is a separate small bug this investigation surfaced.
   the response looks fine either way, which is exactly why this survived in
   production from June to August.
 - Re-run the listing page that was empty (`offset 200`) and confirm 25 rows.
-- After wiring the lock manager, assert `entity_lock_manager` is present on
-  `SparqlSQLSpaceImpl`, so the 8 `getattr` sites stop being no-ops. A unit test
-  on the attribute is enough and would have caught this class of gap.
+- Assert the upsert path actually takes the lock — that
+  `pg_advisory_xact_lock` is issued inside the same transaction as the delete
+  and store, not merely that a helper exists. The failure this issue records is
+  a capability that was present in the codebase and absent at runtime, so a test
+  that only checks for presence would have passed throughout.
 
 ## Scope note
 
