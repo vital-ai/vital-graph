@@ -1,6 +1,6 @@
 # `compute_edge_fanout` Fails On Every Import Round Trip
 
-## Status: OPEN. Reproduces on every `test_bulk_export` round trip.
+## Status: FIXED. Reproduces on every `test_bulk_export` round trip.
 
     resync_all(inttest_exp_dst_*): edge fan-out skipped
       (null value in column "edge_type_uuid" of relation
@@ -55,3 +55,56 @@ restore at all.
 `issues/171` — a statistic whose absence went unremarked this long should have
 to justify its rebuild. Unlike `entity_fanout` this one IS read, so it is a
 measurement question rather than a deletion.
+
+
+---
+
+# FIXED. The hypothesis was wrong; the cause is simpler.
+
+The issue guessed an ORDERING problem — the derivation reading an edge type the
+restore had not populated yet. It is not. The cause is that the guard checks the
+COLUMN EXISTS and never that it is POPULATED:
+
+    has_type = SELECT 1 FROM information_schema.columns
+                WHERE table_name = $1 AND column_name = 'edge_type_uuid'
+
+An edge carrying `hasEdgeSource` and `hasEdgeDestination` but NO `vitaltype`
+derives a NULL `edge_type_uuid`. The aggregate propagates it and the insert
+violates the fan-out table's NOT NULL, so ONE untyped edge discards the whole
+space's statistics.
+
+REPRODUCED DIRECTLY, not inferred: a space computing 6 fan-out rows cleanly,
+plus a single untyped edge, gives `NotNullViolationError: null value in column
+"edge_type_uuid"`. It failed on every `bulk_export` round trip because that
+fixture builds edges from exactly those two predicates and no type.
+
+Real data carries a vitaltype, which is why no populated space showed it — three
+checked at 5,277,000 / 570,696 / 4,977,000 edges, zero NULLs. A rare, legal
+shape that was fatal.
+
+## The fix
+
+Untyped edges are EXCLUDED from the aggregate and the count is logged at
+WARNING. Excluded rather than given a sentinel, unlike `relation_type_uuid` on
+the same table: that sentinel means "not a relation", which is a real category,
+whereas "no type at all" is not one this statistic answers questions about.
+Fan-out is per edge type; pooling untyped edges under a zero uuid would invent a
+type and report a fan-out for it.
+
+WARNING rather than debug because dropping rows quietly is how a statistic
+drifts from the data it describes.
+
+## Three tests, each verified to fail against the old code
+
+  * an untyped edge does not fail the derivation;
+  * the typed edges are STILL COUNTED — guarding the over-correction, where a
+    WHERE that also filtered typed rows would "not fail" while silently
+    emptying the statistic;
+  * no row is written under the zero-uuid bucket.
+
+## Why it took this long to see
+
+It was the first line of a four-warning cascade that read like one failure. The
+other three were `resync_all` catching exceptions inside a transaction that was
+already aborted. Fixing that cascade (`issues/168`) is what made this legible —
+the bug was buried in noise it had itself caused.

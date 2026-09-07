@@ -215,6 +215,44 @@ async def import_space(conn, space_id: str, paths: Dict[str, str],
             # A space predating the table. Nothing to empty, nothing stale.
             logger.debug("import_space(%s): no entity_slot_sort to clear (%s)",
                          space_id, exc)
+        # GEO IS REBUILT INLINE (`issues/169`), unlike entity_slot_sort.
+        #
+        # It is derived from the quads, so a restore that leaves it holding the
+        # PREVIOUS contents produces wrong geo answers, not slow ones — and
+        # emptying it is no safer, because the read path is a correlated
+        # subquery, `SELECT MIN(ST_Distance(...)) FROM {space}_geo WHERE
+        # subject_uuid = ...`, which yields NULL for an absent row. A geo filter
+        # over an empty table therefore excludes every entity, silently.
+        #
+        # So it cannot be deferred the way the slot-sort table is: there is no
+        # marker gating the geo read, and both stale and empty are wrong. It is
+        # rebuilt here because it is CHEAP ENOUGH TO BE — measured 2,268 ms on a
+        # 74.2M-quad space and 476 ms on an 8.9M one, against the 45 minutes
+        # entity_slot_sort takes. Detection is datatype-driven, so the cost
+        # tracks geo literals rather than the size of the space.
+        try:
+            from ...vectorization.geo_populator import populate_geo
+            n_geo = 0
+            for gr in await conn.fetch(
+                    "SELECT graph_uri FROM graph WHERE space_id = $1", space_id):
+                gctx = await conn.fetchval(
+                    f"SELECT term_uuid FROM {_bare(t['term'])} "
+                    f" WHERE term_text = $1 AND term_type = 'U' LIMIT 1",
+                    gr["graph_uri"])
+                if gctx is not None:
+                    st = await populate_geo(conn, space_id, gctx)
+                    n_geo += getattr(st, "points_upserted", 0) or 0
+            logger.info("import_space(%s): geo rebuilt, %d point(s)",
+                        space_id, n_geo)
+        except Exception as exc:
+            # Fail-safe and LOUD. A geo table left describing the previous
+            # contents answers geo queries wrongly, so this is not a
+            # nice-to-have that can be swallowed at debug level.
+            logger.warning(
+                "import_space(%s): geo NOT rebuilt (%s) — geo queries on this "
+                "space may answer from the PREVIOUS contents until "
+                "resync_all_auxiliary_tables is run", space_id, exc)
+
         from .fast_slot_filter import (clear_slot_sort_coverage,
                                        take_slot_sort_block)
         await clear_slot_sort_coverage(conn, space_id)

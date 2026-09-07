@@ -76,6 +76,38 @@ async def compute_edge_fanout(conn, space_id: str) -> int:
                     "— every edge would pool into one bucket", space_id)
         return 0
 
+    # UNTYPED EDGES ARE EXCLUDED, NOT FATAL (`issues/170`).
+    #
+    # The check above asks whether the COLUMN exists, not whether it is
+    # POPULATED. An edge carrying `hasEdgeSource` and `hasEdgeDestination` but no
+    # `vitaltype` derives a NULL `edge_type_uuid`; the aggregate propagates it
+    # and the insert violates the table's NOT NULL — so ONE untyped edge threw
+    # away the whole space's fan-out. Reproduced by adding a single such row to a
+    # space that had computed cleanly a moment earlier.
+    #
+    # It failed on every `bulk_export` round trip because that fixture builds
+    # edges from those two predicates and no type. Real data carries a
+    # vitaltype, which is why no populated space showed it — three checked at
+    # 5,277,000 / 570,696 / 4,977,000 edges, zero NULLs.
+    #
+    # EXCLUDED rather than given a sentinel, unlike `relation_type_uuid` on the
+    # same table. That sentinel means "not a relation", which is a real
+    # category. "No type at all" is not a category this statistic answers
+    # questions about — fan-out is PER EDGE TYPE, so an untyped edge has no
+    # bucket, and pooling them under a zero uuid would invent a type and report
+    # a fan-out for it.
+    n_untyped = await conn.fetchval(
+        f"SELECT count(*) FROM {t_edge} WHERE edge_type_uuid IS NULL")
+    if n_untyped:
+        # WARNING rather than debug: dropping rows quietly is how a statistic
+        # drifts from the data it describes, and the count is what a reader
+        # needs to judge whether it matters.
+        logger.warning(
+            "compute_edge_fanout(%s): %d edge(s) carry no edge_type_uuid and "
+            "are excluded — fan-out is per edge type and an untyped edge has no "
+            "bucket. Usually edges written without a vitaltype.",
+            space_id, n_untyped)
+
     written = 0
     for direction, group_col, count_col in (
         ("forward", "source_node_uuid", "dest_node_uuid"),
@@ -95,6 +127,7 @@ async def compute_edge_fanout(conn, space_id: str) -> int:
                        ON rt.subject_uuid = e.edge_uuid
                       AND rt.predicate_uuid = $2
                       AND rt.context_uuid = e.context_uuid
+                WHERE e.edge_type_uuid IS NOT NULL
             ),
             per_node AS (
                 SELECT edge_type_uuid, relation_type_uuid, node,

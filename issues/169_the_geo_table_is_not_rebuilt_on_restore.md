@@ -1,6 +1,6 @@
 # The Geo Table Is Not Rebuilt On Restore
 
-## Status: OPEN. Found by the `issues/168` audit, unmeasured.
+## Status: FIXED. Found by the `issues/168` audit, unmeasured.
 
 `bulk_export.import_space` TRUNCATEs and re-COPYs the core tables, then rebuilds
 a fixed list of derived tables. Geo has never been on that list. So after a
@@ -51,3 +51,41 @@ option is closed until that is fixed.
 described.
 `issues/167` — under a block-list, a restore would take a block covering geo too,
 which is the general form of this fix.
+
+
+---
+
+# FIXED, INLINE — and the deferral option was closed by measurement
+
+The issue asked whether geo belongs inline or deferred, and said to measure
+before choosing. Measured:
+
+    lead_nurture_grouped (74.2M quads)    2,268 ms
+    wordnet_frames        (8.9M quads)      476 ms
+
+against the 45 minutes `entity_slot_sort` takes on the same space. Detection is
+datatype-driven, so the cost tracks geo literals rather than the size of the
+space. Cheap enough to hold the restore's lock for.
+
+## The deferral option was not merely worse, it was unavailable
+
+The issue flagged the precondition: emptying the table is only safe if the geo
+read path DECLINES on an empty table rather than answering "no points". It does
+not. The read is a correlated subquery —
+
+    (SELECT MIN(ST_Distance(location, ST_MakePoint(...)::geography))
+       FROM {space}_geo WHERE subject_uuid = ... )
+
+— and `MIN` over no rows is NULL, so a geo filter over an empty table SILENTLY
+EXCLUDES EVERY ENTITY. Stale answers from the previous contents and empty
+answers from a truncated table are both wrong, and unlike the slot-sort table
+there is no marker gating the geo read to decline on.
+
+So the choice was never inline-versus-deferred. It was inline-versus-wrong.
+
+## The fix
+
+`import_space` rebuilds geo per registered graph, after registering them (the
+catalog is what it iterates). A failure logs at WARNING and says the space may
+answer geo queries from the previous contents — not debug, because that is a
+wrong answer rather than a slow one.
