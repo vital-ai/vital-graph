@@ -185,6 +185,30 @@ path is left unserialized while looking done.
 worth a docstring line saying so rather than a rename, since entity upsert and
 delete already use it under the old name.
 
+#### Item 5 subsumes 1c and item 4 — do it first
+
+Traced when picking up the next piece of work. **Frame delete and
+`touch_entity_modification_time` both write through
+`execute_sparql_update`**, so neither is separate work: locking the SPARQL
+update path closes all three at once.
+
+| item | writes via | covered by item 5? |
+|---|---|---|
+| 1c — frame delete (`delete_frame`) | `execute_sparql_update` | **yes** |
+| 4 — `touch_entity_modification_time` | `execute_sparql_update`, as an `UpdateModify` that materialises bindings | **yes** |
+| 5 — raw SPARQL updates generally | itself | yes |
+
+This reverses the order they were listed in. Item 4 was called the highest-value
+remaining item because it is the one still actively corrupting production — 42
+subjects on `lead_prod`, most recent 2026-09-06 — and Option B proposed
+rewriting it as direct SQL in a locked transaction. That rewrite is now
+unnecessary: once the SPARQL update path locks, the touch is serialised where it
+stands, with no change to the function at all.
+
+Item 5 is also the most intricate piece in this issue, so the sequencing is not
+free — but doing 1c and 4 separately would mean writing two bespoke fixes and
+then a general one that made both redundant.
+
 #### Phase 1c — frame DELETE takes the same key
 
 Folded in rather than deferred: once create and update serialize on the
