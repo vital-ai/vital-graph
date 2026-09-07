@@ -41,15 +41,46 @@ from devtools.target import add_pg_arguments, describe_target  # noqa: E402
 
 logger = logging.getLogger("migrate_slot_sort_blocks")
 
-_CREATE = """
-CREATE TABLE IF NOT EXISTS slot_sort_block (
-    space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
-    entity_type_uuid UUID,
-    reason TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE NULLS NOT DISTINCT (space_id, entity_type_uuid)
-)
-"""
+async def _ensure_admin_tables(conn) -> list:
+    """Create the global admin tables, FROM THE SCHEMA, before reading any.
+
+    THIS SCRIPT USED TO ASSUME `slot_sort_coverage` EXISTED. It read it to find
+    short types and only afterwards created `slot_sort_block` — so on a database
+    that has neither, it failed with `relation "slot_sort_coverage" does not
+    exist` before creating anything. Caught by a deploy rehearsal against a
+    clean RDS instance, NOT by testing here: both local stacks already had the
+    coverage table, so every run exercised the case where the precondition
+    already held.
+
+    That is also why the DDL is taken from `SparqlSQLSchema.ADMIN_TABLE_DDL`
+    rather than written out here. A copy in this file is a second source of
+    truth that drifts silently, and the rehearsal had to hand-copy the DDL into
+    psql to get past the failure — which is the same drift one step further out.
+
+    Creates every admin table, not just the two this script needs: they are one
+    group, `CREATE TABLE IF NOT EXISTS` is idempotent, and a database missing
+    one is likely missing its siblings.
+    """
+    created = []
+    from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+    sch = SparqlSQLSchema()
+    for name, _ in sch.ADMIN_TABLE_DDL:
+        bare = name.strip('"')
+        exists = await conn.fetchval(
+            "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1",
+            bare)
+        if not exists:
+            created.append(bare)
+    for ddl in sch.create_admin_tables_sql():
+        await conn.execute(ddl)
+    for ddl in sch.create_admin_indexes_sql():
+        try:
+            await conn.execute(ddl)
+        except Exception:
+            # An index on a table this database does not use is not a reason to
+            # fail the migration the caller actually asked for.
+            pass
+    return created
 
 
 async def main() -> int:
@@ -66,6 +97,20 @@ async def main() -> int:
                                  database=args.database, user=args.user,
                                  password=args.password or None)
     try:
+        # BEFORE ANY READ. See `_ensure_admin_tables`.
+        if not args.dry_run:
+            made = await _ensure_admin_tables(conn)
+            if made:
+                logger.info("  created admin table(s): %s", ", ".join(made))
+        elif not await conn.fetchval(
+                "SELECT 1 FROM pg_tables WHERE schemaname='public' "
+                "AND tablename='slot_sort_coverage'"):
+            logger.info("  [dry-run] slot_sort_coverage is ABSENT; a real run "
+                        "would create the admin tables first, and there would "
+                        "be no coverage rows to seed blocks from — every space "
+                        "would take a whole-space block instead")
+            return 0
+
         short = await conn.fetch(
             "SELECT space_id, entity_type_uuid, entities_in_table,"
             "       entities_of_type"
@@ -82,8 +127,6 @@ async def main() -> int:
             logger.info("\n%d type(s) across %d space(s)", len(short),
                         len(by_space))
             return 0
-
-        await conn.execute(_CREATE)
 
         # NEVER-MEASURED SPACES GET A WHOLE-SPACE BLOCK.
         #
