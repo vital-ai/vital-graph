@@ -1429,12 +1429,27 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
 
     async def update_subjects_graph(self, space_id: str, graph_id: str,
                                      subject_uris: List[str],
-                                     insert_quads: List[tuple]) -> bool:
+                                     insert_quads: List[tuple],
+                                     lock_uris: Optional[List[str]] = None) -> bool:
         """Atomically replace quads for a list of subject URIs.
 
         Subject-level delete + insert in a single transaction.  Avoids the
         fragile quad-level UUID matching in ``remove_rdf_quads_batch_bulk``.
         Used by frame create/update paths where the subject URIs are known.
+
+        ``lock_uris`` SERIALISES ON THE GROUPING, not on the subjects being
+        written (`issues/174`). This transaction was already atomic; it was not
+        exclusive, which is the same gap `update_entity_graph` had. The key must
+        be what OWNS these subjects — the entity for an entity-scoped frame, the
+        frame itself for a standalone one — because entity upsert and
+        entity-graph delete hold the entity key, and advisory locks only exclude
+        writers that share a key. Locking the frame subjects instead would
+        contend with nobody while looking correct.
+
+        Do NOT derive the key from `hasKGFormType`: a frame whose form type is
+        unset defaults to Assertion while still being entity-scoped, and on the
+        production space that is roughly 275,000 of 482,000 frames. The caller
+        knows which grouping it is writing; that is where the decision belongs.
         """
         import time as _time
         try:
@@ -1450,6 +1465,9 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
 
             async with self.backend.db_impl.connection_pool.acquire() as conn:
                 async with conn.transaction():
+                    if lock_uris:
+                        from ..db.sparql_sql.entity_lock import lock_entities
+                        await lock_entities(conn, lock_uris)
                     if s_uuids:
                         # Sync auxiliary tables before delete.
                         #

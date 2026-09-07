@@ -201,10 +201,12 @@ class KGEntityFrameCreateProcessor:
             fuseki_success = True
             if operation_mode and str(operation_mode).upper() in ['UPDATE', 'UPSERT']:
                 success, fuseki_success = await self.execute_atomic_frame_update(backend_adapter, space_id, graph_id, 
-                                                               categories.frame_objects, all_objects, operation_mode)
+                                                               categories.frame_objects, all_objects, operation_mode,
+                                                                 entity_uri=entity_uri)
             else:
                 # Step 7: Execute atomic creation via backend (extracted from lines 1125-1145)
-                success, fuseki_success = await self.execute_frame_creation(backend_adapter, space_id, graph_id, all_objects)
+                success, fuseki_success = await self.execute_frame_creation(backend_adapter, space_id, graph_id, all_objects,
+                                                                            entity_uri=entity_uri)
             
             if success:
                 created_uris = [str(obj.URI) for obj in all_objects if hasattr(obj, 'URI')]
@@ -442,7 +444,8 @@ class KGEntityFrameCreateProcessor:
     
     async def execute_atomic_frame_update(self, backend_adapter: KGBackendInterface, space_id: str,
                                         graph_id: str, frame_objects: List[GraphObject], all_objects: List[GraphObject],
-                                        operation_mode: str) -> tuple:
+                                        operation_mode: str,
+                                        entity_uri: Optional[str] = None) -> tuple:
         """
         Execute atomic frame UPDATE/UPSERT via subject-level delete + insert.
         
@@ -477,8 +480,12 @@ class KGEntityFrameCreateProcessor:
                 # Collect all subject URIs from both frame objects and child objects
                 subject_uris = list({str(obj.URI) for obj in all_objects
                                      if hasattr(obj, 'URI') and obj.URI})
+                # Serialise on the grouping (`issues/174`): entity upsert and
+                # entity-graph delete hold the entity key, so a frame write must
+                # take the same one to be excluded from them.
                 success = await backend_adapter.update_subjects_graph(
-                    space_id, graph_id, subject_uris, insert_quads)
+                    space_id, graph_id, subject_uris, insert_quads,
+                    lock_uris=[entity_uri] if entity_uri else None)
                 t2 = time.time()
                 self.logger.info(f"⏱️ FRAME_UPDATE step2 update_subjects_graph: {t2-t1:.3f}s "
                                f"({len(subject_uris)} subjects, {len(insert_quads)} quads)")
@@ -871,8 +878,12 @@ class KGEntityFrameCreateProcessor:
             if hasattr(backend_adapter, 'update_subjects_graph'):
                 subject_uris = list({str(obj.URI) for obj in all_objects
                                      if hasattr(obj, 'URI') and obj.URI})
+                # Serialise on the grouping (`issues/174`): entity upsert and
+                # entity-graph delete hold the entity key, so a frame write must
+                # take the same one to be excluded from them.
                 success = await backend_adapter.update_subjects_graph(
-                    space_id, graph_id, subject_uris, insert_quads)
+                    space_id, graph_id, subject_uris, insert_quads,
+                    lock_uris=[entity_uri] if entity_uri else None)
                 _t2 = _time.time()
                 self.logger.info(f"⏱️ FRAME_CREATE step2 update_subjects_graph: {_t2-_t1:.3f}s "
                                f"({len(subject_uris)} subjects, {len(insert_quads)} quads)")

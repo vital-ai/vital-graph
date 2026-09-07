@@ -282,8 +282,21 @@ class KGFrameCreateProcessor:
             if hasattr(backend_adapter, 'update_subjects_graph'):
                 subject_uris = list({str(obj.URI) for obj in all_objects
                                      if hasattr(obj, 'URI') and obj.URI})
+                # Standalone frames have no enclosing entity, so each frame is
+                # its own lock unit — there is no frame-graph and no ancestor to
+                # walk up to (`issues/174`). Taken from `frameGraphURI`, which
+                # every member carries and which points at its own frame, rather
+                # than by type: this module deliberately does not import KGFrame,
+                # and the grouping URI is the thing being locked anyway.
+                # `lock_entities` sorts and dedupes, so several frames in one
+                # call cannot deadlock against a writer taking the same set in a
+                # different order.
+                _lock_uris = sorted({str(g) for g in
+                                     (getattr(o, 'frameGraphURI', None) for o in all_objects)
+                                     if g})
                 success = await backend_adapter.update_subjects_graph(
-                    space_id, graph_id, subject_uris, insert_quads)
+                    space_id, graph_id, subject_uris, insert_quads,
+                    lock_uris=_lock_uris or None)
                 _t2 = _time.time()
                 self.logger.info(f"⏱️ FRAME_CREATE step2 update_subjects_graph: {_t2-_t1:.3f}s")
             else:
@@ -316,8 +329,21 @@ class KGFrameCreateProcessor:
             if hasattr(backend_adapter, 'update_subjects_graph'):
                 subject_uris = list({str(obj.URI) for obj in all_objects
                                      if hasattr(obj, 'URI') and obj.URI})
+                # Standalone frames have no enclosing entity, so each frame is
+                # its own lock unit — there is no frame-graph and no ancestor to
+                # walk up to (`issues/174`). Taken from `frameGraphURI`, which
+                # every member carries and which points at its own frame, rather
+                # than by type: this module deliberately does not import KGFrame,
+                # and the grouping URI is the thing being locked anyway.
+                # `lock_entities` sorts and dedupes, so several frames in one
+                # call cannot deadlock against a writer taking the same set in a
+                # different order.
+                _lock_uris = sorted({str(g) for g in
+                                     (getattr(o, 'frameGraphURI', None) for o in all_objects)
+                                     if g})
                 success = await backend_adapter.update_subjects_graph(
-                    space_id, graph_id, subject_uris, insert_quads)
+                    space_id, graph_id, subject_uris, insert_quads,
+                    lock_uris=_lock_uris or None)
             else:
                 delete_quads = await self.build_delete_quads_for_frames(
                     backend_adapter, space_id, graph_id, frame_objects)
