@@ -367,22 +367,10 @@ class SegmentationWorker:
             # Compute content hash for skip-if-unchanged on future runs
             content_hash = SegmentationJobManager.compute_content_hash(doc_properties)
 
-            # Acquire per-document advisory lock (cross-instance safe)
-            lock_manager = getattr(
-                getattr(space_impl, 'backend', None),
-                'entity_lock_manager', None,
+            segment_count, output = await self._execute_segmentation(
+                backend_impl, space_impl, space_id, job.graph_id,
+                job.document_uri, doc_properties, config,
             )
-            if lock_manager:
-                async with lock_manager.lock(job.document_uri):
-                    segment_count, output = await self._execute_segmentation(
-                        backend_impl, space_impl, space_id, job.graph_id,
-                        job.document_uri, doc_properties, config,
-                    )
-            else:
-                segment_count, output = await self._execute_segmentation(
-                    backend_impl, space_impl, space_id, job.graph_id,
-                    job.document_uri, doc_properties, config,
-                )
 
             # Mark as 'vectorizing' — segments are stored and immediately
             # searchable via FTS/CONTAINS.  Worker is now free to pick up

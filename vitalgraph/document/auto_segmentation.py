@@ -54,7 +54,6 @@ class AutoSegmentationHook:
         document_uri: str,
         document_properties: dict,
         graph_id: str,
-        lock_manager=None,
     ) -> bool:
         """
         Check if document matches any auto-segmentation config and trigger if so.
@@ -63,7 +62,6 @@ class AutoSegmentationHook:
             document_uri: URI of the KGDocument that was inserted/updated.
             document_properties: Properties dict of the document (short TS names).
             graph_id: RDF graph ID where the document lives.
-            lock_manager: Optional EntityLockManager for advisory locking.
 
         Returns:
             True if segmentation was triggered, False otherwise.
@@ -100,7 +98,7 @@ class AutoSegmentationHook:
         for config_dto in configs:
             try:
                 success = await self._run_segmentation(
-                    document_uri, document_properties, graph_id, config_dto, lock_manager
+                    document_uri, document_properties, graph_id, config_dto
                 )
                 if success:
                     triggered = True
@@ -121,7 +119,6 @@ class AutoSegmentationHook:
         document_properties: dict,
         graph_id: str,
         config_dto: SegmentationConfigDTO,
-        lock_manager=None,
     ) -> bool:
         """Run segmentation for a single config."""
         # Build config from DTO
@@ -155,11 +152,7 @@ class AutoSegmentationHook:
 
             return True
 
-        if lock_manager:
-            async with lock_manager.lock(document_uri):
-                return await _do_segment()
-        else:
-            return await _do_segment()
+        return await _do_segment()
 
     @staticmethod
     def _dto_to_config(dto: SegmentationConfigDTO):

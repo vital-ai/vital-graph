@@ -634,19 +634,10 @@ class KGDocumentsEndpoint:
         # Build config
         config = self._build_config(body)
 
-        # Acquire advisory lock on document URI
-        lock_manager = getattr(space_impl.backend, "entity_lock_manager", None)
-        if lock_manager:
-            async with lock_manager.lock(body.document_uri):
-                result = await self._execute_segmentation(
-                    backend_impl, space_id, graph_id,
-                    body.document_uri, doc_properties, config
-                )
-        else:
-            result = await self._execute_segmentation(
-                backend_impl, space_id, graph_id,
-                body.document_uri, doc_properties, config
-            )
+        result = await self._execute_segmentation(
+            backend_impl, space_id, graph_id,
+            body.document_uri, doc_properties, config
+        )
 
         return result
 
