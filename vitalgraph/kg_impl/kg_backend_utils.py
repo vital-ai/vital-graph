@@ -7,6 +7,7 @@ details and provides a consistent API for KG endpoint implementations.
 """
 
 import asyncio
+import contextlib
 import logging
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, Tuple, Union, cast
@@ -129,6 +130,28 @@ async def fast_typed_subject_page(backend, space_id: str, graph_id: str,
         logging.getLogger(__name__).warning(
             "fast_typed_subject_page failed, caller will fall back", exc_info=True)
         return None
+
+
+@contextlib.asynccontextmanager
+async def _write_conn(pool, conn=None):
+    """Yield the caller's connection, or acquire one for the duration.
+
+    `issues/175` class 2. Write methods each acquired their own connection, so a
+    caller could not compose two of them into one unit of work and a lock taken
+    in one was invisible to the other. Accepting a connection is the enabling
+    step: `conn=None` behaves exactly as before, so nothing that does not opt in
+    changes.
+
+    The transaction stays inside the write method rather than moving here.
+    Nested on a caller's connection it becomes a SAVEPOINT, which preserves what
+    each block was written for — a failure still rolls back only its own work,
+    and the commit boundary belongs to the caller once the caller owns the unit.
+    """
+    if conn is not None:
+        yield conn
+    else:
+        async with pool.acquire() as owned:
+            yield owned
 
 
 @dataclass
@@ -1310,7 +1333,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
 
     async def update_entity_graph(self, space_id: str, graph_id: str,
                                    entity_uri: str,
-                                   insert_quads: List[tuple]) -> bool:
+                                   insert_quads: List[tuple],
+                                     conn=None) -> bool:
         """Atomically replace an entity graph: subject-level delete + insert.
 
         Uses direct SQL to find all subjects belonging to the entity graph
@@ -1330,7 +1354,7 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             p_uuid = _generate_term_uuid(HAS_KG_GRAPH_URI, 'U')
             entity_uuid = _generate_term_uuid(entity_uri, 'U')
 
-            async with self.backend.db_impl.connection_pool.acquire() as conn:
+            async with _write_conn(self.backend.db_impl.connection_pool, conn) as conn:
                 async with conn.transaction():
                     # Step 0: SERIALIZE ON THE ENTITY (`issues/173`).
                     #
@@ -1430,7 +1454,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
     async def update_subjects_graph(self, space_id: str, graph_id: str,
                                      subject_uris: List[str],
                                      insert_quads: List[tuple],
-                                     lock_uris: Optional[List[str]] = None) -> bool:
+                                     lock_uris: Optional[List[str]] = None,
+                                     conn=None) -> bool:
         """Atomically replace quads for a list of subject URIs.
 
         Subject-level delete + insert in a single transaction.  Avoids the
@@ -1463,7 +1488,7 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             g_uuid = _generate_term_uuid(graph_id, 'U')
             s_uuids = [_generate_term_uuid(uri, 'U') for uri in subject_uris]
 
-            async with self.backend.db_impl.connection_pool.acquire() as conn:
+            async with _write_conn(self.backend.db_impl.connection_pool, conn) as conn:
                 async with conn.transaction():
                     if lock_uris:
                         from ..db.sparql_sql.entity_lock import lock_entities
