@@ -138,12 +138,40 @@ hazard, and now the only structural answer available rather than one of two.
 The earlier list here concerned the index design and is void with that
 retracted. What remains:
 
-- **What runs the detection, how often, and scoped to what?** The issue argues
-  detection replaces enforcement, but nothing specifies it. A whole-table sweep
-  needs no predicate list, which is the property that makes it work on an
-  open-ended store — but it must be scoped to what the KG layer MANAGES, or it
-  will alarm on ordinary RDF where a repeated predicate is correct. That scoping
-  rule is not defined, and it is the substance of the proposal, not a detail.
+- **What runs the detection, and how often?** Still open. The SCOPING half is
+  now answered — see below — but nothing decides whether this is a maintenance
+  job phase, a periodic script, or an on-demand tool, nor how a finding is
+  surfaced.
+
+### The scoping rule, with evidence
+
+A duplicate is a defect when **both** of these hold, and neither alone is
+sufficient:
+
+1. the subject's `vitaltype` is a class the KG layer manages, **and**
+2. the predicate is `multiple_values = False` in the ontology.
+
+Measured on `prod_kg`:
+
+| subject type | predicate | cardinality | duplicates | verdict |
+|---|---|---|---|---|
+| `TextSlot` | `hasTextSlotValue` | single | 94 | **defect** |
+| `DateTimeSlot` | `hasDateTimeSlotValue` | single | 92 | **defect** |
+| `MultiChoiceSlot` | `hasMultiChoiceSlotValues` | **multi** | 96 | correct data |
+
+Every violating subject carries a KG vitaltype, so condition 1 alone looks
+sufficient — until `MultiChoiceSlot`, which is equally KG-managed and whose 96
+duplicates are entirely correct. Condition 2 is what separates them.
+
+Condition 1 alone would raise 96 false alarms here. Condition 2 alone would be
+wrong in the other direction on a general store: the same single-valued
+predicate used on a non-KG subject — arbitrary RDF loaded into the space,
+WordNet-style data — is not governed by the KG layer's cardinality rules and
+must not be flagged.
+
+That is why the retracted index could not work at any scope: a partial index
+keys on the predicate alone and cannot express "only when the subject is a KG
+object". A query can.
 - **Nothing detects silent suppression**, and nothing will, now that no
   constraint suppresses. Recorded here only so the earlier impact note is not
   read as still applying.
