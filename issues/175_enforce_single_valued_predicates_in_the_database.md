@@ -85,6 +85,44 @@ instance.
 behaviour that makes the constraint worth having. It cannot be enabled on a
 false premise, and it turned an unexamined space into a measured one.
 
+### The default set is too narrow — slot values need it more than entities do
+
+The set proposed above is entity-level. Working through what happens when a
+SPARQL update touches a slot inside an entity graph (issues/174 item 5) showed
+that is the wrong emphasis: **the corruption is worse on slot values, and they
+are not covered.**
+
+Measured on `prod_kg`, the space already repaired:
+
+| predicate | subjects | violating | `multiple_values` |
+|---|---|---|---|
+| `hasTextSlotValue` | 1,852,047 | **94** | False |
+| `hasDateTimeSlotValue` | 390,756 | **92** | False |
+| `hasKGSlotType` | 2,821,011 | 0 | False |
+| `hasObjectCreationTime` | 81,941 | 0 *(repaired)* | False |
+
+`hasKGSlotType` being clean at 2.8M subjects while the two VALUE predicates are
+corrupted is the mechanism showing through: slot types are written once at
+creation, slot values are UPDATED, and updating is what races.
+
+So the predicate set should be driven by the ontology rather than by which
+properties happen to be server-managed. `multiple_values=False` is the criterion
+already; the migration consults it, and the default list simply does not yet
+include the slot predicates. Every one checked reports False.
+
+**Two consequences.**
+
+1. **The repair script needs extending.** It currently handles only the two
+   entity timestamps, with keep-earliest / keep-latest rules derived from what
+   those properties mean. Slot values have no such natural rule — there is no
+   basis for preferring one text value over another — so the repair for them is
+   a different decision, not a wider loop. Most likely: keep the value belonging
+   to the most recently modified frame, or surface them for review rather than
+   choosing automatically.
+2. **The index cannot be added for slot predicates until they are repaired**,
+   exactly as for `lead_data`. 186 subjects across the two predicates block it
+   on this space alone.
+
 ### Sequence
 
 1. Run `scripts/repair_duplicate_server_timestamps.py` per space, dry-run first.
