@@ -965,6 +965,11 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     # entity_slot_sort is derived from edge as well (issues/096).
                     from .sync_entity_slot_sort import sync_entity_slot_sort_after_edge_insert
                     await sync_entity_slot_sort_after_edge_insert(conn, space_id, [s_uuid])
+                    # entity_prop_sort indexes properties hanging straight off the
+                    # entity, so it needs no edge table — but it re-derives, so it
+                    # must run after the quad has landed.
+                    from .sync_entity_prop_sort import sync_entity_prop_sort_after_change
+                    await sync_entity_prop_sort_after_change(conn, space_id, [s_uuid])
                     # Stats too. The comment above explains why edge and
                     # frame_entity were added — "this path bypasses the bulk
                     # sync" — and stats were simply not part of that thought,
@@ -1007,6 +1012,12 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                         f"AND object_uuid = $3 AND context_uuid = $4",
                         s_uuid, p_uuid, o_uuid, g_uuid,
                     )
+                    # entity_prop_sort re-derives from the SURVIVING quads, so unlike
+                    # every sync above it runs AFTER the delete: removing one value
+                    # of a multi-valued property moves the stored MIN rather than
+                    # clearing the row.
+                    from .sync_entity_prop_sort import sync_entity_prop_sort_after_change
+                    await sync_entity_prop_sort_after_change(conn, space_id, [s_uuid])
             self._invalidate_counts_for_quads(space_id, [(s, p, o, g)])
             return True
         except Exception as e:
@@ -1256,6 +1267,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     await sync_frame_entity_after_edge_insert(conn, space_id, list(subjects))
                     from .sync_entity_slot_sort import sync_entity_slot_sort_after_edge_insert
                     await sync_entity_slot_sort_after_edge_insert(conn, space_id, list(subjects))
+                    from .sync_entity_prop_sort import sync_entity_prop_sort_after_change
+                    await sync_entity_prop_sort_after_change(conn, space_id, list(subjects))
                 # rdf_stats is deliberately NOT synced here. This comment used
                 # to explain why it was: "nothing self-heals stats: the
                 # maintenance job prunes them and never resyncs". That premise
@@ -1493,6 +1506,10 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 await sync_entity_slot_sort_after_edge_insert(
                     conn, space_id, unique_subjects)
 
+                from .sync_entity_prop_sort import sync_entity_prop_sort_after_change
+                await sync_entity_prop_sort_after_change(
+                    conn, space_id, unique_subjects)
+
                 # Sync stats tables
                 # See the note in remove_rdf_quads_batch_bulk: a caller that
                 # keeps working after this returns holds the hot rows for the
@@ -1701,6 +1718,14 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 )
                 deleted = len(deleted_rows)
 
+                # entity_prop_sort re-derives from the SURVIVING quads, so unlike
+                # every sync above it runs AFTER the delete: removing one value
+                # of a multi-valued property moves the stored MIN rather than
+                # clearing the row.
+                from .sync_entity_prop_sort import sync_entity_prop_sort_after_change
+                await sync_entity_prop_sort_after_change(
+                    conn, space_id, subject_uuids, context_uuid=g_uuid)
+
                 # VERIFY, because the membership query above cannot be
                 # trusted to have seen the whole graph. It matches on a
                 # single mutable predicate at one instant, so anything whose
@@ -1853,6 +1878,14 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     delete_rows,
                 )
 
+                # entity_prop_sort re-derives from the SURVIVING quads, so unlike
+                # every sync above it runs AFTER the delete: removing one value
+                # of a multi-valued property moves the stored MIN rather than
+                # clearing the row.
+                from .sync_entity_prop_sort import sync_entity_prop_sort_after_change
+                await sync_entity_prop_sort_after_change(
+                    conn, space_id, unique_subjects)
+
                 # Stats LAST, and optionally not here at all. The decrement
                 # needs only `delete_rows`, never the table, so its old place
                 # ahead of the DELETE bought nothing and cost the whole rest of
@@ -1959,6 +1992,14 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     )
                     if 'DELETE 1' in result:
                         removed += 1
+
+                # entity_prop_sort re-derives from the SURVIVING quads, so unlike
+                # every sync above it runs AFTER the delete: removing one value
+                # of a multi-valued property moves the stored MIN rather than
+                # clearing the row.
+                from .sync_entity_prop_sort import sync_entity_prop_sort_after_change
+                await sync_entity_prop_sort_after_change(
+                    conn, space_id, unique_subjects)
             self._invalidate_counts_for_quads(space_id, quads)
             return removed
         except Exception as e:
@@ -2443,6 +2484,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                                 delete_frame_entity_for_context)
                             from .sync_entity_slot_sort import (
                                 delete_entity_slot_sort_for_context)
+                            from .sync_entity_prop_sort import (
+                                delete_entity_prop_sort_for_context)
                             ctx_uuid = _generate_term_uuid(g_uri, 'U')
                             async with conn.transaction():
                                 # frame_entity first: it is derived FROM the
@@ -2452,6 +2495,11 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                                     conn, space_id, ctx_uuid)
                                 # entity_slot_sort, same reason, same order.
                                 await delete_entity_slot_sort_for_context(
+                                    conn, space_id, ctx_uuid)
+                                # entity_prop_sort names no subjects on a
+                                # CLEAR/DROP either, so the per-subject hook
+                                # below never fires for them (issues/064).
+                                await delete_entity_prop_sort_for_context(
                                     conn, space_id, ctx_uuid)
                                 await delete_edges_for_context(
                                     conn, space_id, ctx_uuid)
@@ -2480,6 +2528,13 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                             from .sync_entity_slot_sort import (
                                 sync_entity_slot_sort_after_edge_insert,
                             )
+                            # entity_prop_sort reconciles the same way, and its
+                            # single entry point already drops before it
+                            # re-derives — which on this path is the only thing
+                            # correcting a property whose value was repointed.
+                            from .sync_entity_prop_sort import (
+                                sync_entity_prop_sort_after_change,
+                            )
                             async with conn.transaction():
                                 await sync_edge_table_after_insert(conn, space_id, subj_uuids)
                                 await cleanup_orphan_edges_for_subjects(conn, space_id, subj_uuids)
@@ -2487,6 +2542,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                                 await sync_frame_entity_after_edge_insert(conn, space_id, subj_uuids)
                                 # Deletes internally before re-deriving.
                                 await sync_entity_slot_sort_after_edge_insert(
+                                    conn, space_id, subj_uuids)
+                                await sync_entity_prop_sort_after_change(
                                     conn, space_id, subj_uuids)
 
                         # Subjects bound by a WHERE clause could not be

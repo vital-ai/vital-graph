@@ -196,11 +196,30 @@ async def survey_space(conn, space_id: str) -> dict | None:
             # table without the connector URIs.
             pass
 
+    # entity_prop_sort, tested the same way: empty is only a defect if the
+    # derivation would produce a row. A space with no KG entities correctly has
+    # zero, and a proxy would flag it forever.
+    eps = await _count(conn, space_id, "entity_prop_sort")
+    if eps is not None and not eps:
+        from vitalgraph.db.sparql_sql.sync_entity_prop_sort import (
+            _select_rows as _eps_select, _args as _eps_args)
+        try:
+            row = await conn.fetchrow(
+                f"SELECT 1 FROM ({_eps_select(space_id, 'TRUE')}) s LIMIT 1",
+                *_eps_args())
+            if row:
+                need.append("entity_prop_sort")
+        except Exception:
+            # A space predating the table has no schema for it; not applicable
+            # rather than empty.
+            pass
+
     if not need:
         return None
     return {"space": space_id, "quads": quads, "need": need, "stale": stale,
             "frame_entity": fe, "uses_connectors": uses_connectors,
-            "edge": edge, "value_stats": vs, "entity_slot_sort": ess}
+            "edge": edge, "value_stats": vs, "entity_slot_sort": ess,
+            "entity_prop_sort": eps}
 
 
 async def repair_space(conn, space_id: str, need: list[str]) -> dict:
@@ -232,6 +251,12 @@ async def repair_space(conn, space_id: str, need: list[str]) -> dict:
         t0 = time.time()
         out["entity_slot_sort"] = await resync_entity_slot_sort(conn, space_id)
         out["entity_slot_sort_s"] = round(time.time() - t0, 1)
+    if "entity_prop_sort" in need:
+        from vitalgraph.db.sparql_sql.sync_entity_prop_sort import (
+            resync_entity_prop_sort)
+        t0 = time.time()
+        out["entity_prop_sort"] = await resync_entity_prop_sort(conn, space_id)
+        out["entity_prop_sort_s"] = round(time.time() - t0, 1)
     return out
 
 

@@ -16,6 +16,7 @@ on term and rdf_quad are essential.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
@@ -184,6 +185,99 @@ def numeric_term_index_sql(space_id: str, term_table: str) -> str:
     expr = numeric_term_expr(numeric_datatype_ids())
     return (f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_num "
             f"ON {term_table} (({expr}))")
+
+
+# PostgreSQL truncates any identifier longer than this to NAMEDATALEN-1 bytes.
+# It does not warn and it does not fail: the object is created under the
+# truncated name, so it enforces correctly while every lookup by the intended
+# name misses it.
+#
+# That is not hypothetical here. `{space}_segmentation_jobs_one_active_per_document_idx`
+# is 66 bytes for a 20-character space id, so the index existed under a
+# truncated name and the schema-completeness check could not find it. It fit
+# production's shorter ids, so only a test space surfaced it.
+_log = logging.getLogger(__name__)
+
+PG_MAX_IDENTIFIER_BYTES = 63
+
+_IDENT_RE = re.compile(
+    r"(?:CREATE|ALTER|DROP)\s+(?:UNIQUE\s+)?(?:INDEX|TABLE)\s+"
+    # `\w+`, which is Unicode-aware in Python, NOT `[A-Za-z0-9_]+`. An
+    # identifier containing non-ASCII is exactly where the byte-versus-character
+    # distinction bites — 40 accented characters are 80 bytes — so an
+    # ASCII-only pattern would skip the very names most likely to overflow.
+    r"(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?\"?(\w+)\"?")
+
+
+def identifiers_in(statements) -> List[str]:
+    """Every table/index identifier the given DDL statements name."""
+    out: List[str] = []
+    for stmt in statements or []:
+        out.extend(m.group(1) for m in _IDENT_RE.finditer(stmt))
+    return out
+
+
+def assert_identifiers_fit(statements, context: str = "") -> None:
+    """Raise if any generated identifier would exceed PostgreSQL's byte limit.
+
+    REFUSES RATHER THAN WARNS, deliberately. PostgreSQL truncates silently: the
+    object is created under a shortened name, enforces correctly, and every
+    lookup by the name it was asked for misses it. A unique index went missing
+    from the schema-completeness check exactly that way, and a warning would
+    leave the next one to be found the same way — by something breaking.
+
+    Collision gets its own message because it is worse still: two names sharing
+    their first 63 bytes mean one object cannot be created at all, and which one
+    loses depends on statement order.
+
+    Checked at GENERATION time, before any DDL reaches the database.
+
+    Byte length, not character count — NAMEDATALEN is a byte budget, and a
+    non-ASCII identifier costs more than it looks.
+    """
+    names = identifiers_in(statements)
+    over = [n for n in names if len(n.encode("utf-8")) > PG_MAX_IDENTIFIER_BYTES]
+    if not over:
+        return
+
+    where = f" for {context}" if context else ""
+    truncated = [n.encode("utf-8")[:PG_MAX_IDENTIFIER_BYTES].decode("utf-8", "ignore")
+                 for n in names]
+    collisions = sorted({t for t in truncated if truncated.count(t) > 1})
+    if collisions:
+        raise ValueError(
+            f"generated identifiers COLLIDE after PostgreSQL truncates them to "
+            f"{PG_MAX_IDENTIFIER_BYTES} bytes{where}: {collisions[:3]}. One of "
+            f"the objects sharing each name cannot be created, and which one "
+            f"loses depends on statement order.")
+
+    worst = max(len(n.encode("utf-8")) for n in over)
+    raise ValueError(
+        f"{len(over)} generated identifier(s){where} exceed PostgreSQL's "
+        f"{PG_MAX_IDENTIFIER_BYTES}-byte limit and would be SILENTLY TRUNCATED: "
+        f"{sorted(over, key=len, reverse=True)[:3]}. Shorten the space id by "
+        f"{worst - PG_MAX_IDENTIFIER_BYTES} byte(s); the longest this schema "
+        f"supports is {max_space_id_bytes()}.")
+
+
+def max_space_id_bytes() -> int:
+    """The longest space id the schema can name objects for.
+
+    Derived from the schema rather than asserted, so it stays true when a suffix
+    changes. Currently bounded by
+    `{space}_document_segmentation_config_doc_type_idx`.
+    """
+    # A ONE-CHARACTER probe, deliberately. A long one would trip
+    # `assert_identifiers_fit` inside the generators this calls — the measurement
+    # would be blocked by the rule it exists to describe. Subtracting the probe
+    # leaves the fixed part of each name, wherever the space id sits in it.
+    probe = "x"
+    longest_suffix = max(
+        (len(n) - len(probe) for n in identifiers_in(
+            SparqlSQLSchema().create_space_indexes_sql(probe)
+            + SparqlSQLSchema().create_space_tables_sql(probe))),
+        default=0)
+    return PG_MAX_IDENTIFIER_BYTES - longest_suffix
 
 
 class SparqlSQLSchema:
@@ -412,6 +506,46 @@ class SparqlSQLSchema:
                 UNIQUE NULLS NOT DISTINCT (space_id, entity_type_uuid)
             )
         '''),
+        # The `entity_prop_sort` gate. Same block-list semantics as
+        # `slot_sort_block` above -- a row means KNOWN TO BE AT RISK, absence
+        # means SERVE -- for the reason `issues/167` measured: read as an
+        # allow-list, absence meant DECLINE, and absence is the common case.
+        #
+        # PER-TYPE ONLY, and that asymmetry is deliberate. A WHOLE-SPACE block
+        # (NULL entity_type_uuid in `slot_sort_block`) is taken by restore and
+        # resync -- `resync_all.py`, `bulk_export.py` -- and those events
+        # invalidate every derived table in the space, this one included. So the
+        # prop-sort gate reads BOTH: a whole-space row in `slot_sort_block` OR a
+        # type row here. That way a new restore path cannot block one derived
+        # table and forget the other; there is no second site to remember.
+        #
+        # What stays separate is convergence. A shortfall in the slot table says
+        # nothing about this one, so a per-type block released as one converges
+        # must not un-gate the other.
+        ("prop_sort_block", '''
+            CREATE TABLE IF NOT EXISTS prop_sort_block (
+                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
+                entity_type_uuid UUID NOT NULL,
+                reason TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (space_id, entity_type_uuid)
+            )
+        '''),
+        # Written by the maintenance coverage probe, which computes both numbers
+        # anyway. Stored rather than derived at read time for the reason
+        # `slot_sort_coverage` records: the quad-side count is cheap but
+        # `count(DISTINCT entity_uuid)` over the derived table is seconds.
+        ("prop_sort_coverage", '''
+            CREATE TABLE IF NOT EXISTS prop_sort_coverage (
+                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
+                entity_type_uuid UUID NOT NULL,
+                entities_in_table BIGINT NOT NULL,
+                entities_of_type BIGINT NOT NULL,
+                complete BOOLEAN NOT NULL,
+                verified_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (space_id, entity_type_uuid)
+            )
+        '''),
         ("space_analytics", '''
             CREATE TABLE IF NOT EXISTS space_analytics (
                 id SERIAL PRIMARY KEY,
@@ -582,6 +716,7 @@ class SparqlSQLSchema:
             'entity_fanout': f'{space_id}_entity_fanout',
             'frame_entity': f'{space_id}_frame_entity',
             'entity_slot_sort': f'{space_id}_entity_slot_sort',
+            'entity_prop_sort': f'{space_id}_entity_prop_sort',
             'vector_index': f'{space_id}_vector_index',
             'geo': f'{space_id}_geo',
             'geo_config': f'{space_id}_geo_config',
@@ -951,6 +1086,63 @@ class SparqlSQLSchema:
         if partition_quads > 0:
             stmts += self._partition_children(t['entity_slot_sort'], partition_quads)
 
+        # The sibling of `entity_slot_sort` for DIRECT entity properties.
+        #
+        # `entity_slot_sort` makes a slot-valued sort O(page) by pre-walking the
+        # entity -> frame -> slot -> value path. A sort or filter on a property
+        # hanging straight off the entity has the same O(total) problem and none
+        # of the hops, so it needs the same table with the walk removed.
+        #
+        # One row per (entity, context, property). A property may legitimately
+        # carry SEVERAL values -- this is a general quad store -- and a sort needs
+        # exactly one key per entity, so the row holds the MIN of them. That makes
+        # DELETE a RECOMPUTE, not a row drop: removing the lexically first of three
+        # values changes the key rather than clearing it. The write path must
+        # re-derive from the surviving quads, never just delete.
+        #
+        # entity_type_uuid is NULLABLE for the reason it is in `entity_slot_sort`:
+        # an untyped entity is still part of the population, and an inner join
+        # would drop it from the table -- changing which rows it describes, not
+        # just how fast it answers.
+        stmts.append(f'''
+            CREATE TABLE IF NOT EXISTS {t['entity_prop_sort']} (
+                entity_uuid       UUID NOT NULL,
+                context_uuid      UUID NOT NULL,
+                entity_type_uuid  UUID,
+                property_uuid     UUID NOT NULL,
+                -- The value in the same three lanes the term table splits on, so
+                -- ordering is correct per type rather than lexical for all. Safe
+                -- to denormalise for the reason `entity_slot_sort` records: a
+                -- term_uuid is a hash of its text, so a value's text cannot
+                -- change under a row -- only the QUAD linking entity to value
+                -- can, and that is a write path this table is maintained by.
+                value_text        TEXT,
+                value_num         NUMERIC,
+                value_dt          TIMESTAMP,
+                -- EVERY value, where the lanes above hold only the MIN.
+                --
+                -- The two gates want different data from the same row. Sorting
+                -- wants one key per entity, or an entity with three values is
+                -- emitted three times. Filtering wants them all: every operator
+                -- `uri_list` allows -- has / has_any / has_all / not_has /
+                -- exists -- is a MEMBERSHIP test, and NONE is an ordering
+                -- comparison, so the MIN cannot answer any of them.
+                --
+                -- Populated for every property, not just the `uri_list` one.
+                -- This is a general quad store and any predicate may become
+                -- multi-valued at any time; if `eq` were served from the MIN,
+                -- it would match only the smallest value and silently return a
+                -- subset -- the asymmetric failure `slot_sort_coverage` records,
+                -- where a short answer still looks like a complete one.
+                --
+                -- TEXT[] uniformly, uris included, so one GIN index serves all
+                -- of them. One element in the common case.
+                value_all         TEXT[] NOT NULL DEFAULT '{{}}',
+                PRIMARY KEY (entity_uuid, context_uuid, property_uuid)
+            ){_part}''')
+        if partition_quads > 0:
+            stmts += self._partition_children(t['entity_prop_sort'], partition_quads)
+
         # 8. Vector index registry (per-space catalog of named vector indexes)
         stmts.append(f'''
             CREATE TABLE IF NOT EXISTS {t['vector_index']} (
@@ -1160,6 +1352,7 @@ class SparqlSQLSchema:
             )
         ''')
 
+        assert_identifiers_fit(stmts, f"space_id={space_id!r}")
         return stmts
 
     def create_space_indexes_sql(self, space_id: str) -> List[str]:
@@ -1170,7 +1363,7 @@ class SparqlSQLSchema:
         """
         t = self.get_table_names(space_id)
 
-        return [
+        _idx = [
             # Term table indexes
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_tt ON {t['term']} USING hash (term_text)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_type ON {t['term']} (term_type)",
@@ -1343,6 +1536,33 @@ class SparqlSQLSchema:
             f"ON {t['entity_slot_sort']} (frame_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_ess_ctx "
             f"ON {t['entity_slot_sort']} (context_uuid)",
+            # `entity_prop_sort`, mirroring the `ess` indexes above -- including
+            # the two details that cost measurement to learn there and would cost
+            # it again here. COLLATE "C" must match what the generator emits for a
+            # text ORDER BY or the index cannot serve the sort and the planner
+            # SILENTLY falls back to the scan this replaces. And the num/dt
+            # indexes are PARTIAL so they cannot compete with the text index for a
+            # text sort: unrestricted, they share its leading columns, are cheaper
+            # to scan, and lack `value_text`, which turned an index-only scan into
+            # an Index Scan with heap fetches (58 buffers -> 2,918, 4ms -> 15ms).
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_text "
+            f"ON {t['entity_prop_sort']} (context_uuid, entity_type_uuid, "
+            f"property_uuid, value_text COLLATE \"C\", entity_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_num "
+            f"ON {t['entity_prop_sort']} (context_uuid, entity_type_uuid, "
+            f"property_uuid, value_num, entity_uuid) WHERE value_num IS NOT NULL",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_dt "
+            f"ON {t['entity_prop_sort']} (context_uuid, entity_type_uuid, "
+            f"property_uuid, value_dt, entity_uuid) WHERE value_dt IS NOT NULL",
+            # Membership for the filter gate: `value_all @> ARRAY[x]`. GIN
+            # because the operators are containment, not ordering -- a btree on
+            # the MIN lanes cannot answer them at all.
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_all "
+            f"ON {t['entity_prop_sort']} USING GIN (value_all)",
+            # Incremental maintenance re-derives every property of one touched
+            # entity; without this that per-write DELETE is a seq scan.
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_entity "
+            f"ON {t['entity_prop_sort']} (entity_uuid)",
             # Document segmentation job queue and config. These indexes lived in
             # SegmentationJobManager / SegmentationConfigManager and were created
             # on demand with their tables, so a space had them only if the
@@ -1400,6 +1620,9 @@ class SparqlSQLSchema:
             # "who are the hubs, widest first" — the only query this table has.
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_entity_fanout_top ON {t['entity_fanout']} (direction, fanout DESC)",
         ]
+        # Fail here rather than let PostgreSQL truncate silently.
+        assert_identifiers_fit(_idx, f"space_id={space_id!r}")
+        return _idx
 
     def drop_space_tables_sql(self, space_id: str) -> List[str]:
         """Return SQL statements to drop all per-space tables/views."""
@@ -1407,6 +1630,7 @@ class SparqlSQLSchema:
         return [
             f"DROP TABLE IF EXISTS {t['frame_entity']} CASCADE",
             f"DROP TABLE IF EXISTS {t['entity_slot_sort']} CASCADE",
+            f"DROP TABLE IF EXISTS {t['entity_prop_sort']} CASCADE",
             f"DROP TABLE IF EXISTS {t['edge']} CASCADE",
             f"DROP TABLE IF EXISTS {t['rdf_stats']} CASCADE",
             f"DROP TABLE IF EXISTS {t['rdf_pred_stats']} CASCADE",
