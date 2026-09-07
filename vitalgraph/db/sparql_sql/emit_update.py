@@ -669,6 +669,11 @@ class UpdateLockPlan:
     subject_columns: List[str] = field(default_factory=list)
     subject_constants: List[str] = field(default_factory=list)
     bindings_table: str = "_upd_bindings"
+    # subject URI -> grouping URI, for `hasKGGraphURI` triples the update itself
+    # writes. A subject being CREATED has no row to look up, so the change set is
+    # the only place its grouping exists — the same case `EntityGraphCache`
+    # covers by inspecting the predicate rather than the index.
+    changeset_groupings: Dict[str, str] = field(default_factory=dict)
 
 
 # ===========================================================================
@@ -799,10 +804,19 @@ async def _modify_sql(
                 _c = _sparql_to_sql_col(_subj.name, var_map)
                 if _c:
                     _cols.append(_c)
+        _HAS_KG_GRAPH_URI = "http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI"
+        _groupings: Dict[str, str] = {}
+        for _q in (op.insert_quads or []):
+            _s, _p, _o = (getattr(_q, "subject", None), getattr(_q, "predicate", None),
+                          getattr(_q, "object", None))
+            if (isinstance(_s, URINode) and isinstance(_p, URINode)
+                    and isinstance(_o, URINode) and _p.value == _HAS_KG_GRAPH_URI):
+                _groupings[_s.value] = _o.value
         plans_out.append(UpdateLockPlan(
             where_sql=where_sql,
             subject_columns=sorted(set(_cols)),
             subject_constants=sorted(set(_consts)),
+            changeset_groupings=_groupings,
         ))
 
     # Step 2: DELETE matching quads

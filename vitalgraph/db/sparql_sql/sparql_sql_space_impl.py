@@ -2346,6 +2346,22 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     return False
                 sql = gen.sql
                 if sql:
+                    # SERIALISE AGAINST ENTITY AND FRAME WRITES FIRST
+                    # (`issues/174` item 5).
+                    #
+                    # Taken inside the same transaction as the write, because
+                    # pg_advisory_xact_lock releases at commit — a lock acquired
+                    # anywhere else would be gone before it mattered. And taken
+                    # BEFORE the generated SQL runs, so the update cannot
+                    # interleave with an entity upsert or entity-graph delete
+                    # holding the same grouping.
+                    #
+                    # Best-effort by construction: a failure here means the
+                    # update runs unserialised, exactly as it did before this
+                    # existed, rather than failing a write that would otherwise
+                    # have succeeded. It is logged at WARNING rather than
+                    # swallowed, because "ran without the lock" is the condition
+                    # that produced the corruption in the first place.
                     # Atomic write: run the generated (multi-statement) update
                     # inside an explicit transaction so that if ANY statement
                     # raises (e.g. a duplicate-key under concurrency), the whole
@@ -2354,6 +2370,32 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     # implicit transaction that stalls conn.reset() and bleeds
                     # the pool (issue 019 defense-in-depth).
                     async with conn.transaction():
+                        # THE LOCK MUST BE IN THIS TRANSACTION, not before it.
+                        # pg_advisory_xact_lock releases when its transaction
+                        # ends, so acquiring it in a separate block would drop
+                        # every lock before the write it was meant to protect —
+                        # a mistake that reads as correct and serialises nothing.
+                        #
+                        # Best-effort: a failure here leaves the update running
+                        # unserialised, exactly as it did before this existed,
+                        # rather than failing a write that would have succeeded.
+                        # Logged at WARNING and not swallowed, because "ran
+                        # without the lock" is the condition that produced the
+                        # corruption this fixes.
+                        try:
+                            from .update_lock import acquire_update_locks
+                            _locked = await acquire_update_locks(
+                                conn, space_id, gen.update_lock_plans)
+                            if _locked:
+                                logger.debug(
+                                    "sparql update: locked %d grouping(s) in %s",
+                                    len(_locked), space_id)
+                        except Exception as _le:
+                            logger.warning(
+                                "sparql update: could not acquire grouping locks "
+                                "for %s (%s) — proceeding UNSERIALISED against "
+                                "concurrent entity and frame writes (issues/174)",
+                                space_id, _le)
                         await conn.execute(sql)
 
                     # Keep {space}_edge in sync — this write path bypasses the
