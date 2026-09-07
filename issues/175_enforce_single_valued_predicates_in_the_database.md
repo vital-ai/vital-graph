@@ -85,29 +85,69 @@ issues/174 item 5.
 So withdrawing the constraint costs less than it appeared to. Locking covers
 every path, including the one this issue existed to backstop.
 
-## Class 2: a write scope, and the hazard that shapes it
+## Class 2: consolidate on a connection passed from above
 
-The appealing design is an ambient connection in a `contextvar`: a caller opens
-a write scope, and everything beneath it — including `execute_sparql_update` —
-silently joins that transaction, with no viral `conn=` parameter across 48 call
-sites. It would cover the SPARQL path automatically, which is what makes it
-attractive.
+**This is the plan, not an option under consideration.** An earlier revision of
+this section led with an ambient `contextvar` connection and read as though the
+choice were open. It is not: writes should take a connection and transaction
+supplied by the caller, opened at the level that knows the unit of work.
 
-**The hazard is concrete in this codebase.** An asyncpg `Connection` is not safe
-for concurrent use, and there are **28 `asyncio.gather` sites**, several running
-two database operations at once — `kgentity_list_impl.py:208` gathers
-`objs_task` and `count_task`, both of which hit the database. Handing those a
-single ambient connection produces intermittent `InterfaceError` under load.
+**The pattern is already established, and most of the way in.** The bottom layer
+is fully threaded — **53 functions take `conn` as a required first argument**
+(the edge, frame_entity and slot_sort sync helpers, `lock_entities`, and the
+rest), and the bulk quad helpers `add_rdf_quads_batch_bulk` and
+`remove_rdf_quads_batch_bulk` both accept `connection=`. Nothing needs
+inventing; the convention exists and is proven in the paths that already use it,
+including the two locks landed in issues/173 and issues/174.
 
-So an ambient scope MUST detect concurrent use — an in-use flag that raises a
-descriptive error naming the fan-out, turning a rare protocol corruption into a
-first-run developer error. Without that guard, ambient is worse than viral,
-because the failure is rare, load-dependent, and reads as a database problem.
+**The gap is the middle.** Adapter and impl methods acquire their own connection
+rather than accepting one, which is what forces locking to be retrofitted per
+path instead of composed:
 
-Also unavoidable under any scheme: `execute_sparql_update` opens three
-transactions on the connection it acquires (issues/174 records which and why),
-and asyncpg turns a nested `conn.transaction()` into a `SAVEPOINT`. Those three
-blocks need their nested semantics decided deliberately, not inherited.
+| file | self-acquiring sites |
+|---|---|
+| `sparql_sql_space_impl.py` | 26 |
+| `data_import_impl.py` | 24 |
+| `data_export_impl.py` | 12 |
+| `kg_backend_utils.py` | 6 |
+| `sparql_sql_db_impl.py` | 5 |
+| various endpoints | 1–2 each |
+
+Not all are in scope — import and export legitimately own their connections for
+long-running work, and read paths do not need to compose. The write path is the
+target: `store_objects`, `delete_object`, `update_subjects_graph`,
+`update_entity_graph`, `execute_sparql_update`.
+
+### What consolidation buys that per-path locking does not
+
+- **Composition.** Two operations that should be one unit — a frame write and a
+  SPARQL update, say — can be, because they share a transaction.
+- **Frame Phase 2** (issues/174). Validation and write become atomic, which
+  per-path locking cannot achieve: the ownership check reads on its own
+  connection long before the write.
+- **New paths are covered by default** rather than having to remember to lock.
+
+### The two obstacles, both known
+
+- **`execute_sparql_update` opens three transactions** on the connection it
+  acquires, and asyncpg turns a nested `conn.transaction()` into a `SAVEPOINT`.
+  Passing a connection in silently changes what all three mean — including one
+  whose comment states it runs separately so a sync failure leaves the committed
+  quads intact. Those semantics must be decided, not inherited.
+- **Concurrent use of one connection.** asyncpg connections are not
+  concurrency-safe and there are **28 `asyncio.gather` sites**, several running
+  two database operations at once (`kgentity_list_impl.py:208` gathers
+  `objs_task` and `count_task`, both hitting the database). Explicit threading
+  makes this visible at the call site, which is its main advantage over an
+  ambient `contextvar`: with an ambient connection the same collision is
+  invisible until it fails under load and reads as a database fault.
+
+### Relationship to issues/174
+
+The per-path locks are the interim, not a competing design. They use the same
+`lock_entities` on the same keys, so they keep working unchanged once a caller
+supplies the connection — the lock simply moves up with the transaction. Nothing
+done in issues/174 is thrown away by this.
 
 ## Recommendation, after the retraction
 
