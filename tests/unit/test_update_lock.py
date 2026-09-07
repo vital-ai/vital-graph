@@ -218,7 +218,7 @@ class TestLockKeyAgreesAcrossPaths:
 
     def test_same_uri_gives_the_same_advisory_key(self):
         from vitalgraph.db.sparql_sql.entity_lock import entity_lock_key
-        for uri in ("urn:entity:A", "urn:cardiff:kg:entity:NurtureAction", "x" * 300):
+        for uri in ("urn:entity:A", "urn:prod_kg:entity:NurtureAction", "x" * 300):
             assert entity_lock_key(uri) == entity_lock_key(uri)
 
     @pytest.mark.asyncio

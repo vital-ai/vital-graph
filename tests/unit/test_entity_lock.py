@@ -33,7 +33,7 @@ class TestKey:
         # entity and never contend — a lock that protects nothing.
         code = ("import sys; sys.path.insert(0,'.');"
                 "from vitalgraph.db.sparql_sql.entity_lock import entity_lock_key;"
-                "print(entity_lock_key('urn:cardiff:probe'))")
+                "print(entity_lock_key('urn:prod_kg:probe'))")
         out = [subprocess.run([sys.executable, "-c", code], capture_output=True,
                               text=True, env={"PYTHONHASHSEED": s, "PATH": "/usr/bin:/bin"},
                               cwd=".").stdout.strip()
