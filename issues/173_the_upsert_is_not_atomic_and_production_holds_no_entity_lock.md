@@ -2,7 +2,7 @@
 
 **Status:** open
 **Found:** 2026-09-07, while repairing the data damage it caused
-**Related:** `scripts/repair_duplicate_server_timestamps.py` (repairs the
+**Related:** `scripts/repair_duplicate_single_valued.py` (repairs the
 damage), `sparql_sql_db_objects._materialize` (bounds the blast radius)
 
 ## The damage, first

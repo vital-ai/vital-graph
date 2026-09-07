@@ -66,7 +66,7 @@ BUILDING
     A space whose data already violates the constraint is REPORTED AND SKIPPED,
     not forced. The index refusing to build is the constraint declining to be
     enabled on a false premise, which is the behaviour that makes it worth
-    having. Repair first with `repair_duplicate_server_timestamps.py`.
+    having. Repair first with `repair_duplicate_single_valued.py`.
 """
 from __future__ import annotations
 
@@ -192,7 +192,7 @@ async def migrate_space(conn, space_id: str, predicates, apply: bool) -> dict:
         if n:
             logger.error("  %-34s BLOCKED — %d subject(s) already hold more than "
                          "one value. Repair first "
-                         "(scripts/repair_duplicate_server_timestamps.py); the "
+                         "(scripts/repair_duplicate_single_valued.py); the "
                          "index is refusing to certify data that contradicts it.",
                          short, n)
             blocked.append(short)

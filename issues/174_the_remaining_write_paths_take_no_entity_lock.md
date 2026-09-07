@@ -321,7 +321,7 @@ Both are `multiple_values=False` in the ontology, so both are invariant
 violations, not legitimate multi-valued data.
 
 **Neither existing remedy covers this today.** The repair in
-`scripts/repair_duplicate_server_timestamps.py` handles only the two
+`scripts/repair_duplicate_single_valued.py` handles only the two
 entity-level timestamps. The default predicate set in issues/175 is
 entity-level too. And the lock does not reach a writer that does not take it.
 So this class is currently unrepaired and unprotected, and it is the direct

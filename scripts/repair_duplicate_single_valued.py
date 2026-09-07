@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Collapse duplicated server-stamped timestamps to one value per subject.
+"""Collapse duplicated single-valued properties to one value per subject.
 
 WHAT IS WRONG
-    `hasObjectCreationTime` and `hasObjectModificationDateTime` are
-    single-valued, and some subjects carry two to four values. The object layer
+    Several properties the KG layer treats as single-valued — the two object
+    timestamps and the text, datetime and integer slot values — have subjects
+    carrying two or more values. The object layer
     groups repeated predicates into a LIST, a list is not a datetime, and
     `from_property_maps` then raises for the whole batch it is given — so ONE
     such subject blanked an entire 25-row page of the KG entity listing
@@ -57,10 +58,45 @@ from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables  #
 
 logger = logging.getLogger("repair_dupe_timestamps")
 
-# (predicate URI, which value survives). ASC keeps the earliest, DESC the latest.
+V = "http://vital.ai/ontology/vital"
+H = "http://vital.ai/ontology/haley-ai-kg#"
+
+# (predicate URI, SQL ORDER BY over t.term_text, human description). Row 1 of the
+# ordering survives; the rest are removed.
+#
+# THE RULE COMES FROM WHAT THE PROPERTY MEANS, and only the first two get it for
+# free. A creation time is the earliest stamp and a modification time the latest,
+# because that is what those words denote — the value is derivable, not chosen.
+#
+# The slot values have no such derivation. Two text values on one slot are both
+# plausible edits of the same message, nothing stored orders them (quads carry no
+# insertion time, the frame's modification time cannot separate two values on the
+# SAME slot, term UUIDs are content hashes, and `ctid` disagrees with itself
+# across samples and is meaningless after a VACUUM anyway). The rules below are
+# therefore a DECISION, taken deliberately on old data judged not worth manual
+# review, not a fact recovered from the data:
+#
+#   text     -> longest    (proxy for the more complete edit)
+#   datetime -> newest
+#   integer  -> largest
+#
+# Recorded here because a future reader will otherwise assume these were derived
+# the way the timestamps were. At least one sampled pair shows the rule picking
+# the arguably wrong value — a shorter text that fixed a grammatical error in a
+# longer one — which is the accepted cost of not reviewing 374 rows by hand.
 TARGETS = [
-    ("http://vital.ai/ontology/vital-aimp#hasObjectCreationTime", "ASC"),
-    ("http://vital.ai/ontology/vital#hasObjectModificationDateTime", "DESC"),
+    (f"{V}-aimp#hasObjectCreationTime", "t.term_text ASC", "earliest"),
+    (f"{V}#hasObjectModificationDateTime", "t.term_text DESC", "latest"),
+    # length first, then the text itself so equal-length values resolve
+    # deterministically instead of by whatever order the scan returns.
+    (f"{H}hasTextSlotValue", "length(t.term_text) DESC, t.term_text DESC", "longest"),
+    (f"{H}hasDateTimeSlotValue", "t.term_text DESC", "newest"),
+    # Cast, do not sort as text: '9' sorts above '10' lexically. Non-numeric
+    # text sorts last rather than raising, so one malformed value cannot fail
+    # the run for every other subject.
+    (f"{H}hasIntegerSlotValue",
+     "(CASE WHEN t.term_text ~ '^-?[0-9]+$' THEN t.term_text::numeric END) "
+     "DESC NULLS LAST, t.term_text DESC", "largest"),
 ]
 
 
@@ -76,18 +112,18 @@ async def _graph_uuid(conn, space_id: str, graph_uri: str):
         f"WHERE term_text = $1 AND term_type = 'U' LIMIT 1", graph_uri)
 
 
-def _victims_sql(space_id: str, keep: str) -> str:
+def _victims_sql(space_id: str, order_by: str) -> str:
     """Rows to remove: every value but the one that survives, per subject.
 
-    Ordered by the TERM TEXT, not by anything in the quad row — these are
-    ISO-8601 timestamps, which sort correctly as text, and the quad table has no
-    column carrying the value's ordering.
+    Ordered by the TERM TEXT rather than by anything in the quad row, because the
+    quad table carries no column expressing the value's order — no insertion
+    time, and `ctid` is physical placement rather than history.
     """
     return f"""
         SELECT subject_uuid, object_uuid FROM (
             SELECT q.subject_uuid, q.object_uuid,
                    row_number() OVER (PARTITION BY q.subject_uuid
-                                      ORDER BY t.term_text {keep}) AS rn
+                                      ORDER BY {order_by}) AS rn
               FROM {space_id}_rdf_quad q
               JOIN {space_id}_term t ON t.term_uuid = q.object_uuid
              WHERE q.predicate_uuid = $1 AND q.context_uuid = $2
@@ -106,17 +142,16 @@ async def repair(conn, space_id: str, graph_uri: str, apply: bool) -> int:
         return 0
 
     total = 0
-    for uri, keep in TARGETS:
+    for uri, order_by, rule in TARGETS:
         p_uuid = await _predicate_uuid(conn, space_id, uri)
         if p_uuid is None:
             logger.info("  %-62s not present in this space", uri.rsplit('#', 1)[-1])
             continue
 
-        rows = await conn.fetch(_victims_sql(space_id, keep), p_uuid, g_uuid)
+        rows = await conn.fetch(_victims_sql(space_id, order_by), p_uuid, g_uuid)
         subjects = len({r["subject_uuid"] for r in rows})
-        label = "earliest" if keep == "ASC" else "latest"
         logger.info("  %-32s %5d redundant row(s) across %4d subject(s) — keeping %s",
-                    uri.rsplit('#', 1)[-1], len(rows), subjects, label)
+                    uri.rsplit('#', 1)[-1], len(rows), subjects, rule)
         total += len(rows)
 
         if apply and rows:
