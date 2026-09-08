@@ -1,7 +1,7 @@
 # Issues
 
 Numbered, append-only, one defect each. Resolved ones move to `archive/` —
-76 there, 21 live. An issue is archived only when nothing remains to do:
+76 there, 99 live. An issue is archived only when nothing remains to do:
 "FIXED in the converter, existing spaces need reloading" is not resolved, it is
 half-done, and it stays here.
 
@@ -20,6 +20,7 @@ were found while working on something else, which is why the themes are uneven.
 | 096 | worked case | Not traversal work itself, but carries a tail-only pin priced BOTH ways on real data: selective-end-first is **2.9x**, the same form is **87x WORSE** when the entity is pinned. Win, regression, separating statistic and formulation all measured. `traversal_decision` needs only to count a type-constrained end as pinned, and something to read its answer |
 | 041 | detection + repair | In-place reload leaves derived tables stale. Repair is no longer manual: `scripts/repair_derived_tables.py` rebuilds frame_entity/entity_fanout/value_stats, and the maintenance cycle audits rdf_stats counts every run (2026-08-16) |
 | 060 | landed locally | Edge table has no type column; remaining work is non-local spaces |
+| 176 | record | **The prop-sort tables — `entity_prop_sort`, `frame_prop_sort` — and what keeps them current.** Read before debugging a slow listing: population, per-write maintenance and the coverage marker are three different mechanisms, and an empty `prop_sort_coverage` means something is wrong rather than unknown. Also indexes the four defects found getting there, and names what commit `9756865e` carries beyond its subject line. |
 
 Fixtures for this work: `scripts/generate_graph_dataset.py` (10k/100k,
 scale-free and small-world, six criterion datatypes),
