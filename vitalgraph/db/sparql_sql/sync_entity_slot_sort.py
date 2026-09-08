@@ -595,7 +595,40 @@ async def entity_slot_sort_coverage(conn, space_id: str, limit: int = 5,
             SELECT DISTINCT q.object_uuid AS ty, q.subject_uuid AS entity_uuid
               FROM {space_id}_rdf_quad q
               JOIN {space_id}_term p ON p.term_uuid = q.predicate_uuid
-               AND p.term_text = $1)
+               AND p.term_text = $1
+             -- AN ENTITY OWNING NO FRAMES HAS NO ROWS BY CONSTRUCTION, so
+             -- counting it here asks the table for something it can never hold.
+             -- Production, 2026-09-08: one such entity (5 quads, no frames) held
+             -- its type at 0/1 forever. That took a per-type block, the backfill
+             -- correctly produced nothing, coverage stayed 0/1, and the block was
+             -- re-taken every cycle -- observed churning every 30-50 s with no
+             -- path to convergence.
+             --
+             -- ONLY "owns no frames at all" is excluded. An entity whose frames
+             -- yield no valued slots stays in the denominator: excluding it would
+             -- need the walk, and a one-level approximation would drop entities
+             -- whose slots hang off CHILD frames -- blinding the probe, which is
+             -- a far worse failure than the false shortfall being fixed.
+             --
+             -- Tested through the QUADS that make up an `Edge_hasEntityKGFrame`
+             -- -- not through `{space_id}_edge`, and not through the table being
+             -- checked. Independence is the point of this probe (`issues/149`),
+             -- and `entity_slot_sort` is itself derived from `edge`, so routing
+             -- this through `edge` would let one incomplete table excuse another.
+             --
+             -- CORRELATED rather than a materialised set of every frame-owning
+             -- entity: measured on production (46.9M quads), correlated costs
+             -- 984 ms against 2,234 ms for the CTE form, because it probes only
+             -- the 82k typed entities instead of building the whole set.
+             AND EXISTS (
+                SELECT 1 FROM {space_id}_rdf_quad src
+                  JOIN {space_id}_rdf_quad vt
+                    ON vt.subject_uuid = src.subject_uuid
+                   AND vt.context_uuid = src.context_uuid
+                   AND vt.predicate_uuid = $2
+                   AND vt.object_uuid = $3
+                 WHERE src.predicate_uuid = $4
+                   AND src.object_uuid = q.subject_uuid))
         SELECT t.term_text AS entity_type,
                o.ty        AS entity_type_uuid,
                count(*) FILTER (WHERE EXISTS (
@@ -612,7 +645,8 @@ async def entity_slot_sort_coverage(conn, space_id: str, limit: int = 5,
                    SELECT 1 FROM {space_id}_entity_slot_sort e
                     WHERE e.entity_uuid = o.entity_uuid))) DESC
          LIMIT {int(limit)}
-    """, ENTITY_TYPE_URI, timeout=timeout)
+    """, ENTITY_TYPE_URI, _u(f"{CORE}vitaltype"), _ENTITY_FRAME_EDGE,
+         _u(f"{CORE}hasEdgeSource"), timeout=timeout)
     return [
         {"entity_type": r["entity_type"],
          # The UUID, so a caller can act on the gap without re-resolving the
@@ -652,7 +686,9 @@ async def entity_slot_sort_drift(conn, space_id: str,
     confirmed by its own input.
 
     **NOT ON THE MAINTENANCE LOOP.** `issues/151` S2 took this off the repair
-    path — coverage answers the same question in 130ms. The recommendation there
+    path — coverage answers the same question in ~1.4s on a 46.9M-quad space
+    (130ms before its denominator was corrected on 2026-09-08), against 73s mean
+    for this walk. The recommendation there
     was to keep this ADVISORY at a daily cadence so a ROW-LEVEL regression stays
     visible (coverage counts ENTITIES; this counts SLOT ROWS). **That advisory
     caller is not written.** Until it is, this has no caller at all and the

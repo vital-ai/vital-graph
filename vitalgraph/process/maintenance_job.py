@@ -1936,7 +1936,9 @@ class MaintenanceJob:
 
         Now:
 
-          DETECT   `entity_slot_sort_coverage` — 130 ms, counts entities from
+          DETECT   `entity_slot_sort_coverage` — 1.4 s on a 46.9M-quad space
+                   (was 130 ms before the denominator was corrected to exclude
+                   frameless entities, 2026-09-08), counts entities from
                    the QUADS, so it cannot be fooled by the derivation it is
                    checking. That independence is `issues/141`'s lesson and the
                    reason drift could report "converged" on a 1%-full table.
