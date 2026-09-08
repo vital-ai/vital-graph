@@ -190,16 +190,31 @@ def build_frame_page_sql(space_id: str, terms: List[tuple], sort_by: Optional[st
         su = p(_u(sort_by))
         direction = "DESC" if descending else "ASC"
         collate = ' COLLATE "C"' if lane == "value_text" else ""
+        # EMIT THE PARTIAL INDEX'S OWN PREDICATE, or the index cannot be used.
+        # `_..._num` and `_..._dt` are partial (`WHERE value_x IS NOT NULL`) and
+        # PostgreSQL will only choose a partial index when the query IMPLIES its
+        # predicate. Without this the sort fell back to a parallel Sort in BOTH
+        # directions -- measured 43 ms and 13,991 buffers where the ordered scan
+        # is sub-millisecond. The schema comment beside those indexes records
+        # exactly this rule; the query simply did not honour it.
+        #
+        # Not needed for `value_text`, whose index is not partial.
+        #
+        # It also narrows nothing the caller would miss: the SPARQL this
+        # replaces binds the sort triple as REQUIRED, so a subject without the
+        # property is absent there too.
+        lane_not_null = f" AND s.{lane} IS NOT NULL" if lane != "value_text" else ""
         # Tie-break on the URI, matching the SPARQL `ORDER BY ?frame`, and it is
         # the last index column so the correct order is the index order.
         order = f"s.{lane}{collate} {direction} NULLS LAST, s.frame_uri"
         if typed:
             base = (f"SELECT s.frame_uri FROM {t} s "
                     f"WHERE s.context_uuid = $1 AND s.property_uuid = {su} "
-                    f"AND s.frame_type_uuid = $2")
+                    f"AND s.frame_type_uuid = $2{lane_not_null}")
         else:
             base = (f"SELECT s.frame_uri FROM {t} s "
-                    f"WHERE s.context_uuid = $1 AND s.property_uuid = {su}")
+                    f"WHERE s.context_uuid = $1 AND s.property_uuid = {su}"
+                    f"{lane_not_null}")
         if parts:
             base += " AND s.frame_uuid IN (" + " INTERSECT ".join(parts) + ")"
         return (f"{base} ORDER BY {order} "

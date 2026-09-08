@@ -203,6 +203,20 @@ def build_page_sql(space_id: str, terms: List[tuple], sort_by: Optional[str],
         # NULLS LAST in both directions: an entity missing the sort property
         # belongs at the end of the list, not at the top of a descending one.
         collate = ' COLLATE "C"' if lane == "value_text" else ""
+        # EMIT THE PARTIAL INDEX'S OWN PREDICATE, or the index cannot be used.
+        # `_..._num` and `_..._dt` are partial (`WHERE value_x IS NOT NULL`) and
+        # PostgreSQL will only choose a partial index when the query IMPLIES its
+        # predicate. Without this the sort fell back to a parallel Sort in BOTH
+        # directions -- measured 43 ms and 13,991 buffers where the ordered scan
+        # is sub-millisecond. The schema comment beside those indexes records
+        # exactly this rule; the query simply did not honour it.
+        #
+        # Not needed for `value_text`, whose index is not partial.
+        #
+        # It also narrows nothing the caller would miss: the SPARQL this
+        # replaces binds the sort triple as REQUIRED, so a subject without the
+        # property is absent there too.
+        lane_not_null = f" AND s.{lane} IS NOT NULL" if lane != "value_text" else ""
         # TIE-BREAK ON THE ENTITY URI, not on `entity_uuid`, because the SPARQL
         # query this replaces breaks ties with `?s`. `entity_uuid` is a hash of
         # the URI, so its order is unrelated -- five entities sharing a name came
@@ -225,10 +239,11 @@ def build_page_sql(space_id: str, terms: List[tuple], sort_by: Optional[str],
         if typed:
             base = (f"SELECT s.entity_uri FROM {t} s "
                     f"WHERE s.context_uuid = $1 AND s.property_uuid = {su} "
-                    f"AND s.entity_type_uuid = $2")
+                    f"AND s.entity_type_uuid = $2{lane_not_null}")
         else:
             base = (f"SELECT s.entity_uri FROM {t} s "
-                    f"WHERE s.context_uuid = $1 AND s.property_uuid = {su}")
+                    f"WHERE s.context_uuid = $1 AND s.property_uuid = {su}"
+                    f"{lane_not_null}")
         if parts:
             base += " AND s.entity_uuid IN (" + " INTERSECT ".join(parts) + ")"
         sql = f"{base} ORDER BY {order} LIMIT ${len(params) + fixed + 1} OFFSET ${len(params) + fixed + 2}"

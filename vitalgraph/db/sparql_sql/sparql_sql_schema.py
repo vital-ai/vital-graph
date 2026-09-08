@@ -1652,6 +1652,32 @@ class SparqlSQLSchema:
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_any_dt "
             f"ON {t['entity_prop_sort']} (context_uuid, property_uuid, "
             f"value_dt, entity_uri) WHERE value_dt IS NOT NULL",
+            # DESCENDING SORTS NEED THEIR OWN INDEXES, because the ordering
+            # is MIXED: the value descends but the URI tie-break ascends, to
+            # match the `ORDER BY DESC(?sort_val) ?s` this replaces. A btree
+            # scanned backwards reverses EVERY column, giving `entity_uri DESC`
+            # — so neither direction of the ascending index above can serve it,
+            # and PostgreSQL sorts instead. Measured: 49 ms and 15,041 buffers
+            # against 0.46 ms and 28 for the same query ascending.
+            #
+            # TYPED ONLY, deliberately. Every listing that sorts descending in
+            # practice also names a type (the portal always sends one), and each
+            # extra index is paid on every write by the per-quad sync. An
+            # UNTYPED descending sort still falls back to a sort; add the
+            # `_any_` variants if one ever appears in a real workload.
+            # NULLS LAST is explicit and load-bearing: a DESC btree defaults
+            # to NULLS FIRST, and the ORDER BY says `DESC NULLS LAST`, so
+            # without it the index is built and then never chosen. It was, and
+            # the query still sorted at 56 ms while an unused index sat beside
+            # it. The ordering spec has to match exactly, NULL placement
+            # included -- even for the partial index, which can hold no NULLs.
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_text_desc "
+            f"ON {t['entity_prop_sort']} (context_uuid, entity_type_uuid, "
+            f"property_uuid, value_text COLLATE \"C\" DESC NULLS LAST, entity_uri)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_dt_desc "
+            f"ON {t['entity_prop_sort']} (context_uuid, entity_type_uuid, "
+            f"property_uuid, value_dt DESC NULLS LAST, entity_uri) "
+            f"WHERE value_dt IS NOT NULL",
             # A TYPED LISTING WITH NO SORT: "all NurtureActions, default
             # order", which is the most common browse there is. Without this it
             # is the one shape the table declines, and it falls to the SPARQL
