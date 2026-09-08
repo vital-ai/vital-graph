@@ -34,7 +34,6 @@ _DATATYPES = {
     f"{VITAL}hasObjectModificationDateTime": "dateTime",
     f"{AIMP}hasObjectCreationTime": "dateTime",
     f"{HALEY}hasKGFormType": "uri",
-    f"{HALEY}hasKGFrameTypeURI": "uri",
     f"{AIMP}hasObjectStatusType": "uri",
     f"{HALEY}hasKGFrameType": "uri",
     f"{HALEY}hasKGFrameTypeDescription": "string",

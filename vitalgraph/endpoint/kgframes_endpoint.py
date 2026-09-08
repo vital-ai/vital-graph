@@ -575,7 +575,7 @@ class KGFramesEndpoint:
             sort_by: Optional[str] = Query(None, description="Property URI to sort by (e.g. vital-core:hasName). Must be one of the allowed sortable properties."),
             sort_order: str = Query("asc", description="Sort order: 'asc' or 'desc'"),
             form_type: Optional[str] = Query(None, description="Filter by hasKGFormType: 'Assertion', 'Aspect', or full URI"),
-            frame_type_uri: Optional[str] = Query(None, description="Filter by hasKGFrameTypeURI (frame type URI)"),
+            frame_type_uri: Optional[str] = Query(None, description="Filter by hasKGFrameType (the frame's KGFrameType URI)"),
             status: Optional[str] = Query(None, description="Filter by status URI (exact match on hasObjectStatusType)"),
             exclude_status: Optional[str] = Query(None, description="Exclude frames with this status URI"),
             created_after: Optional[str] = Query(None, description="Frames created after this ISO 8601 datetime"),
@@ -611,7 +611,8 @@ class KGFramesEndpoint:
             - `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
             - `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
             - `http://vital.ai/ontology/haley-ai-kg#hasKGFormType`
-            - `http://vital.ai/ontology/haley-ai-kg#hasKGFrameTypeURI`
+            - `http://vital.ai/ontology/haley-ai-kg#hasKGFrameType`
+            - `http://vital.ai/ontology/haley-ai-kg#hasKGFrameTypeDescription`
             """
             
             require_space_read(current_user, space_id)

@@ -63,14 +63,13 @@ SORTABLE_PROPERTY_URIS = (
     f"{VITAL}hasObjectModificationDateTime",
     f"{AIMP}hasObjectCreationTime",
     f"{HALEY}hasKGFormType",
-    f"{HALEY}hasKGFrameTypeURI",
     f"{AIMP}hasObjectStatusType",
     f"{HALEY}hasFrameSequence",
-    # The two that carry the data. `hasKGFrameTypeURI` above is a name nothing
-    # in the corpus uses; `hasKGFrameType` is what the endpoint's own
-    # frame_type_uri filter emits and what all 285,348 wordnet frames carry. For
-    # a top-level frame list these two ARE the sort -- those frames have a type,
-    # a type description, and none of the other seven properties at all.
+    # The two that carry the data: `hasKGFrameType` (a `KGFrameType`) is what
+    # the endpoint's frame_type_uri filter emits and what all 285,348 wordnet
+    # frames carry, alongside its description. For a top-level frame list these
+    # two ARE the sort -- those frames have a type, a type description, and none
+    # of the other properties at all.
     f"{HALEY}hasKGFrameType",
     f"{HALEY}hasKGFrameTypeDescription",
 )

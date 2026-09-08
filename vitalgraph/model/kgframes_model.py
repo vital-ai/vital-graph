@@ -22,19 +22,18 @@ _FILTERABLE_FRAME_PROPERTIES = {
     "http://vital.ai/ontology/vital#hasObjectModificationDateTime":       "dateTime",
     "http://vital.ai/ontology/vital-aimp#hasObjectCreationTime":          "dateTime",
     "http://vital.ai/ontology/haley-ai-kg#hasKGFormType":                 "uri",
-    "http://vital.ai/ontology/haley-ai-kg#hasKGFrameTypeURI":             "uri",
     "http://vital.ai/ontology/vital-aimp#hasObjectStatusType":            "uri",
-    # `hasKGFrameType` is what the data and the endpoint actually use — the
-    # frame_type_uri filter emits `?frame haley:hasKGFrameType <uri>` — while
-    # `hasKGFrameTypeURI` above is a name nothing carries. Measured on
-    # `wordnet_frames`: 285,348 frames all have `hasKGFrameType`, none has
-    # `hasKGFrameTypeURI`.
+    # `hasKGFrameType` is the frame's type — a `haley-ai-kg#KGFrameType` — and
+    # is what both the data and the endpoint use: the frame_type_uri filter
+    # emits `?frame haley:hasKGFrameType <uri>`.
     #
-    # Until now a frame could be FILTERED by its type but not SORTED by it,
-    # because sort_by validates against this registry and the real predicate was
-    # missing from it. For a top-level frame list — the wordnet case, where the
-    # frames carry a type and a type description and nothing else — that was the
-    # only sort anyone would want.
+    # This registry previously named `hasKGFrameTypeURI` instead, which nothing
+    # carries: measured on `wordnet_frames`, all 285,348 frames have
+    # `hasKGFrameType` and none has `hasKGFrameTypeURI`. So a frame could be
+    # FILTERED by its type and never SORTED by it, because sort_by validates
+    # against this registry and the real predicate was absent. For a top-level
+    # frame list — where the frames carry a type and a type description and
+    # nothing else — that was the only sort anyone would want.
     "http://vital.ai/ontology/haley-ai-kg#hasKGFrameType":                "uri",
     "http://vital.ai/ontology/haley-ai-kg#hasKGFrameTypeDescription":     "string",
 }

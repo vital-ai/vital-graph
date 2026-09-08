@@ -31,7 +31,8 @@ const FRAME_TYPE_DESC_PROPERTY =
 // needs: measured on `wordnet_frames`, all 285,348 frames carry exactly those
 // two and none of Name / Sequence / Created / Modified. They were previously
 // unsortable because the model registry named `hasKGFrameTypeURI`, which no
-// data carries, while the endpoint's own type FILTER uses `hasKGFrameType`.
+// data carries; that entry has been removed and `hasKGFrameType` — the frame's
+// `KGFrameType`, and what the endpoint's own type FILTER uses — registered.
 const FRAME_SORT_OPTIONS: { label: string; value: string }[] = [
   { label: 'Name', value: NAME_PROPERTY },
   { label: 'Frame type', value: FRAME_TYPE_PROPERTY },
