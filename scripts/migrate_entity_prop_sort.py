@@ -83,6 +83,15 @@ async def migrate_space(conn, space_id: str, apply: bool) -> dict:
                 await conn.execute(stmt)
         logger.info("  %s: created (%d partitions)", table, parts)
 
+    # A table created by an EARLIER revision of this script lacks `entity_uri`,
+    # which is the sort tie-break and the last column of three indexes. Adding it
+    # is not cosmetic: without it the fast path breaks ties on `entity_uuid`, a
+    # hash, and a tied page comes back in a different order from the SPARQL query
+    # it replaces. Backfilled below by the populate, which rewrites every row.
+    if exists and apply:
+        await conn.execute(
+            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS entity_uri TEXT")
+
     # BLOCK BEFORE POPULATING. An empty table with no block is served as
     # complete. The block is per-type and this space has no types resolved yet,
     # so the whole-space block in `slot_sort_block` is what covers the window --

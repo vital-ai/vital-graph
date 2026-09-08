@@ -126,13 +126,35 @@ class TestEntityCount:
             assert str(o.name) == created[str(o.URI)]
 
     async def test_fast_page_guards_return_none(self, backend_adapter, count_space):
+        """What still DECLINES, now that sorted and filtered listings do not.
+
+        `sort_by` used to be a guard here and is deliberately no longer one:
+        `entity_prop_sort` serves it. The two that remain are real —
+
+        SEARCH, because the text lives in `{space}_fts_{index}` and composing it
+        with the property table is a join whose driving side depends on how
+        selective the search is. Guessing that is `issues/172`.
+
+        A NON-URI GRAPH, because every fast path keys on a context uuid derived
+        from the graph URI, and "default" has none.
+        """
         graph = f"http://example.org/graph/{count_space}/{uuid.uuid4().hex[:8]}"
         assert await backend_adapter.fast_entity_page(
-            count_space, graph, 10, 0, search="x") is None
+            count_space, graph, 10, 0, search="x") is None, (
+            "search must decline until the driving side is measured")
         assert await backend_adapter.fast_entity_page(
-            count_space, graph, 10, 0, sort_by="http://vital.ai/ontology/vital-core#hasName") is None
-        assert await backend_adapter.fast_entity_page(
-            count_space, "default", 10, 0) is None
+            count_space, "default", 10, 0) is None, (
+            "a non-URI graph has no context uuid to key on")
+
+        # NOT None: an empty list means SERVED WITH NO ROWS, which is a
+        # different answer from declining and the caller acts on it differently
+        # — `[]` renders an empty page, `None` re-runs the whole thing as SPARQL.
+        served = await backend_adapter.fast_entity_page(
+            count_space, graph, 10, 0,
+            sort_by="http://vital.ai/ontology/vital-core#hasName")
+        assert served == [], (
+            f"a sorted listing should now be served from entity_prop_sort, "
+            f"returning [] for an empty graph rather than {served!r}")
 
     async def test_shared_list_objects_fast_path(self, backend_adapter, space_impl, count_space):
         """The generic list_objects fast path (KGTypes/KGRelations) matches SPARQL.

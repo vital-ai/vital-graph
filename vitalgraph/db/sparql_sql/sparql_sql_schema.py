@@ -1138,6 +1138,24 @@ class SparqlSQLSchema:
                 -- TEXT[] uniformly, uris included, so one GIN index serves all
                 -- of them. One element in the common case.
                 value_all         TEXT[] NOT NULL DEFAULT '{{}}',
+                -- The entity's URI, denormalised for the SAME reason the values
+                -- are: `entity_uuid` is a hash of it, so it cannot change under
+                -- the row.
+                --
+                -- It is here to be the TIE-BREAK, and that is a measured
+                -- requirement rather than a convenience. The SPARQL query this
+                -- table replaces breaks ties with `?s`, so the fast path must
+                -- too or a tied page comes back in a different order. Two of the
+                -- seven sortable properties are `uri` typed with a handful of
+                -- distinct values, so sorting by one ties nearly every row and
+                -- the tie-break IS the page order.
+                --
+                -- Breaking the tie by JOINING the term table instead cost
+                -- exactly what this table exists to save: measured on a 74.5M
+                -- quad space, a deep page went 2.1ms -> 123ms, and an all-tied
+                -- sort 467ms. As the last index column it is an ordered scan
+                -- again, and the page needs no term lookup at all.
+                entity_uri        TEXT,
                 PRIMARY KEY (entity_uuid, context_uuid, property_uuid)
             ){_part}''')
         if partition_quads > 0:
@@ -1547,13 +1565,31 @@ class SparqlSQLSchema:
             # an Index Scan with heap fetches (58 buffers -> 2,918, 4ms -> 15ms).
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_text "
             f"ON {t['entity_prop_sort']} (context_uuid, entity_type_uuid, "
-            f"property_uuid, value_text COLLATE \"C\", entity_uuid)",
+            f"property_uuid, value_text COLLATE \"C\", entity_uri)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_num "
             f"ON {t['entity_prop_sort']} (context_uuid, entity_type_uuid, "
-            f"property_uuid, value_num, entity_uuid) WHERE value_num IS NOT NULL",
+            f"property_uuid, value_num, entity_uri) WHERE value_num IS NOT NULL",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_dt "
             f"ON {t['entity_prop_sort']} (context_uuid, entity_type_uuid, "
-            f"property_uuid, value_dt, entity_uuid) WHERE value_dt IS NOT NULL",
+            f"property_uuid, value_dt, entity_uri) WHERE value_dt IS NOT NULL",
+            # THE SAME TWO SORTS WITHOUT THE TYPE COLUMN, because a listing may
+            # sort the whole space ("all entities by name") and then
+            # `entity_type_uuid` is unconstrained. The indexes above lead with
+            # it, so an untyped sort cannot use them for ordering at all:
+            # measured on a 74.5M-quad space, the first page fell to a parallel
+            # Gather Merge over 13,977 buffers at 125 ms, against 0.4 ms for the
+            # same sort with a type bound.
+            #
+            # Only text and timestamp, because those are the only lanes a sort
+            # reads -- of the seven sortable properties, five are `string`/`uri`
+            # (which order as text) and two are `dateTime`. None is numeric, so
+            # `value_num` has no untyped twin.
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_any_text "
+            f"ON {t['entity_prop_sort']} (context_uuid, property_uuid, "
+            f"value_text COLLATE \"C\", entity_uri)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_any_dt "
+            f"ON {t['entity_prop_sort']} (context_uuid, property_uuid, "
+            f"value_dt, entity_uri) WHERE value_dt IS NOT NULL",
             # Membership for the filter gate: `value_all @> ARRAY[x]`. GIN
             # because the operators are containment, not ordering -- a btree on
             # the MIN lanes cannot answer them at all.

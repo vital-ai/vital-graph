@@ -133,6 +133,18 @@ class KGEntityListProcessor:
                 sort_by, sort_order,
             )
 
+            # The SAME values twice, in two forms, on purpose. The SPARQL
+            # fragment is what the fallback query needs; the dict is what the
+            # fast path needs. Deriving one from the other would mean parsing
+            # generated SPARQL, which is how a fast path drifts from the slow
+            # one it must agree with.
+            structured_filters = {
+                "status": status, "exclude_status": exclude_status,
+                "created_after": created_after, "created_before": created_before,
+                "modified_after": modified_after, "modified_before": modified_before,
+                "action_type": action_type, "provenance_type": provenance_type,
+            }
+
             # Build property filter clauses for SPARQL injection
             prop_filters = self._build_property_filter_clauses(
                 status=status, exclude_status=exclude_status,
@@ -147,7 +159,7 @@ class KGEntityListProcessor:
                     space_id, graph_id, page_size, offset,
                     entity_type_uri, search, backend_adapter,
                     sort_by=sort_by, sort_order=sort_order,
-                    prop_filters=prop_filters,
+                    prop_filters=prop_filters, filters=structured_filters,
                 )
             else:
                 return await self._list_entities_with_graph(
@@ -169,7 +181,8 @@ class KGEntityListProcessor:
                                   offset, entity_type_uri, search,
                                   backend_adapter,
                                   sort_by=None, sort_order="asc",
-                                  prop_filters: str = "") -> ListEntitiesResult:
+                                  prop_filters: str = "",
+                                  filters: Optional[dict] = None) -> ListEntitiesResult:
         """Fetch one page of entities + total count as cheaply as possible.
 
         Fast path (plain default listing): a direct-SQL page ordered by
@@ -188,9 +201,14 @@ class KGEntityListProcessor:
         fast_page_fn = getattr(backend_adapter, 'fast_entity_page', None)
         fast_uris = None
         if fast_page_fn is not None:
+            # `filters` carries the STRUCTURED values, not the SPARQL fragment
+            # in `prop_filters`. The fast path must not re-parse generated
+            # SPARQL to recover what it meant — that is how a fast path comes to
+            # disagree with the slow one it is supposed to match.
             fast_uris = await fast_page_fn(
                 space_id, graph_id, page_size, offset,
-                entity_type_uri, search, prop_filters, sort_by)
+                entity_type_uri, search, prop_filters, sort_by,
+                filters=filters, sort_order=sort_order)
 
         if fast_uris is not None:
             async def _fetch_objects():

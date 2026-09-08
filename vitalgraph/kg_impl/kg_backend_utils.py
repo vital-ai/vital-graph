@@ -1159,11 +1159,33 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                                entity_type_uri: Optional[str] = None,
                                search: Optional[str] = None,
                                prop_filters: str = "",
-                               sort_by: Optional[str] = None) -> Optional[List[str]]:
-        """Ordered (`subject_uuid`) page of entity URIs for the *plain default*
-        listing (see ``fast_typed_subject_page``). ``None`` → SPARQL fallback."""
-        if entity_type_uri or search or prop_filters or sort_by:
+                               sort_by: Optional[str] = None,
+                               filters: Optional[dict] = None,
+                               sort_order: str = "asc") -> Optional[List[str]]:
+        """Ordered page of entity URIs, or ``None`` → SPARQL fallback.
+
+        Two fast paths now, and they cover different shapes:
+
+        * the PLAIN default listing, ordered by `subject_uuid`, from the quads
+        * a SORTED or FILTERED listing, from `{space}_entity_prop_sort`
+
+        SEARCH still declines. Text lives in `{space}_fts_{index}` and composing
+        it with this table is a join whose driving side depends on how selective
+        the search is — measured, not guessed, per
+        `planning_ui/kg_search_filter_sort_fts_plan.md`. `issues/172` is what
+        guessing costs.
+        """
+        if search:
             return None
+        if entity_type_uri or prop_filters or sort_by:
+            impl = _resolve_space_impl(self.backend)
+            if impl is None or not graph_is_uri(graph_id):
+                return None
+            from ..db.sparql_sql.fast_prop_sort import fast_entity_prop_page
+            return await fast_entity_prop_page(
+                impl, space_id, graph_id, page_size, offset,
+                entity_type_uri=entity_type_uri, filters=filters,
+                sort_by=sort_by, sort_order=sort_order)
         return await fast_typed_subject_page(
             self.backend, space_id, graph_id, VITALTYPE_URI,
             self._KGENTITY_TYPE_URIS, page_size, offset)

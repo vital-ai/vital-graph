@@ -143,9 +143,14 @@ def _select_rows(space_id: str, where: str) -> str:
             -- DISTINCT so the membership array is not multiplied by the
             -- entity-type join above, and so it is deterministic (an aggregate
             -- with DISTINCT sorts).
-            array_agg(DISTINCT t.term_text) AS value_all
+            array_agg(DISTINCT t.term_text) AS value_all,
+            -- The entity's own URI, denormalised to be the sort TIE-BREAK
+            -- without a join. See the column comment in the schema: joining for
+            -- it cost a deep page 2.1ms -> 123ms.
+            min(et.term_text) AS entity_uri
         FROM {t_quad} q
         JOIN {t_term} t ON t.term_uuid = q.object_uuid
+        JOIN {t_term} et ON et.term_uuid = q.subject_uuid
         -- The population. INNER: this table describes ENTITIES, and a subject
         -- that is not one must not appear, or the count the coverage probe
         -- compares against would never agree.
@@ -169,7 +174,7 @@ def _select_rows(space_id: str, where: str) -> str:
 
 
 _INSERT_COLS = ("entity_uuid, context_uuid, entity_type_uuid, property_uuid, "
-                "value_text, value_num, value_dt, value_all")
+                "value_text, value_num, value_dt, value_all, entity_uri")
 
 # DO UPDATE, not DO NOTHING, and that is load-bearing. The incremental path
 # deletes before it re-derives, so a conflict should be impossible -- but if a
@@ -186,7 +191,8 @@ _ON_CONFLICT = """
         value_text = EXCLUDED.value_text,
         value_num  = EXCLUDED.value_num,
         value_dt   = EXCLUDED.value_dt,
-        value_all  = EXCLUDED.value_all
+        value_all  = EXCLUDED.value_all,
+        entity_uri = EXCLUDED.entity_uri
 """
 
 
