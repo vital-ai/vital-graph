@@ -52,6 +52,25 @@ async def _global_tables(conn, apply: bool) -> str:
         if apply:
             await conn.execute(ddl)
         made.append(name)
+
+    # A `prop_sort_block` created by an EARLIER revision has
+    # `entity_type_uuid NOT NULL`, so it cannot express a whole-space block --
+    # which is what a rebuild needs to block its own table. Widen it in place;
+    # the unique constraint has to be swapped too, because NULLs are distinct
+    # under a plain UNIQUE and the whole-space row would then admit duplicates.
+    if apply:
+        try:
+            await conn.execute(
+                "ALTER TABLE prop_sort_block ALTER COLUMN entity_type_uuid DROP NOT NULL")
+            await conn.execute(
+                "ALTER TABLE prop_sort_block DROP CONSTRAINT IF EXISTS "
+                "prop_sort_block_space_id_entity_type_uuid_key")
+            await conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS prop_sort_block_space_type_uq "
+                "ON prop_sort_block (space_id, entity_type_uuid) NULLS NOT DISTINCT")
+            made.append("prop_sort_block widened for whole-space blocks")
+        except Exception as exc:
+            logger.warning("could not widen prop_sort_block: %s", exc)
     return ", ".join(made) if made else "already present"
 
 
@@ -92,14 +111,22 @@ async def migrate_space(conn, space_id: str, apply: bool) -> dict:
         await conn.execute(
             f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS entity_uri TEXT")
 
-    # BLOCK BEFORE POPULATING. An empty table with no block is served as
-    # complete. The block is per-type and this space has no types resolved yet,
-    # so the whole-space block in `slot_sort_block` is what covers the window --
-    # the prop-sort gate reads that too, precisely so a restore or a migration
-    # cannot block one derived table and forget the other.
+    # BLOCK BEFORE POPULATING, IN THIS TABLE'S OWN BLOCK LIST.
+    #
+    # An empty table with no block is SERVED as complete -- the gate is a
+    # block-list, so absence means serve -- and for a FILTER that is a plausible
+    # subset rather than an error. Hence block first, release only after
+    # coverage has been measured.
+    #
+    # `prop_sort_block`, NOT `slot_sort_block`. An earlier revision took the
+    # whole-space block there, which turned off the SLOT-sort fast path for the
+    # entire space for the length of this build -- eleven minutes on a 74.5M-quad
+    # space -- for a rebuild that says nothing about that table's validity. The
+    # gate still READS `slot_sort_block`'s whole-space rows, because a restore or
+    # resync does invalidate everything; it is only the writing that was wrong.
     if apply:
         await conn.execute(
-            "INSERT INTO slot_sort_block (space_id, entity_type_uuid, reason) "
+            "INSERT INTO prop_sort_block (space_id, entity_type_uuid, reason) "
             "VALUES ($1, NULL, $2) ON CONFLICT DO NOTHING",
             space_id, "entity_prop_sort migration in progress")
 
@@ -123,7 +150,18 @@ async def migrate_space(conn, space_id: str, apply: bool) -> dict:
     await conn.execute(f"ANALYZE {table}")
     elapsed = round(time.time() - t0, 1)
 
-    gaps = await entity_prop_sort_coverage(conn, space_id)
+    # RECORD what we just measured, do not merely inspect it. The migration
+    # already computes coverage to decide whether to release its block, and
+    # throwing that away left `prop_sort_coverage` empty until the first
+    # maintenance cycle — indistinguishable, to anyone checking, from a phase
+    # that never runs. That ambiguity cost a production diagnosis.
+    from vitalgraph.db.sparql_sql.fast_prop_sort import record_prop_sort_coverage
+    all_types = await entity_prop_sort_coverage(conn, space_id, limit=500, only_gaps=False)
+    for cov in all_types:
+        await record_prop_sort_coverage(
+            conn, space_id, cov["entity_type_uuid"], cov["in_table"], cov["of_type"])
+
+    gaps = [c for c in all_types if c["in_table"] < c["of_type"]]
     if gaps:
         return {"space": space_id, "rows": rows, "seconds": elapsed,
                 "status": f"LEFT BLOCKED — coverage short on {len(gaps)} type(s): "
@@ -132,7 +170,7 @@ async def migrate_space(conn, space_id: str, apply: bool) -> dict:
     # Released only now, and only because coverage was measured rather than
     # assumed. `issues/149` had the sibling reporting converged at 1.05%.
     await conn.execute(
-        "DELETE FROM slot_sort_block WHERE space_id = $1 AND entity_type_uuid IS NULL "
+        "DELETE FROM prop_sort_block WHERE space_id = $1 AND entity_type_uuid IS NULL "
         "AND reason = $2", space_id, "entity_prop_sort migration in progress")
     return {"space": space_id, "rows": rows, "seconds": elapsed,
             "status": "POPULATED, coverage complete, unblocked"}

@@ -333,6 +333,7 @@ async def entity_prop_sort_drift(conn, space_id: str,
 
 
 async def entity_prop_sort_coverage(conn, space_id: str, limit: int = 5,
+                                  only_gaps: bool = True,
                                     timeout: float | None = None) -> list[dict]:
     """Entities IN the table against entities OF THAT TYPE in the quads.
 
@@ -358,6 +359,14 @@ async def entity_prop_sort_coverage(conn, space_id: str, limit: int = 5,
     and reported a false 1.54% shortfall when all 77,468 entities were present,
     because that check trusts the derived table's account of itself.
     """
+    # `only_gaps=False` returns EVERY type, complete ones included.
+    # The gap form answers "where is the worst shortfall" and is empty
+    # exactly when all is well, which makes it useless for the opposite
+    # question the coverage MARKER needs: a positive statement of
+    # completeness, not the absence of a complaint (`issues/161`).
+    _having = (f"HAVING count(*) FILTER (WHERE EXISTS (SELECT 1 FROM "
+               f"{space_id}_entity_prop_sort f WHERE f.entity_uuid = o.entity_uuid)) "
+               f"< count(*)") if only_gaps else ""
     rows = await conn.fetch(f"""
         WITH of_type AS (
             SELECT DISTINCT q.object_uuid AS ty, q.subject_uuid AS entity_uuid
@@ -382,9 +391,7 @@ async def entity_prop_sort_coverage(conn, space_id: str, limit: int = 5,
           FROM of_type o
           JOIN {space_id}_term t ON t.term_uuid = o.ty
          GROUP BY 1, 2
-        HAVING count(*) FILTER (WHERE EXISTS (
-                   SELECT 1 FROM {space_id}_entity_prop_sort e
-                    WHERE e.entity_uuid = o.entity_uuid)) < count(*)
+        {_having}
          ORDER BY (count(*) - count(*) FILTER (WHERE EXISTS (
                    SELECT 1 FROM {space_id}_entity_prop_sort e
                     WHERE e.entity_uuid = o.entity_uuid))) DESC

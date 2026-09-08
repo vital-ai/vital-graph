@@ -2,12 +2,20 @@
 
 The frame twin of `fast_prop_sort`, reading `{space}_frame_prop_sort`.
 
-SERVES THE ASSERTION TAB ONLY, and declines the others. That is not a
-limitation to remove later — the table's population IS the Assertion set, so
-serving the "All" tab from it would return Assertions only and silently drop
-every Aspect. Measured on `sp_lead_dup` that is 4,500 of 5,500 frames. A page
-that is ordered correctly and missing four fifths of its rows is the failure
-this whole family of tables is built to avoid.
+SERVES EVERY TAB. `frame_prop_sort` holds every frame, with the resolved form
+type in a column, so Assertion / Aspect / All differ by one predicate.
+
+It did not always. An earlier revision scoped the TABLE to Assertions, which
+made form type a property of the population rather than a filter. Traversal is
+general -- the parent -> child hop over the edge table is the same hop whatever
+a frame's form type is -- so a table that admits only one form type can only
+answer half the traversals put to it. Measured on `lead_nurture_grouped`, every
+one of its 900,000 child frames resolves to Aspect, so no parent-scoped listing
+there could be served at all.
+
+A tab is a FILTER, not a population. Assertion means a frame not enclosed by an
+entity; Aspect means one that is. Neither has any bearing on which frames a
+traversal reaches.
 
 `value_num` is live here where it is dead for entities: `hasFrameSequence` is
 an integer, so a frame list ordered by authored sequence is an ordered index
@@ -27,7 +35,7 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-from .sync_frame_prop_sort import _u, ASSERTION_URI  # noqa: E402
+from .sync_frame_prop_sort import _u, ASSERTION_URI, ASPECT_URI  # noqa: E402
 
 CHILD_FRAME_EDGE_URI = "http://vital.ai/ontology/haley-ai-kg#Edge_hasKGFrame"
 
@@ -70,11 +78,18 @@ async def frame_prop_sort_blocked(conn, space_id: str,
                 " WHERE space_id = $1 AND entity_type_uuid IS NULL LIMIT 1", space_id):
             return True
         row = await conn.fetchrow(
+            # A NULL `entity_type_uuid` is a WHOLE-SPACE block and must match
+            # whatever type is asked for -- that is how a rebuild blocks its
+            # own table. The previous predicate only matched a whole-space row
+            # when the caller happened to pass no type, so a typed listing
+            # would have been served straight out of a half-built table.
             "SELECT 1 FROM prop_sort_block WHERE space_id = $1"
-            "   AND ($2::uuid IS NULL OR entity_type_uuid = $2) LIMIT 1",
+            "   AND (entity_type_uuid IS NULL"
+            "        OR $2::uuid IS NULL OR entity_type_uuid = $2) LIMIT 1",
             space_id, ty)
     except Exception as exc:
-        logger.debug("frame prop_sort gate unreadable for %s: %s", space_id, exc)
+        logger.info("frame_prop_sort DECLINE(%s): block table unreadable, "
+                    "failing closed: %s", space_id, exc)
         return True
     return row is not None
 
@@ -109,7 +124,8 @@ def _filter_terms(filters: Optional[Dict[str, Any]]) -> Optional[List[tuple]]:
 
 def build_frame_page_sql(space_id: str, terms: List[tuple], sort_by: Optional[str],
                          descending: bool, typed: bool = True,
-                         parent_uri: Optional[str] = None) -> Optional[tuple]:
+                         parent_uri: Optional[str] = None,
+                         form_uuid=None) -> Optional[tuple]:
     """`(sql, params)` or None if the shape is not expressible.
 
     `parent_uri` restricts to a parent's CHILD frames, and it is served from
@@ -147,6 +163,14 @@ def build_frame_page_sql(space_id: str, terms: List[tuple], sort_by: Optional[st
                          f"AND value_dt {cmp} {p(str(value))}::timestamp")
         else:
             return None
+
+    if form_uuid is not None:
+        # A TAB IS A FILTER. Applied to the resolved column, so it composes
+        # with the traversal hop and the property criteria rather than
+        # deciding what the table contains.
+        fu = p(form_uuid)
+        parts.append(f"SELECT frame_uuid FROM {t} WHERE context_uuid = $1 "
+                     f"AND form_type_uuid = {fu}")
 
     if parent_uri:
         # The child-frame hop, from the edge table. Same INTERSECT shape as a
@@ -204,26 +228,45 @@ async def fast_frame_prop_page(
 ) -> Optional[List[str]]:
     """An ordered page of frame URIs, or None to decline.
 
-    DECLINES ANY TAB BUT ASSERTION. The table holds Assertions, so an "All" or
-    "Aspect" listing served from it would silently return the Assertion subset.
+    EVERY TAB IS SERVED. The table holds every frame with the resolved form
+    type in a column, so Assertion, Aspect and All are one filter apart. An
+    earlier revision indexed Assertions only and had to decline the rest —
+    which also made a parent-scoped listing unservable, since a child of an
+    Assertion is an Aspect.
     """
     from .sparql_sql_space_impl import _generate_term_uuid
 
-    if form_type != ASSERTION_URI:
-        return None
-
+    # Declines log at INFO, for the reason `fast_prop_sort` records: a silent
+    # decline is undiagnosable in a deployment running at INFO, and the symptom
+    # (a correct, populated, unblocked table that is simply never used) points
+    # at everything except the gate.
     terms = _filter_terms(filters)
     if terms is None:
-        logger.debug("frame prop_sort: declining, unexpressible filter")
+        logger.info("frame_prop_sort DECLINE(%s): unexpressible filter key in %s",
+                    space_id, sorted(filters or {}))
         return None
-    if not terms and not sort_by and not parent_uri:
+    if not terms and not sort_by and not parent_uri and form_type is None:
+        logger.info("frame_prop_sort DECLINE(%s): nothing to serve — no sort, "
+                    "filter, parent or form type", space_id)
         return None
+
+    # Only Assertion and Aspect are resolvable to a stored value; the All tab
+    # passes None and is simply unfiltered.
+    form_uuid = None
+    if form_type in (ASSERTION_URI, ASPECT_URI):
+        form_uuid = _u(form_type)
+    elif form_type is not None:
+        logger.info("frame_prop_sort DECLINE(%s): unrecognised form_type %s",
+                    space_id, form_type)
+        return None            # decline rather than ignore it
 
     built = build_frame_page_sql(space_id, terms, sort_by,
                                 descending=(sort_order or "asc").lower() == "desc",
                                 typed=frame_type_uri is not None,
-                                parent_uri=parent_uri)
+                                parent_uri=parent_uri, form_uuid=form_uuid)
     if built is None:
+        logger.info("frame_prop_sort DECLINE(%s): unexpressible shape sort_by=%s",
+                    space_id, sort_by)
         return None
     sql, params = built
 
@@ -232,6 +275,8 @@ async def fast_frame_prop_page(
     try:
         async with impl.db_impl.connection_pool.acquire() as conn:
             if await frame_prop_sort_blocked(conn, space_id, frame_type_uri):
+                logger.info("frame_prop_sort DECLINE(%s): blocked (space or "
+                            "type %s)", space_id, frame_type_uri)
                 return None
             head = (g_uuid, ty) if frame_type_uri else (g_uuid,)
             rows = await conn.fetch(sql, *head, *params, page_size, offset)

@@ -666,6 +666,7 @@ class MaintenanceJob:
                 ("edge_integrity", self._run_edge_integrity),
                 ("frame_entity_integrity", self._run_frame_entity_integrity),
                 ("entity_slot_sort_integrity", self._run_entity_slot_sort_integrity),
+                ("prop_sort_coverage", self._run_prop_sort_coverage),
                 ("grouping_self_link", self._run_grouping_self_link_check),
                 ("single_valued_integrity", self._run_single_valued_integrity),
                 ("graph_registration", self._run_graph_registration_check),
@@ -1923,6 +1924,65 @@ class MaintenanceJob:
                 await self._tracker.mark_failed(process_id, str(e))
             logger.error("Frame-entity integrity backfill failed for %s: %s", worst_space, e)
             return {"space_id": worst_space, "error": str(e)}
+
+    async def _run_prop_sort_coverage(self, space_ids: List[str]) -> Optional[Dict]:
+        """Record coverage for `entity_prop_sort` and `frame_prop_sort`.
+
+        WITHOUT THIS THE MARKER TABLE IS NEVER WRITTEN. `prop_sort_coverage` was
+        created alongside the tables and then nothing recorded into it, which is
+        worse than not having it: an operator diagnosing a slow listing found it
+        empty and read that as "coverage was never established". An empty table
+        that looks like a signal costs more than an absent one.
+
+        MEASURE, RECORD, GATE — in that order and in one place.
+        `record_prop_sort_coverage` takes or releases the block from the number
+        it just measured, because splitting measurement from gating is what
+        produced every marker-lifecycle bug in `issues/161`.
+
+        Cost is the probe, which counts from the QUADS so it cannot be fooled by
+        the table it checks: ~1.4 s per space on a 46.9M-quad space.
+        """
+        from ..db.sparql_sql.fast_prop_sort import record_prop_sort_coverage
+
+        recorded, short = 0, []
+        for space_id in space_ids:
+            for label, probe in (
+                    ("entity", "entity_prop_sort_coverage"),
+                    ("frame", "frame_prop_sort_coverage")):
+                try:
+                    mod = ("sync_entity_prop_sort" if label == "entity"
+                           else "sync_frame_prop_sort")
+                    fn = getattr(__import__(
+                        f"vitalgraph.db.sparql_sql.{mod}", fromlist=[probe]), probe)
+                    async with self._pool.acquire() as conn:
+                        async with maintenance_timeouts(conn):
+                            # EVERY type, not just the short ones: the marker
+                            # needs a positive statement of completeness, and
+                            # the gap form is empty exactly when all is well.
+                            covs = await fn(conn, space_id, limit=500,
+                                            only_gaps=False,
+                                            timeout=PROBE_CLIENT_TIMEOUT_S)
+                            for cov in covs:
+                                key = ("entity_type_uuid" if label == "entity"
+                                       else "frame_type_uuid")
+                                await record_prop_sort_coverage(
+                                    conn, space_id, cov[key],
+                                    cov["in_table"], cov["of_type"])
+                                recorded += 1
+                                if cov["in_table"] < cov["of_type"]:
+                                    short.append(
+                                        f"{space_id}/{label}:{cov['in_table']}"
+                                        f"/{cov['of_type']}")
+                except asyncpg.UndefinedTableError:
+                    continue          # space predates the table
+                except Exception as exc:
+                    log_probe_failure(f"{label}_prop_sort_coverage", space_id, exc)
+                    continue
+
+        if short:
+            logger.warning("prop_sort coverage short on %d type(s): %s",
+                           len(short), ", ".join(short[:5]))
+        return {"types_recorded": recorded, "short": len(short)} if recorded else None
 
     async def _run_entity_slot_sort_integrity(self, space_ids: List[str]) -> Optional[Dict]:
         """Fill {space}_entity_slot_sort one BOUNDED BATCH per cycle.

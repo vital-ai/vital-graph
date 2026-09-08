@@ -53,6 +53,7 @@ FRAME_TYPE_URI = f"{HALEY}hasKGFrameType"
 FORM_TYPE_URI = f"{HALEY}hasKGFormType"
 FRAME_GRAPH_URI = f"{HALEY}hasFrameGraphURI"
 ASSERTION_URI = f"{HALEY}KGFormType_Assertion"
+ASPECT_URI = f"{HALEY}KGFormType_Aspect"
 
 # Mirrors `_FRAME_SORT_PROPERTIES`. Asserted equal by
 # `test_frame_prop_sort_properties_match_the_model`, because a property the
@@ -87,6 +88,7 @@ _FRAME_TYPE = _u(FRAME_TYPE_URI)
 _FORM_TYPE = _u(FORM_TYPE_URI)
 _FRAME_GRAPH = _u(FRAME_GRAPH_URI)
 _ASSERTION = _u(ASSERTION_URI)
+_ASPECT = _u(ASPECT_URI)
 _SORT_PROPS = [_u(x) for x in SORTABLE_PROPERTY_URIS]
 
 
@@ -121,22 +123,60 @@ def _select_rows(space_id: str, where: str) -> str:
               FROM {t_quad}
              WHERE predicate_uuid = $1 AND object_uuid = $2
         ),
-        assertion AS MATERIALIZED (
-            SELECT f.subject_uuid, f.context_uuid
+        -- EVERY FRAME IS INDEXED. Form type is RESOLVED to a column, not used
+        -- to decide membership.
+        --
+        -- An earlier revision indexed Assertions only, because the listing's
+        -- Assertion tab was the target. That made form type a property of the
+        -- POPULATION, and the cost showed up the moment a parent-scoped
+        -- listing needed it: the parent -> child hop is general traversal over
+        -- the EDGE table, which knows nothing about form type, so a table
+        -- admitting one form type can only answer the traversals whose results
+        -- happen to share it. Measured on `lead_nurture_grouped`, every one of
+        -- its 900,000 child frames resolves to Aspect, so no parent-scoped
+        -- listing there could be served at all.
+        --
+        -- Membership is "it is a frame". Assertion means a frame NOT enclosed
+        -- by an entity and Aspect means one that is; neither says anything
+        -- about which frames a traversal reaches. So form type is a FILTER on
+        -- one column, which is what a tab is.
+        form AS MATERIALIZED (
+            SELECT f.subject_uuid, f.context_uuid,
+                   CASE
+                     WHEN ex.object_uuid IS NOT NULL THEN ex.object_uuid
+                     -- The unset default, MIRRORING `kgframes_endpoint`
+                     -- exactly rather than improving on it: no form type and
+                     -- no frame graph uri means Assertion; no form type WITH
+                     -- one means Aspect.
+                     --
+                     -- Mirrored deliberately, because this table's job is to
+                     -- agree with what the tab lists. The DEFINITION is about
+                     -- entity enclosure -- an Aspect is a frame enclosed by an
+                     -- entity, an Assertion is one that is not -- and
+                     -- `hasFrameGraphURI` is a proxy for that, not the thing
+                     -- itself. Measured on `lead_nurture_grouped`, all
+                     -- 1,200,000 frames carry both `hasFrameGraphURI` and
+                     -- `hasKGGraphURI` and all are genuinely entity-enclosed,
+                     -- so the proxy agrees there; on `wordnet_frames` neither
+                     -- predicate appears and nothing is entity-enclosed, so it
+                     -- agrees there too.
+                     --
+                     -- If that proxy is ever corrected, correct it in the
+                     -- endpoint and this follows. Diverging here would make the
+                     -- table disagree with the tab, which is worse than
+                     -- inheriting an imperfect rule.
+                     WHEN NOT EXISTS (SELECT 1 FROM {t_quad} g
+                                       WHERE g.predicate_uuid = $7
+                                         AND g.subject_uuid = f.subject_uuid
+                                         AND g.context_uuid = f.context_uuid)
+                       THEN $6::uuid
+                     ELSE $8::uuid
+                   END AS form_type_uuid
               FROM frames f
-             WHERE EXISTS (SELECT 1 FROM {t_quad} x
-                            WHERE x.predicate_uuid = $5
-                              AND x.subject_uuid = f.subject_uuid
-                              AND x.context_uuid = f.context_uuid
-                              AND x.object_uuid = $6)
-                OR (NOT EXISTS (SELECT 1 FROM {t_quad} x2
-                                 WHERE x2.predicate_uuid = $5
-                                   AND x2.subject_uuid = f.subject_uuid
-                                   AND x2.context_uuid = f.context_uuid)
-                    AND NOT EXISTS (SELECT 1 FROM {t_quad} g
-                                     WHERE g.predicate_uuid = $7
-                                       AND g.subject_uuid = f.subject_uuid
-                                       AND g.context_uuid = f.context_uuid))
+              LEFT JOIN {t_quad} ex
+                ON ex.subject_uuid = f.subject_uuid
+               AND ex.context_uuid = f.context_uuid
+               AND ex.predicate_uuid = $5
         )
         SELECT
             q.subject_uuid    AS frame_uuid,
@@ -148,8 +188,12 @@ def _select_rows(space_id: str, where: str) -> str:
             min(t.num_val)               AS value_num,
             min(t.dt_val)                AS value_dt,
             array_agg(DISTINCT t.term_text) AS value_all,
-            min(et.term_text)            AS frame_uri
-        FROM assertion a
+            min(et.term_text)            AS frame_uri,
+            -- Not `min(uuid)`: that aggregate only exists from PostgreSQL 14,
+            -- and this must build on whatever the RDS instance runs. Same
+            -- reason `frame_type_uuid` above uses the array form.
+            (array_agg(a.form_type_uuid))[1] AS form_type_uuid
+        FROM form a
         JOIN {t_quad} q
           ON q.subject_uuid = a.subject_uuid
          AND q.context_uuid = a.context_uuid
@@ -166,7 +210,8 @@ def _select_rows(space_id: str, where: str) -> str:
 
 
 _INSERT_COLS = ("frame_uuid, context_uuid, frame_type_uuid, property_uuid, "
-                "value_text, value_num, value_dt, value_all, frame_uri")
+                "value_text, value_num, value_dt, value_all, frame_uri, "
+                "form_type_uuid")
 
 _ON_CONFLICT = """
     ON CONFLICT (frame_uuid, context_uuid, property_uuid) DO UPDATE SET
@@ -175,13 +220,14 @@ _ON_CONFLICT = """
         value_num  = EXCLUDED.value_num,
         value_dt   = EXCLUDED.value_dt,
         value_all  = EXCLUDED.value_all,
-        frame_uri  = EXCLUDED.frame_uri
+        frame_uri  = EXCLUDED.frame_uri,
+        form_type_uuid = EXCLUDED.form_type_uuid
 """
 
 
 def _args():
     return [_VITALTYPE, _KGFRAME, _FRAME_TYPE, _SORT_PROPS,
-            _FORM_TYPE, _ASSERTION, _FRAME_GRAPH]
+            _FORM_TYPE, _ASSERTION, _FRAME_GRAPH, _ASPECT]
 
 
 async def sync_frame_prop_sort_after_change(
@@ -210,7 +256,7 @@ async def sync_frame_prop_sort_after_change(
     else:
         await conn.execute(
             f"DELETE FROM {t} WHERE frame_uuid = ANY($1)", subject_uuids)
-    sel = _select_rows(space_id, "q.subject_uuid = ANY($8)")
+    sel = _select_rows(space_id, "q.subject_uuid = ANY($9)")
     result = await conn.execute(
         f"INSERT INTO {t} ({_INSERT_COLS}) {sel} {_ON_CONFLICT}",
         *_args(), subject_uuids)
@@ -269,8 +315,9 @@ async def frame_prop_sort_drift(conn, space_id: str,
 
 
 async def frame_prop_sort_coverage(conn, space_id: str, limit: int = 5,
+                                  only_gaps: bool = True,
                                    timeout: float | None = None) -> list[dict]:
-    """Assertion frames IN the table against Assertion frames in the QUADS.
+    """Frames IN the table against frames in the QUADS.
 
     Independent of the derivation, which is what the drift probe above is not:
     that compares the table against the same SELECT that filled it, so when the
@@ -287,27 +334,24 @@ async def frame_prop_sort_coverage(conn, space_id: str, limit: int = 5,
     denominator is deliberately restricted to frames that HAVE at least one
     indexed property. Anything short of that is a real gap.
     """
+    # `only_gaps=False` returns EVERY type, complete ones included.
+    # The gap form answers "where is the worst shortfall" and is empty
+    # exactly when all is well, which makes it useless for the opposite
+    # question the coverage MARKER needs: a positive statement of
+    # completeness, not the absence of a complaint (`issues/161`).
+    _having = (f"HAVING count(*) FILTER (WHERE EXISTS (SELECT 1 FROM "
+               f"{space_id}_frame_prop_sort f WHERE f.frame_uuid = y.frame_uuid)) "
+               f"< count(*)") if only_gaps else ""
     rows = await conn.fetch(f"""
-        WITH assertion AS (
+        WITH population AS (
             SELECT DISTINCT q.subject_uuid AS frame_uuid, q.context_uuid
               FROM {space_id}_rdf_quad q
              WHERE q.predicate_uuid = $1 AND q.object_uuid = $2
-               AND (
-                     EXISTS (SELECT 1 FROM {space_id}_rdf_quad fo
-                              WHERE fo.subject_uuid = q.subject_uuid
-                                AND fo.context_uuid = q.context_uuid
-                                AND fo.predicate_uuid = $5
-                                AND fo.object_uuid = $6)
-                  OR (NOT EXISTS (SELECT 1 FROM {space_id}_rdf_quad fo2
-                                   WHERE fo2.subject_uuid = q.subject_uuid
-                                     AND fo2.context_uuid = q.context_uuid
-                                     AND fo2.predicate_uuid = $5)
-                      AND NOT EXISTS (SELECT 1 FROM {space_id}_rdf_quad fg
-                                       WHERE fg.subject_uuid = q.subject_uuid
-                                         AND fg.context_uuid = q.context_uuid
-                                         AND fg.predicate_uuid = $7)))
-               -- Only frames that HAVE something this table indexes; the rest
-               -- correctly have no rows and must not read as a shortfall.
+               -- Only frames that HAVE something this table indexes; a frame
+               -- carrying none of the sortable properties correctly has no
+               -- rows, and counting it would be a shortfall no backfill can
+               -- close. The same false-shortfall shape that took a permanent
+               -- block on the entity side, 2026-09-08.
                AND EXISTS (SELECT 1 FROM {space_id}_rdf_quad pq
                             WHERE pq.subject_uuid = q.subject_uuid
                               AND pq.context_uuid = q.context_uuid
@@ -319,7 +363,7 @@ async def frame_prop_sort_coverage(conn, space_id: str, limit: int = 5,
                      WHERE ft.subject_uuid = a.frame_uuid
                        AND ft.context_uuid = a.context_uuid
                        AND ft.predicate_uuid = $3 LIMIT 1) AS ty
-              FROM assertion a
+              FROM population a
         )
         SELECT coalesce(t.term_text, '(untyped)') AS frame_type,
                y.ty AS frame_type_uuid,
@@ -330,14 +374,12 @@ async def frame_prop_sort_coverage(conn, space_id: str, limit: int = 5,
           FROM typed y
           LEFT JOIN {space_id}_term t ON t.term_uuid = y.ty
          GROUP BY 1, 2
-        HAVING count(*) FILTER (WHERE EXISTS (
-                   SELECT 1 FROM {space_id}_frame_prop_sort f
-                    WHERE f.frame_uuid = y.frame_uuid)) < count(*)
+        {_having}
          ORDER BY (count(*) - count(*) FILTER (WHERE EXISTS (
                    SELECT 1 FROM {space_id}_frame_prop_sort f
                     WHERE f.frame_uuid = y.frame_uuid))) DESC
          LIMIT {int(limit)}
-    """, *_args(), timeout=timeout)
+    """, *_args()[:4], timeout=timeout)   # this query uses $1..$4 only
     return [
         {"frame_type": r["frame_type"],
          "frame_type_uuid": r["frame_type_uuid"],

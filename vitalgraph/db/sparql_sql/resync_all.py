@@ -100,6 +100,15 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
         logger.warning("resync_all(%s): entity_prop_sort skipped (%s)",
                        space_id, exc)
 
+    fps_count = 0
+    try:
+        async with conn.transaction():
+            from .sync_frame_prop_sort import resync_frame_prop_sort
+            fps_count = await resync_frame_prop_sort(conn, space_id)
+    except Exception as exc:
+        logger.warning("resync_all(%s): frame_prop_sort skipped (%s)",
+                       space_id, exc)
+
     # 3. Stats tables — the SAME function the maintenance job runs, so "rebuild
     # everything" and the periodic rebuild cannot disagree about what the table
     # is. They did: `resync_stats_tables` keeps `row_count = 1` pairs and drops
@@ -265,6 +274,7 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
         'frame_entity_rows': fe_count,
         'entity_slot_sort_rows': ess_count,
         'entity_prop_sort_rows': eps_count,
+        'frame_prop_sort_rows': fps_count,
         'slot_sort_types_complete': sum(1 for a, b in coverage if a >= b),
         'slot_sort_types_total': len(coverage),
         'value_stats_rows': vstats.get('rows', 0),

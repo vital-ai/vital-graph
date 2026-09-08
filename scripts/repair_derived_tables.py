@@ -214,6 +214,21 @@ async def survey_space(conn, space_id: str) -> dict | None:
             # rather than empty.
             pass
 
+    # frame_prop_sort, tested the same way as its entity sibling: empty is only
+    # a defect if the derivation would produce a row.
+    fps = await _count(conn, space_id, "frame_prop_sort")
+    if fps is not None and not fps:
+        from vitalgraph.db.sparql_sql.sync_frame_prop_sort import (
+            _select_rows as _fps_select, _args as _fps_args)
+        try:
+            row = await conn.fetchrow(
+                f"SELECT 1 FROM ({_fps_select(space_id, 'TRUE')}) s LIMIT 1",
+                *_fps_args())
+            if row:
+                need.append("frame_prop_sort")
+        except Exception:
+            pass
+
     if not need:
         return None
     return {"space": space_id, "quads": quads, "need": need, "stale": stale,
@@ -257,6 +272,12 @@ async def repair_space(conn, space_id: str, need: list[str]) -> dict:
         t0 = time.time()
         out["entity_prop_sort"] = await resync_entity_prop_sort(conn, space_id)
         out["entity_prop_sort_s"] = round(time.time() - t0, 1)
+    if "frame_prop_sort" in need:
+        from vitalgraph.db.sparql_sql.sync_frame_prop_sort import (
+            resync_frame_prop_sort)
+        t0 = time.time()
+        out["frame_prop_sort"] = await resync_frame_prop_sort(conn, space_id)
+        out["frame_prop_sort_s"] = round(time.time() - t0, 1)
     return out
 
 

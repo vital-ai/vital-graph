@@ -184,6 +184,10 @@ async def _list(adapter, space, **kw):
     {"entity_type_uri": ETYPE, "sort_by": f"{CORE}hasName"},
     {"entity_type_uri": ETYPE, "sort_by": f"{CORE}hasName", "status": f"{EX}Active"},
     {"entity_type_uri": ETYPE, "status": f"{EX}Active"},
+    # The most common browse, and the one shape that used to decline: filter by
+    # type, no sort. It must return the SAME page as the SPARQL walk it now
+    # replaces — same rows AND same order.
+    {"entity_type_uri": ETYPE},
 ])
 async def test_fast_path_and_sparql_return_the_same_page(
         test_space, space_impl, backend_adapter, monkeypatch, kw):
@@ -257,3 +261,41 @@ async def test_tied_sort_values_break_the_tie_the_same_way(
         f"tie-break diverges\n"
         f"  fast: {[u.rsplit('/',1)[-1] for u in fast]}\n"
         f"  slow: {[u.rsplit('/',1)[-1] for u in slow]}")
+
+
+async def test_a_typed_listing_with_no_sort_is_served_in_uri_order(
+        test_space, space_impl):
+    """It used to decline, sending the commonest browse to the SPARQL walk.
+
+    Ordered by entity URI, matching `ORDER BY ?s`. Deliberately NOT by
+    `entity_uuid`: that is a hash of the URI, so the two orders are unrelated,
+    and the sibling `fast_typed_subject_page` already disagrees with SPARQL for
+    exactly that reason.
+    """
+    from vitalgraph.db.sparql_sql.fast_prop_sort import fast_entity_prop_page
+
+    await space_impl.add_rdf_quads_batch(test_space, _quads())
+
+    uris = await fast_entity_prop_page(
+        space_impl, test_space, GRAPH, 50, 0, entity_type_uri=ETYPE)
+
+    assert uris is not None, (
+        "a typed listing with no sort was declined; that is the most common "
+        "browse and it falls to a 3.7s SPARQL walk")
+    assert uris == sorted(uris), f"not in URI order: {uris}"
+    # A superset check, not equality: this module's space is shared and other
+    # tests add entities of the same type to it.
+    names = {u.rsplit("/", 1)[-1] for u in uris}
+    assert names >= {n for n, _, _ in ROWS}, (
+        f"rows missing from the typed listing: "
+        f"{ {n for n, _, _ in ROWS} - names}")
+
+
+async def test_an_untyped_unsorted_listing_still_defers(test_space, space_impl):
+    """The plain default belongs to `fast_typed_subject_page`; this path must
+    not take it over, or the two would order pages differently."""
+    from vitalgraph.db.sparql_sql.fast_prop_sort import fast_entity_prop_page
+
+    await space_impl.add_rdf_quads_batch(test_space, _quads())
+    assert await fast_entity_prop_page(
+        space_impl, test_space, GRAPH, 50, 0) is None

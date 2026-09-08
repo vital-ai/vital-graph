@@ -525,10 +525,20 @@ class SparqlSQLSchema:
         ("prop_sort_block", '''
             CREATE TABLE IF NOT EXISTS prop_sort_block (
                 space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
-                entity_type_uuid UUID NOT NULL,
+                -- NULLABLE, meaning "the whole space". It was NOT NULL, on the
+                -- theory that a whole-space block could be borrowed from
+                -- `slot_sort_block`. That was wrong in one direction: READING
+                -- that table is right, because a restore invalidates every
+                -- derived table at once, but WRITING it is not. A prop-sort
+                -- rebuild says nothing about `entity_slot_sort`, and taking a
+                -- whole-space block there turned the SLOT-sort fast path off
+                -- for the entire space for the length of the build -- eleven
+                -- minutes on a 74.5M-quad space. A table must be able to block
+                -- ITSELF.
+                entity_type_uuid UUID,
                 reason TEXT NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                UNIQUE (space_id, entity_type_uuid)
+                UNIQUE NULLS NOT DISTINCT (space_id, entity_type_uuid)
             )
         '''),
         # Written by the maintenance coverage probe, which computes both numbers
@@ -1193,6 +1203,21 @@ class SparqlSQLSchema:
                 -- tied page. Joining the term table for it instead cost the
                 -- entity version 2.1ms -> 123ms on a deep page.
                 frame_uri         TEXT,
+                -- The RESOLVED form type: the explicit `hasKGFormType` where
+                -- one is set, otherwise the endpoint's own default (no form
+                -- type and no `hasFrameGraphURI` -> Assertion, with one ->
+                -- Aspect).
+                --
+                -- A COLUMN, not a population filter, and that distinction is
+                -- the point. An earlier revision indexed Assertions only, so
+                -- Aspects were absent entirely, and the parent -> child hop
+                -- over the EDGE table could only be answered for frames that
+                -- happened to be Assertions. On `lead_nurture_grouped` every
+                -- one of its 900,000 child frames resolves to Aspect, so none
+                -- could be served. Traversal is general and must not care about
+                -- form type; a tab is a filter, and a filter belongs in a
+                -- column.
+                form_type_uuid    UUID,
                 PRIMARY KEY (frame_uuid, context_uuid, property_uuid)
             ){_part}''')
         if partition_quads > 0:
@@ -1627,6 +1652,20 @@ class SparqlSQLSchema:
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_any_dt "
             f"ON {t['entity_prop_sort']} (context_uuid, property_uuid, "
             f"value_dt, entity_uri) WHERE value_dt IS NOT NULL",
+            # A TYPED LISTING WITH NO SORT: "all NurtureActions, default
+            # order", which is the most common browse there is. Without this it
+            # is the one shape the table declines, and it falls to the SPARQL
+            # walk measured at 3.7 s warm.
+            #
+            # `entity_uri` directly after the type, with no property or value
+            # between them, so `SELECT DISTINCT entity_uri ... ORDER BY
+            # entity_uri` is an ordered index-only scan: the duplicates (one row
+            # per indexed property) are ADJACENT, so dedup is a unique-scan
+            # rather than a hash. The `_eps_text` family cannot serve it —
+            # `value_text` sits ahead of `entity_uri` there, so the same query
+            # would sort the type's whole population.
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_type_uri "
+            f"ON {t['entity_prop_sort']} (context_uuid, entity_type_uuid, entity_uri)",
             # Membership for the filter gate: `value_all @> ARRAY[x]`. GIN
             # because the operators are containment, not ordering -- a btree on
             # the MIN lanes cannot answer them at all.
@@ -1657,6 +1696,16 @@ class SparqlSQLSchema:
             f"value_dt, frame_uri) WHERE value_dt IS NOT NULL",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_all "
             f"ON {t['frame_prop_sort']} USING GIN (value_all)",
+            # Form-type-scoped ordering: what the Assertion and Aspect tabs
+            # sort by. The `_any_` pair above serves the All tab, and the
+            # parent-scoped hop needs neither — it arrives as an INTERSECT on
+            # frame_uuid from the edge table.
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_form_text "
+            f"ON {t['frame_prop_sort']} (context_uuid, form_type_uuid, "
+            f"property_uuid, value_text COLLATE \"C\", frame_uri)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_form_num "
+            f"ON {t['frame_prop_sort']} (context_uuid, form_type_uuid, "
+            f"property_uuid, value_num, frame_uri) WHERE value_num IS NOT NULL",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_frame "
             f"ON {t['frame_prop_sort']} (frame_uuid)",
             # Document segmentation job queue and config. These indexes lived in

@@ -600,7 +600,7 @@ class KGFramesEndpoint:
             | Value | URI | Meaning |
             |---|---|---|
             | `Assertion` | `haley-ai-kg#KGFormType_Assertion` | Standalone top-level frame — an independent fact |
-            | `Aspect` | `haley-ai-kg#KGFormType_Aspect` | Entity-enclosed frame or child of an Assertion |
+            | `Aspect` | `haley-ai-kg#KGFormType_Aspect` | A frame enclosed by an entity |
 
             Pass the short label (`Assertion`, `Aspect`) or the full URI.
 
@@ -924,13 +924,17 @@ class KGFramesEndpoint:
             # another tab from it would silently return the Assertion subset
             # (on `sp_lead_dup`, 1,000 of 5,500 frames). A search declines too,
             # for the reason the entity path does. ---
-            # `parent_uri` IS served here. "The children of this frame" is one
-            # typed hop, and `{space}_edge` is the table built for it --
-            # `idx_{space}_edge_type_src` is `(edge_type_uuid,
-            # source_node_uuid)`, so it is a seek and joins the property
-            # criteria as one more INTERSECT conjunct.
+            # Served for EVERY form-type tab, and for a parent-scoped listing
+            # regardless of tab. The parent -> child hop is general traversal
+            # over the edge table -- `idx_{space}_edge_type_src` is
+            # `(edge_type_uuid, source_node_uuid)`, so it is a seek -- and
+            # `frame_prop_sort` now holds every frame with the resolved form
+            # type in a column, so the two can actually meet. While that table
+            # was Assertion-only it could only answer traversals whose results
+            # happened to be Assertions.
             if not search and (
                     sort_by or frame_type_uri or status or parent_uri
+                    or form_type
                     or created_after or created_before
                     or modified_after or modified_before):
                 from ..db.sparql_sql.fast_frame_prop_sort import fast_frame_prop_page
