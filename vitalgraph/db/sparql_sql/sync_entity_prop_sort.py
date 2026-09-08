@@ -275,6 +275,11 @@ async def resync_entity_prop_sort(conn, space_id: str) -> int:
         f"INSERT INTO {t} ({_INSERT_COLS}) "
         f"{_select_rows(space_id, 'TRUE')} {_ON_CONFLICT}", *_args())
     rows = int(result.split()[-1]) if result else 0
+    # A TRUNCATE discards the statistics with the rows. Without this the planner
+    # estimates a handful of rows and picks a Sort over the ordered index:
+    # measured 490 ms / 23,767 buffers for a first page, against 0.3 ms / 5
+    # buffers once analysed.
+    await conn.execute(f"ANALYZE {t}")
     logger.info("resync_entity_prop_sort(%s): %d rows", space_id, rows)
     return rows
 

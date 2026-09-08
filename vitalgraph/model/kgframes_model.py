@@ -24,6 +24,19 @@ _FILTERABLE_FRAME_PROPERTIES = {
     "http://vital.ai/ontology/haley-ai-kg#hasKGFormType":                 "uri",
     "http://vital.ai/ontology/haley-ai-kg#hasKGFrameTypeURI":             "uri",
     "http://vital.ai/ontology/vital-aimp#hasObjectStatusType":            "uri",
+    # `hasKGFrameType` is what the data and the endpoint actually use — the
+    # frame_type_uri filter emits `?frame haley:hasKGFrameType <uri>` — while
+    # `hasKGFrameTypeURI` above is a name nothing carries. Measured on
+    # `wordnet_frames`: 285,348 frames all have `hasKGFrameType`, none has
+    # `hasKGFrameTypeURI`.
+    #
+    # Until now a frame could be FILTERED by its type but not SORTED by it,
+    # because sort_by validates against this registry and the real predicate was
+    # missing from it. For a top-level frame list — the wordnet case, where the
+    # frames carry a type and a type description and nothing else — that was the
+    # only sort anyone would want.
+    "http://vital.ai/ontology/haley-ai-kg#hasKGFrameType":                "uri",
+    "http://vital.ai/ontology/haley-ai-kg#hasKGFrameTypeDescription":     "string",
 }
 
 # Sequence properties are sortable but NOT filterable: they are integers, and

@@ -717,6 +717,7 @@ class SparqlSQLSchema:
             'frame_entity': f'{space_id}_frame_entity',
             'entity_slot_sort': f'{space_id}_entity_slot_sort',
             'entity_prop_sort': f'{space_id}_entity_prop_sort',
+            'frame_prop_sort': f'{space_id}_frame_prop_sort',
             'vector_index': f'{space_id}_vector_index',
             'geo': f'{space_id}_geo',
             'geo_config': f'{space_id}_geo_config',
@@ -1161,6 +1162,42 @@ class SparqlSQLSchema:
         if partition_quads > 0:
             stmts += self._partition_children(t['entity_prop_sort'], partition_quads)
 
+        # `entity_prop_sort` for TOP-LEVEL (Assertion) FRAMES.
+        #
+        # Scoped to Assertions deliberately, because that is the tab the listing
+        # sorts. `kgframes_endpoint` defines one as `hasKGFormType =
+        # KGFormType_Assertion`, OR no `hasKGFormType` AND no
+        # `hasFrameGraphURI` -- the unset default. The derivation below matches
+        # that rule exactly rather than approximating it with "has no parent
+        # edge": measured on the test stack the two DISAGREE (on `sp_lead_dup`,
+        # 5,500 Assertions against 1,000 frames with no parent), and a
+        # population that differs from what the tab lists is precisely the
+        # plausible-subset failure this table must not have.
+        #
+        # `value_num` matters here where it does not for entities:
+        # `hasFrameSequence` is an integer, so frames really do use all three
+        # lanes.
+        stmts.append(f'''
+            CREATE TABLE IF NOT EXISTS {t['frame_prop_sort']} (
+                frame_uuid        UUID NOT NULL,
+                context_uuid      UUID NOT NULL,
+                frame_type_uuid   UUID,
+                property_uuid     UUID NOT NULL,
+                value_text        TEXT,
+                value_num         NUMERIC,
+                value_dt          TIMESTAMP,
+                value_all         TEXT[] NOT NULL DEFAULT '{{}}',
+                -- The tie-break, for the reason the entity table records: the
+                -- SPARQL query this replaces breaks ties with `?frame`, and
+                -- `frame_uuid` is a hash of the URI, so tying on it reorders a
+                -- tied page. Joining the term table for it instead cost the
+                -- entity version 2.1ms -> 123ms on a deep page.
+                frame_uri         TEXT,
+                PRIMARY KEY (frame_uuid, context_uuid, property_uuid)
+            ){_part}''')
+        if partition_quads > 0:
+            stmts += self._partition_children(t['frame_prop_sort'], partition_quads)
+
         # 8. Vector index registry (per-space catalog of named vector indexes)
         stmts.append(f'''
             CREATE TABLE IF NOT EXISTS {t['vector_index']} (
@@ -1599,6 +1636,29 @@ class SparqlSQLSchema:
             # entity; without this that per-write DELETE is a seq scan.
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_entity "
             f"ON {t['entity_prop_sort']} (entity_uuid)",
+            # `frame_prop_sort`, the same five shapes plus the untyped pair.
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_text "
+            f"ON {t['frame_prop_sort']} (context_uuid, frame_type_uuid, "
+            f"property_uuid, value_text COLLATE \"C\", frame_uri)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_num "
+            f"ON {t['frame_prop_sort']} (context_uuid, frame_type_uuid, "
+            f"property_uuid, value_num, frame_uri) WHERE value_num IS NOT NULL",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_dt "
+            f"ON {t['frame_prop_sort']} (context_uuid, frame_type_uuid, "
+            f"property_uuid, value_dt, frame_uri) WHERE value_dt IS NOT NULL",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_any_text "
+            f"ON {t['frame_prop_sort']} (context_uuid, property_uuid, "
+            f"value_text COLLATE \"C\", frame_uri)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_any_num "
+            f"ON {t['frame_prop_sort']} (context_uuid, property_uuid, "
+            f"value_num, frame_uri) WHERE value_num IS NOT NULL",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_any_dt "
+            f"ON {t['frame_prop_sort']} (context_uuid, property_uuid, "
+            f"value_dt, frame_uri) WHERE value_dt IS NOT NULL",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_all "
+            f"ON {t['frame_prop_sort']} USING GIN (value_all)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_frame "
+            f"ON {t['frame_prop_sort']} (frame_uuid)",
             # Document segmentation job queue and config. These indexes lived in
             # SegmentationJobManager / SegmentationConfigManager and were created
             # on demand with their tables, so a space had them only if the
@@ -1667,6 +1727,7 @@ class SparqlSQLSchema:
             f"DROP TABLE IF EXISTS {t['frame_entity']} CASCADE",
             f"DROP TABLE IF EXISTS {t['entity_slot_sort']} CASCADE",
             f"DROP TABLE IF EXISTS {t['entity_prop_sort']} CASCADE",
+            f"DROP TABLE IF EXISTS {t['frame_prop_sort']} CASCADE",
             f"DROP TABLE IF EXISTS {t['edge']} CASCADE",
             f"DROP TABLE IF EXISTS {t['rdf_stats']} CASCADE",
             f"DROP TABLE IF EXISTS {t['rdf_pred_stats']} CASCADE",

@@ -23,8 +23,19 @@ import {
   FRAME_SEQUENCE_PROPERTY,
 } from '../lib/sortProperties';
 
+const FRAME_TYPE_PROPERTY = 'http://vital.ai/ontology/haley-ai-kg#hasKGFrameType';
+const FRAME_TYPE_DESC_PROPERTY =
+  'http://vital.ai/ontology/haley-ai-kg#hasKGFrameTypeDescription';
+
+// Frame type and its description are the sorts a TOP-LEVEL frame list actually
+// needs: measured on `wordnet_frames`, all 285,348 frames carry exactly those
+// two and none of Name / Sequence / Created / Modified. They were previously
+// unsortable because the model registry named `hasKGFrameTypeURI`, which no
+// data carries, while the endpoint's own type FILTER uses `hasKGFrameType`.
 const FRAME_SORT_OPTIONS: { label: string; value: string }[] = [
   { label: 'Name', value: NAME_PROPERTY },
+  { label: 'Frame type', value: FRAME_TYPE_PROPERTY },
+  { label: 'Type description', value: FRAME_TYPE_DESC_PROPERTY },
   { label: 'Sequence', value: FRAME_SEQUENCE_PROPERTY },
   { label: 'Created', value: CREATED_PROPERTY },
   { label: 'Modified', value: MODIFIED_PROPERTY },
@@ -117,20 +128,16 @@ const KGFrames: React.FC = () => {
         page_size: itemsPerPage,
         offset: (currentPage - 1) * itemsPerPage,
         search: debouncedSearch || undefined,
-        // Sort only once a search/filter narrows the set: a full-dataset sort
-        // is still a full scan + sort HERE.
-        //
-        // DELIBERATELY UNLIKE KGEntities, which dropped this restriction.
-        // Entities have `{space}_entity_prop_sort`, so an unnarrowed sort is an
-        // ordered index scan (0.6 ms for the first page over 500,000 entities).
-        // Frames have no equivalent — `entity_slot_sort` indexes slot values
-        // reached THROUGH a frame, not a frame's own properties — so the cost
-        // this guards against is still real for frames.
-        //
-        // Do not copy the entity change here until that table exists. See
-        // `planning_ui/kg_search_filter_sort_fts_plan.md` §3.
-        sort_by: (sortBy && (debouncedSearch || formType)) ? sortBy : undefined,
-        sort_order: (sortBy && (debouncedSearch || formType)) ? sortOrder : undefined,
+        // Sorting is unrestricted on the ASSERTION tab and narrowed-only
+        // elsewhere, and that asymmetry is the shape of the data rather than a
+        // quirk. `{space}_frame_prop_sort` indexes top-level (Assertion)
+        // frames, so an Assertion sort is an ordered index scan — measured at
+        // 0.3 ms for the first page over 285,348 wordnet frames, against 578 ms
+        // from the quads. The All and Aspect tabs have no such table, and the
+        // server declines them rather than serving the Assertion subset, so
+        // sorting there is still a full scan and stays gated.
+        sort_by: (sortBy && sortEnabled) ? sortBy : undefined,
+        sort_order: (sortBy && sortEnabled) ? sortOrder : undefined,
         form_type: formType || undefined,
       });
       if (isStale()) return;   // a newer fetch already answered
@@ -156,9 +163,14 @@ const KGFrames: React.FC = () => {
 
   useEffect(() => { fetchFrames(); }, [fetchFrames]);
 
-  // Sorting is offered only once a search/filter narrows the set — sorting the
-  // entire space is a full scan + sort. Reset sort when the narrowing clears.
-  const sortEnabled = Boolean(debouncedSearch || formType);
+  // The Assertion tab is what `{space}_frame_prop_sort` holds, so it is the
+  // only tab whose sort is an index scan. Matching the endpoint's own rule,
+  // which resolves the short label to the full URI.
+  const isAssertionTab = formType === 'Assertion';
+
+  // The Assertion tab is served from an index, so it needs no narrowing. The
+  // other tabs still do.
+  const sortEnabled = isAssertionTab || Boolean(debouncedSearch || formType);
   useEffect(() => {
     if (!sortEnabled && sortBy) setSortBy('');
   }, [sortEnabled, sortBy]);
@@ -178,7 +190,7 @@ const KGFrames: React.FC = () => {
   };
 
   const toggleSort = (field: string) => {
-    if (!debouncedSearch && !formType) return; // sort only on a narrowed set
+    if (!sortEnabled) return; // the other tabs still need narrowing first
     if (sortBy === field) {
       setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
     } else {

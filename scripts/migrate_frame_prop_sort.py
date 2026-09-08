@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
-"""Add `{space}_entity_prop_sort` to existing spaces and populate it.
+"""Add `{space}_frame_prop_sort` to existing spaces and populate it.
 
-New spaces get the table, its indexes and the two gate tables from
-`SparqlSQLSchema`. This adds them to spaces that predate it, then builds the
-contents.
+The frame twin of `migrate_entity_prop_sort.py`, and everything that script
+says about ordering applies here: create and populate BEFORE anything reads,
+block first because the gate is a block-list, release only after coverage has
+been measured.
 
-TWO PHASES, AND THE ORDER MATTERS. The table is created and populated BEFORE
-anything reads it, and the read gate is a BLOCK-LIST (`prop_sort_block`), so a
-space is created blocked and only released once its coverage has been verified.
-Absence of a block means SERVE; a table that exists but is empty would therefore
-be served as if it were complete, which for a FILTER is a plausible subset rather
-than an error. `issues/167` inverted the sibling's gate to a block-list for good
-reasons, and this is the cost of that inversion: the migration must block first.
+SCOPED TO TOP-LEVEL (ASSERTION) FRAMES, which is what the frames listing's
+Assertion tab shows. The population is the endpoint's own rule -- an explicit
+`hasKGFormType` of Assertion, or no form type and no `hasFrameGraphURI`.
 
-DEFAULT IS A DRY RUN, like every migration script here.
+Measured cost of the derivation on the test stack:
 
-The build is a plain `INSERT ... SELECT` over the quads, so it takes ROW
-EXCLUSIVE on the new table and reads the quad table without blocking writers.
-On a large space it is still one long statement -- run it when the maintenance
-window allows, and note that a space's own `resync_all` would do the same work.
+    wordnet_frames         8,911,591 quads -> 570,696 rows over 285,348 frames   8.9 s
+    lead_nurture_grouped  74,465,500 quads ->       0 rows (no Assertions)      38.2 s
+
+The second is the pathological shape -- 1,200,000 frames every one of which
+carries `hasFrameGraphURI`, so the whole cost is proving a negative. It is also
+why this is a windowed operation rather than something to run casually.
+
+DEFAULT IS A DRY RUN.
 """
 from __future__ import annotations
 
@@ -33,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from devtools.target import add_pg_arguments, describe_target  # noqa: E402
 
-logger = logging.getLogger("migrate_entity_prop_sort")
+logger = logging.getLogger("migrate_frame_prop_sort")
 
 
 async def _global_tables(conn, apply: bool) -> str:
@@ -57,10 +58,10 @@ async def _global_tables(conn, apply: bool) -> str:
 
 async def migrate_space(conn, space_id: str, apply: bool) -> dict:
     from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
-    from vitalgraph.db.sparql_sql.sync_entity_prop_sort import (
-        backfill_entity_prop_sort, entity_prop_sort_coverage)
+    from vitalgraph.db.sparql_sql.sync_frame_prop_sort import (
+        backfill_frame_prop_sort, frame_prop_sort_coverage)
 
-    table = f"{space_id}_entity_prop_sort"
+    table = f"{space_id}_frame_prop_sort"
     if not await conn.fetchval(
             "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1",
             f"{space_id}_rdf_quad"):
@@ -79,18 +80,18 @@ async def migrate_space(conn, space_id: str, apply: bool) -> dict:
             "SELECT count(*) FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhparent"
             " WHERE c.relname=$1", f"{space_id}_rdf_quad") or 0
         for stmt in sch.create_space_tables_sql(space_id, partition_quads=parts):
-            if "entity_prop_sort" in stmt:
+            if "frame_prop_sort" in stmt:
                 await conn.execute(stmt)
         logger.info("  %s: created (%d partitions)", table, parts)
 
-    # A table created by an EARLIER revision of this script lacks `entity_uri`,
+    # A table created by an EARLIER revision of this script lacks `frame_uri`,
     # which is the sort tie-break and the last column of three indexes. Adding it
     # is not cosmetic: without it the fast path breaks ties on `entity_uuid`, a
     # hash, and a tied page comes back in a different order from the SPARQL query
     # it replaces. Backfilled below by the populate, which rewrites every row.
     if exists and apply:
         await conn.execute(
-            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS entity_uri TEXT")
+            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS frame_uri TEXT")
 
     # BLOCK BEFORE POPULATING. An empty table with no block is served as
     # complete. The block is per-type and this space has no types resolved yet,
@@ -101,10 +102,10 @@ async def migrate_space(conn, space_id: str, apply: bool) -> dict:
         await conn.execute(
             "INSERT INTO slot_sort_block (space_id, entity_type_uuid, reason) "
             "VALUES ($1, NULL, $2) ON CONFLICT DO NOTHING",
-            space_id, "entity_prop_sort migration in progress")
+            space_id, "frame_prop_sort migration in progress")
 
     for stmt in sch.create_space_indexes_sql(space_id):
-        if "entity_prop_sort" in stmt:
+        if "frame_prop_sort" in stmt:
             if apply:
                 await conn.execute(stmt)
 
@@ -112,7 +113,7 @@ async def migrate_space(conn, space_id: str, apply: bool) -> dict:
         return {"space": space_id, "status": "would populate (table exists)"}
 
     t0 = time.time()
-    rows = await backfill_entity_prop_sort(conn, space_id)
+    rows = await backfill_frame_prop_sort(conn, space_id)
 
     # ANALYZE, and it is NOT housekeeping. A freshly built table has no
     # statistics, so the planner estimated `rows=15` for 570,696 rows and chose
@@ -123,7 +124,7 @@ async def migrate_space(conn, space_id: str, apply: bool) -> dict:
     await conn.execute(f"ANALYZE {table}")
     elapsed = round(time.time() - t0, 1)
 
-    gaps = await entity_prop_sort_coverage(conn, space_id)
+    gaps = await frame_prop_sort_coverage(conn, space_id)
     if gaps:
         return {"space": space_id, "rows": rows, "seconds": elapsed,
                 "status": f"LEFT BLOCKED — coverage short on {len(gaps)} type(s): "
@@ -133,7 +134,7 @@ async def migrate_space(conn, space_id: str, apply: bool) -> dict:
     # assumed. `issues/149` had the sibling reporting converged at 1.05%.
     await conn.execute(
         "DELETE FROM slot_sort_block WHERE space_id = $1 AND entity_type_uuid IS NULL "
-        "AND reason = $2", space_id, "entity_prop_sort migration in progress")
+        "AND reason = $2", space_id, "frame_prop_sort migration in progress")
     return {"space": space_id, "rows": rows, "seconds": elapsed,
             "status": "POPULATED, coverage complete, unblocked"}
 

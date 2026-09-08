@@ -908,6 +908,59 @@ class KGFramesEndpoint:
                     results=quads, total_count=total_count,
                     page_size=page_size, offset=offset)
 
+            # --- Sorted / filtered ASSERTION listing, from
+            # `{space}_frame_prop_sort`. Declines anything else, including the
+            # All and Aspect tabs: that table holds Assertions, so serving
+            # another tab from it would silently return the Assertion subset
+            # (on `sp_lead_dup`, 1,000 of 5,500 frames). A search declines too,
+            # for the reason the entity path does. ---
+            if not search and (sort_by or frame_type_uri or status
+                               or created_after or created_before
+                               or modified_after or modified_before):
+                from ..db.sparql_sql.fast_frame_prop_sort import fast_frame_prop_page
+                fp_uris = await fast_frame_prop_page(
+                    space_impl, space_id, graph_id, page_size, offset,
+                    form_type=form_type, frame_type_uri=frame_type_uri,
+                    filters={"status": status, "created_after": created_after,
+                             "created_before": created_before,
+                             "modified_after": modified_after,
+                             "modified_before": modified_before},
+                    sort_by=sort_by, sort_order=sort_order)
+                if fp_uris is not None:
+                    fake = {"bindings": [{"frame": {"value": u}} for u in fp_uris]}
+                    frames = await self._sparql_results_to_frames(
+                        backend, graph_id, fake, space_id)
+                    # Preserve the page order the index produced; the object
+                    # fetch above returns them in whatever order it likes, and
+                    # using that directly would discard the sort.
+                    _o = {u: i for i, u in enumerate(fp_uris)}
+                    frames = sorted(frames or [],
+                                    key=lambda fr: _o.get(str(fr.URI), len(fp_uris)))
+                    quads = await asyncio.to_thread(
+                        graphobjects_to_quad_list, frames, graph_id)
+                    # The SAME count the SPARQL path uses, through the SAME
+                    # cache. `len(frames)` would be the PAGE size, which the
+                    # pager would read as the total — every list one page long.
+                    _cq = self._build_count_frames_query(
+                        backend, space_id, graph_id, search,
+                        form_type=form_type, frame_type_uri=frame_type_uri,
+                        status=status, exclude_status=exclude_status,
+                        created_after=created_after, created_before=created_before,
+                        modified_after=modified_after, modified_before=modified_before,
+                    )
+                    _ch = _count_cache.query_hash(_cq)
+                    total_count = _count_cache.get(space_id, graph_id, _ch)
+                    if total_count is None:
+                        _cr = await backend.execute_sparql_query(space_id, _cq)
+                        total_count = self._extract_count_from_results(_cr)
+                        if _cr is not None and not (
+                                isinstance(_cr, dict) and _cr.get("success") is False):
+                            _count_cache.put(space_id, graph_id, _ch, total_count)
+                    return QuadResponse(
+                        status=OperationStatus.FOUND if frames else OperationStatus.EMPTY,
+                        results=quads, total_count=total_count,
+                        page_size=page_size, offset=offset)
+
             # Build SPARQL query for listing frames
             sparql_query = self._build_list_frames_query(
                 backend, space_id, graph_id, search, page_size, offset,
