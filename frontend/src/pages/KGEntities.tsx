@@ -8,7 +8,7 @@ import {
 import { type SpaceInfo } from '../types/api';
 import { type GraphInfo } from '../types/graphs';
 import { HiPlus, HiEye, HiTrash } from 'react-icons/hi2';
-import { HiSearch, HiCube, HiCollection, HiSortAscending, HiSortDescending } from 'react-icons/hi';
+import { HiSearch, HiCube, HiCollection, HiSortAscending, HiSortDescending, HiFilter } from 'react-icons/hi';
 import CopyButton from '../components/CopyButton';
 import {
   parseEntitiesFromQuads,
@@ -16,11 +16,18 @@ import {
   type Quad,
 } from '../utils/QuadUtils';
 import ConfirmDialog from '../components/ConfirmDialog';
+import { buildEntityListQuery, activeFilterCount } from '../lib/entityListQuery';
 
+// Every property `{space}_entity_prop_sort` indexes. Sorting by any of them is
+// an ordered index scan rather than a scan-and-sort of the whole space, so the
+// list is no longer limited to the three that were tolerable to sort slowly.
 const SORT_OPTIONS: { label: string; value: string }[] = [
   { label: 'Name', value: 'http://vital.ai/ontology/vital-core#hasName' },
   { label: 'Modified', value: 'http://vital.ai/ontology/vital#hasObjectModificationDateTime' },
   { label: 'Created', value: 'http://vital.ai/ontology/vital-aimp#hasObjectCreationTime' },
+  { label: 'Status', value: 'http://vital.ai/ontology/vital-aimp#hasObjectStatusType' },
+  { label: 'Entity type', value: 'http://vital.ai/ontology/haley-ai-kg#hasKGEntityType' },
+  { label: 'Provenance', value: 'http://vital.ai/ontology/haley-ai-kg#hasKGProvenanceType' },
 ];
 
 interface KGEntity {
@@ -53,6 +60,16 @@ const KGEntities: React.FC = () => {
   const [sortBy, setSortBy] = useState<string>('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [entityTypeFilter, setEntityTypeFilter] = useState<string>('');
+  // Server-side property filters. Each is served from the same table the sort
+  // is, so a filtered page costs about what an unfiltered one does.
+  const [showFilters, setShowFilters] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('');
+  const [actionTypeFilter, setActionTypeFilter] = useState('');
+  const [provenanceFilter, setProvenanceFilter] = useState('');
+  const [createdAfter, setCreatedAfter] = useState('');
+  const [createdBefore, setCreatedBefore] = useState('');
+  const [modifiedAfter, setModifiedAfter] = useState('');
+  const [modifiedBefore, setModifiedBefore] = useState('');
 
   // Fetch spaces
   const fetchSpaces = useCallback(async () => {
@@ -99,16 +116,12 @@ const KGEntities: React.FC = () => {
     try {
       setLoading(true);
       setError(null);
-      const data = await apiService.getEntities(selectedSpace, selectedGraph, {
-        page_size: itemsPerPage,
-        offset: (currentPage - 1) * itemsPerPage,
-        search: committedSearch || undefined,
-        entity_type_uri: entityTypeFilter || undefined,
-        // Sorting the whole dataset is a full scan + full sort, so it is only
-        // sent once a search/type filter has narrowed the result set.
-        sort_by: (sortBy && (committedSearch || entityTypeFilter)) ? sortBy : undefined,
-        sort_order: (sortBy && (committedSearch || entityTypeFilter)) ? sortOrder : undefined,
-      });
+      const data = await apiService.getEntities(selectedSpace, selectedGraph,
+        buildEntityListQuery({
+          itemsPerPage, currentPage, committedSearch, entityTypeFilter,
+          sortBy, sortOrder, statusFilter, actionTypeFilter, provenanceFilter,
+          createdAfter, createdBefore, modifiedAfter, modifiedBefore,
+        }));
       if (isStale()) return;   // a newer fetch already answered
       const quads: Quad[] = data.results || [];
       const grouped = parseEntitiesFromQuads(quads);
@@ -128,17 +141,27 @@ const KGEntities: React.FC = () => {
     } finally {
       if (!isStale()) setLoading(false);
     }
-  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage, committedSearch, entityTypeFilter, sortBy, sortOrder, beginRequest]);
+  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage, committedSearch,
+      entityTypeFilter, sortBy, sortOrder, statusFilter, actionTypeFilter,
+      provenanceFilter, createdAfter, createdBefore, modifiedAfter,
+      modifiedBefore, beginRequest]);
 
   useEffect(() => { fetchEntities(); }, [fetchEntities]);
 
-  // Sorting is offered only once a search/type filter narrows the set — sorting
-  // the entire space is a full scan + sort. Reset sort when the narrowing is
-  // cleared so the fast default (subject_uuid) order returns.
-  const sortEnabled = Boolean(committedSearch || entityTypeFilter);
-  useEffect(() => {
-    if (!sortEnabled && sortBy) setSortBy('');
-  }, [sortEnabled, sortBy]);
+  // Sorting no longer depends on the set being narrowed first, so there is
+  // nothing to reset when a search or type filter is cleared — clearing one
+  // used to silently drop the user's chosen sort.
+  const filterCount = activeFilterCount({
+    statusFilter, actionTypeFilter, provenanceFilter,
+    createdAfter, createdBefore, modifiedAfter, modifiedBefore,
+  });
+
+  const clearFilters = () => {
+    setStatusFilter(''); setActionTypeFilter(''); setProvenanceFilter('');
+    setCreatedAfter(''); setCreatedBefore('');
+    setModifiedAfter(''); setModifiedBefore('');
+    setCurrentPage(1);
+  };
 
   const totalPages = Math.max(1, Math.ceil(totalCount / itemsPerPage));
   const hasSelection = selectedSpace && selectedGraph;
@@ -155,7 +178,6 @@ const KGEntities: React.FC = () => {
   };
 
   const toggleSort = (field: string) => {
-    if (!committedSearch && !entityTypeFilter) return; // sort only on a narrowed set
     if (sortBy === field) {
       setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
     } else {
@@ -251,8 +273,8 @@ const KGEntities: React.FC = () => {
             />
           </div>
           <div className="w-36 flex-shrink-0">
-            <Select value={sortBy} disabled={!sortEnabled} title={sortEnabled ? undefined : 'Search or filter to enable sorting'} onChange={(e) => { setSortBy(e.target.value); setCurrentPage(1); }}>
-              <option value="">{sortEnabled ? 'Sort by...' : 'Sort (search first)'}</option>
+            <Select value={sortBy} data-testid="sort-select" onChange={(e) => { setSortBy(e.target.value); setCurrentPage(1); }}>
+              <option value="">Sort by...</option>
               {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </Select>
           </div>
@@ -263,6 +285,74 @@ const KGEntities: React.FC = () => {
               <option value={50}>50 / page</option>
               <option value={100}>100 / page</option>
             </Select>
+          </div>
+          <div className="flex-shrink-0">
+            <Button size="sm" color={filterCount ? 'blue' : 'light'}
+                    data-testid="toggle-filters"
+                    onClick={() => setShowFilters(v => !v)}>
+              <HiFilter className="w-4 h-4 mr-1" />
+              Filters{filterCount ? ` (${filterCount})` : ''}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Property filters. Behind a toggle rather than always visible: seven
+          more inputs would crowd out the search box, which is the control most
+          people reach for first. The count on the button is what makes a
+          collapsed filter discoverable — a filter left set and out of sight is
+          why a list "has no results". */}
+      {hasSelection && showFilters && (
+        <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-3"
+             data-testid="entity-filters">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <Label htmlFor="f-status">Status URI</Label>
+              <TextInput id="f-status" sizing="sm" placeholder="hasObjectStatusType value"
+                         value={statusFilter} data-testid="filter-status"
+                         onChange={(e) => { setStatusFilter(e.target.value); setCurrentPage(1); }} />
+            </div>
+            <div>
+              <Label htmlFor="f-action">Action type URI</Label>
+              <TextInput id="f-action" sizing="sm" placeholder="entity has this action type"
+                         value={actionTypeFilter} data-testid="filter-action"
+                         onChange={(e) => { setActionTypeFilter(e.target.value); setCurrentPage(1); }} />
+            </div>
+            <div>
+              <Label htmlFor="f-prov">Provenance URI</Label>
+              <TextInput id="f-prov" sizing="sm" placeholder="hasKGProvenanceType value"
+                         value={provenanceFilter} data-testid="filter-provenance"
+                         onChange={(e) => { setProvenanceFilter(e.target.value); setCurrentPage(1); }} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div>
+              <Label htmlFor="f-ca">Created after</Label>
+              <TextInput id="f-ca" type="date" sizing="sm" value={createdAfter}
+                         data-testid="filter-created-after"
+                         onChange={(e) => { setCreatedAfter(e.target.value); setCurrentPage(1); }} />
+            </div>
+            <div>
+              <Label htmlFor="f-cb">Created before</Label>
+              <TextInput id="f-cb" type="date" sizing="sm" value={createdBefore}
+                         onChange={(e) => { setCreatedBefore(e.target.value); setCurrentPage(1); }} />
+            </div>
+            <div>
+              <Label htmlFor="f-ma">Modified after</Label>
+              <TextInput id="f-ma" type="date" sizing="sm" value={modifiedAfter}
+                         onChange={(e) => { setModifiedAfter(e.target.value); setCurrentPage(1); }} />
+            </div>
+            <div>
+              <Label htmlFor="f-mb">Modified before</Label>
+              <TextInput id="f-mb" type="date" sizing="sm" value={modifiedBefore}
+                         onChange={(e) => { setModifiedBefore(e.target.value); setCurrentPage(1); }} />
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <Button size="xs" color="light" onClick={clearFilters}
+                    disabled={!filterCount} data-testid="clear-filters">
+              Clear filters
+            </Button>
           </div>
         </div>
       )}
@@ -314,13 +404,9 @@ const KGEntities: React.FC = () => {
               <thead className="text-xs text-gray-500 dark:text-gray-400 uppercase bg-gray-50 dark:bg-gray-800">
                 <tr>
                   <th className="px-4 py-3">
-                    {sortEnabled ? (
-                      <button onClick={() => toggleSort('http://vital.ai/ontology/vital-core#hasName')} className="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-200">
-                        Entity <SortIcon field="http://vital.ai/ontology/vital-core#hasName" />
-                      </button>
-                    ) : (
-                      <span title="Search or filter to enable sorting">Entity</span>
-                    )}
+                    <button onClick={() => toggleSort('http://vital.ai/ontology/vital-core#hasName')} className="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-200" data-testid="sort-entity">
+                      Entity <SortIcon field="http://vital.ai/ontology/vital-core#hasName" />
+                    </button>
                   </th>
                   <th className="px-4 py-3">Type</th>
                   <th className="px-4 py-3 w-28">Properties</th>

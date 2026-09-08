@@ -117,8 +117,18 @@ const KGFrames: React.FC = () => {
         page_size: itemsPerPage,
         offset: (currentPage - 1) * itemsPerPage,
         search: debouncedSearch || undefined,
-        // Sort only once a search/filter narrows the set (full-dataset sort is
-        // a full scan + sort).
+        // Sort only once a search/filter narrows the set: a full-dataset sort
+        // is still a full scan + sort HERE.
+        //
+        // DELIBERATELY UNLIKE KGEntities, which dropped this restriction.
+        // Entities have `{space}_entity_prop_sort`, so an unnarrowed sort is an
+        // ordered index scan (0.6 ms for the first page over 500,000 entities).
+        // Frames have no equivalent — `entity_slot_sort` indexes slot values
+        // reached THROUGH a frame, not a frame's own properties — so the cost
+        // this guards against is still real for frames.
+        //
+        // Do not copy the entity change here until that table exists. See
+        // `planning_ui/kg_search_filter_sort_fts_plan.md` §3.
         sort_by: (sortBy && (debouncedSearch || formType)) ? sortBy : undefined,
         sort_order: (sortBy && (debouncedSearch || formType)) ? sortOrder : undefined,
         form_type: formType || undefined,

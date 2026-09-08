@@ -156,9 +156,22 @@ export class ApiService {
 
   // ─── KG Entities ──────────────────────────────────────────────────
 
+  /**
+   * The property filters are served from `{space}_entity_prop_sort`, so they
+   * cost about the same as an unfiltered page. They were previously not passed
+   * through at all, even though both the client and the server had supported
+   * them for some time.
+   *
+   * `search` is the exception and still takes the SPARQL path: the text lives
+   * in a separate FTS index and composing the two is not yet measured.
+   */
   async getEntities(spaceId: string, graphId: string, options: {
     page_size?: number; offset?: number; search?: string;
     entity_type_uri?: string; sort_by?: string; sort_order?: 'asc' | 'desc';
+    status?: string; exclude_status?: string;
+    created_after?: string; created_before?: string;
+    modified_after?: string; modified_before?: string;
+    action_type?: string; provenance_type?: string;
   } = {}): Promise<QuadResponse> {
     return vgClient.kgentities.list(spaceId, graphId, {
       pageSize: options.page_size,
@@ -167,6 +180,14 @@ export class ApiService {
       entityTypeUri: options.entity_type_uri,
       sortBy: options.sort_by,
       sortOrder: options.sort_order,
+      status: options.status,
+      excludeStatus: options.exclude_status,
+      createdAfter: options.created_after,
+      createdBefore: options.created_before,
+      modifiedAfter: options.modified_after,
+      modifiedBefore: options.modified_before,
+      actionType: options.action_type,
+      provenanceType: options.provenance_type,
     }) as any;
   }
 
