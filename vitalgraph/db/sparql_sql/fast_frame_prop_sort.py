@@ -12,6 +12,12 @@ this whole family of tables is built to avoid.
 `value_num` is live here where it is dead for entities: `hasFrameSequence` is
 an integer, so a frame list ordered by authored sequence is an ordered index
 scan on the numeric lane.
+
+PARENT-SCOPED LISTINGS ARE SERVED, not declined. "The children of this frame" is
+a single typed hop, and `{space}_edge` is the table built for it --
+`idx_{space}_edge_type_src` is `(edge_type_uuid, source_node_uuid)`, so it is a
+seek. It joins the property criteria as one more INTERSECT conjunct, so
+parent + filter + sort is one plan rather than a fallback.
 """
 
 from __future__ import annotations
@@ -22,6 +28,8 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 from .sync_frame_prop_sort import _u, ASSERTION_URI  # noqa: E402
+
+CHILD_FRAME_EDGE_URI = "http://vital.ai/ontology/haley-ai-kg#Edge_hasKGFrame"
 
 HALEY = "http://vital.ai/ontology/haley-ai-kg#"
 CORE = "http://vital.ai/ontology/vital-core#"
@@ -100,8 +108,17 @@ def _filter_terms(filters: Optional[Dict[str, Any]]) -> Optional[List[tuple]]:
 
 
 def build_frame_page_sql(space_id: str, terms: List[tuple], sort_by: Optional[str],
-                         descending: bool, typed: bool = True) -> Optional[tuple]:
-    """`(sql, params)` or None if the shape is not expressible."""
+                         descending: bool, typed: bool = True,
+                         parent_uri: Optional[str] = None) -> Optional[tuple]:
+    """`(sql, params)` or None if the shape is not expressible.
+
+    `parent_uri` restricts to a parent's CHILD frames, and it is served from
+    `{space}_edge` rather than declined. That table exists for exactly this hop:
+    `idx_{space}_edge_type_src` is `(edge_type_uuid, source_node_uuid)`, so
+    "destinations of Edge_hasKGFrame from this parent" is a seek, not a scan --
+    the same index the traversal planner uses. It INTERSECTs with the property
+    criteria like any other conjunct.
+    """
     t = f"{space_id}_frame_prop_sort"
     params: List[Any] = []
     fixed = 2 if typed else 1
@@ -130,6 +147,16 @@ def build_frame_page_sql(space_id: str, terms: List[tuple], sort_by: Optional[st
                          f"AND value_dt {cmp} {p(str(value))}::timestamp")
         else:
             return None
+
+    if parent_uri:
+        # The child-frame hop, from the edge table. Same INTERSECT shape as a
+        # property criterion, so it composes with filters and the sort without
+        # any special case downstream.
+        pe = p(_u(CHILD_FRAME_EDGE_URI))
+        ps = p(_u(parent_uri))
+        parts.append(f"SELECT dest_node_uuid AS frame_uuid FROM {space_id}_edge "
+                     f"WHERE edge_type_uuid = {pe} AND source_node_uuid = {ps} "
+                     f"AND context_uuid = $1")
 
     if sort_by:
         dt = _DATATYPES.get(sort_by)
@@ -173,6 +200,7 @@ async def fast_frame_prop_page(
     filters: Optional[Dict[str, Any]] = None,
     sort_by: Optional[str] = None,
     sort_order: str = "asc",
+    parent_uri: Optional[str] = None,
 ) -> Optional[List[str]]:
     """An ordered page of frame URIs, or None to decline.
 
@@ -188,12 +216,13 @@ async def fast_frame_prop_page(
     if terms is None:
         logger.debug("frame prop_sort: declining, unexpressible filter")
         return None
-    if not terms and not sort_by:
+    if not terms and not sort_by and not parent_uri:
         return None
 
     built = build_frame_page_sql(space_id, terms, sort_by,
                                 descending=(sort_order or "asc").lower() == "desc",
-                                typed=frame_type_uri is not None)
+                                typed=frame_type_uri is not None,
+                                parent_uri=parent_uri)
     if built is None:
         return None
     sql, params = built

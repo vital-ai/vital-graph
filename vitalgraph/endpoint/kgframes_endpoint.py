@@ -569,6 +569,7 @@ class KGFramesEndpoint:
             page_size: int = Query(10, ge=1, le=1000, description="Number of frames per page"),
             offset: int = Query(0, ge=0, description="Offset for pagination"),
             search: Optional[str] = Query(None, description="Search text to find in frame properties"),
+            parent_uri: Optional[str] = Query(None, description="Return only the CHILD frames of this parent frame (reached by Edge_hasKGFrame)"),
             uri: Optional[str] = Query(None, description="Single frame URI to retrieve"),
             uri_list: Optional[str] = Query(None, description="Comma-separated list of frame URIs"),
             include_frame_graph: bool = Query(False, description="If True, include complete frame graph with slots"),
@@ -664,6 +665,7 @@ class KGFramesEndpoint:
                 status=status, exclude_status=exclude_status,
                 created_after=created_after, created_before=created_before,
                 modified_after=modified_after, modified_before=modified_before,
+                parent_uri=parent_uri,
             )
 
         @self.router.post("/kgframes", response_model=None, tags=["KG Frames"])
@@ -862,7 +864,8 @@ class KGFramesEndpoint:
                            created_after: Optional[str] = None,
                            created_before: Optional[str] = None,
                            modified_after: Optional[str] = None,
-                           modified_before: Optional[str] = None) -> QuadResponse:
+                           modified_before: Optional[str] = None,
+                           parent_uri: Optional[str] = None) -> QuadResponse:
         """List KG frames with pagination using backend interface."""
         try:
             self.logger.info(f"Listing KGFrames in space {space_id}, graph {graph_id}")
@@ -887,6 +890,12 @@ class KGFramesEndpoint:
                 search, form_type, frame_type_uri, status, exclude_status,
                 created_after, created_before, modified_after, modified_before,
                 sort_by,
+                # `parent_uri` BELONGS IN THIS LIST. It is a filter, and this
+                # path pages every frame in the graph by subject_uuid — it has
+                # no notion of a parent. Leaving it out would return the whole
+                # graph for a request that asked for one frame's children,
+                # which is the failure the parameter was added to end.
+                parent_uri,
             ])
             fast_uris = None
             if _no_filters:
@@ -915,9 +924,15 @@ class KGFramesEndpoint:
             # another tab from it would silently return the Assertion subset
             # (on `sp_lead_dup`, 1,000 of 5,500 frames). A search declines too,
             # for the reason the entity path does. ---
-            if not search and (sort_by or frame_type_uri or status
-                               or created_after or created_before
-                               or modified_after or modified_before):
+            # `parent_uri` IS served here. "The children of this frame" is one
+            # typed hop, and `{space}_edge` is the table built for it --
+            # `idx_{space}_edge_type_src` is `(edge_type_uuid,
+            # source_node_uuid)`, so it is a seek and joins the property
+            # criteria as one more INTERSECT conjunct.
+            if not search and (
+                    sort_by or frame_type_uri or status or parent_uri
+                    or created_after or created_before
+                    or modified_after or modified_before):
                 from ..db.sparql_sql.fast_frame_prop_sort import fast_frame_prop_page
                 fp_uris = await fast_frame_prop_page(
                     space_impl, space_id, graph_id, page_size, offset,
@@ -926,7 +941,8 @@ class KGFramesEndpoint:
                              "created_before": created_before,
                              "modified_after": modified_after,
                              "modified_before": modified_before},
-                    sort_by=sort_by, sort_order=sort_order)
+                    sort_by=sort_by, sort_order=sort_order,
+                    parent_uri=parent_uri)
                 if fp_uris is not None:
                     fake = {"bindings": [{"frame": {"value": u}} for u in fp_uris]}
                     frames = await self._sparql_results_to_frames(
@@ -970,6 +986,7 @@ class KGFramesEndpoint:
                 status=status, exclude_status=exclude_status,
                 created_after=created_after, created_before=created_before,
                 modified_after=modified_after, modified_before=modified_before,
+                parent_uri=parent_uri,
             )
             
             # Execute query via backend interface
@@ -984,6 +1001,7 @@ class KGFramesEndpoint:
                 status=status, exclude_status=exclude_status,
                 created_after=created_after, created_before=created_before,
                 modified_after=modified_after, modified_before=modified_before,
+                parent_uri=parent_uri,
             )
             # This count is GRAPH-scoped and re-run on every page load and every
             # page change. On a 1.1M-frame graph the Assertion filter puts it at
@@ -1857,9 +1875,19 @@ class KGFramesEndpoint:
                                     created_after: Optional[str] = None,
                                     created_before: Optional[str] = None,
                                     modified_after: Optional[str] = None,
-                                    modified_before: Optional[str] = None) -> str:
+                                    modified_before: Optional[str] = None,
+                                    parent_uri: Optional[str] = None) -> str:
         """Build SPARQL filter clause fragments for frame list queries."""
         parts = []
+
+        # CHILD FRAMES of a given parent, by the same pattern
+        # `kg_validation_utils` uses to verify the link exists: the edge is a
+        # first-class node, not a property on the frame.
+        if parent_uri:
+            parts.append(
+                f'?_pedge a <{self.haley_prefix}Edge_hasKGFrame> .\n'
+                f'                ?_pedge <{self.vital_prefix}hasEdgeSource> <{parent_uri}> .\n'
+                f'                ?_pedge <{self.vital_prefix}hasEdgeDestination> ?frame .')
 
         # Text search on name / description / URI
         if search:
@@ -1947,7 +1975,8 @@ class KGFramesEndpoint:
                                  created_after: Optional[str] = None,
                                  created_before: Optional[str] = None,
                                  modified_after: Optional[str] = None,
-                                 modified_before: Optional[str] = None) -> str:
+                                 modified_before: Optional[str] = None,
+                                 parent_uri: Optional[str] = None) -> str:
         """Build SPARQL query for listing frame subjects with filtering and sorting."""
         # Get the proper space-specific graph URI
         if hasattr(backend, '_get_space_graph_uri'):
@@ -1960,6 +1989,7 @@ class KGFramesEndpoint:
             status=status, exclude_status=exclude_status,
             created_after=created_after, created_before=created_before,
             modified_after=modified_after, modified_before=modified_before,
+            parent_uri=parent_uri,
         )
 
         # Build sort clause.  Sequence properties get the numeric /
@@ -1998,7 +2028,8 @@ class KGFramesEndpoint:
                                   created_after: Optional[str] = None,
                                   created_before: Optional[str] = None,
                                   modified_after: Optional[str] = None,
-                                  modified_before: Optional[str] = None) -> str:
+                                  modified_before: Optional[str] = None,
+                                 parent_uri: Optional[str] = None) -> str:
         """Build SPARQL count query for frames with filtering."""
         # Get the proper space-specific graph URI
         if hasattr(backend, '_get_space_graph_uri'):
@@ -2011,6 +2042,7 @@ class KGFramesEndpoint:
             status=status, exclude_status=exclude_status,
             created_after=created_after, created_before=created_before,
             modified_after=modified_after, modified_before=modified_before,
+            parent_uri=parent_uri,
         )
 
         return f"""

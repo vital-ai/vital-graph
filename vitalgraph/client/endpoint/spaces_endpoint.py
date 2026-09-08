@@ -70,12 +70,24 @@ class SpacesEndpoint(BaseEndpoint):
         """
         Create a new space.
         
+        The space id has a LENGTH LIMIT the server enforces. Every per-space
+        table and index name is derived from it, and PostgreSQL truncates any
+        identifier past 63 bytes SILENTLY — two indexes can collapse to one name
+        and every lookup by the intended name stops matching. An over-long id is
+        rejected with HTTP 400 and a message naming the limit.
+
+        The limit is NOT duplicated here on purpose: the server derives it from
+        the schema's own longest name, so it stays correct when a name changes.
+        A copy in the client would be a second source of truth that drifts.
+
         Args:
             space: Space object with space data
-            
+
         Returns:
-            SpaceCreateResponse with created space
-            
+            SpaceCreateResponse. On failure `status_code` is the status the
+            SERVER returned — 400 for a rejected id, not a blanket 500 — and
+            `error_message` carries the server's `detail`.
+
         Raises:
             VitalGraphClientError: If request fails
         """

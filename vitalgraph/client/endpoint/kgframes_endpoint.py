@@ -108,12 +108,27 @@ class KGFramesEndpoint(BaseEndpoint):
             graph_id: Graph identifier
             page_size: Number of items per page
             offset: Offset for pagination
-            parent_uri: Optional parent URI for filtering frames
+            parent_uri: Return only the CHILD frames of this parent frame,
+                i.e. frames reached by `Edge_hasKGFrame` from it.
             search: Optional search term
-            sort_by: Property URI to sort by
+            sort_by: Property URI to sort by. The server validates against its
+                own registry and returns 400 for anything else. Accepted:
+                  vital-core#hasName
+                  haley-ai-kg#hasKGFrameType             (the frame's KGFrameType)
+                  haley-ai-kg#hasKGFrameTypeDescription
+                  haley-ai-kg#hasKGFormType
+                  haley-ai-kg#hasFrameSequence           (integer)
+                  vital-aimp#hasObjectStatusType
+                  vital-aimp#hasObjectCreationTime
+                  vital#hasObjectModificationDateTime
+                `haley-ai-kg#hasKGFrameTypeURI` was REMOVED 2026-09-08: nothing
+                in the corpus carries it, so sorting by it validated, ran, and
+                returned an unordered page. It is now a 400.
             sort_order: 'asc' or 'desc'
-            form_type: Filter by form type ('Assertion', 'Aspect', or full URI)
-            frame_type_uri: Filter by frame type URI
+            form_type: Filter by form type ('Assertion', 'Aspect', or full URI).
+                'Assertion' means a top-level frame and is the only tab served
+                from an index; the others take the SPARQL path.
+            frame_type_uri: Filter by `haley-ai-kg#hasKGFrameType`
             status: Filter by status URI
             exclude_status: Exclude by status URI
             created_after: ISO 8601 lower bound for creation time
@@ -1117,16 +1132,29 @@ class KGFramesEndpoint(BaseEndpoint):
         """
         return await self.delete_kgframes_batch(space_id, graph_id, ','.join(frame_uris), recursive=recursive)
     
-    async def get_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, frame_type: Optional[str] = None) -> PaginatedGraphObjectResponse:
+    async def get_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str,
+                               frame_type: Optional[str] = None,
+                               page_size: int = 10, offset: int = 0) -> PaginatedGraphObjectResponse:
         """
         Get child frames for a parent frame, optionally filtered by frame type.
-        
+
+        Served by `GET /api/graphs/kgframes` with `parent_uri`. It previously
+        called `/api/graphs/kgframes/kgframes`, which is not a registered route
+        — every call 404'd — and sent `parent_frame_uri` / `frame_type`, neither
+        of which the real route declares.
+
+        PAGED, like every other listing. This sent no page_size at all, so the
+        server default of 10 applied and silently capped the result; pass
+        `page_size` explicitly for more.
+
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
             parent_frame_uri: Parent frame URI
-            frame_type: Optional frame type URI for filtering
-            
+            frame_type: Optional frame type URI (`hasKGFrameType`) for filtering
+            page_size: Number of children per page (server default 10, max 1000)
+            offset: Offset for pagination
+
         Returns:
             PaginatedGraphObjectResponse containing child frames as GraphObjects
             
@@ -1137,10 +1165,11 @@ class KGFramesEndpoint(BaseEndpoint):
         validate_required_params(space_id=space_id, graph_id=graph_id, parent_frame_uri=parent_frame_uri)
         
         try:
-            url = f"{self._get_server_url()}/api/graphs/kgframes/kgframes"
+            url = f"{self._get_server_url()}/api/graphs/kgframes"
             params = build_query_params(
                 space_id=space_id, graph_id=graph_id,
-                parent_frame_uri=parent_frame_uri, frame_type=frame_type
+                parent_uri=parent_frame_uri, frame_type_uri=frame_type,
+                page_size=page_size, offset=offset,
             )
             
             response = await self._make_request('GET', url, params=params)
@@ -1168,7 +1197,12 @@ class KGFramesEndpoint(BaseEndpoint):
                          page_size: int = 10, offset: int = 0) -> PaginatedGraphObjectResponse:
         """
         List child frames for a parent frame with pagination.
-        
+
+        Served by `GET /api/graphs/kgframes` with `parent_uri`; it previously
+        called a route that does not exist. Equivalent to
+        `list_kgframes(parent_uri=...)`, which also accepts sorting and the
+        property filters.
+
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
@@ -1187,11 +1221,11 @@ class KGFramesEndpoint(BaseEndpoint):
         validate_required_params(space_id=space_id, graph_id=graph_id, parent_frame_uri=parent_frame_uri)
         
         try:
-            url = f"{self._get_server_url()}/api/graphs/kgframes/kgframes"
+            url = f"{self._get_server_url()}/api/graphs/kgframes"
             params = build_query_params(
                 space_id=space_id, graph_id=graph_id,
-                parent_frame_uri=parent_frame_uri, frame_type=frame_type,
-                page_size=page_size, offset=offset
+                parent_uri=parent_frame_uri, frame_type_uri=frame_type,
+                page_size=page_size, offset=offset,
             )
             
             response = await self._make_request('GET', url, params=params)
