@@ -14,7 +14,7 @@ import { createSpace, dropSpace } from './space-fixtures';
 // shared space had one worker's createSpace drop the space the other was using.
 // That failed as `400 Failed to add space with tables`, not as anything naming
 // the race.
-const STREAM_SPACE_ID = 'e2e_files_stream_space';
+const STREAM_SPACE_ID = 'e2e_files_stream';
 const UI_SPACE_ID = 'e2e_files_ui_space';
 const GRAPH_ID = 'urn:e2e:files-crud:graph';
 

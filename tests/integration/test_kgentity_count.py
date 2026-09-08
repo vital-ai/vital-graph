@@ -346,13 +346,24 @@ class TestEntityCount:
 
     async def test_fast_count_guards_return_none(self, backend_adapter, count_space):
         graph = f"http://example.org/graph/{count_space}/{uuid.uuid4().hex[:8]}"
-        # Filtered / searched / sorted / non-URI-graph shapes are not derivable
-        # from a single COUNT(*) → fall back to SPARQL.
+        # WHAT STILL DECLINES. Typed and sorted shapes are no longer here:
+        # `entity_prop_sort` counts them, and it must, because the count and the
+        # page run CONCURRENTLY and the request waits for both. Leaving the
+        # count on the SPARQL path while the page was fast is what made the
+        # first page of a filtered listing take 30 s while every later page —
+        # served from the count cache — took 2 s.
         assert await backend_adapter.fast_entity_count(
-            count_space, graph, search="x") is None
+            count_space, graph, search="x") is None, (
+            "search must decline; text lives in the FTS index")
         assert await backend_adapter.fast_entity_count(
-            count_space, graph, entity_type_uri="http://x/T") is None
-        assert await backend_adapter.fast_entity_count(
-            count_space, graph, sort_by="http://vital.ai/ontology/vital-core#hasName") is None
-        assert await backend_adapter.fast_entity_count(
-            count_space, "default") is None
+            count_space, "default") is None, (
+            "a non-URI graph has no context uuid to key on")
+
+        # NOT None: a typed count is served, returning 0 for an empty graph
+        # rather than declining.
+        typed = await backend_adapter.fast_entity_count(
+            count_space, graph, entity_type_uri="http://x/T")
+        sorted_ = await backend_adapter.fast_entity_count(
+            count_space, graph, sort_by="http://vital.ai/ontology/vital-core#hasName")
+        assert typed == 0, f"a typed count should be served, got {typed!r}"
+        assert sorted_ == 0, f"a sorted count should be served, got {sorted_!r}"

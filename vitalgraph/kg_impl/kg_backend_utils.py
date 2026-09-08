@@ -13,6 +13,8 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, Tuple, Union, cast
 from dataclasses import dataclass
 
+logger = logging.getLogger(__name__)
+
 # VitalSigns imports
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from ai_haley_kg_domain.model.KGEntity import KGEntity
@@ -1145,12 +1147,41 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                                 entity_type_uri: Optional[str] = None,
                                 search: Optional[str] = None,
                                 prop_filters: str = "",
-                                sort_by: Optional[str] = None) -> Optional[int]:
-        """Exact entity count for the *plain default* listing (see
-        ``fast_typed_subject_count``). Returns ``None`` (→ SPARQL fallback) for
-        any filtered/searched/sorted/typed shape."""
-        if entity_type_uri or search or prop_filters or sort_by:
+                                sort_by: Optional[str] = None,
+                                filters: Optional[dict] = None) -> Optional[int]:
+        """Exact entity count, from `entity_prop_sort` when it can serve the
+        shape and from the quads for the plain default listing.
+
+        THE COUNT MUST TRACK THE PAGE. Both run concurrently and the request
+        waits for both, so a fast page beside a slow count is worth nothing.
+        This declined every typed/filtered/sorted shape while
+        `fast_entity_page` had already been taught to serve them: the page
+        came back in 0.4 ms and the count took a `COUNT(DISTINCT)` over the
+        quads, so the request took 30 s and was killed by the transaction
+        timeout. Deterministic on the FIRST page of a listing; every later page
+        hit the count cache and looked fine.
+        """
+        if search:
+            logger.info(
+                "fast_entity_count DECLINE(%s): search is set; text lives in the "
+                "FTS index, not entity_prop_sort", space_id)
             return None
+        # `sort_by` is NOT a routing condition here, where it is for the page.
+        # A sort changes the ORDER of a result set, never its SIZE, so a bare
+        # sort is the plain count and belongs to `fast_typed_subject_count`.
+        # Routing it into the prop-sort branch made a sort-only listing decline
+        # its count and fall to SPARQL for a number the plain path already had.
+        if entity_type_uri or prop_filters:
+            impl = _resolve_space_impl(self.backend)
+            if impl is None or not graph_is_uri(graph_id):
+                logger.info(
+                    "fast_entity_count DECLINE(%s): impl_resolved=%s graph_is_uri=%s",
+                    space_id, impl is not None, graph_is_uri(graph_id))
+                return None
+            from ..db.sparql_sql.fast_prop_sort import fast_entity_prop_count
+            return await fast_entity_prop_count(
+                impl, space_id, graph_id, entity_type_uri=entity_type_uri,
+                filters=filters, sort_by=sort_by)
         return await fast_typed_subject_count(
             self.backend, space_id, graph_id, VITALTYPE_URI, self._KGENTITY_TYPE_URIS)
 
@@ -1175,11 +1206,28 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         `planning_ui/kg_search_filter_sort_fts_plan.md`. `issues/172` is what
         guessing costs.
         """
+        # THESE TWO DECLINES WERE SILENT, and that cost a second production
+        # diagnosis. `fast_entity_prop_page` logs its own reasons at INFO, but
+        # both returns below happen BEFORE it is called — so a listing that
+        # declined here produced no line at all, and the absence of a
+        # `prop_sort DECLINE` was read as "the fast path is not declining".
+        # An unexplained decline is indistinguishable from an absent one.
         if search:
+            logger.info(
+                "fast_entity_page DECLINE(%s): search is set and text lives in "
+                "the FTS index, not entity_prop_sort; composing them is not yet "
+                "measured. NOTE: a UI that only enables sorting once a search "
+                "narrows the set makes this the COMMON path, not a rare one.",
+                space_id)
             return None
         if entity_type_uri or prop_filters or sort_by:
             impl = _resolve_space_impl(self.backend)
             if impl is None or not graph_is_uri(graph_id):
+                logger.info(
+                    "fast_entity_page DECLINE(%s): impl_resolved=%s graph_is_uri=%s "
+                    "— the space impl could not be resolved from %s, or the graph "
+                    "is not a URI", space_id, impl is not None,
+                    graph_is_uri(graph_id), type(self.backend).__name__)
                 return None
             from ..db.sparql_sql.fast_prop_sort import fast_entity_prop_page
             return await fast_entity_prop_page(

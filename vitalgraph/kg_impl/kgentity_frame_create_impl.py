@@ -840,7 +840,8 @@ class KGEntityFrameCreateProcessor:
             return []
 
     async def execute_frame_creation(self, backend_adapter: KGBackendInterface, space_id: str, 
-                                   graph_id: str, all_objects: List[GraphObject]) -> bool:
+                                   graph_id: str, all_objects: List[GraphObject],
+                                   entity_uri: Optional[str] = None) -> bool:
         """
         Execute atomic frame creation via subject-level delete + insert.
         

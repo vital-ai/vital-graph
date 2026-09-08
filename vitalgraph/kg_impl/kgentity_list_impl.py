@@ -166,7 +166,7 @@ class KGEntityListProcessor:
                     space_id, graph_id, page_size, offset,
                     entity_type_uri, search, backend_adapter,
                     sort_by=sort_by, sort_order=sort_order,
-                    prop_filters=prop_filters,
+                    prop_filters=prop_filters, filters=structured_filters,
                 )
 
         except Exception as e:
@@ -227,7 +227,7 @@ class KGEntityListProcessor:
             objs_task = asyncio.ensure_future(_fetch_objects())
             count_task = asyncio.ensure_future(self._resolve_total_count(
                 space_id, graph_id, backend_adapter, count_sparql,
-                entity_type_uri, search, prop_filters, sort_by))
+                entity_type_uri, search, prop_filters, sort_by, filters=filters))
             objects, total_count = await asyncio.gather(objs_task, count_task)
             self.logger.debug("list_entities_fast(direct): %d objects, total=%d",
                               len(objects), total_count)
@@ -246,7 +246,7 @@ class KGEntityListProcessor:
             backend_adapter.execute_sparql_query(space_id, sparql))
         count_task = asyncio.ensure_future(self._resolve_total_count(
             space_id, graph_id, backend_adapter, count_sparql,
-            entity_type_uri, search, prop_filters, sort_by))
+            entity_type_uri, search, prop_filters, sort_by, filters=filters))
         data_result, total_count = await asyncio.gather(data_task, count_task)
 
         # Parse data bindings → GraphObjects via from_property_maps
@@ -266,7 +266,8 @@ class KGEntityListProcessor:
                                         offset, entity_type_uri, search,
                                         backend_adapter,
                                         sort_by=None, sort_order="asc",
-                                        prop_filters: str = "") -> ListEntitiesResult:
+                                        prop_filters: str = "",
+                                        filters: Optional[dict] = None) -> ListEntitiesResult:
         """Get entity URIs, then fetch full entity graphs in parallel."""
         from .kgentity_get_impl import KGEntityGetProcessor
 
@@ -283,7 +284,7 @@ class KGEntityListProcessor:
             backend_adapter.execute_sparql_query(space_id, uri_sparql))
         count_task = asyncio.ensure_future(self._resolve_total_count(
             space_id, graph_id, backend_adapter, count_sparql,
-            entity_type_uri, search, prop_filters, sort_by))
+            entity_type_uri, search, prop_filters, sort_by, filters=filters))
         uri_result, total_count = await asyncio.gather(uri_task, count_task)
 
         # Parse URIs
@@ -358,7 +359,8 @@ class KGEntityListProcessor:
 
     async def _resolve_total_count(self, space_id, graph_id, backend_adapter,
                                    count_sparql, entity_type_uri, search,
-                                   prop_filters, sort_by) -> int:
+                                   prop_filters, sort_by,
+                                   filters: Optional[dict] = None) -> int:
         """Resolve the listing's total count as cheaply as possible.
 
         1. Count cache (shared with /kgentities/count, invalidated on writes).
@@ -380,8 +382,13 @@ class KGEntityListProcessor:
         fast_fn = getattr(backend_adapter, 'fast_entity_count', None)
         if fast_fn is not None:
             try:
+                # `filters` carries the STRUCTURED values, as the page call
+                # does. Without them the count cannot answer a filtered shape
+                # and falls to the SPARQL COUNT(DISTINCT) the page no longer
+                # needs — which is the whole cost of the first page.
                 total = await fast_fn(space_id, graph_id, entity_type_uri,
-                                      search, prop_filters, sort_by)
+                                      search, prop_filters, sort_by,
+                                      filters=filters)
             except Exception as e:
                 self.logger.warning("fast_entity_count errored, using SPARQL: %s", e)
                 total = None

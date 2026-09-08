@@ -273,12 +273,20 @@ def build_page_sql(space_id: str, terms: List[tuple], sort_by: Optional[str],
     # This costs a sort, where the sorted branch above gets its order from the
     # index. Acceptable here precisely because a filter narrows first: the sort
     # is over the survivors, not the population.
+    # The type restriction is emitted ONLY when there is a type to restrict by.
+    # It used to reference `$2` unconditionally -- but `$2` is the entity type
+    # only in the TYPED form; untyped, `fixed` is 1 and `$2` is the first FILTER
+    # parameter. So an untyped filter-only listing read a property uuid as an
+    # entity type and returned nothing. Caught by
+    # `test_count_and_page_move_together`, which compared the page against the
+    # count for the same shape: page 0 rows, count 2.
+    type_clause = (
+        f" WHERE EXISTS (SELECT 1 FROM {t} ty WHERE ty.entity_uuid = f.entity_uuid"
+        f"   AND ty.context_uuid = $1 AND ty.entity_type_uuid = $2)" if typed else "")
     sql = (f"SELECT (SELECT u.entity_uri FROM {t} u"
            f"          WHERE u.entity_uuid = f.entity_uuid AND u.context_uuid = $1"
            f"          LIMIT 1) AS entity_uri FROM ({inner}) f "
-           f" WHERE $2::uuid IS NULL OR EXISTS ("
-           f"     SELECT 1 FROM {t} ty WHERE ty.entity_uuid = f.entity_uuid"
-           f"       AND ty.context_uuid = $1 AND ty.entity_type_uuid = $2)"
+           f"{type_clause}"
            f" ORDER BY 1 LIMIT ${len(params) + fixed + 1} OFFSET ${len(params) + fixed + 2}")
     return sql, params
 
@@ -348,6 +356,98 @@ async def fast_entity_prop_page(
             return [r["entity_uri"] for r in rows if r["entity_uri"] is not None]
     except Exception:
         logger.warning("prop_sort page failed, caller will fall back", exc_info=True)
+        return None
+
+
+
+async def fast_entity_prop_count(
+    impl, space_id: str, graph_id: str,
+    entity_type_uri: Optional[str] = None,
+    filters: Optional[Dict[str, Any]] = None,
+    sort_by: Optional[str] = None,
+) -> Optional[int]:
+    """Exact count for the same shapes `fast_entity_prop_page` serves.
+
+    THE PAGE AND THE COUNT HAVE TO MOVE TOGETHER. They run concurrently and the
+    request waits for both, so making one fast and leaving the other on the
+    SPARQL path buys nothing at all.
+
+    That is exactly what shipped: `fast_entity_page` was taught to serve typed,
+    filtered and sorted listings while `fast_entity_count` kept declining the
+    identical shape. The page came back in 0.4 ms, the count took a
+    `COUNT(DISTINCT)` over the quads, and the request took as long as the count
+    — 30 s, where `PROD_TRANSACTION_TIMEOUT` killed it.
+
+    It was deterministic and it looked like contention: the FIRST page of a
+    listing paid it, and every later page hit the count cache and returned in
+    ~2 s. Same filters, same query hash, so only the first request of a
+    filter combination ever misses.
+
+    Measured on production for the shape that was failing (typed +
+    status=ACTIVE): 79,995 entities in 76.9 ms.
+
+    A sort has no bearing on a count, so `sort_by` is accepted and ignored —
+    it is part of the caller's shape, not of the question.
+    """
+    from .sparql_sql_space_impl import _generate_term_uuid
+
+    terms = _filter_terms(filters)
+    if terms is None:
+        logger.info("prop_sort COUNT DECLINE(%s): unexpressible filter key in %s",
+                    space_id, sorted(filters or {}))
+        return None
+    if not terms and entity_type_uri is None:
+        # Untyped and unfiltered: `fast_typed_subject_count` owns that.
+        return None
+
+    t = f"{space_id}_entity_prop_sort"
+    params: List[Any] = []
+    fixed = 2 if entity_type_uri is not None else 1
+    def p(v):
+        params.append(v)
+        return f"${len(params) + fixed}"
+
+    parts: List[str] = []
+    for prop, op, value in terms:
+        dt = _DATATYPES.get(prop)
+        if dt is None:
+            return None
+        pu = p(_u(prop))
+        if op in ("eq", "has"):
+            parts.append(f"SELECT entity_uuid FROM {t} WHERE context_uuid = $1 "
+                         f"AND property_uuid = {pu} AND value_all @> ARRAY[{p(str(value))}]::text[]")
+        elif op == "ne":
+            parts.append(f"SELECT entity_uuid FROM {t} WHERE context_uuid = $1 "
+                         f"AND property_uuid = {pu} AND NOT (value_all @> ARRAY[{p(str(value))}]::text[])")
+        elif op in ("gte", "lte"):
+            if dt != "dateTime":
+                return None
+            cmp = ">=" if op == "gte" else "<="
+            parts.append(f"SELECT entity_uuid FROM {t} WHERE context_uuid = $1 "
+                         f"AND property_uuid = {pu} AND value_dt IS NOT NULL "
+                         f"AND value_dt {cmp} {p(str(value))}::timestamp")
+        else:
+            return None
+
+    if entity_type_uri is not None:
+        base = (f"SELECT count(DISTINCT s.entity_uuid) FROM {t} s "
+                f"WHERE s.context_uuid = $1 AND s.entity_type_uuid = $2")
+        if parts:
+            base += " AND s.entity_uuid IN (" + " INTERSECT ".join(parts) + ")"
+    else:
+        base = (f"SELECT count(*) FROM (" + " INTERSECT ".join(parts) + ") f")
+
+    g_uuid = _generate_term_uuid(graph_id, 'U')
+    ty = _u(entity_type_uri) if entity_type_uri else None
+    try:
+        async with impl.db_impl.connection_pool.acquire() as conn:
+            if await prop_sort_blocked(conn, space_id, entity_type_uri):
+                logger.info("prop_sort COUNT DECLINE(%s): blocked", space_id)
+                return None
+            head = (g_uuid, ty) if entity_type_uri is not None else (g_uuid,)
+            return int(await conn.fetchval(base, *head, *params) or 0)
+    except Exception:
+        logger.warning("prop_sort count failed, caller will fall back", exc_info=True)
         return None
 
 

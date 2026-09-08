@@ -18,6 +18,7 @@ operation that genuinely should wait, e.g. long-running maintenance).
 from __future__ import annotations
 
 import asyncio
+import time
 import logging
 from typing import Optional
 
@@ -36,6 +37,18 @@ DEFAULT_ACQUIRE_TIMEOUT = 15.0
 # which is a legitimate request to wait indefinitely.
 _UNSET: object = object()
 
+# Log any acquire that WAITS this long but still succeeds.
+#
+# Timing out was already logged; waiting 40 seconds and then succeeding was
+# not, and that is the case that actually reached production. A single
+# `GET kgentities` was measured at 39.972s while the calls either side of it,
+# same endpoint and same client process, took 0.020-0.092s. Nothing in any log
+# attributed it, because the only pool diagnostic fired on TimeoutError.
+#
+# A slow success and a timeout are the same starvation; only one of them was
+# visible.
+SLOW_ACQUIRE_SECONDS = 1.0
+
 
 class _LoggingAcquireContext:
     """Wraps asyncpg's PoolAcquireContext to log pool state on timeout.
@@ -52,22 +65,42 @@ class _LoggingAcquireContext:
         self._pool = pool
         self._ctx = ctx
 
-    async def __aenter__(self):
+    def _report_slow(self, waited: float) -> None:
+        """A slow-but-successful acquire is starvation that nothing else logs."""
+        if waited < SLOW_ACQUIRE_SECONDS:
+            return
         try:
-            return await self._ctx.__aenter__()
+            logger.warning(
+                "pool acquire WAITED %.2fs (size=%s idle=%s min=%s max=%s) — the "
+                "query that follows is not the slow part; the request queued for "
+                "a connection",
+                waited, self._pool.get_size(), self._pool.get_idle_size(),
+                self._pool.get_min_size(), self._pool.get_max_size())
+        except Exception:   # diagnostics must never mask the real path
+            logger.warning("pool acquire WAITED %.2fs (state unavailable)", waited)
+
+    async def __aenter__(self):
+        t0 = time.monotonic()
+        try:
+            conn = await self._ctx.__aenter__()
         except asyncio.TimeoutError:
             log_pool_state(self._pool, "acquire timed out")
             raise
+        self._report_slow(time.monotonic() - t0)
+        return conn
 
     async def __aexit__(self, *exc_info):
         return await self._ctx.__aexit__(*exc_info)
 
     def __await__(self):
+        t0 = time.monotonic()
         try:
-            return (yield from self._ctx.__await__())
+            conn = yield from self._ctx.__await__()
         except asyncio.TimeoutError:
             log_pool_state(self._pool, "acquire timed out")
             raise
+        self._report_slow(time.monotonic() - t0)
+        return conn
 
 
 class TimeoutPool(asyncpg.pool.Pool):

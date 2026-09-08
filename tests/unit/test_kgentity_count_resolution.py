@@ -38,7 +38,11 @@ class _FakeAdapter:
             self.fast_entity_count = self._fast_entity_count
 
     async def _fast_entity_count(self, space_id, graph_id, entity_type_uri,
-                                 search, prop_filters, sort_by):
+                                 search, prop_filters, sort_by, filters=None):
+        # `filters` mirrors the real signature. Without it the call raised
+        # TypeError, `_resolve_total_count` swallowed it as "fast count
+        # errored", and the test silently exercised the SPARQL fallback while
+        # appearing to cover the fast path.
         self.fast_calls += 1
         return self._fast_count
 

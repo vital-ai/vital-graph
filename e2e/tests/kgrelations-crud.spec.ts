@@ -6,7 +6,7 @@ import { createSpace, dropSpace } from './space-fixtures';
 // what pushed other specs' fixtures off page 1 (issues/022). Readers keep
 // sharing the seeded fixture — isolating them would multiply the expensive ONNX
 // index seeding for a problem the writers cause.
-const SPACE_ID = 'e2e_kgrelations_crud_space';
+const SPACE_ID = 'e2e_kgrel_crud';
 const GRAPH_ID = 'urn:e2e:kgrelations-crud:graph';
 
 /**
