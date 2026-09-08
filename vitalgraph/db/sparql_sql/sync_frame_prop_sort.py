@@ -92,7 +92,7 @@ _ASPECT = _u(ASPECT_URI)
 _SORT_PROPS = [_u(x) for x in SORTABLE_PROPERTY_URIS]
 
 
-def _select_rows(space_id: str, where: str) -> str:
+def _select_rows(space_id: str, where: str, seed_param: str = None) -> str:
     """The derivation, as one SELECT. Used verbatim by resync, backfill and the
     incremental re-derive, so the three cannot disagree about what the table
     means.
@@ -103,6 +103,22 @@ def _select_rows(space_id: str, where: str) -> str:
     """
     t_quad = f"{space_id}_rdf_quad"
     t_term = f"{space_id}_term"
+    # SEEDS THE POPULATION CTE, and without it cost tracks the SPACE rather than
+    # the CHANGE. `MATERIALIZED` is what makes the Assertion test run once per
+    # frame instead of once per property row -- but it also forces both CTEs to
+    # be computed IN FULL before the outer `where` can filter them, so an
+    # incremental write materialised every frame in the space and discarded
+    # nearly all of it. Measured on a 1.2M-frame space: 5 touched subjects did
+    # not finish in 25 s, against 23 ms for the entity equivalent.
+    #
+    # This is the defect `sync_entity_slot_sort._select_rows` records verbatim
+    # ("the touched-set filter sat in the outer SELECT where PostgreSQL cannot
+    # push it into a recursive CTE ... cost tracked the SPACE, not the change"),
+    # reintroduced here while fixing a different one.
+    #
+    # `seed_param` stays None for the full resync and the backfill, which must
+    # walk everything.
+    _seed = f" AND subject_uuid = ANY({seed_param})" if seed_param else ""
     # THE ASSERTION TEST RUNS ONCE PER FRAME, in a MATERIALIZED CTE, not once
     # per property quad in the WHERE. Written the obvious way -- correlated
     # EXISTS/NOT EXISTS inside the main WHERE -- it is evaluated for every
@@ -121,7 +137,7 @@ def _select_rows(space_id: str, where: str) -> str:
         WITH frames AS MATERIALIZED (
             SELECT DISTINCT subject_uuid, context_uuid
               FROM {t_quad}
-             WHERE predicate_uuid = $1 AND object_uuid = $2
+             WHERE predicate_uuid = $1 AND object_uuid = $2{_seed}
         ),
         -- EVERY FRAME IS INDEXED. Form type is RESOLVED to a column, not used
         -- to decide membership.
@@ -256,7 +272,7 @@ async def sync_frame_prop_sort_after_change(
     else:
         await conn.execute(
             f"DELETE FROM {t} WHERE frame_uuid = ANY($1)", subject_uuids)
-    sel = _select_rows(space_id, "q.subject_uuid = ANY($9)")
+    sel = _select_rows(space_id, "q.subject_uuid = ANY($9)", seed_param="$9")
     result = await conn.execute(
         f"INSERT INTO {t} ({_INSERT_COLS}) {sel} {_ON_CONFLICT}",
         *_args(), subject_uuids)

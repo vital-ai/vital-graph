@@ -235,3 +235,59 @@ async def test_building_frames_does_not_block_slot_sort(test_space, space_impl, 
         assert not writes, (
             f"{name} writes to slot_sort_block: {writes}. A table must block "
             f"itself, in prop_sort_block.")
+
+
+async def test_the_incremental_derivation_is_seeded(test_space, space_impl, pg_pool):
+    """An incremental write must cost the CHANGE, not the SPACE.
+
+    The population lives in a `MATERIALIZED` CTE — which is what makes the
+    Assertion test run once per frame rather than once per property row — but
+    materialising also forces it to be computed IN FULL before the outer WHERE
+    can filter it. Unseeded, every single write derived every frame in the space
+    and threw nearly all of it away: measured on a 1.2M-frame space, five
+    touched subjects did not finish in 25 s, against 3.3 ms once seeded.
+
+    `sync_entity_slot_sort._select_rows` records this defect verbatim from the
+    last time it was found. It was reintroduced here while fixing a different
+    problem, so this asserts the seed structurally rather than trusting a
+    comment.
+    """
+    from vitalgraph.db.sparql_sql.sync_frame_prop_sort import _select_rows
+
+    seeded = _select_rows(test_space, "q.subject_uuid = ANY($9)", seed_param="$9")
+    head = seeded[:seeded.index("form AS MATERIALIZED")]
+    assert "subject_uuid = ANY($9)" in head, (
+        "the population CTE is not seeded, so an incremental write materialises "
+        "every frame in the space before filtering — cost tracks the space, not "
+        "the change")
+
+    # The full resync and backfill must stay unseeded; they walk everything.
+    full = _select_rows(test_space, "TRUE")
+    assert "ANY($9)" not in full, "the full derivation must not be seeded"
+
+
+async def test_seeded_and_unseeded_derive_identical_rows(
+        test_space, space_impl, pg_pool):
+    """Seeding is only safe if it changes cost and nothing else."""
+    from vitalgraph.db.sparql_sql.sync_frame_prop_sort import _select_rows, _args
+
+    await space_impl.add_rdf_quads_batch(test_space, _quads())
+
+    async with pg_pool.acquire() as conn:
+        subs = [r[0] for r in await conn.fetch(
+            f"SELECT DISTINCT frame_uuid FROM {test_space}_frame_prop_sort")]
+        assert subs, "no rows to compare"
+        cols = ("frame_uuid, property_uuid, value_text, value_num, value_dt, "
+                "value_all, frame_uri, form_type_uuid")
+        seeded = await conn.fetch(
+            f"SELECT {cols} FROM ("
+            f"{_select_rows(test_space, 'q.subject_uuid = ANY($9)', seed_param='$9')}"
+            f") d ORDER BY 1,2", *_args(), subs)
+        plain = await conn.fetch(
+            f"SELECT {cols} FROM ("
+            f"{_select_rows(test_space, 'q.subject_uuid = ANY($9)')}"
+            f") d ORDER BY 1,2", *_args(), subs)
+
+    assert [tuple(r) for r in seeded] == [tuple(r) for r in plain], (
+        "the seeded derivation returns different rows from the unseeded one; "
+        "seeding must change only the cost")
