@@ -60,7 +60,7 @@ from vitalgraph.model.entity_registry_model import (
     EntityTypeCreateRequest,
     LocationCreateRequest,
 )
-from vitalgraph.agent_registry.agent_models import (
+from vitalgraph.model.agent_model import (
     AgentCreate,
     AgentTypeCreate,
 )

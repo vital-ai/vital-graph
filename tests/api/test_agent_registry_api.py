@@ -12,7 +12,7 @@ import pytest
 
 from vitalgraph.model.result_status import OperationStatus
 
-from vitalgraph.agent_registry.agent_models import (
+from vitalgraph.model.agent_model import (
     AgentCreate,
     AgentEndpointCreate,
     AgentEndpointUpdate,

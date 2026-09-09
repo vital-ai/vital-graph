@@ -365,7 +365,7 @@ async def _seed_entity_registry(client) -> None:
 
 async def _seed_agent_registry(client) -> None:
     """Create a seeded agent-registry entry."""
-    from vitalgraph.agent_registry.agent_models import AgentTypeCreate, AgentCreate
+    from vitalgraph.model.agent_model import AgentTypeCreate, AgentCreate
 
     try:
         # Ensure the agent type exists

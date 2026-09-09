@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from ..model.result_status import OperationStatus, ResultStatus
+from .result_status import OperationStatus, ResultStatus
 
 
 # ---------------------------------------------------------------------------

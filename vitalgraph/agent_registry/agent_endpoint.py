@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..model.result_status import OperationStatus
-from .agent_models import (
+from ..model.agent_model import (
     AgentChangeLogEntry,
     AgentChangeLogResponse,
     AgentCreate,

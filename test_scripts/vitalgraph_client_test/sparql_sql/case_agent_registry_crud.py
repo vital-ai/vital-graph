@@ -22,7 +22,7 @@ Tests the full agent registry lifecycle via the VitalGraph client:
 import logging
 from typing import Dict, Any
 
-from vitalgraph.agent_registry.agent_models import (
+from vitalgraph.model.agent_model import (
     AgentCreate,
     AgentEndpointCreate,
     AgentEndpointUpdate,

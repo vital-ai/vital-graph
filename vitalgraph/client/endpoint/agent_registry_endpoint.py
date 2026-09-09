@@ -8,7 +8,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from .base_endpoint import BaseEndpoint
-from ...agent_registry.agent_models import (
+from ...model.agent_model import (
     AgentChangeLogResponse,
     AgentCreate,
     AgentDeleteResponse,
