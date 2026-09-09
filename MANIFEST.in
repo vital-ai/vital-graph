@@ -2,8 +2,9 @@
 # Include frontend build files
 recursive-include vitalgraph/api/frontend/dist *
 
-# Include README and license files
+# Include README, changelog and license files
 include README.md
+include CHANGELOG.md
 include LICENSE
 
 # Note: Config directories are excluded from PyPI distribution
