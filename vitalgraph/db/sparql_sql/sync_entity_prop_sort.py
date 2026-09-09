@@ -204,6 +204,50 @@ def _args():
 # Incremental — drop and re-derive
 # ---------------------------------------------------------------------------
 
+# Spaces whose table is known to exist. Only the POSITIVE answer is cached: a
+# space that lacks the table today may be migrated at any moment, and a cached
+# "absent" would keep it excluded for the life of the process. Present is the
+# steady state, so the catalog lookup is paid only by unmigrated spaces --
+# which are exactly the ones already running degraded.
+_TABLE_PRESENT: set = set()
+_WARNED: set = set()
+
+
+async def _table_present(conn, space_id: str, table: str) -> bool:
+    """Whether `table` exists, so a write to an UNMIGRATED space can proceed.
+
+    THIS TABLE IS AN OPTIMISATION AND A WRITE MUST NOT DEPEND ON IT. Without
+    this guard, every write to a space that predates the table failed outright:
+    `add_rdf_quads_batch_bulk` raised `relation "{space}_entity_prop_sort" does
+    not exist`, `update_quads` returned False and the endpoint answered 500. The
+    table is created by an explicit migration, never as a side effect
+    (deliberately), so "the space has not been migrated yet" is a NORMAL state
+    -- and it is the state every space is in immediately after this code ships
+    and before the migration runs.
+
+    Checked rather than caught, because a failed statement aborts the enclosing
+    transaction: by the time the error surfaced, the write could no longer be
+    completed even by ignoring it.
+
+    Reads already degrade this way -- `fast_entity_prop_page` falls back to
+    SPARQL when the table cannot be read. Only writes failed closed.
+    """
+    if space_id in _TABLE_PRESENT:
+        return True
+    exists = await conn.fetchval("SELECT to_regclass($1)", table) is not None
+    if exists:
+        _TABLE_PRESENT.add(space_id)
+        return True
+    if space_id not in _WARNED:
+        _WARNED.add(space_id)
+        logger.warning(
+            "%s does not exist, so this write maintains no property-sort rows "
+            "for %s. The space has not been migrated; listings fall back to "
+            "SPARQL and stay CORRECT, only slower. Run the migration to fix.",
+            table, space_id)
+    return False
+
+
 async def sync_entity_prop_sort_after_change(
     conn, space_id: str, subject_uuids: List[uuid.UUID],
     context_uuid: Optional[uuid.UUID] = None,
@@ -237,6 +281,8 @@ async def sync_entity_prop_sort_after_change(
     if not subject_uuids:
         return 0
     t = f"{space_id}_entity_prop_sort"
+    if not await _table_present(conn, space_id, t):
+        return 0
     if context_uuid:
         await conn.execute(
             f"DELETE FROM {t} WHERE entity_uuid = ANY($1) AND context_uuid = $2",
