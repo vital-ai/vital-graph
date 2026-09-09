@@ -2464,10 +2464,34 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                         # Logged at WARNING and not swallowed, because "ran
                         # without the lock" is the condition that produced the
                         # corruption this fixes.
+                        #
+                        # INSIDE A SAVEPOINT, and that is what makes the fallback
+                        # real rather than notional. A `lock_timeout` is a
+                        # SERVER-side error: it aborts the whole transaction, so
+                        # the `conn.execute(sql)` below raised
+                        # InFailedSQLTransactionError and the write failed anyway
+                        # — the one outcome this except clause exists to avoid.
+                        # Observed in production during the v0.0.60 rollout, when
+                        # an update contended with the draining generation.
+                        #
+                        # A nested `conn.transaction()` is a SAVEPOINT in asyncpg.
+                        # Rolling back to it discards the failed acquisition and
+                        # leaves the transaction usable; releasing it KEEPS any
+                        # locks taken, because an advisory xact lock lives until
+                        # the transaction ends, not the savepoint. Both verified
+                        # against PostgreSQL before relying on them.
                         try:
                             from .update_lock import acquire_update_locks
-                            _locked = await acquire_update_locks(
-                                conn, space_id, gen.update_lock_plans)
+                            _sp = conn.transaction()
+                            await _sp.start()
+                            try:
+                                _locked = await acquire_update_locks(
+                                    conn, space_id, gen.update_lock_plans)
+                            except Exception:
+                                await _sp.rollback()
+                                raise
+                            else:
+                                await _sp.commit()
                             if _locked:
                                 logger.debug(
                                     "sparql update: locked %d grouping(s) in %s",

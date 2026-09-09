@@ -1,7 +1,7 @@
 # Issues
 
 Numbered, append-only, one defect each. Resolved ones move to `archive/` —
-76 there, 99 live. An issue is archived only when nothing remains to do:
+76 there, 100 live. An issue is archived only when nothing remains to do:
 "FIXED in the converter, existing spaces need reloading" is not resolved, it is
 half-done, and it stays here.
 
@@ -133,6 +133,7 @@ caller, which is what makes that file worth a sweep rather than two point fixes.
 |---|---|---|
 | 042 | fixed in the converter | CSV import drops datatypes and diverges on term uuids; existing CSV-loaded spaces still need reloading |
 | 032 | deferred | `vitalgraph_service_impl` stranded by a sync interface |
+| 177 | fixed 2026-09-08 | The `issues/174` grouping-lock degradation could not degrade: a `lock_timeout` aborts the transaction server-side, so "proceeding UNSERIALISED" logged reassurance and then died on `InFailedSQLTransactionError`. Fixed with a savepoint. Read for the shape of the mistake — a fallback path that never ran, whose failure looked like success in the logs |
 
 ## Conventions worth keeping
 
