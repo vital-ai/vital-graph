@@ -422,11 +422,25 @@ async def fast_entity_prop_count(
         params.append(v)
         return f"${len(params) + fixed}"
 
+    # The PAGE reaches these same three declines through `build_page_sql`,
+    # whose caller logs when it returns None. The COUNT builds its SQL inline,
+    # so the identical conditions returned SILENTLY here. That asymmetry is the
+    # bug this file already carries two comments about: the count must track
+    # the page, and a count that declines without saying so leaves the request
+    # paying a COUNT(DISTINCT) with nothing in the log to explain it. Found
+    # while investigating a 2.6 s listing whose components each measured in
+    # milliseconds -- the absence of a line proved nothing, because absence was
+    # also what a decline looked like.
+    def _decline(reason: str) -> None:
+        logger.info("prop_sort COUNT DECLINE(%s): %s (type=%s sort_by=%s)",
+                    space_id, reason, entity_type_uri, sort_by)
+        return None
+
     parts: List[str] = []
     for prop, op, value in terms:
         dt = _DATATYPES.get(prop)
         if dt is None:
-            return None
+            return _decline(f"no datatype known for filter property {prop}")
         pu = p(_u(prop))
         if op in ("eq", "has"):
             parts.append(f"SELECT entity_uuid FROM {t} WHERE context_uuid = $1 "
@@ -436,13 +450,15 @@ async def fast_entity_prop_count(
                          f"AND property_uuid = {pu} AND NOT (value_all @> ARRAY[{p(str(value))}]::text[])")
         elif op in ("gte", "lte"):
             if dt != "dateTime":
-                return None
+                return _decline(
+                    f"range filter on {prop} whose datatype is {dt}, not "
+                    f"dateTime; only the dateTime lane carries a range")
             cmp = ">=" if op == "gte" else "<="
             parts.append(f"SELECT entity_uuid FROM {t} WHERE context_uuid = $1 "
                          f"AND property_uuid = {pu} AND value_dt IS NOT NULL "
                          f"AND value_dt {cmp} {p(str(value))}::timestamp")
         else:
-            return None
+            return _decline(f"unsupported operator {op!r} on {prop}")
 
     if entity_type_uri is not None:
         base = (f"SELECT count(DISTINCT s.entity_uuid) FROM {t} s "
