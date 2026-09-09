@@ -89,7 +89,12 @@ async def _probe_latency(pool, sid, term_args, quad_rows, subjects, repeats=3):
 @pytest.mark.ingest_bench
 async def test_per_write_cost_stays_flat(perf_pool, perf_record):
     term_args, quad_rows, subjects = _probe_rows()
-    sid = f"perf_perwrite_{uuid.uuid4().hex[:8]}"
+    # Space ids are capped at 21 bytes, and the cap is not arbitrary: the
+    # longest generated identifier is
+    # `{space}_document_segmentation_config_doc_type_idx`, which reaches
+    # exactly 63 -- PostgreSQL's limit -- at a 21-byte id and is SILENTLY
+    # TRUNCATED beyond it. This fixture was 22 and 23 bytes.
+    sid = f"perf_pwrite_{uuid.uuid4().hex[:8]}"
     points = {}
     try:
         for n_ent in SIZES:

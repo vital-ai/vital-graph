@@ -65,6 +65,35 @@ def _key_columns(defn: str):
     return tuple(c.strip().lower() for c in m.group("cols").split(","))
 
 
+_MODIFIER_RE = re.compile(
+    r"""\s+(?:collate\s+(?:"[^"]*"|\w+)|asc|desc|nulls\s+(?:first|last)"""
+    r"""|\w+_ops)(?!\w)""",
+    re.IGNORECASE)
+
+
+def _bare_columns(defn: str):
+    """Just the column NAMES, with ordering and operator-class noise removed.
+
+    `_key_columns` keeps the modifiers because an index's direction is part of
+    what it can serve — a DESC btree and an ASC one are not interchangeable.
+    But the existence check below asks `information_schema` whether a column is
+    there, and `value_dt desc nulls last` is not a column name. It reported
+    three indexes as "the table is an older schema version, so the index cannot
+    be created" when the columns were present and the indexes were simply
+    absent: the opposite diagnosis, and the message actively tells you not to
+    do the thing that fixes it.
+    """
+    keys = _key_columns(defn)
+    if keys is None:
+        return None
+    out = tuple(_MODIFIER_RE.sub("", c).strip().strip('"') for c in keys)
+    assert not any(" " in c for c in out), (
+        f"unstripped index modifier in {out} — the existence check would ask "
+        f"information_schema for a column name that cannot exist and report a "
+        f"missing index as an unfixable schema-version problem")
+    return out
+
+
 @pytest.mark.parametrize("space", BENCHED_SPACES)
 async def test_benched_space_indexes_match_schema(perf_conn, space):
     """EVERY index `create_space_indexes_sql` builds is present, on every table.
@@ -92,11 +121,12 @@ async def test_benched_space_indexes_match_schema(perf_conn, space):
         pytest.skip(f"space {space} not present in this environment")
 
     # Every index the schema builds, keyed by name, carrying its target table.
-    expected = {}
+    expected, _SCHEMA_SQL = {}, {}
     for stmt in SparqlSQLSchema().create_space_indexes_sql(space):
         m = _CREATE_RE.search(stmt)
         if m:
             expected[m.group("name")] = (m.group("table"), _key_columns(stmt))
+            _SCHEMA_SQL[m.group("name")] = stmt
 
     assert expected, "schema produced no indexes to compare against"
 
@@ -130,7 +160,7 @@ async def test_benched_space_indexes_match_schema(perf_conn, space):
         if table not in present_tables:
             continue
         if name not in actual:
-            absent_cols = [c for c in (want or ())
+            absent_cols = [c for c in (_bare_columns(_SCHEMA_SQL[name]) or ())
                            if c and c not in cols.get(table, set())]
             if absent_cols:
                 drifted.append(f"{table}: no column(s) {absent_cols} — the "

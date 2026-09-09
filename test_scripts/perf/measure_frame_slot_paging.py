@@ -48,7 +48,13 @@ XSD_INT = "http://www.w3.org/2001/XMLSchema#integer"
 FRAME_SEQ = f"{KG}hasFrameSequence"
 SLOT_SEQ = f"{KG}hasSlotSequence"
 
-SPACE_ID = "perf_frame_slot_paging"
+# 20 bytes. Space ids are capped at 21 and `add_space` REJECTS a longer
+# one -- "perf_frame_slot_paging" was 22, so the space was never created
+# and the fixture then paged a space that did not exist. Every page came
+# back with 0 rows and the bench read as a frame-listing regression; the
+# only evidence of the real cause was one add_space ERROR in the server
+# log, which the failing assertion never mentions.
+SPACE_ID = "perf_frame_slot_page"
 GRAPH_ID = "urn:perf:frameslot"
 NS = "urn:perf:fs:"
 ENTITY = f"{NS}entity"

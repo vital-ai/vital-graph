@@ -137,18 +137,23 @@ PROBE_TIMEOUT_MS = 20_000
 WARM_TIMEOUT_MS = 120_000
 
 
-async def _cost(conn, sql, *, fenced: bool, warm: bool = False):
+async def _cost(conn, sql, *, fenced: bool, warm: bool = False,
+                budget_ms: int | None = None):
     """Buffers for this plan, or None if it could not finish in time.
 
     `warm=True` discards the result: it exists to pull this plan's working set
     into the buffer pool before anything is timed.
+
+    `budget_ms` overrides the probe timeout, for the confirming retry described
+    at the call site: a plan that misses the 20 s probe under suite load is
+    re-run with room to finish before we conclude anything from its failure.
     """
     from .harness import explain_json, total_shared_buffers
     try:
         async with conn.transaction():
             await conn.execute(
                 f"SET LOCAL statement_timeout = "
-                f"{WARM_TIMEOUT_MS if warm else PROBE_TIMEOUT_MS}")
+                f"{budget_ms or (WARM_TIMEOUT_MS if warm else PROBE_TIMEOUT_MS)}")
             if fenced:
                 await conn.execute("SET LOCAL enable_sort = off")
             return total_shared_buffers(await explain_json(conn, sql))
@@ -198,6 +203,28 @@ async def test_a_flippable_shape_is_always_fenced(
     unfenced = await _cost(perf_conn, gen.sql, fenced=False)
     fenced = await _cost(perf_conn, gen.sql, fenced=True)
 
+    # A TIMEOUT IS A SUSPICION, NOT A VERDICT. Everything above compares
+    # BUFFERS, which is why this test needs no threshold and does not care what
+    # else the machine is doing. The timeout is the one exception: it turns the
+    # judgement into "did this finish in 20 s of wall clock", which depends on
+    # cache state and on whatever else the suite is running. That is how
+    # `range-tight/specific` failed here at ~70% of a long serial run and passed
+    # alone minutes later -- the same shape issues/117 already records as
+    # straddling this exact boundary at 7.1x cold against 1.3x warm.
+    #
+    # So a side that times out gets ONE retry at the warm budget before its
+    # failure is believed. If it finishes, we have real buffers and the
+    # deterministic comparison proceeds as normal. If it cannot finish in
+    # 120 s on an already-warmed cache, "this plan does not finish" is a
+    # property of the plan rather than of the machine, and the assertions
+    # below are entitled to say so.
+    if unfenced is None:
+        unfenced = await _cost(perf_conn, gen.sql, fenced=False, warm=False,
+                               budget_ms=WARM_TIMEOUT_MS)
+    if fenced is None:
+        fenced = await _cost(perf_conn, gen.sql, fenced=True, warm=False,
+                             budget_ms=WARM_TIMEOUT_MS)
+
     if unfenced is None and fenced is None:
         pytest.skip("neither plan finished within the probe timeout")
 
@@ -208,13 +235,15 @@ async def test_a_flippable_shape_is_always_fenced(
     if fenced is None:
         assert not flag, (
             f"{where}: `needs_ordered_scan` is set, but the FENCED plan did not "
-            f"finish in {PROBE_TIMEOUT_MS}ms while the unfenced one took "
+            f"finish in {PROBE_TIMEOUT_MS}ms NOR in a confirming "
+            f"{WARM_TIMEOUT_MS}ms retry, while the unfenced one took "
             f"{unfenced:,} buffers. The fence is being applied to a shape that "
             f"needs a sort — the 273x shape this repository warns about.")
         return
     if unfenced is None:
         assert flag, (
-            f"{where}: the UNFENCED plan did not finish in {PROBE_TIMEOUT_MS}ms "
+            f"{where}: the UNFENCED plan did not finish in {PROBE_TIMEOUT_MS}ms, "
+            f"nor in a confirming {WARM_TIMEOUT_MS}ms retry on a warmed cache, "
             f"and `needs_ordered_scan` is NOT set, so that is the plan served.")
         return
 

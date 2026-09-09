@@ -52,8 +52,21 @@ except Exception:  # pragma: no cover - depends on test_scripts layout
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def paging_space(perf_client):
-    """Seed a scratch space with FRAMES frames, drop it afterwards."""
+async def paging_space(perf_client, perf_pool):
+    """Seed a scratch space with FRAMES frames, drop it afterwards.
+
+    STATISTICS ARE PART OF THE FIXTURE, not an afterthought. The seed writes
+    through `execute_sparql_update`, and that path deliberately does not
+    maintain `rdf_stats` -- `recompute_stats_tables` rebuilds it on a per-space
+    schedule instead (`issues/142`). A fixture that creates a space, seeds it,
+    measures it and drops it never gives that job a chance to run, so every
+    plan this bench timed was drawn on statistics that read as ZERO.
+
+    That is the exact condition `test_loaded_spaces_have_stats` exists to
+    catch, and it caught this one -- but only after the space id was shortened
+    to fit, because while the id was 22 bytes the space was never created and
+    there was nothing for the auditor to look at. One bug was hiding another.
+    """
     if not _HAVE_SCRIPT:
         pytest.skip("measure_frame_slot_paging not importable")
 
@@ -66,6 +79,17 @@ async def paging_space(perf_client):
         pass  # already exists
 
     await _seed(perf_client, FRAMES, SLOTS)
+
+    # Build the statistics the planner will use, then ANALYZE so PostgreSQL's
+    # own estimates are current too. Without both, this bench measures plans
+    # chosen on absent numbers and reports the timings as if they meant
+    # something.
+    from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
+    async with perf_pool.acquire() as conn:
+        await recompute_stats_tables(conn, SPACE_ID)
+        await conn.execute(f"ANALYZE {SPACE_ID}_rdf_quad")
+        await conn.execute(f"ANALYZE {SPACE_ID}_term")
+
     yield SPACE_ID
     try:
         await perf_client.delete_space(SPACE_ID)

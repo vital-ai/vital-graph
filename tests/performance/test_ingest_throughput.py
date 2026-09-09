@@ -67,7 +67,12 @@ def _synth_rows(n_quads):
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def two_spaces(perf_pool):
-    sids = [f"perf_ingest_{k}_{uuid.uuid4().hex[:8]}" for k in ("em", "bulk")]
+    # Space ids are capped at 21 bytes, and the cap is not arbitrary: the
+    # longest generated identifier is
+    # `{space}_document_segmentation_config_doc_type_idx`, which reaches
+    # exactly 63 -- PostgreSQL's limit -- at a 21-byte id and is SILENTLY
+    # TRUNCATED beyond it. This fixture was 22 and 23 bytes.
+    sids = [f"perf_in_{k}_{uuid.uuid4().hex[:8]}" for k in ("em", "bulk")]
     async with perf_pool.acquire() as conn:
         for sid in sids:
             await SparqlSQLSchema.create_space(conn, sid)
