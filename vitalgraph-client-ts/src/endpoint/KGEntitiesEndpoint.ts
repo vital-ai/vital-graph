@@ -28,6 +28,8 @@ export interface ListKGEntitiesOptions {
   modifiedBefore?: string;
   actionType?: string;
   provenanceType?: string;
+  /** Batch-fetch by id, the `id`/`uri` pair's list form. */
+  idList?: string[];
 }
 
 export class KGEntitiesEndpoint extends BaseEndpoint {
@@ -56,6 +58,7 @@ export class KGEntitiesEndpoint extends BaseEndpoint {
         modified_before: options.modifiedBefore,
         action_type: options.actionType,
         provenance_type: options.provenanceType,
+        id_list: options.idList?.length ? options.idList.join(',') : undefined,
       },
     });
   }
@@ -106,10 +109,15 @@ export class KGEntitiesEndpoint extends BaseEndpoint {
     spaceId: string,
     graphId: string,
     uri: string,
+    /** Also delete the entity's graph, not just the entity. */
+    deleteEntityGraph?: boolean,
   ): Promise<DeleteResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId, uri });
     return this.request('DELETE', '/api/graphs/kgentities', {
-      params: { space_id: spaceId, graph_id: graphId, uri },
+      params: {
+        space_id: spaceId, graph_id: graphId, uri,
+        delete_entity_graph: deleteEntityGraph,
+      },
     });
   }
 
@@ -117,10 +125,15 @@ export class KGEntitiesEndpoint extends BaseEndpoint {
     spaceId: string,
     graphId: string,
     uris: string[],
+    /** Also delete each entity's graph, not just the entities. */
+    deleteEntityGraph?: boolean,
   ): Promise<DeleteResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId });
     return this.request('DELETE', '/api/graphs/kgentities', {
-      params: { space_id: spaceId, graph_id: graphId, uri_list: uris.join(',') },
+      params: {
+        space_id: spaceId, graph_id: graphId, uri_list: uris.join(','),
+        delete_entity_graph: deleteEntityGraph,
+      },
     });
   }
 

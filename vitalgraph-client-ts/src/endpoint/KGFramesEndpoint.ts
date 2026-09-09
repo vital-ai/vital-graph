@@ -76,10 +76,12 @@ export class KGFramesEndpoint extends BaseEndpoint {
     spaceId: string,
     graphId: string,
     uri: string,
+    /** Also delete this frame's descendants. */
+    recursive?: boolean,
   ): Promise<DeleteResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId, uri });
     return this.request('DELETE', '/api/graphs/kgframes', {
-      params: { space_id: spaceId, graph_id: graphId, uri },
+      params: { space_id: spaceId, graph_id: graphId, uri, recursive },
     });
   }
 
@@ -212,7 +214,7 @@ export class KGFramesEndpoint extends BaseEndpoint {
     parentFrameUri: string,
   ): Promise<PaginatedGraphObjectResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId, parent_frame_uri: parentFrameUri });
-    return this.request('GET', '/api/graphs/kgframes/kgframes', {
+    return this.request('GET', '/api/graphs/kgentities/kgframes', {
       params: { space_id: spaceId, graph_id: graphId, parent_frame_uri: parentFrameUri },
     });
   }
@@ -224,7 +226,7 @@ export class KGFramesEndpoint extends BaseEndpoint {
     data: unknown,
   ): Promise<VitalGraphResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId, parent_frame_uri: parentFrameUri });
-    return this.request('POST', '/api/graphs/kgframes/kgframes', {
+    return this.request('POST', '/api/graphs/kgentities/kgframes', {
       params: { space_id: spaceId, graph_id: graphId, parent_frame_uri: parentFrameUri },
       json: data,
     });
@@ -237,7 +239,7 @@ export class KGFramesEndpoint extends BaseEndpoint {
     data: unknown,
   ): Promise<VitalGraphResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId, parent_frame_uri: parentFrameUri });
-    return this.request('POST', '/api/graphs/kgframes/kgframes', {
+    return this.request('POST', '/api/graphs/kgentities/kgframes', {
       params: { space_id: spaceId, graph_id: graphId, parent_frame_uri: parentFrameUri },
       json: data,
     });
@@ -248,10 +250,15 @@ export class KGFramesEndpoint extends BaseEndpoint {
     graphId: string,
     parentFrameUri: string,
     frameUris?: string[],
+    /** Also delete the children's descendants. */
+    recursive?: boolean,
   ): Promise<DeleteResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId, parent_frame_uri: parentFrameUri });
-    return this.request('DELETE', '/api/graphs/kgframes/kgframes', {
-      params: { space_id: spaceId, graph_id: graphId, parent_frame_uri: parentFrameUri },
+    return this.request('DELETE', '/api/graphs/kgentities/kgframes', {
+      params: {
+        space_id: spaceId, graph_id: graphId,
+        parent_frame_uri: parentFrameUri, recursive,
+      },
       json: frameUris ? { frame_uris: frameUris } : undefined,
     });
   }
