@@ -72,11 +72,33 @@ async def _spaces(conn, only: str | None) -> list:
             await conn.fetch("SELECT space_id FROM space ORDER BY space_id")]
 
 
-async def _tables_for(conn, space_id: str) -> list:
+async def _tables_for(conn, space_id: str, all_spaces: list) -> list:
+    r"""This space's tables, attributed by the LONGEST matching space id.
+
+    `LIKE '<space>\_%'` alone is wrong whenever one space id is a prefix of
+    another. With spaces `cardiff_kg` and `cardiff_kg_test`, every table of the
+    second matches the first, and `cardiff_kg` then reports `test_frame_entity`
+    AND `test_rdf_quad` as unrecognised drift — the second being an ordinary
+    schema table.
+
+    The DROP itself survives that (the suffix `test_frame_entity` does not equal
+    `frame_entity`, so nothing is removed), but the REPORT is the hazard: it
+    invites someone to add `test_frame_entity` to `RETIRED`, and that entry
+    would then drop another live space's table. Attribution has to be exact
+    before the list can be trusted.
+    """
     rows = await conn.fetch(
         "SELECT tablename FROM pg_tables WHERE schemaname='public' "
         "AND tablename LIKE $1 ORDER BY tablename", f"{space_id}\\_%")
-    return [r["tablename"] for r in rows]
+    longer = [s for s in all_spaces
+              if s != space_id and s.startswith(space_id + "_")]
+    out = []
+    for r in rows:
+        t = r["tablename"]
+        if any(t.startswith(s + "_") for s in longer):
+            continue          # belongs to a space whose id extends this one
+        out.append(t)
+    return out
 
 
 async def main() -> int:
@@ -107,7 +129,7 @@ async def main() -> int:
         total_dropped = 0
         drift: dict = {}
         for sid in spaces:
-            present = await _tables_for(conn, sid)
+            present = await _tables_for(conn, sid, spaces)
             suffixes = {t[len(sid) + 1:]: t for t in present}
 
             for name, why in RETIRED:
