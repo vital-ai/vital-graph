@@ -97,24 +97,6 @@ WHERE q_dst.object_uuid = $1
 LIMIT 1
 """
 
-# Resolve the entity filling a slot, directly from `frame_slot`.
-#
-# This was written against `frame_entity` and selected `entity_uuid`, a column
-# that table NEVER HAD — it named its two roles as `source_entity_uuid` and
-# `dest_entity_uuid`. So the fast path raised on every call and silently fell
-# through to the quad walk, for as long as it has existed (`issues/184`).
-#
-# `frame_slot` is one row per SLOT and does carry `entity_uuid`, which is the
-# shape this query was always written for. The lookup is now by SLOT rather
-# than a self-join: the slot uuid identifies the row directly.
-_SLOT_TO_ENTITY_VIA_FRAME_SLOT_SQL = """
-SELECT fs.entity_uuid
-FROM {frame_slot} fs
-WHERE fs.slot_uuid = $1
-  AND fs.context_uuid = $2
-  AND fs.entity_uuid IS NOT NULL
-LIMIT 1
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -176,33 +158,29 @@ async def resolve_entity_uuid_for_slot(
     slot_uuid,
     context_uuid,
 ) -> Optional[Any]:
-    """Resolve the owning entity UUID for a slot UUID.
+    """Resolve the OWNING entity for a slot: slot -> frame -> owning entity.
 
-    Uses the `frame_slot` table if available (fast path), otherwise falls back
-    to edge traversal in the quad store.
+    THERE IS NO DERIVED-TABLE FAST PATH, deliberately.
+
+    One stood here for as long as this module has existed and NEVER EXECUTED:
+    it selected `entity_uuid` from `frame_entity`, a column that table did not
+    have, so it raised on every call and always fell through (`issues/184`).
+
+    Repointing it at `{space}_frame_slot.entity_uuid` looks like the obvious
+    repair and is WRONG. That column is the entity FILLING THE SLOT — the
+    object of `hasEntitySlotValue`. This function returns the entity that OWNS
+    THE FRAME, reached below by `Edge_hasEntityKGFrame` with the frame as the
+    edge DESTINATION. On any frame whose slot values differ from its owner —
+    which is the normal case, and the entire point of a relationship frame —
+    the two disagree, and `process_geo_slot` would key geo points to the wrong
+    entity SILENTLY, with no error and no drift signal.
+
+    `frame_slot` does not record frame ownership at all, so no correct fast
+    path can be built from it. The traversal below is the only implementation.
+    `issues/184` says writing new behaviour here "should be done deliberately";
+    this is that decision, recorded rather than made by accident.
     """
-    frame_slot = f"{space_id}_frame_slot"
-
-    # Fast path: read the slot's entity straight off `frame_slot`.
-    try:
-        row = await conn.fetchrow(
-            _SLOT_TO_ENTITY_VIA_FRAME_SLOT_SQL.format(frame_slot=frame_slot),
-            slot_uuid, context_uuid,
-        )
-        if row:
-            return row["entity_uuid"]
-    except Exception as exc:
-        # NOT merely "the table might not exist". Until `frame_slot` replaced
-        # `frame_entity` here, this path had NEVER executed: it selected
-        # `entity_uuid`, a column `frame_entity` did not have, so it raised on
-        # every call and always fell through (`issues/184`). Still logged
-        # rather than silently swallowed — a fast path that cannot run is
-        # indistinguishable from a by-design fallback until something says so,
-        # and that is exactly how it went unnoticed.
-        logger.debug("geo slot fast path unavailable, using edge traversal: %s",
-                     exc)
-
-    # Slow path: edge traversal slot → frame → entity
+    # Edge traversal: slot → frame → owning entity
     rdf_quad = f"{space_id}_rdf_quad"
     term = f"{space_id}_term"
 

@@ -145,11 +145,24 @@ async def survey_space(conn, space_id: str) -> dict | None:
     # between a report that converges and one that always says "1 remaining".
     if ef is not None and not ef and fe:
         from vitalgraph.db.sparql_sql.sync_entity_fanout import MIN_FANOUT_DEFAULT
+        # A SELF-JOIN on the frame, matching `resync_entity_fanout` exactly.
+        # `frame_entity` held both ends of a relationship on ONE row
+        # (`source_entity_uuid`, `dest_entity_uuid`); `frame_slot` is one row
+        # per SLOT and has neither column — so the old form raises
+        # `column does not exist` rather than returning a wrong answer, and it
+        # raises precisely when `entity_fanout` is empty and `frame_slot` is
+        # populated: the state a fresh `frame_slot` migration produces.
         hubbed = await conn.fetchval(f"""
             SELECT EXISTS (
-              SELECT 1 FROM {space_id}_frame_slot
-              GROUP BY source_entity_uuid, context_uuid
-              HAVING count(DISTINCT dest_entity_uuid) >= $1)""", MIN_FANOUT_DEFAULT)
+              SELECT 1
+              FROM {space_id}_frame_slot a
+              JOIN {space_id}_frame_slot b
+                ON b.frame_uuid = a.frame_uuid
+               AND b.context_uuid = a.context_uuid
+               AND b.entity_uuid IS DISTINCT FROM a.entity_uuid
+              WHERE a.entity_uuid IS NOT NULL AND b.entity_uuid IS NOT NULL
+              GROUP BY a.entity_uuid, a.context_uuid
+              HAVING count(DISTINCT b.entity_uuid) >= $1)""", MIN_FANOUT_DEFAULT)
         if hubbed:
             need.append("entity_fanout")
     # Same trap as frame_slot: empty is only wrong if there is something to

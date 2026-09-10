@@ -1844,13 +1844,26 @@ class MaintenanceJob:
         The incremental paths in `sync_frame_slot_table` are what keep this
         table current; this is the safety net that says when they have not.
 
-        It does NOT repair, deliberately. The only rebuild available is
-        `resync_frame_slot_table`, which TRUNCATEs — and the frame-slot rewrite
-        reads this table, so a truncate inside the maintenance cycle would make
-        every frame query return zero rows for the length of the rebuild. The
-        frame-entity twin can repair because it has a non-blocking backfill
-        (ROW EXCLUSIVE, no TRUNCATE); until this table has one, repair is a
-        deliberate act: `scripts/migrate_frame_slot_table.py --space X --apply`.
+        It does NOT repair on the SCHEDULED tick. Originally that was because
+        the only rebuild available was `resync_frame_slot_table`, which
+        TRUNCATEs — and the frame-slot rewrite reads this table, so a truncate
+        inside the maintenance cycle would make every frame query return zero
+        rows for the length of the rebuild.
+
+        **That reason is now obsolete**: `backfill_frame_slot_table` exists and
+        is non-blocking (`INSERT ... ON CONFLICT DO NOTHING`, ROW EXCLUSIVE, no
+        TRUNCATE, adds only missing rows and can never delete). Wiring it in
+        here is a small change and probably the right one.
+
+        It is deliberately NOT done in the same batch as the `frame_entity`
+        retirement: turning on automatic repair of a table whose migration is
+        landing simultaneously means a bad migration would be papered over by a
+        background job instead of showing up as drift. Scheduled auto-repair
+        should be its own change, after the migration has been observed.
+
+        Until then repair is explicit — `trigger_maintenance` for one space
+        runs the backfill, or `scripts/migrate_frame_slot_table.py --space X
+        --apply` rebuilds.
 
         Reporting a problem nobody fixes automatically is still worth doing:
         `issues/041` is a table that was faithfully wrong with a matching row
