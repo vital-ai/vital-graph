@@ -196,5 +196,13 @@ def distribute_join_over_union(plan: PlanV2, aliases) -> PlanV2:
         out.children = arms
         logger.info("distributed a join over a %d-branch union: each arm now "
                     "joins on the variables that branch binds", len(arms))
+        try:
+            from .plan_decisions import recorder_for
+            recorder_for(aliases).fired(
+                "distribute_union",
+                "each arm joins on the variables its branch binds",
+                arms=len(arms))
+        except Exception:
+            pass
         return out
     return plan

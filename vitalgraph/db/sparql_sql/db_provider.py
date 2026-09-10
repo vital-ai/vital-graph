@@ -22,7 +22,9 @@ Setup (done once at startup):
 
 from __future__ import annotations
 
+import contextvars
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
@@ -138,6 +140,38 @@ async def bounded_lock_wait(conn, lock_timeout_ms: int = STATS_LOCK_TIMEOUT_MS):
             logger.debug("could not restore lock_timeout to %s", prev)
 
 
+# Round trips made while GENERATING one query, as (count, total_ms).
+#
+# Generation is on the request path and can dominate: on the `issues/178`
+# reference query it measured 2.7 s to produce SQL that executes in 39 ms, and
+# a CPU profile accounted for only 103 ms of it. The rest was await time — 36
+# separate round trips, none individually slow. A per-stage timer cannot show
+# that, because the cost is not in any one stage; it is in how MANY there are.
+#
+# A ContextVar, not a module global: concurrent queries share the event loop
+# and a global would attribute one query's round trips to another.
+_roundtrips: contextvars.ContextVar = contextvars.ContextVar(
+    "sparql_sql_roundtrips", default=None)
+
+
+def start_roundtrip_count() -> None:
+    """Begin counting round trips for the current task."""
+    _roundtrips.set([0, 0.0])
+
+
+def roundtrip_count() -> tuple:
+    """(count, total_ms) since `start_roundtrip_count`, or (0, 0.0)."""
+    v = _roundtrips.get()
+    return (v[0], round(v[1], 1)) if v else (0, 0.0)
+
+
+def _record_roundtrip(ms: float) -> None:
+    v = _roundtrips.get()
+    if v is not None:
+        v[0] += 1
+        v[1] += ms
+
+
 async def execute_query(sql, params=None, conn_params=None, conn=None,
                         *, lock_timeout_ms: Optional[int] = None):
     """Execute a SQL query and return rows as list of dicts.
@@ -160,8 +194,10 @@ async def execute_query(sql, params=None, conn_params=None, conn=None,
     asql, args = _pg_params_to_asyncpg(sql, params)
 
     async def _run(c):
+        _t0 = time.monotonic()
         if lock_timeout_ms is None:
             rows = await c.fetch(asql, *args)
+            _record_roundtrip((time.monotonic() - _t0) * 1000)
             return [dict(r) for r in rows]
         # Save and restore rather than SET LOCAL in a transaction of our own.
         # `sparql_sql_space_impl.create_transaction()` hands callers a connection
@@ -172,6 +208,7 @@ async def execute_query(sql, params=None, conn_params=None, conn=None,
         # This form is correct whether or not a transaction is open.
         async with bounded_lock_wait(c, lock_timeout_ms):
             rows = await c.fetch(asql, *args)
+        _record_roundtrip((time.monotonic() - _t0) * 1000)
         return [dict(r) for r in rows]
 
     if conn is not None:

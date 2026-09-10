@@ -131,6 +131,8 @@ def merge_bgp_joins(plan: PlanV2, aliases=None) -> PlanV2:
     """Rewrite every `Join(BGP, BGP)` below `plan` into a single BGP."""
     if plan is None:
         return plan
+    from .plan_decisions import recorder_for
+    _rec = recorder_for(aliases) if aliases is not None else None
     plan.children = [merge_bgp_joins(c, aliases) for c in (plan.children or [])]
 
     if plan.kind != KIND_JOIN or len(plan.children or []) != 2:
@@ -139,6 +141,7 @@ def merge_bgp_joins(plan: PlanV2, aliases=None) -> PlanV2:
     # sides are not one pattern and merging them would turn a semi-join into a
     # product.
     if (plan.hints or {}).get('semijoin'):
+        if _rec: _rec.declined("merge_bgp", "join is marked as a semi-join")
         return plan
     left, right = plan.children
     # A UNION branch carrying `BIND(?x AS ?y)` reaches here as
@@ -149,16 +152,33 @@ def merge_bgp_joins(plan: PlanV2, aliases=None) -> PlanV2:
     left_core, left_chain = _peel_extends(left, right)
     right_core, right_chain = _peel_extends(right, left)
     if left_core is None or right_core is None:
+        if _rec: _rec.declined(
+            "merge_bgp", "an EXTEND binds a variable the other side also binds")
         return plan
     if left_core.kind != KIND_BGP or right_core.kind != KIND_BGP:
+        # THE decline that cost two rounds in `issues/178`: a UNION branch
+        # arrives as `Filter(Extend(BGP))`, and requiring bare BGPs rejected
+        # the query this was written for while distribution above it fired.
+        if _rec: _rec.declined(
+            "merge_bgp", "children are not both BGPs after peeling",
+            left=left_core.kind, right=right_core.kind)
         return plan
 
     merged = _merge_two(left_core, right_core)
+    _merged_tables = len(merged.tables) if merged is not None else 0
     if merged is None:
+        if _rec: _rec.declined("merge_bgp", "no shared variable, or a shared "
+                                            "variable had no position")
         return plan
     for node in reversed(left_chain + right_chain):
         node.children = [merged]
         merged = node
+    # `_merged_tables`, not `len(merged.tables)`: by here `merged` may be the
+    # outermost re-wrapped FILTER/EXTEND, whose `.tables` is empty. Reporting
+    # that read "merged two BGPs into one: 0 tables" until the decision record
+    # made it visible.
     logger.info("merged two BGPs into one: %d tables, order now chosen across "
-                "both", len(merged.tables))
+                "both", _merged_tables)
+    if _rec: _rec.fired("merge_bgp", "one ordering decision across both",
+                        tables=_merged_tables)
     return merged

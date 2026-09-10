@@ -45,9 +45,26 @@ _CACHE: dict = {}
 RDF_TYPE_URI = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
 VITALTYPE_URI = "http://vital.ai/ontology/vital-core#vitaltype"
 
-# Same budget and the same reasoning as `slot_type_tautology`: this is an
-# optimisation INPUT, and no such input is worth minutes of a user's query.
-AGREEMENT_TIMEOUT_MS = 2000
+# An optimisation INPUT, and no such input is worth seconds of a user's query.
+#
+# 250 ms, not the 2,000 ms this used to carry. Measured on `wordnet_frames`,
+# the frame check costs **2,128 ms** — it EXCEEDS the old budget, so it timed
+# out and returned None every time, and the caller then kept the join anyway.
+# The 2,000 ms was therefore pure latency spent on an answer never obtained:
+# half of a 4.0 s generation for a query that executes in 39 ms.
+#
+# Resolving the predicate to a uuid first (below) did not rescue it — the scan
+# is genuinely expensive, not merely opaque to the planner.
+#
+# Lowering the budget keeps the same OUTCOME at an eighth of the cost. A
+# sampled scan cannot replace it: a sample can DISPROVE agreement but never
+# prove it, and absorbing on a false "agrees" is a wrong answer, not a slow one.
+#
+# The durable fix is to stop asking this on the query path at all. Whether
+# `rdf:type` agrees with `vitaltype` is a per-SPACE data property that changes
+# only on write, so it belongs in the maintenance job, written to a stats
+# table and read for free. Until then, bounded and usually None.
+AGREEMENT_TIMEOUT_MS = 250
 
 
 def clear_cache() -> None:
@@ -83,9 +100,40 @@ async def frame_type_absorbable(space_id: str, type_predicate: str,
         logger.debug("frame-type agreement: count failed: %s", exc)
         return None
 
+    if not rows:
+        # VACUOUS, not agreement. An empty table produces no counterexample, so
+        # the check would answer "they agree" and the rewrite would fire against
+        # nothing. That is how `edge_type_absorbable` came to return zero rows
+        # on 8 integration tests (`issues/182`).
+        logger.debug("frame-type agreement: %s is empty — declining rather "
+                     "than answering vacuously", t_fs)
+        return None
+
     cached = _CACHE.get(key)
     if cached is not None and cached[0] == rows:
         return cached[1]
+
+    # The predicate is resolved to a uuid FIRST, not joined by `term_text`
+    # inside the query. A subquery the planner cannot fold hides the
+    # selectivity of `(predicate_uuid, object_uuid)` — it cannot use statistics
+    # for a value it does not know — so the check costs more than its own
+    # budget, times out, and returns None. `slot_type_tautology` had exactly
+    # this defect: 1,805 ms against a 2,000 ms budget, and the verdict then
+    # flipped run to run. Measured here at 2,140.8 ms against the same 2,000 ms
+    # budget, so `rdf:type` was ALWAYS returning None and the frame type
+    # constraint was never absorbed (`issues/178`).
+    try:
+        pred_uuid = await conn.fetchval(
+            f"SELECT term_uuid FROM {space_id}_term WHERE term_text = $1",
+            type_predicate)
+    except Exception as exc:
+        logger.debug("frame-type agreement: predicate lookup failed: %s", exc)
+        return None
+    if pred_uuid is None:
+        # The predicate is absent from this space, so nothing carries it and
+        # no frame can disagree. That is a REAL agreement, not a vacuous one.
+        _CACHE[key] = (rows, True)
+        return True
 
     sql = f"""
         SELECT 1 FROM (SELECT DISTINCT frame_uuid, context_uuid, frame_type_uuid
@@ -93,8 +141,7 @@ async def frame_type_absorbable(space_id: str, type_predicate: str,
         LEFT JOIN {space_id}_rdf_quad rt
                ON rt.subject_uuid = f.frame_uuid
               AND rt.context_uuid = f.context_uuid
-              AND rt.predicate_uuid = (SELECT term_uuid FROM {space_id}_term
-                                       WHERE term_text = $1)
+              AND rt.predicate_uuid = $1
         WHERE rt.object_uuid IS DISTINCT FROM f.frame_type_uuid
         LIMIT 1"""
 
@@ -102,7 +149,7 @@ async def frame_type_absorbable(space_id: str, type_predicate: str,
     await conn.execute(f"SET statement_timeout = '{int(AGREEMENT_TIMEOUT_MS)}ms'")
     try:
         async with conn.transaction():
-            row = await conn.fetchval(sql, RDF_TYPE_URI)
+            row = await conn.fetchval(sql, pred_uuid)
         agrees = row is None
     except Exception as exc:
         logger.debug("frame-type agreement: gave up (%s)", type(exc).__name__)

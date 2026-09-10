@@ -2225,6 +2225,24 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 'joins': join_count,
                 'sql_chars': sql_len,
             }
+            # WARNING, and self-sufficient. Production does not run at INFO,
+            # so the breakdown below is invisible exactly where a slow query
+            # matters; this carries the SPARQL, the plan decisions and the
+            # timing split so the query can be analysed without the machine.
+            try:
+                from .plan_shape import report_slow_query
+                # No connection: the request's was released when the `async
+                # with` above closed. `report_slow_query` acquires its own only
+                # when deep analysis is switched on, so the diagnostic can never
+                # borrow — or hold — the connection serving the request.
+                await report_slow_query(
+                    None,
+                    space_id=space_id, sparql=query, sql=sql, timing=timing,
+                    plan_decisions=getattr(gen, 'plan_decisions', None),
+                    rows_returned=len(rows))
+            except Exception:
+                pass
+
             logger.info(
                 "SPARQL pipeline [%s]: acquire=%.0fms sidecar=%.0fms gen=%.0fms exec=%.0fms "
                 "rows→dict=%.0fms bindings=%.0fms total=%.0fms "

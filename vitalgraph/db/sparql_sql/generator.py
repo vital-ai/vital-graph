@@ -16,6 +16,7 @@ This module is the v2 equivalent of v1's jena_sql_generator.py.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 
 import asyncpg
@@ -46,6 +47,9 @@ class GenerateResult:
     ok: bool = True
     error: Optional[str] = None
     trace_json: Optional[str] = None
+    # Which plan rewrites fired and which declined, with reasons. See
+    # `plan_decisions`; empty dict when generation failed before the pipeline.
+    plan_decisions: Dict[str, Any] = field(default_factory=dict)
     # VectorRequests that need server-side vectorization before SQL execution.
     # Non-empty when the query uses vg:vectorSimilarity with a text argument.
     # The orchestrator must vectorize each request's search_text and replace
@@ -1356,6 +1360,12 @@ async def _generate_sql(
     try:
         # Stage 1: Collect → PlanV2 (pure, no I/O)
         aliases = AliasGenerator()
+        # Attached here so every rewrite can reach it without a signature
+        # change — they all already take `aliases`. See `plan_decisions`.
+        from .plan_decisions import recorder_for
+        _decisions = recorder_for(aliases)
+        from .db_provider import start_roundtrip_count, roundtrip_count
+        start_roundtrip_count()
         if graph_lock_uri:
             aliases.graph_lock_uri = graph_lock_uri
         if default_graph:
@@ -1404,8 +1414,9 @@ async def _generate_sql(
         # Stage 2: Materialize constants
         term_table = f"{space_id}_term"
         if conn is not None or conn_params is not None:
-            await materialize_constants(aliases, term_table,
-                                        conn_params=conn_params, conn=conn)
+            with _decisions.stage("materialize_constants"):
+                await materialize_constants(aliases, term_table,
+                                            conn_params=conn_params, conn=conn)
 
         # Stage 2 post: Prune dead UNION branches (constants absent from term table)
         from .prune_union import (prune_dead_union_branches,
@@ -1421,8 +1432,9 @@ async def _generate_sql(
 
         # Stage 2a: Load predicate cardinality stats
         if conn is not None or conn_params is not None:
-            await _load_quad_stats(aliases, space_id,
-                                   conn_params=conn_params, conn=conn)
+            with _decisions.stage("load_quad_stats"):
+                await _load_quad_stats(aliases, space_id,
+                                       conn_params=conn_params, conn=conn)
 
         # Stage 2a.0: VALUES -> FILTER ... IN
         #
@@ -1474,8 +1486,9 @@ async def _generate_sql(
         from .ensure_frame_entity_table import ensure_frame_entity_table
         edge_ready = frame_entity_ready = False
         if conn is not None or conn_params is not None:
-            edge_ready = await ensure_edge_table(space_id, conn=conn,
-                                                 conn_params=conn_params)
+            with _decisions.stage("ensure_edge_table"):
+                edge_ready = await ensure_edge_table(space_id, conn=conn,
+                                                     conn_params=conn_params)
             if edge_ready:
                 # Whether a type constraint on the FRAME node can be read off
                 # `frame_slot.frame_type_uuid` instead of joining rdf_quad per
@@ -1500,12 +1513,26 @@ async def _generate_sql(
                     from .edge_type_agreement import (
                         frame_type_absorbable,
                         RDF_TYPE_URI as _ETA_RDF, VITALTYPE_URI as _ETA_VT)
+                    _t0 = time.monotonic()
                     aliases.frame_type_absorbable = {
                         tp: await frame_type_absorbable(space_id, tp, conn)
                         for tp in (_ETA_RDF, _ETA_VT)
                     }
+                    # A gate that answers TRUE because the table it checks is
+                    # EMPTY is the `edge_type_absorbable` failure — vacuously
+                    # true, then eight tests returning zero rows. Record the
+                    # verdicts so a vacuous one is visible.
+                    _decisions.timed(
+                        "frame_type_absorbable",
+                        (time.monotonic() - _t0) * 1000,
+                        fired=any(v for v in aliases.frame_type_absorbable.values()),
+                        reason="rdf:type agrees with vitaltype for every frame",
+                        verdicts={k.rsplit('#', 1)[-1]: v for k, v
+                                  in aliases.frame_type_absorbable.items()})
                 except Exception as exc:
                     logger.debug("frame-type agreement prefetch skipped: %s", exc)
+                    _decisions.declined("frame_type_absorbable",
+                                        f"prefetch failed: {exc}")
                 from .rewrite_edge_table import rewrite_edge_table
                 plan = rewrite_edge_table(plan, aliases, space_id)
 
@@ -1534,11 +1561,27 @@ async def _generate_sql(
                     for _tp, _tu in slot_type_constants(plan, aliases):
                         if _tp not in (RDF_TYPE_URI, VITALTYPE_URI):
                             continue
-                        aliases.slot_type_tautology[(_tp, _tu)] = \
-                            await excludes_nothing(
-                                space_id, _tu, _roles, _tp, conn)
+                        # TIMED, and recorded next to the verdict. This gate
+                        # cost 1,805 ms warm under a 2,000 ms budget, so it
+                        # expired on some runs and not others and the plan
+                        # flipped an order of magnitude with it — invisible
+                        # until the duration sat beside the answer
+                        # (`issues/178`).
+                        _t0 = time.monotonic()
+                        _verdict = await excludes_nothing(
+                            space_id, _tu, _roles, _tp, conn)
+                        aliases.slot_type_tautology[(_tp, _tu)] = _verdict
+                        _decisions.timed(
+                            "slot_type_tautology",
+                            (time.monotonic() - _t0) * 1000,
+                            fired=bool(_verdict),
+                            reason=("constraint excludes nothing, dropped"
+                                    if _verdict else
+                                    "constraint excludes rows, or unknown"))
                 except Exception as exc:
                     logger.debug("slot-type tautology prefetch skipped: %s", exc)
+                    _decisions.declined("slot_type_tautology",
+                                        f"prefetch failed: {exc}")
 
                 # GATED. The collapse emits joins against `{space}_frame_slot`;
                 # if that table is absent or empty the joins match nothing and
@@ -1546,8 +1589,10 @@ async def _generate_sql(
                 # integration tests went to empty result sets the moment the
                 # rewrite fired on an unbuilt table.
                 from .ensure_frame_slot_table import ensure_frame_slot_table
-                if await ensure_frame_slot_table(space_id, conn=conn,
-                                                 conn_params=conn_params):
+                with _decisions.stage("ensure_frame_slot_table"):
+                    _fs_ready = await ensure_frame_slot_table(
+                        space_id, conn=conn, conn_params=conn_params)
+                if _fs_ready:
                     from .rewrite_frame_entity_table import rewrite_frame_entity_table
                     plan = rewrite_frame_entity_table(plan, aliases, space_id)
 
@@ -1753,7 +1798,8 @@ async def _generate_sql(
         # emit time, which is what made every negated criterion walk raw quads
         # and resolve each predicate URI with a runtime subquery (issues/057).
         from .exists_subplan import prepare_exists_subplans
-        await prepare_exists_subplans(
+        with _decisions.stage("prepare_exists_subplans"):
+         await prepare_exists_subplans(
             plan, space_id, conn=conn, conn_params=conn_params,
             graph_lock_uri=graph_lock_uri,
             edge_table_ready=edge_ready, frame_entity_ready=frame_entity_ready)
@@ -1773,15 +1819,17 @@ async def _generate_sql(
         if conn is not None or conn_params is not None:
             try:
                 from .sync_edge_fanout import load_edge_fanout
-                aliases.edge_fanout = await load_edge_fanout(conn, space_id)
+                with _decisions.stage("load_edge_fanout"):
+                    aliases.edge_fanout = await load_edge_fanout(conn, space_id)
             except Exception:
                 aliases.edge_fanout = {}
         else:
             aliases.edge_fanout = {}
 
         # Stage 2b: Load datatype cache
-        datatype_cache = await _load_datatype_cache(
-            space_id, conn_params=conn_params, conn=conn)
+        with _decisions.stage("load_datatype_cache"):
+            datatype_cache = await _load_datatype_cache(
+                space_id, conn_params=conn_params, conn=conn)
 
         # Stage 2c: Compute text-needed vars (skip term JOINs for internal-only vars)
         from .var_scope import compute_text_needed_vars
@@ -1794,8 +1842,9 @@ async def _generate_sql(
         # Stage 2d.1: Mark joins emittable as existence tests, and the DISTINCT
         # each one makes redundant. After 2c so it sees the plan emit will see.
         from .semijoin import mark_semijoins, needed_pairs
-        await _load_missing_pair_stats(plan, aliases, space_id,
-                                       conn=conn, conn_params=conn_params)
+        with _decisions.stage("load_pair_stats"):
+            await _load_missing_pair_stats(plan, aliases, space_id,
+                                           conn=conn, conn_params=conn_params)
         # A DEEP page wants the opposite plan, and the choice must be made HERE:
         # mark_semijoins SPLITS the anchor BGP, and a split is equivalent to the
         # original only AS a semi-join. The undo list is local to that function,
@@ -1994,6 +2043,7 @@ async def _generate_sql(
         # Stage 2e: Pre-load vector + FTS index metadata
         vector_index_meta: Dict[str, Dict[str, Any]] = {}
         fts_index_meta: Dict[str, Dict[str, Any]] = {}
+        _idx_meta_t0 = time.monotonic()
         if conn is not None:
             try:
                 vi_table = f"{space_id}_vector_index"
@@ -2041,6 +2091,12 @@ async def _generate_sql(
             except Exception:
                 pass  # tables may not exist
 
+        # Three optional-feature lookups (vector, FTS, search mapping) that
+        # every query pays whether or not it uses them. Timed together because
+        # what matters is the COUNT of round trips, not any one of them.
+        _decisions.stages["index_metadata"] = (
+            time.monotonic() - _idx_meta_t0) * 1000
+
         # Stage 3: Emit → SQL (pure, no I/O)
         from .emit_context import ProcessingTrace
         sparql_text = getattr(meta, 'sparql', '') if meta else ''
@@ -2063,7 +2119,8 @@ async def _generate_sql(
         # See issues 027 / 028.
         from .var_scope import all_named_vars
         ctx.query_all_vars = frozenset(all_named_vars(plan))
-        sql_str = emit(plan, ctx)
+        with _decisions.stage("emit"):
+            sql_str = emit(plan, ctx)
 
         # Issue 028: any variable an expression could not resolve compiled to
         # NULL. Harmless when the variable is legitimately unbound, and a
@@ -2087,8 +2144,9 @@ async def _generate_sql(
         # scalar subquery over the _const CTE — only slow.
         if (conn is not None or conn_params is not None) and (
                 len(aliases.resolved_constants) < len(aliases.constants)):
-            await materialize_constants(aliases, term_table,
-                                        conn_params=conn_params, conn=conn)
+            with _decisions.stage("materialize_constants"):
+                await materialize_constants(aliases, term_table,
+                                            conn_params=conn_params, conn=conn)
 
         # Stage 4: Substitute constants
         sql_str = substitute_constants(sql_str, aliases)
@@ -2127,10 +2185,18 @@ async def _generate_sql(
         ctx.trace.log_step(0, "final", "generator",
                            f"var_map: {var_map}")
 
+        # One structured line per query: which rewrites fired, which declined
+        # and why. Always on — a diagnostic nobody enables is indistinguishable
+        # from not having one, which is what `issues/178` ran into.
+        _rt_n, _rt_ms = roundtrip_count()
+        _decisions.emit(space_id=space_id,
+                        extra={"db_roundtrips": _rt_n, "db_ms": _rt_ms})
+
         return GenerateResult(
             sql=sql_str,
             var_map=var_map,
             sparql_vars=sparql_vars,
+            plan_decisions=_decisions.as_dict(),
             trace_json=ctx.trace.to_json(),
             vector_requests=ctx.vector_requests,
             fuzzy_requests=ctx.fuzzy_requests,
