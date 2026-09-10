@@ -49,8 +49,14 @@ async def test_the_hub_list_matches_the_real_fanout(perf_conn):
     assert rows, "no hubs recorded"
     for r in rows:
         actual = await perf_conn.fetchval(
-            f"SELECT count(DISTINCT dest_entity_uuid) FROM {fx.space}_frame_entity "
-            f"WHERE source_entity_uuid=$1 AND context_uuid=$2",
+            f"SELECT count(DISTINCT b.entity_uuid) "
+            f"FROM {fx.space}_frame_slot a "
+            f"JOIN {fx.space}_frame_slot b "
+            f"  ON b.frame_uuid = a.frame_uuid "
+            f" AND b.context_uuid = a.context_uuid "
+            f" AND b.entity_uuid IS DISTINCT FROM a.entity_uuid "
+            f"WHERE a.entity_uuid=$1 AND a.context_uuid=$2 "
+            f"  AND b.entity_uuid IS NOT NULL",
             r["entity_uuid"], r["context_uuid"])
         assert r["fanout"] == actual, (
             f"recorded {r['fanout']} but the entity has {actual} distinct "
@@ -77,10 +83,14 @@ async def test_absence_from_the_list_means_not_a_hub(perf_conn):
 
     widest_absent = await perf_conn.fetchval(f"""
         SELECT COALESCE(max(n), 0) FROM (
-            SELECT source_entity_uuid s, context_uuid c,
-                   count(DISTINCT dest_entity_uuid) n
-            FROM {fx.space}_frame_entity
-            WHERE source_entity_uuid IS NOT NULL AND dest_entity_uuid IS NOT NULL
+            SELECT a.entity_uuid s, a.context_uuid c,
+                   count(DISTINCT b.entity_uuid) n
+            FROM {fx.space}_frame_slot a
+            JOIN {fx.space}_frame_slot b
+              ON b.frame_uuid = a.frame_uuid
+             AND b.context_uuid = a.context_uuid
+             AND b.entity_uuid IS DISTINCT FROM a.entity_uuid
+            WHERE a.entity_uuid IS NOT NULL AND b.entity_uuid IS NOT NULL
             GROUP BY 1, 2) d
         WHERE NOT EXISTS (
             SELECT 1 FROM {fx.space}_entity_fanout f

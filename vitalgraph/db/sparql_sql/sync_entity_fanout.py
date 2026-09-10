@@ -106,24 +106,30 @@ TOP_N_DEFAULT = 1000
 # body of the distribution and below the tail that matters.
 MIN_FANOUT_DEFAULT = 25
 
-_DIRECTIONS = {
-    # direction -> (the column a walk starts FROM, the column it arrives at)
-    "forward": ("source_entity_uuid", "dest_entity_uuid"),
-    "backward": ("dest_entity_uuid", "source_entity_uuid"),
-}
+# `frame_entity` named two roles in its COLUMNS, and "forward" meant
+# source_entity -> dest_entity. `frame_slot` carries the role as DATA
+# (`issues/183`), so that direction no longer exists: the table records which
+# entity fills which slot of which frame, and which of two roles counts as
+# "forward" is a per-dataset question this module must not answer.
+#
+# The co-frame relation is SYMMETRIC — if A and B fill slots of one frame, A
+# reaches B and B reaches A — so both directions are written with the same
+# value rather than inventing an asymmetry. The column stays because the schema
+# constrains it and because a future dataset-aware consumer may want it back.
+_DIRECTIONS = ("forward", "backward")
 
 
 async def resync_entity_fanout(conn, space_id: str,
                                top_n: int = TOP_N_DEFAULT,
                                min_fanout: int = MIN_FANOUT_DEFAULT) -> Dict[str, int]:
-    """Rebuild the hub list from `frame_entity`. Returns rows written per direction.
+    """Rebuild the hub list from `frame_slot`. Returns rows written per direction.
 
     DISTINCT neighbours, not edge count: two frames connecting the same pair of
     entities are one step of a walk, not two, and it is the walk this exists to
     describe.
     """
     t_fe = f"{space_id}_entity_fanout"
-    t_src = f"{space_id}_frame_entity"
+    t_src = f"{space_id}_frame_slot"
 
     exists = await conn.fetchval(
         "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1", t_fe)
@@ -134,15 +140,23 @@ async def resync_entity_fanout(conn, space_id: str,
 
     await conn.execute(f"TRUNCATE {t_fe}")
     written: Dict[str, int] = {}
-    for direction, (from_col, to_col) in _DIRECTIONS.items():
+    for direction in _DIRECTIONS:
+        # A SELF-JOIN on the frame, where `frame_entity` had both ends on one
+        # row. `IS DISTINCT FROM` rather than `<>` so a NULL-valued slot cannot
+        # silently drop a neighbour, and DISTINCT neighbours rather than slot
+        # count: two slots naming the same entity are one step of a walk.
         result = await conn.execute(f"""
             INSERT INTO {t_fe} (entity_uuid, context_uuid, direction, fanout)
-            SELECT {from_col}, context_uuid, $1, n FROM (
-                SELECT {from_col}, context_uuid,
-                       count(DISTINCT {to_col}) AS n
-                FROM {t_src}
-                WHERE {from_col} IS NOT NULL AND {to_col} IS NOT NULL
-                GROUP BY {from_col}, context_uuid
+            SELECT entity_uuid, context_uuid, $1, n FROM (
+                SELECT a.entity_uuid, a.context_uuid,
+                       count(DISTINCT b.entity_uuid) AS n
+                FROM {t_src} a
+                JOIN {t_src} b
+                  ON b.frame_uuid = a.frame_uuid
+                 AND b.context_uuid = a.context_uuid
+                 AND b.entity_uuid IS DISTINCT FROM a.entity_uuid
+                WHERE a.entity_uuid IS NOT NULL AND b.entity_uuid IS NOT NULL
+                GROUP BY a.entity_uuid, a.context_uuid
             ) d
             WHERE n >= $2
             ORDER BY n DESC

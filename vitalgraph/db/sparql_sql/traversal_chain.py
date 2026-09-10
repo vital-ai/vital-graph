@@ -21,7 +21,9 @@ cost, measured on graph_synth_10k at depth 3 with the same answer throughout:
 TWO SHAPES
 
     frame traversal   entity -> frame -> slot -> entity, collapsed to
-                      {space}_frame_entity(frame, source_entity, dest_entity)
+                      {space}_frame_slot(frame, slot, role, entity) — one row
+                      per SLOT, with the role as DATA (`issues/183`), where
+                      `frame_entity` named its two roles in COLUMNS
     relation          entity -> entity over Edge_hasKGRelation, collapsed to
                       {space}_edge(edge, source_node, dest_node)
 

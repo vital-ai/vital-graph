@@ -97,14 +97,22 @@ WHERE q_dst.object_uuid = $1
 LIMIT 1
 """
 
-# Simplified: resolve entity UUID directly from slot UUID via frame_entity table
-_SLOT_TO_ENTITY_VIA_FRAME_ENTITY_SQL = """
-SELECT fe.entity_uuid
-FROM {frame_entity} fe
-JOIN {frame_entity} fe_slot ON fe_slot.entity_uuid = fe.entity_uuid
-    AND fe_slot.context_uuid = fe.context_uuid
-WHERE fe_slot.frame_uuid = $1
-  AND fe_slot.context_uuid = $2
+# Resolve the entity filling a slot, directly from `frame_slot`.
+#
+# This was written against `frame_entity` and selected `entity_uuid`, a column
+# that table NEVER HAD — it named its two roles as `source_entity_uuid` and
+# `dest_entity_uuid`. So the fast path raised on every call and silently fell
+# through to the quad walk, for as long as it has existed (`issues/184`).
+#
+# `frame_slot` is one row per SLOT and does carry `entity_uuid`, which is the
+# shape this query was always written for. The lookup is now by SLOT rather
+# than a self-join: the slot uuid identifies the row directly.
+_SLOT_TO_ENTITY_VIA_FRAME_SLOT_SQL = """
+SELECT fs.entity_uuid
+FROM {frame_slot} fs
+WHERE fs.slot_uuid = $1
+  AND fs.context_uuid = $2
+  AND fs.entity_uuid IS NOT NULL
 LIMIT 1
 """
 
@@ -170,26 +178,27 @@ async def resolve_entity_uuid_for_slot(
 ) -> Optional[Any]:
     """Resolve the owning entity UUID for a slot UUID.
 
-    Uses the frame_entity table if available (fast path), otherwise
-    falls back to edge traversal in the quad store.
+    Uses the `frame_slot` table if available (fast path), otherwise falls back
+    to edge traversal in the quad store.
     """
-    frame_entity = f"{space_id}_frame_entity"
+    frame_slot = f"{space_id}_frame_slot"
 
-    # Fast path: use frame_entity table
+    # Fast path: read the slot's entity straight off `frame_slot`.
     try:
         row = await conn.fetchrow(
-            _SLOT_TO_ENTITY_VIA_FRAME_ENTITY_SQL.format(frame_entity=frame_entity),
+            _SLOT_TO_ENTITY_VIA_FRAME_SLOT_SQL.format(frame_slot=frame_slot),
             slot_uuid, context_uuid,
         )
         if row:
             return row["entity_uuid"]
     except Exception as exc:
-        # NOT merely "the table might not exist". This path has never executed:
-        # the query selects `entity_uuid`, a column `frame_entity` does not
-        # have, so it raises on every call and always falls through
-        # (`issues/184`). Logged rather than silently swallowed — a fast path
-        # that cannot run is indistinguishable from a by-design fallback until
-        # something says so.
+        # NOT merely "the table might not exist". Until `frame_slot` replaced
+        # `frame_entity` here, this path had NEVER executed: it selected
+        # `entity_uuid`, a column `frame_entity` did not have, so it raised on
+        # every call and always fell through (`issues/184`). Still logged
+        # rather than silently swallowed — a fast path that cannot run is
+        # indistinguishable from a by-design fallback until something says so,
+        # and that is exactly how it went unnoticed.
         logger.debug("geo slot fast path unavailable, using edge traversal: %s",
                      exc)
 

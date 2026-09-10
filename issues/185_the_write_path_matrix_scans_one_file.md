@@ -77,3 +77,46 @@ is a judgement per module, which is exactly what the test is designed to force.
 - Whether other derived tables (`edge`, `entity_slot_sort`) are ALSO unmaintained
   on the four unscanned modules. The same grep that found the `frame_slot` gap
   would answer it, and it was not run for them.
+
+## The sweep, completed — and four more misses it found
+
+`issues/183` retired `frame_entity` for `frame_slot`. The audit that was
+supposed to catch every path that touched it missed these, each of which kept
+RESOLVING and so failed silently rather than loudly:
+
+| path | what it did instead |
+|---|---|
+| `sparql_sql_space_impl` DROP GRAPH | called `delete_frame_entity_for_context`; cleared nothing, 14 rows survived a dropped graph |
+| `maintenance_job` sweep | called `cleanup_stale_frame_entity` on a table that no longer exists, so `cleanup_stale_frame_slot` had NO scheduled caller |
+| `maintenance_job` self-heal | called `backfill_frame_entity_table`; that function had no `frame_slot` equivalent at all until now |
+| `sync_entity_fanout` | rebuilt the hub diagnostic FROM `frame_entity`, so every resync wrote nothing and the diagnostic read "no hubs" |
+| `geo_slot_handler` | see below — worse |
+| `ops/database_op`, `traversal_chain` | stale table lists and documentation |
+| `sparql_sql_space_impl` incremental write | a DEAD import of the retired module beside live `frame_slot` calls |
+
+**The pattern is one thing: the module still existed.** Deleting a table while
+leaving its module importable means every call site keeps compiling, keeps
+running, and keeps doing nothing. A missing module would have failed on the
+first import; a missing table failed only where something read the result.
+
+### `geo_slot_handler` was never right, not merely stale
+
+`issues/184` recorded that this fast path has never executed. The reason is
+worse than staleness: the query selected `fe.entity_uuid`, **a column
+`frame_entity` never had** — it named its two roles as `source_entity_uuid` and
+`dest_entity_uuid`. So it raised on every call since it was written and always
+fell through to the quad walk.
+
+`frame_slot` is one row per slot and does carry `entity_uuid`, which is the
+shape the query was always written for, so repointing it also fixes it.
+
+### A test that skips forever passes forever
+
+`tests/integration/test_frame_entity_staleness_is_detected.py` now reports
+`SKIPPED [4] no space on this stack has a populated frame_entity`. It will skip
+for as long as the table is absent, which is permanently. A test whose guard
+can never be satisfied is indistinguishable from one that passes, and this file
+exists because of exactly that failure mode.
+
+Still open: four test files and two scripts import `sync_frame_entity_table`.
+The module is inert, but leaving it importable is the same hazard as above.

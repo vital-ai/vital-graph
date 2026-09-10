@@ -2586,14 +2586,18 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                                 cleanup_orphan_edges_for_subjects,
                             )
                             subj_uuids = [_generate_term_uuid(u, 'U') for u in subj_uris]
-                            # frame_entity is derived from the edge table — reconcile
-                            # the touched frames: drop then re-derive so a frame that
-                            # gained/lost an entity slot is corrected. WHERE-bound
-                            # subjects are covered by the background self-heal.
-                            from .sync_frame_entity_table import (
-                                sync_frame_entity_after_edge_insert,
-                                sync_frame_entity_before_delete,
-                            )
+                            # `frame_slot` is derived from the edge table —
+                            # reconcile the touched frames: drop then re-derive
+                            # so a frame that gained or lost an entity slot is
+                            # corrected. WHERE-bound subjects are covered by the
+                            # background self-heal.
+                            #
+                            # The `sync_frame_entity_table` import that stood
+                            # here was DEAD — the calls below already use the
+                            # `frame_slot` functions. It is exactly that kind of
+                            # leftover that let the DROP GRAPH path keep
+                            # resolving against a retired module and silently
+                            # clear nothing (`issues/183`).
                             # entity_slot_sort reconciles the same way — drop
                             # then re-derive — so a slot whose VALUE was
                             # repointed gets a corrected row. Insert-only would

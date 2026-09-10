@@ -1630,24 +1630,27 @@ class MaintenanceJob:
         from ..db.sparql_sql.sync_edge_table import (
             take_sweep_pending, mark_sweep_needed)
         pending = take_sweep_pending()
-        from ..db.sparql_sql.sync_frame_entity_table import (
-            cleanup_stale_frame_entity)
+        from ..db.sparql_sql.sync_frame_slot_table import (
+            cleanup_stale_frame_slot)
         for sid in sorted(pending)[:_SWEEP_SPACES_PER_CYCLE]:
             try:
                 async with self._pool.acquire() as conn:
-                    # frame_entity BEFORE edges, and the order is load-bearing:
-                    # a frame_entity row is validated against the edge table, so
+                    # frame_slot BEFORE edges, and the order is load-bearing:
+                    # a frame_slot row is validated against the edge table, so
                     # cleaning it after the edges it reads have gone makes it
                     # look stale for the wrong reason and the two passes
                     # disagree about why. This ordering came from the inline
                     # cleanup that used to run in execute_sparql_update; moving
-                    # the sweep here dropped the frame_entity half entirely,
-                    # leaving it called from NOWHERE (issues/064).
+                    # the sweep here dropped that half entirely, leaving it
+                    # called from NOWHERE (issues/064) — and retiring
+                    # `frame_entity` for `frame_slot` (issues/183) did it a
+                    # second time, because this call kept RESOLVING against the
+                    # old module and so swept a table that no longer exists.
                     async with maintenance_timeouts(conn):
-                        stale = await cleanup_stale_frame_entity(conn, sid)
+                        stale = await cleanup_stale_frame_slot(conn, sid)
                         removed = await cleanup_orphan_edges(conn, sid)
                 if stale:
-                    logger.info("Frame-entity integrity: swept %d stale row(s) "
+                    logger.info("Frame-slot integrity: swept %d stale row(s) "
                                 "from %s after a WHERE-bound delete", stale, sid)
                 if removed:
                     logger.info("Edge integrity: swept %d orphan(s) from %s "
@@ -1885,18 +1888,23 @@ class MaintenanceJob:
         return {"spaces": findings}
 
     async def _run_frame_entity_integrity(self, space_ids: List[str]) -> Optional[Dict]:
-        """Backfill the single worst-drifted {space}_frame_entity table, if any.
+        """Backfill the single worst-drifted {space}_frame_slot table, if any.
 
         Same shape as _run_edge_integrity: measure drift cheaply per space and
         backfill the worst one per cycle with the non-blocking
-        `backfill_frame_entity_table` (ROW EXCLUSIVE, no TRUNCATE), so
-        frame-entity-rewrite queries are not blocked. No-op for spaces without
-        connector-frame data (drift 0). frame_entity is derived from the edge
+        `backfill_frame_slot_table` (ROW EXCLUSIVE, no TRUNCATE), so
+        frame-slot-rewrite queries are not blocked. No-op for spaces without
+        connector-frame data (drift 0). `frame_slot` is derived from the edge
         table, so this runs after the edge integrity step.
+
+        The STEP and PROBE names keep the `frame_entity` spelling: they are
+        identifiers a running deployment has already persisted and gated on, so
+        renaming them is a migration, not a rename. The table they act on is
+        `frame_slot` (`issues/183`).
         """
-        from ..db.sparql_sql.sync_frame_entity_table import (
-            frame_entity_drift, frame_entity_orphan_rate,
-            backfill_frame_entity_table)
+        from ..db.sparql_sql.sync_frame_slot_table import (
+            frame_slot_drift, frame_slot_orphan_rate,
+            backfill_frame_slot_table)
 
         worst_space = None
         worst_drift = 0
@@ -1908,7 +1916,7 @@ class MaintenanceJob:
                         if not await probe_data_changed(
                                 conn, space_id, "frame_entity_drift"):
                             continue
-                        expected, actual = await frame_entity_drift(
+                        expected, actual = await frame_slot_drift(
                             conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
                         mark_probe_converged(
                             space_id, "frame_entity_drift",
@@ -1919,7 +1927,7 @@ class MaintenanceJob:
                     # same size, disjoint set, drift 0, every traversal empty
                     # (issues/041). Only a referential probe sees that, and
                     # until now only the edge table had one.
-                    orphan_rate = await frame_entity_orphan_rate(conn, space_id)
+                    orphan_rate = await frame_slot_orphan_rate(conn, space_id)
             except asyncpg.UndefinedTableError:
                 continue  # no frame_entity table (e.g. non-KG) — skip
             except Exception as exc:
@@ -1961,7 +1969,7 @@ class MaintenanceJob:
         try:
             async with self._pool.acquire() as conn:
                 async with maintenance_timeouts(conn):
-                    inserted = await backfill_frame_entity_table(
+                    inserted = await backfill_frame_slot_table(
                         conn, worst_space, timeout=PROBE_CLIENT_TIMEOUT_S)
             result = {"space_id": worst_space, "drift": worst_drift, "rows_added": inserted}
             if self._tracker and process_id:
@@ -2616,5 +2624,5 @@ class MaintenanceJob:
             f"{space_id}_rdf_pred_stats",
             f"{space_id}_rdf_stats",
             f"{space_id}_edge",
-            f"{space_id}_frame_entity",
+            f"{space_id}_frame_slot",
         ]
