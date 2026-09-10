@@ -108,3 +108,77 @@ class TestRetiredDropsComeFromOneList:
         live = set(SparqlSQLSchema.get_table_names("X").keys())
         retired = set(SparqlSQLSchema._RETIRED_TABLE_SUFFIXES)
         assert not (live & retired), f"both live and retired: {live & retired}"
+
+
+class TestNoCodeIndexesARetiredKey:
+    """`get_table_names(...)['x']` with a retired key is a runtime KeyError.
+
+    Removing `frame_entity` from that map turned three existing lookups into
+    landmines. One of them, in `_maybe_analyze_aux_tables`, built its table list
+    as
+
+        tables = [t['rdf_pred_stats'], t['rdf_stats'], t['datatype'],
+                  t['edge'], t['frame_entity']]
+
+    so the KeyError fired while BUILDING the list, before any ANALYZE ran — and
+    the caller logs it as non-fatal. The result was not "one stale table is
+    skipped" but ALL FIVE silently skipped on every bulk write in production,
+    visible only as `ANALYZE after bulk insert failed (non-fatal):
+    'frame_entity'` in the logs.
+
+    A retirement removes a key; nothing failed at import, and nothing failed
+    loudly at runtime either. Hence a static check.
+    """
+
+    def _lookup_keys(self):
+        """(file, key) for every subscript of a `get_table_names` result.
+
+        AST, scoped PER FUNCTION. Two cruder versions produced false positives:
+        matching any variable named `t` caught unrelated dicts, and scoping by
+        FILE still caught them, because the same short name is reused for a
+        different dict elsewhere in the same module.
+        """
+        import ast, pathlib
+        root = pathlib.Path(__file__).resolve().parents[3]
+        found = []
+        for f in list((root / "vitalgraph").rglob("*.py")) + \
+                 list((root / "scripts").rglob("*.py")):
+            try:
+                tree = ast.parse(f.read_text())
+            except Exception:
+                continue
+            for fn in ast.walk(tree):
+                if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                names = set()
+                for node in ast.walk(fn):
+                    if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+                        continue
+                    fname = node.value.func
+                    label = getattr(fname, "attr", None) or getattr(fname, "id", None)
+                    if label != "get_table_names":
+                        continue
+                    for tgt in node.targets:
+                        if isinstance(tgt, ast.Name):
+                            names.add(tgt.id)
+                if not names:
+                    continue
+                for node in ast.walk(fn):
+                    if (isinstance(node, ast.Subscript)
+                            and isinstance(node.value, ast.Name)
+                            and node.value.id in names
+                            and isinstance(node.slice, ast.Constant)
+                            and isinstance(node.slice.value, str)):
+                        found.append((f.relative_to(root), node.slice.value))
+        return found
+
+    def test_every_indexed_key_exists(self):
+        live = set(SparqlSQLSchema.get_table_names("X"))
+        bad = [(f, k) for f, k in self._lookup_keys() if k not in live]
+        assert not bad, (
+            "these index get_table_names with a key it no longer defines, "
+            f"which is a runtime KeyError: {bad}")
+
+    def test_the_check_can_see_something(self):
+        """Guard the guard: a regex that matches nothing would pass forever."""
+        assert self._lookup_keys(), "found no lookups at all — the pattern broke"

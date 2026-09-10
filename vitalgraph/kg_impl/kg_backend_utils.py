@@ -928,8 +928,15 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             return False
 
         t = SparqlSQLSchema.get_table_names(space_id)
+        # `frame_slot`, not `frame_entity`. The retired key was removed from
+        # `get_table_names` (`issues/183`), so this raised KeyError while
+        # BUILDING the list — before any ANALYZE ran. Not "the dropped table's
+        # ANALYZE fails": ALL FIVE were skipped, silently, because the caller
+        # logs it as non-fatal. Prod showed it as
+        # `ANALYZE after bulk insert failed (non-fatal): 'frame_entity'`
+        # on every bulk write.
         tables = [t['rdf_pred_stats'], t['rdf_stats'], t['datatype'],
-                  t['edge'], t['frame_entity']]
+                  t['edge'], t['frame_slot']]
         # Largest of the set — the best proxy for "has this space been analyzed".
         representative = t['edge']
 

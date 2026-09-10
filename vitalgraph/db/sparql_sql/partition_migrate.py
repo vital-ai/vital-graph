@@ -51,7 +51,9 @@ def _new_core_ddl(t: Dict[str, str], n: int):
     without INCLUDING INDEXES does not copy constraints, which is what lets
     rdf_quad take the slim 4-column key it is migrating TO.
     """
-    q, e, f = _bare(t["rdf_quad"]), _bare(t["edge"]), _bare(t["frame_entity"])
+    # `frame_slot`: the retired key is gone from `get_table_names`
+    # (`issues/183`), so this would raise KeyError before doing anything.
+    q, e, f = _bare(t["rdf_quad"]), _bare(t["edge"]), _bare(t["frame_slot"])
     stmts = [
         f"""CREATE TABLE {q}_new (
                 LIKE {q} INCLUDING DEFAULTS,
@@ -90,7 +92,9 @@ async def migrate_space_to_partitioned(conn, space_id: str,
     """
     schema = SparqlSQLSchema()
     t = schema.get_table_names(space_id)
-    q, e, f = _bare(t["rdf_quad"]), _bare(t["edge"]), _bare(t["frame_entity"])
+    # `frame_slot`: the retired key is gone from `get_table_names`
+    # (`issues/183`), so this would raise KeyError before doing anything.
+    q, e, f = _bare(t["rdf_quad"]), _bare(t["edge"]), _bare(t["frame_slot"])
 
     old_quads = await conn.fetchval(f"SELECT count(*) FROM {t['rdf_quad']}")
 
