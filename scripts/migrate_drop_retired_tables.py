@@ -76,8 +76,8 @@ async def _tables_for(conn, space_id: str, all_spaces: list) -> list:
     r"""This space's tables, attributed by the LONGEST matching space id.
 
     `LIKE '<space>\_%'` alone is wrong whenever one space id is a prefix of
-    another. With spaces `cardiff_kg` and `cardiff_kg_test`, every table of the
-    second matches the first, and `cardiff_kg` then reports `test_frame_entity`
+    another. With spaces `prod_kg` and `prod_kg_test`, every table of the
+    second matches the first, and `prod_kg` then reports `test_frame_entity`
     AND `test_rdf_quad` as unrecognised drift — the second being an ordinary
     schema table.
 
