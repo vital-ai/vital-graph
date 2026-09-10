@@ -711,6 +711,77 @@ class SparqlSQLSchema:
     # Table name helpers
     # ------------------------------------------------------------------
 
+    # Per-space tables this schema NO LONGER creates, with why. Deliberately
+    # not a public list: callers ask `classify_space_table` whether a name is
+    # retired rather than matching against strings of their own, so the answer
+    # cannot drift from the schema that owns it.
+    #
+    # `scripts/migrate_drop_retired_tables.py` duplicated all of this — the
+    # known suffixes, the dynamic prefixes AND the retired names — and the
+    # duplicate is how a table can be "retired" in one place and live in
+    # another.
+    _RETIRED_TABLE_SUFFIXES: Dict[str, str] = {
+        # Named two `hasKGSlotType` VALUES in its COLUMNS, so a frame schema
+        # using different roles got no collapse and no warning. Replaced by
+        # `frame_slot`, which carries the role as data.
+        'frame_entity': 'issues/183 — superseded by frame_slot',
+        'vector_mapping': 'superseded by search_mapping',
+        'vector_mapping_property': 'superseded by search_mapping_property',
+    }
+
+    # One table per USER-NAMED index, so unrecognisable by construction. Any
+    # sweep that drops "anything not in the schema" would destroy these.
+    _DYNAMIC_TABLE_PREFIXES = ('fts_', 'vec_')
+
+    @staticmethod
+    def retired_table_sql(space_id: str) -> List[str]:
+        """DROP statements for every table this schema has retired."""
+        return [f"DROP TABLE IF EXISTS {space_id}_{suffix} CASCADE"
+                for suffix in SparqlSQLSchema._RETIRED_TABLE_SUFFIXES]
+
+    @staticmethod
+    def classify_space_table(table_name: str, space_ids) -> Dict[str, Any]:
+        r"""What is this table? Ask here rather than matching names yourself.
+
+        Returns `{space_id, suffix, role, reason}` where role is one of
+        `schema`, `dynamic_index`, `retired`, `unknown`, or `foreign` when the
+        name belongs to no known space.
+
+        ATTRIBUTION IS BY LONGEST MATCHING SPACE ID, which is the part callers
+        get wrong. `LIKE '<space>\_%'` matches every table of a space whose id
+        merely EXTENDS this one: with `cardiff_kg` and `cardiff_kg_test`, the
+        first claims all of the second's tables and reports `test_rdf_quad` —
+        an ordinary schema table — as unrecognised. A drop keyed off that is a
+        step away from removing a live table of another space.
+        """
+        owner = None
+        for sid in space_ids:
+            if table_name.startswith(sid + "_"):
+                if owner is None or len(sid) > len(owner):
+                    owner = sid
+        if owner is None:
+            return {"space_id": None, "suffix": None, "role": "foreign",
+                    "reason": "no known space id is a prefix of this name"}
+
+        suffix = table_name[len(owner) + 1:]
+        # Partition children are `<table>_p<N>`; attribute them to the parent.
+        base = suffix
+        head, _, tail = suffix.rpartition("_p")
+        if head and tail.isdigit():
+            base = head
+
+        if base in SparqlSQLSchema.get_table_names("X"):
+            role, reason = "schema", ""
+        elif base in SparqlSQLSchema._RETIRED_TABLE_SUFFIXES:
+            role = "retired"
+            reason = SparqlSQLSchema._RETIRED_TABLE_SUFFIXES[base]
+        elif base.startswith(SparqlSQLSchema._DYNAMIC_TABLE_PREFIXES):
+            role, reason = "dynamic_index", "one table per user-named index"
+        else:
+            role, reason = "unknown", "not created by this schema version"
+        return {"space_id": owner, "suffix": base, "role": role,
+                "reason": reason}
+
     @staticmethod
     def get_table_names(space_id: str) -> Dict[str, str]:
         """Return all per-space table names."""
@@ -1821,14 +1892,11 @@ class SparqlSQLSchema:
         t = self.get_table_names(space_id)
         return [
             f"DROP TABLE IF EXISTS {t['frame_slot']} CASCADE",
-            # `frame_entity` is RETIRED (`issues/183`) and no longer in
-            # `get_table_names` — that map is what
-            # `test_new_space_matches_schema` treats as "must exist", so
-            # leaving it there asserted a table the creation path
-            # deliberately no longer builds. The drop stays, named
-            # directly, so tearing down a space made before the change
-            # still removes it.
-            f"DROP TABLE IF EXISTS {space_id}_frame_entity CASCADE",
+            # RETIRED tables are not in `get_table_names` — that map is what
+            # `test_new_space_matches_schema` treats as "must exist" — but a
+            # space made before the change still has them, so they are dropped
+            # from the single list that defines what "retired" means.
+            *SparqlSQLSchema.retired_table_sql(space_id),
             f"DROP TABLE IF EXISTS {t['entity_slot_sort']} CASCADE",
             f"DROP TABLE IF EXISTS {t['entity_prop_sort']} CASCADE",
             f"DROP TABLE IF EXISTS {t['frame_prop_sort']} CASCADE",
@@ -2025,9 +2093,11 @@ class SparqlSQLSchema:
         for row in fn_rows:
             await conn.execute(f"DROP FUNCTION IF EXISTS {row['routine_name']}() CASCADE")
 
-        # Drop legacy vector_mapping tables (superseded by search_mapping)
-        await conn.execute(f"DROP TABLE IF EXISTS {space_id}_vector_mapping_property CASCADE")
-        await conn.execute(f"DROP TABLE IF EXISTS {space_id}_vector_mapping CASCADE")
+        # Every RETIRED table, from the one list that defines them. Naming
+        # them here as well is how `frame_entity` came to be dropped in one
+        # path and kept in another.
+        for stmt in SparqlSQLSchema.retired_table_sql(space_id):
+            await conn.execute(stmt)
 
         # Drop well-known tables
         schema = SparqlSQLSchema()

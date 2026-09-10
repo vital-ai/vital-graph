@@ -45,26 +45,6 @@ from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema  # noqa: 
 
 logger = logging.getLogger("migrate_drop_retired_tables")
 
-# Retired per-space tables, newest first. A table belongs here once nothing
-# reads it AND its replacement is deployed everywhere that matters.
-#
-# Order within the list matters only where one references another; these do not,
-# and CASCADE covers dependent objects either way.
-RETIRED = [
-    # `frame_entity` named two `hasKGSlotType` VALUES in its COLUMNS, so a
-    # frame schema using different roles got no collapse and no warning.
-    # Replaced by `frame_slot`, which carries the role as data (`issues/183`).
-    ("frame_entity", "issues/183 — superseded by frame_slot"),
-    # Superseded by `search_mapping` / `search_mapping_property`. The
-    # `/api/vector-mappings` routes are legacy and already delegate there.
-    ("vector_mapping_property", "superseded by search_mapping_property"),
-    ("vector_mapping", "superseded by search_mapping"),
-]
-
-# Prefixes that are legitimately unrecognisable: one table per user-named index.
-DYNAMIC_PREFIXES = ("fts_", "vec_")
-
-
 async def _spaces(conn, only: str | None) -> list:
     if only:
         return [only]
@@ -72,33 +52,11 @@ async def _spaces(conn, only: str | None) -> list:
             await conn.fetch("SELECT space_id FROM space ORDER BY space_id")]
 
 
-async def _tables_for(conn, space_id: str, all_spaces: list) -> list:
-    r"""This space's tables, attributed by the LONGEST matching space id.
-
-    `LIKE '<space>\_%'` alone is wrong whenever one space id is a prefix of
-    another. With spaces `prod_kg` and `prod_kg_test`, every table of the
-    second matches the first, and `prod_kg` then reports `test_frame_entity`
-    AND `test_rdf_quad` as unrecognised drift — the second being an ordinary
-    schema table.
-
-    The DROP itself survives that (the suffix `test_frame_entity` does not equal
-    `frame_entity`, so nothing is removed), but the REPORT is the hazard: it
-    invites someone to add `test_frame_entity` to `RETIRED`, and that entry
-    would then drop another live space's table. Attribution has to be exact
-    before the list can be trusted.
-    """
+async def _tables_for(conn, space_id: str) -> list:
     rows = await conn.fetch(
         "SELECT tablename FROM pg_tables WHERE schemaname='public' "
         "AND tablename LIKE $1 ORDER BY tablename", f"{space_id}\\_%")
-    longer = [s for s in all_spaces
-              if s != space_id and s.startswith(space_id + "_")]
-    out = []
-    for r in rows:
-        t = r["tablename"]
-        if any(t.startswith(s + "_") for s in longer):
-            continue          # belongs to a space whose id extends this one
-        out.append(t)
-    return out
+    return [r["tablename"] for r in rows]
 
 
 async def main() -> int:
@@ -123,45 +81,34 @@ async def main() -> int:
                                  password=args.password)
     try:
         spaces = await _spaces(conn, args.space)
-        known = set(SparqlSQLSchema().get_table_names("X").keys())
-        retired = {name for name, _ in RETIRED}
 
         total_dropped = 0
         drift: dict = {}
+        seen: set = set()
         for sid in spaces:
-            present = await _tables_for(conn, sid, spaces)
-            suffixes = {t[len(sid) + 1:]: t for t in present}
-
-            for name, why in RETIRED:
-                # Partition children are `<table>_p<N>` and CASCADE from the
-                # parent, so matching the parent is enough — but the suffix
-                # after `_p` must be DIGITS. `startswith(name + "_p")` alone
-                # matched `vector_mapping_property` against the `vector_mapping`
-                # rule, listing it twice and inflating the count from 34 to 51.
-                # Any retired name that is a prefix of another would collide.
-                def _is_child(suf: str) -> bool:
-                    if not suf.startswith(name + "_p"):
-                        return False
-                    return suf[len(name) + 2:].isdigit()
-
-                hit = [t for suf, t in suffixes.items()
-                       if suf == name or _is_child(suf)]
-                for table in sorted(hit):
+            for table in await _tables_for(conn, sid):
+                if table in seen:
+                    continue
+                # THE SCHEMA DECIDES. This script used to carry its own copy of
+                # the known suffixes, the dynamic prefixes and the retired
+                # names — and a duplicate is how a table comes to be retired in
+                # one place and live in another. It also attributes by the
+                # LONGEST space id, which is what a plain prefix match gets
+                # wrong when one space id extends another.
+                info = SparqlSQLSchema.classify_space_table(table, spaces)
+                if info["space_id"] != sid:
+                    continue          # belongs to a space whose id extends this one
+                seen.add(table)
+                role = info["role"]
+                if role == "retired":
                     if args.apply:
                         await conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
-                        print(f"  dropped {table}   ({why})")
+                        print(f"  dropped {table}   ({info['reason']})")
                     else:
-                        print(f"  WOULD DROP {table}   ({why})")
+                        print(f"  WOULD DROP {table}   ({info['reason']})")
                     total_dropped += 1
-
-            if args.report_drift:
-                for suf in suffixes:
-                    base = suf.rsplit("_p", 1)[0] if suf.rsplit("_p", 1)[-1].isdigit() else suf
-                    if base in known or base in retired:
-                        continue
-                    if base.startswith(DYNAMIC_PREFIXES):
-                        continue
-                    drift.setdefault(base, []).append(sid)
+                elif role == "unknown" and args.report_drift:
+                    drift.setdefault(info["suffix"], []).append(sid)
 
         verb = "dropped" if args.apply else "would drop"
         print(f"\n{verb} {total_dropped} retired table(s) across {len(spaces)} space(s)")
@@ -172,7 +119,7 @@ async def main() -> int:
             if not drift:
                 print("\nno drift: every other table is schema or a named index")
             else:
-                print("\nUNRECOGNISED (not dropped — triage before adding to RETIRED):")
+                print("\nUNRECOGNISED (not dropped — triage, then retire it in\n  SparqlSQLSchema._RETIRED_TABLE_SUFFIXES, not here):")
                 for base, sids in sorted(drift.items(), key=lambda kv: -len(kv[1])):
                     print(f"  {base:32s} {len(sids)} space(s)  e.g. {sids[:2]}")
         return 0
