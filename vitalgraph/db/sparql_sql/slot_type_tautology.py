@@ -16,7 +16,7 @@ WHY THIS IS A QUERY AND NOT AN ARGUMENT
 wrong:
 
   * "a slot reached through `hasEntitySlotValue` from a `frame_entity` row IS a
-    KGEntitySlot" — false. `sync_frame_entity_table` requires an edge, a
+    KGEntitySlot" — false. `sync_frame_slot_table` requires an edge, a
     source/dest role and `hasEntitySlotValue`, and never looks at the type.
   * comparing `rdf_stats` counts — necessary, not sufficient. On
     `sp_graph_skew_2k` the counts matched exactly while the conclusion was still

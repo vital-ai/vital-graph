@@ -1483,7 +1483,6 @@ async def _generate_sql(
 
         # Stage 2a.1: Edge table rewrite
         from .ensure_edge_table import ensure_edge_table
-        from .ensure_frame_entity_table import ensure_frame_entity_table
         edge_ready = frame_entity_ready = False
         if conn is not None or conn_params is not None:
             with _decisions.stage("ensure_edge_table"):

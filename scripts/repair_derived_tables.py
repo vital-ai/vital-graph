@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Populate `frame_entity`, `entity_fanout`, `rdf_value_stats` and
+"""Populate `frame_slot`, `entity_fanout`, `rdf_value_stats` and
 `entity_slot_sort` where empty.
 
 THE GAP. `migrate_space_schema.py` CREATES a missing derived table and says so
@@ -10,27 +10,27 @@ reports read zero. It is only wrong at query time, where an empty derived table
 is indistinguishable from a graph that genuinely has no frames.
 
 Measured on the local host cluster 2026-08-15: 43 of 77 spaces had at least one
-unpopulated derived table, and `frame_entity` / `entity_fanout` were empty on
-EVERY space with data — including one where frame_entity should hold 200,000
+unpopulated derived table, and `frame_slot` / `entity_fanout` were empty on
+EVERY space with data — including one where frame_slot should hold 200,000
 rows. The edge tables were populated throughout, so this is specifically the
 layer derived FROM edge that never got built.
 
 WHAT DEPENDS ON THEM, i.e. why an empty table is not a cosmetic problem:
-  * `frame_entity` collapses six tables per hop into one for entity/frame
+  * `frame_slot` collapses six tables per hop into one for entity/frame
     traversal. Without it, that plan is unavailable.
   * `entity_fanout` records hub entities so the planner can avoid driving a
     walk from a high-degree node.
   * `rdf_value_stats` holds the value histograms behind the criterion gate.
     Empty means every value criterion reads as unmeasured.
 
-ORDER IS NOT OPTIONAL. `resync_entity_fanout` rebuilds from `frame_entity`, so
+ORDER IS NOT OPTIONAL. `resync_entity_fanout` rebuilds from `frame_slot`, so
 running it first writes an empty hub list from an empty source and reports
-success. frame_entity therefore always runs first here rather than leaving the
+success. frame_slot therefore always runs first here rather than leaving the
 ordering to whoever calls this — the same footgun as backfilling
 `value_stats.pred_rows` before `rdf_pred_stats` exists.
 
-NOT INCLUDED: the edge table. `frame_entity` is derived from `edge`, so an
-incomplete edge table yields an incomplete frame_entity — but the edge resync
+NOT INCLUDED: the edge table. `frame_slot` is derived from `edge`, so an
+incomplete edge table yields an incomplete frame_slot — but the edge resync
 has its own known defect (an edge table ~25% incomplete in production was
 traced to both the ensure and resync paths), and rebuilding it is a bigger
 decision than this script should make silently. If edge is wrong, this
@@ -54,19 +54,19 @@ from devtools.target import add_pg_arguments, describe_target  # noqa: E402
 
 logger = logging.getLogger("repair_derived_tables")
 
-# `frame_entity` indexes CONNECTOR FRAMES: a frame joining two entities through
+# `frame_slot` indexes CONNECTOR FRAMES: a frame joining two entities through
 # a source-entity slot and a destination-entity slot. It does NOT index
 # entity->frame membership.
 #
 # Getting this wrong is easy and produces a confident false alarm. Counting
 # `Edge_hasEntityKGFrame` (entity-to-frame membership) and calling that the
-# expected frame_entity size reported one space as missing 41,730 rows when the
+# expected frame_slot size reported one space as missing 41,730 rows when the
 # correct answer for its data shape was zero — it has no connector frames at
 # all, so the resync wrote nothing and was right to.
 #
 # The honest test is whether the space uses the pattern, which is exactly what
 # `_resolve_uuids` checks before doing any work: all four URIs present in the
-# term table. Absent, frame_entity is not applicable rather than empty.
+# term table. Absent, frame_slot is not applicable rather than empty.
 # Above this fraction of sampled rows failing the referential probe, the table
 # is STALE rather than merely behind, and only a resync fixes it. Matches
 # EDGE_ORPHAN_STALE_PCT in the maintenance job so the two agree about what
@@ -97,7 +97,7 @@ async def survey_space(conn, space_id: str) -> dict | None:
     """What is empty that should not be.
 
     Emptiness alone is not evidence: a space with no entity/frame edges SHOULD
-    have an empty frame_entity. So the expected row count is derived from the
+    have an empty frame_slot. So the expected row count is derived from the
     quads and compared, rather than treating zero as automatically wrong.
     """
     if not await _exists(conn, f"{space_id}_rdf_quad"):
@@ -106,7 +106,7 @@ async def survey_space(conn, space_id: str) -> dict | None:
     if not quads:
         return None
 
-    fe = await _count(conn, space_id, "frame_entity")
+    fe = await _count(conn, space_id, "frame_slot")
     ef = await _count(conn, space_id, "entity_fanout")
     vs = await _count(conn, space_id, "rdf_value_stats")
     edge = await _count(conn, space_id, "edge")
@@ -119,26 +119,26 @@ async def survey_space(conn, space_id: str) -> dict | None:
     need = []
     stale = []
     if fe is not None and not fe and uses_connectors:
-        need.append("frame_entity")
+        need.append("frame_slot")
     elif fe:
         # POPULATED IS NOT THE SAME AS CORRECT. This script only ever repaired an
         # EMPTY table, so the one failure it could not fix was the one that most
         # needs it: a space reloaded in place — or under a new graph URI — leaves
-        # frame_entity a faithful materialisation of the PREVIOUS contents. Same
+        # frame_slot a faithful materialisation of the PREVIOUS contents. Same
         # row count, disjoint set, drift zero, every traversal returning nothing
         # (issues/041). The maintenance job now names this script for exactly
         # that fault, so it has to be able to repair it.
         #
         # Resync TRUNCATEs and holds ACCESS EXCLUSIVE, which is why the
         # maintenance tick will not do it unattended. Here an operator asked.
-        from vitalgraph.db.sparql_sql.sync_frame_entity_table import (
-            frame_entity_orphan_rate)
-        rate = await frame_entity_orphan_rate(conn, space_id)
+        from vitalgraph.db.sparql_sql.sync_frame_slot_table import (
+            frame_slot_orphan_rate)
+        rate = await frame_slot_orphan_rate(conn, space_id)
         if rate > STALE_ORPHAN_PCT:
-            need.append("frame_entity")
-            stale.append(f"frame_entity {rate * 100:.0f}% orphaned")
-    # entity_fanout is rebuilt FROM frame_entity, so it is only meaningful where
-    # frame_entity has rows — AND only where some entity actually clears
+            need.append("frame_slot")
+            stale.append(f"frame_slot {rate * 100:.0f}% orphaned")
+    # entity_fanout is rebuilt FROM frame_slot, so it is only meaningful where
+    # frame_slot has rows — AND only where some entity actually clears
     # min_fanout. It is a HUB list, not a copy: a space whose busiest entity has
     # one neighbour has no hubs, and zero rows is the right answer. Mirroring
     # the threshold here, like the value_stats test above, is the difference
@@ -147,12 +147,12 @@ async def survey_space(conn, space_id: str) -> dict | None:
         from vitalgraph.db.sparql_sql.sync_entity_fanout import MIN_FANOUT_DEFAULT
         hubbed = await conn.fetchval(f"""
             SELECT EXISTS (
-              SELECT 1 FROM {space_id}_frame_entity
+              SELECT 1 FROM {space_id}_frame_slot
               GROUP BY source_entity_uuid, context_uuid
               HAVING count(DISTINCT dest_entity_uuid) >= $1)""", MIN_FANOUT_DEFAULT)
         if hubbed:
             need.append("entity_fanout")
-    # Same trap as frame_entity: empty is only wrong if there is something to
+    # Same trap as frame_slot: empty is only wrong if there is something to
     # put in it. Histograms are built from numeric and temporal literals, so a
     # space carrying neither has zero rows correctly, and flagging it queues a
     # resync that can only ever write zero — reporting "needs repair" forever.
@@ -232,23 +232,23 @@ async def survey_space(conn, space_id: str) -> dict | None:
     if not need:
         return None
     return {"space": space_id, "quads": quads, "need": need, "stale": stale,
-            "frame_entity": fe, "uses_connectors": uses_connectors,
+            "frame_slot": fe, "uses_connectors": uses_connectors,
             "edge": edge, "value_stats": vs, "entity_slot_sort": ess,
             "entity_prop_sort": eps}
 
 
 async def repair_space(conn, space_id: str, need: list[str]) -> dict:
-    from vitalgraph.db.sparql_sql.sync_frame_entity_table import resync_frame_entity_table
+    from vitalgraph.db.sparql_sql.sync_frame_slot_table import resync_frame_slot_table
     from vitalgraph.db.sparql_sql.sync_entity_fanout import resync_entity_fanout
     from vitalgraph.db.sparql_sql.sync_value_stats import resync_value_stats
 
     out: dict = {}
-    # frame_entity FIRST — entity_fanout reads from it.
-    if "frame_entity" in need:
+    # frame_slot FIRST — entity_fanout reads from it.
+    if "frame_slot" in need:
         t0 = time.time()
-        out["frame_entity"] = await resync_frame_entity_table(conn, space_id)
-        out["frame_entity_s"] = round(time.time() - t0, 1)
-    if "entity_fanout" in need or "frame_entity" in need:
+        out["frame_slot"] = await resync_frame_slot_table(conn, space_id)
+        out["frame_slot_s"] = round(time.time() - t0, 1)
+    if "entity_fanout" in need or "frame_slot" in need:
         t0 = time.time()
         r = await resync_entity_fanout(conn, space_id)
         out["entity_fanout"] = sum(r.values()) if isinstance(r, dict) else r
@@ -258,7 +258,7 @@ async def repair_space(conn, space_id: str, need: list[str]) -> dict:
         r = await resync_value_stats(conn, space_id)
         out["value_stats"] = r.get("rows") if isinstance(r, dict) else r
         out["value_stats_s"] = round(time.time() - t0, 1)
-    # entity_slot_sort is derived from `edge` like frame_entity, and from
+    # entity_slot_sort is derived from `edge` like frame_slot, and from
     # nothing this script rebuilds, so its position here is free.
     if "entity_slot_sort" in need:
         from vitalgraph.db.sparql_sql.sync_entity_slot_sort import (

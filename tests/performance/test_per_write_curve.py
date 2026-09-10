@@ -27,8 +27,8 @@ from vitalgraph.db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
 from vitalgraph.db.sparql_sql.bulk_load import insert_terms_quads_executemany
 from vitalgraph.db.sparql_sql.sync_edge_table import (
     sync_edge_table_after_insert, _EDGE_SRC_UUID, _EDGE_DST_UUID)
-from vitalgraph.db.sparql_sql.sync_frame_entity_table import (
-    sync_frame_entity_after_edge_insert)
+from vitalgraph.db.sparql_sql.sync_frame_slot_table import (
+    sync_frame_slot_after_edge_insert)
 from test_scripts.data.generate_scale_data import load_scale_space, HASNAME
 from .conftest import skip_no_pg
 from .harness import explain_json, has_seq_scan_on, assert_growth_class, node_types
@@ -70,7 +70,7 @@ async def _probe_latency(pool, sid, term_args, quad_rows, subjects, repeats=3):
             t0 = time.monotonic()
             await insert_terms_quads_executemany(conn, t, term_args, quad_rows)
             await sync_edge_table_after_insert(conn, sid, subjects)
-            await sync_frame_entity_after_edge_insert(conn, sid, subjects)
+            await sync_frame_slot_after_edge_insert(conn, sid, subjects)
             # NO per-write stats sync. `issues/142` replaced the incremental
             # accumulator with `recompute_stats_tables`, which runs on the
             # maintenance schedule rather than on the write. Calling it here

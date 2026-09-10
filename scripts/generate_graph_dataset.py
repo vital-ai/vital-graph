@@ -177,7 +177,7 @@ ATTRIBUTE_SLOTS = [
 # differently-typed role slot silently gets WRONG ANSWERS.
 #
 # One such slot makes the proof refuse. It stays in `frame_entity` —
-# `sync_frame_entity_table` requires a role and `hasEntitySlotValue` and never
+# `sync_frame_slot_table` requires a role and `hasEntitySlotValue` and never
 # looks at the type — so the frame is still reachable, and `?slot a KGEntitySlot`
 # now genuinely EXCLUDES it.
 #
@@ -1101,7 +1101,7 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
             #
             # They carry `hasKGSlotType` — so the collapse sees them as
             # slots — but NOT `hasEntitySlotValue`, which is what keeps
-            # them out of `frame_entity`: `sync_frame_entity_table` inner
+            # them out of `frame_slot`: `sync_frame_slot_table` inner
             # joins BOTH predicates on the same slot and filters the role
             # to source/dest, so an attribute slot contributes nothing to
             # the aggregate and the table is unchanged. Checked against

@@ -1,10 +1,10 @@
-"""The frame_entity sync must not get slower the longer a connection lives.
+"""The frame_slot sync must not get slower the longer a connection lives.
 
 It did, and nothing else in the suite could see it.
 
 PostgreSQL plans a prepared statement per-parameter for its first five
 executions, then decides whether a GENERIC plan is competitive. For the
-frame_entity insert it decided wrongly by roughly 5,000x. Measured on
+frame_slot insert it decided wrongly by roughly 5,000x. Measured on
 `wordnet_frames`, syncing five touched frames on one connection:
 
     plan_cache_mode=auto           [4, 1, 2, 1, 1, 10186, 8094, 8885, 8581] ms
@@ -41,15 +41,15 @@ pytestmark = [pytest.mark.performance, skip_no_pg,
 SPACE = "wordnet_frames"
 
 
-async def test_the_frame_entity_sync_does_not_degrade_after_five_calls(perf_conn):
-    from vitalgraph.db.sparql_sql.sync_frame_entity_table import (
-        sync_frame_entity_after_edge_insert)
+async def test_the_frame_slot_sync_does_not_degrade_after_five_calls(perf_conn):
+    from vitalgraph.db.sparql_sql.sync_frame_slot_table import (
+        sync_frame_slot_after_edge_insert)
 
     if not await space_exists(perf_conn, SPACE):
         pytest.skip(f"space {SPACE} not loaded")
 
     frames = [r["frame_uuid"] for r in await perf_conn.fetch(
-        f"SELECT frame_uuid FROM {SPACE}_frame_entity LIMIT 5")]
+        f"SELECT frame_uuid FROM {SPACE}_frame_slot LIMIT 5")]
     assert frames, "fixture has no frames to sync"
 
     times = []
@@ -58,7 +58,7 @@ async def test_the_frame_entity_sync_does_not_degrade_after_five_calls(perf_conn
         await tr.start()
         try:
             t = time.perf_counter()
-            await sync_frame_entity_after_edge_insert(perf_conn, SPACE, frames)
+            await sync_frame_slot_after_edge_insert(perf_conn, SPACE, frames)
             times.append((time.perf_counter() - t) * 1000)
         finally:
             await tr.rollback()            # leave the space exactly as found

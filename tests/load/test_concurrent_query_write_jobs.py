@@ -113,13 +113,13 @@ async def test_reads_stay_fast_while_writes_and_jobs_run(pg_pool, scope):
 
         The first version INSERTed raw quads, which measured lock and I/O
         contention and nothing else: `cleanup removed {'entity_slot_sort': 0,
-        'edge': 0, 'frame_entity': 0, 'quad': 676}` — no derived rows were
+        'edge': 0, 'frame_slot': 0, 'quad': 676}` — no derived rows were
         created because none of the sync hooks fired.
 
         That omitted the write-side work this test exists to expose. Every real
         write path — `add_rdf_quad`, `add_rdf_quads_batch`,
         `add_rdf_quads_batch_bulk`, `execute_sparql_update` — runs
-        `sync_edge_table_after_insert`, `sync_frame_entity_after_edge_insert`
+        `sync_edge_table_after_insert`, `sync_frame_slot_after_edge_insert`
         and `sync_entity_slot_sort_after_edge_insert` IN THE CALLER'S
         TRANSACTION, so a write holds its locks across three derivations while
         readers are running.
@@ -130,8 +130,8 @@ async def test_reads_stay_fast_while_writes_and_jobs_run(pg_pool, scope):
         """
         from vitalgraph.db.sparql_sql.sync_edge_table import (
             sync_edge_table_after_insert)
-        from vitalgraph.db.sparql_sql.sync_frame_entity_table import (
-            sync_frame_entity_after_edge_insert)
+        from vitalgraph.db.sparql_sql.sync_frame_slot_table import (
+            sync_frame_slot_after_edge_insert)
         from vitalgraph.db.sparql_sql.sync_entity_slot_sort import (
             sync_entity_slot_sort_after_edge_insert)
 
@@ -157,7 +157,7 @@ async def test_reads_stay_fast_while_writes_and_jobs_run(pg_pool, scope):
                 # any of them recognise, and the POINT is that they RUN under
                 # the write's locks, not that they produce rows.
                 for fn in (sync_edge_table_after_insert,
-                           sync_frame_entity_after_edge_insert,
+                           sync_frame_slot_after_edge_insert,
                            sync_entity_slot_sort_after_edge_insert):
                     try:
                         await fn(c, SPACE, [subj])

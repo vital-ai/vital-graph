@@ -1,12 +1,12 @@
-"""A frame_entity table can be the right SIZE and entirely wrong (issues/041).
+"""A frame_slot table can be the right SIZE and entirely wrong (issues/041).
 
-`frame_entity_drift` compares counts. The failure this exists for has identical
+`frame_slot_drift` compares counts. The failure this exists for has identical
 counts: a space reloaded in place — or under a new graph URI — leaves the derived
 table a faithful materialisation of the PREVIOUS contents. Same rows, disjoint
 set, drift zero, and every frame traversal returning nothing with no error.
 
 That gap was closed for `{space}_edge` in 2026-08-08 and the issue recorded that
-the same argument applied to `frame_entity`, which had no equivalent probe. These
+the same argument applied to `frame_slot`, which had no equivalent probe. These
 tests cover the probe that fills it, and the repair path that the maintenance
 job's error message now names.
 
@@ -28,10 +28,10 @@ from __future__ import annotations
 
 import pytest
 
-from vitalgraph.db.sparql_sql.sync_frame_entity_table import (
-    frame_entity_drift,
-    frame_entity_orphan_rate,
-    resync_frame_entity_table,
+from vitalgraph.db.sparql_sql.sync_frame_slot_table import (
+    frame_slot_drift,
+    frame_slot_orphan_rate,
+    resync_frame_slot_table,
 )
 
 from .conftest import skip_no_infra
@@ -47,22 +47,22 @@ STALE = 0.5
 
 
 async def _populated_space(conn):
-    """A space on this stack whose frame_entity has rows, or skip."""
+    """A space on this stack whose frame_slot has rows, or skip."""
     rows = await conn.fetch("SELECT space_id FROM space ORDER BY space_id")
     for r in rows:
         sid = r["space_id"]
         if not await conn.fetchval(
-                "SELECT 1 FROM pg_tables WHERE tablename = $1", f"{sid}_frame_entity"):
+                "SELECT 1 FROM pg_tables WHERE tablename = $1", f"{sid}_frame_slot"):
             continue
-        if await conn.fetchval(f"SELECT count(*) FROM {sid}_frame_entity"):
+        if await conn.fetchval(f"SELECT count(*) FROM {sid}_frame_slot"):
             return sid
-    pytest.skip("no space on this stack has a populated frame_entity")
+    pytest.skip("no space on this stack has a populated frame_slot")
 
 
 async def test_a_healthy_table_reads_zero(pg_conn):
     """Without this, a probe that always returns 1.0 would pass everything else."""
     sid = await _populated_space(pg_conn)
-    assert await frame_entity_orphan_rate(pg_conn, sid) == 0.0
+    assert await frame_slot_orphan_rate(pg_conn, sid) == 0.0
 
 
 @pytest.mark.parametrize("column,mode", [
@@ -71,15 +71,15 @@ async def test_a_healthy_table_reads_zero(pg_conn):
 ], ids=["identity", "context"])
 async def test_staleness_is_detected_where_drift_is_blind(pg_conn, column, mode):
     sid = await _populated_space(pg_conn)
-    table = f"{sid}_frame_entity"
+    table = f"{sid}_frame_slot"
 
     # Rolled back: this deliberately corrupts a real fixture table.
     tx = pg_conn.transaction()
     await tx.start()
     try:
         await pg_conn.execute(f"UPDATE {table} SET {column} = gen_random_uuid()")
-        rate = await frame_entity_orphan_rate(pg_conn, sid)
-        expected, actual = await frame_entity_drift(pg_conn, sid)
+        rate = await frame_slot_orphan_rate(pg_conn, sid)
+        expected, actual = await frame_slot_drift(pg_conn, sid)
         assert rate > STALE, f"{mode} not detected: orphan rate {rate}"
         # The whole reason the probe exists: the count check calls this healthy.
         assert expected == actual, (
@@ -88,7 +88,7 @@ async def test_staleness_is_detected_where_drift_is_blind(pg_conn, column, mode)
     finally:
         await tx.rollback()
 
-    assert await frame_entity_orphan_rate(pg_conn, sid) == 0.0, "rollback failed"
+    assert await frame_slot_orphan_rate(pg_conn, sid) == 0.0, "rollback failed"
 
 
 async def test_resync_repairs_a_stale_table(pg_conn):
@@ -96,16 +96,16 @@ async def test_resync_repairs_a_stale_table(pg_conn):
     work: the script only ever repaired an EMPTY table, so the one fault it could
     not fix was this one."""
     sid = await _populated_space(pg_conn)
-    table = f"{sid}_frame_entity"
+    table = f"{sid}_frame_slot"
     before = await pg_conn.fetchval(f"SELECT count(*) FROM {table}")
 
     tx = pg_conn.transaction()
     await tx.start()
     try:
         await pg_conn.execute(f"UPDATE {table} SET context_uuid = gen_random_uuid()")
-        assert await frame_entity_orphan_rate(pg_conn, sid) > STALE
-        await resync_frame_entity_table(pg_conn, sid)
-        assert await frame_entity_orphan_rate(pg_conn, sid) == 0.0
+        assert await frame_slot_orphan_rate(pg_conn, sid) > STALE
+        await resync_frame_slot_table(pg_conn, sid)
+        assert await frame_slot_orphan_rate(pg_conn, sid) == 0.0
         assert await pg_conn.fetchval(f"SELECT count(*) FROM {table}") == before
     finally:
         await tx.rollback()
