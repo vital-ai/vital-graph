@@ -1,7 +1,7 @@
 """Bulk resync of all auxiliary tables for a space.
 
 Call after bulk loads, disaster recovery, or manual DB edits.
-Rebuilds edge, frame_entity, and stats tables from scratch,
+Rebuilds edge, frame_slot, and stats tables from scratch,
 runs ANALYZE on all space tables, and invalidates the stats cache.
 """
 
@@ -271,6 +271,8 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
 
     result = {
         'edge_rows': edge_count,
+        'frame_slot_rows': fe_count,
+        # DEPRECATED alias, same value — see `admin_model`.
         'frame_entity_rows': fe_count,
         'entity_slot_sort_rows': ess_count,
         'entity_prop_sort_rows': eps_count,

@@ -26,7 +26,7 @@ class AdminClientEndpoint(BaseEndpoint):
         return f"{self._get_server_url()}{self._base_path}{path}"
 
     async def resync(self, space_id: str) -> ResyncResponse:
-        """Resync all auxiliary tables (edge, frame_entity, stats) for a space.
+        """Resync all auxiliary tables (edge, frame_slot, stats) for a space.
 
         Rebuilds maintained tables from rdf_quad, runs ANALYZE, and
         invalidates the in-memory stats cache.

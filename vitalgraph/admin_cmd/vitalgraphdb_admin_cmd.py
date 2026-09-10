@@ -612,7 +612,7 @@ class VitalGraphDBAdminREPL:
             print("  rebuild stats [space_id]    - Rebuild query optimizer statistics")
             print("  rebuild analyze [space_id]  - Run ANALYZE on space tables")
             print("  rebuild vacuum [space_id]   - Run VACUUM on space tables")
-            print("  rebuild resync [space_id]   - Resync auxiliary tables (edge, frame_entity, stats)")
+            print("  rebuild resync [space_id]   - Resync auxiliary tables (edge, frame_slot, stats)")
             return True
         
         subcommand = args[0].lower()
@@ -941,7 +941,7 @@ class VitalGraphDBAdminREPL:
         return True
     
     def cmd_rebuild_resync(self, args: list[str]) -> bool:
-        """Resync all auxiliary tables (edge, frame_entity, stats) from rdf_quad."""
+        """Resync all auxiliary tables (edge, frame_slot, stats) from rdf_quad."""
         if not self.connected:
             print("❌ Not connected to database. Use 'connect;' first.")
             return True
@@ -976,7 +976,7 @@ class VitalGraphDBAdminREPL:
                     async with pool.acquire() as conn:
                         result = await resync_all_auxiliary_tables(conn, s)
                         print(f"   ✅ edge:         {result['edge_rows']:>10,} rows")
-                        print(f"   ✅ frame_entity: {result['frame_entity_rows']:>10,} rows")
+                        print(f"   ✅ frame_slot: {result.get('frame_slot_rows', result.get('frame_entity_rows', 0)):>10,} rows")
                         print(f"   ✅ pred_stats:   {result['pred_stats_rows']:>10,} rows")
                         print(f"   ✅ quad_stats:   {result['quad_stats_rows']:>10,} rows")
                 except Exception as e:
@@ -1723,7 +1723,7 @@ class VitalGraphDBAdminREPL:
   rebuild stats [space_id];  - Rebuild query optimizer statistics
   rebuild analyze [space_id];- Run ANALYZE on space tables
   rebuild vacuum [space_id]; - Run VACUUM on space tables
-  rebuild resync [space_id]; - Resync auxiliary tables (edge, frame_entity, stats)
+  rebuild resync [space_id]; - Resync auxiliary tables (edge, frame_slot, stats)
   clear <space-id>;          - Clear data within a space but leave the space in place
 
 🌐 Space Management:

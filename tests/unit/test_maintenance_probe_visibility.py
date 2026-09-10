@@ -116,7 +116,7 @@ def test_no_REPAIR_step_swallows_a_failure_silently():
     """
     import inspect
     import re
-    for name in ("_run_edge_integrity", "_run_frame_entity_integrity",
+    for name in ("_run_edge_integrity", "_run_frame_slot_backfill",
                  "_run_entity_slot_sort_integrity", "_run_stats_recompute"):
         src = inspect.getsource(getattr(M.MaintenanceJob, name))
         lines = src.split("\n")
@@ -198,7 +198,7 @@ def test_every_repair_runs_under_the_maintenance_budget():
 
     Found in `_run_entity_slot_sort_integrity` (measured: 3 statement timeouts,
     43 LockNotAvailableError, table stuck at 40k of ~2.83M), then found unfixed
-    in `_run_edge_integrity`, `_run_frame_entity_integrity`, the orphan sweep,
+    in `_run_edge_integrity`, `_run_frame_slot_backfill`, the orphan sweep,
     and `_run_stats_rebuild` — the last of which repairs corrupt rdf_stats, so
     it timing out means the stats stay corrupt forever (`issues/139`'s shape).
 
@@ -212,8 +212,8 @@ def test_every_repair_runs_under_the_maintenance_budget():
     import inspect
     lines = inspect.getsource(M).split("\n")
     calls = ("backfill_entity_slot_sort_batch(", "backfill_edge_table(",
-             "backfill_frame_entity_table(", "cleanup_orphan_edges(",
-             "cleanup_stale_frame_entity(", "recompute_stats_tables(",
+             "backfill_frame_slot_table(", "cleanup_orphan_edges(",
+             "cleanup_stale_frame_slot(", "recompute_stats_tables(",
              "resync_value_stats(", "StatsRebuildOp(")
     unwrapped = []
     for i, line in enumerate(lines):
@@ -257,9 +257,9 @@ def test_every_long_probe_and_repair_gets_a_CLIENT_side_timeout():
     # Anything that scans or writes proportional to the SPACE, not to a batch.
     long_calls = (
         "backfill_entity_slot_sort_batch(", "backfill_edge_table(",
-        "backfill_frame_entity_table(", "entity_slot_sort_coverage(",
+        "backfill_frame_slot_table(", "entity_slot_sort_coverage(",
         "entity_slot_sort_all_types(", "edge_table_drift(",
-        "edge_table_orphan_rate(", "frame_entity_drift(",
+        "edge_table_orphan_rate(", "frame_slot_drift(",
     )
     missing = []
     for i, line in enumerate(lines):

@@ -38,7 +38,7 @@ from __future__ import annotations
 import pytest
 
 from .conftest import skip_no_infra
-from .test_frame_entity_collapse import (  # noqa: F401  (fixtures)
+from .test_frame_slot_collapse import (  # noqa: F401  (fixtures)
     collapse_space, seeded, EX, HALEY, VITAL, SRC_ROLE, DST_ROLE,
 )
 

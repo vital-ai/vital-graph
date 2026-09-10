@@ -113,7 +113,7 @@ STAGES: Tuple[str, ...] = (
     "prune_union",            # Stage 2 post
     "pred_stats",             # Stage 2a
     "edge_rewrite",           # Stage 2a.1
-    "frame_entity_rewrite",   # Stage 2a.2
+    "frame_slot_rewrite",   # Stage 2a.2
     "exists_subplans",        # Stage 2a.3
     "edge_fanout",            # Stage 2a.4
     "datatype_cache",         # Stage 2b

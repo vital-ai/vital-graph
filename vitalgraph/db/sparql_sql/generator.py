@@ -1483,7 +1483,7 @@ async def _generate_sql(
 
         # Stage 2a.1: Edge table rewrite
         from .ensure_edge_table import ensure_edge_table
-        edge_ready = frame_entity_ready = False
+        edge_ready = frame_slot_ready = False
         if conn is not None or conn_params is not None:
             with _decisions.stage("ensure_edge_table"):
                 edge_ready = await ensure_edge_table(space_id, conn=conn,
@@ -1537,8 +1537,8 @@ async def _generate_sql(
 
             # Stage 2a.2: Frame-slot collapse (issues/183).
 
-            frame_entity_ready = True
-            if frame_entity_ready:
+            frame_slot_ready = True
+            if frame_slot_ready:
                 # Whether a slot TYPE constraint this query carries can exclude
                 # anything in this space (issues/048 Problem 4). Answered HERE
                 # because the rewrite is synchronous and has no connection, and
@@ -1801,7 +1801,7 @@ async def _generate_sql(
          await prepare_exists_subplans(
             plan, space_id, conn=conn, conn_params=conn_params,
             graph_lock_uri=graph_lock_uri,
-            edge_table_ready=edge_ready, frame_entity_ready=frame_entity_ready)
+            edge_table_ready=edge_ready, frame_slot_ready=frame_slot_ready)
 
         # Stage 2a.3b: A prepared EXISTS body now knows which of ITS constants
         # resolved, so a NOT EXISTS that can never match is knowable here and

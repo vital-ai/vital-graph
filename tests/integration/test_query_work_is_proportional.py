@@ -79,7 +79,7 @@ async def proportional_space(make_space):
 async def seeded(proportional_space, space_impl):
     """Frames with a source and destination slot; ONE entity matches the text."""
     graph = URIRef(f"urn:{proportional_space}")
-    # The DB-level impl, as `test_frame_entity_collapse` does: the manager-level
+    # The DB-level impl, as `test_frame_slot_collapse` does: the manager-level
     # wrapper does not expose the batch insert these fixtures need.
     backend = (space_impl.get_db_space_impl()
                if hasattr(space_impl, "get_db_space_impl") else space_impl)

@@ -2,7 +2,7 @@
 Admin REST API endpoint for VitalGraph.
 
 Provides administrative operations such as resyncing auxiliary tables
-(edge, frame_entity, stats) for the sparql_sql backend, and audit log querying.
+(edge, frame_slot, stats) for the sparql_sql backend, and audit log querying.
 """
 
 import logging
@@ -35,7 +35,7 @@ class AdminEndpoint:
             current_user: Dict = Depends(self.auth_dependency)
         ):
             """
-            Resync all auxiliary tables (edge, frame_entity, stats) from rdf_quad.
+            Resync all auxiliary tables (edge, frame_slot, stats) from rdf_quad.
 
             Rebuilds the maintained tables from scratch, runs ANALYZE on all
             space tables, and invalidates the in-memory stats cache.
@@ -45,7 +45,7 @@ class AdminEndpoint:
             def _empty_resync(status_value, message):
                 return ResyncResponse(
                     status=status_value, message=message,
-                    space_id=space_id, edge_rows=0, frame_entity_rows=0,
+                    space_id=space_id, edge_rows=0, frame_slot_rows=0, frame_entity_rows=0,
                     pred_stats_rows=0, quad_stats_rows=0, elapsed_ms=0.0,
                 )
 
@@ -79,9 +79,9 @@ class AdminEndpoint:
                 elapsed_ms = (_time.monotonic() - t0) * 1000
 
                 self.logger.info(
-                    "Admin resync [%s]: edge=%d, frame_entity=%d, pred_stats=%d, quad_stats=%d (%.0fms)",
+                    "Admin resync [%s]: edge=%d, frame_slot=%d, pred_stats=%d, quad_stats=%d (%.0fms)",
                     space_id,
-                    result['edge_rows'], result['frame_entity_rows'],
+                    result['edge_rows'], result['frame_slot_rows'],
                     result['pred_stats_rows'], result['quad_stats_rows'],
                     elapsed_ms,
                 )
@@ -90,7 +90,8 @@ class AdminEndpoint:
                     status=OperationStatus.OK,
                     space_id=space_id,
                     edge_rows=result['edge_rows'],
-                    frame_entity_rows=result['frame_entity_rows'],
+                    frame_slot_rows=result['frame_slot_rows'],
+                    frame_entity_rows=result['frame_slot_rows'],
                     pred_stats_rows=result['pred_stats_rows'],
                     quad_stats_rows=result['quad_stats_rows'],
                     elapsed_ms=round(elapsed_ms, 1),

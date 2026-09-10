@@ -665,7 +665,11 @@ class MaintenanceJob:
             one = [space_id]
             for key, phase in (
                 ("edge_integrity", self._run_edge_integrity),
-                ("frame_entity_integrity", self._run_frame_entity_integrity),
+                # The step KEY keeps its spelling — a running deployment has
+                # persisted and gated on it, so renaming it is a migration
+                # rather than a rename. The function it calls acts on
+                # `frame_slot` (`issues/183`).
+                ("frame_entity_integrity", self._run_frame_slot_backfill),
                 ("entity_slot_sort_integrity", self._run_entity_slot_sort_integrity),
                 ("prop_sort_coverage", self._run_prop_sort_coverage),
                 ("grouping_self_link", self._run_grouping_self_link_check),
@@ -1877,7 +1881,15 @@ class MaintenanceJob:
             try:
                 async with self._pool.acquire() as conn:
                     async with maintenance_timeouts(conn):
-                        expected, actual = await frame_slot_drift(conn, space_id)
+                        # CLIENT-side timeout, not just the server fence above.
+                        # The pool's 60s `command_timeout` cancels in the
+                        # DRIVER whatever the server is told (`issues/149`), so
+                        # a probe that runs proportional to the space needs its
+                        # own. This was missing because the coverage test
+                        # looked for `frame_entity_drift(` while the code said
+                        # `frame_slot_drift(` — the rename is what exposed it.
+                        expected, actual = await frame_slot_drift(
+                            conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
                         orphan_rate = await frame_slot_orphan_rate(conn, space_id)
             except asyncpg.UndefinedTableError:
                 continue          # space not migrated — the rewrite declines
@@ -1900,7 +1912,7 @@ class MaintenanceJob:
                 sp, f["expected"], f["actual"], f["orphan_rate"] * 100, sp)
         return {"spaces": findings}
 
-    async def _run_frame_entity_integrity(self, space_ids: List[str]) -> Optional[Dict]:
+    async def _run_frame_slot_backfill(self, space_ids: List[str]) -> Optional[Dict]:
         """Backfill the single worst-drifted {space}_frame_slot table, if any.
 
         Same shape as _run_edge_integrity: measure drift cheaply per space and

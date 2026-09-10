@@ -90,7 +90,7 @@ async def prepare_exists_subplans(plan: PlanV2, space_id: str, *,
                                   conn=None, conn_params=None,
                                   graph_lock_uri: Optional[str] = None,
                                   edge_table_ready: bool = False,
-                                  frame_entity_ready: bool = False,
+                                  frame_slot_ready: bool = False,
                                   depth: int = 0) -> int:
     """Collect and optimize every EXISTS body in `plan`. Returns how many.
 
@@ -148,7 +148,7 @@ async def prepare_exists_subplans(plan: PlanV2, space_id: str, *,
                 from .rewrite_edge_table import rewrite_edge_table
                 inner_plan = rewrite_edge_table(inner_plan, inner_aliases,
                                                 space_id)
-            if frame_entity_ready:
+            if frame_slot_ready:
                 from .rewrite_frame_slot_table import (
                     rewrite_frame_slot_table)
                 inner_plan = rewrite_frame_slot_table(inner_plan,
@@ -159,7 +159,7 @@ async def prepare_exists_subplans(plan: PlanV2, space_id: str, *,
                 inner_plan, space_id, conn=conn, conn_params=conn_params,
                 graph_lock_uri=graph_lock_uri,
                 edge_table_ready=edge_table_ready,
-                frame_entity_ready=frame_entity_ready, depth=depth + 1)
+                frame_slot_ready=frame_slot_ready, depth=depth + 1)
 
             node.prepared_plan = inner_plan
             node.prepared_aliases = inner_aliases

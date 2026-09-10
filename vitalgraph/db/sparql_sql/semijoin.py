@@ -536,7 +536,7 @@ def _bgps(node, depth: int = 0):
         yield from _bgps(c, depth + 1)
 
 
-_QUAD_KINDS = ("quad", "edge", "frame_entity", "frame_slot")
+_QUAD_KINDS = ("quad", "edge", "frame_slot")
 
 
 def _split_bgp(bgp: PlanV2, key: str) -> Optional[PlanV2]:

@@ -1,4 +1,4 @@
-"""The 6-table frame traversal that `frame_entity` exists to collapse.
+"""The 6-table frame traversal that `frame_slot` exists to collapse.
 
 `rewrite_frame_slot_table` replaces six quad tables
 
@@ -6,7 +6,7 @@
     2 slot_type    slot --hasKGSlotType--> <urn:hasSourceEntity> / <...Destination>
     2 slot_value   slot --hasEntitySlotValue--> entity
 
-with one row of `{space}_frame_entity(frame_uuid, source_entity_uuid,
+with one row of `{space}_frame_slot(frame_uuid, source_entity_uuid,
 dest_entity_uuid, context_uuid)`. That is the shape a CRITERIA query has: one
 that filters across many frames by what sits at each end, rather than fetching
 one known frame's slots.
@@ -18,7 +18,7 @@ down with tests rather than prose:
     FROM-clause entry for table "mv0"` — because it collapsed the six tables
     while a constraint still referenced a collapsed alias;
   * the guard added for that makes the rewrite DECLINE on any slot-node
-    constraint, and `frame_entity` holds a slot no column, so the canonical
+    constraint, and `frame_slot` holds a slot no column, so the canonical
     query (which says `?sourceSlot a KGEntitySlot`) is exactly the case that
     declines. The table is therefore correct, populated, and unread.
 
@@ -28,7 +28,7 @@ they keep passing when the rewrite is taught to handle slot constraints — the
 open work in 048 — and fail if it starts collapsing something it should not.
 
 The fixture is deliberately tiny and built here rather than borrowed from a
-development space: `frame_entity` is populated in one space of 79, so a test
+development space: `frame_slot` is populated in one space of 79, so a test
 that depended on finding one would silently skip.
 """
 
@@ -172,7 +172,7 @@ def _criteria_query(graph: str, source_entity: str, *, slot_typed: bool) -> str:
     """The 6-table traversal.
 
     `slot_typed` adds `?sourceSlot a KGEntitySlot` — a constraint on the SLOT
-    node. `frame_entity` has no slot column, so this is the constraint that
+    node. `frame_slot` has no slot column, so this is the constraint that
     cannot be remapped after the collapse and the one the rewrite declines on.
     The canonical query in the reference SPARQL has it.
     """
@@ -216,7 +216,7 @@ async def _sql_for(conn, space_id: str, sparql: str) -> str:
 
 
 def _disable_rewrite(monkeypatch):
-    """Turn the frame_entity rewrite off for one query.
+    """Turn the frame_slot rewrite off for one query.
 
     Patch the DEFINING module, not `generator`: `generate_sql` imports the
     function inside the function body, so the name is looked up in
@@ -318,10 +318,10 @@ class TestTheRewriteContract:
         assert "frame_slot" not in sql_off, "the rewrite was not disabled"
 
         assert _pairs(rows_on) == _pairs(rows_off), (
-            "the frame_entity rewrite changed the answer")
+            "the frame_slot rewrite changed the answer")
 
     async def test_a_slot_constraint_is_not_silently_dropped(self, seeded, pg_conn):
-        """`frame_entity` has no slot column, so a slot-node constraint cannot
+        """`frame_slot` has no slot column, so a slot-node constraint cannot
         be carried through a collapse. It must be honoured by declining — never
         discarded to make the collapse possible.
 
@@ -349,7 +349,7 @@ class TestWhetherTheTableIsUsed:
     """Records the CURRENT state so a change is visible, without asserting it
     must stay that way — making the rewrite fire on this shape is open work."""
 
-    async def test_report_frame_entity_usage(self, seeded, pg_conn):
+    async def test_report_frame_slot_usage(self, seeded, pg_conn):
         space_id, graph = seeded
         used = {}
         for label, typed in (("plain", False), ("slot-typed", True)):
@@ -357,7 +357,7 @@ class TestWhetherTheTableIsUsed:
                                  _criteria_query(graph, f"{EX}e0", slot_typed=typed))
             used[label] = "frame_slot" in sql
 
-        # `frame_entity` was RETIRED (`issues/183`) — it named two
+        # `frame_slot` was RETIRED (`issues/183`) — it named two
         # `hasKGSlotType` VALUES in its columns and 26 of 29 spaces use others.
         # `frame_slot` replaces it and holds the role as data.
         rows = await pg_conn.fetch(
@@ -437,7 +437,7 @@ class TestTheCollapseActuallyHappening:
                     for r in rows}
 
         assert triples(rows_on) == triples(rows_off), (
-            "collapsing 6 tables into frame_entity changed the answer")
+            "collapsing 6 tables into frame_slot changed the answer")
         assert len(rows_on) == len(ALL_FRAMES), (
             f"every frame has a source and a dest, so all {len(ALL_FRAMES)} "
             f"must appear; got {len(rows_on)}")
@@ -489,7 +489,7 @@ def _chain_query(graph: str, start: str, depth: int) -> str:
 
     Each hop is an independent 6-table group sharing only the entity variable
     with its neighbour — so a depth-3 traversal is 18 quad tables, and a
-    complete collapse is three frame_entity rows.
+    complete collapse is three frame_slot rows.
     """
     hops = "".join(_hop(i + 1, f"?ent{i}", f"?ent{i + 1}") for i in range(depth))
     return f"""
@@ -541,7 +541,7 @@ class TestMultiHopTraversal:
     @pytest.mark.parametrize("depth", [1, 2, 3])
     async def test_every_hop_collapses(self, seeded, pg_conn, depth):
         """The saving is PER HOP — that is the claim in 048's join table — so a
-        depth-3 traversal should reach frame_entity three times, not once.
+        depth-3 traversal should reach frame_slot three times, not once.
 
         A single reference would mean only the first hop collapsed and the rest
         stayed as raw quad joins, which is the failure that still looks like a
@@ -552,7 +552,7 @@ class TestMultiHopTraversal:
         joins = sql.count(f"{space_id}_frame_slot")
         # TWO joins per hop, not one. `frame_slot` holds one row per (frame,
         # slot) with the role as data, so a hop's two arms are two rows joined
-        # on `frame_uuid` — where `frame_entity` folded both into one row by
+        # on `frame_uuid` — where `frame_slot` folded both into one row by
         # naming the roles in its columns (`issues/183`). The count that matters
         # is that every hop collapsed, not that it collapsed into one table ref.
         assert joins == 2 * depth, (
@@ -581,7 +581,7 @@ class TestMultiHopTraversal:
 
     async def test_the_collapse_removes_joins(self, seeded, pg_conn, monkeypatch):
         """Record the reduction rather than assume it: 6 quad tables per hop
-        against one frame_entity row."""
+        against one frame_slot row."""
         space_id, graph = seeded
         sparql = _chain_query(graph, f"{EX}c0", 3)
 
@@ -592,7 +592,7 @@ class TestMultiHopTraversal:
         quad_on = sql_on.count(f"{space_id}_rdf_quad")
         quad_off = sql_off.count(f"{space_id}_rdf_quad")
         print(f"\ndepth 3 — rdf_quad references: {quad_off} -> {quad_on}, "
-              f"frame_entity joins: {sql_on.count(f'{space_id}_frame_entity')}")
+              f"frame_slot joins: {sql_on.count(f'{space_id}_frame_slot')}")
         assert quad_on < quad_off, (
             f"the collapse did not reduce quad-table joins ({quad_off} -> "
             f"{quad_on}); it is meant to replace 6 tables per hop with 1")
@@ -697,7 +697,7 @@ class TestCriteriaFilteredTraversal:
     @pytest.mark.parametrize("depth", [2, 3])
     async def test_the_collapse_survives_a_frame_criterion(self, seeded, pg_conn, depth):
         """A criterion on the FRAME can be carried through the collapse —
-        frame_entity keeps frame_uuid, so the constraint still has a column to
+        frame_slot keeps frame_uuid, so the constraint still has a column to
         land on. Contrast the slot-node constraint, which has none and makes the
         rewrite decline entirely.
 

@@ -49,7 +49,7 @@ _COREF_RE = re.compile(r"(\w+)\.(\w+)\s*=\s*(\w+)\.(\w+)")
 # matches on `kind == "edge"` tables, so without stage 2a.1 having run there is
 # nothing here to collapse. Declaring the dependency is how "no edge table
 # bindings" stops being a message someone has to interpret.
-FE = Rule("frame_entity_rewrite", stage="frame_entity_rewrite",
+FE = Rule("frame_slot_rewrite", stage="frame_slot_rewrite",
           reads=("collect", "materialize_constants", "edge_rewrite"))
 
 
@@ -298,7 +298,6 @@ def rewrite_frame_slot_table(plan: PlanV2, aliases: AliasGenerator,
                                                           needed_vars)
         return plan
 
-    fe_table_name = f"{space_id}_frame_entity"
     fs_table_name = f"{space_id}_frame_slot"
     edge_table_name = f"{space_id}_edge"
     quad_table_name = f"{space_id}_rdf_quad"

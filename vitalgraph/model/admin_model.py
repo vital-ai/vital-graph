@@ -14,6 +14,12 @@ class ResyncResponse(ResultStatus):
     status: OperationStatus = OperationStatus.OK
     space_id: str
     edge_rows: int
+    frame_slot_rows: int = 0
+    # DEPRECATED alias of `frame_slot_rows`, carrying the same value.
+    # `frame_entity` was retired for `frame_slot` (`issues/183`) and this field
+    # has reported the frame_slot count ever since — a name contradicting its
+    # own value. Kept populated so existing admin clients do not break; remove
+    # once they read `frame_slot_rows`.
     frame_entity_rows: int
     pred_stats_rows: int
     quad_stats_rows: int

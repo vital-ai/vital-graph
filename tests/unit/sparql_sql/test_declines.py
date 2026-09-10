@@ -147,7 +147,7 @@ def test_every_declared_rule_in_the_pipeline_is_ordered():
     names = {r.name for r in rules}
     # The four modules imported above must actually have registered.
     assert {"hop_partition", "hop_wise", "dedup_chain", "traversal_shape",
-            "edge_rewrite", "frame_entity_rewrite"} <= names
+            "edge_rewrite", "frame_slot_rewrite"} <= names
     order = {s: i for i, s in enumerate(STAGES)}
     for r in rules:
         for read in r.reads:
@@ -163,7 +163,7 @@ def test_the_traversal_rules_declare_the_dependency_that_bit():
     # placed before it, the gate saw no number on any query.
     assert "semijoin" in by_name["traversal_shape"].reads
     # The frame_entity rewrite consumes the edge rewrite's output.
-    assert "edge_rewrite" in by_name["frame_entity_rewrite"].reads
+    assert "edge_rewrite" in by_name["frame_slot_rewrite"].reads
 
 
 # ---------------------------------------------------------------------------
