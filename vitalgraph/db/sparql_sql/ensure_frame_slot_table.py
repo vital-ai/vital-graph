@@ -63,16 +63,39 @@ async def ensure_frame_slot_table(space_id: str, conn=None,
         populated = bool(rows and rows[0]["present"])
 
         if not populated:
-            # An empty table may mean "never built" or may mean "this space has
-            # no frames". Build it once; if it is still empty afterwards the
-            # space genuinely has none, and the collapse stays off — which costs
-            # nothing, because there is nothing to collapse.
-            if conn is not None:
-                from .sync_frame_slot_table import resync_frame_slot_table
-                built = await resync_frame_slot_table(conn, space_id)
-                populated = built > 0
-                logger.info("ensure_frame_slot_table(%s): populated %d row(s)",
-                            space_id, built)
+            # DECLINE. Never rebuild here.
+            #
+            # This used to call `resync_frame_slot_table` inline, to tell
+            # "never built" apart from "this space has no frames". That is a
+            # TRUNCATE plus a full rebuild — on the QUERY PATH, paid by whoever
+            # asked first, holding ACCESS EXCLUSIVE while every other reader
+            # waits. On a space the size of the one this was measured against
+            # that is 570,696 rows and ~9 s; it scales with the space.
+            #
+            # It is also unnecessary now, twice over:
+            #
+            #   * `frame_slot_drift` gets the same answer CHEAPLY — it computes
+            #     the expected count from the edge table, so `expected > 0` with
+            #     `actual == 0` means "never built" and `expected == 0` means
+            #     "no frames here", with no rebuild.
+            #   * the maintenance tick backfills the worst-drifted space with
+            #     `backfill_frame_slot_table`, which is non-blocking
+            #     (`INSERT ... ON CONFLICT DO NOTHING`, ROW EXCLUSIVE). A
+            #     never-built table is maximally drifted, so it is exactly what
+            #     that step picks up.
+            #
+            # Declining costs correctness nothing: the rewrite falls back to the
+            # quad joins, which is the answer it would give on a space that has
+            # no `frame_slot` at all. It is slower until maintenance runs, and
+            # slower is not an outage.
+            logger.warning(
+                "ensure_frame_slot_table(%s): %s exists but is EMPTY — the "
+                "frame-slot collapse is disabled for this space until it is "
+                "populated. The maintenance backfill will do it, or run "
+                "`python scripts/migrate_frame_slot_table.py --space %s "
+                "--apply` to do it now. NOT rebuilding here: that is a "
+                "TRUNCATE on the query path.",
+                space_id, table_name, space_id)
 
         _frame_slot_ready[space_id] = populated
         return populated
