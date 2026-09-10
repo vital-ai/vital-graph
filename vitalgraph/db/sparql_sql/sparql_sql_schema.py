@@ -749,7 +749,7 @@ class SparqlSQLSchema:
 
         ATTRIBUTION IS BY LONGEST MATCHING SPACE ID, which is the part callers
         get wrong. `LIKE '<space>\_%'` matches every table of a space whose id
-        merely EXTENDS this one: with `cardiff_kg` and `cardiff_kg_test`, the
+        merely EXTENDS this one: with `prod_kg` and `prod_kg_test`, the
         first claims all of the second's tables and reports `test_rdf_quad` —
         an ordinary schema table — as unrecognised. A drop keyed off that is a
         step away from removing a live table of another space.

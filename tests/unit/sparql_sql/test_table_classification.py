@@ -15,7 +15,7 @@ import pytest
 from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
 
 
-SPACES = ["cardiff_kg", "cardiff_kg_test", "lead_prod"]
+SPACES = ["prod_kg", "prod_kg_test", "other_space"]
 
 
 def _c(table):
@@ -28,19 +28,19 @@ class TestAttribution:
         """The bug this API exists to prevent.
 
         `LIKE '<space>\\_%'` matches every table of a space whose id merely
-        EXTENDS this one, so `cardiff_kg` claimed all of `cardiff_kg_test`'s.
+        EXTENDS this one, so `prod_kg` claimed all of `prod_kg_test`'s.
         The drop survived it, but the DRIFT REPORT did not — and that report is
         the input to the retired list, so a misattribution there is one step
         from dropping a live table of another space.
         """
-        info = _c("cardiff_kg_test_rdf_quad")
-        assert info["space_id"] == "cardiff_kg_test", (
+        info = _c("prod_kg_test_rdf_quad")
+        assert info["space_id"] == "prod_kg_test", (
             "attributed to the shorter prefix; a plain LIKE would do this")
         assert info["role"] == "schema"
 
     def test_the_shorter_space_still_gets_its_own(self):
-        info = _c("cardiff_kg_rdf_quad")
-        assert info["space_id"] == "cardiff_kg"
+        info = _c("prod_kg_rdf_quad")
+        assert info["space_id"] == "prod_kg"
         assert info["role"] == "schema"
 
     def test_a_name_belonging_to_no_space_is_foreign(self):
@@ -50,7 +50,7 @@ class TestAttribution:
 class TestRoles:
 
     def test_a_retired_table_reports_why(self):
-        info = _c("cardiff_kg_frame_entity")
+        info = _c("prod_kg_frame_entity")
         assert info["role"] == "retired"
         assert info["reason"], "a retired verdict without a reason is not actionable"
 
@@ -60,11 +60,11 @@ class TestRoles:
         A sweep that dropped "anything not in the schema" would destroy these,
         which is why the retired list is explicit rather than inferred.
         """
-        for name in ("cardiff_kg_fts_whatever", "cardiff_kg_vec_my_index_7f3a"):
+        for name in ("prod_kg_fts_whatever", "prod_kg_vec_my_index_7f3a"):
             assert _c(name)["role"] == "dynamic_index", name
 
     def test_a_partition_child_is_attributed_to_its_parent(self):
-        info = _c("cardiff_kg_rdf_quad_p3")
+        info = _c("prod_kg_rdf_quad_p3")
         assert info["suffix"] == "rdf_quad"
         assert info["role"] == "schema"
 
@@ -76,14 +76,14 @@ class TestRoles:
         twice and inflating a 34-table count to 51. The suffix after `_p` has
         to be digits.
         """
-        assert _c("cardiff_kg_vector_mapping")["suffix"] == "vector_mapping"
-        assert _c("cardiff_kg_vector_mapping_property")["suffix"] == \
+        assert _c("prod_kg_vector_mapping")["suffix"] == "vector_mapping"
+        assert _c("prod_kg_vector_mapping_property")["suffix"] == \
             "vector_mapping_property"
 
     def test_an_unknown_table_is_reported_not_assumed(self):
-        info = _c("cardiff_kg_something_nobody_knows")
+        info = _c("prod_kg_something_nobody_knows")
         assert info["role"] == "unknown"
-        assert info["space_id"] == "cardiff_kg"
+        assert info["space_id"] == "prod_kg"
 
 
 class TestRetiredDropsComeFromOneList:
