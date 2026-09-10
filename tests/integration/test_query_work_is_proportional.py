@@ -68,7 +68,11 @@ N_FRAMES = 400
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def proportional_space(make_space):
-    return await make_space("proportional")
+    # NO fixed name. `make_space` is unique-by-default and only collides when a
+    # caller supplies one — and a fixed name SURVIVES an interrupted run, so
+    # the next run fails with `SpaceAlreadyExistsError` forever rather than
+    # once. That is what happened here after a suite was stopped mid-flight.
+    return await make_space()
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
