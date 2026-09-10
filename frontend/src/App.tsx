@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { initThemeMode, Spinner } from 'flowbite-react';
+import { ThemeInit } from '../.flowbite-react/init';
 import { AuthProvider } from './contexts/AuthContext';
 import { WebSocketProvider } from './contexts/WebSocketContext';
 import { ChangeNotificationProvider } from './contexts/ChangeNotificationContext';
@@ -78,6 +79,7 @@ initThemeMode();
 export default function App() {
   return (
     <ErrorBoundary>
+    <ThemeInit />
     <AuthProvider>
       <WebSocketProvider>
         <ToastProvider>
