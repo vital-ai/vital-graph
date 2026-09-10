@@ -17,7 +17,7 @@ broken data during this work:
 
 * an orphaned edge row is an EXTRA row, so a count check reads a table
   containing them as healthy, and orphans plus missing edges cancel exactly;
-* a stale frame_entity row keeps the count unchanged while naming the wrong
+* a stale frame_slot row keeps the count unchanged while naming the wrong
   entity.
 
 Comparing against the rebuild is the only form that catches both, because the
@@ -58,7 +58,7 @@ GRAPH = URIRef("urn:test:bulk_graph")
 def _dataset(n: int) -> list:
     """Connection frames, the shape that exercises every derived table at once.
 
-    Each frame produces edge rows (two), a frame_entity row, and stats for
+    Each frame produces edge rows (two), frame_slot rows, and stats for
     several predicates — so one dataset covers all three structures rather than
     testing each against data shaped only for it.
     """
@@ -86,9 +86,13 @@ async def _snapshot(conn, space_id: str) -> dict:
     edges = await conn.fetch(
         f"SELECT edge_uuid, source_node_uuid, dest_node_uuid, context_uuid, "
         f"edge_type_uuid FROM {space_id}_edge")
-    fe = await conn.fetch(
-        f"SELECT frame_uuid, source_entity_uuid, dest_entity_uuid, context_uuid "
-        f"FROM {space_id}_frame_entity")
+    # `frame_entity` was retired for `frame_slot` (`issues/183`): the old table
+    # named the two roles in its COLUMNS, which made a per-dataset data value
+    # part of the schema. `frame_slot` carries the role as a uuid, one row per
+    # slot rather than one per frame.
+    fs = await conn.fetch(
+        f"SELECT frame_uuid, slot_uuid, role_uuid, entity_uuid, context_uuid, "
+        f"frame_type_uuid FROM {space_id}_frame_slot")
     stats = await conn.fetch(
         f"SELECT predicate_uuid, object_uuid, row_count "
         f"FROM {space_id}_rdf_stats")
@@ -96,7 +100,7 @@ async def _snapshot(conn, space_id: str) -> dict:
         f"SELECT predicate_uuid, row_count FROM {space_id}_rdf_pred_stats")
     return {
         "edge": {tuple(r) for r in edges},
-        "frame_entity": {tuple(r) for r in fe},
+        "frame_slot": {tuple(r) for r in fs},
         "stats": {tuple(r) for r in stats},
         "pred_stats": {tuple(r) for r in preds},
     }
@@ -114,7 +118,7 @@ class TestBulkLoadDerivedTables:
 
         after_load = await _snapshot(pg_conn, test_space)
         assert after_load["edge"], "bulk load produced no edge rows"
-        assert after_load["frame_entity"], "bulk load produced no frame_entity rows"
+        assert after_load["frame_slot"], "bulk load produced no frame_slot rows"
         # NOT stats. The load is no longer expected to produce them:
         # `recompute_stats_tables` is the only writer (`issues/142`), so the
         # load leaving them empty is correct and the comparison below moves to
@@ -127,10 +131,10 @@ class TestBulkLoadDerivedTables:
         await resync_all_auxiliary_tables(pg_conn, test_space)
         after_rebuild = await _snapshot(pg_conn, test_space)
 
-        # edge and frame_entity ONLY. pred_stats moved to the quad-truth check
+        # edge and frame_slot ONLY. pred_stats moved to the quad-truth check
         # below for the same reason as rdf_stats: the load does not write it any
         # more, so "load == rebuild" is a comparison against an empty table.
-        for table in ("edge", "frame_entity"):
+        for table in ("edge", "frame_slot"):
             missing = after_rebuild[table] - after_load[table]
             extra = after_load[table] - after_rebuild[table]
             assert not missing and not extra, (
@@ -196,7 +200,7 @@ class TestBulkLoadDerivedTables:
         await resync_all_auxiliary_tables(pg_conn, test_space)
         after_rebuild = await _snapshot(pg_conn, test_space)
 
-        for table in ("edge", "frame_entity"):
+        for table in ("edge", "frame_slot"):
             missing = after_rebuild[table] - after_crud[table]
             extra = after_crud[table] - after_rebuild[table]
             assert not missing and not extra, (

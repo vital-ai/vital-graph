@@ -209,6 +209,52 @@ def _as_uuid_pair(pred, obj):
             _generate_term_uuid(o_text, o_type))
 
 
+def _text_filtered_vars(plan: PlanV2, out: set, depth: int = 0) -> set:
+    """Variables a selective TEXT filter restricts, anywhere in the plan.
+
+    `CONTAINS`/`STRSTARTS`/`STRENDS`/`REGEX` on a variable, through any number
+    of `LCASE`/`UCASE`/`STR` wrappers.
+
+    Such a variable is not pinned to ONE value, but it is restricted to FEW —
+    on `wordnet_frames` `CONTAINS(LCASE(STR(?d)),"happy")` matches 76 of
+    617,455 terms — and "few" is what a driving set needs to be.
+
+    `issues/181`: the gate asked only for a constant `(predicate, object)` pair,
+    so the most selective thing in the query was invisible to the one mechanism
+    whose purpose is driving from a small set, and every text-filtered traversal
+    declined with "neither end pinned or constrained, no driving set".
+
+    Read from the PARSED QUERY for the same reason `_pinned_vars` is: detection
+    runs before push-down and must not depend on whether the push fired.
+    """
+    from vitalgraph.db.jena_sparql.jena_types import ExprFunction, ExprVar
+    if plan is None or depth > 24:
+        return out
+
+    def _unwrap(node):
+        while (isinstance(node, ExprFunction)
+               and (node.name or "").lower() in ("lcase", "ucase", "str")
+               and len(node.args or []) == 1):
+            node = node.args[0]
+        return node
+
+    for expr in (plan.filter_exprs or []):
+        if not isinstance(expr, ExprFunction):
+            continue
+        if (expr.name or "").lower() not in ("contains", "strstarts",
+                                             "strends", "regex"):
+            continue
+        args = expr.args or []
+        if not args:
+            continue
+        inner = _unwrap(args[0])
+        if isinstance(inner, ExprVar) and getattr(inner, "var", None):
+            out.add(inner.var)
+    for child in (plan.children or []):
+        _text_filtered_vars(child, out, depth + 1)
+    return out
+
+
 def _pinned_vars(plan: PlanV2, out: set, depth: int = 0) -> set:
     """Variables an equality FILTER binds to a constant, anywhere in the plan.
 
@@ -236,24 +282,27 @@ def _pinned_vars(plan: PlanV2, out: set, depth: int = 0) -> set:
 
 
 def find_chains(plan: PlanV2, depth: int = 0,
-                pinned: Optional[set] = None) -> List[TraversalChain]:
+                pinned: Optional[set] = None, text=None) -> List[TraversalChain]:
     """Every traversal chain reachable from `plan`, longest first."""
     if plan is None or depth > 24:
         return []
     if pinned is None:
         pinned = _pinned_vars(plan, set())
+    if text is None:
+        text = _text_filtered_vars(plan, set())
 
     chains: List[TraversalChain] = []
     if plan.kind == KIND_BGP and plan.tables:
-        chains.extend(_chains_in_bgp(plan, pinned))
+        chains.extend(_chains_in_bgp(plan, pinned, text))
     for child in (plan.children or []):
-        chains.extend(find_chains(child, depth + 1, pinned))
+        chains.extend(find_chains(child, depth + 1, pinned, text))
 
     chains.sort(key=lambda c: c.depth, reverse=True)
     return chains
 
 
-def _chains_in_bgp(bgp: PlanV2, pinned_vars: set) -> List[TraversalChain]:
+def _chains_in_bgp(bgp: PlanV2, pinned_vars: set,
+                   text_vars: set = frozenset()) -> List[TraversalChain]:
     """Link the hops in one BGP using the plan's STRUCTURE.
 
     Everything here reads `var_slots` and `leaf_terms` — the records collect()
@@ -313,6 +362,14 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set) -> List[TraversalChain]:
         if col_var.get((ref_id, col)) in pinned_vars:
             return True
         return (ref_id, col) in leaf_terms
+
+        # REVERTED (`issues/181`): treating a text-filtered end as a driving set
+        # measured 126,592,971 buffers on the reference CONSTRUCT against
+        # 5,151,498 with the text push alone — ~25x WORSE. The gate declining is
+        # not what makes that query slow, and forcing it to fire is actively
+        # harmful. The detector `_text_filtered_vars` is kept because it is
+        # correct and cheap, and because the next attempt should start from a
+        # measurement rather than from re-deriving it.
 
     def _constrained(ref_id: str, col: str):
         """A type-ish constraint on this end, as ((pred_uuid, obj_uuid), alias).

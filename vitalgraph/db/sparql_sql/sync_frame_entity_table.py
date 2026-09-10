@@ -133,7 +133,8 @@ async def sync_frame_entity_after_edge_insert(
     for chunk in chunk_uuids(touched_uuids):
         result = await _forced(f"""
             INSERT INTO {t_fe} (frame_uuid, source_entity_uuid, dest_entity_uuid,
-                                context_uuid, frame_type_uuid)
+                                context_uuid, frame_type_uuid,
+                                source_slot_uuid, dest_slot_uuid)
             SELECT
                 emv.source_node_uuid AS frame_uuid,
                 (array_agg(sv.object_uuid) FILTER (
@@ -149,7 +150,16 @@ async def sync_frame_entity_after_edge_insert(
                 -- over that frame's slots, and FILTERed because the LEFT JOIN
                 -- contributes NULLs that would otherwise win position [1].
                 (array_agg(vt.object_uuid)
-                 FILTER (WHERE vt.object_uuid IS NOT NULL))[1] AS frame_type_uuid
+                 FILTER (WHERE vt.object_uuid IS NOT NULL))[1] AS frame_type_uuid,
+                -- The slot node itself. Same aggregate shape as the entity
+                -- columns above, over the same join — `emv.dest_node_uuid` IS
+                -- the slot (issues/182).
+                (array_agg(emv.dest_node_uuid) FILTER (
+                    WHERE st.object_uuid = $3
+                ))[1] AS source_slot_uuid,
+                (array_agg(emv.dest_node_uuid) FILTER (
+                    WHERE st.object_uuid = $4
+                ))[1] AS dest_slot_uuid
             FROM {t_edge} emv
             JOIN {t_quad} st
                 ON st.subject_uuid = emv.dest_node_uuid
@@ -367,7 +377,8 @@ async def resync_frame_entity_table(conn, space_id: str) -> int:
 
     result = await conn.execute(f"""
         INSERT INTO {t_fe} (frame_uuid, source_entity_uuid, dest_entity_uuid,
-                            context_uuid, frame_type_uuid)
+                            context_uuid, frame_type_uuid,
+                            source_slot_uuid, dest_slot_uuid)
         SELECT
             emv.source_node_uuid AS frame_uuid,
             (array_agg(sv.object_uuid) FILTER (
@@ -378,7 +389,9 @@ async def resync_frame_entity_table(conn, space_id: str) -> int:
             ))[1] AS dest_entity_uuid,
             emv.context_uuid,
             (array_agg(vt.object_uuid)
-             FILTER (WHERE vt.object_uuid IS NOT NULL))[1] AS frame_type_uuid
+             FILTER (WHERE vt.object_uuid IS NOT NULL))[1] AS frame_type_uuid,
+            (array_agg(emv.dest_node_uuid) FILTER (WHERE st.object_uuid = $3))[1] AS source_slot_uuid,
+            (array_agg(emv.dest_node_uuid) FILTER (WHERE st.object_uuid = $4))[1] AS dest_slot_uuid
         FROM {t_edge} emv
         JOIN {t_quad} st
             ON st.subject_uuid = emv.dest_node_uuid
@@ -424,14 +437,17 @@ async def backfill_frame_entity_table(
 
     result = await conn.execute(f"""
         INSERT INTO {t_fe} (frame_uuid, source_entity_uuid, dest_entity_uuid,
-                            context_uuid, frame_type_uuid)
+                            context_uuid, frame_type_uuid,
+                            source_slot_uuid, dest_slot_uuid)
         SELECT
             emv.source_node_uuid AS frame_uuid,
             (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $3))[1] AS source_entity_uuid,
             (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $4))[1] AS dest_entity_uuid,
             emv.context_uuid,
             (array_agg(vt.object_uuid)
-             FILTER (WHERE vt.object_uuid IS NOT NULL))[1] AS frame_type_uuid
+             FILTER (WHERE vt.object_uuid IS NOT NULL))[1] AS frame_type_uuid,
+            (array_agg(emv.dest_node_uuid) FILTER (WHERE st.object_uuid = $3))[1] AS source_slot_uuid,
+            (array_agg(emv.dest_node_uuid) FILTER (WHERE st.object_uuid = $4))[1] AS dest_slot_uuid
         FROM {t_edge} emv
         JOIN {t_quad} st ON st.subject_uuid = emv.dest_node_uuid AND st.predicate_uuid = $1
         JOIN {t_quad} sv ON sv.subject_uuid = emv.dest_node_uuid AND sv.predicate_uuid = $2

@@ -1326,7 +1326,7 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         import time as _time
         from ..db.sparql_sql.entity_lock import lock_entities
         from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
-        from ..db.sparql_sql.sync_frame_entity_table import sync_frame_entity_before_delete
+        from ..db.sparql_sql.sync_frame_slot_table import sync_frame_slot_before_delete
         from ..db.sparql_sql.sync_edge_table import sync_edge_table_before_delete
         from rdflib import URIRef
 
@@ -1369,7 +1369,7 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                             continue
                         # The auxiliary tables are derived from the quads, so
                         # they have to be told before the rows go, not after.
-                        await sync_frame_entity_before_delete(
+                        await sync_frame_slot_before_delete(
                             conn, space_id, subject_uuids, context_uuid=g_uuid)
                         await sync_edge_table_before_delete(
                             conn, space_id, subject_uuids, context_uuid=g_uuid)
@@ -1438,8 +1438,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                         # Still insert the new quads (entity may not have kGGraphURI on itself)
                     else:
                         # Step 2: Sync auxiliary tables before delete
-                        from ..db.sparql_sql.sync_frame_entity_table import sync_frame_entity_before_delete
-                        await sync_frame_entity_before_delete(conn, space_id, subject_uuids, context_uuid=g_uuid)
+                        from ..db.sparql_sql.sync_frame_slot_table import sync_frame_slot_before_delete
+                        await sync_frame_slot_before_delete(conn, space_id, subject_uuids, context_uuid=g_uuid)
                         from ..db.sparql_sql.sync_edge_table import sync_edge_table_before_delete
                         await sync_edge_table_before_delete(conn, space_id, subject_uuids, context_uuid=g_uuid)
 
@@ -1565,8 +1565,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                         # of them could. Sub-millisecond to emit, and it runs on
                         # the path that starves the connection pool.
                         _s0 = _time.monotonic()
-                        from ..db.sparql_sql.sync_frame_entity_table import sync_frame_entity_before_delete
-                        await sync_frame_entity_before_delete(conn, space_id, s_uuids, context_uuid=g_uuid)
+                        from ..db.sparql_sql.sync_frame_slot_table import sync_frame_slot_before_delete
+                        await sync_frame_slot_before_delete(conn, space_id, s_uuids, context_uuid=g_uuid)
                         _s1 = _time.monotonic()
                         from ..db.sparql_sql.sync_edge_table import sync_edge_table_before_delete
                         await sync_edge_table_before_delete(conn, space_id, s_uuids, context_uuid=g_uuid)

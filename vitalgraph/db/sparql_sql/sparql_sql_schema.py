@@ -724,7 +724,7 @@ class SparqlSQLSchema:
             'edge': f'{space_id}_edge',
             'edge_fanout': f'{space_id}_edge_fanout',
             'entity_fanout': f'{space_id}_entity_fanout',
-            'frame_entity': f'{space_id}_frame_entity',
+            'frame_slot': f'{space_id}_frame_slot',
             'entity_slot_sort': f'{space_id}_entity_slot_sort',
             'entity_prop_sort': f'{space_id}_entity_prop_sort',
             'frame_prop_sort': f'{space_id}_frame_prop_sort',
@@ -1026,31 +1026,47 @@ class SparqlSQLSchema:
                 PRIMARY KEY (entity_uuid, context_uuid, direction)
             )''')
 
-        # 7. Frame-entity table (maintained by app-level sync; replaces frame_entity MV)
+        # 7a. Frame-SLOT table — the general form of the frame collapse.
+        #
+        # `frame_entity` (below) hardcodes `urn:hasSourceEntity` and
+        # `urn:hasDestinationEntity` in its COLUMN NAMES, and its builder filters
+        # to those two. They are not schema: they are VALUES of `hasKGSlotType`,
+        # as arbitrary as any other object, and a frame schema may use different
+        # ones or have more than two slots. `issues/183` records the
+        # consequence — such frames get no collapse and no warning.
+        #
+        # This table holds the role as DATA, one row per (frame, slot):
+        # any role value, any arity. A query pattern collapses to one join per
+        # slot arm with `role_uuid` = whatever constant that arm used.
+        #
+        # `entity_uuid` is nullable: a slot with a role but no
+        # `hasEntitySlotValue` is still a slot of that frame, and an inner join
+        # here would silently change which rows the table describes rather than
+        # only how fast it answers — the same reasoning as the nullable columns
+        # in `frame_entity` and `edge`.
         stmts.append(f'''
-            CREATE TABLE IF NOT EXISTS {t['frame_entity']} (
-                frame_uuid           UUID NOT NULL,
-                source_entity_uuid   UUID,
-                dest_entity_uuid     UUID,
-                context_uuid         UUID NOT NULL,
-                -- The frame's rdf:type / vitaltype, denormalised for the same
-                -- reason as `edge.edge_type_uuid` (issues/060): without it a
-                -- typed hop joins back to rdf_quad per row, handing back the
-                -- join reduction this table exists to provide. Measured on
-                -- wordnet_frames depth 3, the type probe was 79% of all buffers
-                -- (2,006,247 of 2,543,685) and the walk went 53 ms -> 9 ms once
-                -- it became a column predicate.
-                --
-                -- NULLABLE on purpose, matching edge: a frame reachable through
-                -- its slots but carrying no type triple is still a frame, and
-                -- populating this with an inner join would silently drop it —
-                -- changing which rows the table describes rather than only how
-                -- fast it answers.
-                frame_type_uuid      UUID,
-                PRIMARY KEY (frame_uuid, context_uuid)
-            ){_part}''')
+            CREATE TABLE IF NOT EXISTS {t['frame_slot']} (
+                frame_uuid       UUID NOT NULL,
+                slot_uuid        UUID NOT NULL,
+                role_uuid        UUID NOT NULL,
+                entity_uuid      UUID,
+                context_uuid     UUID NOT NULL,
+                frame_type_uuid  UUID,
+                PRIMARY KEY (frame_uuid, slot_uuid, context_uuid)
+            )''')
+
+        # 7. `frame_entity` is NO LONGER CREATED. It named two
+        # `hasKGSlotType` VALUES in its columns, so it could only ever
+        # serve frames using those two roles — 26 of 29 local spaces use
+        # others (`issues/183`). `frame_slot` above replaces it and holds
+        # the role as data. Existing tables are dropped by
+        # `scripts/migrate_drop_frame_entity.py`; the entry stays in
+        # `drop_space_tables_sql` so tearing down an old space still
+        # removes it.
+
+        # `frame_slot` partitions on the same terms the other derived tables do.
         if partition_quads > 0:
-            stmts += self._partition_children(t['frame_entity'], partition_quads)
+            stmts += self._partition_children(t['frame_slot'], partition_quads)
 
         # 7b. Entity/slot sort table (issues/096). One row per slot reachable by
         # `entity -Edge_hasEntityKGFrame-> frame -Edge_hasKGSlot-> slot`,
@@ -1563,15 +1579,20 @@ class SparqlSQLSchema:
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_edge_ctx ON {t['edge']} (context_uuid)",
 
             # Frame-entity table indexes
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fe_src_frame ON {t['frame_entity']} (source_entity_uuid, frame_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fe_dst_frame ON {t['frame_entity']} (dest_entity_uuid, frame_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fe_frame ON {t['frame_entity']} (frame_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fe_ctx ON {t['frame_entity']} (context_uuid)",
+            # frame_slot: driven from either end, and from the role.
+            # COVERING, and it is not optional. The collapse joins on
+            # (context, role, frame) and reads slot_uuid + entity_uuid; without
+            # the INCLUDE the reference CONSTRUCT measured 2,032,883 buffers
+            # against `frame_entity`'s 903,218, and with it 902,869 — parity.
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fs_cover ON {t['frame_slot']} (context_uuid, role_uuid, frame_uuid) INCLUDE (slot_uuid, entity_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fs_role_entity ON {t['frame_slot']} (role_uuid, entity_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fs_entity_role ON {t['frame_slot']} (entity_uuid, role_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fs_frame_role ON {t['frame_slot']} (frame_uuid, role_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fs_slot ON {t['frame_slot']} (slot_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fs_ctx ON {t['frame_slot']} (context_uuid)",
             # Type-leading, mirroring idx_*_edge_type_src/_dst. A typed
             # traversal filters on the type and then walks by source or dest,
             # so the type has to lead for the scan to start there.
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fe_type_src ON {t['frame_entity']} (frame_type_uuid, source_entity_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fe_type_dst ON {t['frame_entity']} (frame_type_uuid, dest_entity_uuid)",
 
             # Entity/slot sort indexes (issues/096). Each is the FULL sort key
             # for one value lane, ending in entity_uuid so the scan is
@@ -1799,7 +1820,15 @@ class SparqlSQLSchema:
         """Return SQL statements to drop all per-space tables/views."""
         t = self.get_table_names(space_id)
         return [
-            f"DROP TABLE IF EXISTS {t['frame_entity']} CASCADE",
+            f"DROP TABLE IF EXISTS {t['frame_slot']} CASCADE",
+            # `frame_entity` is RETIRED (`issues/183`) and no longer in
+            # `get_table_names` — that map is what
+            # `test_new_space_matches_schema` treats as "must exist", so
+            # leaving it there asserted a table the creation path
+            # deliberately no longer builds. The drop stays, named
+            # directly, so tearing down a space made before the change
+            # still removes it.
+            f"DROP TABLE IF EXISTS {space_id}_frame_entity CASCADE",
             f"DROP TABLE IF EXISTS {t['entity_slot_sort']} CASCADE",
             f"DROP TABLE IF EXISTS {t['entity_prop_sort']} CASCADE",
             f"DROP TABLE IF EXISTS {t['frame_prop_sort']} CASCADE",

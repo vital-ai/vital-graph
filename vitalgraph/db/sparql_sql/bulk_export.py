@@ -203,10 +203,10 @@ async def import_space(conn, space_id: str, paths: Dict[str, str],
         # general SPARQL pipeline — slower, and correct. Before the sort path
         # was gated this would have served empty pages as "no results".
         from .sync_edge_table import resync_edge_table
-        from .sync_frame_entity_table import resync_frame_entity_table
+        from .sync_frame_slot_table import resync_frame_slot_table
         from .sync_stats_tables import recompute_stats_tables
         await resync_edge_table(conn, space_id)
-        await resync_frame_entity_table(conn, space_id)
+        await resync_frame_slot_table(conn, space_id)
         await recompute_stats_tables(conn, space_id)
         try:
             async with conn.transaction():

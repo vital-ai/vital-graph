@@ -2,7 +2,7 @@
 
 THE INVARIANT THIS ENFORCES
 ---------------------------
-`{space}_edge`, `{space}_frame_entity`, `{space}_rdf_pred_stats` and
+`{space}_edge`, `{space}_frame_slot`, `{space}_rdf_pred_stats` and
 `{space}_rdf_stats` are denormalised mirrors of `rdf_quad`. A write path that
 changes quads without updating them leaves them describing a graph that no
 longer exists — and the query pipeline TRUSTS them, so the result is a wrong
@@ -79,11 +79,18 @@ DERIVED = {
     "edge": (("sync_edge_table", "delete_edges_for_context"),
              "denormalised edge mirror; the edge-table rewrite is the default "
              "plan for entity/frame/relation queries"),
-    "frame_entity": (("sync_frame_entity",),
-                     "derived from edge; collapses 6 tables per hop"),
+    # `frame_entity` was RETIRED (`issues/183`): it named two `hasKGSlotType`
+    # VALUES in its columns, so it could only serve frames using those two
+    # roles, and 26 of 29 local spaces use others. `frame_slot` replaces it —
+    # one row per (frame, slot) with the role as data — and is a structural
+    # mirror on exactly the same terms: the collapse READS it, so a stale row
+    # is a wrong answer rather than a slow query.
+    "frame_slot": (("sync_frame_slot", "resync_frame_slot",
+                    "delete_frame_slot_for_context"),
+                   "derived from edge; collapses each slot arm of a hop"),
     # issues/096. A stale row here is a WRONG SORT ORDER, not a slow query —
     # the sort reads the value straight off this table — so it is a structural
-    # mirror on the same terms as edge and frame_entity.
+    # mirror on the same terms as edge and frame_slot.
     "entity_slot_sort": (("sync_entity_slot_sort", "delete_entity_slot_sort_for_context"),
                          "denormalised entity->frame->slot sort values; a slot "
                          "sort reads its ORDER from this table"),
@@ -95,7 +102,7 @@ DERIVED = {
     #
     # The invariant this file enforces — "a write path that changes quads
     # without updating the mirror leaves it describing a graph that no longer
-    # exists" — is exactly right for `edge`, `frame_entity` and
+    # exists" — is exactly right for `edge`, `frame_slot` and
     # `entity_slot_sort`, whose staleness produces WRONG ANSWERS. It was wrong
     # for stats, and enforcing it here is what kept the accumulator alive:
     #

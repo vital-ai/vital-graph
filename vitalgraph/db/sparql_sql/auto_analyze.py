@@ -130,7 +130,7 @@ async def maybe_analyze(
         f"{space_id}_rdf_quad",
         f"{space_id}_term",
         f"{space_id}_edge",
-        f"{space_id}_frame_entity",
+        f"{space_id}_frame_slot",
         f"{space_id}_rdf_pred_stats",
         f"{space_id}_rdf_stats",
         f"{space_id}_datatype",

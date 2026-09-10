@@ -20,8 +20,14 @@ from vitalgraph.db.sparql_sql.rewrite_edge_table import (
 from vitalgraph.db.sparql_sql.rewrite_frame_entity_table import (
     rewrite_frame_entity_table,
     SLOT_TYPE_URI, SLOT_VALUE_URI,
-    SOURCE_ENTITY_URI, DEST_ENTITY_URI,
 )
+
+# SAMPLE role values, defined here rather than imported. They are
+# `hasKGSlotType` OBJECT values — data a query supplies — and the rewrite no
+# longer names any (`issues/183`). Any two distinct URIs exercise the same code
+# path; these two are used because the reference queries happen to.
+SOURCE_ENTITY_URI = "urn:hasSourceEntity"
+DEST_ENTITY_URI = "urn:hasDestinationEntity"
 
 SPACE = "test_space"
 
@@ -407,9 +413,10 @@ class TestRewriteFrameEntityDetection:
         plan, aliases = _build_frame_pattern()
         result = rewrite_frame_entity_table(plan, aliases, SPACE)
 
-        fe_tables = [t for t in result.tables if t.kind == "frame_entity"]
-        assert len(fe_tables) == 1
-        assert fe_tables[0].table_name == f"{SPACE}_frame_entity"
+        fs_tables = [t for t in result.tables if t.kind == "frame_slot"]
+        # One join per ARM — two here, because this fixture has two slots.
+        assert len(fs_tables) == 2
+        assert all(t.table_name == f"{SPACE}_frame_slot" for t in fs_tables)
 
     def test_removes_all_six_tables(self):
         """All 6 original tables are removed."""
@@ -418,8 +425,8 @@ class TestRewriteFrameEntityDetection:
         assert original_count == 6
 
         result = rewrite_frame_entity_table(plan, aliases, SPACE)
-        # 6 removed, 1 added = 1 total
-        assert len(result.tables) == 1
+        # 6 removed, one frame_slot join per arm added = 2 total
+        assert len(result.tables) == 2
 
     def test_incomplete_pattern_no_rewrite(self):
         """Missing slot_value quad → no rewrite."""
@@ -445,7 +452,7 @@ class TestRewriteFrameEntityDetection:
         plan = _make_bgp_plan(tables, var_slots, tagged)
         result = rewrite_frame_entity_table(plan, aliases, SPACE)
         # No frame_entity table should be introduced
-        assert not any(t.kind == "frame_entity" for t in result.tables)
+        assert not any(t.kind == "frame_slot" for t in result.tables)
 
 
 class TestRewriteFrameEntityVarSlots:
@@ -456,7 +463,7 @@ class TestRewriteFrameEntityVarSlots:
 
         frame_slot = result.var_slots.get("frame")
         assert frame_slot is not None
-        assert any("frame_uuid" in col for _, col in frame_slot.positions)
+        assert any(col == "frame_uuid" for _, col in frame_slot.positions)
 
     def test_entity_vars_remapped(self):
         plan, aliases = _build_frame_pattern()
@@ -464,11 +471,11 @@ class TestRewriteFrameEntityVarSlots:
 
         src_slot = result.var_slots.get("srcEntity")
         assert src_slot is not None
-        assert any("source_entity_uuid" in col for _, col in src_slot.positions)
+        assert any(col == "entity_uuid" for _, col in src_slot.positions)
 
         dst_slot = result.var_slots.get("dstEntity")
         assert dst_slot is not None
-        assert any("dest_entity_uuid" in col for _, col in dst_slot.positions)
+        assert any(col == "entity_uuid" for _, col in dst_slot.positions)
 
     def test_slot_vars_removed(self):
         """Intermediate slot variables should lose their positions."""
@@ -494,5 +501,96 @@ class TestRewriteFrameEntityRecursive:
         result = rewrite_frame_entity_table(outer, aliases, SPACE)
 
         child = result.children[0]
-        fe_tables = [t for t in child.tables if t.kind == "frame_entity"]
-        assert len(fe_tables) == 1
+        fs_tables = [t for t in child.tables if t.kind == "frame_slot"]
+        assert len(fs_tables) == 2      # one per arm; the fixture has two slots
+
+
+class TestRewriteFrameEntityProjectionGuard:
+    """issues/178 — the collapse must not empty a variable the query reads.
+
+    Since `issues/182` the SLOT variables survive the collapse: `frame_entity`
+    carries `source_slot_uuid`/`dest_slot_uuid`, so `?srcSlot` is remapped
+    rather than emptied and the guard has nothing to decline for. What can
+    still be emptied is a variable bound only to a position the table has no
+    column for — `edge.edge_uuid` is the live example, i.e. `?srcEdge`.
+
+    These pin the DISCRIMINATION, not just the decline. A guard that always
+    declined would pass the decline cases and destroy the optimisation, so the
+    "still collapses" cases are what keep it honest.
+    """
+
+    @staticmethod
+    def _under_project(project_vars, with_edge_var=False):
+        plan, aliases = _build_frame_pattern()
+        if with_edge_var:
+            # `?srcEdge` — bound ONLY to a position frame_entity cannot express.
+            plan.var_slots["srcEdge"] = VarSlot(
+                name="srcEdge", positions=[("mv0", "edge_uuid")])
+        root = PlanV2(kind=KIND_PROJECT)
+        root.children = [plan]
+        root.project_vars = project_vars
+        return root, aliases
+
+    def test_declines_when_an_emptied_var_is_projected(self):
+        root, aliases = self._under_project(
+            ["frame", "srcEntity", "srcEdge"], with_edge_var=True)
+        result = rewrite_frame_entity_table(root, aliases, SPACE)
+
+        bgp = result.children[0]
+        assert not any(t.kind == "frame_slot" for t in bgp.tables), \
+            "collapsed away a projected variable it has no column for"
+        assert bgp.var_slots["srcEdge"].positions
+
+    def test_declines_for_select_star(self):
+        """project_vars=None means every variable is read."""
+        root, aliases = self._under_project(None, with_edge_var=True)
+        result = rewrite_frame_entity_table(root, aliases, SPACE)
+
+        bgp = result.children[0]
+        assert not any(t.kind == "frame_slot" for t in bgp.tables)
+
+    def test_slot_vars_now_survive_the_collapse(self):
+        """issues/182: projecting a slot no longer costs the collapse.
+
+        Before the slot columns existed this DECLINED, trading the traversal
+        table for correct output. Now it does both.
+        """
+        root, aliases = self._under_project(["frame", "srcEntity", "srcSlot"])
+        result = rewrite_frame_entity_table(root, aliases, SPACE)
+
+        bgp = result.children[0]
+        assert any(t.kind == "frame_slot" for t in bgp.tables), \
+            "declined even though frame_entity can now bind the slot"
+        cols = [c for _, c in bgp.var_slots["srcSlot"].positions]
+        assert "slot_uuid" in cols, f"slot bound to the wrong column: {cols}"
+
+    def test_dst_slot_maps_to_its_own_arm(self):
+        """Two slots must land on two different frame_slot joins."""
+        root, aliases = self._under_project(["frame", "srcSlot", "dstSlot"])
+        result = rewrite_frame_entity_table(root, aliases, SPACE)
+
+        bgp = result.children[0]
+        assert any(t.kind == "frame_slot" for t in bgp.tables)
+        # Distinct ARMS, so distinct aliases — the role separates them now,
+        # not two differently-named columns.
+        src_al = {a for a, c in bgp.var_slots["srcSlot"].positions if c == "slot_uuid"}
+        dst_al = {a for a, c in bgp.var_slots["dstSlot"].positions if c == "slot_uuid"}
+        assert src_al and dst_al and src_al != dst_al, (src_al, dst_al)
+
+    def test_still_collapses_when_slots_are_not_read(self):
+        """The common shape — FRAME_UNION / RELATIONSHIPS, 25x per issues/051."""
+        root, aliases = self._under_project(["frame", "srcEntity", "dstEntity"])
+        result = rewrite_frame_entity_table(root, aliases, SPACE)
+
+        bgp = result.children[0]
+        assert any(t.kind == "frame_slot" for t in bgp.tables), \
+            "declined a collapse that reads nothing the table cannot bind"
+
+    def test_emptied_but_unread_var_is_still_dropped(self):
+        """Only READ variables block the collapse, not every emptied one."""
+        root, aliases = self._under_project(["frame"], with_edge_var=True)
+        result = rewrite_frame_entity_table(root, aliases, SPACE)
+
+        bgp = result.children[0]
+        assert any(t.kind == "frame_slot" for t in bgp.tables)
+        assert "srcEdge" not in bgp.var_slots

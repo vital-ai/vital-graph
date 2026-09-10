@@ -183,9 +183,15 @@ async def resolve_entity_uuid_for_slot(
         )
         if row:
             return row["entity_uuid"]
-    except Exception:
-        # Table might not exist — fall through to edge traversal
-        pass
+    except Exception as exc:
+        # NOT merely "the table might not exist". This path has never executed:
+        # the query selects `entity_uuid`, a column `frame_entity` does not
+        # have, so it raises on every call and always falls through
+        # (`issues/184`). Logged rather than silently swallowed — a fast path
+        # that cannot run is indistinguishable from a by-design fallback until
+        # something says so.
+        logger.debug("geo slot fast path unavailable, using edge traversal: %s",
+                     exc)
 
     # Slow path: edge traversal slot → frame → entity
     rdf_quad = f"{space_id}_rdf_quad"

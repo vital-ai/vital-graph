@@ -24,14 +24,16 @@ import re
 from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
 from .declines import Rule
-from .ir import PlanV2, TableRef, AliasGenerator, KIND_BGP
+from .ir import PlanV2, TableRef, AliasGenerator, KIND_BGP, KIND_PROJECT
 
 logger = logging.getLogger(__name__)
 
 SLOT_TYPE_URI = "http://vital.ai/ontology/haley-ai-kg#hasKGSlotType"
 SLOT_VALUE_URI = "http://vital.ai/ontology/haley-ai-kg#hasEntitySlotValue"
-SOURCE_ENTITY_URI = "urn:hasSourceEntity"
-DEST_ENTITY_URI = "urn:hasDestinationEntity"
+# NOTE: the slot ROLE values (`urn:hasSourceEntity` and friends) are
+# deliberately NOT named in this module. They are `hasKGSlotType` OBJECT
+# values — data, supplied by the query — and compiling two of them in is
+# what `issues/183` records. `slot_role_constants` reads them from the plan.
 # The frame's own type. `frame_entity.frame_type_uuid` carries it, so a hop
 # constrained by it needs no join back to rdf_quad — the trade `edge_type_uuid`
 # makes (issues/060). VITALTYPE rather than rdf:type: single-valued by design so
@@ -63,7 +65,7 @@ class _SlotGroup(NamedTuple):
 
 
 def _type_quads_for(plan, frame_var, quad_predicate, quad_obj_const,
-                    table_by_alias):
+                    table_by_alias, aliases=None):
     """Quad tables holding `<frame_var> vitaltype <constant>`.
 
     A VARIABLE object is skipped rather than absorbed. `?f vitaltype ?t` binds
@@ -82,8 +84,19 @@ def _type_quads_for(plan, frame_var, quad_predicate, quad_obj_const,
         tbl = table_by_alias.get(ref_id)
         if not tbl or tbl.kind != "quad":
             continue
-        if quad_predicate.get(ref_id) != VITALTYPE_URI:
-            continue
+        # VITALTYPE is what `frame_type_uuid` holds, so it is always
+        # equivalent. `rdf:type` is equivalent only where the two agree in this
+        # space, which `frame_type_absorbable` answers against the data and
+        # `generator` prefetches onto `aliases`. Absent or None keeps the join.
+        #
+        # This gate used to accept VITALTYPE only, and `issues/183` measured the
+        # cost on a query that writes `?frame a KGFrame`: 5,120,000 of the
+        # 6,032,427 buffers, the entire remaining gap against the table this
+        # collapse replaced.
+        _pred = quad_predicate.get(ref_id)
+        if _pred != VITALTYPE_URI:
+            if not (getattr(aliases, "frame_type_absorbable", None) or {}).get(_pred):
+                continue
         if not quad_obj_const.get(ref_id):
             continue
         out.append(ref_id)
@@ -125,6 +138,30 @@ def _slot_type_quads_for(plan, slot_var, quad_predicate, quad_obj_const,
     return out
 
 
+def slot_role_constants(plan: PlanV2, aliases: AliasGenerator) -> tuple:
+    """Every `hasKGSlotType` OBJECT constant this plan names, as a tuple.
+
+    The roles are whatever the QUERY says they are. Reading them from the plan
+    is what lets the slot-type tautology be asked about the roles actually in
+    play instead of two names compiled into the source (`issues/183`).
+    """
+    const_to_uri = {c: text for (text, ttype, _lg, _dt), c in aliases.constants.items()
+                    if ttype == "U"}
+    pred_of, obj_of = {}, {}
+    for _owner, sql in (plan.tagged_constraints or []):
+        m = _PRED_RE.search(sql)
+        if m:
+            pred_of[m.group(1)] = const_to_uri.get(m.group(2), "")
+        m = _OBJ_RE.search(sql)
+        if m:
+            obj_of[m.group(1)] = const_to_uri.get(m.group(2), "")
+    out = {obj_of[a] for a in pred_of
+           if pred_of[a] == SLOT_TYPE_URI and obj_of.get(a)}
+    for child in (plan.children or []):
+        out.update(slot_role_constants(child, aliases))
+    return tuple(sorted(out))
+
+
 def slot_type_constants(plan: PlanV2, aliases: AliasGenerator):
     """(type_predicate_uri, type_object_uri) for every slot type constraint here.
 
@@ -150,24 +187,119 @@ def slot_type_constants(plan: PlanV2, aliases: AliasGenerator):
     return sorted(out)
 
 
+_NEEDED_UNSET = object()
+
+
+def _needed_vars(root: PlanV2) -> Optional[Set[str]]:
+    """Variables the query still reads after this BGP — or None for "all".
+
+    `frame_entity` has no slot column, so collapsing a group DISCARDS the slot
+    variables (issues/178). That is free when nothing reads them and silently
+    wrong when something does: the CONSTRUCT template in
+    `sql_reference/happy_frame_query.sparql` projected `?sourceSlot` and
+    `?destinationSlot`, got a literal NULL for each, and emitted 30 of its 60
+    triples with HTTP 200.
+
+    None means "could not enumerate, assume everything is read", which makes the
+    caller decline. That is the safe direction and it costs nothing that was
+    working: a query this declines on is one whose slot variables the rewrite
+    would have emptied, i.e. one that is returning wrong output today.
+    """
+    needed: Set[str] = set()
+
+    def walk(p: PlanV2) -> bool:
+        ok = True
+        if p.kind == KIND_PROJECT:
+            if p.project_vars is None:
+                return False          # SELECT * — every variable is read
+            needed.update(p.project_vars)
+        # Any variable named in an expression is read too, wherever it sits.
+        for attr in ("filter_expr", "extend_expr", "order_by", "group_vars",
+                     "aggregates", "having"):
+            # `getattr(p, "child")` is NOT safe here: `child` is a property that
+            # asserts a single child and raises on a BGP, and a default does not
+            # suppress an exception raised inside a property. Only plain fields
+            # are read, and the walk below uses `children` directly — which is
+            # what `child` returns anyway.
+            val = getattr(p, attr, None)
+            if val is not None:
+                needed.update(_expr_vars(val))
+        ev = getattr(p, "extend_var", None)
+        if isinstance(ev, str):
+            needed.add(ev)
+        for child in (p.children or []):
+            if child is not None and not walk(child):
+                ok = False
+        return ok
+
+    return needed if walk(root) else None
+
+
+def _expr_vars(val) -> Set[str]:
+    """Every variable named anywhere inside an expression-ish value.
+
+    Deliberately structure-agnostic — it walks dataclasses, lists and dicts
+    generically rather than switching on node type, so a node kind this file
+    does not know about cannot silently hide a variable reference.
+    """
+    from ..jena_sparql.jena_types import ExprVar, VarNode
+    out: Set[str] = set()
+    seen: Set[int] = set()
+
+    def rec(v):
+        if v is None or id(v) in seen:
+            return
+        seen.add(id(v))
+        if isinstance(v, (ExprVar, VarNode)):
+            name = getattr(v, "var", None) or getattr(v, "name", None)
+            if isinstance(name, str):
+                out.add(name)
+            return
+        if isinstance(v, str):
+            return
+        if isinstance(v, dict):
+            for k, x in v.items():
+                if isinstance(k, str):
+                    out.add(k)
+                rec(x)
+            return
+        if isinstance(v, (list, tuple, set, frozenset)):
+            for x in v:
+                rec(x)
+            return
+        for f in getattr(v, "__dataclass_fields__", {}):
+            rec(getattr(v, f, None))
+
+    rec(val)
+    return out
+
+
 def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
-                                space_id: str) -> PlanV2:
+                                space_id: str, needed_vars=_NEEDED_UNSET) -> PlanV2:
     """Rewrite a v2 plan to use the frame_entity table where possible.
 
     Detects groups of 6 tables (2 edge + 2 slot_type + 2 slot_value)
     that form a frame traversal pattern and replaces each group with a
     single frame_entity table lookup.
+
+    `needed_vars` is computed once from the root and threaded down; callers do
+    not pass it. See `_needed_vars` for why the collapse must consult it.
     """
+    if needed_vars is _NEEDED_UNSET:
+        needed_vars = _needed_vars(plan)
+
     # Kept so a decline can return the plan untouched rather than a
     # half-rewritten one.
     original_plan = copy.deepcopy(plan)
 
     if plan.kind != KIND_BGP or not plan.tables:
         for i, child in enumerate(plan.children):
-            plan.children[i] = rewrite_frame_entity_table(child, aliases, space_id)
+            plan.children[i] = rewrite_frame_entity_table(child, aliases, space_id,
+                                                          needed_vars)
         return plan
 
     fe_table_name = f"{space_id}_frame_entity"
+    fs_table_name = f"{space_id}_frame_slot"
     edge_table_name = f"{space_id}_edge"
     quad_table_name = f"{space_id}_rdf_quad"
 
@@ -225,18 +357,21 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
 
     for q_alias, pred_uri in quad_predicate.items():
         if pred_uri == SLOT_TYPE_URI:
+            # ANY constant role. `urn:hasSourceEntity` and
+            # `urn:hasDestinationEntity` are VALUES of `hasKGSlotType`, as
+            # arbitrary as any other object — matching on them by name is what
+            # `issues/183` records, and it silently excluded every frame schema
+            # using different ones.
             obj_uri = quad_obj_const.get(q_alias, "")
-            if obj_uri == SOURCE_ENTITY_URI:
-                slot_type_quads[q_alias] = "source"
-            elif obj_uri == DEST_ENTITY_URI:
-                slot_type_quads[q_alias] = "dest"
+            if obj_uri:
+                slot_type_quads[q_alias] = obj_uri
         elif pred_uri == SLOT_VALUE_URI:
             slot_value_quads.add(q_alias)
 
     if not slot_type_quads or not slot_value_quads:
         FE.decline(
-            "no source/dest slot groups — a frame_entity row needs both a "
-            "typed slot and its entity value",
+            "no slot arms — a frame_slot row needs a typed slot and its "
+            "entity value",
             slot_type_quads=len(slot_type_quads),
             slot_value_quads=len(slot_value_quads))
         return plan
@@ -299,24 +434,32 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
             frame_var=frame_var,
         ))
 
-    # --- Step 7: Group by frame_var, find source+dest pairs ---
-    frame_groups: Dict[str, Dict[str, _SlotGroup]] = {}
+    # --- Step 7: Group arms by frame variable ---
+    #
+    # An ARM is one (edge, slot-type quad, slot-value quad) reaching one slot of
+    # one frame. Previously this required exactly a "source" arm and a "dest"
+    # arm, because `frame_entity` has one column for each. `frame_slot` holds
+    # the role as data, so any number of arms with any role values collapse —
+    # two is merely the common case (`issues/183`).
+    frame_groups: Dict[str, List[_SlotGroup]] = {}
     for g in groups:
-        frame_groups.setdefault(g.frame_var, {})[g.role] = g
+        frame_groups.setdefault(g.frame_var, []).append(g)
 
-    pairs: List[Tuple[_SlotGroup, _SlotGroup]] = []
-    for _fvar, roles in frame_groups.items():
-        if "source" in roles and "dest" in roles:
-            pairs.append((roles["source"], roles["dest"]))
+    # Two arms on one frame is the shape worth collapsing: a single arm is one
+    # slot lookup, which the quad tables already do without a join saved.
+    frame_arms: List[List[_SlotGroup]] = [
+        arms for arms in frame_groups.values() if len(arms) >= 2]
 
-    if not pairs:
+    if not frame_arms:
         FE.decline(
-            "no frame variable carries BOTH a source and a dest group, which "
-            "is what one frame_entity row represents",
-            frame_vars={v: sorted(r) for v, r in frame_groups.items()})
+            "no frame variable carries two or more slot arms, which is what a "
+            "frame_slot collapse joins",
+            frame_vars={v: sorted(g.role for g in a)
+                        for v, a in frame_groups.items()})
         return plan
 
-    logger.debug("Frame-entity table rewrite: found %d frame pattern(s)", len(pairs))
+    logger.debug("Frame-slot rewrite: %d frame pattern(s), arms per frame %s",
+                 len(frame_arms), [len(a) for a in frame_arms])
 
     # --- Step 8: Replace each pair with a frame_entity table ---
     removed_aliases: Set[str] = set()
@@ -326,54 +469,64 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
     absorbed_type: List[Tuple[str, str]] = []
     new_fe_tables: List[TableRef] = []
     alias_map: Dict[str, Tuple[str, Dict[str, Optional[str]]]] = {}
+    # The frame_entity aliases this pass CREATES. Needed by the issues/051
+    # check below, which asks whether a variable is still bound by a
+    # SURVIVING table — and `alias_map` is keyed by the OLD aliases, so a
+    # position on the new table looks like a survivor unless excluded.
+    fe_aliases: Set[str] = set()
 
-    for src_g, dst_g in pairs:
-        fe_alias = aliases.next("femv")
-        new_fe_tables.append(TableRef(
-            ref_id=fe_alias, kind="frame_entity",
-            table_name=fe_table_name, alias=fe_alias,
-        ))
+    for arms in frame_arms:
+        # One frame_slot join per arm. They join to each other on `frame_uuid`
+        # automatically: the frame variable has a position on every arm's alias,
+        # so the emitter produces the equality itself.
+        arm_alias: Dict[int, str] = {}
+        for _g in arms:
+            _a = aliases.next("fsmv")
+            fe_aliases.add(_a)
+            arm_alias[id(_g)] = _a
+            new_fe_tables.append(TableRef(
+                ref_id=_a, kind="frame_slot",
+                table_name=fs_table_name, alias=_a,
+            ))
+        # The frame ANCHOR. Everything below that is a property of the FRAME
+        # rather than of one slot — the frame type absorption, the edge-type and
+        # slot-type semi-joins — hangs off this one alias, and every arm carries
+        # the same `frame_uuid`, so any arm would do. Kept under the old name so
+        # those blocks are untouched by this change.
+        fe_alias = arm_alias[id(arms[0])]
 
-        for alias in [src_g.edge_alias, dst_g.edge_alias,
-                      src_g.type_quad, dst_g.type_quad,
-                      src_g.value_quad, dst_g.value_quad]:
-            removed_aliases.add(alias)
 
-        # Source edge: frame → srcSlot
-        alias_map[src_g.edge_alias] = (fe_alias, {
-            "source_node_uuid": "frame_uuid",
-            "dest_node_uuid": None,
-            "edge_uuid": None,
-            "context_uuid": "context_uuid",
-        })
-        # Dest edge: frame → dstSlot
-        alias_map[dst_g.edge_alias] = (fe_alias, {
-            "source_node_uuid": "frame_uuid",
-            "dest_node_uuid": None,
-            "edge_uuid": None,
-            "context_uuid": "context_uuid",
-        })
-        # Slot type quads: eliminated entirely
-        for st_q in [src_g.type_quad, dst_g.type_quad]:
-            alias_map[st_q] = (fe_alias, {
-                "subject_uuid": None,
-                "predicate_uuid": None,
-                "object_uuid": None,
+        for _g in arms:
+            for alias in (_g.edge_alias, _g.type_quad, _g.value_quad):
+                removed_aliases.add(alias)
+
+        for _g in arms:
+            a = arm_alias[id(_g)]
+            # edge: frame -> slot
+            alias_map[_g.edge_alias] = (a, {
+                "source_node_uuid": "frame_uuid",
+                "dest_node_uuid": "slot_uuid",
+                "edge_uuid": None,
                 "context_uuid": "context_uuid",
             })
-        # Slot value quads: object_uuid → entity column
-        alias_map[src_g.value_quad] = (fe_alias, {
-            "subject_uuid": None,
-            "predicate_uuid": None,
-            "object_uuid": "source_entity_uuid",
-            "context_uuid": "context_uuid",
-        })
-        alias_map[dst_g.value_quad] = (fe_alias, {
-            "subject_uuid": None,
-            "predicate_uuid": None,
-            "object_uuid": "dest_entity_uuid",
-            "context_uuid": "context_uuid",
-        })
+            # slot TYPE quad. `object_uuid -> role_uuid` is what makes the role
+            # constraint survive: the query's own
+            # `qN.object_uuid = __CONST_role__` is remapped to
+            # `fsN.role_uuid = __CONST_role__`, whatever that constant is. No
+            # role value is named here.
+            alias_map[_g.type_quad] = (a, {
+                "subject_uuid": "slot_uuid",
+                "predicate_uuid": None,
+                "object_uuid": "role_uuid",
+                "context_uuid": "context_uuid",
+            })
+            # slot VALUE quad
+            alias_map[_g.value_quad] = (a, {
+                "subject_uuid": "slot_uuid",
+                "predicate_uuid": None,
+                "object_uuid": "entity_uuid",
+                "context_uuid": "context_uuid",
+            })
 
         # A `<frame> vitaltype <Type>` triple collapses in too: the column holds
         # exactly that, so the quad table is redundant. Measured on
@@ -387,8 +540,8 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
         # correct and no faster. The predicate conjunct is what IDENTIFIES the
         # triple as a vitaltype, and the column already encodes that, so it is
         # dropped rather than remapped.
-        for tq in _type_quads_for(plan, src_g.frame_var, quad_predicate,
-                                  quad_obj_const, table_by_alias):
+        for tq in _type_quads_for(plan, arms[0].frame_var, quad_predicate,
+                                  quad_obj_const, table_by_alias, aliases):
             removed_aliases.add(tq)
             type_quad_owned.add(tq)
             alias_map[tq] = (fe_alias, {
@@ -424,7 +577,7 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
                 if _col == "edge_uuid":
                     edge_var_of[_ref] = _v
 
-        for g in (src_g, dst_g):
+        for g in arms:
             role_pred = quad_pred_token.get(g.type_quad)
             role_obj = quad_obj_token.get(g.type_quad)
             if not (role_pred and role_obj):
@@ -445,6 +598,7 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
                     e_tok = quad_obj_token.get(etq)
                     if not e_tok:
                         continue
+
                     ex = aliases.next("edgechk")
                     removed_aliases.add(etq)
                     type_quad_owned.add(etq)
@@ -541,6 +695,7 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
     # Edge_hasKGSlot in the space. Measured on wordnet: 285,348 rows correct,
     # over a million produced, and an unbounded count that would not finish.
     broken: List[str] = []
+    had_positions = {k for k, v in plan.var_slots.items() if v.positions}
     for _var_name, slot in plan.var_slots.items():
         new_positions = []
         lost_to_fe = False
@@ -557,7 +712,15 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
                     seen_positions.add(pos_key)
             else:
                 new_positions.append((ref_id, col_name))
-        if lost_to_fe and any(ref not in alias_map for ref, _ in new_positions):
+        # `ref not in alias_map` means "bound by a table the collapse did not
+        # absorb" — the cross-product hazard of issues/051. A position on the
+        # frame_entity table this pass just CREATED is not that: it IS the
+        # collapse, and since issues/182 gave the table `source_slot_uuid` /
+        # `dest_slot_uuid` the slot variables land there instead of being
+        # emptied. Without this exclusion the guard fires on its own output and
+        # declines every frame pattern that names a slot.
+        if lost_to_fe and any(ref not in alias_map and ref not in fe_aliases
+                              for ref, _ in new_positions):
             broken.append(_var_name)
         slot.positions = new_positions
     if broken:
@@ -566,6 +729,29 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
             "while still being bound by a surviving table, which reads as a "
             "cross product (issues/051)",
             broken=sorted(broken))
+        return original_plan
+    # A variable whose every position mapped into `frame_entity` at a column
+    # that does not exist has been emptied above, and the line below would drop
+    # it from the plan entirely. `compute_scope` then reports it out of scope,
+    # `null_companions` pads it with a literal NULL, and the query returns a
+    # column of NULLs where it asked for slots — silently, with HTTP 200
+    # (issues/178).
+    #
+    # The `broken` check above does not cover this: it fires only when the
+    # variable is ALSO bound by a surviving table, which reads as a cross
+    # product (issues/051). That guards wrong ROWS. This one guards a missing
+    # OUTPUT, which the A/B in issues/178 measured as the whole of the defect —
+    # 425 rows either way, identical, with the two slot columns NULL.
+    emptied = sorted(had_positions - {k for k, v in plan.var_slots.items()
+                                      if v.positions})
+    if emptied and (needed_vars is None
+                    or any(v in needed_vars for v in emptied)):
+        FE.decline(
+            "the collapse would empty a variable the query still reads, and "
+            "`frame_entity` has no column to rebind it from (issues/178)",
+            emptied=emptied,
+            needed=("<all: SELECT *>" if needed_vars is None
+                    else sorted(v for v in emptied if v in needed_vars)))
         return original_plan
     plan.var_slots = {k: v for k, v in plan.var_slots.items() if v.positions}
 
@@ -591,6 +777,26 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
                     new_tagged.append((new_fe, new_sql))
                     new_constraints.append(new_sql)
                 continue
+
+            # A constraint on a column the collapse KEEPS must be REMAPPED,
+            # not dropped. `frame_slot` holds the role in `role_uuid`, so the
+            # arm's own `qN.object_uuid = __CONST_role__` becomes
+            # `fsN.role_uuid = __CONST_role__`.
+            #
+            # Dropping it was correct while the role lived in the COLUMN NAME
+            # (`source_entity_uuid` vs `dest_entity_uuid`) — the constraint was
+            # genuinely redundant. With the role as data it is load-bearing:
+            # without it every arm matches every role, which measured as a 4x
+            # cross product (1,700 rows where the answer is 425).
+            _m_const = re.search(r"(\w+)\.(\w+)\s*=\s*(__CONST_c_\d+__)", sql)
+            if _m_const and _m_const.group(1) == owner:
+                _fe_a, _cm = alias_map[owner]
+                _new_col = _cm.get(_m_const.group(2))
+                if _new_col:
+                    new_sql = f"{_fe_a}.{_new_col} = {_m_const.group(3)}"
+                    new_tagged.append((_fe_a, new_sql))
+                    new_constraints.append(new_sql)
+                    continue
 
             # Check co-references linking removed ↔ non-removed tables
             m = _COREF_RE.search(sql)

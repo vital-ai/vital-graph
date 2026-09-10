@@ -315,7 +315,7 @@ class TestTheRewriteContract:
 
         _disable_rewrite(monkeypatch)
         sql_off, rows_off = await _rows(pg_conn, space_id, sparql)
-        assert "frame_entity" not in sql_off, "the rewrite was not disabled"
+        assert "frame_slot" not in sql_off, "the rewrite was not disabled"
 
         assert _pairs(rows_on) == _pairs(rows_off), (
             "the frame_entity rewrite changed the answer")
@@ -355,14 +355,17 @@ class TestWhetherTheTableIsUsed:
         for label, typed in (("plain", False), ("slot-typed", True)):
             sql = await _sql_for(pg_conn, space_id,
                                  _criteria_query(graph, f"{EX}e0", slot_typed=typed))
-            used[label] = "frame_entity" in sql
+            used[label] = "frame_slot" in sql
 
+        # `frame_entity` was RETIRED (`issues/183`) — it named two
+        # `hasKGSlotType` VALUES in its columns and 26 of 29 spaces use others.
+        # `frame_slot` replaces it and holds the role as data.
         rows = await pg_conn.fetch(
-            f"SELECT count(*) AS n FROM {space_id}_frame_entity")
+            f"SELECT count(*) AS n FROM {space_id}_frame_slot")
         populated = rows[0]["n"] if rows else 0
 
-        print(f"\nframe_entity rows: {populated}")
-        print(f"rewrite reaches frame_entity — plain: {used['plain']}, "
+        print(f"\nframe_slot rows: {populated}")
+        print(f"rewrite reaches frame_slot — plain: {used['plain']}, "
               f"slot-typed: {used['slot-typed']}")
 
         assert not used["slot-typed"], (
@@ -410,7 +413,7 @@ class TestTheCollapseActuallyHappening:
     async def test_it_fires_when_both_ends_are_variables(self, seeded, pg_conn):
         space_id, graph = seeded
         sql = await _sql_for(pg_conn, space_id, _both_ends_variable_query(graph))
-        assert "frame_entity" in sql, (
+        assert "frame_slot" in sql, (
             "the 6-table pattern with both ends free is the case the rewrite "
             "was built for; if it stopped firing here the table is entirely "
             "dead rather than merely under-used")
@@ -422,11 +425,11 @@ class TestTheCollapseActuallyHappening:
         sparql = _both_ends_variable_query(graph)
 
         sql_on, rows_on = await _rows(pg_conn, space_id, sparql)
-        assert "frame_entity" in sql_on
+        assert "frame_slot" in sql_on
 
         _disable_rewrite(monkeypatch)
         sql_off, rows_off = await _rows(pg_conn, space_id, sparql)
-        assert "frame_entity" not in sql_off, "the rewrite was not disabled"
+        assert "frame_slot" not in sql_off, "the rewrite was not disabled"
 
         def triples(rows):
             return {tuple(sorted(str(v) for v in r.values()
@@ -452,7 +455,7 @@ class TestTheCollapseActuallyHappening:
         space_id, graph = seeded
         sql = await _sql_for(
             pg_conn, space_id, _criteria_query(graph, f"{EX}e0", slot_typed=False))
-        assert "frame_entity" not in sql, (
+        assert "frame_slot" not in sql, (
             "the constant-ended criteria query now collapses — good, but "
             "update this test and confirm the differential still holds")
 
@@ -546,10 +549,16 @@ class TestMultiHopTraversal:
         """
         space_id, graph = seeded
         sql = await _sql_for(pg_conn, space_id, _chain_query(graph, f"{EX}c0", depth))
-        joins = sql.count(f"{space_id}_frame_entity")
-        assert joins == depth, (
-            f"depth {depth} collapsed {joins} hop(s); each hop is its own "
-            f"6-table group and each should become one frame_entity join")
+        joins = sql.count(f"{space_id}_frame_slot")
+        # TWO joins per hop, not one. `frame_slot` holds one row per (frame,
+        # slot) with the role as data, so a hop's two arms are two rows joined
+        # on `frame_uuid` — where `frame_entity` folded both into one row by
+        # naming the roles in its columns (`issues/183`). The count that matters
+        # is that every hop collapsed, not that it collapsed into one table ref.
+        assert joins == 2 * depth, (
+            f"depth {depth} collapsed {joins} join(s); each hop is its own "
+            f"6-table group and each should become TWO frame_slot joins, one "
+            f"per slot arm")
 
     @pytest.mark.parametrize("depth", [2, 3])
     async def test_collapsed_and_uncollapsed_agree(self, seeded, pg_conn,
@@ -561,11 +570,11 @@ class TestMultiHopTraversal:
         sparql = _chain_query(graph, f"{EX}c0", depth)
 
         sql_on, rows_on = await _rows(pg_conn, space_id, sparql)
-        assert f"{space_id}_frame_entity" in sql_on
+        assert f"{space_id}_frame_slot" in sql_on
 
         _disable_rewrite(monkeypatch)
         sql_off, rows_off = await _rows(pg_conn, space_id, sparql)
-        assert f"{space_id}_frame_entity" not in sql_off, "rewrite not disabled"
+        assert f"{space_id}_frame_slot" not in sql_off, "rewrite not disabled"
 
         assert _reached(rows_on) == _reached(rows_off), (
             f"depth {depth}: collapsing changed which entities are reachable")
@@ -699,7 +708,7 @@ class TestCriteriaFilteredTraversal:
         q = _filtered_chain(graph, f"{EX}c0", depth,
                             hop_filter=f'\n        ?f{{n}} <{HALEY}hasKGFrameType> <{HYPERNYM}> .')
         sql = await _sql_for(pg_conn, space_id, q)
-        assert sql.count(f"{space_id}_frame_entity") == depth, (
+        assert sql.count(f"{space_id}_frame_slot") == 2 * depth, (
             "a frame-level criterion should not cost the collapse; if this "
             "fails, filtered traversal has lost the table entirely")
 
@@ -714,11 +723,11 @@ class TestCriteriaFilteredTraversal:
                             hop_filter=f'\n        ?f{{n}} <{HALEY}hasKGFrameType> <{HYPERNYM}> .')
 
         sql_on, rows_on = await _rows(pg_conn, space_id, q)
-        assert f"{space_id}_frame_entity" in sql_on
+        assert f"{space_id}_frame_slot" in sql_on
 
         _disable_rewrite(monkeypatch)
         sql_off, rows_off = await _rows(pg_conn, space_id, q)
-        assert f"{space_id}_frame_entity" not in sql_off, "rewrite not disabled"
+        assert f"{space_id}_frame_slot" not in sql_off, "rewrite not disabled"
 
         assert _reached(rows_on) == _reached(rows_off), (
             f"depth {depth}: the collapse changed which paths the criterion "

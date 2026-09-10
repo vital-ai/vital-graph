@@ -887,7 +887,7 @@ class ImportEngine:
 
         # Incremental aux table sync
         from vitalgraph.db.sparql_sql.sync_edge_table import resync_edge_table
-        from vitalgraph.db.sparql_sql.sync_frame_entity_table import resync_frame_entity_table
+        from vitalgraph.db.sparql_sql.sync_frame_slot_table import resync_frame_slot_table
         from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
 
         if progress_cb:
@@ -898,7 +898,7 @@ class ImportEngine:
 
         async with self._pool.acquire() as conn:
             await resync_edge_table(conn, space_id)
-            await resync_frame_entity_table(conn, space_id)
+            await resync_frame_slot_table(conn, space_id)
             await recompute_stats_tables(conn, space_id)
 
         # Register graph
@@ -1097,7 +1097,7 @@ class ImportEngine:
 
         # Incremental aux table sync
         from vitalgraph.db.sparql_sql.sync_edge_table import resync_edge_table
-        from vitalgraph.db.sparql_sql.sync_frame_entity_table import resync_frame_entity_table
+        from vitalgraph.db.sparql_sql.sync_frame_slot_table import resync_frame_slot_table
         from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
 
         if progress_cb:
@@ -1108,7 +1108,7 @@ class ImportEngine:
 
         async with self._pool.acquire() as conn:
             await resync_edge_table(conn, space_id)
-            await resync_frame_entity_table(conn, space_id)
+            await resync_frame_slot_table(conn, space_id)
             await recompute_stats_tables(conn, space_id)
 
         # Register graph
@@ -1294,7 +1294,7 @@ class ImportEngine:
 
         # Incremental aux table sync
         from vitalgraph.db.sparql_sql.sync_edge_table import resync_edge_table
-        from vitalgraph.db.sparql_sql.sync_frame_entity_table import resync_frame_entity_table
+        from vitalgraph.db.sparql_sql.sync_frame_slot_table import resync_frame_slot_table
         from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
 
         if progress_cb:
@@ -1305,7 +1305,7 @@ class ImportEngine:
 
         async with self._pool.acquire() as conn:
             await resync_edge_table(conn, space_id)
-            await resync_frame_entity_table(conn, space_id)
+            await resync_frame_slot_table(conn, space_id)
             await recompute_stats_tables(conn, space_id)
 
         # Register graph

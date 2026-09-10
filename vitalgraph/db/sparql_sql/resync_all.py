@@ -23,7 +23,7 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
     Returns dict with row counts for each table.
     """
     from .sync_edge_table import resync_edge_table
-    from .sync_frame_entity_table import resync_frame_entity_table
+    from .sync_frame_slot_table import resync_frame_slot_table
     from .sync_stats_tables import recompute_stats_tables
     from .sync_value_stats import resync_value_stats
     from .generator import invalidate_stats_cache
@@ -57,8 +57,8 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
     # 1. Edge table (frame_entity depends on this)
     edge_count = await resync_edge_table(conn, space_id)
 
-    # 2. Frame-entity table
-    fe_count = await resync_frame_entity_table(conn, space_id)
+    # 2. Frame-slot table (issues/183 — the role-agnostic collapse)
+    fe_count = await resync_frame_slot_table(conn, space_id)
 
     # EVERY OPTIONAL STEP BELOW RUNS IN ITS OWN SAVEPOINT (`issues/168`).
     #

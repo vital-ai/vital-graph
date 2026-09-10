@@ -1,12 +1,12 @@
 """Do the derived tables project blank nodes? (issues/069 test 12, issues/076)
 
-The edge and frame_entity tables model URI-based binary relations. A blank node
+The edge and frame_slot tables model URI-based binary relations. A blank node
 in a subject or object position has no representation there, so issues/076 asks
 whether the sync SKIPS such rows or mis-projects them.
 
 That question was answered by reading and reasoning in an earlier pass, and
 recorded as unverified for exactly that reason: neither sync_edge_table nor
-sync_frame_entity_table mentions term_type anywhere, so "they skip blank nodes"
+sync_frame_slot_table mentions term_type anywhere, so "they skip blank nodes"
 was an assumption about code that contains no such check.
 
 This file establishes the actual behaviour. It asserts what IS, with the
@@ -84,28 +84,28 @@ class TestEdgeTableWithBlankNodes:
             f"behaviour), got {n} rows")
 
 
-class TestFrameEntityWithBlankNodes:
+class TestFrameSlotWithBlankNodes:
 
-    async def test_frame_entity_is_unaffected_by_blank_nodes(
+    async def test_frame_slot_is_unaffected_by_blank_nodes(
         self, test_space, space_impl, pg_conn
     ):
-        """frame_entity indexes connector frames, which are keyed on entity
+        """frame_slot indexes connector frames, which are keyed on entity
         slots. A blank node cannot carry the slot structure, so no row should
         appear regardless of what the edge table did."""
-        from vitalgraph.db.sparql_sql.sync_frame_entity_table import (
-            resync_frame_entity_table)
+        from vitalgraph.db.sparql_sql.sync_frame_slot_table import (
+            resync_frame_slot_table)
 
         before = await pg_conn.fetchval(
-            f"SELECT count(*) FROM {test_space}_frame_entity")
+            f"SELECT count(*) FROM {test_space}_frame_slot")
         edge = URIRef("urn:test:bnode_derived:edge2")
         await space_impl.add_rdf_quads_batch(test_space, [
             (edge, EDGE_SRC, BNode("bnfe1"), GRAPH),
             (edge, EDGE_DST, BNode("bnfe2"), GRAPH),
         ])
-        await resync_frame_entity_table(pg_conn, test_space)
+        await resync_frame_slot_table(pg_conn, test_space)
         after = await pg_conn.fetchval(
-            f"SELECT count(*) FROM {test_space}_frame_entity")
+            f"SELECT count(*) FROM {test_space}_frame_slot")
         assert after == before, (
-            "a pair of blank-node endpoints produced a frame_entity row; that "
+            "a pair of blank-node endpoints produced a frame_slot row; that "
             "table indexes connector frames keyed on entity slots, which a "
             "blank node cannot carry")

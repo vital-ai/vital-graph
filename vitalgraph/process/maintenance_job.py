@@ -559,10 +559,11 @@ class MaintenanceJob:
             if edge_result:
                 summary["edge_integrity"] = edge_result
 
-            # --- Frame-entity integrity (derived from edge; backfill after) ---
-            fe_result = await self._run_frame_entity_integrity(list(stats.keys()))
-            if fe_result:
-                summary["frame_entity_integrity"] = fe_result
+
+            # --- Frame-slot integrity (issues/183; detection only) ---
+            fs_result = await self._run_frame_slot_integrity(list(stats.keys()))
+            if fs_result:
+                summary["frame_slot_integrity"] = fs_result
 
             # --- Entity/slot sort integrity (derived from edge; issues/096) ---
             ess_result = await self._run_entity_slot_sort_integrity(list(stats.keys()))
@@ -1833,6 +1834,55 @@ class MaintenanceJob:
                 await self._tracker.mark_failed(process_id, str(e))
             logger.error("Edge integrity backfill failed for %s: %s", worst_space, e)
             return {"space_id": worst_space, "error": str(e)}
+
+    async def _run_frame_slot_integrity(self, space_ids: List[str]) -> Optional[Dict]:
+        """Report drift and orphans in `{space}_frame_slot`. DETECTION ONLY.
+
+        The incremental paths in `sync_frame_slot_table` are what keep this
+        table current; this is the safety net that says when they have not.
+
+        It does NOT repair, deliberately. The only rebuild available is
+        `resync_frame_slot_table`, which TRUNCATEs — and the frame-slot rewrite
+        reads this table, so a truncate inside the maintenance cycle would make
+        every frame query return zero rows for the length of the rebuild. The
+        frame-entity twin can repair because it has a non-blocking backfill
+        (ROW EXCLUSIVE, no TRUNCATE); until this table has one, repair is a
+        deliberate act: `scripts/migrate_frame_slot_table.py --space X --apply`.
+
+        Reporting a problem nobody fixes automatically is still worth doing:
+        `issues/041` is a table that was faithfully wrong with a matching row
+        count, and nothing said so.
+        """
+        from ..db.sparql_sql.sync_frame_slot_table import (
+            frame_slot_drift, frame_slot_orphan_rate)
+
+        findings: Dict[str, Dict] = {}
+        for space_id in space_ids:
+            try:
+                async with self._pool.acquire() as conn:
+                    async with maintenance_timeouts(conn):
+                        expected, actual = await frame_slot_drift(conn, space_id)
+                        orphan_rate = await frame_slot_orphan_rate(conn, space_id)
+            except asyncpg.UndefinedTableError:
+                continue          # space not migrated — the rewrite declines
+            except Exception as exc:
+                log_probe_failure("frame_slot_integrity", space_id, exc)
+                continue
+            if expected == actual and orphan_rate == 0.0:
+                continue
+            findings[space_id] = {"expected": expected, "actual": actual,
+                                  "orphan_rate": round(orphan_rate, 4)}
+
+        if not findings:
+            return None
+        for sp, f in findings.items():
+            logger.warning(
+                "frame_slot integrity: %s expected %d rows, has %d, orphan rate "
+                "%.2f%% — the frame-slot collapse is serving from a table that "
+                "does not match the data. Repair with "
+                "`scripts/migrate_frame_slot_table.py --space %s --apply`.",
+                sp, f["expected"], f["actual"], f["orphan_rate"] * 100, sp)
+        return {"spaces": findings}
 
     async def _run_frame_entity_integrity(self, space_ids: List[str]) -> Optional[Dict]:
         """Backfill the single worst-drifted {space}_frame_entity table, if any.

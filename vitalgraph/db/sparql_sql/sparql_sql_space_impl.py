@@ -960,8 +960,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     # frame_entity is derived from the edge table, so sync it after.
                     from .sync_edge_table import sync_edge_table_after_insert
                     await sync_edge_table_after_insert(conn, space_id, [s_uuid])
-                    from .sync_frame_entity_table import sync_frame_entity_after_edge_insert
-                    await sync_frame_entity_after_edge_insert(conn, space_id, [s_uuid])
+                    from .sync_frame_slot_table import sync_frame_slot_after_edge_insert
+                    await sync_frame_slot_after_edge_insert(conn, space_id, [s_uuid])
                     # entity_slot_sort is derived from edge as well (issues/096).
                     from .sync_entity_slot_sort import sync_entity_slot_sort_after_edge_insert
                     await sync_entity_slot_sort_after_edge_insert(conn, space_id, [s_uuid])
@@ -1002,8 +1002,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 # This path maintained nothing at all, the mirror of
                 # add_rdf_quad, which syncs edge and frame_entity but not stats.
                 async with conn.transaction():
-                    from .sync_frame_entity_table import sync_frame_entity_before_delete
-                    await sync_frame_entity_before_delete(conn, space_id, [s_uuid])
+                    from .sync_frame_slot_table import sync_frame_slot_before_delete
+                    await sync_frame_slot_before_delete(conn, space_id, [s_uuid])
                     from .sync_entity_slot_sort import sync_entity_slot_sort_before_delete
                     await sync_entity_slot_sort_before_delete(conn, space_id, [s_uuid])
                     from .sync_edge_table import sync_edge_table_before_delete
@@ -1267,8 +1267,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 if subjects:
                     from .sync_edge_table import sync_edge_table_after_insert
                     await sync_edge_table_after_insert(conn, space_id, list(subjects))
-                    from .sync_frame_entity_table import sync_frame_entity_after_edge_insert
-                    await sync_frame_entity_after_edge_insert(conn, space_id, list(subjects))
+                    from .sync_frame_slot_table import sync_frame_slot_after_edge_insert
+                    await sync_frame_slot_after_edge_insert(conn, space_id, list(subjects))
                     from .sync_entity_slot_sort import sync_entity_slot_sort_after_edge_insert
                     await sync_entity_slot_sort_after_edge_insert(conn, space_id, list(subjects))
                     from .sync_entity_prop_sort import sync_entity_prop_sort_after_change
@@ -1502,8 +1502,9 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 _t5 = _time.monotonic()
 
                 # Sync frame_entity table (depends on edge table)
-                from .sync_frame_entity_table import sync_frame_entity_after_edge_insert
-                fe_inserted = await sync_frame_entity_after_edge_insert(
+                from .sync_frame_slot_table import sync_frame_slot_after_edge_insert
+                fe_inserted = 0
+                await sync_frame_slot_after_edge_insert(
                     conn, space_id, unique_subjects)
                 _t5b = _time.monotonic()
 
@@ -1699,8 +1700,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     return None
 
                 # Step 2: Sync frame_entity table — remove before edge rows
-                from .sync_frame_entity_table import sync_frame_entity_before_delete
-                await sync_frame_entity_before_delete(
+                from .sync_frame_slot_table import sync_frame_slot_before_delete
+                await sync_frame_slot_before_delete(
                     conn, space_id, subject_uuids, context_uuid=g_uuid)
 
                 # Step 2a: entity_slot_sort, also before the edge rows go —
@@ -1868,9 +1869,10 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     delete_rows.append((s_uuid, p_uuid, o_uuid, g_uuid))
 
                 # Sync frame_entity — remove before edge rows
-                from .sync_frame_entity_table import sync_frame_entity_before_delete
+                from .sync_frame_slot_table import sync_frame_slot_before_delete
                 unique_subjects = list({row[0] for row in delete_rows})
-                await sync_frame_entity_before_delete(
+                from .sync_frame_slot_table import sync_frame_slot_before_delete
+                await sync_frame_slot_before_delete(
                     conn, space_id, unique_subjects)
 
                 # entity_slot_sort — also before the edge rows
@@ -1988,8 +1990,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 # sync helpers read those quads to work out what to remove.
                 # Stats decrement before the delete for the same reason.
                 unique_subjects = list({row[0] for row in delete_rows})
-                from .sync_frame_entity_table import sync_frame_entity_before_delete
-                await sync_frame_entity_before_delete(
+                from .sync_frame_slot_table import sync_frame_slot_before_delete
+                await sync_frame_slot_before_delete(
                     conn, space_id, unique_subjects)
                 from .sync_entity_slot_sort import sync_entity_slot_sort_before_delete
                 await sync_entity_slot_sort_before_delete(
@@ -2522,8 +2524,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                         # (issues/064). Handled by context instead.
                         for g_uri in _cleared_graphs_from_update_ops(cr.update_ops):
                             from .sync_edge_table import delete_edges_for_context
-                            from .sync_frame_entity_table import (
-                                delete_frame_entity_for_context)
+                            from .sync_frame_slot_table import (
+                                delete_frame_slot_for_context)
                             from .sync_entity_slot_sort import (
                                 delete_entity_slot_sort_for_context)
                             from .sync_entity_prop_sort import (
@@ -2532,10 +2534,17 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                                 delete_frame_prop_sort_for_context)
                             ctx_uuid = _generate_term_uuid(g_uri, 'U')
                             async with conn.transaction():
-                                # frame_entity first: it is derived FROM the
+                                # frame_slot first: it is derived FROM the
                                 # edge table, so clearing edges first would
                                 # leave it unable to describe what it lost.
-                                await delete_frame_entity_for_context(
+                                #
+                                # This named `frame_entity` until `issues/183`
+                                # retired that table. The call kept resolving —
+                                # the module still exists — so DROP GRAPH
+                                # silently cleared nothing and 14 rows survived
+                                # a dropped graph, describing frames that no
+                                # longer exist.
+                                await delete_frame_slot_for_context(
                                     conn, space_id, ctx_uuid)
                                 # entity_slot_sort, same reason, same order.
                                 await delete_entity_slot_sort_for_context(
@@ -2587,8 +2596,11 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                             async with conn.transaction():
                                 await sync_edge_table_after_insert(conn, space_id, subj_uuids)
                                 await cleanup_orphan_edges_for_subjects(conn, space_id, subj_uuids)
-                                await sync_frame_entity_before_delete(conn, space_id, subj_uuids)
-                                await sync_frame_entity_after_edge_insert(conn, space_id, subj_uuids)
+                                from .sync_frame_slot_table import (
+                                    sync_frame_slot_before_delete as _fs_del,
+                                    sync_frame_slot_after_edge_insert as _fs_ins)
+                                await _fs_del(conn, space_id, subj_uuids)
+                                await _fs_ins(conn, space_id, subj_uuids)
                                 # Deletes internally before re-deriving.
                                 await sync_entity_slot_sort_after_edge_insert(
                                     conn, space_id, subj_uuids)
