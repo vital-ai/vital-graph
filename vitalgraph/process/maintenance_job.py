@@ -560,10 +560,21 @@ class MaintenanceJob:
                 summary["edge_integrity"] = edge_result
 
 
-            # --- Frame-slot integrity (issues/183; detection only) ---
+            # --- Frame-slot integrity: report, then repair the worst ---
+            #
+            # Two steps because they answer different questions. The first
+            # REPORTS drift and orphans for every space and repairs nothing —
+            # an orphan is a row whose defining edge is gone, which a backfill
+            # cannot fix because backfilling only ADDS. The second repairs the
+            # single worst-drifted space with `backfill_frame_slot_table`, the
+            # same shape as edge integrity above.
             fs_result = await self._run_frame_slot_integrity(list(stats.keys()))
             if fs_result:
                 summary["frame_slot_integrity"] = fs_result
+
+            fs_fix = await self._run_frame_slot_backfill(list(stats.keys()))
+            if fs_fix:
+                summary["frame_slot_backfill"] = fs_fix
 
             # --- Entity/slot sort integrity (derived from edge; issues/096) ---
             ess_result = await self._run_entity_slot_sort_integrity(list(stats.keys()))
@@ -1848,26 +1859,18 @@ class MaintenanceJob:
         The incremental paths in `sync_frame_slot_table` are what keep this
         table current; this is the safety net that says when they have not.
 
-        It does NOT repair on the SCHEDULED tick. Originally that was because
-        the only rebuild available was `resync_frame_slot_table`, which
-        TRUNCATEs — and the frame-slot rewrite reads this table, so a truncate
-        inside the maintenance cycle would make every frame query return zero
-        rows for the length of the rebuild.
+        This step does NOT repair; `_run_frame_slot_backfill` runs straight
+        after it and does. They are separate because they answer different
+        questions, and one of them has no automatic answer.
 
-        **That reason is now obsolete**: `backfill_frame_slot_table` exists and
-        is non-blocking (`INSERT ... ON CONFLICT DO NOTHING`, ROW EXCLUSIVE, no
-        TRUNCATE, adds only missing rows and can never delete). Wiring it in
-        here is a small change and probably the right one.
+        MISSING rows a backfill fixes. ORPHANS — rows whose defining edge is
+        gone — it cannot: `backfill_frame_slot_table` only ever ADDS. Those are
+        removed by `cleanup_stale_frame_slot` in the sweep, or by a full
+        `scripts/migrate_frame_slot_table.py --space X --apply` when the table
+        has diverged badly enough to want rebuilding.
 
-        It is deliberately NOT done in the same batch as the `frame_entity`
-        retirement: turning on automatic repair of a table whose migration is
-        landing simultaneously means a bad migration would be papered over by a
-        background job instead of showing up as drift. Scheduled auto-repair
-        should be its own change, after the migration has been observed.
-
-        Until then repair is explicit — `trigger_maintenance` for one space
-        runs the backfill, or `scripts/migrate_frame_slot_table.py --space X
-        --apply` rebuilds.
+        So a non-zero orphan rate reported here and NOT fixed by the next
+        cycle's backfill is a real signal, not a gap.
 
         Reporting a problem nobody fixes automatically is still worth doing:
         `issues/041` is a table that was faithfully wrong with a matching row
