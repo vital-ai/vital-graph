@@ -674,7 +674,7 @@ def dedup_feasible(root, chain, text_needed_vars):
             above=[n.kind for n in above])
 
     quad_tables = [tb for tb in (bgp.tables or [])
-                   if tb.kind in ("quad", "edge", "frame_entity")]
+                   if tb.kind in ("quad", "edge", "frame_entity", "frame_slot")]
     groups = partition_hops(bgp, chain, quad_tables)
     if not groups:
         return None

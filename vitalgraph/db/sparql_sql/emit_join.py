@@ -356,7 +356,37 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
     # For VALUES joins and LEFT JOINs, use COALESCE so right-side bindings
     # fill in NULLs from the left (SPARQL compatible-mapping semantics).
     select_cols = []
-    values_shared = shared if (left_is_table or right_is_table or is_left) else set()
+    # A shared variable that ONE SIDE MAY LEAVE UNBOUND needs the same
+    # treatment, and for the same reason: SPARQL merges compatible solutions so
+    # the BOUND value wins (§17.6 — `mu1` unbound, `mu2` bound gives bound), and
+    # the ON clause already implements that with `(x IS NULL OR x = y)`.
+    # Without it the projection takes the left side's NULL and the query returns
+    # a column of nulls for a variable it demonstrably bound.
+    #
+    # `issues/180` measured it on the reference CONSTRUCT: 212 of 425 rows had
+    # `?sourceSlotEntity` NULL and 213 had `?destinationSlotEntity` NULL, one
+    # per UNION branch, because each branch binds only its own and the shared
+    # BGP below binds both. It is also the third missing triple of
+    # `issues/178` — `urn:hasSourceSlotEntity` — which the projection guard
+    # there never explained.
+    #
+    # `maybe` rather than "is a UNION": the question is whether the value can be
+    # absent, which `compute_scope` already answers for every operator.
+    _maybe_shared = set()
+    if shared and len(plan.children or []) == 2:
+        try:
+            # NOT a local import: `compute_scope` is already imported at module
+            # level and used above, and re-importing it here makes the name
+            # function-local for the WHOLE function, so the earlier use raises
+            # UnboundLocalError.
+            _ls = compute_scope(plan.children[0])
+            _rs = compute_scope(plan.children[1])
+            _maybe_shared = {v for v in shared
+                             if v in _ls.maybe or v in _rs.maybe}
+        except Exception as _exc:      # pragma: no cover - scope is advisory
+            ctx.log("join", f"scope unavailable for COALESCE: {_exc}")
+    values_shared = (shared if (left_is_table or right_is_table or is_left)
+                     else _maybe_shared)
     # A variable NEITHER CHILD REGISTERED is not produced by either side, and
     # `_child_sn` falls back to the raw SPARQL name — so the projection asks for
     # a column nothing created and PostgreSQL rejects the whole query

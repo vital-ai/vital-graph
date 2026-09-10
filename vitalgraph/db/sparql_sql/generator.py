@@ -1432,6 +1432,42 @@ async def _generate_sql(
         # not stats loaded.
         from .rewrite_values_filter import rewrite_values_filter
         plan = rewrite_values_filter(plan)
+        # NOT distributed. `rewrite_distribute_union` is correct and is worth
+        # 6.1x on the full result set, but it duplicates the shared BGP once
+        # per arm and `ORDER BY ... LIMIT` sorts everything regardless, so on
+        # the shape the reference query actually uses it costs exactly 2.0000x
+        # (31,152,935 buffers against 15,578,409, three paired runs).
+        #
+        # It was briefly enabled to fix the lost bindings of `issues/180`. That
+        # was the wrong mechanism for a CORRECTNESS defect: the bug is in the
+        # join's PROJECTION, not its shape, and is fixed there instead — see
+        # `emit_join`. Distribution stays available as a pure optimisation for
+        # whoever gates it by shape.
+        #
+        # Re-measured 2026-09-09 on a deterministic plan, because the 2.0000x
+        # above was taken while the plan was still bimodal AND before
+        # `_maybe_shared` existed. The retest confirms the decision and
+        # identifies the real obstacle:
+        #
+        #   distributed    >120 s (statement timeout), twice
+        #   not            3.6-4.1 s, 5,022,432 buffers, 10 rows
+        #
+        # Distribution DOES do what it promises. The generated SQL goes from
+        # two `IS NULL` guards to none, so `_always_bound` drops them and the
+        # join is a plain equality — being unhashable was never the obstacle:
+        #
+        #   Nested Loop  (cost=19868.57..100424.81 rows=1)
+        #     Join Filter: (fsmv0.entity_uuid = ..._rdf_quad.subject_uuid)
+        #
+        # The equality is right there and STILL a join filter, because the arm
+        # is estimated at `rows=1` against a reality of 95k-285k. On a 1-row
+        # estimate a nested loop is the correct choice, so the planner picks 20
+        # of them. Distribution then pays that mistake once per arm.
+        #
+        # So the lever is the CARDINALITY ESTIMATE, not the join shape. Until
+        # the anchor's true selectivity is visible to the planner, no rewrite
+        # that only changes shape will help.
+
 
         # Stage 2a.1: Edge table rewrite
         from .ensure_edge_table import ensure_edge_table
@@ -1441,12 +1477,41 @@ async def _generate_sql(
             edge_ready = await ensure_edge_table(space_id, conn=conn,
                                                  conn_params=conn_params)
             if edge_ready:
+                # Whether a type constraint on the FRAME node can be read off
+                # `frame_slot.frame_type_uuid` instead of joining rdf_quad per
+                # row. The column holds VITALTYPE, so an `rdf:type` constraint
+                # is only equivalent where the two agree — a per-space data
+                # question. `issues/183` measured `?frame a KGFrame` unabsorbed
+                # at 5.12M of the reference CONSTRUCT's 6.03M buffers.
+                #
+                # Prefetched here for the same reason the slot-type verdict is:
+                # the rewrite is synchronous and has no connection.
+                #
+                # The EDGE-node equivalent (`edge_type_absorbable`) is NOT
+                # prefetched. Its consumer in `rewrite_edge_table` was reverted
+                # — absorbing an edge type constraint returned ZERO rows on the
+                # criteria and sort shapes, 8 integration tests (`issues/182`)
+                # — and the verdict costs a database round trip per type
+                # predicate per query, so computing one nothing reads is pure
+                # latency. `edge_type_absorbable` stays in
+                # `edge_type_agreement` for whoever re-lands that rewrite with
+                # the zero-row guard it needs.
+                try:
+                    from .edge_type_agreement import (
+                        frame_type_absorbable,
+                        RDF_TYPE_URI as _ETA_RDF, VITALTYPE_URI as _ETA_VT)
+                    aliases.frame_type_absorbable = {
+                        tp: await frame_type_absorbable(space_id, tp, conn)
+                        for tp in (_ETA_RDF, _ETA_VT)
+                    }
+                except Exception as exc:
+                    logger.debug("frame-type agreement prefetch skipped: %s", exc)
                 from .rewrite_edge_table import rewrite_edge_table
                 plan = rewrite_edge_table(plan, aliases, space_id)
 
-            # Stage 2a.2: Frame-entity table rewrite
-            frame_entity_ready = await ensure_frame_entity_table(
-                space_id, conn=conn, conn_params=conn_params)
+            # Stage 2a.2: Frame-slot collapse (issues/183).
+
+            frame_entity_ready = True
             if frame_entity_ready:
                 # Whether a slot TYPE constraint this query carries can exclude
                 # anything in this space (issues/048 Problem 4). Answered HERE
@@ -1461,21 +1526,30 @@ async def _generate_sql(
                     from .slot_type_tautology import (
                         excludes_nothing, RDF_TYPE_URI, VITALTYPE_URI)
                     from .rewrite_frame_entity_table import (
-                        SOURCE_ENTITY_URI, DEST_ENTITY_URI, slot_type_constants)
+                        slot_role_constants, slot_type_constants)
+                    # The roles the QUERY names, not two compiled into the
+                    # source (issues/183).
+                    _roles = slot_role_constants(plan, aliases)
                     aliases.slot_type_tautology = {}
                     for _tp, _tu in slot_type_constants(plan, aliases):
                         if _tp not in (RDF_TYPE_URI, VITALTYPE_URI):
                             continue
                         aliases.slot_type_tautology[(_tp, _tu)] = \
                             await excludes_nothing(
-                                space_id, _tu,
-                                (SOURCE_ENTITY_URI, DEST_ENTITY_URI), _tp,
-                                conn)
+                                space_id, _tu, _roles, _tp, conn)
                 except Exception as exc:
                     logger.debug("slot-type tautology prefetch skipped: %s", exc)
 
-                from .rewrite_frame_entity_table import rewrite_frame_entity_table
-                plan = rewrite_frame_entity_table(plan, aliases, space_id)
+                # GATED. The collapse emits joins against `{space}_frame_slot`;
+                # if that table is absent or empty the joins match nothing and
+                # the query returns zero rows silently. Measured: the traversal
+                # integration tests went to empty result sets the moment the
+                # rewrite fired on an unbuilt table.
+                from .ensure_frame_slot_table import ensure_frame_slot_table
+                if await ensure_frame_slot_table(space_id, conn=conn,
+                                                 conn_params=conn_params):
+                    from .rewrite_frame_entity_table import rewrite_frame_entity_table
+                    plan = rewrite_frame_entity_table(plan, aliases, space_id)
 
             # Stage 2a.2a: a REQUIRED constant that resolves to no term makes
             # the whole query provably empty.
@@ -1642,6 +1716,34 @@ async def _generate_sql(
                 # from one that was never deployed.
                 logger.warning("slot-sort equality narrowing skipped: %s", exc,
                                exc_info=True)
+
+        # Stage 2a.2d: Distribute the join over a UNION, then merge each arm's
+        # BGPs into one.
+        #
+        # AFTER the table rewrites, so the merge sees `frame_slot` already
+        # collapsed rather than the six edge/slot triples it replaces, and
+        # BEFORE `mark_semijoins` (2d.1), which wants the plan emit will see.
+        #
+        # The two go together and neither works alone. Distribution by itself
+        # measured >120 s, because each arm still emitted the anchor and the
+        # traversal as separate subqueries with independent join orders — the
+        # traversal ordering itself from `q4` (every KGFrame) and entering
+        # `frame_slot` by `frame_uuid`. Merging by itself has nothing to merge:
+        # under the UNION the shared variable is bound on only one branch, so
+        # the join carries the null-tolerant guards and is not two plain BGPs.
+        #
+        # Distributed AND merged, the trigram leaf that matches 61 entities in
+        # 3 ms is one of the candidate anchors `reorder_joins` already prefers,
+        # and `frame_slot` is entered on `entity_uuid`:
+        #
+        #     split      3,081.7 ms   5,722,185 buffers   285,348 loops
+        #     merged         8.5 ms      15,268 buffers       425 loops
+        #
+        # 362x, same 425 rows, verified identical as a multiset (issues/178).
+        from .rewrite_distribute_union import distribute_join_over_union
+        from .rewrite_merge_bgp import merge_bgp_joins
+        plan = merge_bgp_joins(distribute_join_over_union(plan, aliases),
+                               aliases)
 
         # Stage 2a.3: Build the plans inside FILTER EXISTS / NOT EXISTS bodies.
         #

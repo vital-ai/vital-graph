@@ -67,7 +67,7 @@ def emit_bgp(plan: PlanV2, ctx: EmitContext) -> str:
     table aliases — so parent handlers can safely wrap this SQL in a
     subquery and reference columns by name.
     """
-    quad_tables = [t for t in plan.tables if t.kind in ("quad", "edge", "frame_entity")]
+    quad_tables = [t for t in plan.tables if t.kind in ("quad", "edge", "frame_entity", "frame_slot")]
 
     if not plan.var_slots:
         # All-constant BGP: still need to verify the pattern exists
@@ -454,7 +454,7 @@ def emit_bgp_exists(plan: PlanV2, ctx: EmitContext,
     from .reorder_bgp import reorder_joins
 
     quad_tables = [t for t in plan.tables
-                   if t.kind in ("quad", "edge", "frame_entity")]
+                   if t.kind in ("quad", "edge", "frame_entity", "frame_slot")]
     if not quad_tables or not plan.var_slots:
         return None
 
@@ -532,7 +532,7 @@ def emit_bgp_anchor(plan: PlanV2, ctx: EmitContext, var: str):
     from .reorder_bgp import reorder_joins
 
     quad_tables = [t for t in plan.tables
-                   if t.kind in ("quad", "edge", "frame_entity")]
+                   if t.kind in ("quad", "edge", "frame_entity", "frame_slot")]
     slot = plan.var_slots.get(var)
     if not quad_tables or not slot or not slot.positions:
         return None

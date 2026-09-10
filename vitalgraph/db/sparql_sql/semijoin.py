@@ -432,7 +432,7 @@ def needed_texts(plan, aliases) -> set:
             ops = _text_search_operands(expr)
             if ops is None:
                 continue
-            var, _, literal, ci, _flags = ops
+            var, _, literal, ci, _flags, _str = ops
             if var is None or literal is None:
                 continue
             # Built exactly as `filter_pushdown` builds it, so the count is over
@@ -500,7 +500,7 @@ def has_unservable_text(plan) -> bool:
             ops = _text_search_operands(expr)
             if ops is None:
                 continue
-            _var, name, literal, _ci, _flags = ops
+            _var, name, literal, _ci, _flags, _str = ops
             if literal is not None and not is_servable(name, literal):
                 return True
     return False
@@ -536,7 +536,7 @@ def _bgps(node, depth: int = 0):
         yield from _bgps(c, depth + 1)
 
 
-_QUAD_KINDS = ("quad", "edge", "frame_entity")
+_QUAD_KINDS = ("quad", "edge", "frame_entity", "frame_slot")
 
 
 def _split_bgp(bgp: PlanV2, key: str) -> Optional[PlanV2]:

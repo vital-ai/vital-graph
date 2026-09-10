@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 def _quad_aliases(bgp: PlanV2) -> set:
     return {t.alias for t in bgp.tables
-            if t.kind in ("quad", "edge", "frame_entity")}
+            if t.kind in ("quad", "edge", "frame_entity", "frame_slot")}
 
 
 def _term_set(ctx, term_table: str, cond: str) -> str:
@@ -85,6 +85,12 @@ def _term_set(ctx, term_table: str, cond: str) -> str:
     A CTE could still pay off where the term set is small AND the candidate
     count is large. Nothing in the sweep is that shape, so it is not worth the
     machinery until something is.
+
+    RE-TESTED 2026-09-09 (`issues/183`) on a query that IS that shape — 76 terms
+    against 285,348 frames — and the CTE is still not the lever. The same query
+    with `AS MATERIALIZED` and with `AS NOT MATERIALIZED` measures 33.3 ms and
+    28.7 ms: identical, marginally better WITHOUT the fence. What carries that
+    query's 339x is the driving DIRECTION, not where the term set is computed.
     """
     return f"(SELECT term_uuid FROM {term_table} WHERE {cond})"
 
@@ -300,10 +306,11 @@ def _try_text_filter(
     literal_node = None
     flags_arg = None
     ci = False
+    stringified = False
 
     ops = _text_search_operands(expr)
     if ops is not None:
-        var_name, _, literal_value, ci, flags_arg = ops
+        var_name, _, literal_value, ci, flags_arg, stringified = ops
     elif name == "eq" and len(args) == 2:
         for i, j in ((0, 1), (1, 0)):
             if isinstance(args[i], ExprVar) and isinstance(args[j], ExprValue):
@@ -436,7 +443,9 @@ def _try_text_filter(
     # `<http://example.com/uri>` as well as the literal and returned a row too
     # many. `eq` is excluded: RDFterm-equal compares terms of ANY kind, and
     # restricting it to literals would drop every URI match.
-    if name in _TEXT_SEARCH_OPS:
+    # STR() removes the §17.4.3 type error, so a STR-wrapped push must NOT
+    # restrict to literals — that would drop every URI match.
+    if name in _TEXT_SEARCH_OPS and not stringified:
         term_cond = f"term_type = 'L' AND ({term_cond})"
 
     constraint_sql = f"{uuid_col} IN {_term_set(ctx, term_table, term_cond)}"
@@ -456,6 +465,27 @@ def _try_text_filter(
 # `(term_text || '')`, the no-op concatenation that used to sit here.
 _TEXT_SEARCH_OPS = ("contains", "strstarts", "strends", "regex")
 _FOLD_FNS = ("lcase", "ucase")
+
+
+def _unwrap_str(node):
+    """(inner, True) if node is STR(x), else (node, False)."""
+    if (isinstance(node, ExprFunction) and (node.name or "").lower() == "str"
+            and len(node.args or []) == 1):
+        return node.args[0], True
+    return node, False
+
+
+def _fold_invariant(lit, fold):
+    """Is the needle unchanged by the fold, so an unfolded one is equivalent?
+
+    `CONTAINS(LCASE(?v),"happy")` and `?v ILIKE '%happy%'` are the same
+    predicate. `CONTAINS(LCASE(?v),"Happy")` is NOT — it is always FALSE, since
+    nothing upper-case survives LCASE, while ILIKE would match.
+    """
+    if fold is None or lit is None: return False
+    if fold == "lcase": return lit == lit.lower()
+    if fold == "ucase": return lit == lit.upper()
+    return False
 
 
 def _unwrap_fold(node):
@@ -494,11 +524,17 @@ def _text_search_operands(expr):
     # the reason it was slow.
     a0, f0 = _unwrap_fold(args[0])
     a1, f1 = _unwrap_fold(args[1])
+    a0, str0 = _unwrap_str(a0)
+    if not str0:
+        inner, str0 = _unwrap_str(args[0])
+        if str0: a0, f0 = _unwrap_fold(inner)
     # Both sides must be folded by the SAME function. LCASE(?v) against an
     # unfolded needle is case-SENSITIVE against a lowercased haystack, which
     # ILIKE would over-match; that asymmetry is a wrong answer, not a slow one.
     if f0 != f1:
-        return None
+        needle = (a1.node.value if isinstance(a1, ExprValue)
+                  and isinstance(a1.node, LiteralNode) else None)
+        if not (f1 is None and _fold_invariant(needle, f0)): return None
     ci = f0 is not None
     if name == "regex" and ci:
         # regex carries its own case-insensitivity in flags; folding on top has
@@ -509,7 +545,7 @@ def _text_search_operands(expr):
     if not isinstance(a1.node, LiteralNode):
         return None
     flags = args[2] if (name == "regex" and len(args) >= 3) else None
-    return a0.var, name, a1.node.value, ci, flags
+    return a0.var, name, a1.node.value, ci, flags, str0
 
 
 def _text_search_var(expr) -> Optional[str]:
@@ -536,7 +572,7 @@ def _text_search_var(expr) -> Optional[str]:
     ops = _text_search_operands(expr)
     if not ops:
         return None
-    var, name, literal, _ci, _flags = ops
+    var, name, literal, _ci, _flags, _str = ops
     if name in _TEXT_SEARCH_OPS and literal is not None:
         from .text_needle import is_servable
         if not is_servable(name, literal):

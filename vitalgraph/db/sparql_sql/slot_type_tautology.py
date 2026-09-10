@@ -48,6 +48,28 @@ logger = logging.getLogger(__name__)
 # (space_id, type_uri, roles) -> (predicate_rows_when_computed, excludes_nothing)
 _CACHE: dict = {}
 
+# How long the anti-join may run before the optimisation gives up on itself.
+#
+# 2000 ms was WORSE THAN EITHER OUTCOME, because it sat on top of the cost. The
+# check measures ~1,805 ms warm on `wordnet_frames` with the terms resolved, so
+# a 2 s budget flipped between succeeding and expiring from one run to the next
+# — and the two answers produce plans 22x apart, measured on the reference
+# CONSTRUCT with the verdict forced each way, three runs each:
+#
+#     verdict DROPS the constraint    5,722,181 buffers    3.4-3.7 s
+#     verdict KEEPS it (expired)    126,593,820 buffers   41-42 s
+#
+# A bimodal plan is worse than a consistently slow one: it cannot be measured,
+# and `issues/178` records several conclusions that were wrong because of it.
+# The budget now sits well clear of the cost, so the common case is stable.
+#
+# The check is worth 7.4x, and measured on `wordnet_frames` it cost 58s / 26s /
+# 3.9s in three successive cold processes and ~20ms warm (`issues/178`). The
+# spread is PostgreSQL's buffer cache, not our own — so the 58s is the
+# post-deploy cost, and it was being charged to whichever user's query arrived
+# first. No optimisation input is worth a minute of someone's query.
+TAUTOLOGY_TIMEOUT_MS = 15000
+
 SLOT_TYPE_URI = "http://vital.ai/ontology/haley-ai-kg#hasKGSlotType"
 VITALTYPE_URI = "http://vital.ai/ontology/vital-core#vitaltype"
 RDF_TYPE_URI = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
@@ -55,6 +77,93 @@ RDF_TYPE_URI = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
 
 def clear_cache() -> None:
     _CACHE.clear()
+
+
+async def _anti_join(space_id: str, type_uri: str, roles: tuple,
+                     type_predicate: str, conn,
+                     timeout_ms: Optional[int] = None) -> Optional[bool]:
+    """Does any role slot in this space LACK `type_uri`? True = none does.
+
+    None means the question was not answered — a failure, or the budget ran out.
+    Callers must read that as "keep the check", never as "nothing excluded".
+
+    The `LIMIT 1` short-circuits the moment a counterexample turns up — but that
+    is the verdict which DISABLES the optimisation. Proving the useful answer,
+    "no role slot lacks this type", means scanning all of them, so the outcome
+    worth having is by construction the expensive one. `timeout_ms=None` runs
+    unbounded and is for the maintenance cycle, off the request path.
+    """
+    # RESOLVE the terms first, then compare uuid to uuid.
+    #
+    # Joining `{space}_term` by `term_text` inside the anti-join hides the
+    # selectivity from the planner: it cannot use the statistics on
+    # `(predicate_uuid, object_uuid)` for a value it does not know, so it
+    # estimates blind. Resolved, the same check measured 1,805 ms against
+    # 2,149 ms and — more importantly — becomes estimable.
+    ids = {}
+    try:
+        for uri in (SLOT_TYPE_URI, type_predicate, type_uri, *roles):
+            if uri in ids:
+                continue
+            ids[uri] = await conn.fetchval(
+                f"SELECT term_uuid FROM {space_id}_term WHERE term_text = $1",
+                uri)
+    except Exception as exc:
+        logger.debug("slot-type tautology: term resolution failed: %s", exc)
+        return None
+    if any(ids.get(u) is None for u in (SLOT_TYPE_URI, type_predicate, type_uri)):
+        # A term that is absent cannot be lacked by anything, but saying so
+        # here would be a guess about which direction that cuts. None keeps the
+        # check, which is the safe direction.
+        return None
+    role_ids = [ids[r] for r in roles if ids.get(r) is not None]
+    if not role_ids:
+        return None
+
+    placeholders = ", ".join(f"${i + 3}" for i in range(len(role_ids)))
+    sql = f"""SELECT count(*) FROM (
+                  SELECT 1 FROM {space_id}_rdf_quad q
+                  WHERE q.predicate_uuid = $1
+                    AND q.object_uuid IN ({placeholders})
+                    AND NOT EXISTS (
+                      SELECT 1 FROM {space_id}_rdf_quad ty
+                      WHERE ty.subject_uuid = q.subject_uuid
+                        AND ty.predicate_uuid = $2
+                        AND ty.object_uuid = ${len(role_ids) + 3})
+                  LIMIT 1) x"""
+    args = (ids[SLOT_TYPE_URI], ids[type_predicate], *role_ids, ids[type_uri])
+
+    if timeout_ms is None:
+        try:
+            return (await conn.fetchval(sql, *args)) == 0
+        except Exception as exc:
+            logger.debug("slot-type tautology: anti-join failed: %s", exc)
+            return None
+
+    # Plain SET with save/restore, not SET LOCAL: `create_transaction()` can
+    # hand us a connection with a transaction already open, asyncpg nests ours
+    # as a savepoint, and SET LOCAL survives the savepoint RELEASE to the end of
+    # the OUTER transaction — silently imposing this timeout on the caller's
+    # remaining statements. Same reasoning as `bounded_lock_wait`.
+    #
+    # The transaction wrapper is what makes the timeout survivable at all: a
+    # statement_timeout is enforced SERVER-side and ABORTS the transaction, so
+    # without a savepoint to roll back to, every later statement on this
+    # connection would fail with InFailedSQLTransactionError — a bound that
+    # trades a slow query for a broken one, which is `issues/177`.
+    prev = await conn.fetchval("SHOW statement_timeout")
+    await conn.execute(f"SET statement_timeout = '{int(timeout_ms)}ms'")
+    try:
+        async with conn.transaction():
+            return (await conn.fetchval(sql, *args)) == 0
+    except Exception as exc:
+        logger.debug("slot-type tautology: anti-join gave up: %s", exc)
+        return None
+    finally:
+        try:
+            await conn.execute(f"SET statement_timeout = '{prev}'")
+        except Exception:  # pragma: no cover - abort path
+            logger.debug("could not restore statement_timeout to %s", prev)
 
 
 async def excludes_nothing(space_id: str, type_uri: str, roles: tuple,
@@ -89,31 +198,29 @@ async def excludes_nothing(space_id: str, type_uri: str, roles: tuple,
     if cached is not None and cached[0] == pred_rows:
         return cached[1]
 
-    placeholders = ", ".join(f"${i + 3}" for i in range(len(roles)))
-    try:
-        row = await conn.fetchval(
-            f"""SELECT count(*) FROM (
-                  SELECT 1 FROM {space_id}_rdf_quad q
-                  JOIN {space_id}_term p ON p.term_uuid = q.predicate_uuid
-                   AND p.term_text = $1
-                  JOIN {space_id}_term o ON o.term_uuid = q.object_uuid
-                   AND o.term_text IN ({placeholders})
-                  WHERE NOT EXISTS (
-                    SELECT 1 FROM {space_id}_rdf_quad ty
-                    JOIN {space_id}_term tp ON tp.term_uuid = ty.predicate_uuid
-                     AND tp.term_text = $2
-                    JOIN {space_id}_term t2 ON t2.term_uuid = ty.object_uuid
-                     AND t2.term_text = ${len(roles) + 3}
-                    WHERE ty.subject_uuid = q.subject_uuid)
-                  LIMIT 1) x""",
-            SLOT_TYPE_URI, type_predicate, *roles, type_uri)
-    except Exception as exc:
-        logger.debug("slot-type tautology: anti-join failed: %s", exc)
+    verdict = await _anti_join(space_id, type_uri, roles, type_predicate,
+                               conn, timeout_ms=TAUTOLOGY_TIMEOUT_MS)
+    if verdict is None:
+        # Cached as "could not answer" on purpose. Not caching would re-pay the
+        # full timeout on EVERY query of this shape for the life of the process,
+        # which is a worse trade than losing the 7.4x: the check is an
+        # optimisation input, the timeout is not. It is re-evaluated when the
+        # predicate's row count changes or the process restarts.
+        _CACHE[key] = (pred_rows, None)
+        logger.warning(
+            "slot-type tautology: %s %s over %s gave up after %dms — the check "
+            "is KEPT, so answers are correct and this query is slower. The "
+            "maintenance cycle precomputes this; a space that has never had one "
+            "pays here instead (issues/178).",
+            space_id, type_uri, sorted(roles), TAUTOLOGY_TIMEOUT_MS)
         return None
 
-    verdict = (row == 0)
     _CACHE[key] = (pred_rows, verdict)
-    logger.info("slot-type tautology: %s %s over %s -> %s (%d counterexample(s))",
+    # No counterexample COUNT any more: `_anti_join` returns the verdict, not
+    # the row it was derived from, and the query stops at `LIMIT 1` regardless —
+    # so the old "(%d counterexample(s))" could only ever print 0 or 1.
+    logger.info("slot-type tautology: %s %s over %s -> %s",
                 space_id, type_uri, sorted(roles),
-                "excludes nothing" if verdict else "EXCLUDES", row or 0)
+                "excludes nothing" if verdict else "EXCLUDES")
     return verdict
+
