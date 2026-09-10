@@ -68,7 +68,26 @@ _CACHE: dict = {}
 # spread is PostgreSQL's buffer cache, not our own — so the 58s is the
 # post-deploy cost, and it was being charged to whichever user's query arrived
 # first. No optimisation input is worth a minute of someone's query.
-TAUTOLOGY_TIMEOUT_MS = 15000
+#
+# 5,000 ms, reduced from the 15,000 ms that first replaced the 2,000 ms.
+#
+# 2,000 ms was the real defect: it sat ON TOP OF the check's own 1,805 ms warm
+# cost, so the verdict expired on some runs and not others and the plan flipped
+# an order of magnitude with it. Determinism needs the budget clearly AWAY from
+# the cost — above or below, but not on it — and 5,000 ms is ~2.8x clear of
+# 1,805 ms, which the query-shape audit confirms is stable.
+#
+# 15,000 ms bought no more determinism than 5,000 ms and made the FALLBACK
+# ruinous: a constraint whose check genuinely cannot finish burns the whole
+# budget before giving up, and `scripts/query_shape_audit.py` measured exactly
+# that — a 17.4 s generation on a space with no maintenance cycle behind it,
+# 15 s of which was this check expiring.
+#
+# A space that HAS had a maintenance cycle reads the precomputed verdict and
+# pays none of this. The budget bounds what an un-maintained space costs the
+# first user through the door; it is not where the optimisation is meant to
+# come from.
+TAUTOLOGY_TIMEOUT_MS = 5000
 
 SLOT_TYPE_URI = "http://vital.ai/ontology/haley-ai-kg#hasKGSlotType"
 VITALTYPE_URI = "http://vital.ai/ontology/vital-core#vitaltype"

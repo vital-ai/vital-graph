@@ -30,10 +30,12 @@ during that investigation and are handled here:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 import os
+import time
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -203,11 +205,49 @@ def log_if_disproportionate(shape: Optional[PlanShape], *, space_id: str = "",
 # under investigation can be turned down without a deploy.
 SLOW_QUERY_MS = float(os.environ.get("VG_SLOW_QUERY_MS", "1000"))
 
-# Running `EXPLAIN ANALYZE` EXECUTES THE QUERY AGAIN. For a query already known
-# to be slow that doubles a cost the user has already paid, so it is opt-in:
-# the cheap half of the report (timings, decisions, SQL identity) is always
-# emitted, and the ratio is added only where someone has asked for it.
-EXPLAIN_SLOW_QUERIES = os.environ.get("VG_EXPLAIN_SLOW_QUERIES", "") == "1"
+# Running `EXPLAIN ANALYZE` EXECUTES THE QUERY AGAIN — but AFTER the response
+# has been returned, on a task of its own, so it costs the caller nothing. That
+# is why this defaults ON: the cost moved from user latency to server capacity.
+#
+# It is not free, and the saving from warm buffers is uneven. Measured:
+#
+#     fast query    first 118.6 ms   repeat  10.7 ms   EXPLAIN  11.2 ms
+#     slow query    first 5,889.8 ms repeat 3,734.4 ms EXPLAIN 3,427.2 ms
+#
+# `EXPLAIN ANALYZE` adds essentially nothing over a plain repeat (0.92-1.05x),
+# so the instrumentation is free — but a re-run is only 11x cheaper for the
+# fast query and 1.6x for the slow one. The disproportionate shapes this hunts
+# are CPU-bound on pages that are ALREADY cached, so warm buffers save little.
+#
+# Hence the fingerprint cache below: a shape recurring a thousand times needs
+# ONE explain, not a thousand.
+EXPLAIN_SLOW_QUERIES = os.environ.get("VG_EXPLAIN_SLOW_QUERIES", "1") != "0"
+
+# One EXPLAIN per SQL shape per this many seconds.
+EXPLAIN_TTL_S = float(os.environ.get("VG_EXPLAIN_TTL_S", "3600"))
+
+# At most this many diagnostics in flight. A slow query is often slow because
+# the database is busy, and queueing re-executions behind it is how a
+# diagnostic becomes an outage.
+_MAX_CONCURRENT = int(os.environ.get("VG_EXPLAIN_CONCURRENCY", "1"))
+
+_explained: Dict[str, float] = {}
+_semaphore: Optional[asyncio.Semaphore] = None
+# Strong refs: `asyncio.create_task` only holds a weak one, so a fire-and-forget
+# task can be garbage collected mid-flight.
+_tasks: set = set()
+
+
+def _should_explain(fingerprint: str) -> bool:
+    now = time.monotonic()
+    last = _explained.get(fingerprint)
+    if last is not None and (now - last) < EXPLAIN_TTL_S:
+        return False
+    _explained[fingerprint] = now
+    if len(_explained) > 2000:            # bounded; this is a cache, not a log
+        for k, v in sorted(_explained.items(), key=lambda kv: kv[1])[:500]:
+            _explained.pop(k, None)
+    return True
 
 # Enough SQL to recognise the shape; the fingerprint identifies it exactly.
 _SQL_EXCERPT = int(os.environ.get("VG_SLOW_QUERY_SQL_CHARS", "2000"))
@@ -244,7 +284,8 @@ async def report_slow_query(conn, *, space_id: str, sparql: str, sql: str,
         if plan_decisions:
             payload["plan_decisions"] = plan_decisions
 
-        if EXPLAIN_SLOW_QUERIES and sql:
+        if EXPLAIN_SLOW_QUERIES and sql and _should_explain(
+                payload["sql_fingerprint"]):
             shape = None
             if conn is not None:
                 shape = await explain_and_analyse(conn, sql,
@@ -270,3 +311,56 @@ async def report_slow_query(conn, *, space_id: str, sparql: str, sql: str,
                                                    sort_keys=True))
     except Exception as exc:  # pragma: no cover - diagnostics must not throw
         logger.debug("slow-query report skipped: %s", exc)
+
+
+def schedule_slow_query_report(*, space_id: str, sparql: str, sql: str,
+                               timing: Dict[str, Any],
+                               plan_decisions: Optional[Dict] = None,
+                               rows_returned: Optional[int] = None,
+                               threshold_ms: Optional[float] = None) -> None:
+    """Report AFTER the response has gone out, on a task of its own.
+
+    Queries are non-blocking, so the re-execution `EXPLAIN ANALYZE` needs costs
+    the caller nothing — the response has already been returned by the time
+    this runs. That moves the cost from user latency to server capacity, which
+    is why explaining defaults on.
+
+    Capacity is still finite, so it is bounded three ways: one EXPLAIN per SQL
+    shape per `EXPLAIN_TTL_S`, at most `_MAX_CONCURRENT` in flight, and the
+    statement timeout inside `explain_and_analyse`. A slow query is often slow
+    because the database is BUSY, and queueing re-executions behind it is how a
+    diagnostic becomes an outage.
+
+    Fire-and-forget, and never raises into the caller.
+    """
+    try:
+        if float(timing.get("total_ms") or 0.0) < (
+                SLOW_QUERY_MS if threshold_ms is None else threshold_ms):
+            return
+        loop = asyncio.get_running_loop()
+    except Exception:
+        return
+
+    global _semaphore
+    if _semaphore is None:
+        _semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
+
+    async def _run() -> None:
+        try:
+            # Non-blocking acquire: if a diagnostic is already in flight, skip
+            # this one rather than queue it. The next occurrence of the same
+            # shape will be reported instead.
+            if _semaphore.locked():
+                logger.debug("slow-query report skipped: diagnostic in flight")
+                return
+            async with _semaphore:
+                await report_slow_query(
+                    None, space_id=space_id, sparql=sparql, sql=sql,
+                    timing=timing, plan_decisions=plan_decisions,
+                    rows_returned=rows_returned, threshold_ms=threshold_ms)
+        except Exception as exc:  # pragma: no cover
+            logger.debug("slow-query report failed: %s", exc)
+
+    task = loop.create_task(_run())
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)

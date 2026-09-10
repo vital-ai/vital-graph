@@ -2230,13 +2230,15 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             # matters; this carries the SPARQL, the plan decisions and the
             # timing split so the query can be analysed without the machine.
             try:
-                from .plan_shape import report_slow_query
-                # No connection: the request's was released when the `async
-                # with` above closed. `report_slow_query` acquires its own only
-                # when deep analysis is switched on, so the diagnostic can never
-                # borrow — or hold — the connection serving the request.
-                await report_slow_query(
-                    None,
+                from .plan_shape import schedule_slow_query_report
+                # SCHEDULED, not awaited. The response is already computed, so
+                # the diagnostic — including the `EXPLAIN ANALYZE` it runs —
+                # costs the caller nothing; the cost moves from user latency to
+                # server capacity. It takes its own connection: the request's
+                # was released when the `async with` above closed, and a
+                # diagnostic must never borrow or hold the one serving a
+                # request.
+                schedule_slow_query_report(
                     space_id=space_id, sparql=query, sql=sql, timing=timing,
                     plan_decisions=getattr(gen, 'plan_decisions', None),
                     rows_returned=len(rows))

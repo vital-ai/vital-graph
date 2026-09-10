@@ -45,6 +45,14 @@ logger = logging.getLogger(__name__)
 SLOW_GENERATE_MS = float(os.environ.get("VG_SLOW_GENERATE_MS", "500"))
 
 
+def _by_name(decisions: List["Decision"]) -> Dict[str, List["Decision"]]:
+    out: Dict[str, List[Decision]] = {}
+    for d in decisions:
+        if d.ms is not None:
+            out.setdefault(d.name, []).append(d)
+    return out
+
+
 @dataclass
 class Decision:
     name: str
@@ -101,8 +109,24 @@ class PlanDecisions:
             "fired": [d.name for d in self.decisions if d.fired],
             "declined": {d.name: d.reason
                          for d in self.decisions if not d.fired},
-            "timings_ms": {d.name: round(d.ms, 1)
-                           for d in self.decisions if d.ms is not None},
+            "declined_n": {
+                name: n for name, n in
+                ((nm, sum(1 for d in self.decisions
+                          if not d.fired and d.name == nm))
+                 for nm in {d.name for d in self.decisions if not d.fired})
+                if n > 1},
+            # SUMMED, not last-wins. A gate that runs once per constant
+            # reports several times, and keying by name silently kept the last
+            # — which read 8 ms while a sibling call had just burned 15,000 ms
+            # against its budget. `_n` distinguishes one slow call from many
+            # fast ones.
+            "timings_ms": {
+                name: round(sum(d.ms for d in group), 1)
+                for name, group in _by_name(self.decisions).items()
+            },
+            "timings_n": {name: len(group)
+                          for name, group in _by_name(self.decisions).items()
+                          if len(group) > 1},
             "detail": {d.name: d.detail
                        for d in self.decisions if d.detail},
             "stage_ms": {k: round(v, 1) for k, v in sorted(
