@@ -274,7 +274,7 @@ def _expr_vars(val) -> Set[str]:
     return out
 
 
-def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
+def rewrite_frame_slot_table(plan: PlanV2, aliases: AliasGenerator,
                                 space_id: str, needed_vars=_NEEDED_UNSET) -> PlanV2:
     """Rewrite a v2 plan to use the frame_entity table where possible.
 
@@ -294,7 +294,7 @@ def rewrite_frame_entity_table(plan: PlanV2, aliases: AliasGenerator,
 
     if plan.kind != KIND_BGP or not plan.tables:
         for i, child in enumerate(plan.children):
-            plan.children[i] = rewrite_frame_entity_table(child, aliases, space_id,
+            plan.children[i] = rewrite_frame_slot_table(child, aliases, space_id,
                                                           needed_vars)
         return plan
 

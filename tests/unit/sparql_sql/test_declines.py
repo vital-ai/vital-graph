@@ -20,7 +20,7 @@ from vitalgraph.db.sparql_sql.declines import (
 # a registry check that silently examines nothing is the failure it exists to
 # prevent.
 from vitalgraph.db.sparql_sql import (  # noqa: F401
-    emit_traversal, rewrite_edge_table, rewrite_frame_entity_table,
+    emit_traversal, rewrite_edge_table, rewrite_frame_slot_table,
     traversal_decision)
 
 

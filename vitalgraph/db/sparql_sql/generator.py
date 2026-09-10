@@ -1551,7 +1551,7 @@ async def _generate_sql(
                 try:
                     from .slot_type_tautology import (
                         excludes_nothing, RDF_TYPE_URI, VITALTYPE_URI)
-                    from .rewrite_frame_entity_table import (
+                    from .rewrite_frame_slot_table import (
                         slot_role_constants, slot_type_constants)
                     # The roles the QUERY names, not two compiled into the
                     # source (issues/183).
@@ -1592,8 +1592,8 @@ async def _generate_sql(
                     _fs_ready = await ensure_frame_slot_table(
                         space_id, conn=conn, conn_params=conn_params)
                 if _fs_ready:
-                    from .rewrite_frame_entity_table import rewrite_frame_entity_table
-                    plan = rewrite_frame_entity_table(plan, aliases, space_id)
+                    from .rewrite_frame_slot_table import rewrite_frame_slot_table
+                    plan = rewrite_frame_slot_table(plan, aliases, space_id)
 
             # Stage 2a.2a: a REQUIRED constant that resolves to no term makes
             # the whole query provably empty.

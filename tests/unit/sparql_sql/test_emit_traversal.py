@@ -41,7 +41,7 @@ def _q(name):
 def _plan(depth=3, criteria=True):
     """A depth-N frame walk: each hop is femv{i} + a type check + a criterion.
 
-    Mirrors what `rewrite_frame_entity_table` actually leaves behind — the
+    Mirrors what `rewrite_frame_slot_table` actually leaves behind — the
     criterion table joins the TYPE table, not the link, so a hop is only
     recoverable by walking the constraint graph rather than by adjacency.
     """

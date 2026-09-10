@@ -1,6 +1,6 @@
 """A multi-hop traversal must be recognisable AS a chain.
 
-The pipeline detects each hop and never the chain. `rewrite_frame_entity_table`
+The pipeline detects each hop and never the chain. `rewrite_frame_slot_table`
 collapses a hop's six tables into one row, per hop, so a depth-3 walk becomes
 three references — and what links them exists only as ordinary join conditions.
 Nothing reads those as a sequence, so no pass can order the joins to drive from

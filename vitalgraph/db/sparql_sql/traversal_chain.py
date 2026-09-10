@@ -1,7 +1,7 @@
 """Find multi-hop traversal chains in a plan, and which end is pinned.
 
 The pipeline detects each HOP and never the CHAIN.
-`rewrite_frame_entity_table` collapses a hop's six tables into one
+`rewrite_frame_slot_table` collapses a hop's six tables into one
 `frame_entity` row, correctly and per hop, so a depth-3 walk becomes three
 references. What links them exists only as ordinary join conditions:
 

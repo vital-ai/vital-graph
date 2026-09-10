@@ -1,7 +1,7 @@
 """The slot-type tautology check must not cost a user a minute of their query.
 
 `excludes_nothing` is an optimisation INPUT: knowing that no role slot lacks a
-type lets `rewrite_frame_entity_table` drop the per-row check, worth 7.4x. The
+type lets `rewrite_frame_slot_table` drop the per-row check, worth 7.4x. The
 anti-join that answers it carries `LIMIT 1`, which short-circuits as soon as a
 counterexample appears — but that is the verdict which DISABLES the
 optimisation. Proving the useful answer means scanning every role slot, so the

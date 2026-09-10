@@ -1,6 +1,6 @@
 """The 6-table frame traversal that `frame_entity` exists to collapse.
 
-`rewrite_frame_entity_table` replaces six quad tables
+`rewrite_frame_slot_table` replaces six quad tables
 
     2 edge         frame --hasEdgeSource/hasEdgeDestination--> slot
     2 slot_type    slot --hasKGSlotType--> <urn:hasSourceEntity> / <...Destination>
@@ -220,13 +220,13 @@ def _disable_rewrite(monkeypatch):
 
     Patch the DEFINING module, not `generator`: `generate_sql` imports the
     function inside the function body, so the name is looked up in
-    `rewrite_frame_entity_table` at call time and a patch on the generator's
+    `rewrite_frame_slot_table` at call time and a patch on the generator's
     namespace has no effect. Doing that produced a differential test that
     compared the rewritten plan against itself and passed — which is why every
     caller of this asserts the SQL really changed.
     """
-    import vitalgraph.db.sparql_sql.rewrite_frame_entity_table as mod
-    monkeypatch.setattr(mod, "rewrite_frame_entity_table",
+    import vitalgraph.db.sparql_sql.rewrite_frame_slot_table as mod
+    monkeypatch.setattr(mod, "rewrite_frame_slot_table",
                         lambda plan, aliases, space_id: plan)
 
 

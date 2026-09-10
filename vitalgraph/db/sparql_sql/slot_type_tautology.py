@@ -1,6 +1,6 @@
 """Is a slot TYPE constraint able to exclude anything in this space?
 
-`rewrite_frame_entity_table` absorbs `?slot a <T>` as a role-scoped semi-join back
+`rewrite_frame_slot_table` absorbs `?slot a <T>` as a role-scoped semi-join back
 through the edge, which is correct and costs three index probes per surviving
 `frame_entity` row. With a criterion few rows survive and it is free; with none,
 every row survives and it is the whole cost — 4.2x to 5.2x against the open walk

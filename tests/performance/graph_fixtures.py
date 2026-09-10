@@ -226,7 +226,7 @@ def kind_uri(kind: str) -> str:
 def frame_hop(n: int, from_var: str, to_var: str, criterion: str = "") -> str:
     """One entity -> frame -> entity hop as its own 6 tables.
 
-    Both slot values stay VARIABLES. `rewrite_frame_entity_table` reads the
+    Both slot values stay VARIABLES. `rewrite_frame_slot_table` reads the
     entity from the object variable, so an end pinned to a constant is not
     recognised as a slot group and that hop does not collapse (issues/048).
     Pin the start with FILTER instead.

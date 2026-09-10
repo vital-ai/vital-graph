@@ -1,4 +1,4 @@
-"""Unit tests for rewrite_edge_table.py and rewrite_frame_entity_table.py.
+"""Unit tests for rewrite_edge_table.py and rewrite_frame_slot_table.py.
 
 Tests the materialized-view (MV) rewrite passes that collapse multi-quad
 patterns into single optimized table lookups (edge table, frame_entity table).
@@ -17,8 +17,8 @@ from vitalgraph.db.sparql_sql.rewrite_edge_table import (
     EDGE_SOURCE_URI, EDGE_DEST_URI,
     _remap_col_ref, _remap_constraint_sql,
 )
-from vitalgraph.db.sparql_sql.rewrite_frame_entity_table import (
-    rewrite_frame_entity_table,
+from vitalgraph.db.sparql_sql.rewrite_frame_slot_table import (
+    rewrite_frame_slot_table,
     SLOT_TYPE_URI, SLOT_VALUE_URI,
 )
 
@@ -327,7 +327,7 @@ class TestRemapConstraintSql:
 
 
 # ===========================================================================
-# rewrite_frame_entity_table tests
+# rewrite_frame_slot_table tests
 # ===========================================================================
 
 def _build_frame_pattern():
@@ -392,7 +392,7 @@ class TestRewriteFrameEntityDetection:
     def test_non_bgp_passthrough(self):
         plan = PlanV2(kind=KIND_PROJECT)
         aliases = AliasGenerator()
-        result = rewrite_frame_entity_table(plan, aliases, SPACE)
+        result = rewrite_frame_slot_table(plan, aliases, SPACE)
         assert result.kind == KIND_PROJECT
 
     def test_no_edge_tables_passthrough(self):
@@ -405,13 +405,13 @@ class TestRewriteFrameEntityDetection:
         ]
         tagged = [("q0", "q0.predicate_uuid = __CONST_c_st__")]
         plan = _make_bgp_plan(tables, {}, tagged)
-        result = rewrite_frame_entity_table(plan, aliases, SPACE)
+        result = rewrite_frame_slot_table(plan, aliases, SPACE)
         assert all(t.kind == "quad" for t in result.tables)
 
     def test_detects_full_frame_pattern(self):
         """Full 6-table frame pattern is detected and collapsed."""
         plan, aliases = _build_frame_pattern()
-        result = rewrite_frame_entity_table(plan, aliases, SPACE)
+        result = rewrite_frame_slot_table(plan, aliases, SPACE)
 
         fs_tables = [t for t in result.tables if t.kind == "frame_slot"]
         # One join per ARM — two here, because this fixture has two slots.
@@ -424,7 +424,7 @@ class TestRewriteFrameEntityDetection:
         original_count = len(plan.tables)
         assert original_count == 6
 
-        result = rewrite_frame_entity_table(plan, aliases, SPACE)
+        result = rewrite_frame_slot_table(plan, aliases, SPACE)
         # 6 removed, one frame_slot join per arm added = 2 total
         assert len(result.tables) == 2
 
@@ -450,7 +450,7 @@ class TestRewriteFrameEntityDetection:
             ("q2", "q2.object_uuid = __CONST_c_21__"),
         ]
         plan = _make_bgp_plan(tables, var_slots, tagged)
-        result = rewrite_frame_entity_table(plan, aliases, SPACE)
+        result = rewrite_frame_slot_table(plan, aliases, SPACE)
         # No frame_entity table should be introduced
         assert not any(t.kind == "frame_slot" for t in result.tables)
 
@@ -459,7 +459,7 @@ class TestRewriteFrameEntityVarSlots:
 
     def test_frame_var_remapped(self):
         plan, aliases = _build_frame_pattern()
-        result = rewrite_frame_entity_table(plan, aliases, SPACE)
+        result = rewrite_frame_slot_table(plan, aliases, SPACE)
 
         frame_slot = result.var_slots.get("frame")
         assert frame_slot is not None
@@ -467,7 +467,7 @@ class TestRewriteFrameEntityVarSlots:
 
     def test_entity_vars_remapped(self):
         plan, aliases = _build_frame_pattern()
-        result = rewrite_frame_entity_table(plan, aliases, SPACE)
+        result = rewrite_frame_slot_table(plan, aliases, SPACE)
 
         src_slot = result.var_slots.get("srcEntity")
         assert src_slot is not None
@@ -480,7 +480,7 @@ class TestRewriteFrameEntityVarSlots:
     def test_slot_vars_removed(self):
         """Intermediate slot variables should lose their positions."""
         plan, aliases = _build_frame_pattern()
-        result = rewrite_frame_entity_table(plan, aliases, SPACE)
+        result = rewrite_frame_slot_table(plan, aliases, SPACE)
 
         # srcSlot and dstSlot had positions on removed tables
         # After rewrite, their positions in removed tables are gone
@@ -498,7 +498,7 @@ class TestRewriteFrameEntityRecursive:
     def test_recurses_into_children(self):
         plan, aliases = _build_frame_pattern()
         outer = PlanV2(kind=KIND_FILTER, children=[plan])
-        result = rewrite_frame_entity_table(outer, aliases, SPACE)
+        result = rewrite_frame_slot_table(outer, aliases, SPACE)
 
         child = result.children[0]
         fs_tables = [t for t in child.tables if t.kind == "frame_slot"]
@@ -534,7 +534,7 @@ class TestRewriteFrameEntityProjectionGuard:
     def test_declines_when_an_emptied_var_is_projected(self):
         root, aliases = self._under_project(
             ["frame", "srcEntity", "srcEdge"], with_edge_var=True)
-        result = rewrite_frame_entity_table(root, aliases, SPACE)
+        result = rewrite_frame_slot_table(root, aliases, SPACE)
 
         bgp = result.children[0]
         assert not any(t.kind == "frame_slot" for t in bgp.tables), \
@@ -544,7 +544,7 @@ class TestRewriteFrameEntityProjectionGuard:
     def test_declines_for_select_star(self):
         """project_vars=None means every variable is read."""
         root, aliases = self._under_project(None, with_edge_var=True)
-        result = rewrite_frame_entity_table(root, aliases, SPACE)
+        result = rewrite_frame_slot_table(root, aliases, SPACE)
 
         bgp = result.children[0]
         assert not any(t.kind == "frame_slot" for t in bgp.tables)
@@ -556,7 +556,7 @@ class TestRewriteFrameEntityProjectionGuard:
         table for correct output. Now it does both.
         """
         root, aliases = self._under_project(["frame", "srcEntity", "srcSlot"])
-        result = rewrite_frame_entity_table(root, aliases, SPACE)
+        result = rewrite_frame_slot_table(root, aliases, SPACE)
 
         bgp = result.children[0]
         assert any(t.kind == "frame_slot" for t in bgp.tables), \
@@ -567,7 +567,7 @@ class TestRewriteFrameEntityProjectionGuard:
     def test_dst_slot_maps_to_its_own_arm(self):
         """Two slots must land on two different frame_slot joins."""
         root, aliases = self._under_project(["frame", "srcSlot", "dstSlot"])
-        result = rewrite_frame_entity_table(root, aliases, SPACE)
+        result = rewrite_frame_slot_table(root, aliases, SPACE)
 
         bgp = result.children[0]
         assert any(t.kind == "frame_slot" for t in bgp.tables)
@@ -580,7 +580,7 @@ class TestRewriteFrameEntityProjectionGuard:
     def test_still_collapses_when_slots_are_not_read(self):
         """The common shape — FRAME_UNION / RELATIONSHIPS, 25x per issues/051."""
         root, aliases = self._under_project(["frame", "srcEntity", "dstEntity"])
-        result = rewrite_frame_entity_table(root, aliases, SPACE)
+        result = rewrite_frame_slot_table(root, aliases, SPACE)
 
         bgp = result.children[0]
         assert any(t.kind == "frame_slot" for t in bgp.tables), \
@@ -589,7 +589,7 @@ class TestRewriteFrameEntityProjectionGuard:
     def test_emptied_but_unread_var_is_still_dropped(self):
         """Only READ variables block the collapse, not every emptied one."""
         root, aliases = self._under_project(["frame"], with_edge_var=True)
-        result = rewrite_frame_entity_table(root, aliases, SPACE)
+        result = rewrite_frame_slot_table(root, aliases, SPACE)
 
         bgp = result.children[0]
         assert any(t.kind == "frame_slot" for t in bgp.tables)

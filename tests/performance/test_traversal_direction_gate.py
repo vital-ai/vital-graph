@@ -556,8 +556,8 @@ class TestTheTautologyProofDecidesPerSpace:
         query all produce None, and the risk is one-sided: dropping a constraint
         that DOES exclude something returns rows that should not be there."""
         import inspect
-        from vitalgraph.db.sparql_sql import rewrite_frame_entity_table as r
-        src = inspect.getsource(r.rewrite_frame_entity_table)
+        from vitalgraph.db.sparql_sql import rewrite_frame_slot_table as r
+        src = inspect.getsource(r.rewrite_frame_slot_table)
         assert "if verdict is True:" in src, (
             "the drop must test `is True`; a truthiness test would drop on any "
             "non-empty value and an identity slip would drop on None")

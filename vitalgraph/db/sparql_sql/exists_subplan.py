@@ -149,9 +149,9 @@ async def prepare_exists_subplans(plan: PlanV2, space_id: str, *,
                 inner_plan = rewrite_edge_table(inner_plan, inner_aliases,
                                                 space_id)
             if frame_entity_ready:
-                from .rewrite_frame_entity_table import (
-                    rewrite_frame_entity_table)
-                inner_plan = rewrite_frame_entity_table(inner_plan,
+                from .rewrite_frame_slot_table import (
+                    rewrite_frame_slot_table)
+                inner_plan = rewrite_frame_slot_table(inner_plan,
                                                         inner_aliases, space_id)
 
             # Nested EXISTS inside this body.
