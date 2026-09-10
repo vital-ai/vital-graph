@@ -1,0 +1,67 @@
+version: 2
+
+updates:
+  # Python server package
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      python:
+        patterns:
+          - "*"
+
+  # Web UI (Vite + React SPA, bundled into vitalgraph/api/frontend/dist)
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      frontend-prod:
+        dependency-type: production
+        patterns:
+          - "*"
+      frontend-dev:
+        dependency-type: development
+        patterns:
+          - "*"
+
+  # Published TypeScript client (@vital-ai/vitalgraph-client)
+  - package-ecosystem: npm
+    directory: /vitalgraph-client-ts
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      client-ts-prod:
+        dependency-type: production
+        patterns:
+          - "*"
+      client-ts-dev:
+        dependency-type: development
+        patterns:
+          - "*"
+
+  # Jena SPARQL compiler sidecar
+  - package-ecosystem: maven
+    directory: /vitalgraph-jena-sidecar
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      maven:
+        patterns:
+          - "*"
+
+  # CI workflow actions
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns:
+          - "*"
