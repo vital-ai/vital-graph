@@ -115,6 +115,58 @@ to this conclusion: what was 8.6x worse there was forcing a hand-picked driving
 set under ORDER BY + LIMIT. Whatever emits this must be measured on both rows of
 the table above, not just the list.
 
+**AND THE VALUE CASE FOR THE GATE DOES NOT SURVIVE ITS OWN TWO QUERIES.** Asking
+which of them actually reaches the general pipeline, where a direction gate
+would run:
+
+| shape | `can_serve` | cost |
+|---|---|---|
+| list, entity end open | **served by the table** | 421,010 buf / 301 ms |
+| pinned to ONE entity | declines → pipeline | 49 buf / 0.1 ms |
+
+The 2.9x arm is a query users never pay for — `fast_slot_sort` answers it from
+`entity_slot_sort`, and the 421,010 buffers are what the pipeline WOULD cost if
+it had to. The arm that does reach the gate is already 0.1 ms, and is the one
+measured 87x worse if the slot end is pinned. On these two queries the gate is
+either inert or harmful, and the 2.9x is unreachable.
+
+So the gate has to be justified on the shapes `can_serve` DECLINES, which this
+issue never measured. Measured now, same fixture, a two-key sort (company then
+lead id — a realistic list view, and a decline because `len(sort_criteria) != 1`):
+
+    list, TWO sort keys, page 25    1,405,617 buf    778.5 ms
+
+That is the shape worth fixing: 1.4M buffers to return 25 rows, 3.3x the
+single-key pipeline cost, and unlike the single-key list nothing rescues it.
+
+**But the fix is probably not a direction gate.** Both keys live in
+`entity_slot_sort` already, so the same page is a self-join of the table it
+declined to use:
+
+    self-join on (entity_uuid, context_uuid), ORDER BY a.value_text, b.value_text
+        650 buffers    11.3 ms        <- vs 1,405,617 / 778.5 ms
+
+**2,162x fewer buffers, 69x faster**, with no new table, no statistics, and no
+plan change — only widening `can_serve` to accept a second key and emitting the
+join. That dominates a 2.9x direction gate on the one shape where either could
+apply.
+
+Two things to settle before building it, neither measured here:
+
+1. **The join must be LEFT, not INNER.** On this fixture all 2,863 entities
+   carry both slots, so the inner join above loses nothing — a property of the
+   data, not a guarantee. An entity missing the second slot must still appear,
+   ordered per SPARQL semantics, or this becomes exactly the confidently-wrong
+   page `can_serve` exists to prevent. The 650-buffer number is for the INNER
+   form and needs re-measuring as a LEFT join.
+2. **How many keys.** Two is one self-join; N keys is N-1 of them, and the
+   buffer count will not stay flat. Worth a cap with the rest declining.
+
+The other declined shapes — `entity_property_filters`, and a slot with no frame
+hop — remain unmeasured, and the no-frame-hop one CANNOT be served this way at
+all: it is absent from the table by construction. That one is the genuine
+candidate for a direction gate, and it is the only one left.
+
 What landed, all in `vitalgraph/sparql/kg_query_builder.py`:
 
 - `_sort_needs_aggregate` — new; whether a criterion can bind more than one
