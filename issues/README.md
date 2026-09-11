@@ -126,6 +126,12 @@ caller, which is what makes that file worth a sweep rather than two point fixes.
 | **184** | OPEN | **The geo slot handler's `frame_entity` fast path has never executed.** It selects `entity_uuid`, a column `frame_entity` does not have, so it raises on every call — and a bare `except Exception: pass` commented "table might not exist" swallows it, falling through to edge traversal every time on every space since it was written. Confirmed against a real space (`ERROR: column fe_slot.entity_uuid does not exist`). The `except` now logs. NOT repaired: it has never returned anything, so there is no behaviour to preserve and no way to tell from the code what "the owning entity for a slot" was meant to mean |
 | **185** | OPEN | **The write-path matrix enforces "every write path must maintain every derived table" over ONE file.** `_IMPL` is just `sparql_sql_space_impl.py`; quad-changing paths in `kg_backend_utils.py`, `resync_all.py`, `bulk_export.py` and `data_import_impl.py` are invisible to it — not exempt, not known gaps. **Demonstrated: deleting all three maintenance calls from `kg_backend_utils.py` leaves the suite green.** The test exists because a production edge table went ~25% incomplete when "only ONE of many write paths" maintained it; a guard against that which scans one module reproduces the failure shape one level up. It let a real gap through during the issues/183 retirement |
 
+## CI and the build environment
+
+| | status | |
+|---|---|---|
+| **186** | FIXED | **CI restores locally-built wheels across runners, and they SIGILL.** `hnswlib` compiles from source; `~/.cache/pip/wheels` was cached with a PREFIX `restore-keys`, so a binary built on one runner ran on another. Surfaced as `Illegal instruction` (exit 132) **on a docs-only commit**, passed locally, and hit an unrelated branch the same hour. No new release was involved — hnswlib 0.8.0 is from 2023, so version-bisecting could not have found it. **Read this before debugging any CI crash that a code diff cannot explain.** |
+
 ## Fixtures and test infrastructure
 
 | | status | |
