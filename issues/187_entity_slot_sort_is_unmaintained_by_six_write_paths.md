@@ -1,8 +1,8 @@
 # `entity_slot_sort` Is Unmaintained By Six Write Paths
 
-## Status: OPEN — found 2026-09-11 by widening the write-path matrix
-## (`issues/185`). Named in `KNOWN_GAPS` so the suite passes while the gap is
-## visible; NOT wired.
+## Status: OPEN, but DOWNGRADED after measurement — the gap is LATENT, not
+## active. Measured 2026-09-11 on production: **no shortfall on any space.**
+## Named in `KNOWN_GAPS`; deliberately NOT wired.
 
 **Related:** `issues/185` (the matrix that could not see these),
 `issues/096` (why a stale row here is a wrong ANSWER), `edge_table_integrity_bug.md`
@@ -49,15 +49,51 @@ carries no edge-source/dest properties and is not a frame. Its docstring says
 so, which is why it is an EXEMPT entry rather than a gap — the distinction the
 matrix exists to force.
 
-## Not established
+## Measured — and the answer changes the priority
 
-* **Whether the incremental import paths are reachable in a way that matters.**
-  A bulk import calls `resync_all_auxiliary_tables` and rebuilds everything; the
-  incremental ones do not. How much production traffic uses them is unmeasured.
-* **How stale the table actually is in production.** No drift figure was taken
-  for `entity_slot_sort` on the affected spaces. `issues/096` built drift
-  detection for it; running that per space would size the problem before any
-  fix.
+Run 2026-09-11 with `entity_slot_sort_coverage`, which counts entities from the
+QUADS and so cannot be confirmed by the derivation it checks:
+
+    PRODUCTION
+      cardiff_kg    2,898,205 rows    no shortfall
+      lead_data     1,102,169 rows    no shortfall
+      lead_prod       797,006 rows    no shortfall
+
+    DEV (11 populated spaces)
+      10 of 11      no shortfall
+      sp_kg_rel     4,500 of 4,875    92.31%
+
+**The six unmaintained write paths have produced no observable staleness.**
+
+### Why, and it is not luck
+
+The maintenance job already repairs this table, and on the independent probe:
+
+    DETECT   entity_slot_sort_coverage — counts from the quads
+    REPAIR   one seeded batch of ONE short type per cycle
+
+So a row these paths fail to write is picked up by the background repair. That
+is why the defect is real in code and invisible in the data.
+
+### What that does and does not license
+
+It does NOT make the gap acceptable. The repair is **one batch of one type per
+cycle** — a bounded rate. A write burst concentrated on those six paths can
+outpace it, and nothing in the current measurement says how much headroom there
+is.
+
+It DOES mean wiring six write paths is not urgent, and the measurement was worth
+taking before doing it. `issues/178` records six rewrites argued convincingly
+and reverted after measurement; this is the same discipline applied before the
+work rather than after.
+
+### Use coverage, not drift
+
+`entity_slot_sort_drift` compares the table against `_select_rows` — the same
+walk that populated it — so when the walk is at fault the two agree and it
+reports converged. Production measured **809 entities against 76,996 of that
+type with drift satisfied** (`issues/149`). Any future sizing of this issue must
+use `entity_slot_sort_coverage`.
 
 ## The fix
 
@@ -65,6 +101,13 @@ Wire `sync_entity_slot_sort_after_edge_insert` / the delete-side counterpart
 into the six paths, beside the `edge` and `frame_slot` calls already there, and
 remove the `KNOWN_GAPS` entries.
 
-**Measure first.** `issues/178` records six rewrites that were argued
-convincingly and reverted after measurement; the cheap check here is the drift
-figure per space, not the wiring.
+**The measurement is done** (above) and says this is not urgent. If it is
+taken up, the work is to wire `sync_entity_slot_sort_after_edge_insert` and its
+delete-side counterpart into the six paths beside the `edge` and `frame_slot`
+calls already there, then remove the `KNOWN_GAPS` entries.
+
+Before that, the question worth answering is the one the measurement raised:
+**how much headroom does the one-batch-per-cycle repair actually have?** If a
+realistic write burst on these paths can outrun it, that is the argument for
+wiring. If it cannot, the repair is the design and these paths are arguably
+EXEMPT rather than broken.
