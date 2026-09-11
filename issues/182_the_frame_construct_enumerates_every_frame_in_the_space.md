@@ -1,16 +1,5 @@
 # The Frame CONSTRUCT Enumerates Every Frame In The Space
 
-## Status: ROOT CAUSE FOUND AND FULLY DECOMPOSED — **1,218x available**, from
-## three fixes that must land TOGETHER (`issues/179`, the `frame_entity` slot
-## columns from `issues/178`, and dropping redundant type constraints). Each
-## alone is worth little or is a regression, which is why five separate
-## single-mechanism measurements all failed. Nothing built yet.
-##
-## (superseded status below)
-## ROOT CAUSE FOUND. The plan enumerates every frame because the text
-## predicate cannot use the trigram index, so there is no cheap way to start
-## from the selective end. With `issues/179` applied the simplified query goes
-## **1,153,015 -> 3,561 buffers (324x)** and reaches the pinned-set floor. The
 ## Status: RESOLVED 2026-09-11. The enumeration is gone: **285,348 frames
 ## enumerated before, 341 loops now** for the same 425 rows, 23,854 buffers.
 ##
@@ -26,6 +15,23 @@
 ## `issues/179` — is answered there: the push-down was producing a cheap anchor
 ## that the plan discarded, because nothing let it drive.
 
+
+## (SUPERSEDED — see the RESOLVED status at the top. Kept because the reasoning was
+## half right in a useful way: it correctly concluded that no single mechanism
+## would do it, and correctly predicted that each alone is "worth little or is a
+## regression". It named the wrong three.)
+##
+## Status: ROOT CAUSE FOUND AND FULLY DECOMPOSED — **1,218x available**, from
+## three fixes that must land TOGETHER (`issues/179`, the `frame_entity` slot
+## columns from `issues/178`, and dropping redundant type constraints). Each
+## alone is worth little or is a regression, which is why five separate
+## single-mechanism measurements all failed. Nothing built yet.
+##
+## (superseded status below)
+## ROOT CAUSE FOUND. The plan enumerates every frame because the text
+## predicate cannot use the trigram index, so there is no cheap way to start
+## from the selective end. With `issues/179` applied the simplified query goes
+## **1,153,015 -> 3,561 buffers (324x)** and reaches the pinned-set floor. The
 **Raised:** 2026-09-09, after `issues/178`, `179`, `180` and `181` each
 identified a real mechanism and none of them explained the query's cost.
 
