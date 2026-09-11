@@ -1,12 +1,31 @@
 # LCASE + CONTAINS Defeats The Trigram Index That Exists For It
 
-## Status: OPEN, and now known to be **the fix for `issues/182`** — the root
-## cost of this whole family. On the simplified traversal it is worth
-## **324x (1,153,015 -> 3,561 buffers)** and reaches the pinned-set floor,
-## because it gives the planner a cheap entry point from the selective end and
-## the 285,348-frame enumeration disappears. It still REGRESSES the reference
-## CONSTRUCT, and finding why is the one open question. Implemented and reverted
-## three times; not shipped.
+## Status: RESOLVED 2026-09-11, verified against the plan rather than inferred.
+## The push-down fires on both UNION branches and the trigram index is the entry
+## point:
+
+    Bitmap Index Scan on idx_wordnet_frames_term_trgm
+      Index Cond: (term_text ~~* '%happy%')      <- once per UNION branch
+    root_buffers = 23,854   max_loops = 341   rows = 425
+
+## The gates this issue described were fixed in
+## `filter_pushdown._text_search_operands`: `_unwrap_str` handles `STR(?v)`,
+## `_unwrap_fold` handles `LCASE`, and the `f0 != f1` rejection now has a
+## `_fold_invariant` escape — `"happy"` is already lowercase, so folding it is a
+## no-op and the case asymmetry that gate protected against cannot arise. There
+## is no `lower(...)` left in the emitted SQL at all.
+##
+## **The "one open question" is answered, and the answer is that the question
+## was wrong.** This issue said the fix "still REGRESSES the reference CONSTRUCT,
+## and finding why is the one open question", after being implemented and
+## reverted three times. It regressed because the push-down produced a cheap
+## 61-row set that THE PLAN THEN THREW AWAY — the anchor could not drive the
+## traversal, so a cheaper anchor bought nothing and cost the extra scan.
+##
+## `rewrite_merge_bgp` (`issues/178`) made the anchor drive. The two now compose:
+## the trigram leaf is the entry point AND the traversal is entered from it. The
+## regression was never a property of this fix; it was a property of the plan
+## shape around it.
 
 **Raised:** 2026-09-09, profiling the reference happy-frame CONSTRUCT while
 working `issues/178`. Split out from it because it is a different mechanism with

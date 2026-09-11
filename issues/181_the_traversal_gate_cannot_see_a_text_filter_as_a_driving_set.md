@@ -1,10 +1,26 @@
 # The Traversal Gate Cannot See A Text Filter As A Driving Set
 
-## Status: OPEN as a DEFECT, but DO NOT BUILD THE FIX on the evidence here. The
-## cause is confirmed. The 312x priced on a simplified query **does not survive
-## on the real one**: on the reference CONSTRUCT the same driving set is
-## 8.6x WORSE with ORDER BY + LIMIT and roughly NEUTRAL on buffers for the full
-## result set. Sibling of `issues/160`.
+## Status: CLOSED 2026-09-11 as SUPERSEDED — do not build the fix.
+##
+## The DEFECT described here is still real: the traversal gate cannot see a text
+## filter as a driving set. What changed is that it no longer matters for the
+## query that raised it, and the fix proposed here is still the wrong one.
+##
+## The OUTCOME this issue wanted — the text filter driving the traversal — is
+## achieved by `rewrite_merge_bgp` (`issues/178`), which merges the anchor BGP
+## and the traversal BGP so `reorder_joins` chooses an order across both and
+## opens on the trigram leaf. The reference CONSTRUCT now runs 341 loops for 425
+## rows, entering `frame_slot` on `entity_uuid` from the 61-entity anchor.
+##
+## That is a DIFFERENT mechanism from the one proposed here, and the measurement
+## in this file still stands as the reason not to build this one: the driving
+## set as priced here was **8.6x WORSE with ORDER BY + LIMIT** and neutral on
+## buffers for the full result set. A 312x on a simplified query that inverts on
+## the real one is exactly the trap `issues/178` documents six times over.
+##
+## Reopen only with a shape the merge does NOT reach — it fires on
+## `Join(BGP, BGP)`, so a traversal with no mergeable anchor is the case that
+## would still want this.
 
 **Raised:** 2026-09-09, asking why the reference happy-frame CONSTRUCT does not
 use the traversal machinery at all.

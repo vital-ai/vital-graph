@@ -11,7 +11,20 @@
 ## predicate cannot use the trigram index, so there is no cheap way to start
 ## from the selective end. With `issues/179` applied the simplified query goes
 ## **1,153,015 -> 3,561 buffers (324x)** and reaches the pinned-set floor. The
-## CONSTRUCT still regresses under 179 and that is now the ONE open question.
+## Status: RESOLVED 2026-09-11. The enumeration is gone: **285,348 frames
+## enumerated before, 341 loops now** for the same 425 rows, 23,854 buffers.
+##
+## NOT by the mechanism this issue proposed. The fix is
+## `rewrite_distribute_union` + `rewrite_merge_bgp` (`issues/178`), which put the
+## anchor and the traversal into ONE join-ordering decision so `reorder_joins`
+## could open on the trigram leaf it already preferred. Absorbing the edge type
+## constraint — the 6.8x measured here — was implemented and REVERTED: it
+## returned zero rows on the criteria and sort shapes (see the revert note in
+## this file).
+##
+## The "ONE open question" below — why the CONSTRUCT regressed under
+## `issues/179` — is answered there: the push-down was producing a cheap anchor
+## that the plan discarded, because nothing let it drive.
 
 **Raised:** 2026-09-09, after `issues/178`, `179`, `180` and `181` each
 identified a real mechanism and none of them explained the query's cost.

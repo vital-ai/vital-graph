@@ -1,9 +1,26 @@
 # The Geo Slot Handler's `frame_entity` Fast Path Has Never Executed
 
-## Status: OPEN — confirmed against the database. The failure is swallowed by a
-## bare `except`, so the handler has always taken its slow path. NOT fixed:
-## repairing it means deciding what the query was meant to return, and it has
-## never returned anything.
+## Status: RESOLVED 2026-09-10 — the fast path is DELETED, not repaired.
+##
+## This issue ends "repairing it means deciding what the query was meant to
+## return, and it has never returned anything." That decision is made, and the
+## answer is that no correct fast path exists.
+##
+## The obvious repair — point it at `{space}_frame_slot.entity_uuid`, which DOES
+## have the column the old query selected — is WRONG, and silently so. That
+## column is the entity FILLING THE SLOT (`hasEntitySlotValue`). The function
+## returns the entity that OWNS THE FRAME, reached by `Edge_hasEntityKGFrame`
+## with the frame as edge destination. On any relationship frame — the normal
+## case, and the point of the construct — the two disagree, and
+## `process_geo_slot` would key geo points to a different entity with no error
+## and no drift signal.
+##
+## `frame_slot` does not record frame ownership at all, so the repoint was never
+## available; the choice was delete or keep dead code. The traversal remains,
+## which is what has always run, so behaviour is unchanged.
+##
+## It was briefly repointed during the `frame_entity` retirement and reverted in
+## review before shipping — the review caught what the sweep did not.
 
 **Raised:** 2026-09-09, while auditing readers of `frame_entity` before
 retiring it (`issues/183`).
