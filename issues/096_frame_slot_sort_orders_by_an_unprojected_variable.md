@@ -139,33 +139,47 @@ lead id — a realistic list view, and a decline because `len(sort_criteria) != 
 That is the shape worth fixing: 1.4M buffers to return 25 rows, 3.3x the
 single-key pipeline cost, and unlike the single-key list nothing rescues it.
 
-**But the fix is probably not a direction gate.** Both keys live in
-`entity_slot_sort` already, so the same page is a self-join of the table it
-declined to use:
+**SHIPPED 2026-09-11, and not as a direction gate.** Both keys already live in
+`entity_slot_sort`, so the page is served from the table that declined it. Three
+forms were priced; the one that won is not the obvious one:
 
-    self-join on (entity_uuid, context_uuid), ORDER BY a.value_text, b.value_text
-        650 buffers    11.3 ms        <- vs 1,405,617 / 778.5 ms
+| form | buffers | exec |
+|---|---:|---:|
+| general pipeline (what it did) | 1,405,617 | 778.5 ms |
+| self-join on `(entity_uuid, context_uuid)` | 650 | 11.3 ms |
+| **N conditional aggregates, one scan** | **165** | **3.6 ms** |
 
-**2,162x fewer buffers, 69x faster**, with no new table, no statistics, and no
-plan change — only widening `can_serve` to accept a second key and emitting the
-join. That dominates a 2.9x direction gate on the one shape where either could
-apply.
+`MIN(value) FILTER (WHERE slot_type_uuid = $k)` per key over a single index-only
+scan, zero heap fetches. **8,519x fewer buffers, 215x faster**, no new table, no
+statistics, no plan change. Because it is aggregates rather than joins the cost
+is FLAT in the key count — 4.4 / 2.7 / 3.0 ms per page at one, two and three
+keys — which a self-join's N-1 joins would not have been.
 
-Two things to settle before building it, neither measured here:
+The LEFT-versus-INNER question raised here was the wrong question. The pipeline
+is not more permissive: `_build_sort_bindings` emits every sort pattern as a
+REQUIRED triple, never OPTIONAL, so an entity missing any sort key is absent
+from ITS answer too. `HAVING <each key> IS NOT NULL` reproduces that. An outer
+join would have returned rows the query being imitated does not.
 
-1. **The join must be LEFT, not INNER.** On this fixture all 2,863 entities
-   carry both slots, so the inner join above loses nothing — a property of the
-   data, not a guarantee. An entity missing the second slot must still appear,
-   ordered per SPARQL semantics, or this becomes exactly the confidently-wrong
-   page `can_serve` exists to prevent. The 650-buffer number is for the INNER
-   form and needs re-measuring as a LEFT join.
-2. **How many keys.** Two is one self-join; N keys is N-1 of them, and the
-   buffer count will not stay flat. Worth a cap with the rest declining.
+Verified against the general pipeline on real data: 9 shapes x 3 page offsets,
+row for row in order, including mixed directions, priority reversing
+declaration order, and a 3-key sort. Declines kept where serving would be wrong
+or merely slow: keys under different frame paths (`frame_type_path` is a leading
+index column matched whole), and more than `MAX_SORT_KEYS`.
 
-The other declined shapes — `entity_property_filters`, and a slot with no frame
-hop — remain unmeasured, and the no-frame-hop one CANNOT be served this way at
-all: it is absent from the table by construction. That one is the genuine
-candidate for a direction gate, and it is the only one left.
+One methodological note worth keeping. The first agreement run passed on all
+shapes while never exercising the second key: `CompanyName` has 2,855 distinct
+values over 2,863 entities, so almost nothing tied and the tiebreak was never
+reached. The cases that mean anything lead with a slot holding ONE distinct
+value. The same trap appeared in the test suite — a precedence test that was
+green under a mutation that broke precedence, because with the first key
+constant the leading key is unobservable. Worth a cap with the rest declining.
+
+**What remains.** `entity_property_filters` and a slot with no frame hop are
+still declined and still unmeasured. The no-frame-hop shape CANNOT be served
+this way at all — it is absent from the table by construction — so it is the
+one genuine candidate left for a direction gate, and the gate should be judged
+on it rather than on the two queries at the top of this issue.
 
 What landed, all in `vitalgraph/sparql/kg_query_builder.py`:
 
