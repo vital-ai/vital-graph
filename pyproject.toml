@@ -50,7 +50,18 @@ dependencies = [
 heavy = [
     "vital-ai-vitalsigns>=0.1.55",
     "vital-ai-haley-kg>=0.1.24",
-    "torch>=2.0.0",
+    # UPPER BOUND, and it is load-bearing for CI.
+    #
+    # torch 2.14.0 (2026-09-02) SIGILLs on the GitHub runner — `Fatal Python
+    # error: Illegal instruction`, exit 132, inside `VitalGraphClient(...)`,
+    # with `torch._C` among the loaded extension modules. It surfaced on a
+    # DOCS-ONLY commit because every earlier run reused a fully-satisfied pip
+    # environment and installed nothing; the first fresh resolve picked up the
+    # new wheel.
+    #
+    # An unbounded pin means the build is a bet on whatever published most
+    # recently, and the bet is settled by CI crashing rather than by a test.
+    "torch>=2.0.0,<2.14",
     "transformers>=4.30.0",
     "sentencepiece>=0.1.99",
     "numpy>=1.24.0",
@@ -125,7 +136,18 @@ dev = [
     "flake8>=6.0.0",
     "mypy>=1.5.0",
     "pre-commit>=3.0.0",
-    "torch>=2.0.0",
+    # UPPER BOUND, and it is load-bearing for CI.
+    #
+    # torch 2.14.0 (2026-09-02) SIGILLs on the GitHub runner — `Fatal Python
+    # error: Illegal instruction`, exit 132, inside `VitalGraphClient(...)`,
+    # with `torch._C` among the loaded extension modules. It surfaced on a
+    # DOCS-ONLY commit because every earlier run reused a fully-satisfied pip
+    # environment and installed nothing; the first fresh resolve picked up the
+    # new wheel.
+    #
+    # An unbounded pin means the build is a bet on whatever published most
+    # recently, and the bet is settled by CI crashing rather than by a test.
+    "torch>=2.0.0,<2.14",
     "transformers>=4.30.0",
     "nltk>=3.8.0",
     "numpy>=1.24.0",
