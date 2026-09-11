@@ -25,7 +25,8 @@ from __future__ import annotations
 
 import pytest
 
-from vitalgraph.db.sparql_sql.fast_slot_sort import can_serve
+from vitalgraph.db.sparql_sql.fast_slot_sort import (
+    MAX_SORT_KEYS, can_serve, sort_keys)
 
 HALEY = "http://vital.ai/ontology/haley-ai-kg#"
 TEXT = HALEY + "KGTextSlot"
@@ -78,9 +79,55 @@ def test_no_sort_criteria_is_refused():
     assert not can_serve(_Crit(sort_criteria=[]))
 
 
-def test_a_second_sort_key_is_refused():
-    """The index orders ONE value column; a second key would re-sort the page."""
-    assert not can_serve(_Crit(sort_criteria=[_Sort(), _Sort(slot_type="urn:b")]))
+def test_a_second_sort_key_IS_served():
+    """Served since 2026-09-11 as N conditional aggregates over one scan.
+
+    Was a decline, on the reasoning that "the index orders ONE value column".
+    Measured on cardiff_kg, page 25: the declined two-key sort cost 1,405,617
+    buffers / 778.5 ms through the general pipeline, against 165 buffers /
+    3.6 ms served here with zero heap fetches.
+    """
+    assert can_serve(_Crit(sort_criteria=[_Sort(), _Sort(slot_type="urn:b")]))
+
+
+def test_keys_are_ordered_by_priority_not_declaration():
+    """A page ordered by the right values in the wrong precedence is a WRONG
+    page that looks entirely plausible, so this must match the builder's own
+    `sorted(sort_criteria, key=priority)`."""
+    a = _Sort(slot_type="urn:a"); a.priority = 2
+    b = _Sort(slot_type="urn:b"); b.priority = 1
+    assert [k.slot_type for k in sort_keys(_Crit(sort_criteria=[a, b]))] == \
+        ["urn:b", "urn:a"]
+
+
+def test_equal_priorities_keep_declaration_order():
+    """Python's sort is stable and the builder relies on it too."""
+    a, b = _Sort(slot_type="urn:a"), _Sort(slot_type="urn:b")
+    assert [k.slot_type for k in sort_keys(_Crit(sort_criteria=[a, b]))] == \
+        ["urn:a", "urn:b"]
+
+
+def test_more_keys_than_the_cap_are_refused():
+    keys = [_Sort(slot_type=f"urn:{i}") for i in range(MAX_SORT_KEYS + 1)]
+    assert not can_serve(_Crit(sort_criteria=keys))
+
+
+def test_keys_under_DIFFERENT_frame_paths_are_refused():
+    """`frame_type_path` is a leading index column matched as a whole array.
+    Two paths would need an OR of (slot_type, path) pairs and give up the
+    index-only scan, so this falls back rather than serving it slowly."""
+    assert not can_serve(_Crit(sort_criteria=[
+        _Sort(slot_type="urn:a", frame_path=("urn:f1",)),
+        _Sort(slot_type="urn:b", frame_path=("urn:f2",))]))
+
+
+def test_one_bad_key_refuses_the_WHOLE_query():
+    """Every key is checked, not just the first — a served page built from a
+    partially-understood sort would be ordered by the wrong thing."""
+    assert not can_serve(_Crit(sort_criteria=[
+        _Sort(), _Sort(slot_type="urn:b", slot_class_uri=HALEY + "KGGeoSlot")]))
+    assert not can_serve(_Crit(sort_criteria=[
+        _Sort(), _Sort(slot_type=None)]))
 
 
 def test_an_unknown_sort_type_is_refused():

@@ -88,28 +88,63 @@ def _term_uuid(uri: str) -> uuid.UUID:
     return uuid.uuid5(_VITALGRAPH_NS, f"{uri}\x00U")
 
 
+# More keys are one more conditional aggregate each, not one more join, so the
+# cost curve is flat in a way a self-join's would not be. The cap is here
+# because "flat" was measured at two and asserted at three, not because
+# anything breaks above it: past this the general pipeline is the safer answer.
+MAX_SORT_KEYS = 3
+
+
+def sort_keys(criteria):
+    """The sort criteria this table can answer, in the builder's own order.
+
+    `None` -- not a list -- when the shape is unserved, so callers get one
+    answer to one question instead of re-deriving the conditions.
+
+    ORDER MATTERS AND MUST MATCH THE BUILDER. `_build_sort_bindings` emits
+    `sorted(sort_criteria, key=priority)`, and Python's sort is stable, so equal
+    priorities keep declaration order. Sorting differently here would return a
+    page ordered by the right values in the wrong precedence -- a wrong page
+    that looks entirely plausible.
+    """
+    sc = getattr(criteria, "sort_criteria", None) or []
+    if not 1 <= len(sc) <= MAX_SORT_KEYS:
+        return None
+    keys = sorted(sc, key=lambda x: getattr(x, "priority", 1))
+    for s in keys:
+        if s.sort_type not in ("entity_frame_slot", "frame_slot"):
+            return None
+        if not s.slot_type:
+            return None
+        if _LANE.get(s.slot_class_uri or "") is None:
+            return None
+        # At least one frame hop, per key. See the note in `can_serve`.
+        if not (s.frame_path or []):
+            return None
+    # EVERY KEY MUST WALK THE SAME FRAME PATH. `frame_type_path` is one of the
+    # index's leading columns and is matched as a whole array; two keys under
+    # different paths would need an OR of (slot_type, path) pairs, which gives
+    # up the index-only scan that makes this worth doing. Declining is a
+    # fallback to the general pipeline, so it costs latency and not correctness.
+    if any(list(k.frame_path) != list(keys[0].frame_path) for k in keys[1:]):
+        return None
+    return keys
+
+
 def can_serve(criteria) -> bool:
     """Whether this builder criteria object is a shape the table answers.
 
     Kept separate from the query so the endpoint can decide without a database
     round trip, and so the conditions are testable on their own.
     """
-    sc = getattr(criteria, "sort_criteria", None)
-    if not sc or len(sc) != 1:
+    keys = sort_keys(criteria)
+    if keys is None:
         return False
-    s = sc[0]
-    if s.sort_type not in ("entity_frame_slot", "frame_slot"):
-        return False
-    if not s.slot_type:
-        return False
-    if _LANE.get(s.slot_class_uri or "") is None:
-        return False
-    # At least one frame hop. Depth beyond that is fine — the type path is
-    # stored and matched whole — but a slot hanging directly off the entity is
-    # not in the table at all, and answering it from frame-borne rows would be
-    # a wrong page rather than a slow one.
-    if not (s.frame_path or []):
-        return False
+    s = keys[0]
+    # The frame-hop requirement is enforced per key in `sort_keys`: depth beyond
+    # one is fine -- the type path is stored and matched whole -- but a slot
+    # hanging directly off the entity is not in the table at all, and answering
+    # it from frame-borne rows would be a wrong page rather than a slow one.
     # FRAME CRITERIA ARE SERVED HERE NOW, when every one of them is an equality
     # this table can answer (`issues/172`).
     #
@@ -210,6 +245,55 @@ def _filter_exists(t: str, criteria, args: list) -> str:
     return "\n              ".join(out)
 
 
+def _grouped(space_id: str, graph_uri: str, criteria, keys):
+    """The grouped population the page and the count must BOTH be drawn from.
+
+    One place, because the page and the count disagreeing is the failure this
+    path keeps producing: a UI that offers a last page it cannot reach. Returns
+    the pieces rather than a query so each caller adds only its own tail.
+
+    N keys is N conditional aggregates over ONE index-only scan, not N-1 joins.
+    Measured on `cardiff_kg`, two keys, page 25: 165 buffers / 3.6 ms with zero
+    heap fetches, against 1,405,617 buffers / 778.5 ms for the same page through
+    the general pipeline, and 650 / 11.3 for the self-join form.
+
+    HAVING, not WHERE, is what makes an entity missing ANY key absent -- which
+    is the general pipeline's semantics, not a choice: `_build_sort_bindings`
+    emits every sort pattern as a REQUIRED triple, never OPTIONAL, so the
+    pipeline drops such an entity too. An outer join here would return rows the
+    query being imitated does not.
+    """
+    t = f"{space_id}_entity_slot_sort"
+    args = [_term_uuid(graph_uri), _term_uuid(criteria.entity_type),
+            [_term_uuid(u) for u in keys[0].frame_path]]
+    slot_ph = []
+    for k in keys:
+        args.append(_term_uuid(k.slot_type))
+        slot_ph.append(f"${len(args)}")
+
+    sel, having, order = [], [], []
+    for i, (k, ph) in enumerate(zip(keys, slot_ph)):
+        col, agg_min, agg_max = _LANE_SQL[_LANE[k.slot_class_uri]]
+        descending = (k.sort_order or "asc").lower() == "desc"
+        # MIN ascending / MAX descending, per key -- order each entity by the
+        # value that will actually determine its position when a slot type
+        # appears more than once under the path. This mirrors the aggregate
+        # `_build_sort_bindings` chooses for exactly the same reason.
+        agg = f"{agg_max if descending else agg_min} FILTER (WHERE slot_type_uuid = {ph})"
+        sel.append(f"{agg} AS sv{i}")
+        # Repeated rather than referenced: HAVING cannot see a SELECT alias.
+        having.append(f"{agg} IS NOT NULL")
+        order.append(f"sv{i} {'DESC' if descending else 'ASC'}")
+
+    # Filters append to `args`, so every placeholder above must already be in it.
+    where_filters = _filter_exists(t, criteria, args)
+    where = (f"context_uuid = $1 AND entity_type_uuid = $2 "
+             f"AND frame_type_path = $3 "
+             f"AND slot_type_uuid IN ({', '.join(slot_ph)})"
+             f"{where_filters}")
+    return t, args, ", ".join(sel), where, " AND ".join(having), order
+
+
 async def fast_slot_sort_page(
     conn, space_id: str, graph_uri: str, criteria,
     page_size: int, offset: int,
@@ -220,51 +304,28 @@ async def fast_slot_sort_page(
     both must fall back, and the caller cannot tell them apart, which is
     deliberate: a half-populated table answering a page would be a wrong answer.
     """
-    if not can_serve(criteria):
+    keys = sort_keys(criteria)
+    if keys is None:
         return None
-    s = criteria.sort_criteria[0]
-    lane = _LANE[s.slot_class_uri]
-    col, agg_min, agg_max = _LANE_SQL[lane]
-    descending = (s.sort_order or "asc").lower() == "desc"
-    agg = agg_max if descending else agg_min
-    direction = "DESC" if descending else "ASC"
-
-    t = f"{space_id}_entity_slot_sort"
+    t, args, sel, where, having, order = _grouped(
+        space_id, graph_uri, criteria, keys)
     t_term = f"{space_id}_term"
-
-    ctx = _term_uuid(graph_uri)
-    ent_t = _term_uuid(criteria.entity_type)
-    slot_t = _term_uuid(s.slot_type)
-    # The WHOLE path, in order — this is what makes a nested frame criterion
-    # reachable. Matching only `frame_path[0]` would return rows for any slot of
-    # that type anywhere under that root frame, which is a different question.
-    frame_path = [_term_uuid(u) for u in s.frame_path]
-
-    # frame_type_path is part of the index's leading columns, so it is matched
-    # rather than left unconstrained.
-    args = [ctx, ent_t, slot_t, frame_path]
-    # Filters are appended to `args` and their placeholders numbered from it, so
-    # the page/offset placeholders below must be computed AFTER this.
-    where_filters = _filter_exists(t, criteria, args)
     n = len(args)
+    tail = ", ".join(order)
 
     sql = f"""
         SELECT tm.term_text
         FROM (
-            SELECT entity_uuid, {agg} AS sv
+            SELECT entity_uuid, {sel}
             FROM {t}
-            WHERE context_uuid = $1
-              AND entity_type_uuid = $2
-              AND slot_type_uuid = $3
-              AND frame_type_path = $4
-              AND {col} IS NOT NULL
-              {where_filters}
+            WHERE {where}
             GROUP BY entity_uuid
-            ORDER BY sv {direction}, entity_uuid
+            HAVING {having}
+            ORDER BY {tail}, entity_uuid
             LIMIT ${n + 1} OFFSET ${n + 2}
         ) p
         JOIN {t_term} tm ON tm.term_uuid = p.entity_uuid
-        ORDER BY p.sv {direction}, p.entity_uuid
+        ORDER BY {", ".join("p." + o for o in order)}, p.entity_uuid
     """
     try:
         rows = await conn.fetch(sql, *args, page_size, offset)
@@ -287,30 +348,21 @@ async def fast_slot_sort_count(
     omitted the restriction would disagree with its own page and the UI would
     show a last page that cannot be reached.
     """
-    if not can_serve(criteria):
+    keys = sort_keys(criteria)
+    if keys is None:
         return None
-    s = criteria.sort_criteria[0]
-    lane = _LANE[s.slot_class_uri]
-    col, _mn, _mx = _LANE_SQL[lane]
-
-    t = f"{space_id}_entity_slot_sort"
-    ctx = _term_uuid(graph_uri)
-    ent_t = _term_uuid(criteria.entity_type)
-    slot_t = _term_uuid(s.slot_type)
-    frame_path = [_term_uuid(u) for u in s.frame_path]
-    args = [ctx, ent_t, slot_t, frame_path]
-    # THE SAME FILTER AS THE PAGE. A count that ignores the criteria reports the
-    # whole population while the page shows the filtered subset — the paging
-    # control then offers pages that do not exist, and nothing errors.
-    where_filters = _filter_exists(t, criteria, args)
+    t, args, sel, where, having, _order = _grouped(
+        space_id, graph_uri, criteria, keys)
 
     try:
         return await conn.fetchval(f"""
-            SELECT count(DISTINCT entity_uuid) FROM {t}
-            WHERE context_uuid = $1 AND entity_type_uuid = $2
-              AND slot_type_uuid = $3 AND frame_type_path = $4
-              AND {col} IS NOT NULL
-              {where_filters}
+            SELECT count(*) FROM (
+                SELECT entity_uuid, {sel}
+                FROM {t}
+                WHERE {where}
+                GROUP BY entity_uuid
+                HAVING {having}
+            ) x
         """, *args)
     except Exception as exc:
         logger.debug("fast_slot_sort_count(%s) declined: %s", space_id, exc)
