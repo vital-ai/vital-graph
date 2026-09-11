@@ -114,7 +114,7 @@ caller, which is what makes that file worth a sweep rather than two point fixes.
 
 | | status | |
 |---|---|---|
-| 088 | partially fixed | Absence-defined filters scan every row when the predicate EXISTS. Fast when absent (13.4 s -> 0.76 s cold, 0.03 s warm); still 9.7 s in the 22 of 79 spaces that populate the predicate |
+| 088 | RESOLVED | **RESOLVED 2026-08-19 — 1,744 buffers, 43.4 ms.** The "still 9.7 s in 22 of 79 spaces" this row used to carry were the PRE-FIX numbers and stayed here after the fix landed. Absence-defined filters scan every row when the predicate EXISTS. Fast when absent (13.4 s -> 0.76 s cold, 0.03 s warm); still 9.7 s in the 22 of 79 spaces that populate the predicate |
 | 081 | SAFEGUARD CLOSED | Perf conclusions measured on a 1 GB pool. The three re-measurements are done; the comparison gate skipped ABSENT values, so an unstamped baseline disabled it rather than failing it — a disabled gate reports what a satisfied one reports |
 | 070 | largely fixed | Pushed term subqueries re-execute inside correlated probes; `contains` not fully closed |
 | **178** | 1 FIXED, 1 bounded | **The happy-frame CONSTRUCT returned 30 of 60 triples, and 84% of its 69s was ONE tautology check.** (1) FIXED: `rewrite_frame_entity_table` pruned projected variables into literal `NULL`; row correctness cleared first (425 = 425, zero diff), so missing OUTPUT not wrong answers. (2) BOUNDED: `excludes_nothing` capped at 2s, 58,035ms → 3,206ms cold. A precompute/persist layer built on top worked (527ms) and was **REVERTED as premature** — stored schema committed before establishing where the cost was. Neither defect is where the time goes; see 179 and 180. **Read for four retractions** — including why "a join is removed" is not evidence of a win, and why `NULL AS v` means nothing until you read the `__uuid` beside it |
@@ -141,7 +141,7 @@ caller, which is what makes that file worth a sweep rather than two point fixes.
 | 055 | FIXED | **FIXED 2026-08-17, re-fixed 2026-08-19.** Loaders and tests target different clusters. Recurred 2026-08-14; needs a decision, not more documentation |
 | 084 | FIXED | Load-test setup wrote an empty entity list over a TRACKED file when the space was already seeded, printed it as success, and told you to re-run the command that did it |
 
-| 022 | partially resolved | E2E list-visibility flake under parallel load; one class not swept |
+| 022 | RESOLVED | **RESOLVED 2026-08-18 — the last class is swept.** E2E list-visibility flake under parallel load; one class not swept |
 
 ## Other
 
