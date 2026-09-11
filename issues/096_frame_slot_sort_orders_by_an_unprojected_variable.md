@@ -52,30 +52,68 @@ WRONG page, not a slow one); a non-equality frame criterion;
 `entity_property_filters`; `entity_uris`; and any of the vector, geo, slot or
 search-string criteria.
 
-**The gate condition as written would pick wrong on its own query.** The rule
-above says "pin the slot end when the slot type admits fewer rows than the entity
-criteria". The case where pinning the slot end WINS has 5,726 CompanyName slots
-against 2,863 entities — more, not fewer. Followed literally, the gate pins the
-anchor end on the one query that is measured to want the slot end.
+**MEASURED 2026-09-11 on this issue's own fixture** — `cardiff_kg`, 2,863
+KGLead, `CompanyName`, page 25, via `test_scripts/perf/_issue096_direction.py`.
+Both rows of the table above reproduce at HEAD:
 
-The raw counts are not the discriminator. What actually separates the two
-measured cases is that the 87x regression is the sort *pinned to a single
-entity*, and an end pinned to literal URIs is always the better anchor: its
-cardinality is known exactly, syntactically, at build time, and it is small by
-construction. That case needs no statistic at all — and it is already visible as
-`entity_uris`, which `can_serve` declines, so it reaches the general pipeline
-where the gate would run.
+| shape | 096 recorded | HEAD |
+|---|---|---|
+| list, entity end open | 507,492 buf / 360 ms | **421,010 buf / 311.8 ms** |
+| pinned to ONE entity | 222 buf / 0.7 ms | **49 buf / 0.1 ms** |
 
-So the gate is two tests, not one comparison:
+Three things follow, and two of them contradict what this issue says.
 
-1. `entity_uris` present → anchor end. Exact, syntactic, no `rdf_stats` call.
-   This is the 87x case, and it is the only one measured to regress.
-2. Otherwise, both ends type-constrained → compare `rdf_stats` counts.
+**1. It is NOT superseded by `rewrite_merge_bgp`, the way `181` was.** That was
+the first thing to rule out: `181` wanted the same widening ("let a constraint
+count as a driving set"), priced it at 8.6x WORSE under ORDER BY + LIMIT, and
+closed because the merge got the outcome by another route. This shape is also
+ORDER BY + LIMIT, so the question transfers — but the merge does not. It never
+runs here: `plan_decisions` records it neither fired nor declined, because the
+plan is a SINGLE BGP with a sort and the merge matches `Join(BGP, BGP)`. The
+opportunity is real and still open.
 
-Splitting it this way also means the statistical half is never what stands
-between the implementation and the known regression, which is the part worth
-being careful about: a stats-driven gate that misjudges costs 87x, and this
-arrangement keeps the measured regression out of its reach entirely.
+**2. No count comparison can produce the measured answer, because the two counts
+are EQUAL.** The rule above says "pin the slot end when the slot type admits
+fewer rows than the entity criteria". As the gate would see them, restricted to
+the entity type the query asks for:
+
+    KGLead entities (all)               2,863
+    CompanyName slots, KGLead only      2,863     <- the comparison is a TIE
+    CompanyName slots, all types        5,726     <- what this issue quoted
+
+The `5,726` is CompanyName across BOTH KGLead and KGBusiness, 2,863 each; the
+`2,863` it was compared against is entities of ONE type. Apples to oranges, and
+that is the whole of the apparent contradiction. Corrected to a like-for-like
+comparison the two ends tie, so a cardinality rule has no signal to act on;
+quoted as written it favours the anchor end, which is the arm measured 2.9x
+slower. There is no reading under which the stated statistic picks the slot end.
+
+**3. The discriminator is the SORT, not selectivity.** Driving the slot end wins
+here despite the tie because the sort key IS that slot's value: entering on
+`CompanyName` yields the order from an index-ordered scan instead of joining the
+whole population and sorting it afterward. And the 87x regression is not a
+cardinality misjudgement either — pinning the entity to one URI leaves nothing
+to sort, so the slot-end entry degenerates into scanning 5,726 slots to find the
+one that belongs to it.
+
+So the gate is two syntactic tests, and needs no `rdf_stats` call for this shape:
+
+1. `entity_uris` present → anchor end. The population is pinned, the sort is
+   trivial, and this is the only case measured to regress. Exact and syntactic;
+   `can_serve` already declines this shape, so it does reach the general pipeline
+   where the gate would run (pinned by `test_fast_slot_sort_gate`).
+2. Otherwise, sort key is a slot value on the far end → slot end.
+
+Selectivity may still matter for traversal shapes that are not sorts — that is
+what `choose_direction` already does, and it is NOT inert: `emit_traversal`
+reads it. What is missing is that this sort shape never reaches it, because
+`decide_for_plan` requires a pinned end and a type-constrained end does not
+count. That is the one true statement in the original framing.
+
+Before building, note the 8.6x warning from `181` applies to the mechanism, not
+to this conclusion: what was 8.6x worse there was forcing a hand-picked driving
+set under ORDER BY + LIMIT. Whatever emits this must be measured on both rows of
+the table above, not just the list.
 
 What landed, all in `vitalgraph/sparql/kg_query_builder.py`:
 
