@@ -31,10 +31,51 @@ not serve.
 
 **Remaining, and why this is not archived:** the direction gate from the survey
 (2.9x on the general path, 87x worse pinned) is still unbuilt. It matters for
-every traversal, not just this sort, and the shapes `fast_slot_sort` declines —
-a slot attached directly to an entity with no frame, and sorts combined with
-frame or property criteria — still take the six-way join. This issue's own query
-is fixed; the class it belongs to is not.
+every traversal, not just this sort, and the shapes `fast_slot_sort` declines
+still take the six-way join. This issue's own query is fixed; the class it
+belongs to is not.
+
+**Reviewed 2026-09-11 against HEAD.** Two corrections to the paragraph above,
+which had drifted from the code.
+
+*Frame criteria no longer decline.* This used to read "sorts combined with frame
+or property criteria". `issues/172` shipped frame criteria into `can_serve`, for
+every criterion that is an equality the table can answer. Only the non-equality
+remainder declines. Property criteria (`entity_property_filters`) do still
+decline, so that half stands.
+
+The decline set in `fast_slot_sort.can_serve` at HEAD is: more or fewer than one
+sort key; a `sort_type` outside `{entity_frame_slot, frame_slot}`; no slot type;
+a value lane the table does not split on; no frame hop (a slot hanging directly
+off the entity is genuinely absent from the table, so serving it would be a
+WRONG page, not a slow one); a non-equality frame criterion;
+`entity_property_filters`; `entity_uris`; and any of the vector, geo, slot or
+search-string criteria.
+
+**The gate condition as written would pick wrong on its own query.** The rule
+above says "pin the slot end when the slot type admits fewer rows than the entity
+criteria". The case where pinning the slot end WINS has 5,726 CompanyName slots
+against 2,863 entities — more, not fewer. Followed literally, the gate pins the
+anchor end on the one query that is measured to want the slot end.
+
+The raw counts are not the discriminator. What actually separates the two
+measured cases is that the 87x regression is the sort *pinned to a single
+entity*, and an end pinned to literal URIs is always the better anchor: its
+cardinality is known exactly, syntactically, at build time, and it is small by
+construction. That case needs no statistic at all — and it is already visible as
+`entity_uris`, which `can_serve` declines, so it reaches the general pipeline
+where the gate would run.
+
+So the gate is two tests, not one comparison:
+
+1. `entity_uris` present → anchor end. Exact, syntactic, no `rdf_stats` call.
+   This is the 87x case, and it is the only one measured to regress.
+2. Otherwise, both ends type-constrained → compare `rdf_stats` counts.
+
+Splitting it this way also means the statistical half is never what stands
+between the implementation and the known regression, which is the part worth
+being careful about: a stats-driven gate that misjudges costs 87x, and this
+arrangement keeps the measured regression out of its reach entirely.
 
 What landed, all in `vitalgraph/sparql/kg_query_builder.py`:
 
