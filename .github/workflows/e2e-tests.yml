@@ -47,6 +47,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-seed-
 
+      # Same hazard as unit-tests.yml: `restore-keys` is a prefix match, so a
+      # wheel pip COMPILED on one runner can be restored onto another with a
+      # different CPU. `hnswlib` is built from source and SIGILLs when that
+      # happens. Keep the download cache, drop the built wheels.
+      - name: Drop locally-built wheels from the restored cache
+        run: rm -rf ~/.cache/pip/wheels
+
       - name: Install Python dependencies for seeding
         run: pip install -e ".[client]"
 

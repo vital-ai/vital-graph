@@ -29,6 +29,24 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-${{ matrix.python-version }}-
 
+      # Locally-BUILT wheels must not cross runners.
+      #
+      # `~/.cache/pip` holds both the download cache and wheels pip COMPILED
+      # from source. `hnswlib` ships as an sdist, so it is compiled here — and
+      # `restore-keys` is a PREFIX match, so a wheel built on one runner is
+      # restored onto another. GitHub runners differ in CPU, and the result was
+      # `Fatal Python error: Illegal instruction` (exit 132) loading `hnswlib`
+      # from `vital_ai_vitalsigns.collection.vector_collection_impl`.
+      #
+      # It surfaced on a DOCS-ONLY commit: editing pyproject.toml missed the
+      # exact cache key, fell back to the prefix, and picked up an incompatible
+      # prebuilt wheel. Nothing in the repo had changed.
+      #
+      # Dropping only `wheels/` keeps the download cache — the part that is
+      # machine-independent and most of the speed.
+      - name: Drop locally-built wheels from the restored cache
+        run: rm -rf ~/.cache/pip/wheels
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
