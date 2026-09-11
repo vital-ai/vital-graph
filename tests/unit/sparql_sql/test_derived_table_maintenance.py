@@ -42,23 +42,69 @@ import re
 
 import pytest
 
-_IMPL = (pathlib.Path(__file__).resolve().parents[3]
-         / "vitalgraph" / "db" / "sparql_sql" / "sparql_sql_space_impl.py")
+_ROOT = pathlib.Path(__file__).resolve().parents[3]
 
-# The write paths on the space implementation that change quads.
+# EVERY module containing a quad-changing write path, not just the space impl.
+#
+# `issues/185`: this test promised "every write path" and read ONE file, so the
+# quad-changing paths in the other modules were not exempt and not listed as
+# gaps — they were invisible. Deleting all three maintenance calls from
+# `kg_backend_utils` left the suite green. A test written to prevent "one path
+# was missed" that itself scans one file reproduces the original failure at the
+# level of the guard.
+MODULES = {
+    "space_impl": _ROOT / "vitalgraph/db/sparql_sql/sparql_sql_space_impl.py",
+    "kg_backend": _ROOT / "vitalgraph/kg_impl/kg_backend_utils.py",
+    "data_import": _ROOT / "vitalgraph/endpoint/impl/data_import_impl.py",
+    "bulk_export": _ROOT / "vitalgraph/db/sparql_sql/bulk_export.py",
+}
+
+# MODULES DELIBERATELY NOT LISTED, with the reason — the judgement this test is
+# designed to force rather than allow to be skipped:
+#
+#   * `resync_all.py` — `resync_all_auxiliary_tables` REBUILDS every derived
+#     table from the quads. It does not change quads, so the invariant does not
+#     apply: it is the repair mechanism, not a path that can leave a mirror
+#     stale.
+#   * `bulk_export.export_space` — COPY OUT only. Reads quads, writes a file.
+#
+# `bulk_export.import_space` IS in the matrix: it COPYs quads back in.
+#
+# Membership was established by scanning each module's functions for direct
+# `INSERT INTO`/`DELETE FROM`/`COPY` against `rdf_quad`, not by reading names.
+
+# (module, function) for every write path that changes quads.
 WRITE_PATHS = [
-    "add_rdf_quad",
-    "add_rdf_quads_batch",
-    "add_rdf_quads_batch_bulk",
-    "remove_rdf_quad",
-    "remove_rdf_quads_batch",
-    "remove_rdf_quads_batch_bulk",
-    "delete_entity_graph_bulk",
+    ("space_impl", "add_rdf_quad"),
+    ("space_impl", "add_rdf_quads_batch"),
+    ("space_impl", "add_rdf_quads_batch_bulk"),
+    ("space_impl", "remove_rdf_quad"),
+    ("space_impl", "remove_rdf_quads_batch"),
+    ("space_impl", "remove_rdf_quads_batch_bulk"),
+    ("space_impl", "delete_entity_graph_bulk"),
     # SPARQL UPDATE. Named in edge_table_integrity_bug.md's root cause as a
     # path that did not sync, and omitted from the first version of this matrix
     # — which is the failure this test exists to prevent, made by the test
     # itself. Any write path that reaches rdf_quad belongs here.
-    "execute_sparql_update",
+    ("space_impl", "execute_sparql_update"),
+
+    # Four DELETE-from-rdf_quad paths. These are the ones `issues/185`
+    # demonstrated were invisible: removing their maintenance calls left the
+    # suite green.
+    ("kg_backend", "upsert_objects_atomic"),
+    ("kg_backend", "update_entity_graph"),
+    ("kg_backend", "update_entity_subject_only"),
+    ("kg_backend", "update_subjects_graph"),
+
+    # The import paths. `import_ntriples_bulk` COPYs and then resyncs
+    # wholesale; the three incremental ones INSERT and DELETE per batch.
+    ("data_import", "import_ntriples_bulk"),
+    ("data_import", "import_ntriples_incremental"),
+    ("data_import", "import_jsonl_quads_incremental"),
+    ("data_import", "import_vital_block_incremental"),
+
+    # Restores a space by COPYing quads back in.
+    ("bulk_export", "import_space"),
 ]
 
 # derived table -> (markers that prove a path maintains it, why it matters).
@@ -75,8 +121,19 @@ WRITE_PATHS = [
 # adding sync_stats_after_insert on top of the recount would have DOUBLE
 # COUNTED. So each entry lists every accepted mechanism, and adding a new one
 # means adding it here.
+# Accepted for EVERY table: a full rebuild is strictly stronger than an
+# incremental delta, the same reasoning that accepts `resync_stats_for_predicates`.
+# `import_ntriples_bulk` maintains everything this way and read as a triple gap
+# until this was added.
+_REBUILD = "resync_all_auxiliary_tables"
+
 DERIVED = {
-    "edge": (("sync_edge_table", "delete_edges_for_context"),
+    # `resync_all_auxiliary_tables` is accepted for every table below. It
+    # REBUILDS all of them from the quads, which is strictly stronger than an
+    # incremental delta — the same reasoning that accepts
+    # `resync_stats_for_predicates` above. `import_ntriples_bulk` maintains
+    # everything this way and read as a triple gap until this was added.
+    "edge": (("sync_edge_table", "delete_edges_for_context", _REBUILD),
              "denormalised edge mirror; the edge-table rewrite is the default "
              "plan for entity/frame/relation queries"),
     # `frame_entity` was RETIRED (`issues/183`): it named two `hasKGSlotType`
@@ -86,12 +143,13 @@ DERIVED = {
     # mirror on exactly the same terms: the collapse READS it, so a stale row
     # is a wrong answer rather than a slow query.
     "frame_slot": (("sync_frame_slot", "resync_frame_slot",
-                    "delete_frame_slot_for_context"),
+                    "delete_frame_slot_for_context", _REBUILD),
                    "derived from edge; collapses each slot arm of a hop"),
     # issues/096. A stale row here is a WRONG SORT ORDER, not a slow query —
     # the sort reads the value straight off this table — so it is a structural
     # mirror on the same terms as edge and frame_slot.
-    "entity_slot_sort": (("sync_entity_slot_sort", "delete_entity_slot_sort_for_context"),
+    "entity_slot_sort": (("sync_entity_slot_sort",
+                          "delete_entity_slot_sort_for_context", _REBUILD),
                          "denormalised entity->frame->slot sort values; a slot "
                          "sort reads its ORDER from this table"),
     # STATS IS DELIBERATELY NOT IN THIS MATRIX ANY MORE.
@@ -121,7 +179,19 @@ DERIVED = {
 
 # (write path, derived table) -> why it does not apply. A pair that is neither
 # maintained nor exempt fails the test.
-EXEMPT: dict[tuple[str, str], str] = {}
+_SUBJECT_ONLY = (
+    "deletes ONLY quads whose subject IS the entity, leaving its frames, slots "
+    "and edges in place. The entity subject carries no edge-source/dest "
+    "properties and is not a frame, so no edge, frame_slot or slot-sort row can "
+    "describe it. This reason is stated in the method's own docstring, which is "
+    "why it is an exemption rather than a gap."
+)
+
+EXEMPT: dict[tuple[str, str], str] = {
+    (("kg_backend", "update_entity_subject_only"), "edge"): _SUBJECT_ONLY,
+    (("kg_backend", "update_entity_subject_only"), "frame_slot"): _SUBJECT_ONLY,
+    (("kg_backend", "update_entity_subject_only"), "entity_slot_sort"): _SUBJECT_ONLY,
+}
 
 # Pairs that are KNOWN BROKEN, kept as expected failures so the test passes on
 # the current tree while naming what is wrong. Removing an entry here should be
@@ -142,26 +212,56 @@ EXEMPT: dict[tuple[str, str], str] = {}
 #   * execute_sparql_update was never a gap. It maintains stats by
 #     `resync_stats_for_predicates`, and the first version of this test simply
 #     did not recognise that mechanism. See the note on DERIVED.
-KNOWN_GAPS: dict[tuple[str, str], str] = {}
+_ESS_GAP = (
+    "maintains `edge` and `frame_slot` but NOT `entity_slot_sort`, with no "
+    "stated reason. Found 2026-09-11 by widening this matrix past one module "
+    "(`issues/185`) — the question that issue listed as NOT ESTABLISHED, "
+    "answered: yes, another derived table is also unmaintained on the modules "
+    "the matrix could not see. A stale slot-sort row is a WRONG SORT ORDER, "
+    "because the sort reads its value straight off this table. Tracked in "
+    "`issues/187`; these stay named here until wired."
+)
+
+KNOWN_GAPS: dict[tuple[str, str], str] = {
+    (("kg_backend", "upsert_objects_atomic"), "entity_slot_sort"): _ESS_GAP,
+    (("kg_backend", "update_entity_graph"), "entity_slot_sort"): _ESS_GAP,
+    (("kg_backend", "update_subjects_graph"), "entity_slot_sort"): _ESS_GAP,
+    (("data_import", "import_ntriples_incremental"), "entity_slot_sort"): _ESS_GAP,
+    (("data_import", "import_jsonl_quads_incremental"), "entity_slot_sort"): _ESS_GAP,
+    (("data_import", "import_vital_block_incremental"), "entity_slot_sort"): _ESS_GAP,
+}
 
 
-def _method_bodies() -> dict[str, str]:
-    """Each write method's source, taking the IMPLEMENTATION not the ABC stub.
+def _method_bodies() -> dict[tuple[str, str], str]:
+    """(module, function) -> source text, via AST.
 
-    The file carries abstract declarations for several of these names; the
-    implementation is the later definition. Taking the first match would read
-    a one-line stub and report every table as unmaintained.
+    AST rather than the previous `    async def ` regex, which assumed a
+    four-space indent and therefore only ever matched methods on one class. The
+    write paths outside the space implementation are module-level functions and
+    methods at other depths; a pattern that cannot see them is how they stayed
+    invisible (`issues/185`).
     """
-    src = _IMPL.read_text(encoding="utf-8").split("\n")
-    starts = [(i, m.group(1)) for i, line in enumerate(src)
-              if (m := re.match(r"    async def (\w+)\s*\(", line))]
-    out: dict[str, str] = {}
-    for name in WRITE_PATHS:
-        hits = [i for i, n in starts if n == name]
-        assert hits, f"{name} is not defined in {_IMPL.name}"
-        begin = max(hits)
-        after = [i for i, _n in starts if i > begin]
-        out[name] = "\n".join(src[begin: after[0] if after else len(src)])
+    import ast
+
+    out: dict[tuple[str, str], str] = {}
+    for mod, path in MODULES.items():
+        src = path.read_text()
+        lines = src.splitlines()
+        tree = ast.parse(src)
+        found: dict[str, str] = {}
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            body = "\n".join(lines[node.lineno - 1:(node.end_lineno or node.lineno)])
+            # A name may appear twice (an abstract declaration and the real
+            # implementation). Keep the longest.
+            if len(body) > len(found.get(node.name, "")):
+                found[node.name] = body
+        for m, name in WRITE_PATHS:
+            if m != mod:
+                continue
+            assert name in found, f"{name} is not defined in {path.name}"
+            out[(mod, name)] = found[name]
     return out
 
 
@@ -183,14 +283,14 @@ def test_the_matrix_is_derived_from_real_implementations():
             f"is an abstract stub, not the implementation")
     # And the one path known to maintain everything must read that way, or the
     # marker strings have drifted from the code.
-    full = bodies["add_rdf_quads_batch_bulk"]
+    full = bodies[("space_impl", "add_rdf_quads_batch_bulk")]
     for table, (markers, _why) in DERIVED.items():
         assert _maintains(full, markers), (
             f"add_rdf_quads_batch_bulk does not appear to maintain {table}; "
             f"the markers {markers!r} are probably stale")
 
 
-@pytest.mark.parametrize("path", WRITE_PATHS)
+@pytest.mark.parametrize("path", WRITE_PATHS, ids=lambda p: f"{p[0]}.{p[1]}")
 @pytest.mark.parametrize("table", sorted(DERIVED))
 def test_write_path_maintains_derived_table(path, table):
     markers, why = DERIVED[table]

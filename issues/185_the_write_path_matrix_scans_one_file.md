@@ -1,7 +1,36 @@
 # The Write-Path Matrix Enforces "Every Write Path" Over One File
 
-## Status: OPEN — found by falsifying the test, not by reading it. The check is
-## real and valuable; its SCOPE is one module while its promise is the tree.
+## Status: FIXED 2026-09-11. `_IMPL` is now `MODULES` and `WRITE_PATHS` is
+## (module, function) pairs, covering 12 write paths across 4 modules instead of
+## 8 across 1.
+##
+## VERIFIED BY FALSIFICATION, the way the defect was found: deleting the
+## maintenance calls from `kg_backend_utils.py` now fails **53** assertions.
+## Before this change it left the suite fully green.
+##
+## Body extraction moved from a `    async def ` regex to AST. That pattern
+## assumed a four-space indent, so it could only ever see methods on one class —
+## the write paths outside the space implementation are module-level functions
+## and methods at other depths, which is part of why they stayed invisible.
+##
+## It immediately answered the question this issue left open, and the answer was
+## yes — see `issues/187`. Six write paths maintain `edge` and `frame_slot` and
+## skip `entity_slot_sort`, where a stale row is a wrong SORT ORDER.
+##
+## Two judgements the widening forced, which is what the matrix is for:
+##
+##   * `resync_all.py` and `bulk_export.export_space` are NOT write paths —
+##     one rebuilds every mirror from the quads, the other only COPYs out.
+##     `bulk_export.import_space` IS, and is in the matrix.
+##   * `update_entity_subject_only` is EXEMPT from all three, on the reason
+##     stated in its own docstring: it deletes only quads whose subject IS the
+##     entity, which carries no edge-source/dest properties and is not a frame.
+##
+## One marker was also wrong in the false-negative direction:
+## `import_ntriples_bulk` maintains everything by calling
+## `resync_all_auxiliary_tables`, and read as a triple gap until a full rebuild
+## was accepted as maintenance — the same correction the file already documents
+## for `resync_stats_for_predicates`.
 
 **Raised:** 2026-09-09, while retiring `frame_entity` (`issues/183`). A manual
 audit had missed five write paths; this test was expected to have caught them
