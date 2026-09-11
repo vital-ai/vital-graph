@@ -22,6 +22,18 @@ keywords = ["knowledge-graph", "rdf", "sparql", "database", "semantic-web"]
 # Core dependencies - minimal set for basic functionality
 dependencies = [
     "vital-ai-vitalsigns>=0.1.55",
+    # MUST be here, not only in the `server` extra.
+    #
+    # `vital-ai-vitalsigns` requires `datasketch>=1.6.5` with NO upper bound, so
+    # every install resolves it transitively — including `.[dev]`, which is what
+    # CI installs. The `<2.0` pin lived only in `server`, so CI never saw it,
+    # resolved datasketch 2.0.0, and pulled numpy 2.5.3 / scipy 1.18.1 with it.
+    # Tier 1 then died with SIGILL (exit 132) inside `VitalGraphClient(...)` —
+    # on a DOCS-ONLY commit, because nothing in the repo had changed.
+    #
+    # A bound in an extra cannot constrain a transitive dependency of a core
+    # one. If the bound is real it belongs here.
+    "datasketch>=1.9.0,<2.0",
     "vital-ai-haley-kg>=0.1.24",
     "python-dotenv",
     "rdflib>=7.0.0",
@@ -77,7 +89,7 @@ server = [
     "pytidb[models]",
     "pytidb",
     "weaviate-client>=4.19.2",
-    "datasketch>=1.9.0,<2.0",
+    # datasketch: bound in [project] dependencies — one place only.
     "redis>=5.0.0",
     "rapidfuzz>=3.0.0",
     "jellyfish>=1.0.0",
