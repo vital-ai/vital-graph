@@ -1,10 +1,11 @@
 # Both Prop-Sort Tables Are Unmaintained By Seven Write Paths, And Were Absent From The Matrix
 
-## Status: FIXED 2026-09-12 (`c00a5f83`, `82a9e5eb`) for both prop tables:
-## coverage counts PAIRS and the maintenance loop repairs in bounded batches.
-## Still open — `entity_slot_sort`'s probe has the same keying, and the seven
-## write paths are still unwired (now a convergence-speed issue, not a
-## correctness one).
+## Status: FIXED 2026-09-12 across all three tables — `entity_prop_sort`,
+## `frame_prop_sort` (`c00a5f83`, `82a9e5eb`) and `entity_slot_sort`
+## (`00adfc70`, `c6716b0f`, `44b1a215`): detected at the right grain, repaired
+## in bounded batches, and gated so a known gap cannot be served. Still open —
+## the seven write paths are unwired, now a convergence-speed issue rather than
+## a correctness one.
 
 The twin of `issues/187`, found by asking why `entity_prop_sort` existed in no
 local space. It does not reproduce 187 — it is a *different set of tables* with a
@@ -264,20 +265,32 @@ bounded batch for the worst-short space per cycle. Two details are load-bearing:
    a full resync. (The commit message for `c6716b0f` lost that field name to
    shell backtick expansion; the field is `unattributed`.)
 
-   **GATING IS STILL NOT DONE, and may not be the right goal.** Both available
-   routes are bad:
+   **AND GATED, `44b1a215`. This was NOT a threshold decision, and framing it as
+   one was wrong.** `slot_sort_block` is a block-list — absence means SERVE — so
+   a shortfall that is detected and left unblocked means knowingly serving a
+   short page for a sort and a plausible SUBSET for a filter. Magnitude changes
+   how many queries are wrong, not whether they are. There is nothing to wait
+   for.
 
-   * per-ENTITY-TYPE attribution, which `slot_sort_block` is keyed on, needs the
-     entity->frame->slot walk `issues/151` removed from this loop;
-   * a WHOLE-SPACE block is exact and needs no attribution, but it turns the
-     fast path off for everything — the schema comments already record an
-     eleven-minute outage on a 74.5M-quad space from taking one — and it would
-     do that over a shortfall that may be a single row in 3.8M.
+   The slot-level number enters the SAME decision as the entity counts, not a
+   blocker alongside them. `record_slot_sort_coverage` is the only place
+   entitled to move the gate because it is the only place that measures, and
+   splitting the two is what produced every marker-lifecycle bug in
+   `issues/161`. A separate blocker would have taken a block that the next
+   per-entity sweep released, every cycle — those counts are per ENTITY, so an
+   entity holding rows for slot type A while missing type B reads as covered.
+   Both release paths now hold while the number is nonzero, and the `complete`
+   column agrees with the gate, so a held block does not read as a bug.
 
-   With a working repair the gap now closes on its own, which is what a gate was
-   wanted for. The remaining question is whether a shortfall large enough to
-   matter should escalate to a block, and that is a threshold decision rather
-   than a measurement.
+   The block is SPACE-WIDE, deliberately. Per-type attribution needs the walk
+   `issues/151` removed, and a bounded sample could attribute only SOME types —
+   enough to take a block, unsound to release one, since a type the sample
+   missed would read as clean. Coarse and correct beats precise and
+   unavailable. Unlike the permanent block `issues/167` documents, this one is
+   self-limiting: the repair drives the number to zero and the release fires.
+
+   It costs nothing on current data — every space measured is exactly complete,
+   so the number is zero and no block is taken.
 3. **Wire the syncs into the seven write paths**, starting with
    `update_entity_subject_only` for `entity_prop_sort`. Lower priority now: with
    a pair-keyed probe and a working repair the drift self-heals, so this is a
