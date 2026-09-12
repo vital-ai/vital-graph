@@ -30,6 +30,81 @@ query, it is an unrunnable plan that the suite waits on indefinitely.
 The generated SQL grows modestly — 9,103 to 12,075 characters, 8 to 15 joins —
 so this is a PLANNING collapse, not a code-generation explosion.
 
+## ROOT CAUSE, traced 2026-09-12
+
+The detector never links ANY of these hops, at any depth. With the chain logger
+turned up:
+
+    depth 1   traversal: no multi-hop chain found (2 single hop(s))
+    depth 2   traversal: no multi-hop chain found (4 single hop(s))
+    depth 3   traversal: no multi-hop chain found (6 single hop(s))
+
+Two hops per depth are FOUND and none are ever JOINED. So this is not a
+depth-2 problem — the chain machinery has never linked a walk on
+`sp_graph_synth_10k`, the fixture built to exercise it. Depth 1 merely survives
+being planned flat.
+
+### Why the links do not join
+
+`_chains_in_bgp` joins two hops when THE SAME VARIABLE is one hop's destination
+and the next one's source. Dumping what it actually sees at depth 2:
+
+    mv0  src(source_node_uuid)=f1  dest(dest_node_uuid)=ss1
+    mv1  src(source_node_uuid)=f1  dest(dest_node_uuid)=ds1
+    mv2  src(source_node_uuid)=f2  dest(dest_node_uuid)=ss2
+    mv3  src(source_node_uuid)=f2  dest(dest_node_uuid)=ds2
+
+**No variable is ever both a destination and a source.** Destinations are
+`ss*`/`ds*`; sources are `f1`/`f2`. The `successor` map is therefore always
+empty and every hop stays a singleton.
+
+That is the shape `frame_hop` actually writes. One entity->frame->entity hop is:
+
+    ?seN <hasEdgeSource> ?fN .  ?seN <hasEdgeDestination> ?ssN .
+    ?deN <hasEdgeSource> ?fN .  ?deN <hasEdgeDestination> ?dsN .
+    ?ssN <hasEntitySlotValue> ?e{N-1} .   ?dsN <hasEntitySlotValue> ?eN .
+
+Both edges point OUT of the frame, so they share a SOURCE rather than chaining.
+The hop-to-hop connection runs through `?e1` at `hasEntitySlotValue` — a QUAD,
+not an edge column, and not something `_TRAVERSAL_KINDS` models.
+
+### And half the detector's vocabulary is dead
+
+    _TRAVERSAL_KINDS = {
+        "frame_entity": ("source_entity_uuid", "dest_entity_uuid"),
+        "edge":         ("source_node_uuid",   "dest_node_uuid"),
+    }
+
+`frame_entity` was RETIRED on 2026-09-10 in `b94484a9`, and nothing produces
+that kind any more. It is the entry that could collapse an
+entity->frame->entity hop into ONE row with a real source and destination — the
+only one whose columns match the detector's dest-to-source model. Its
+replacement, `frame_slot`, was never added here.
+
+So the detector is left with `edge`, which for this shape produces the
+share-a-source pattern above and cannot chain.
+
+### A third gap, found on the way
+
+`frame_slot_rewrite` — the collapse that would put a chainable table in the plan
+— appears in the decision record **neither as fired nor as declined**. A rewrite
+that does neither is invisible, which is the exact failure mode `describe_chains`
+documents for itself ("a detector that finds nothing must say so where it can be
+seen").
+
+## Ordered next steps
+
+1. Add `frame_slot` to `_TRAVERSAL_KINDS`, or establish why the dest-to-source
+   model cannot express it. **Do not add it blindly**: its columns are
+   `(frame_uuid, slot_uuid, role_uuid, entity_uuid)`, so two rows of one hop
+   share `frame_uuid` — the same share-a-source shape, which suggests the MODEL
+   needs a shared-intermediate case and not just another entry.
+2. Find out why `frame_slot_rewrite` neither fires nor declines here.
+3. Then re-check whether the 19-trillion plan survives. **The before/after has
+   not been run**: the baselines predate `b94484a9`, so it is plausible this was
+   planned differently before the retirement, and that is a check rather than a
+   claim.
+
 ## The proximate cause: the chain detector does not see the second hop
 
 `traversal_decision` reports the SAME decision for both depths:
