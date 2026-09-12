@@ -35,6 +35,21 @@ THRESHOLDS = os.path.join(ROOT, "tests", "performance", "thresholds.toml")
 
 OK, WARN, FAIL, INFO = "ok", "warn", "fail", "info"
 
+# Not a severity — a BOOKKEEPING level. A metric with no rule in thresholds.toml
+# used to be dropped at the `continue` below without a trace, so "nobody wrote a
+# rule" and "the rule passed" printed identically: nothing. Measured 2026-09-12
+# on the committed baselines, 106 of the 121 recorded metric names were unruled,
+# including most benches' headline claim (`underestimate_factor`, `deep_ratio`,
+# `sort_ratio`, `flips_within_range`, ...), and 37 of 108 query cells had no
+# gating metric at all.
+#
+# These are collected and reported as ONE aggregate line rather than one finding
+# each, deliberately: `ok_benches` below counts a bench as within tolerance only
+# if nothing WARNs against it, so 106 per-metric warnings would take the headline
+# from 108/108 to roughly 30/108 and bury every real warning under them. That is
+# the "a warning nobody reads" failure, manufactured on purpose.
+UNRULED = "unruled"
+
 # Env fields that must match for a comparison to be meaningful (plan R2).
 ENV_GATES = [
     ("runner", "class"),
@@ -349,6 +364,10 @@ def compare_bench(bench_id: str, base: Dict[str, Any], cur: Optional[Dict[str, A
 
         rule = rule_for(thresholds, bench_id, metric)
         if rule is None:
+            # Recorded, not compared. See UNRULED above.
+            out.append({"bench": bench_id, "metric": metric, "level": UNRULED,
+                        "detail": f"{_fmt(b_val)} → {_fmt(c_val)} "
+                                  f"(no rule in thresholds.toml — not compared)"})
             continue
         delta = pct_change(float(b_val), float(c_val))
         worse_dir = 1 if rule.get("direction", "increase") == "increase" else -1
@@ -410,9 +429,33 @@ def _fmt(v: Any) -> str:
 ICON = {OK: "✅", WARN: "⚠️ ", FAIL: "❌", INFO: "ℹ️ "}
 
 
+def benches_with_no_gate(base_b: Dict[str, Any],
+                         thresholds: Dict[str, Any]) -> List[str]:
+    """Benches whose recorded metrics are ALL report-only or unruled.
+
+    A bench can still hold an inline assertion — an absolute floor that fails on
+    its own — so this is not "unguarded". It is "no drift detection": a
+    degradation that stays under the floor cannot turn this cell red.
+    """
+    out = []
+    for bench_id, b in sorted(base_b.items()):
+        if b.get("status") != "ok":
+            continue
+        gated = False
+        for metric in (b.get("metrics") or {}):
+            rule = rule_for(thresholds, bench_id, metric)
+            if rule is not None and not rule.get("report_only"):
+                gated = True
+                break
+        if not gated and not b.get("shape"):
+            out.append(bench_id)
+    return out
+
+
 def report(run: Dict[str, Any], base: Dict[str, Any],
            thresholds: Dict[str, Any],
-           partial: bool = False) -> Tuple[int, List[Dict[str, Any]]]:
+           partial: bool = False,
+           strict_rules: bool = False) -> Tuple[int, List[Dict[str, Any]]]:
     cur_b, base_b = benches(run), benches(base)
     findings: List[Dict[str, Any]] = []
 
@@ -443,11 +486,36 @@ def report(run: Dict[str, Any], base: Dict[str, Any],
           f"  →  run commit {g_run.get('short')} ({g_run.get('branch')})"
           + ("  [DIRTY WORKING TREE]" if g_run.get("dirty") else ""))
 
+    # Bookkeeping, not severity: keep the unruled metrics out of the counts and
+    # out of the per-bench tolerance tally (see UNRULED).
+    unruled = [f for f in findings if f["level"] == UNRULED]
+    findings = [f for f in findings if f["level"] != UNRULED]
+
     n_fail = sum(1 for f in findings if f["level"] == FAIL)
     n_warn = sum(1 for f in findings if f["level"] == WARN)
     ok_benches = [b for b in base_b
                   if not any(f["bench"] == b and f["level"] in (FAIL, WARN) for f in findings)]
     print(f"\n  ✅ {len(ok_benches)}/{len(base_b)} benches within tolerance")
+
+    if unruled:
+        names = sorted({f["metric"] for f in unruled})
+        no_gate = benches_with_no_gate(base_b, thresholds)
+        print(f"  ⚠️  {len(unruled)} metric comparisons skipped for want of a rule "
+              f"({len(names)} distinct names)")
+        if no_gate:
+            print(f"      {len(no_gate)}/{len(base_b)} benches have no gating "
+                  f"metric and no plan shape — nothing here can turn them red")
+        if strict_rules:
+            for f in unruled:
+                print(f"      · {f['bench']:<44} {f['metric']:<26} {f['detail']}")
+            if no_gate:
+                print("      benches with no gate at all:")
+                for b in no_gate:
+                    print(f"      · {b}")
+        else:
+            print(f"      {', '.join(names[:8])}"
+                  + (", ..." if len(names) > 8 else "")
+                  + "  (--strict-rules to list every one)")
 
     for level in (FAIL, WARN, INFO):
         for f in findings:
@@ -456,8 +524,9 @@ def report(run: Dict[str, Any], base: Dict[str, Any],
             print(f"  {ICON[level]} {f['bench']:<44} {f['metric']:<20} {f['detail']}")
 
     print(f"\n  {n_fail} failing, {n_warn} warning, "
-          f"{len(findings) - n_fail - n_warn} informational")
-    return (1 if n_fail else 0), findings
+          f"{len(findings) - n_fail - n_warn} informational, "
+          f"{len(unruled)} uncompared")
+    return (1 if n_fail else 0), findings + unruled
 
 
 # ---------------------------------------------------------------------------
@@ -546,6 +615,10 @@ def main() -> int:
                     help="promote even if the run recorded no PostgreSQL "
                          "settings (issues/081 — the resulting baseline cannot "
                          "be shown comparable to anything)")
+    ap.add_argument("--strict-rules", action="store_true",
+                    help="list every metric that was recorded but not compared "
+                         "for want of a rule in thresholds.toml, instead of "
+                         "summarising them on one line")
     ap.add_argument("--reason", default="", help="why this baseline was promoted")
     ap.add_argument("--json", metavar="PATH", help="write the findings as JSON")
     ap.add_argument("--trend", metavar="BENCH_ID", help="show a metric's history")
@@ -574,7 +647,8 @@ def main() -> int:
     run = load_json(args.run)
     base = load_json(resolve_baseline(args.baseline))
     code, findings = report(run, base, load_thresholds(args.thresholds),
-                            partial=args.partial)
+                            partial=args.partial,
+                            strict_rules=args.strict_rules)
     if args.json:
         with open(args.json, "w") as fh:
             json.dump({"findings": findings}, fh, indent=2)
