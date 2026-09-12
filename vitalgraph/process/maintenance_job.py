@@ -2031,7 +2031,9 @@ class MaintenanceJob:
         from ..db.sparql_sql.fast_prop_sort import record_prop_sort_coverage
 
         recorded, short = 0, []
-        worst_short = None    # (shortfall, space_id) — repaired below
+        # (shortfall, space_id) per KIND — each has its own bounded batch, and
+        # a short entity table says nothing about the frame one.
+        worst_short = {"entity": None, "frame": None}
         for space_id in space_ids:
             for label, probe in (
                     ("entity", "entity_prop_sort_coverage"),
@@ -2057,14 +2059,10 @@ class MaintenanceJob:
                                     cov["in_table"], cov["of_type"])
                                 recorded += 1
                                 if cov["in_table"] < cov["of_type"]:
-                                    # Only the ENTITY probe drives the repair
-                                    # below; `frame_prop_sort` has no bounded
-                                    # batch yet and is tracked in `issues/194`.
-                                    if label == "entity":
-                                        gap = cov["of_type"] - cov["in_table"]
-                                        if (worst_short is None
-                                                or gap > worst_short[0]):
-                                            worst_short = (gap, space_id)
+                                    gap = cov["of_type"] - cov["in_table"]
+                                    cur = worst_short[label]
+                                    if cur is None or gap > cur[0]:
+                                        worst_short[label] = (gap, space_id)
                                     short.append(
                                         f"{space_id}/{label}:{cov['in_table']}"
                                         f"/{cov['of_type']}")
@@ -2095,37 +2093,43 @@ class MaintenanceJob:
         # WORST SPACE ONLY, matching the slot-sort task: repair work is serial
         # against the same pool the queries use, and a cycle that tries every
         # space starves reads.
-        repaired = None
-        if worst_short is not None:
-            _, space_id = worst_short
+        from ..db.sparql_sql.sync_entity_prop_sort import (
+            backfill_entity_prop_sort_batch)
+        from ..db.sparql_sql.sync_frame_prop_sort import (
+            backfill_frame_prop_sort_batch)
+        _batches = {"entity": ("entity_prop_sort", backfill_entity_prop_sort_batch,
+                               "entities"),
+                    "frame": ("frame_prop_sort", backfill_frame_prop_sort_batch,
+                              "frames")}
+        repaired = {}
+        for kind, target in worst_short.items():
+            if target is None:
+                continue
+            _, space_id = target
+            table, fn, noun = _batches[kind]
             try:
-                from ..db.sparql_sql.sync_entity_prop_sort import (
-                    backfill_entity_prop_sort_batch)
                 async with self._pool.acquire() as conn:
                     async with maintenance_timeouts(conn):
-                        selected, written = await backfill_entity_prop_sort_batch(
+                        selected, written = await fn(
                             conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
-                repaired = {"space": space_id, "selected": selected,
-                            "rows": written}
+                repaired[kind] = {"space": space_id, "selected": selected,
+                                  "rows": written}
                 if selected and not written:
-                    # Selected but derived nothing: those entities carry a
+                    # Selected but derived nothing: those subjects carry a
                     # sortable predicate whose object has no term row, so they
                     # stay absent and would be selected again every cycle. Say
                     # so once rather than spinning silently.
                     logger.warning(
-                        "entity_prop_sort: %s selected %d entities and wrote 0 "
-                        "rows — they derive nothing, so this space cannot "
-                        "converge on its own. See issues/194.",
-                        space_id, selected)
+                        "%s: %s selected %d %s and wrote 0 rows — they derive "
+                        "nothing, so this space cannot converge on its own. "
+                        "See issues/194.", table, space_id, selected, noun)
                 elif written:
-                    logger.info(
-                        "entity_prop_sort: repaired %s — %d entities, %d rows.",
-                        space_id, selected, written)
+                    logger.info("%s: repaired %s — %d %s, %d rows.",
+                                table, space_id, selected, noun, written)
             except asyncpg.UndefinedTableError:
-                pass
+                continue
             except Exception as exc:
-                log_probe_failure("backfill_entity_prop_sort_batch",
-                                  space_id, exc)
+                log_probe_failure(f"backfill_{table}_batch", space_id, exc)
 
         out = {"types_recorded": recorded, "short": len(short)}
         if repaired:

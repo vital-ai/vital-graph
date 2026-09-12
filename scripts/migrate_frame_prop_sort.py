@@ -6,9 +6,19 @@ says about ordering applies here: create and populate BEFORE anything reads,
 block first because the gate is a block-list, release only after coverage has
 been measured.
 
-SCOPED TO TOP-LEVEL (ASSERTION) FRAMES, which is what the frames listing's
-Assertion tab shows. The population is the endpoint's own rule -- an explicit
-`hasKGFormType` of Assertion, or no form type and no `hasFrameGraphURI`.
+NO LONGER SCOPED TO ASSERTION FRAMES -- corrected 2026-09-12. This said the
+population was "an explicit `hasKGFormType` of Assertion, or no form type and no
+`hasFrameGraphURI`", which is what an earlier revision indexed. `_select_rows`
+now indexes EVERY frame and resolves form type to a COLUMN instead, because
+membership by form type could only answer traversals whose results happened to
+share one: measured on `lead_nurture_grouped`, all 900,000 child frames resolve
+to Aspect, so no parent-scoped listing there could be served at all. See the
+`form` CTE for the full reasoning.
+
+The stale wording here was not harmless: read together with a coverage probe
+whose denominator counts every frame, it suggested a denominator/derivation
+mismatch that does not exist, and that inference was used to defer fixing the
+probe (`issues/194`).
 
 Measured cost of the derivation on the test stack:
 

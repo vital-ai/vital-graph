@@ -365,6 +365,62 @@ async def backfill_frame_prop_sort(conn, space_id: str) -> int:
     return rows
 
 
+FPS_BACKFILL_BATCH = 500
+
+
+async def backfill_frame_prop_sort_batch(
+        conn, space_id: str, batch_size: int = None,
+        timeout: float | None = None) -> tuple[int, int]:
+    """Repair ONE BOUNDED BATCH of frames missing at least one pair.
+
+    `issues/194`, the frame twin of `backfill_entity_prop_sort_batch`, and
+    everything that one says about being BOUNDED and PAIR-SEEDED applies
+    verbatim: `backfill_frame_prop_sort` is a single unbounded
+    `INSERT ... SELECT` that an RDS `statement_timeout` kills and rolls back, and
+    a seed keyed on frames with NO rows selects nothing on a table whose frames
+    are each missing only SOME of their properties.
+
+    Membership is "it is a frame", matching the derivation — see the `form` CTE
+    in `_select_rows`. Form type is resolved to a COLUMN here, not used to decide
+    membership, so there is no Assertion restriction to mirror. (The docstring of
+    `scripts/migrate_frame_prop_sort.py` still says Assertion-scoped; it predates
+    that change.)
+
+    Returns `(frames_selected, rows_written)`, with the same contract as the
+    entity twin: `selected > 0 and written == 0` means these frames derive
+    nothing and the caller must stop rather than reselect them forever.
+    """
+    n = int(batch_size or FPS_BACKFILL_BATCH)
+    t = f"{space_id}_frame_prop_sort"
+    rows = await conn.fetch(
+        f"SELECT DISTINCT q.subject_uuid FROM {space_id}_rdf_quad q "
+        f" WHERE q.predicate_uuid = ANY($1) "
+        # Population membership, the same test the derivation applies.
+        f"   AND EXISTS (SELECT 1 FROM {space_id}_rdf_quad v "
+        f"                WHERE v.subject_uuid = q.subject_uuid "
+        f"                  AND v.context_uuid = q.context_uuid "
+        f"                  AND v.predicate_uuid = $2 "
+        f"                  AND v.object_uuid = $3) "
+        # PAIR-KEYED, matching the table's unique index.
+        f"   AND NOT EXISTS (SELECT 1 FROM {t} f "
+        f"                    WHERE f.frame_uuid = q.subject_uuid "
+        f"                      AND f.context_uuid = q.context_uuid "
+        f"                      AND f.property_uuid = q.predicate_uuid) "
+        f" LIMIT {n}",
+        _SORT_PROPS, _VITALTYPE, _KGFRAME, timeout=timeout)
+    seeds = [r["subject_uuid"] for r in rows]
+    if not seeds:
+        return 0, 0
+    sel = _select_rows(space_id, "q.subject_uuid = ANY($9)", seed_param="$9")
+    result = await conn.execute(
+        f"INSERT INTO {t} ({_INSERT_COLS}) {sel} {_ON_CONFLICT}",
+        *_args(), seeds, timeout=timeout)
+    written = int(result.split()[-1]) if result else 0
+    logger.info("backfill_frame_prop_sort_batch(%s): %d frames -> %d rows",
+                space_id, len(seeds), written)
+    return len(seeds), written
+
+
 async def frame_prop_sort_drift(conn, space_id: str,
                                 timeout: float | None = None) -> tuple[int, int]:
     """`(expected, actual)` row counts, the order `_run_*_integrity` reads."""
@@ -401,26 +457,40 @@ async def frame_prop_sort_coverage(conn, space_id: str, limit: int = 5,
     # exactly when all is well, which makes it useless for the opposite
     # question the coverage MARKER needs: a positive statement of
     # completeness, not the absence of a complaint (`issues/161`).
-    _having = (f"HAVING count(*) FILTER (WHERE EXISTS (SELECT 1 FROM "
-               f"{space_id}_frame_prop_sort f WHERE f.frame_uuid = y.frame_uuid)) "
-               f"< count(*)") if only_gaps else ""
+    # COUNTED IN (frame, context, property) PAIRS SINCE `issues/194`, not in
+    # frames. Presence was `EXISTS (... WHERE f.frame_uuid = y.frame_uuid)`, so
+    # ANY single row made a frame covered — the same blindness measured on the
+    # entity twin, where it reported 0 gaps and every type COMPLETE on a table
+    # missing 329,235 rows. The table is keyed (frame, context, property); a
+    # probe that counts subjects cannot validate it.
+    #
+    # All four prod tables were verified pair-complete before this changed
+    # (cardiff_kg 1,214,433, lead_data 659,772, wordnet_frames 570,696,
+    # lead_prod 566,283), so re-keying blocks nothing that was being served.
+    _present = (f"EXISTS (SELECT 1 FROM {space_id}_frame_prop_sort f"
+                f"  WHERE f.frame_uuid = y.frame_uuid"
+                f"    AND f.context_uuid = y.context_uuid"
+                f"    AND f.property_uuid = y.property_uuid)")
+    _having = (f"HAVING count(*) FILTER (WHERE {_present}) < count(*)"
+               if only_gaps else "")
     rows = await conn.fetch(f"""
         WITH population AS (
-            SELECT DISTINCT q.subject_uuid AS frame_uuid, q.context_uuid
+            -- One row per (frame, context, PROPERTY IT ACTUALLY CARRIES). The
+            -- inner join to the property quad replaces the previous EXISTS and
+            -- keeps the guarantee that came with it: a frame carrying none of
+            -- the sortable properties contributes nothing, so it cannot read as
+            -- a shortfall no backfill can close.
+            SELECT DISTINCT q.subject_uuid AS frame_uuid, q.context_uuid,
+                   pq.predicate_uuid AS property_uuid
               FROM {space_id}_rdf_quad q
+              JOIN {space_id}_rdf_quad pq
+                ON pq.subject_uuid = q.subject_uuid
+               AND pq.context_uuid = q.context_uuid
+               AND pq.predicate_uuid = ANY($4)
              WHERE q.predicate_uuid = $1 AND q.object_uuid = $2
-               -- Only frames that HAVE something this table indexes; a frame
-               -- carrying none of the sortable properties correctly has no
-               -- rows, and counting it would be a shortfall no backfill can
-               -- close. The same false-shortfall shape that took a permanent
-               -- block on the entity side, 2026-09-08.
-               AND EXISTS (SELECT 1 FROM {space_id}_rdf_quad pq
-                            WHERE pq.subject_uuid = q.subject_uuid
-                              AND pq.context_uuid = q.context_uuid
-                              AND pq.predicate_uuid = ANY($4))
         ),
         typed AS (
-            SELECT a.frame_uuid, a.context_uuid,
+            SELECT a.frame_uuid, a.context_uuid, a.property_uuid,
                    (SELECT ft.object_uuid FROM {space_id}_rdf_quad ft
                      WHERE ft.subject_uuid = a.frame_uuid
                        AND ft.context_uuid = a.context_uuid
@@ -429,17 +499,13 @@ async def frame_prop_sort_coverage(conn, space_id: str, limit: int = 5,
         )
         SELECT coalesce(t.term_text, '(untyped)') AS frame_type,
                y.ty AS frame_type_uuid,
-               count(*) FILTER (WHERE EXISTS (
-                   SELECT 1 FROM {space_id}_frame_prop_sort f
-                    WHERE f.frame_uuid = y.frame_uuid)) AS in_table,
+               count(*) FILTER (WHERE {_present}) AS in_table,
                count(*) AS of_type
           FROM typed y
           LEFT JOIN {space_id}_term t ON t.term_uuid = y.ty
          GROUP BY 1, 2
         {_having}
-         ORDER BY (count(*) - count(*) FILTER (WHERE EXISTS (
-                   SELECT 1 FROM {space_id}_frame_prop_sort f
-                    WHERE f.frame_uuid = y.frame_uuid))) DESC
+         ORDER BY (count(*) - count(*) FILTER (WHERE {_present})) DESC
          LIMIT {int(limit)}
     """, *_args()[:4], timeout=timeout)   # this query uses $1..$4 only
     return [
