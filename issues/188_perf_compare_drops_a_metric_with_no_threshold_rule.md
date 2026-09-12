@@ -1,7 +1,9 @@
 # `perf_compare` Drops A Metric With No Threshold Rule, In Silence
 
-## Status: PARTLY FIXED 2026-09-12 — the absence is now VISIBLE. The 106 rules
-## are still unwritten, so 37 of 108 query cells still cannot turn red.
+## Status: PARTLY FIXED 2026-09-12 — the absence is VISIBLE, and the one metric
+## that needed no sampling is now GATED (`1834b857`). The 91 NUMERIC rules are
+## still unwritten, and BLOCKED ON A SUITE THAT CANNOT BE SAMPLED — see
+## "Why the numbers could not be measured".
 
 **Related:** `issues/081` (a gate disabled by absence, same shape),
 `issues/112` (the one metric where this was noticed and fixed),
@@ -81,6 +83,51 @@ sets it — so this gates nothing new.
 Pinned by `tests/unit/test_unruled_metrics_are_visible.py`, which also pins that
 `report_only` counts as RULED: "classified, and here is why it does not gate
 yet" must stay distinguishable from "nobody looked".
+
+## The one that needed no sampling — DONE (`1834b857`)
+
+Classified the 95 unruled metrics in `query.json` by type:
+
+    numeric      91     need a measured noise band
+    boolean       1     flips_within_range
+    string        3     node_types, with_index_node, without_index_node
+
+The three strings already WARN on change without a rule, so they are gated in
+practice. **`flips_within_range` is the only cell that could be fixed without
+sampling anything** — there is no spread for a boolean, any change is the event
+— and it is the sharpest case in this issue. Gated at `warn_pct = 0`,
+`fail_pct = 0`; `pct_change` returns `inf` from a `false` baseline, so the flip
+fails without a mechanism of its own.
+
+## Why the numbers could not be measured
+
+The instruction below — sample 3-4 times on an unmodified tree — was attempted
+on 2026-09-12 against the live seeded stack (105 GB, 16 GB `shared_buffers`,
+all gated fixtures excluded from maintenance, so the statistics could not move
+under the run).
+
+**It did not get past the first sample.** After 25 minutes the suite was at 23%
+and one query had been running for 15 of those minutes continuously. Four full
+samples is not hours, it is most of a day, and nothing in this issue is worth
+that much wall-clock.
+
+That is a finding about the suite rather than about these thresholds: **a
+benchmark suite that cannot be run four times cannot have measured thresholds**,
+and every numeric rule here depends on exactly that. It belongs with
+`issues/192` / `issues/193`, which are about the suite's shape.
+
+Two ways forward, and the choice is not obvious:
+
+1. **Sample a fast SUBSET.** Pick the benches that complete in seconds, measure
+   their claim metrics properly, gate those, and leave the slow benches
+   unruled with a comment. Honest and partial.
+2. **Find out why one bench runs for 15 minutes first.** It may be a real
+   pathology worth its own issue, in which case sampling around it is measuring
+   the wrong thing. The query was a `SELECT DISTINCT` over a projected
+   sub-select; the fixture was not identified before the run was stopped.
+
+(2) first, on the grounds that a 15-minute bench is either a bug or a fixture
+that should not be in a suite anyone is expected to re-run.
 
 ## What remains
 
