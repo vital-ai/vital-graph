@@ -1,7 +1,8 @@
 # Both Prop-Sort Tables Are Unmaintained By Seven Write Paths, And Were Absent From The Matrix
 
-## Status: OPEN 2026-09-12 — latent on all three live prod spaces, ACTIVE on one
-## perf-test space. The matrix now names the gaps; the syncs are not wired.
+## Status: PARTLY FIXED 2026-09-12 (`c00a5f83`). The entity side is repaired:
+## coverage counts PAIRS and the maintenance loop now backfills. Still open —
+## `frame_prop_sort`, and wiring the syncs into the seven write paths.
 
 The twin of `issues/187`, found by asking why `entity_prop_sort` existed in no
 local space. It does not reproduce 187 — it is a *different set of tables* with a
@@ -145,13 +146,63 @@ this issue does by hand.
 
 ## What to do
 
-1. Wire `sync_entity_prop_sort` / `sync_frame_prop_sort` into the seven paths,
-   starting with `update_entity_subject_only` for `entity_prop_sort`.
-2. Give the prop tables a REPAIRING maintenance task, not just a reporting one —
-   `backfill_entity_prop_sort` already exists and is wired only to the migration.
-3. Re-key all three coverage probes to (subject, property) / (subject, slot
-   type) pairs. Until then a "verified complete" marker means only "every
-   subject has at least one row", including for `entity_slot_sort`.
+### DONE 2026-09-12 (`c00a5f83`) — the entity side
+
+**Coverage is counted in pairs.** `entity_prop_sort_coverage` now tests presence
+on (entity, context, property). Validated read-only against prod before and
+after, which is the point of the change:
+
+    wordnet_frames   4 of 4 types SHORT    219,490 / 548,725 pairs
+    cardiff_kg       complete              423,036 / 423,036
+    lead_data        complete              395,705 / 395,705
+    lead_prod        complete              186,865 / 186,865
+
+So the gap is visible and **no live space is newly blocked** — which was the risk
+of making a gate stricter.
+
+**The maintenance loop repairs it.** `backfill_entity_prop_sort_batch`, one
+bounded batch for the worst-short space per cycle. Two details are load-bearing:
+
+* BOUNDED. `backfill_entity_prop_sort` is one unbounded `INSERT ... SELECT` over
+  the whole space; under an RDS `statement_timeout` it is killed and rolls back,
+  so it makes ZERO progress every cycle forever. That is `issues/151` for the
+  slot table and `issues/136` for VACUUM.
+* PAIR-SEEDED. `backfill_entity_slot_sort_batch` seeds on entities with NO rows
+  (`NOT EXISTS ... WHERE e.entity_uuid = q.subject_uuid`). On the spaces this
+  issue is about every entity already has some rows, so that seed selects
+  NOTHING and the table never heals. **The blindness was in the repair as well
+  as the probe** — fixing only the probe would have produced a permanent,
+  correct, unactionable alarm.
+  The seed also applies the derivation's full population test rather than
+  `hasKGEntityType` alone; broader, it would select subjects that derive nothing
+  and report "cannot converge" forever.
+
+### STILL OPEN
+
+1. **`frame_prop_sort` is unchanged, deliberately.** Its probe's denominator
+   counts every `KGFrame` (`$1..$4` only) while the derivation stores ASSERTION
+   frames only, so re-keying it to pairs would multiply an adjacent pre-existing
+   denominator question rather than just fix the keying. And it does not complete
+   within two minutes against prod `cardiff_kg`, so the change could not be
+   validated the way the entity side was. Both need settling first: does any prod
+   space carry non-Assertion frames that this probe counts?
+2. **`entity_slot_sort_coverage` has the same per-subject keying** and is not
+   changed here either. Its gating is entangled with `issues/187`'s convergence
+   machinery, and making it stricter could take blocks on live spaces — measure
+   per-slot-type completeness on prod BEFORE touching it.
+3. **Wire the syncs into the seven write paths**, starting with
+   `update_entity_subject_only` for `entity_prop_sort`. Lower priority now: with
+   a pair-keyed probe and a working repair the drift self-heals, so this is a
+   convergence-speed issue rather than a correctness one.
+4. **`wordnet_frames` will converge slowly.** Every one of its 109,745 entities
+   is missing pairs, at 500 per cycle — about 220 cycles. A one-off
+   `resync_all_auxiliary_tables` (or the unbounded backfill in a maintenance
+   window) repairs it at once. Not done: this issue has not touched prod.
+5. **`prop_sort_coverage` stores pair counts in columns named `entities_in_table`
+   / `entities_of_type`.** Not renamed — that is a prod migration for a comment's
+   worth of clarity — but the names now understate what they hold. Note that the
+   same table also receives FRAME type rows in its `entity_type_uuid` column,
+   which is why `cardiff_kg` shows 32 rows for 5 entity types.
 2. Until then, consider whether the import paths should take a whole-space
    `prop_sort_block`, the way `bulk_export` already does for the slot table —
    that is the mechanism designed for exactly this, and it converts a wrong
