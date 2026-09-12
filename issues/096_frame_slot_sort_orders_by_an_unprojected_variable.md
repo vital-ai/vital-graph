@@ -179,31 +179,56 @@ constant the leading key is unobservable. Worth a cap with the rest declining.
 Neither yields a direction gate, and one of them turned up a different defect
 entirely.
 
-**A. `entity_property_filters` + sort.** Slow only when the filter is BROAD:
+**A. `entity_property_filters` + sort — NOW SERVED (`11d628e5`).** Slow only
+when the filter is BROAD:
 
     + status eq ACTIVE  (matches all 2,863)   1,007,597 buf   548.9 ms
     + hasName eq        (matches one)               341 buf     0.4 ms
 
 A selective property filter already drives the query and needs nothing. The
-broad one is genuinely slow, and the table CAN answer it — an entity-property
-EXISTS against the quad table, correlated on `entity_uuid`. The floor is **8,755
-buffers / 136.7 ms**, 115x fewer buffers than the pipeline.
+broad one is a fresh instance of the failure `fast_prop_sort`'s own docstring
+names — two fast paths each declining the other's input, the combination
+falling through. Served now as an EXISTS on the quad table, ~15 ms.
 
-**But the planner will not choose it, and the reason is not this table.** Every
-natural formulation came out SLOWER than the pipeline it would replace:
+**A CORRECTION TO WHAT THIS FILE SAID FOR ONE COMMIT.** It recorded A as
+blocked, on the grounds that the quad table estimates `(predicate, object)` at 1
+row against 8,755 actual and the planner therefore refuses the good plan. That
+was an artefact OF THE PROBE, not a property of the database: those prototypes
+resolved every constant with an inline sub-SELECT, and a sub-SELECT is opaque at
+plan time, so no statistic could apply. Re-run with the constants as literals
+the estimate is 8,666 against 8,755 and the planner picks a hash semi join
+unaided. Nothing was wrong with the statistics.
 
-    correlated EXISTS                        674,061 buf   1,373.6 ms
-    filter set as a MATERIALIZED CTE, IN     674,061 buf   1,431.9 ms
-    the same, with a hash join forced          8,755 buf     136.7 ms
+**The real hazard was elsewhere, and it is not a planning problem but a
+CACHING one.** Bound as parameters, this query is fast five times and then slow
+forever:
 
-The nested loop is driven by the filter set, probing the sort index 8,755 times.
-Its cause is the QUAD table's `(predicate_uuid, object_uuid)` estimate: **1 row
-against 8,755 actual**, despite `rdf_quad` being analyzed and extended
-statistics being in place on exactly that pair (see the section above, and
-`issues/139`). Forcing the join is available but it is a fence, and this
-codebase has a measured history of fences that win one shape and lose another.
-So A is left OPEN and blocked on a cardinality estimate, not on a missing
-feature. Reopening it should start from that estimate.
+    exec 1-5      ~10 ms      custom plan, values known
+    exec 6+     ~1,180 ms     generic plan
+
+asyncpg prepares every statement, and PostgreSQL switches to a generic plan on
+the sixth execution. A generic plan cannot see the value, so it cannot know the
+predicate matches 8,755 rows, and it reverts to the nested loop. A pooled server
+holds prepared statements across requests, so production traffic lands on the
+second number permanently while any benchmark that runs a query a handful of
+times reports the first. The constants are therefore INLINED, which is flat at
+11-31 ms over eight executions.
+
+The shipped frame-criteria EXISTS was checked for the same cliff and does not
+have one — flat at 0.6 ms over eight — because it probes `entity_slot_sort` on
+its own leading index columns, where the generic plan is the same good plan. It
+stays parameterised. The distinction is worth keeping: inlining is not a general
+remedy, it is the answer when a predicate's SELECTIVITY is the thing the plan
+turns on.
+
+Coverage is narrow and deliberately so: `eq` on a URI-valued property, read from
+the builder's declared datatype map. A literal's term uuid folds in `lang` and a
+space-local numeric `datatype_id`, and guessing wrong does not error — it
+matches no term and the page returns EMPTY but well formed.
+
+`entity_prop_sort` would be the architecturally consistent home for this, and is
+not used: **no space in the local database has that table**, so nothing could be
+measured against it. Worth revisiting where it exists.
 
 **B. A slot with no frame hop — THE SHAPE HAS NO DATA.** This was the one
 candidate left for a direction gate, since it cannot come from the table by
