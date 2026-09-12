@@ -254,7 +254,7 @@ _PROP_GAP = (
     "lists. WORSE THAN THE SLOT-TABLE GAP: these are read by a FILTER as well as "
     "a sort, and their gate (`prop_sort_block`) is a BLOCK-LIST, so absence means "
     "SERVE. A short table is not declined -- it answers with a plausible SUBSET "
-    "and a count that agrees with it. Tracked in `issues/190`."
+    "and a count that agrees with it. Tracked in `issues/194`."
 )
 
 _EPS_SUBJECT_GAP = (
@@ -263,7 +263,7 @@ _EPS_SUBJECT_GAP = (
     "`entity_prop_sort` indexes -- so unlike `edge`, `frame_slot` and "
     "`entity_slot_sort`, which are legitimately exempt on this path, here the "
     "mirror is left describing properties the entity no longer has. A FILTER on "
-    "a removed value still matches. Tracked in `issues/190`."
+    "a removed value still matches. Tracked in `issues/194`."
 )
 
 KNOWN_GAPS: dict[tuple[str, str], str] = {
@@ -274,7 +274,7 @@ KNOWN_GAPS: dict[tuple[str, str], str] = {
     (("data_import", "import_jsonl_quads_incremental"), "entity_slot_sort"): _ESS_GAP,
     (("data_import", "import_vital_block_incremental"), "entity_slot_sort"): _ESS_GAP,
     # `entity_prop_sort` / `frame_prop_sort`, surfaced 2026-09-12 by listing them
-    # in DERIVED at all. See `issues/190`. Same seven paths as the slot table,
+    # in DERIVED at all. See `issues/194`. Same seven paths as the slot table,
     # plus the subject-only path for `entity_prop_sort` (see EXEMPT above).
     (("kg_backend", "update_entity_subject_only"), "entity_prop_sort"): _EPS_SUBJECT_GAP,
     (("kg_backend", "upsert_objects_atomic"), "entity_prop_sort"): _PROP_GAP,

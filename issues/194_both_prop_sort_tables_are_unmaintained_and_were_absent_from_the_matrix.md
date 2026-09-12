@@ -74,10 +74,84 @@ same shape as the missing GRANT the gate's own docstring cites, and the same
 shape as the `ANALYZE` list that silently skipped five tables (`issues/183`).
 Worth running the migration on dev so the path is exercised at all.
 
+## WHY THE BACKFILL DID NOT FIX IT — investigated 2026-09-12
+
+Two independent reasons, and the second is the serious one.
+
+### 1. No backfill is wired for these tables
+
+`backfill_entity_prop_sort` EXISTS. Its only caller is
+`scripts/migrate_entity_prop_sort.py` — the one-time migration. Nothing in the
+running system calls it.
+
+The maintenance job gives every other derived table a REPAIRING task and gives
+these two a REPORTING one:
+
+    edge_integrity              -> _run_edge_integrity              backfills
+    frame_entity_integrity      -> _run_frame_slot_backfill          backfills
+    entity_slot_sort_integrity  -> _run_entity_slot_sort_integrity   backfills
+    prop_sort_coverage          -> _run_prop_sort_coverage           MEASURES ONLY
+
+`_run_prop_sort_coverage` measures and gates — "MEASURE, RECORD, GATE" in its
+own words — and never adds a row. It is easy to read that list and assume the
+prop tables are covered; they are observed, not repaired.
+
+### 2. The gate cannot SEE this shortfall, so it would have certified the table
+
+Measured read-only against prod `wordnet_frames`, the space missing 329,235 rows:
+
+    probe returned 4 type rows
+      in_table=13880  of_type=13880  COMPLETE
+      in_table=  107  of_type=  107  COMPLETE
+      in_table=82115  of_type=82115  COMPLETE
+      in_table=13643  of_type=13643  COMPLETE
+    gaps reported: 0
+
+Presence is tested PER SUBJECT:
+
+    EXISTS (SELECT 1 FROM {space}_entity_prop_sort f
+             WHERE f.entity_uuid = o.entity_uuid)
+
+so ANY single row makes an entity covered. Every entity there has 2 of its 5
+property rows, so all four types read complete. And because
+`record_prop_sort_coverage` "takes or releases the block from the number it just
+measured", running the probe would have RELEASED any block and written a
+positive completeness marker. That is worse than never running: it certifies a
+60%-incomplete table.
+
+The docstring's claim that the invariant is exact — "every entity in the
+denominator must have at least the row for [`hasKGEntityType`] ... Anything short
+of 100% is a real gap" — is TRUE and insufficient. It detects an entity with
+ZERO rows. It cannot detect an entity with SOME rows, which is the shape this gap
+actually takes, because the missing thing is a PROPERTY and the probe counts
+ENTITIES.
+
+### The same blindness is in all three probes
+
+    entity_prop_sort   WHERE f.entity_uuid = o.entity_uuid
+    frame_prop_sort    WHERE f.frame_uuid  = y.frame_uuid
+    entity_slot_sort   WHERE e.entity_uuid = o.entity_uuid
+
+So `entity_slot_sort` coverage is blind to a missing SLOT TYPE in exactly the
+same way — an entity present with slot type A but lacking type B reads as
+covered, and a sort on B returns a short page. That matters beyond reporting,
+because `issues/187`'s convergence gating consumes these numbers. Its
+denominator caveat ("an entity may simply own no frames") is acknowledged in the
+docstring; this per-type blindness is not.
+
+A probe that counts subjects cannot validate a table keyed by (subject,
+property). The fix is to compare PAIRS, which is what the measurement earlier in
+this issue does by hand.
+
 ## What to do
 
 1. Wire `sync_entity_prop_sort` / `sync_frame_prop_sort` into the seven paths,
    starting with `update_entity_subject_only` for `entity_prop_sort`.
+2. Give the prop tables a REPAIRING maintenance task, not just a reporting one —
+   `backfill_entity_prop_sort` already exists and is wired only to the migration.
+3. Re-key all three coverage probes to (subject, property) / (subject, slot
+   type) pairs. Until then a "verified complete" marker means only "every
+   subject has at least one row", including for `entity_slot_sort`.
 2. Until then, consider whether the import paths should take a whole-space
    `prop_sort_block`, the way `bulk_export` already does for the slot table —
    that is the mechanism designed for exactly this, and it converts a wrong
