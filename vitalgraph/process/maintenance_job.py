@@ -2164,7 +2164,8 @@ class MaintenanceJob:
         """
         from ..db.sparql_sql.sync_entity_slot_sort import (
             entity_slot_sort_coverage, backfill_entity_slot_sort_batch,
-            entity_slot_sort_row_shortfall, entity_slot_sort_valueless_slots)
+            entity_slot_sort_row_shortfall, entity_slot_sort_valueless_slots,
+            backfill_entity_slot_sort_missing_slots)
 
         # --- SLOT-LEVEL SHORTFALL, an alarm and NOT a gate (`issues/194`) ---
         #
@@ -2209,6 +2210,32 @@ class MaintenanceJob:
                                     space_id, sf["table_rows"],
                                     sf["quad_slots"], real, sf["shortfall"],
                                     real)
+                                # AND REPAIR IT. An alarm with no repair is what
+                                # `entity_prop_sort` had: correct, permanent and
+                                # unactionable. The per-ENTITY batch below
+                                # cannot close this gap — it seeds on entities
+                                # with no rows at all — so the slot-seeded form
+                                # is the only thing that can.
+                                fix = await backfill_entity_slot_sort_missing_slots(
+                                    conn, space_id,
+                                    timeout=PROBE_CLIENT_TIMEOUT_S)
+                                if fix["rows"]:
+                                    logger.info(
+                                        "entity_slot_sort: repaired %s — %d "
+                                        "absent slots via %d entities, %d rows.",
+                                        space_id, fix["slots"],
+                                        fix["entities"], fix["rows"])
+                                if fix["unattributed"]:
+                                    # No `frame_slot` row either, so BOTH
+                                    # mirrors are short for those slots and
+                                    # nothing incremental can rebuild them.
+                                    logger.error(
+                                        "entity_slot_sort: %s has %d absent "
+                                        "slots with no frame_slot row — both "
+                                        "mirrors are short, so this needs "
+                                        "resync_all_auxiliary_tables. See "
+                                        "issues/194.",
+                                        space_id, fix["unattributed"])
                             else:
                                 logger.debug(
                                     "entity_slot_sort: %s short by %d, all "

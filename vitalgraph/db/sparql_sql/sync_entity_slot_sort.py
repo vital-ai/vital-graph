@@ -551,6 +551,82 @@ async def backfill_entity_slot_sort_batch(
     return len(seeds), (int(result.split()[-1]) if result else 0)
 
 
+async def backfill_entity_slot_sort_missing_slots(
+        conn, space_id: str, batch_size: int = None,
+        timeout: float | None = None) -> dict:
+    """Repair absent SLOTS, including for entities that already have rows.
+
+    `issues/194`. `backfill_entity_slot_sort_batch` seeds on entities with NO
+    rows at all (`NOT EXISTS ... WHERE e.entity_uuid = q.subject_uuid`), so an
+    entity holding rows for slot type A while missing type B is never selected
+    and the gap cannot heal. Without this, the slot-level alarm added alongside
+    it would fire every cycle forever with nothing able to act on it — which is
+    the state `entity_prop_sort` was in, and the reason fixing only the probe
+    there would have produced a permanent, correct, unactionable error.
+
+    Runs in three bounded steps:
+
+      1. Absent slots. The `NOT EXISTS` probes the table's PRIMARY KEY
+         `(slot_uuid, context_uuid)`, so it is one index probe per candidate and
+         `LIMIT` stops it early. Only worth calling when
+         `entity_slot_sort_row_shortfall` has already reported a REAL gap: with
+         nothing missing this scans every slot-type quad to find none.
+      2. Their entities, from `{space}_frame_slot`, which stores
+         `(slot_uuid, entity_uuid)` directly. A reverse walk up the edge table
+         would need recursion through nested frames for the same answer, and the
+         derivation here already depends on `edge`, so this is the same class of
+         dependency rather than a new one.
+      3. Re-derive those entities. `_ON_CONFLICT` makes it idempotent, so rows
+         that already exist are simply rewritten.
+
+    Returns `{slots, entities, rows, unattributed}`.
+
+    `unattributed` is slots with no `frame_slot` row, and it is reported rather
+    than ignored: it means BOTH mirrors are short for that slot, so this cannot
+    repair it and a full `resync_all_auxiliary_tables` is the remedy.
+    """
+    n = int(batch_size or ESS_BACKFILL_BATCH)
+    t = f"{space_id}_entity_slot_sort"
+    rows = await conn.fetch(
+        f"SELECT q.subject_uuid AS slot_uuid FROM {space_id}_rdf_quad q "
+        f" WHERE q.predicate_uuid = $1 "
+        f"   AND NOT EXISTS (SELECT 1 FROM {t} e "
+        f"                    WHERE e.slot_uuid = q.subject_uuid "
+        f"                      AND e.context_uuid = q.context_uuid) "
+        f" LIMIT {n}",
+        _SLOT_TYPE, timeout=timeout)
+    slots = [r["slot_uuid"] for r in rows]
+    if not slots:
+        return {"slots": 0, "entities": 0, "rows": 0, "unattributed": 0}
+
+    ents = await conn.fetch(
+        f"SELECT DISTINCT entity_uuid FROM {space_id}_frame_slot "
+        f" WHERE slot_uuid = ANY($1) AND entity_uuid IS NOT NULL",
+        slots, timeout=timeout)
+    seeds = [r["entity_uuid"] for r in ents]
+    attributed = await conn.fetchval(
+        f"SELECT count(DISTINCT slot_uuid) FROM {space_id}_frame_slot "
+        f" WHERE slot_uuid = ANY($1) AND entity_uuid IS NOT NULL",
+        slots, timeout=timeout)
+    unattributed = len(slots) - int(attributed or 0)
+    if not seeds:
+        return {"slots": len(slots), "entities": 0, "rows": 0,
+                "unattributed": unattributed}
+
+    args = await _type_args(space_id)
+    result = await conn.execute(
+        f"INSERT INTO {t} ({_INSERT_COLS}) "
+        f"{_select_rows(space_id, 'TRUE', seed_param=f'${len(args) + 1}')} "
+        f"{_ON_CONFLICT}", *args, seeds, timeout=timeout)
+    written = int(result.split()[-1]) if result else 0
+    logger.info(
+        "backfill_entity_slot_sort_missing_slots(%s): %d absent slots -> "
+        "%d entities -> %d rows (%d unattributed)",
+        space_id, len(slots), len(seeds), written, unattributed)
+    return {"slots": len(slots), "entities": len(seeds), "rows": written,
+            "unattributed": unattributed}
+
+
 async def entity_slot_sort_row_shortfall(conn, space_id: str,
                                           timeout: float | None = None) -> dict:
     """Is ANY row missing from this table — including a missing SLOT TYPE?
