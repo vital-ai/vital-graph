@@ -2166,6 +2166,7 @@ class MaintenanceJob:
             entity_slot_sort_coverage, backfill_entity_slot_sort_batch,
             entity_slot_sort_row_shortfall, entity_slot_sort_valueless_slots,
             backfill_entity_slot_sort_missing_slots)
+        from ..db.sparql_sql.fast_slot_filter import take_slot_sort_block
 
         # --- SLOT-LEVEL SHORTFALL, an alarm and NOT a gate (`issues/194`) ---
         #
@@ -2188,6 +2189,7 @@ class MaintenanceJob:
         #
         # So it reports, at ERROR when there is a real gap, and the expensive
         # exact count runs ONLY when the cheap one has something to explain.
+        slot_gaps: dict = {}   # space_id -> genuinely absent slot rows
         for space_id in space_ids:
             try:
                 async with self._pool.acquire() as conn:
@@ -2216,6 +2218,26 @@ class MaintenanceJob:
                                 # cannot close this gap — it seeds on entities
                                 # with no rows at all — so the slot-seeded form
                                 # is the only thing that can.
+                                slot_gaps[space_id] = real
+                                # BLOCK WHILE IT IS SHORT. Absence of a block
+                                # means SERVE, so a detected-but-unblocked
+                                # shortfall is knowingly serving a short page
+                                # for a sort and a plausible SUBSET for a
+                                # filter. That is a wrong answer, not a slow
+                                # one, so it cannot wait for a threshold.
+                                #
+                                # WHOLE-SPACE, because attributing an absent
+                                # slot to an entity type needs the walk
+                                # `issues/151` removed from this loop. Coarse
+                                # and correct beats precise and unavailable:
+                                # the repair below drives the number to zero and
+                                # the release paths hold until it is zero, so
+                                # the block is self-limiting rather than the
+                                # permanent one `issues/167` documents.
+                                await take_slot_sort_block(
+                                    conn, space_id, None,
+                                    reason=f"{real} slot row(s) absent "
+                                           f"(issues/194)")
                                 fix = await backfill_entity_slot_sort_missing_slots(
                                     conn, space_id,
                                     timeout=PROBE_CLIENT_TIMEOUT_S)
@@ -2290,7 +2312,8 @@ class MaintenanceJob:
                         for cov in covs:
                             await record_slot_sort_coverage(
                                 conn, space_id, cov["entity_type_uuid"],
-                                cov["in_table"], cov["of_type"])
+                                cov["in_table"], cov["of_type"],
+                                slot_shortfall=slot_gaps.get(space_id, 0))
                         # AND CLEAR A WHOLE-SPACE BLOCK IF THE SWEEP IS CLEAN.
                         #
                         # This loop is the only caller that measures EVERY type
@@ -2302,7 +2325,8 @@ class MaintenanceJob:
                         # is how two spaces on a clean deploy sat blocked over
                         # complete tables until someone ran the DELETE by hand.
                         if await release_whole_space_block_if_complete(
-                                conn, space_id, covs):
+                                conn, space_id, covs,
+                                slot_shortfall=slot_gaps.get(space_id, 0)):
                             logger.info(
                                 "entity_slot_sort: released the WHOLE-SPACE "
                                 "block on %s — all %d type(s) measured "

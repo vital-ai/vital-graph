@@ -287,7 +287,8 @@ async def release_slot_sort_block(conn, space_id: str,
 
 
 async def release_whole_space_block_if_complete(conn, space_id: str,
-                                               coverage_rows) -> bool:
+                                               coverage_rows,
+                                               slot_shortfall: int = 0) -> bool:
     """Clear a WHOLE-SPACE block once every type has measured complete.
 
     THE WHOLE-SPACE BLOCK HAD NO RELEASER. `record_slot_sort_coverage` releases
@@ -314,6 +315,12 @@ async def release_whole_space_block_if_complete(conn, space_id: str,
     if not rows:
         return False
     if not all(r["in_table"] >= r["of_type"] and r["of_type"] > 0 for r in rows):
+        return False
+    # A GENUINELY ABSENT SLOT ROW HOLDS THE BLOCK (`issues/194`), even when every
+    # per-entity number is complete — those count entities, and an entity
+    # missing one slot type still counts as covered. Releasing on them alone
+    # would hand the fast path a table known to be short.
+    if slot_shortfall:
         return False
     try:
         await release_slot_sort_block(conn, space_id, None)
@@ -439,13 +446,34 @@ async def slot_sort_coverage_is_complete(conn, space_id: str,
 
 
 async def record_slot_sort_coverage(conn, space_id: str, entity_type_uuid,
-                                    in_table: int, of_type: int) -> None:
+                                    in_table: int, of_type: int,
+                                    slot_shortfall: int = 0) -> None:
     """Record what the coverage probe measured, for the read path to consult.
 
     `complete` is `in_table >= of_type`, not `==`: the table can legitimately
     hold rows for entities the type count no longer sees (a type quad deleted
     while slot rows await their sync), and that direction does not cost the
     filter any matches. Short is the only dangerous direction.
+
+    `slot_shortfall` IS THE SPACE-LEVEL COUNT OF GENUINELY ABSENT SLOT ROWS
+    (`issues/194`), and a nonzero one means NOT COMPLETE however good the
+    per-entity numbers look.
+
+    It has to enter the decision HERE rather than block separately alongside it.
+    The two measurements see different things — `in_table`/`of_type` count
+    ENTITIES, so an entity holding rows for slot type A while missing type B is
+    counted as covered — and this function is the only place entitled to move the
+    gate, for the reason below. A second blocker on the side would take a block
+    that this function then released, every cycle: the marker-lifecycle failure
+    `issues/161` is a catalogue of.
+
+    It is deliberately SPACE-level and not per-type. Attributing an absent slot
+    to an entity type needs the entity->frame->slot walk `issues/151` removed
+    from the maintenance loop, and a bounded sample could only ever attribute
+    SOME types — fine for taking a block, unsound for releasing one, because a
+    type the sample missed would read as clean. So any real shortfall in the
+    space holds every type in it. That is the conservative direction, and the
+    repair (`backfill_entity_slot_sort_missing_slots`) drives it to zero.
     """
     try:
         await conn.execute(
@@ -458,7 +486,7 @@ async def record_slot_sort_coverage(conn, space_id: str, entity_type_uuid,
             "  complete          = EXCLUDED.complete,"
             "  verified_at       = EXCLUDED.verified_at",
             space_id, entity_type_uuid, int(in_table), int(of_type),
-            bool(in_table >= of_type and of_type > 0))
+            bool(in_table >= of_type and of_type > 0 and not slot_shortfall))
         # AND KEEP THE BLOCK IN STEP WITH IT (`issues/167`).
         #
         # This function is the only place that MEASURES coverage, so it is the
@@ -470,12 +498,16 @@ async def record_slot_sort_coverage(conn, space_id: str, entity_type_uuid,
         # A type that is short takes a block; a type that is complete releases
         # one. Releasing here is safe by construction because coverage was just
         # measured, which is the condition `release_slot_sort_block` requires.
-        if in_table >= of_type and of_type > 0:
+        if in_table >= of_type and of_type > 0 and not slot_shortfall:
             await release_slot_sort_block(conn, space_id, entity_type_uuid)
         else:
+            reason = f"coverage {in_table}/{of_type}"
+            if slot_shortfall:
+                # Named so an operator reading the row knows which measurement
+                # holds the block, and that it is not the entity counts.
+                reason += f"; {slot_shortfall} slot row(s) absent space-wide"
             await take_slot_sort_block(
-                conn, space_id, entity_type_uuid,
-                reason=f"coverage {in_table}/{of_type}")
+                conn, space_id, entity_type_uuid, reason=reason)
     except Exception as exc:
         logger.debug("could not record slot_sort_coverage for %s: %s",
                      space_id, exc)
