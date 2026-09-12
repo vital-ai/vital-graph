@@ -3,9 +3,9 @@
 ## Status: FIXED 2026-09-12 across all three tables — `entity_prop_sort`,
 ## `frame_prop_sort` (`c00a5f83`, `82a9e5eb`) and `entity_slot_sort`
 ## (`00adfc70`, `c6716b0f`, `44b1a215`): detected at the right grain, repaired
-## in bounded batches, and gated so a known gap cannot be served. Still open —
-## the seven write paths are unwired, now a convergence-speed issue rather than
-## a correctness one.
+## in bounded batches, and gated so a known gap cannot be served. The write
+## paths are wired too (`78b316b8`), which closes all nineteen gaps — so drift
+## is now prevented at the source as well as caught and repaired.
 
 The twin of `issues/187`, found by asking why `entity_prop_sort` existed in no
 local space. It does not reproduce 187 — it is a *different set of tables* with a
@@ -291,10 +291,42 @@ bounded batch for the worst-short space per cycle. Two details are load-bearing:
 
    It costs nothing on current data — every space measured is exactly complete,
    so the number is zero and no block is taken.
-3. **Wire the syncs into the seven write paths**, starting with
-   `update_entity_subject_only` for `entity_prop_sort`. Lower priority now: with
-   a pair-keyed probe and a working repair the drift self-heals, so this is a
-   convergence-speed issue rather than a correctness one.
+3. ~~Wire the syncs into the seven write paths~~ — **DONE `78b316b8`. All
+   nineteen gaps closed, and they were all DELETE-side.**
+
+   `add_rdf_quads_batch_bulk` already maintained all five derived tables, so
+   every INSERT was covered. What was missing was what happens when quads GO —
+   and the two halves need OPPOSITE ordering, which is why "call the sync" would
+   have been the wrong instruction:
+
+   * `entity_slot_sort` is dropped BEFORE the delete: its rows are reached
+     through the edge table the delete invalidates, so afterwards they cannot be
+     found, and a stale row makes a sort order by a value that is gone.
+   * the prop tables are re-derived AFTER it: they hold the MIN of a
+     multi-valued property, so removing the lexically first of three values must
+     move the MIN to the next survivor while the ROW SURVIVES. Re-deriving
+     first would restore the value being removed.
+
+   `update_entity_subject_only` needed judgement rather than mechanism — see
+   the EXEMPT note above. Its docstring asserted no sync was needed; corrected.
+
+   **THE MATRIX WAS LYING, and a mutation caught it.** `_maintains` was a bare
+   substring test, so an IMPORT of the sync satisfied it: deleting the
+   `sync_entity_prop_sort_after_change` call while leaving its import left the
+   cell GREEN. It now requires a CALL whose name starts with the marker —
+   prefixes matter, because `resync_frame_slot` is the marker for
+   `resync_frame_slot_table`, and demanding the paren immediately after reported
+   four genuine call sites as unmaintained on the first attempt.
+
+   **And that hardening found a live defect.** `bulk_export.import_space` passed
+   only because the module MENTIONS these tables in its comments. Its deferral
+   under a whole-space block is sound and is now an explicit exemption — but it
+   truncated ONLY `entity_slot_sort`, leaving both prop tables holding
+   PRE-RESTORE rows. The block does not cover that: it is released when the
+   backfill verifies `entity_slot_sort` coverage, which says nothing about the
+   prop tables, so between that release and the next `_run_prop_sort_coverage`
+   both gates read clear and the tables answer from a DIFFERENT GRAPH. Truncated
+   with it now.
 4. **`wordnet_frames` will converge slowly.** Every one of its 109,745 entities
    is missing pairs, at 500 per cycle — about 220 cycles. A one-off
    `resync_all_auxiliary_tables` (or the unbounded backfill in a maintenance
