@@ -104,6 +104,24 @@ direction = "decrease"
 warn_pct = 10
 fail_pct = 20
 
+# THE PAGE-SIZE CLIFF APPEARING (`issues/188`, `issues/190`).
+#
+# `flips_within_range` records whether the winning plan CHANGES across the page
+# sizes a bench sweeps. It is `false` in the baseline, and the bench exists to
+# notice it becoming `true` — that flip IS the cliff. With no rule the
+# comparison dropped it on the floor, so the one thing the bench was built to
+# detect was the one thing it could not report.
+#
+# NEEDS NO SAMPLING, which is why it is gated here while the 91 numeric claim
+# metrics are not. There is no noise band for a boolean: any change is the
+# event. `pct_change` returns `inf` from a `false`/0 baseline, so `warn_pct = 0`
+# and `fail_pct = 0` make `false -> true` fail correctly without a mechanism of
+# its own (`issues/188`, "booleans need a rule, not a mechanism").
+[metrics.flips_within_range]
+direction = "increase"
+warn_pct = 0
+fail_pct = 0
+
 # Any failed request under load is a regression regardless of rate.
 [metrics.failures]
 direction = "increase"

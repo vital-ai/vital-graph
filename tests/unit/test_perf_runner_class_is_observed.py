@@ -128,7 +128,7 @@ def _run(cls, *, blocked=None, benches=("a", "b", "c")):
                          "metrics": {"exec_ms": 1.0}} for b in benches]}
 
 
-def _report(run, base):
+def _perf_compare():
     import importlib.util
     import pathlib
     spec = importlib.util.spec_from_file_location(
@@ -136,7 +136,20 @@ def _report(run, base):
         pathlib.Path(__file__).resolve().parents[2] / "scripts" / "perf_compare.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod.report(run, base, {})
+    return mod
+
+
+def _report(run, base, thresholds=None):
+    """THE REAL thresholds by default.
+
+    Passing `{}` here made every metric unruled, so the cliff test failed
+    against a harness with no rules at all rather than against the rule it was
+    written to check. An empty thresholds dict is a valid argument and a
+    misleading default.
+    """
+    mod = _perf_compare()
+    return mod.report(run, base,
+                      mod.load_thresholds() if thresholds is None else thresholds)
 
 
 def test_a_class_mismatch_is_ONE_finding_not_one_per_bench():
@@ -193,3 +206,50 @@ def test_a_clean_run_creating_its_own_fixtures_is_still_clean():
         {"fixture_tables": 40, "fixture_live_tuples": 1000},
         {"space_bytes": {"sp_graph_skew_2k": 300 * 1024 ** 2}}, None)
     assert out["class"] == "vg-test-docker-clean"
+
+
+# --- the page-size cliff must be able to turn red (`issues/188`) -------------
+
+def _bench(bid, **metrics):
+    return {"bench_id": bid, "status": "ok", "metrics": metrics}
+
+
+def _pair(base_metrics, run_metrics, cls="vg-test-docker-persist"):
+    env = {"runner": {"class": cls}, "pg": {"server_version": "18.4"}, "git": {}}
+    return ({"env": env, "benches": [_bench("cliff", **run_metrics)]},
+            {"env": env, "benches": [_bench("cliff", **base_metrics)]})
+
+
+def test_the_page_size_cliff_appearing_is_a_FAIL():
+    """`flips_within_range` false -> true IS the cliff, and had no rule.
+
+    The bench exists to notice this and the comparison dropped it, so the one
+    thing it was built to detect was the one thing it could not report.
+    """
+    run, base = _pair({"flips_within_range": False},
+                      {"flips_within_range": True})
+    code, findings = _report(run, base)
+    fail = _perf_compare().FAIL
+    hits = [f for f in findings
+            if f["metric"] == "flips_within_range" and f["level"] == fail]
+    assert hits, [f for f in findings if f["metric"] == "flips_within_range"]
+    assert code == 1
+
+
+def test_a_stable_cliff_metric_does_not_fail():
+    """Guard the guard — `warn_pct = 0` must not flag an unchanged value."""
+    run, base = _pair({"flips_within_range": False},
+                      {"flips_within_range": False})
+    _, findings = _report(run, base)
+    mod = _perf_compare()
+    assert not [f for f in findings
+                if f["metric"] == "flips_within_range"
+                and f["level"] in (mod.FAIL, mod.WARN)]
+
+
+def test_the_cliff_metric_is_no_longer_counted_as_unruled():
+    """It must move from "nobody looked" to gated, not merely be reported."""
+    mod = _perf_compare()
+    rule = mod.rule_for(mod.load_thresholds(), "any_bench", "flips_within_range")
+    assert rule is not None
+    assert not rule.get("report_only"), "report_only would not gate the flip"
