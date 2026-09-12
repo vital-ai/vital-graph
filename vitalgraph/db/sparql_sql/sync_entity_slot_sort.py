@@ -551,6 +551,71 @@ async def backfill_entity_slot_sort_batch(
     return len(seeds), (int(result.split()[-1]) if result else 0)
 
 
+async def entity_slot_sort_row_shortfall(conn, space_id: str,
+                                          timeout: float | None = None) -> dict:
+    """Is ANY row missing from this table — including a missing SLOT TYPE?
+
+    `issues/194`. `entity_slot_sort_coverage` tests presence per ENTITY
+    (`EXISTS ... WHERE e.entity_uuid = o.entity_uuid`), so an entity holding
+    rows for slot type A while missing type B reads as fully covered, and a sort
+    on B returns a short page with nothing reporting it. Its sibling
+    `entity_prop_sort_coverage` had the identical flaw and was measured
+    certifying a 60%-empty table as complete.
+
+    This counts at the grain the table is keyed on. The primary key is
+    `(slot_uuid, context_uuid)` — one row per slot per graph — so `count(*)` IS
+    the number of covered slots and no DISTINCT is needed.
+
+    CHEAP, which is the point. Measured on `sp_lead_synth_100k` (3,877,000 rows):
+
+        quad side, count by predicate      3,388 buffers
+        table side, count(*)               3,065 buffers
+        the exact INTERSECT of the two    33,929,100 buffers
+
+    So this is ~6.5k buffers where the precise question is ~34M, and it belongs
+    on a maintenance loop where `issues/151` removed an O(graph) walk for costing
+    216-303s and 54% of wall-clock.
+
+    THE NUMBER IS AN UPPER BOUND ON THE GAP, not the gap. `shortfall` also counts
+    slots that are legitimately absent: the derivation joins the slot's value as
+    INNER, so a slot carrying a type but NO value derives nothing at all. On
+    `cardiff_kg` that is 10 slots of 304,933 (0.003%) — real, and correctly
+    excluded. Use `entity_slot_sort_valueless_slots` to resolve a nonzero
+    shortfall into the two causes; it is the expensive form, so only run it when
+    this says there is something to explain.
+    """
+    quad_slots = await conn.fetchval(
+        f"SELECT count(*) FROM {space_id}_rdf_quad WHERE predicate_uuid = $1",
+        _SLOT_TYPE, timeout=timeout)
+    table_rows = await conn.fetchval(
+        f"SELECT count(*) FROM {space_id}_entity_slot_sort", timeout=timeout)
+    return {"quad_slots": int(quad_slots or 0),
+            "table_rows": int(table_rows or 0),
+            "shortfall": max(0, int(quad_slots or 0) - int(table_rows or 0))}
+
+
+async def entity_slot_sort_valueless_slots(conn, space_id: str,
+                                           timeout: float | None = None) -> int:
+    """Slots carrying a type but NO value — legitimately absent from the table.
+
+    The expensive half of the pair above, and the reason that one is only an
+    upper bound. Enumerates `SLOT_VALUE_URIS` rather than matching
+    `LIKE '%SlotValue'`, for the reason stated where that tuple is defined: a
+    name match would silently admit a future predicate and change what this
+    number means.
+
+    Only worth running when `entity_slot_sort_row_shortfall` reports a shortfall,
+    because subtracting this from it gives the REAL gap.
+    """
+    return int(await conn.fetchval(
+        f"SELECT count(*) FROM {space_id}_rdf_quad q "
+        f" WHERE q.predicate_uuid = $1 "
+        f"   AND NOT EXISTS (SELECT 1 FROM {space_id}_rdf_quad v "
+        f"                    WHERE v.subject_uuid = q.subject_uuid "
+        f"                      AND v.predicate_uuid = ANY($2))",
+        _SLOT_TYPE, _SLOT_VALUE_PREDS, timeout=timeout) or 0)
+
+
 async def entity_slot_sort_coverage(conn, space_id: str, limit: int = 5,
                                     timeout: float | None = None) -> list[dict]:
     """Entities IN the table against entities OF THAT TYPE in the quads.

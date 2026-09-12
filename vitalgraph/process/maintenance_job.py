@@ -2163,7 +2163,62 @@ class MaintenanceJob:
         advisory number elsewhere; nothing gates a repair on it.
         """
         from ..db.sparql_sql.sync_entity_slot_sort import (
-            entity_slot_sort_coverage, backfill_entity_slot_sort_batch)
+            entity_slot_sort_coverage, backfill_entity_slot_sort_batch,
+            entity_slot_sort_row_shortfall, entity_slot_sort_valueless_slots)
+
+        # --- SLOT-LEVEL SHORTFALL, an alarm and NOT a gate (`issues/194`) ---
+        #
+        # `entity_slot_sort_coverage` below counts ENTITIES, so an entity holding
+        # rows for slot type A while missing type B reads as covered and a sort
+        # on B returns a short page. This counts at the table's own key
+        # (slot_uuid, context_uuid) and sees that.
+        #
+        # ALARM, NOT A GATE, deliberately. Two reasons:
+        #
+        #   * it cannot ATTRIBUTE a shortfall to an entity type — a missing slot
+        #     has no row, so the table cannot say whose it was — and blocks are
+        #     per entity type. Attribution needs the entity->frame->slot walk
+        #     that `issues/151` took off this loop.
+        #   * the cheap number is an UPPER BOUND: slots with a type but no value
+        #     derive nothing and are correctly absent (10 of 304,933 on
+        #     `cardiff_kg`). Blocking a live space over that would be a
+        #     regression, and failing closed is only safe when the number is
+        #     exact.
+        #
+        # So it reports, at ERROR when there is a real gap, and the expensive
+        # exact count runs ONLY when the cheap one has something to explain.
+        for space_id in space_ids:
+            try:
+                async with self._pool.acquire() as conn:
+                    async with maintenance_timeouts(conn):
+                        sf = await entity_slot_sort_row_shortfall(
+                            conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
+                        if sf["shortfall"]:
+                            valueless = await entity_slot_sort_valueless_slots(
+                                conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
+                            real = sf["shortfall"] - valueless
+                            if real > 0:
+                                logger.error(
+                                    "entity_slot_sort SLOT-LEVEL SHORTFALL: %s "
+                                    "has %d of %d slots, and %d of the %d "
+                                    "missing carry a VALUE — so %d rows are "
+                                    "genuinely absent. A per-entity coverage "
+                                    "probe cannot see this; a sort on the "
+                                    "affected slot type returns a short page. "
+                                    "See issues/194.",
+                                    space_id, sf["table_rows"],
+                                    sf["quad_slots"], real, sf["shortfall"],
+                                    real)
+                            else:
+                                logger.debug(
+                                    "entity_slot_sort: %s short by %d, all "
+                                    "value-less and correctly absent.",
+                                    space_id, sf["shortfall"])
+            except asyncpg.UndefinedTableError:
+                continue
+            except Exception as exc:
+                log_probe_failure("entity_slot_sort_row_shortfall",
+                                  space_id, exc)
 
         worst = None          # (shortfall, space_id, gap)
         for space_id in space_ids:
