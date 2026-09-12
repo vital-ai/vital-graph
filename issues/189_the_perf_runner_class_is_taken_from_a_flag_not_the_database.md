@@ -1,7 +1,11 @@
 # The Perf Runner Class Is Taken From A Flag, Not The Database
 
-## Status: OPEN. The committed `query.json` is stamped `vg-test-docker-clean`
-## and was measured on a seeded, persisted 105 GB stack.
+## Status: FIXED 2026-09-12 (`7ddf8312`, `bd1dbe1f`). The class is derived from
+## the database, per-space bytes are recorded, the residency property is
+## asserted, and an incomparable pair is refused in one line.
+##
+## CONSEQUENCE: both committed baselines are now refused for comparison, which
+## makes `issues/190` blocking rather than merely stale.
 
 **Related:** `issues/055` (fixtures on one cluster, tests on another),
 `issues/081` (a baseline promoted with no PG stamp),
@@ -56,6 +60,27 @@ Cache state cannot corrupt the GATED metrics, by design — `shared_buffers` is
 hit + read, and `shared_read` is `report_only` with the measured evidence for
 why. What resident data changes is **which plan wins**, and plan shape is the
 primary gate.
+
+## CORRECTIONS FOUND WHILE FIXING IT
+
+**The table above is missing the largest fixture.** Measured with the per-space
+recording this issue asked for: `lead_nurture_grouped` is **45.7 GB**, larger
+than `sp_lead_synth_100k`'s 35 GB, and it is a gated prefix. So **TWO** gated
+fixtures exceed `shared_buffers`, not one, and the "true by accident" framing
+below understates it — the suite has more out-of-memory coverage than it knew.
+Total seed-space data is 51.7 GB of the 105 GB.
+
+**`fixture_live_tuples` cannot be used to detect a seeded stack, and my first
+fix used it anyway.** It reads **0** on that live 105 GB stack: `n_live_tup` is
+a statistics estimate, and 286 fixture tables there have never been ANALYZEd. So
+the first version of the reconciliation called the seeded stack CLEAN,
+reproducing the defect it was written to fix. Detection is by
+`pg_total_relation_size` on the SEED-ONLY spaces, which needs no statistics —
+and by those spaces specifically, because a clean run creates its own fixtures
+as it goes, so the presence of fixture tables proves nothing.
+
+That the aggregate tuple count is both the wrong stat AND unreliable is the
+strongest argument for the per-space bytes this issue asked for.
 
 ## The fix
 
