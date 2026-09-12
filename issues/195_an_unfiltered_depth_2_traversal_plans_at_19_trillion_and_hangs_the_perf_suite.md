@@ -81,6 +81,42 @@ That is safe — `ensure_frame_slot_table` requires rows, so the rewrite still
 declines — but that space can never have the collapse while its `space_id` is
 that long, and it is a gated fixture. Worth its own issue.
 
+## THE SUITE STILL CANNOT COMPLETE — it was never one bench
+
+A full run after the migration reached **185/307 in 35 minutes** and was stopped
+on another query that had been executing for **10m56s** with three parallel
+workers. Better than 83/307 in 25 minutes, and still not a suite anyone can run
+four times.
+
+The next blocker is `test_nested_frame_traversal`, on the same
+`sp_graph_synth_10k`. Planning every nested-criterion shape it uses, EXPLAIN
+only, no execution:
+
+| criterion | depth 1 | depth 2 | depth 3 |
+|---|---:|---:|---:|
+| `has_nested` (structure only) | 46.53 | 103.99 | 119.97 |
+| `nested_category_in_alpha_beta` | 893,200 | 4,323,546 | **4.19 x 10^21** |
+| `nested_score_gte_50` | 1,083,089 | 18,673,383 | **2.06 x 10^13** |
+
+Four SEXTILLION for the first — worse than the 19 trillion this issue was
+raised for.
+
+**The pattern is the criterion, not the depth.** `has_nested` asks only about
+structure and is trivial at every depth. The two that carry a FILTER on a
+nested value — `category IN ("alpha","beta")`, `score >= 50` — are already a
+million at depth 1 and astronomical at depth 3. `traversal_decision` reports
+`criterion admits 0%` on these, which is the gate looking at a criterion it
+cannot price and declining to act.
+
+So the original diagnosis was too narrow. The unmigrated fixtures were real and
+fixing them was worth it, but **a family of criterion-bearing traversal shapes
+plans at 10^13 to 10^21**, and any one of them stalls a run. `issues/188`'s
+sampling and `issues/190`'s re-promotion stay blocked until that family is
+either fixed or excluded from the suite.
+
+This belongs with `issues/197` (the detector cannot link these shapes) rather
+than here: this issue is about the data gap, which is closed.
+
 ## What is still wrong in the code
 
 Clearing the data does not fix what the investigation exposed, and all of it
