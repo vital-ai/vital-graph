@@ -1,9 +1,11 @@
 # An Unfiltered Depth-2 Traversal Plans At 19 Trillion And Hangs The Perf Suite
 
-## Status: OPEN, found 2026-09-12 while trying to sample the perf suite for
-## `issues/188`. It is why the suite cannot be run to completion, and therefore
-## why `188`'s thresholds cannot be measured and `190`'s baselines cannot be
-## re-promoted.
+## Status: ROOT CAUSE CONFIRMED AND CLEARED ON THE TEST STACK 2026-09-12. The
+## perf fixtures had no `{space}_frame_slot` table, so the collapse could not
+## fire and an unfiltered depth-2 walk planned at 19 trillion. Migrating the
+## fixtures took the same plan to **47.77** and the hanging bench to **1.54 s**.
+## Still open: the CODE defects the investigation exposed (see "What is still
+## wrong in the code").
 
 **Related:** `issues/188` (blocked by this), `issues/190` (blocked by this),
 `issues/096` / `issues/181` (the traversal gate and what it can see),
@@ -29,6 +31,72 @@ query, it is an unrunnable plan that the suite waits on indefinitely.
 
 The generated SQL grows modestly — 9,103 to 12,075 characters, 8 to 15 joins —
 so this is a PLANNING collapse, not a code-generation explosion.
+
+## PROVED: the fixtures were never migrated
+
+`b94484a9` retired `frame_entity` and dropped its tables.
+`scripts/migrate_frame_slot_table.py` creates the replacement for existing
+spaces — and it had been run for **147 of 155** spaces. Every one of the 13 it
+missed is a PERFORMANCE FIXTURE:
+
+    space_lead_dataset_test  sp_graph_forms_20k   sp_graph_skew_2k
+    sp_graph_synth_100k      sp_graph_synth_10k   sp_kg_rel
+    sp_kg_types              sp_lead_dup          sp_lead_synth_100k
+    sp_lead_synth_10k        sp_lead_types        sp_sql_lead_dataset
+    wordnet_frames
+
+With no table, `ensure_frame_slot_table` reports it absent, the collapse
+declines, and the entity->frame->entity hop stays as raw edge rows — which is
+the shape the chain detector cannot link.
+
+Migrating `sp_graph_synth_10k` alone (91,286 rows, 3.9 s) settles it:
+
+| depth | before | after |
+|---|---:|---:|
+| 1 | 741,337 | **30.25** |
+| 2 | **19,282,929,239,712** | **47.77** |
+
+Plan lines 77 -> 35, nested loops 12 -> 7, sequential scans 1 -> 0. The bench
+that had run 24m41s without finishing now passes all three depths in **1.54 s**.
+
+### The migration's own safety claim is wrong for this shape
+
+Its docstring says:
+
+> A space that is NOT migrated keeps working: `ensure_frame_slot_table` reports
+> the table absent, the rewrite declines, and queries fall back to the quad
+> joins — correct, just without the collapse.
+
+Correct, yes. "Just without the collapse" is the part that does not hold: for an
+unfiltered multi-hop walk the fallback is not slower, it is **4x10^11 times more
+expensive** and never returns. A migration that is optional for correctness can
+still be mandatory for usability, and nothing said so.
+
+### All 13 are migrated now, except one that CANNOT be
+
+`space_lead_dataset_test` fails: its generated index identifiers exceed
+PostgreSQL's 63-byte limit. The migration created the TABLE and then failed on
+the indexes, leaving it with 0 rows and 1 index where a healthy space has 7.
+That is safe — `ensure_frame_slot_table` requires rows, so the rewrite still
+declines — but that space can never have the collapse while its `space_id` is
+that long, and it is a gated fixture. Worth its own issue.
+
+## What is still wrong in the code
+
+Clearing the data does not fix what the investigation exposed, and all of it
+survives:
+
+1. **`_TRAVERSAL_KINDS` names a retired table.** `frame_entity` is still in it;
+   nothing produces that kind. Its replacement `frame_slot` is not there.
+2. **The chain detector cannot link this shape even in principle.** Its rule is
+   "one hop's DESTINATION variable is the next one's SOURCE", and `frame_hop`
+   points both edges OUT of the frame, so hops share a source. After the
+   migration the detector reports **0 hops** — the collapse removed the edge
+   tables entirely — so it is bypassed rather than repaired.
+3. **`frame_slot_rewrite` records neither a fire nor a decline.** A rewrite
+   whose absence costs 4x10^11 is invisible in the decision record. Had it
+   declined audibly, this would have been a one-line diagnosis instead of a
+   day.
 
 ## ROOT CAUSE, traced 2026-09-12
 
