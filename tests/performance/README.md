@@ -270,9 +270,25 @@ carries the measured evidence.
 - **`bs4` / `markdownify` must be installed** in the test env, or four
   `tests/unit` modules fail to import and abort the *entire* pytest session
   before any perf test runs. `pip install -e '.[dev]'` covers it.
-- **The vg-test PostgreSQL runs stock config** (`shared_buffers=128MB`,
-  `work_mem=4MB`). Plan shapes are measured against defaults, not the tuned
-  parameter group from `rds_parameter_group_deploy.md` — fine for detecting
-  drift, but don't read absolute numbers as production-representative.
+- **The vg-test PostgreSQL is NOT stock, and it is not arbitrary either.**
+  `docker-compose.test.yml` pins the settings on the command line (`-c`, so they
+  beat both `postgresql.conf` and a previous `ALTER SYSTEM` — `issues/081`):
+
+  | setting | vg-test | RDS param group, 64 GB tier | |
+  |---|---|---|---|
+  | `shared_buffers` | `16GB` | `16GB` | matches |
+  | `effective_cache_size` | `48GB` | `48GB` | matches |
+  | `work_mem` | `64MB` | — | |
+  | `random_page_cost` | **`4`** | **`1.1`** | **diverges** |
+
+  So on memory this stack *mirrors* production's small tier; what differs is the
+  cost model. `random_page_cost` is still PostgreSQL's spinning-disk default
+  here and `1.1` in production, because io2/gp3 random I/O is roughly
+  sequential — and that is the single setting that most directly steers
+  index-scan versus seq-scan, which is the choice the plan-shape gate exists to
+  watch. Read a plan here as "the right-sized server with the wrong cost model",
+  not as "a small dev box". (Changing it would move plan shapes and therefore
+  invalidate both baselines, so it belongs in a re-promotion, not a standalone
+  edit.) Full parameter group: `planning_performance/rds_parameter_group_deploy.md`.
 - **Don't run the suite against the dev/host PG** expecting comparable numbers;
   it's a different environment class and `perf_compare.py` will say so.
