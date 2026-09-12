@@ -206,10 +206,45 @@ bounded batch for the worst-short space per cycle. Two details are load-bearing:
    creates these tables. Re-running the expensive probe against a 48M-quad
    production table would only have recomputed numbers already in hand.
 
-2. **`entity_slot_sort_coverage` has the same per-subject keying** and is not
-   changed here either. Its gating is entangled with `issues/187`'s convergence
-   machinery, and making it stricter could take blocks on live spaces — measure
-   per-slot-type completeness on prod BEFORE touching it.
+2. ~~`entity_slot_sort_coverage` has the same per-subject keying~~ —
+   **ADDRESSED in `00adfc70`, as an ALARM rather than a gate.**
+
+   Measured first, and locally: all three local spaces with data are exactly
+   complete at slot level (cardiff_kg 304,923, sp_lead_synth_100k 3,877,000,
+   sp_lead_types 77,290), so the blindness is LATENT here, not active. The 10
+   cardiff_kg slots absent from the table all carry no value and are correctly
+   excluded — the derivation joins the value as INNER.
+
+   The new check counts at the table's own key. The primary key is
+   `(slot_uuid, context_uuid)`, so `count(*)` IS the covered-slot count, and
+   that is what makes it affordable on a loop `issues/151` cleared an O(graph)
+   walk off:
+
+       quad side, count by predicate            3,388 buffers
+       table side, count(*)                     3,065 buffers
+       count(DISTINCT slot_uuid)            2,657,991 buffers
+       the exact INTERSECT of both sides   33,929,100 buffers
+
+   ~6.5k buffers for the question, against ~34M for the precise form. Two
+   earlier formulations of "cheap" were not: a correlated `EXISTS` per slot came
+   to 49M buffers.
+
+   **It reports; it does not block, and that is the difference from the prop-sort
+   fix.** Two reasons, both specific to this table:
+
+   * it cannot ATTRIBUTE a shortfall to an entity type. A missing slot has no
+     row, so the table cannot say whose it was, and `slot_sort_block` is keyed
+     per entity type. Attribution needs the entity->frame->slot walk that 151
+     removed from this loop.
+   * the cheap number is an UPPER BOUND. Value-less slots inflate it, and
+     blocking a live space over 10 of those would be a regression. Failing
+     closed is only safe when the number is exact — which is why the expensive
+     exact count runs ONLY to explain a nonzero cheap one, and the two causes
+     are subtracted before anything is logged.
+
+   So the honest state is: a missing slot type is now VISIBLE at ERROR, and
+   still not gated. Gating it needs the per-type attribution, and that wants its
+   own measurement.
 3. **Wire the syncs into the seven write paths**, starting with
    `update_entity_subject_only` for `entity_prop_sort`. Lower priority now: with
    a pair-keyed probe and a working repair the drift self-heals, so this is a
