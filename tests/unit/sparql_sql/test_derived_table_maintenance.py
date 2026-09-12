@@ -203,7 +203,25 @@ _SUBJECT_ONLY = (
     "why it is an exemption rather than a gap."
 )
 
+_RESTORE_DEFERS = (
+    "TRUNCATEs the three sort tables and takes a WHOLE-SPACE `slot_sort_block`, "
+    "instead of deriving them inline. Deliberate: `resync_entity_slot_sort` runs "
+    "in MINUTES on a 53M-quad space and this executes inside a transaction "
+    "holding ACCESS EXCLUSIVE on the core tables, so deriving here extends an "
+    "outage rather than shortening one (`issues/161`, `issues/150`). The block "
+    "is what makes the deferral safe under a block-list, and the bounded "
+    "backfill job rebuilds them. EMPTY AND BLOCKED, not stale and served.\n"
+    "Surfaced 2026-09-12: these cells passed only because `_maintains` was a "
+    "substring test and the module MENTIONS the tables in its comments. Now "
+    "that it requires a call, the exemption has to be stated — which also "
+    "exposed that the two prop tables were NOT being truncated, so they kept "
+    "pre-restore rows past the point the block was released. Fixed with them."
+)
+
 EXEMPT: dict[tuple[str, str], str] = {
+    (("bulk_export", "import_space"), "entity_slot_sort"): _RESTORE_DEFERS,
+    (("bulk_export", "import_space"), "entity_prop_sort"): _RESTORE_DEFERS,
+    (("bulk_export", "import_space"), "frame_prop_sort"): _RESTORE_DEFERS,
     (("kg_backend", "update_entity_subject_only"), "edge"): _SUBJECT_ONLY,
     (("kg_backend", "update_entity_subject_only"), "frame_slot"): _SUBJECT_ONLY,
     (("kg_backend", "update_entity_subject_only"), "entity_slot_sort"): _SUBJECT_ONLY,
@@ -237,58 +255,36 @@ EXEMPT: dict[tuple[str, str], str] = {
 #   * execute_sparql_update was never a gap. It maintains stats by
 #     `resync_stats_for_predicates`, and the first version of this test simply
 #     did not recognise that mechanism. See the note on DERIVED.
-_ESS_GAP = (
-    "maintains `edge` and `frame_slot` but NOT `entity_slot_sort`, with no "
-    "stated reason. Found 2026-09-11 by widening this matrix past one module "
-    "(`issues/185`) — the question that issue listed as NOT ESTABLISHED, "
-    "answered: yes, another derived table is also unmaintained on the modules "
-    "the matrix could not see. A stale slot-sort row is a WRONG SORT ORDER, "
-    "because the sort reads its value straight off this table. Tracked in "
-    "`issues/187`; these stay named here until wired."
-)
 
-_PROP_GAP = (
-    "maintains `edge` and `frame_slot` but NEITHER prop-sort table. Surfaced "
-    "2026-09-12 by adding them to DERIVED; they were simply absent before, which "
-    "is `issues/185` one level down -- the matrix reports only on tables it "
-    "lists. WORSE THAN THE SLOT-TABLE GAP: these are read by a FILTER as well as "
-    "a sort, and their gate (`prop_sort_block`) is a BLOCK-LIST, so absence means "
-    "SERVE. A short table is not declined -- it answers with a plausible SUBSET "
-    "and a count that agrees with it. Tracked in `issues/194`."
-)
 
-_EPS_SUBJECT_GAP = (
-    "THE SEVERE ONE. `update_entity_subject_only` deletes exactly the quads "
-    "hanging off the entity subject, and those are precisely what "
-    "`entity_prop_sort` indexes -- so unlike `edge`, `frame_slot` and "
-    "`entity_slot_sort`, which are legitimately exempt on this path, here the "
-    "mirror is left describing properties the entity no longer has. A FILTER on "
-    "a removed value still matches. Tracked in `issues/194`."
-)
 
 KNOWN_GAPS: dict[tuple[str, str], str] = {
-    (("kg_backend", "upsert_objects_atomic"), "entity_slot_sort"): _ESS_GAP,
-    (("kg_backend", "update_entity_graph"), "entity_slot_sort"): _ESS_GAP,
-    (("kg_backend", "update_subjects_graph"), "entity_slot_sort"): _ESS_GAP,
-    (("data_import", "import_ntriples_incremental"), "entity_slot_sort"): _ESS_GAP,
-    (("data_import", "import_jsonl_quads_incremental"), "entity_slot_sort"): _ESS_GAP,
-    (("data_import", "import_vital_block_incremental"), "entity_slot_sort"): _ESS_GAP,
-    # `entity_prop_sort` / `frame_prop_sort`, surfaced 2026-09-12 by listing them
-    # in DERIVED at all. See `issues/194`. Same seven paths as the slot table,
-    # plus the subject-only path for `entity_prop_sort` (see EXEMPT above).
-    (("kg_backend", "update_entity_subject_only"), "entity_prop_sort"): _EPS_SUBJECT_GAP,
-    (("kg_backend", "upsert_objects_atomic"), "entity_prop_sort"): _PROP_GAP,
-    (("kg_backend", "update_entity_graph"), "entity_prop_sort"): _PROP_GAP,
-    (("kg_backend", "update_subjects_graph"), "entity_prop_sort"): _PROP_GAP,
-    (("data_import", "import_ntriples_incremental"), "entity_prop_sort"): _PROP_GAP,
-    (("data_import", "import_jsonl_quads_incremental"), "entity_prop_sort"): _PROP_GAP,
-    (("data_import", "import_vital_block_incremental"), "entity_prop_sort"): _PROP_GAP,
-    (("kg_backend", "upsert_objects_atomic"), "frame_prop_sort"): _PROP_GAP,
-    (("kg_backend", "update_entity_graph"), "frame_prop_sort"): _PROP_GAP,
-    (("kg_backend", "update_subjects_graph"), "frame_prop_sort"): _PROP_GAP,
-    (("data_import", "import_ntriples_incremental"), "frame_prop_sort"): _PROP_GAP,
-    (("data_import", "import_jsonl_quads_incremental"), "frame_prop_sort"): _PROP_GAP,
-    (("data_import", "import_vital_block_incremental"), "frame_prop_sort"): _PROP_GAP,
+    # EMPTY as of 2026-09-12 (`issues/194`, and `issues/187` before it), and the
+    # nineteen entries that were here are worth recording rather than just
+    # deleting, because of WHERE the defect turned out to be.
+    #
+    # All nineteen were DELETE-side. `add_rdf_quads_batch_bulk` already
+    # maintained all five derived tables, so every insert was covered; what was
+    # missing was what happens when quads GO. And the two halves need opposite
+    # ordering, which is why a single "call the sync" would have been wrong:
+    #
+    #   `entity_slot_sort` is dropped BEFORE the delete, because its rows are
+    #   reached through the edge table the delete invalidates — afterwards they
+    #   cannot be found.
+    #   The prop tables are re-derived AFTER it, because they store the MIN of a
+    #   multi-valued property: removing the lexically first of three values must
+    #   move the MIN to the next survivor while the row survives, and a
+    #   before-delete re-derive would just restore the doomed value.
+    #
+    # The three `data_import` paths take full resyncs instead, matching the
+    # choice `edge` and `frame_slot` already made there for a bulk load.
+    #
+    # `update_entity_subject_only` -> `entity_prop_sort` was the one that needed
+    # judgement rather than mechanism: that path is EXEMPT for edge, frame_slot
+    # and entity_slot_sort on sound reasoning — the subject is neither an edge
+    # nor a frame — and that reasoning stops one step short of a table indexing
+    # the entity's OWN properties, which is exactly what it deletes. It is wired;
+    # `frame_prop_sort` stays exempt there, an entity not being a frame.
 }
 
 
@@ -326,7 +322,27 @@ def _method_bodies() -> dict[tuple[str, str], str]:
 
 
 def _maintains(body: str, markers) -> bool:
-    return any(m in body for m in markers)
+    """A CALL to the sync, not merely a mention of it.
+
+    Was `any(m in body ...)`, a bare substring test, and that is a false
+    negative waiting to happen: an `import` of the sync satisfies it, as does a
+    comment naming it. Demonstrated 2026-09-12 while wiring `issues/194` —
+    deleting the `await sync_entity_prop_sort_after_change(...)` call from
+    `update_entity_subject_only` left the import behind and the matrix stayed
+    GREEN, so the cell claimed maintenance that no longer happened.
+
+    Matched as "a call whose name STARTS WITH the marker", not `m + "("`.
+    Several markers are PREFIXES of the function actually called —
+    `resync_frame_slot` for `resync_frame_slot_table` — so demanding the paren
+    immediately after reported four genuine call sites as unmaintained on the
+    first attempt.
+
+    An import cannot satisfy this: `from x.sync_foo import bar` and
+    `from x import (\n    sync_foo_after_change)` both put a space or a `)`
+    where a call puts word characters and then `(`.
+    """
+    import re as _re
+    return any(_re.search(_re.escape(m) + r"\w*\(", body) for m in markers)
 
 
 def test_the_matrix_is_derived_from_real_implementations():

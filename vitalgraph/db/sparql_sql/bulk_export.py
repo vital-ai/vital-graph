@@ -197,7 +197,7 @@ async def import_space(conn, space_id: str, paths: Dict[str, str],
         # bounded per batch, fenced, and already running on a duty cycle
         # (`issues/150`).
         #
-        # SAFE ONLY BECAUSE BOTH READ PATHS ARE GATED. The slot-sort table is
+        # SAFE ONLY BECAUSE THE READ PATHS ARE GATED. The three sort tables are
         # emptied rather than left stale, and the marker is cleared, so the
         # filter AND sort paths decline and every query is answered by the
         # general SPARQL pipeline — slower, and correct. Before the sort path
@@ -208,13 +208,23 @@ async def import_space(conn, space_id: str, paths: Dict[str, str],
         await resync_edge_table(conn, space_id)
         await resync_frame_slot_table(conn, space_id)
         await recompute_stats_tables(conn, space_id)
-        try:
-            async with conn.transaction():
-                await conn.execute(f"TRUNCATE {_bare(t['entity_slot_sort'])}")
-        except Exception as exc:
-            # A space predating the table. Nothing to empty, nothing stale.
-            logger.debug("import_space(%s): no entity_slot_sort to clear (%s)",
-                         space_id, exc)
+        # THE TWO PROP TABLES ARE EMPTIED HERE TOO, since 2026-09-12
+        # (`issues/194`). They were not, and the whole-space block below is not
+        # enough on its own: it is released when the backfill job verifies
+        # `entity_slot_sort` coverage, which says nothing about them. After that
+        # release, and before `_run_prop_sort_coverage` next measures and takes
+        # `prop_sort_block`, both gates read clear and the tables answer with
+        # PRE-RESTORE rows. Empty and awaiting backfill is the state the comment
+        # above describes as safe; stale is not, and unlike `entity_slot_sort` it
+        # is not even a subset — it describes a different graph.
+        for _key in ('entity_slot_sort', 'entity_prop_sort', 'frame_prop_sort'):
+            try:
+                async with conn.transaction():
+                    await conn.execute(f"TRUNCATE {_bare(t[_key])}")
+            except Exception as exc:
+                # A space predating the table. Nothing to empty, nothing stale.
+                logger.debug("import_space(%s): no %s to clear (%s)",
+                             space_id, _key, exc)
         # GEO IS REBUILT INLINE (`issues/169`), unlike entity_slot_sort.
         #
         # It is derived from the quads, so a restore that leaves it holding the

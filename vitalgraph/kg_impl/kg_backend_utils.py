@@ -1348,6 +1348,12 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
         from ..db.sparql_sql.sync_frame_slot_table import sync_frame_slot_before_delete
         from ..db.sparql_sql.sync_edge_table import sync_edge_table_before_delete
+        from ..db.sparql_sql.sync_entity_slot_sort import (
+            sync_entity_slot_sort_before_delete)
+        from ..db.sparql_sql.sync_entity_prop_sort import (
+            sync_entity_prop_sort_after_change)
+        from ..db.sparql_sql.sync_frame_prop_sort import (
+            sync_frame_prop_sort_after_change)
         from rdflib import URIRef
 
         try:
@@ -1393,10 +1399,26 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                             conn, space_id, subject_uuids, context_uuid=g_uuid)
                         await sync_edge_table_before_delete(
                             conn, space_id, subject_uuids, context_uuid=g_uuid)
+                        # `entity_slot_sort` BEFORE the delete for the same
+                        # reason (`issues/194`): its rows are reached through
+                        # the edge table this delete invalidates, and a stale
+                        # row makes a sort order by a value that is gone.
+                        await sync_entity_slot_sort_before_delete(
+                            conn, space_id, subject_uuids, context_uuid=g_uuid)
                         await conn.execute(
                             f"DELETE FROM {t['rdf_quad']} "
                             f"WHERE subject_uuid = ANY($1) AND context_uuid = $2",
                             subject_uuids, g_uuid)
+                        # AND THE PROP TABLES AFTER IT. A delete there is a
+                        # RECOMPUTE: they store the MIN of a multi-valued
+                        # property, so removing the lexically first of three
+                        # values must move the MIN to the next survivor while
+                        # the row itself survives. Re-deriving before the
+                        # delete would restore the value being removed.
+                        await sync_entity_prop_sort_after_change(
+                            conn, space_id, subject_uuids, context_uuid=g_uuid)
+                        await sync_frame_prop_sort_after_change(
+                            conn, space_id, subject_uuids, context_uuid=g_uuid)
 
                     if quads:
                         await self.backend.add_rdf_quads_batch_bulk(
@@ -1462,6 +1484,28 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                         await sync_frame_slot_before_delete(conn, space_id, subject_uuids, context_uuid=g_uuid)
                         from ..db.sparql_sql.sync_edge_table import sync_edge_table_before_delete
                         await sync_edge_table_before_delete(conn, space_id, subject_uuids, context_uuid=g_uuid)
+                        # THE SORT TABLES TOO (`issues/194`). The insert side is
+                        # already covered: `add_rdf_quads_batch_bulk` maintains
+                        # all five derived tables. What was missing is the
+                        # DELETE side, and it fails differently for each:
+                        #
+                        #   `entity_slot_sort` keeps rows pointing at quads that
+                        #   no longer exist, so a sort orders by a value that is
+                        #   gone. Dropped BEFORE the delete, like edge and
+                        #   frame_slot, because the rows are identified through
+                        #   the edge table the delete is about to invalidate.
+                        #
+                        #   The two prop tables hold the MIN of a multi-valued
+                        #   property, so a delete is a RECOMPUTE, not a row
+                        #   drop — removing the lexically first of three values
+                        #   must move the stored MIN to the next survivor while
+                        #   the ROW SURVIVES. That cannot run before the delete
+                        #   (the doomed value is still there to be re-derived),
+                        #   so it runs after, below.
+                        from ..db.sparql_sql.sync_entity_slot_sort import (
+                            sync_entity_slot_sort_before_delete)
+                        await sync_entity_slot_sort_before_delete(
+                            conn, space_id, subject_uuids, context_uuid=g_uuid)
 
                         # Step 3: Delete all quads for those subjects
                         result = await conn.execute(
@@ -1477,6 +1521,22 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                     if insert_quads:
                         await self.backend.add_rdf_quads_batch_bulk(
                             space_id, insert_quads, connection=conn)
+
+                    # AND THE PROP TABLES, AFTER the delete (`issues/194`).
+                    # A delete here is a recompute against the survivors: for a
+                    # subject that is gone entirely this empties its rows, and
+                    # for one that lost a single value of several it moves the
+                    # stored MIN. Running it before the delete would re-derive
+                    # the value being removed.
+                    if subject_uuids:
+                        from ..db.sparql_sql.sync_entity_prop_sort import (
+                            sync_entity_prop_sort_after_change)
+                        from ..db.sparql_sql.sync_frame_prop_sort import (
+                            sync_frame_prop_sort_after_change)
+                        await sync_entity_prop_sort_after_change(
+                            conn, space_id, subject_uuids, context_uuid=g_uuid)
+                        await sync_frame_prop_sort_after_change(
+                            conn, space_id, subject_uuids, context_uuid=g_uuid)
 
             _t1 = _time.monotonic()
             self.logger.info("⏱️  update_entity_graph: %.3fs", _t1 - _t0)
@@ -1494,8 +1554,18 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         this only deletes quads where the subject IS the entity itself, preserving
         all frames, slots, and edges in the entity graph.
 
-        Only rdf_stats sync is needed (no edge/frame_entity sync) because the entity
-        subject has no edge-source/dest properties and is not a frame.
+        No edge / frame_slot / entity_slot_sort sync is needed: the entity subject
+        carries no edge-source/dest properties and is not a frame, so no row in
+        those tables can describe it.
+
+        `entity_prop_sort` IS needed, and this docstring said otherwise until
+        2026-09-12 (`issues/194`). That table indexes properties hanging STRAIGHT
+        OFF THE ENTITY — which is exactly the set of quads this method deletes.
+        The reasoning that exempts the other three stops one step short of it:
+        being neither an edge nor a frame says nothing about the entity's own
+        properties. Left unsynced, a filter on a removed value still matched it.
+        `frame_prop_sort` stays exempt, for the stated reason — an entity is not
+        a frame.
         """
         import time as _time
         try:
@@ -1522,6 +1592,16 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                     if insert_quads:
                         await self.backend.add_rdf_quads_batch_bulk(
                             space_id, insert_quads, connection=conn)
+
+                    # AFTER the write, not before: a delete here is a RECOMPUTE
+                    # against the surviving values, so re-deriving first would
+                    # restore the value being removed. One call covers both the
+                    # delete and the insert, which is why this table has a
+                    # single `after_change` where the slot table needs two.
+                    from ..db.sparql_sql.sync_entity_prop_sort import (
+                        sync_entity_prop_sort_after_change)
+                    await sync_entity_prop_sort_after_change(
+                        conn, space_id, [entity_uuid], context_uuid=g_uuid)
 
             _t1 = _time.monotonic()
             self.logger.info("⏱️  update_entity_subject_only: %.3fs", _t1 - _t0)
@@ -1591,6 +1671,14 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                         from ..db.sparql_sql.sync_edge_table import sync_edge_table_before_delete
                         await sync_edge_table_before_delete(conn, space_id, s_uuids, context_uuid=g_uuid)
                         _s2 = _time.monotonic()
+                        # `entity_slot_sort` BEFORE the delete (`issues/194`):
+                        # its rows are reached through the edge table the delete
+                        # invalidates, so afterwards they cannot be found — and
+                        # a stale row makes a sort order by a value that is
+                        # gone. Timed like its siblings above, for the same
+                        # reason: any of these scans can own the latency.
+                        await sync_entity_slot_sort_before_delete(
+                            conn, space_id, s_uuids, context_uuid=g_uuid)
                         _s3 = _time.monotonic()
 
                         # Delete all quads for these subjects in this graph
@@ -1600,6 +1688,16 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                             s_uuids, g_uuid,
                         )
                         _s4 = _time.monotonic()
+                        # AND THE PROP TABLES AFTER IT, because a delete there
+                        # is a RECOMPUTE against the survivors rather than a row
+                        # drop: they store the MIN of a multi-valued property,
+                        # and for a subject deleted outright this empties its
+                        # rows. Before the delete it would re-derive the value
+                        # being removed.
+                        await sync_entity_prop_sort_after_change(
+                            conn, space_id, s_uuids, context_uuid=g_uuid)
+                        await sync_frame_prop_sort_after_change(
+                            conn, space_id, s_uuids, context_uuid=g_uuid)
                         deleted = int(result.split()[-1]) if result else 0
                         self.logger.info(
                             "⏱️  update_subjects_graph presync: frame_entity=%.3fs "

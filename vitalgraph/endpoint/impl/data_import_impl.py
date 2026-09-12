@@ -888,6 +888,9 @@ class ImportEngine:
         # Incremental aux table sync
         from vitalgraph.db.sparql_sql.sync_edge_table import resync_edge_table
         from vitalgraph.db.sparql_sql.sync_frame_slot_table import resync_frame_slot_table
+        from vitalgraph.db.sparql_sql.sync_entity_slot_sort import resync_entity_slot_sort
+        from vitalgraph.db.sparql_sql.sync_entity_prop_sort import resync_entity_prop_sort
+        from vitalgraph.db.sparql_sql.sync_frame_prop_sort import resync_frame_prop_sort
         from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
 
         if progress_cb:
@@ -899,6 +902,18 @@ class ImportEngine:
         async with self._pool.acquire() as conn:
             await resync_edge_table(conn, space_id)
             await resync_frame_slot_table(conn, space_id)
+            # THE THREE SORT TABLES TOO (`issues/194`). This rebuilt `edge`,
+            # `frame_slot` and stats and silently skipped these, so an
+            # incremental import left them describing the pre-import graph:
+            # a stale `entity_slot_sort` row is a WRONG SORT ORDER, and the two
+            # prop tables are read by a FILTER whose gate serves on the ABSENCE
+            # of a block, so a short table answers with a plausible subset.
+            #
+            # Full resyncs rather than incremental syncs because this is a bulk
+            # load — the same choice the two lines above already make.
+            await resync_entity_slot_sort(conn, space_id)
+            await resync_entity_prop_sort(conn, space_id)
+            await resync_frame_prop_sort(conn, space_id)
             await recompute_stats_tables(conn, space_id)
 
         # Register graph
@@ -1098,6 +1113,9 @@ class ImportEngine:
         # Incremental aux table sync
         from vitalgraph.db.sparql_sql.sync_edge_table import resync_edge_table
         from vitalgraph.db.sparql_sql.sync_frame_slot_table import resync_frame_slot_table
+        from vitalgraph.db.sparql_sql.sync_entity_slot_sort import resync_entity_slot_sort
+        from vitalgraph.db.sparql_sql.sync_entity_prop_sort import resync_entity_prop_sort
+        from vitalgraph.db.sparql_sql.sync_frame_prop_sort import resync_frame_prop_sort
         from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
 
         if progress_cb:
@@ -1109,6 +1127,18 @@ class ImportEngine:
         async with self._pool.acquire() as conn:
             await resync_edge_table(conn, space_id)
             await resync_frame_slot_table(conn, space_id)
+            # THE THREE SORT TABLES TOO (`issues/194`). This rebuilt `edge`,
+            # `frame_slot` and stats and silently skipped these, so an
+            # incremental import left them describing the pre-import graph:
+            # a stale `entity_slot_sort` row is a WRONG SORT ORDER, and the two
+            # prop tables are read by a FILTER whose gate serves on the ABSENCE
+            # of a block, so a short table answers with a plausible subset.
+            #
+            # Full resyncs rather than incremental syncs because this is a bulk
+            # load — the same choice the two lines above already make.
+            await resync_entity_slot_sort(conn, space_id)
+            await resync_entity_prop_sort(conn, space_id)
+            await resync_frame_prop_sort(conn, space_id)
             await recompute_stats_tables(conn, space_id)
 
         # Register graph
@@ -1295,6 +1325,9 @@ class ImportEngine:
         # Incremental aux table sync
         from vitalgraph.db.sparql_sql.sync_edge_table import resync_edge_table
         from vitalgraph.db.sparql_sql.sync_frame_slot_table import resync_frame_slot_table
+        from vitalgraph.db.sparql_sql.sync_entity_slot_sort import resync_entity_slot_sort
+        from vitalgraph.db.sparql_sql.sync_entity_prop_sort import resync_entity_prop_sort
+        from vitalgraph.db.sparql_sql.sync_frame_prop_sort import resync_frame_prop_sort
         from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
 
         if progress_cb:
@@ -1306,6 +1339,18 @@ class ImportEngine:
         async with self._pool.acquire() as conn:
             await resync_edge_table(conn, space_id)
             await resync_frame_slot_table(conn, space_id)
+            # THE THREE SORT TABLES TOO (`issues/194`). This rebuilt `edge`,
+            # `frame_slot` and stats and silently skipped these, so an
+            # incremental import left them describing the pre-import graph:
+            # a stale `entity_slot_sort` row is a WRONG SORT ORDER, and the two
+            # prop tables are read by a FILTER whose gate serves on the ABSENCE
+            # of a block, so a short table answers with a plausible subset.
+            #
+            # Full resyncs rather than incremental syncs because this is a bulk
+            # load — the same choice the two lines above already make.
+            await resync_entity_slot_sort(conn, space_id)
+            await resync_entity_prop_sort(conn, space_id)
+            await resync_frame_prop_sort(conn, space_id)
             await recompute_stats_tables(conn, space_id)
 
         # Register graph
