@@ -1,8 +1,10 @@
 # `entity_slot_sort` Is Unmaintained By Six Write Paths
 
-## Status: OPEN, but DOWNGRADED after measurement — the gap is LATENT, not
-## active. Measured 2026-09-11 on production: **no shortfall on any space.**
-## Named in `KNOWN_GAPS`; deliberately NOT wired.
+## Status: FIXED 2026-09-12 (`78b316b8`). All six paths are wired and the
+## `KNOWN_GAPS` entries are gone. The measurement below still stands — the gap
+## was LATENT, with no shortfall on any production space — so this was closed
+## for a reason the measurement did not supply; see "Why it was wired after
+## all".
 
 **Related:** `issues/185` (the matrix that could not see these),
 `issues/096` (why a stale row here is a wrong ANSWER), `edge_table_integrity_bug.md`
@@ -95,16 +97,36 @@ reports converged. Production measured **809 entities against 76,996 of that
 type with drift satisfied** (`issues/149`). Any future sizing of this issue must
 use `entity_slot_sort_coverage`.
 
-## The fix
+## The fix — DONE, `78b316b8`
 
-Wire `sync_entity_slot_sort_after_edge_insert` / the delete-side counterpart
-into the six paths, beside the `edge` and `frame_slot` calls already there, and
-remove the `KNOWN_GAPS` entries.
+Wired into all six paths beside the `edge` and `frame_slot` calls, and the
+`KNOWN_GAPS` entries removed.
 
-**The measurement is done** (above) and says this is not urgent. If it is
-taken up, the work is to wire `sync_entity_slot_sort_after_edge_insert` and its
-delete-side counterpart into the six paths beside the `edge` and `frame_slot`
-calls already there, then remove the `KNOWN_GAPS` entries.
+**One correction to the plan as written above.** It says to wire
+`sync_entity_slot_sort_after_edge_insert` *and* a delete-side counterpart. Only
+the DELETE side was missing: `add_rdf_quads_batch_bulk` already maintains all
+five derived tables, so every insert on these paths was covered. What went in is
+`sync_entity_slot_sort_before_delete`, and it must run BEFORE the delete because
+its rows are reached through the edge table the delete invalidates — afterwards
+they cannot be found at all.
+
+The three importers take `resync_entity_slot_sort` instead, matching the choice
+`edge` and `frame_slot` already make there for a bulk load.
+
+## Why it was wired after all
+
+Not because the headroom question below was answered — it was not. `issues/194`
+found the same defect class in `entity_prop_sort` and `frame_prop_sort`, and
+fixing those meant touching these same seven paths. Wiring one table and
+leaving its two siblings unwired in the same functions would have left the next
+reader to rediscover which of three tables each path maintains. The marginal
+cost, once already editing the call site, was three lines.
+
+So the measurement's conclusion — that the repair is the design and this was not
+urgent — was never overturned. It just stopped being the deciding factor.
+
+**The measurement is done** (above) and said this was not urgent. It was wired
+anyway, for the reason in "Why it was wired after all".
 
 Before that, the question worth answering is the one the measurement raised:
 **how much headroom does the one-batch-per-cycle repair actually have?** If a

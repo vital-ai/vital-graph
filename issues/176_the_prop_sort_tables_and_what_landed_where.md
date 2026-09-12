@@ -12,7 +12,21 @@ Two reasons, and the second is the awkward one.
 
 **The tables are new and their maintenance is not obvious.** `entity_prop_sort`
 and `frame_prop_sort` are populated by a migration, maintained per-write, and
-described by a coverage marker written from two places. Someone debugging a slow
+described by a coverage marker written from two places.
+
+> **CORRECTION 2026-09-12 (`issues/194`).** "Maintained per-write" was not true
+> when this record was written. SEVEN quad-changing write paths maintained
+> `edge` and `frame_slot` and neither of these — three in `kg_backend_utils`,
+> three incremental importers, and `update_entity_subject_only`, whose own
+> docstring asserted no sync was needed. The maintenance matrix could not report
+> it because neither table was listed in it. Wired in `78b316b8`, so the
+> sentence is true now; it was aspirational then.
+>
+> Two other claims below have also moved: the coverage marker is counted in
+> (subject, property) PAIRS since `c00a5f83`/`82a9e5eb` — as written it tested
+> presence per subject, and was measured reporting every type COMPLETE on a
+> table missing 329,235 rows — and the maintenance phase REPAIRS now as well as
+> measuring, which it did not do at all. Someone debugging a slow
 listing needs to know which of those has not run, and the distinction between
 "stale" and "nothing has run yet" is not visible from the data.
 

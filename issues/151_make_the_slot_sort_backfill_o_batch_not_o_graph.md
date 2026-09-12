@@ -39,6 +39,21 @@ is not the fix.
    `entity_slot_sort_coverage` measures **130 ms** and counts entities from the
    QUADS, so it cannot be fooled by the derivation it is checking — that is
    `issues/149`'s lesson, and it is the same defect class as `issues/141`.
+
+   > **QUALIFIED 2026-09-12 (`issues/194`).** Independent of the derivation, yes
+   > — but blind to a whole class of shortfall. It tests presence PER ENTITY, so
+   > an entity holding rows for slot type A while missing type B counts as
+   > covered, and a sort on B returns a short page. The same pattern on
+   > `entity_prop_sort` was measured reporting 0 gaps and every type COMPLETE
+   > against a table missing 329,235 rows. `entity_slot_sort_row_shortfall`
+   > (`00adfc70`) counts at the table's own key `(slot_uuid, context_uuid)` for
+   > ~6.5k buffers and does see it.
+
+   Likewise the bounded per-type seed in part 3 below seeds on entities with NO
+   rows, so it cannot repair a missing slot type either;
+   `backfill_entity_slot_sort_missing_slots` (`c6716b0f`) seeds on the absent
+   SLOTS for that case. A detector and a repair that share a blind spot leave a
+   gap that is both invisible and unfixable.
 2. **Replace drift's full walk with coverage for the DECISION.** Drift becomes
    advisory, or drops. Today the walk re-derives a total in order to conclude
    something coverage already reported for 130 ms.
