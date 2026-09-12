@@ -571,19 +571,21 @@ async def backfill_entity_slot_sort_missing_slots(
          `LIMIT` stops it early. Only worth calling when
          `entity_slot_sort_row_shortfall` has already reported a REAL gap: with
          nothing missing this scans every slot-type quad to find none.
-      2. Their entities, from `{space}_frame_slot`, which stores
-         `(slot_uuid, entity_uuid)` directly. A reverse walk up the edge table
-         would need recursion through nested frames for the same answer, and the
-         derivation here already depends on `edge`, so this is the same class of
-         dependency rather than a new one.
+      2. Their entities, by climbing the EDGE table two hops. `frame_slot`
+         stores `(slot_uuid, entity_uuid)` directly and was used first, until a
+         production check found that column NULL for every row on all three
+         live spaces — see the note at the query. A slot under a NESTED frame is
+         not reached by these two hops and is reported `unattributed` rather
+         than guessed at.
       3. Re-derive those entities. `_ON_CONFLICT` makes it idempotent, so rows
          that already exist are simply rewritten.
 
     Returns `{slots, entities, rows, unattributed}`.
 
-    `unattributed` is slots with no `frame_slot` row, and it is reported rather
-    than ignored: it means BOTH mirrors are short for that slot, so this cannot
-    repair it and a full `resync_all_auxiliary_tables` is the remedy.
+    `unattributed` is slots whose entity these two hops do not reach — a short
+    edge table, or a slot nested deeper than one frame. Reported rather than
+    ignored: this cannot repair them, and `resync_all_auxiliary_tables` is the
+    remedy.
     """
     n = int(batch_size or ESS_BACKFILL_BATCH)
     t = f"{space_id}_entity_slot_sort"
@@ -599,15 +601,40 @@ async def backfill_entity_slot_sort_missing_slots(
     if not slots:
         return {"slots": 0, "entities": 0, "rows": 0, "unattributed": 0}
 
+    # RESOLVED THROUGH THE EDGE TABLE, not `frame_slot.entity_uuid`.
+    #
+    # That column looked ideal — one indexed lookup for slot -> entity — and it
+    # is NULL FOR EVERY ROW on all three live production spaces (`cardiff_kg`,
+    # `lead_data`, `lead_prod`); only `wordnet_frames`, loaded later, has it
+    # populated. A repair keyed on it finds nothing and reports every slot
+    # `unattributed`, which is silent and total failure on exactly the spaces
+    # that matter. Checked against production before this shipped.
+    #
+    # The edge table carries the same path in two hops and is the source the
+    # derivation itself walks, so it cannot be less populated than the rows
+    # being rebuilt: slot <- Edge_hasKGSlot <- frame <- Edge_hasEntityKGFrame
+    # <- entity. Bounded by the batch, so both hops are index probes.
     ents = await conn.fetch(
-        f"SELECT DISTINCT entity_uuid FROM {space_id}_frame_slot "
-        f" WHERE slot_uuid = ANY($1) AND entity_uuid IS NOT NULL",
-        slots, timeout=timeout)
+        f"SELECT DISTINCT ef.source_node_uuid AS entity_uuid "
+        f"  FROM {space_id}_edge se "
+        f"  JOIN {space_id}_edge ef "
+        f"    ON ef.dest_node_uuid = se.source_node_uuid "
+        f"   AND ef.context_uuid = se.context_uuid "
+        f"   AND ef.edge_type_uuid = $2 "
+        f" WHERE se.dest_node_uuid = ANY($1) "
+        f"   AND se.edge_type_uuid = $3",
+        slots, _ENTITY_FRAME_EDGE, _SLOT_EDGE, timeout=timeout)
     seeds = [r["entity_uuid"] for r in ents]
     attributed = await conn.fetchval(
-        f"SELECT count(DISTINCT slot_uuid) FROM {space_id}_frame_slot "
-        f" WHERE slot_uuid = ANY($1) AND entity_uuid IS NOT NULL",
-        slots, timeout=timeout)
+        f"SELECT count(DISTINCT se.dest_node_uuid) "
+        f"  FROM {space_id}_edge se "
+        f"  JOIN {space_id}_edge ef "
+        f"    ON ef.dest_node_uuid = se.source_node_uuid "
+        f"   AND ef.context_uuid = se.context_uuid "
+        f"   AND ef.edge_type_uuid = $2 "
+        f" WHERE se.dest_node_uuid = ANY($1) "
+        f"   AND se.edge_type_uuid = $3",
+        slots, _ENTITY_FRAME_EDGE, _SLOT_EDGE, timeout=timeout)
     unattributed = len(slots) - int(attributed or 0)
     if not seeds:
         return {"slots": len(slots), "entities": 0, "rows": 0,

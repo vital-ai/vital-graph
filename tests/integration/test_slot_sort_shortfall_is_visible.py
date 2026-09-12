@@ -232,27 +232,42 @@ async def test_a_slot_with_no_frame_slot_row_is_reported_unattributed(
 
 
 async def test_an_attributable_slot_is_repaired(pg_conn, test_space):
-    """With a `frame_slot` row present the entity is found and re-derived.
+    """With the EDGE path present the entity is found and re-derived.
 
-    The derivation walks the EDGE table, so a row is only written when the
-    entity->frame->slot edges exist; this asserts the attribution step, which is
-    the part `frame_slot` provides and the part that was missing.
+    Writes edge rows rather than `frame_slot.entity_uuid`, which is what the
+    repair actually climbs — and what production actually has. That column is
+    NULL for every row on all three live spaces, so a fixture built on it would
+    have passed while the repair found nothing there.
     """
-    from vitalgraph.db.sparql_sql.sync_entity_slot_sort import _u as _uu
+    from vitalgraph.db.sparql_sql.sync_entity_slot_sort import (
+        _u as _uu, _SLOT_EDGE, _ENTITY_FRAME_EDGE)
     tag = "attrib"
     n = await _load(pg_conn, test_space, tag, with_b=False)
     ctx = _uu(_G)
-    rows = []
+    edges = []
     for i in range(n):
         e = _uu(f"urn:sfs:{tag}:e:{i}")
         frame = _uu(f"urn:sfs:{tag}:fr:{i}")
         sl = _uu(f"urn:sfs:{tag}:sl:{i}:{_B}")
-        rows.append((frame, sl, _uu("urn:sfs:role:R"), e, ctx, _uu(_F)))
+        edges += [
+            (uuid.uuid4(), frame, sl, ctx, _SLOT_EDGE),
+            (uuid.uuid4(), e, frame, ctx, _ENTITY_FRAME_EDGE),
+        ]
     await pg_conn.executemany(
-        f"INSERT INTO {test_space}_frame_slot (frame_uuid, slot_uuid, role_uuid,"
-        f" entity_uuid, context_uuid, frame_type_uuid) "
-        f"VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING", rows)
+        f"INSERT INTO {test_space}_edge (edge_uuid, source_node_uuid,"
+        f" dest_node_uuid, context_uuid, edge_type_uuid) "
+        f"VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING", edges)
 
     fix = await _repair(pg_conn, test_space)
     assert fix["entities"] >= n, (
-        f"the absent slots must resolve to their entities via frame_slot: {fix}")
+        f"the absent slots must resolve to their entities up the edge table: "
+        f"{fix}")
+
+
+async def test_a_slot_with_no_edge_path_is_unattributed(pg_conn, test_space):
+    """The honest failure. No edges means the two hops reach no entity, and
+    guessing would be worse than saying so: `resync_all_auxiliary_tables` is
+    the remedy and the log has to name it."""
+    n = await _load(pg_conn, test_space, "noedge", with_b=False)
+    fix = await _repair(pg_conn, test_space)
+    assert fix["unattributed"] >= n

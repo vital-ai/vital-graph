@@ -2189,7 +2189,11 @@ class MaintenanceJob:
         #
         # So it reports, at ERROR when there is a real gap, and the expensive
         # exact count runs ONLY when the cheap one has something to explain.
-        slot_gaps: dict = {}   # space_id -> genuinely absent slot rows
+        # DELIBERATELY NEVER POPULATED — see the note where the suspected
+        # shortfall is logged. Kept so the two decision points below read
+        # `slot_gaps.get(space_id, 0)` and are ready for an EXACT number, rather
+        # than being rewired when one exists.
+        slot_gaps: dict = {}
         for space_id in space_ids:
             try:
                 async with self._pool.acquire() as conn:
@@ -2201,14 +2205,16 @@ class MaintenanceJob:
                                 conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
                             real = sf["shortfall"] - valueless
                             if real > 0:
-                                logger.error(
-                                    "entity_slot_sort SLOT-LEVEL SHORTFALL: %s "
-                                    "has %d of %d slots, and %d of the %d "
-                                    "missing carry a VALUE — so %d rows are "
-                                    "genuinely absent. A per-entity coverage "
-                                    "probe cannot see this; a sort on the "
-                                    "affected slot type returns a short page. "
-                                    "See issues/194.",
+                                logger.warning(
+                                    "entity_slot_sort SUSPECTED SHORTFALL: %s "
+                                    "has %d of %d slots; %d of the %d missing "
+                                    "carry a value, so up to %d rows may be "
+                                    "absent. AN UPPER BOUND, not a gap: a slot "
+                                    "unreachable from an entity, or in a lane "
+                                    "this table does not split on, is absent "
+                                    "CORRECTLY. Confirm with "
+                                    "entity_slot_sort_drift before treating it "
+                                    "as real. See issues/194.",
                                     space_id, sf["table_rows"],
                                     sf["quad_slots"], real, sf["shortfall"],
                                     real)
@@ -2218,26 +2224,34 @@ class MaintenanceJob:
                                 # cannot close this gap — it seeds on entities
                                 # with no rows at all — so the slot-seeded form
                                 # is the only thing that can.
-                                slot_gaps[space_id] = real
-                                # BLOCK WHILE IT IS SHORT. Absence of a block
-                                # means SERVE, so a detected-but-unblocked
-                                # shortfall is knowingly serving a short page
-                                # for a sort and a plausible SUBSET for a
-                                # filter. That is a wrong answer, not a slow
-                                # one, so it cannot wait for a threshold.
+                                # DELIBERATELY DOES NOT BLOCK. An earlier
+                                # revision took a whole-space block here, on the
+                                # principle that a block-list serves on absence
+                                # so a detected shortfall must gate. The
+                                # principle is right; this number does not meet
+                                # it, because it is SUSPECTED and not DETECTED.
                                 #
-                                # WHOLE-SPACE, because attributing an absent
-                                # slot to an entity type needs the walk
-                                # `issues/151` removed from this loop. Coarse
-                                # and correct beats precise and unavailable:
-                                # the repair below drives the number to zero and
-                                # the release paths hold until it is zero, so
-                                # the block is self-limiting rather than the
-                                # permanent one `issues/167` documents.
-                                await take_slot_sort_block(
-                                    conn, space_id, None,
-                                    reason=f"{real} slot row(s) absent "
-                                           f"(issues/194)")
+                                # `shortfall - valueless` assumes the only
+                                # legitimate reason a slot is absent is having
+                                # no value. It is not. A slot not reachable from
+                                # an entity derives nothing, and so does one
+                                # whose value lane the table does not split on.
+                                # Measured on production `cardiff_kg`: 927 slots
+                                # absent, 99 of them value-less, so this
+                                # arithmetic claims 828 — while the per-entity
+                                # coverage probe, which IS exact for its own
+                                # question, reports all 5 types and all 84,629
+                                # entities complete. Blocking on 828 would have
+                                # turned the sort AND filter fast paths off for
+                                # the main production space over 0.03% of rows
+                                # that are probably all legitimate.
+                                #
+                                # Failing closed is only safe on an EXACT
+                                # number. The exact one is the derivation
+                                # itself (`entity_slot_sort_drift`), which is
+                                # the O(graph) walk `issues/151` removed from
+                                # this loop. So this reports and repairs, and
+                                # gating waits for a number that can carry it.
                                 fix = await backfill_entity_slot_sort_missing_slots(
                                     conn, space_id,
                                     timeout=PROBE_CLIENT_TIMEOUT_S)
