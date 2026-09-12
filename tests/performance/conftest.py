@@ -259,6 +259,20 @@ async def perf_record(request, perf_pool):
             # ANALYZEs these fixtures on its own schedule, so two runs of
             # identical code are not necessarily comparable (issues/112).
             _RUN.env["stats"] = await perf_record_mod.stats_stamp(conn)
+            # PER-SPACE BYTES, because a query touches ONE space and the
+            # aggregate tuple count cannot say whether it was resident
+            # (`issues/189`).
+            _RUN.env["sizes"] = await perf_record_mod.fixture_sizes(conn)
+            # AND RE-DERIVE THE RUNNER CLASS FROM WHAT IS ACTUALLY THERE.
+            # It was taken from VG_PERF_PERSIST / VG_PERF_SEEDED, which only
+            # `scripts/run-perf-tests.sh` sets — so a bare `pytest` run against
+            # a seeded stack stamped itself "clean" and was promoted. Done here
+            # rather than in `runner_stamp()` because only this scope has a
+            # connection.
+            _RUN.env["runner"] = perf_record_mod.reconcile_runner(
+                _RUN.env.get("runner") or {}, _RUN.env["stats"],
+                _RUN.env["sizes"],
+                perf_record_mod.shared_buffers_bytes(_RUN.env["pg"]))
 
     def _record(plan=None, metrics=None, *, bench_id=None, kind="query",
                 dataset=None, notes=None, **extra):

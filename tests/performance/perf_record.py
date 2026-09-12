@@ -163,6 +163,123 @@ async def stats_stamp(conn) -> Dict[str, Any]:
     return out
 
 
+async def fixture_sizes(conn) -> Dict[str, Any]:
+    """Bytes per SPACE — heap plus indexes — and the largest of them.
+
+    `issues/189`. The aggregate `fixture_live_tuples` reads as reassuring and
+    answers the wrong question: **a query touches ONE space.** 126,128,097 live
+    tuples across 260 tables says nothing about whether the space a bench read
+    was resident, and residency is what decides which plan wins.
+
+    Grouped by `space_id` from the `space` table rather than by the prefixes in
+    `STATS_FIXTURE_PREFIXES`, because `sp_lead_synth_` matches both
+    `sp_lead_synth_100k` (35 GB, out of memory) and `sp_lead_synth_10k`
+    (3.4 GB, resident) — merging them would hide the one property that matters.
+    """
+    out: Dict[str, Any] = {}
+    try:
+        spaces = [r["space_id"] for r in
+                  await conn.fetch("SELECT space_id FROM space")]
+        rows = await conn.fetch(
+            "SELECT relname, pg_total_relation_size(c.oid) AS bytes "
+            "  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+            " WHERE c.relkind IN ('r','p') AND n.nspname = 'public'")
+    except Exception:
+        return out
+    per: Dict[str, int] = {}
+    for r in rows:
+        name = r["relname"]
+        # Longest match wins: `sp_lead_synth_10k` is a prefix of nothing here,
+        # but a shorter space id could be a prefix of a longer one.
+        owner = max((sp for sp in spaces if name.startswith(sp + "_")),
+                    key=len, default=None)
+        if owner:
+            per[owner] = per.get(owner, 0) + int(r["bytes"] or 0)
+    if not per:
+        return out
+    gated = {sp: b for sp, b in per.items()
+             if any(sp.startswith(pre) for pre in STATS_FIXTURE_PREFIXES)}
+    out["space_bytes"] = dict(sorted(per.items(), key=lambda kv: -kv[1]))
+    if gated:
+        biggest = max(gated.items(), key=lambda kv: kv[1])
+        out["largest_gated_fixture"] = biggest[0]
+        out["largest_gated_fixture_bytes"] = biggest[1]
+    return out
+
+
+def reconcile_runner(runner: Dict[str, Any], stats: Dict[str, Any],
+                     sizes: Dict[str, Any],
+                     shared_buffers_bytes: Optional[int]) -> Dict[str, Any]:
+    """Re-derive the runner class from OBSERVED state; keep the flags as a check.
+
+    `issues/189`. `runner.class` is what `compare_env` uses to decide whether two
+    runs are comparable at all, and it was the one field taken on trust from an
+    environment variable. The committed `query.json` is stamped
+    `vg-test-docker-clean` while its own `stats` block records 126,128,097 live
+    tuples across 260 tables — a clean container mounts no volume and holds
+    none of that — and twelve of its cells read spaces that exist only on a
+    seeded stack. Both facts were in the same file and nothing compared them.
+
+    So the flags no longer decide. The DATABASE decides, the flags are recorded
+    beside it, and a DISAGREEMENT BLOCKS PROMOTION rather than silently
+    preferring either: a run that cannot say which environment it measured is
+    not a baseline, whichever way the mismatch points.
+    """
+    out = dict(runner)
+    tables = int(stats.get("fixture_tables") or 0)
+    tuples = int(stats.get("fixture_live_tuples") or 0)
+    # A clean container DB has no fixture tables at all — it is empty on every
+    # `up`. Any fixture rows mean the volume persisted or was seeded.
+    observed_persist = tables > 0 and tuples > 0
+    observed_seeded = observed_persist
+    out["observed"] = {"persist": observed_persist, "seeded": observed_seeded,
+                       "fixture_tables": tables, "fixture_live_tuples": tuples}
+    flags = {"persist": bool(runner.get("persist")),
+             "seeded": bool(runner.get("seeded"))}
+    out["flags"] = flags
+
+    base = "vg-test-docker" if runner.get("pg_port") == "5433" else "host-pg"
+    out["class"] = base + ("-persist" if observed_persist else "-clean")
+    out["persist"] = observed_persist
+    out["seeded"] = observed_seeded
+
+    if flags["persist"] != observed_persist or flags["seeded"] != observed_seeded:
+        out["flags_disagree"] = (
+            f"VG_PERF_PERSIST/VG_PERF_SEEDED say persist={flags['persist']} "
+            f"seeded={flags['seeded']}, but the database holds {tables} fixture "
+            f"table(s) and {tuples:,} live tuple(s). Class taken from the "
+            f"DATABASE. See issues/189.")
+        out["promotion_blocked"] = out["flags_disagree"]
+
+    # THE RESIDENCY PROPERTY, ASSERTED RATHER THAN INHERITED. Exactly one gated
+    # fixture exceeds `shared_buffers`, and it does so by accident; if that stops
+    # being true the suite measures only in-memory plans and nothing says so.
+    big = sizes.get("largest_gated_fixture_bytes")
+    if big is not None and shared_buffers_bytes:
+        out["largest_gated_fixture"] = sizes.get("largest_gated_fixture")
+        out["largest_gated_fixture_bytes"] = big
+        out["shared_buffers_bytes"] = shared_buffers_bytes
+        out["exceeds_shared_buffers"] = big > shared_buffers_bytes
+    return out
+
+
+def shared_buffers_bytes(pg: Dict[str, Any]) -> Optional[int]:
+    """`shared_buffers` as bytes. It is reported in 8 kB blocks by default."""
+    raw = (pg or {}).get("shared_buffers")
+    if raw is None:
+        return None
+    try:
+        return int(raw) * 8192
+    except (TypeError, ValueError):
+        pass
+    import re as _re
+    m = _re.match(r"^\s*(\d+)\s*([kKmMgGtT]?)B?\s*$", str(raw))
+    if not m:
+        return None
+    mult = {"": 1, "k": 1024, "m": 1024 ** 2, "g": 1024 ** 3, "t": 1024 ** 4}
+    return int(m.group(1)) * mult[m.group(2).lower()]
+
+
 async def pg_stamp(conn) -> Dict[str, Any]:
     settings: Dict[str, Any] = {}
     for name in PG_SETTINGS:

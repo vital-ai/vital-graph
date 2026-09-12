@@ -464,6 +464,36 @@ def report(run: Dict[str, Any], base: Dict[str, Any],
         findings.append({"bench": "-", "metric": "env", "level": WARN,
                          "detail": f"environment differs — {p}"})
 
+    # AN INCOMPARABLE PAIR IS ONE FINDING, NOT ONE PER CELL (`issues/189`).
+    #
+    # A clean run against a resident baseline differs in every fixture-dependent
+    # metric, so the per-bench pass below emitted a coverage failure for each of
+    # 103 cells. That is not 103 problems — it is one problem, restated until the
+    # real signal is unreadable and the habit becomes to skim past it.
+    #
+    # Refused on `runner.class`, which is the field that decides comparability at
+    # all, and on a baseline whose own stamp says it should never have been
+    # promoted (`promotion_blocked`, set when its flags disagree with its
+    # database). Returning here keeps NEW benches unreported too, deliberately:
+    # nothing in this pairing can be read, and a partial list invites reading it.
+    run_runner = (run.get("env", {}).get("runner") or {})
+    base_runner = (base.get("env", {}).get("runner") or {})
+    blocker = None
+    if base_runner.get("promotion_blocked"):
+        blocker = ("baseline is not promotable — its own stamp disagrees with "
+                   f"the database it measured: {base_runner['promotion_blocked']}")
+    elif (run_runner.get("class") and base_runner.get("class")
+            and run_runner["class"] != base_runner["class"]):
+        blocker = (f"runner class {run_runner['class']!r} cannot be compared to "
+                   f"baseline {base_runner['class']!r} — different environments "
+                   f"differ in every fixture-dependent metric. Re-run in the "
+                   f"baseline's environment, or promote a baseline for this one.")
+    if blocker:
+        findings.append({"bench": "-", "metric": "env", "level": FAIL,
+                         "detail": f"COMPARISON REFUSED: {blocker}"})
+        print(f"\n  ⛔ COMPARISON REFUSED — {blocker}")
+        return 1, findings
+
     for bench_id in sorted(base_b):
         findings.extend(compare_bench(bench_id, base_b[bench_id],
                                       cur_b.get(bench_id), thresholds,
