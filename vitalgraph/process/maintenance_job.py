@@ -2031,6 +2031,7 @@ class MaintenanceJob:
         from ..db.sparql_sql.fast_prop_sort import record_prop_sort_coverage
 
         recorded, short = 0, []
+        worst_short = None    # (shortfall, space_id) — repaired below
         for space_id in space_ids:
             for label, probe in (
                     ("entity", "entity_prop_sort_coverage"),
@@ -2056,6 +2057,14 @@ class MaintenanceJob:
                                     cov["in_table"], cov["of_type"])
                                 recorded += 1
                                 if cov["in_table"] < cov["of_type"]:
+                                    # Only the ENTITY probe drives the repair
+                                    # below; `frame_prop_sort` has no bounded
+                                    # batch yet and is tracked in `issues/194`.
+                                    if label == "entity":
+                                        gap = cov["of_type"] - cov["in_table"]
+                                        if (worst_short is None
+                                                or gap > worst_short[0]):
+                                            worst_short = (gap, space_id)
                                     short.append(
                                         f"{space_id}/{label}:{cov['in_table']}"
                                         f"/{cov['of_type']}")
@@ -2068,7 +2077,60 @@ class MaintenanceJob:
         if short:
             logger.warning("prop_sort coverage short on %d type(s): %s",
                            len(short), ", ".join(short[:5]))
-        return {"types_recorded": recorded, "short": len(short)} if recorded else None
+
+        # --- REPAIR, one bounded batch for the worst space (`issues/194`) ---
+        #
+        # This task MEASURED AND GATED AND NEVER REPAIRED. Every sibling derived
+        # table has a repairing task -- `_run_edge_integrity`,
+        # `_run_frame_slot_backfill`, `_run_entity_slot_sort_integrity` -- and
+        # reading the list it was easy to believe these two did as well. They
+        # were observed, not fixed, so a short table stayed short indefinitely.
+        #
+        # BOUNDED, not `backfill_entity_prop_sort`. That one is a single
+        # unbounded INSERT ... SELECT over the whole space; under an RDS
+        # `statement_timeout` it is killed and rolls back, making zero progress
+        # every cycle forever (`issues/151`, and `issues/136` for the same shape
+        # in VACUUM). One batch per cycle converges instead.
+        #
+        # WORST SPACE ONLY, matching the slot-sort task: repair work is serial
+        # against the same pool the queries use, and a cycle that tries every
+        # space starves reads.
+        repaired = None
+        if worst_short is not None:
+            _, space_id = worst_short
+            try:
+                from ..db.sparql_sql.sync_entity_prop_sort import (
+                    backfill_entity_prop_sort_batch)
+                async with self._pool.acquire() as conn:
+                    async with maintenance_timeouts(conn):
+                        selected, written = await backfill_entity_prop_sort_batch(
+                            conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
+                repaired = {"space": space_id, "selected": selected,
+                            "rows": written}
+                if selected and not written:
+                    # Selected but derived nothing: those entities carry a
+                    # sortable predicate whose object has no term row, so they
+                    # stay absent and would be selected again every cycle. Say
+                    # so once rather than spinning silently.
+                    logger.warning(
+                        "entity_prop_sort: %s selected %d entities and wrote 0 "
+                        "rows — they derive nothing, so this space cannot "
+                        "converge on its own. See issues/194.",
+                        space_id, selected)
+                elif written:
+                    logger.info(
+                        "entity_prop_sort: repaired %s — %d entities, %d rows.",
+                        space_id, selected, written)
+            except asyncpg.UndefinedTableError:
+                pass
+            except Exception as exc:
+                log_probe_failure("backfill_entity_prop_sort_batch",
+                                  space_id, exc)
+
+        out = {"types_recorded": recorded, "short": len(short)}
+        if repaired:
+            out["repaired"] = repaired
+        return out if recorded else None
 
     async def _run_entity_slot_sort_integrity(self, space_ids: List[str]) -> Optional[Dict]:
         """Fill {space}_entity_slot_sort one BOUNDED BATCH per cycle.

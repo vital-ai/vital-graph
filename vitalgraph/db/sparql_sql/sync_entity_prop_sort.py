@@ -346,6 +346,83 @@ async def backfill_entity_prop_sort(conn, space_id: str) -> int:
     return rows
 
 
+EPS_BACKFILL_BATCH = 500
+
+
+async def backfill_entity_prop_sort_batch(
+        conn, space_id: str, batch_size: int = None,
+        timeout: float | None = None) -> tuple[int, int]:
+    """Repair ONE BOUNDED BATCH of entities that are missing at least one pair.
+
+    `issues/194`. Two things wrong with putting `backfill_entity_prop_sort` on a
+    maintenance loop, and the second is the one that matters:
+
+    1. It is UNBOUNDED -- one `INSERT ... SELECT` over the whole space. Under an
+       RDS `statement_timeout` that is killed and rolls back, so it makes ZERO
+       progress every cycle, forever. That is `issues/151` for the slot table and
+       `issues/136` for VACUUM: an unbounded statement on a loop does not
+       converge, it just fails on a schedule.
+
+    2. SEEDING PER ENTITY WOULD NOT FIX THE GAP THIS ISSUE IS ABOUT.
+       `backfill_entity_slot_sort_batch` seeds on entities with NO rows at all
+       (`NOT EXISTS ... WHERE e.entity_uuid = q.subject_uuid`). Every entity in
+       the space that raised `194` already had 2 of its 5 property rows, so that
+       seed selects NOTHING and the table never heals. The missing thing is a
+       (entity, property) PAIR, so the seed has to be keyed on pairs.
+
+    Returns `(entities_selected, rows_written)`, and the caller needs both for
+    the same reason the slot-sort batch does:
+
+      selected == 0   nothing is missing a pair. Done.
+      selected  > 0
+        written  > 0  progress.
+        written == 0  these entities derive nothing -- the derivation joins the
+                      value and its term as INNER, so a property quad whose
+                      object has no term row yields no output. They stay absent
+                      and would be selected again forever, so the caller must
+                      treat this as "stop", not "retry".
+
+    `written` counts rows INSERTED OR UPDATED, because `_ON_CONFLICT` is DO
+    UPDATE; it is progress made, not strictly new pairs.
+    """
+    n = int(batch_size or EPS_BACKFILL_BATCH)
+    t = f"{space_id}_entity_prop_sort"
+    # PAIR-KEYED, and `context_uuid` is part of the key because the table's
+    # unique index is (entity, context, property) -- the same property in a
+    # second graph is a different row.
+    rows = await conn.fetch(
+        f"SELECT DISTINCT q.subject_uuid FROM {space_id}_rdf_quad q "
+        f" WHERE q.predicate_uuid = ANY($1) "
+        # POPULATION MEMBERSHIP, the same test the derivation and the probe
+        # apply. Seeding on `hasKGEntityType` alone would be BROADER than the
+        # derivation, so a subject carrying that predicate without being a
+        # KGEntity would be selected every cycle, derive nothing, and make the
+        # caller report "cannot converge" forever.
+        f"   AND EXISTS (SELECT 1 FROM {space_id}_rdf_quad v "
+        f"                WHERE v.subject_uuid = q.subject_uuid "
+        f"                  AND v.context_uuid = q.context_uuid "
+        f"                  AND v.predicate_uuid = $2 "
+        f"                  AND v.object_uuid = ANY($3)) "
+        f"   AND NOT EXISTS (SELECT 1 FROM {t} f "
+        f"                    WHERE f.entity_uuid = q.subject_uuid "
+        f"                      AND f.context_uuid = q.context_uuid "
+        f"                      AND f.property_uuid = q.predicate_uuid) "
+        f" LIMIT {n}",
+        _SORT_PROPS, _VITALTYPE, _KGENTITY_TYPES, timeout=timeout)
+    seeds = [r["subject_uuid"] for r in rows]
+    if not seeds:
+        return 0, 0
+    args = _args()
+    result = await conn.execute(
+        f"INSERT INTO {t} ({_INSERT_COLS}) "
+        f"{_select_rows(space_id, f'q.subject_uuid = ANY(${len(args) + 1})')} "
+        f"{_ON_CONFLICT}", *args, seeds, timeout=timeout)
+    written = int(result.split()[-1]) if result else 0
+    logger.info("backfill_entity_prop_sort_batch(%s): %d entities -> %d rows",
+                space_id, len(seeds), written)
+    return len(seeds), written
+
+
 # ---------------------------------------------------------------------------
 # Probes — two of them, because they fail in different directions
 # ---------------------------------------------------------------------------
@@ -392,13 +469,25 @@ async def entity_prop_sort_coverage(conn, space_id: str, limit: int = 5,
 
     This counts from the QUADS, which no derived table can influence.
 
-    A CLEAN INVARIANT MAKES THIS EXACT HERE, where for the sibling it is only a
-    heuristic. The denominator is entities carrying `hasKGEntityType` -- and
-    `hasKGEntityType` is ITSELF one of the seven properties this table indexes.
-    So every entity in the denominator must have at least the row for that
-    property. There is no "entity that legitimately has no rows" to explain away,
-    which for `entity_slot_sort` (an entity may simply own no frames) there is.
-    Anything short of 100% is a real gap.
+    COUNTED IN PAIRS, NOT ENTITIES, SINCE `issues/194`. Presence used to be
+    `EXISTS (... WHERE f.entity_uuid = o.entity_uuid)`, so ANY single row made an
+    entity covered. Run against prod `wordnet_frames`, which was missing three of
+    five properties for every one of its 109,745 entities -- 329,235 absent rows
+    -- that form reported **0 gaps and all four types COMPLETE**. Worse than
+    useless: `record_prop_sort_coverage` takes or releases the block from the
+    number it is handed, so that reading would have RELEASED the block and
+    written a positive completeness marker over a 60%-empty table.
+
+    The table is keyed (entity, context, property). A probe that counts subjects
+    cannot validate it; the unit has to be the key.
+
+    THE DENOMINATOR IS STILL EXACT, not a heuristic, for the reason it always
+    was: it counts (entity, property) pairs PRESENT IN THE QUADS for entities in
+    the population, and `hasKGEntityType` is itself one of the indexed
+    properties, so every entity in it has at least one pair due. There is no
+    "pair that legitimately has no row" to explain away, which for
+    `entity_slot_sort` (an entity may simply own no frames) there is. Anything
+    short of 100% is a real gap.
 
     Presence is tested by `entity_uuid`, NOT by the table's own type column --
     the sibling's first version grouped by the derived table's `entity_type_uuid`
@@ -410,39 +499,50 @@ async def entity_prop_sort_coverage(conn, space_id: str, limit: int = 5,
     # exactly when all is well, which makes it useless for the opposite
     # question the coverage MARKER needs: a positive statement of
     # completeness, not the absence of a complaint (`issues/161`).
-    _having = (f"HAVING count(*) FILTER (WHERE EXISTS (SELECT 1 FROM "
-               f"{space_id}_entity_prop_sort f WHERE f.entity_uuid = o.entity_uuid)) "
-               f"< count(*)") if only_gaps else ""
+    #
+    # COUNTED IN (entity, context, property) PAIRS SINCE `issues/194`, not in
+    # entities: the per-entity form reported 0 gaps and every type COMPLETE on a
+    # table missing 329,235 rows.
+    _present = (f"EXISTS (SELECT 1 FROM {space_id}_entity_prop_sort f"
+                f"  WHERE f.entity_uuid = p.entity_uuid"
+                f"    AND f.context_uuid = p.context_uuid"
+                f"    AND f.property_uuid = p.property_uuid)")
+    _having = (f"HAVING count(*) FILTER (WHERE {_present}) < count(*)"
+               if only_gaps else "")
     rows = await conn.fetch(f"""
-        WITH of_type AS (
-            SELECT DISTINCT q.object_uuid AS ty, q.subject_uuid AS entity_uuid
+        WITH pairs AS (
+            SELECT DISTINCT et.object_uuid AS ty,
+                   q.subject_uuid   AS entity_uuid,
+                   q.context_uuid   AS context_uuid,
+                   q.predicate_uuid AS property_uuid
               FROM {space_id}_rdf_quad q
-              JOIN {space_id}_term p ON p.term_uuid = q.predicate_uuid
-               AND p.term_text = $1
-             -- Population membership, or subjects that merely carry the
-             -- predicate would inflate the denominator and report a permanent
-             -- shortfall the backfill can never close.
-             WHERE EXISTS (
-                 SELECT 1 FROM {space_id}_rdf_quad v
-                  WHERE v.subject_uuid = q.subject_uuid
-                    AND v.context_uuid = q.context_uuid
-                    AND v.predicate_uuid = $2
-                    AND v.object_uuid = ANY($3)))
+              -- The type comes from the entity's own `hasKGEntityType`, which is
+              -- itself one of the indexed properties, so every entity in the
+              -- denominator has at least one pair due.
+              JOIN {space_id}_rdf_quad et
+                ON et.subject_uuid = q.subject_uuid
+               AND et.predicate_uuid = $1
+             WHERE q.predicate_uuid = ANY($4)
+               -- Population membership, unchanged: subjects that merely carry a
+               -- sortable predicate would inflate the denominator and report a
+               -- permanent shortfall the backfill can never close.
+               AND EXISTS (
+                   SELECT 1 FROM {space_id}_rdf_quad v
+                    WHERE v.subject_uuid = q.subject_uuid
+                      AND v.context_uuid = q.context_uuid
+                      AND v.predicate_uuid = $2
+                      AND v.object_uuid = ANY($3)))
         SELECT t.term_text AS entity_type,
-               o.ty        AS entity_type_uuid,
-               count(*) FILTER (WHERE EXISTS (
-                   SELECT 1 FROM {space_id}_entity_prop_sort e
-                    WHERE e.entity_uuid = o.entity_uuid)) AS in_table,
+               p.ty        AS entity_type_uuid,
+               count(*) FILTER (WHERE {_present}) AS in_table,
                count(*) AS of_type
-          FROM of_type o
-          JOIN {space_id}_term t ON t.term_uuid = o.ty
+          FROM pairs p
+          JOIN {space_id}_term t ON t.term_uuid = p.ty
          GROUP BY 1, 2
         {_having}
-         ORDER BY (count(*) - count(*) FILTER (WHERE EXISTS (
-                   SELECT 1 FROM {space_id}_entity_prop_sort e
-                    WHERE e.entity_uuid = o.entity_uuid))) DESC
+         ORDER BY (count(*) - count(*) FILTER (WHERE {_present})) DESC
          LIMIT {int(limit)}
-    """, ENTITY_TYPE_URI, _VITALTYPE, _KGENTITY_TYPES, timeout=timeout)
+    """, _ENTITY_TYPE, _VITALTYPE, _KGENTITY_TYPES, _SORT_PROPS, timeout=timeout)
     return [
         {"entity_type": r["entity_type"],
          "entity_type_uuid": r["entity_type_uuid"],
