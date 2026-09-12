@@ -22,13 +22,19 @@ from tests.performance.perf_record import (
 _CLEAN_FLAGS = {"class": "vg-test-docker-clean", "persist": False,
                 "seeded": False, "pg_port": "5433"}
 
+# Seeded is proved by the SEED-ONLY spaces holding bytes, not by a row estimate.
+_SEEDED_SIZES = {"space_bytes": {"wordnet_frames": 5962 * 1024 ** 2},
+                 "largest_gated_fixture": "wordnet_frames",
+                 "largest_gated_fixture_bytes": 5962 * 1024 ** 2}
+_EMPTY_SIZES = {"space_bytes": {}}
+
 
 def test_the_committed_baselines_exact_case_is_caught():
     """The stamp that motivated this: flags say clean, database says 126M rows."""
     out = reconcile_runner(
         _CLEAN_FLAGS,
         {"fixture_tables": 260, "fixture_live_tuples": 126128097},
-        {}, None)
+        _SEEDED_SIZES, None)
     assert out["class"] == "vg-test-docker-persist", (
         "the class must follow the database, not the flag")
     assert out["persist"] is True and out["seeded"] is True
@@ -38,7 +44,8 @@ def test_the_committed_baselines_exact_case_is_caught():
 
 def test_a_genuinely_clean_run_is_still_clean():
     out = reconcile_runner(
-        _CLEAN_FLAGS, {"fixture_tables": 0, "fixture_live_tuples": 0}, {}, None)
+        _CLEAN_FLAGS, {"fixture_tables": 0, "fixture_live_tuples": 0},
+        _EMPTY_SIZES, None)
     assert out["class"] == "vg-test-docker-clean"
     assert "promotion_blocked" not in out, "no disagreement, nothing to block"
 
@@ -48,7 +55,7 @@ def test_flags_claiming_persist_on_an_empty_database_also_disagree():
     measured an empty stack is equally unable to say what it measured."""
     out = reconcile_runner(
         {**_CLEAN_FLAGS, "persist": True, "seeded": True},
-        {"fixture_tables": 0, "fixture_live_tuples": 0}, {}, None)
+        {"fixture_tables": 0, "fixture_live_tuples": 0}, _EMPTY_SIZES, None)
     assert out["class"] == "vg-test-docker-clean"
     assert "promotion_blocked" in out
 
@@ -56,7 +63,8 @@ def test_flags_claiming_persist_on_an_empty_database_also_disagree():
 def test_the_flags_are_kept_for_the_record():
     """Recorded, not discarded — the disagreement is the evidence."""
     out = reconcile_runner(
-        _CLEAN_FLAGS, {"fixture_tables": 260, "fixture_live_tuples": 1}, {}, None)
+        _CLEAN_FLAGS, {"fixture_tables": 260, "fixture_live_tuples": 1},
+        _SEEDED_SIZES, None)
     assert out["flags"] == {"persist": False, "seeded": False}
     assert out["observed"]["fixture_tables"] == 260
 
@@ -64,7 +72,7 @@ def test_the_flags_are_kept_for_the_record():
 def test_host_pg_is_not_mislabelled_as_the_docker_stack():
     out = reconcile_runner(
         {"pg_port": "5432", "persist": False, "seeded": False},
-        {"fixture_tables": 12, "fixture_live_tuples": 5}, {}, None)
+        {"fixture_tables": 12, "fixture_live_tuples": 5}, _SEEDED_SIZES, None)
     assert out["class"] == "host-pg-persist"
 
 
@@ -73,7 +81,8 @@ def test_host_pg_is_not_mislabelled_as_the_docker_stack():
 def test_the_largest_gated_fixture_is_compared_to_shared_buffers():
     out = reconcile_runner(
         _CLEAN_FLAGS, {"fixture_tables": 1, "fixture_live_tuples": 1},
-        {"largest_gated_fixture": "sp_lead_synth_100k",
+        {"space_bytes": {"wordnet_frames": 1},
+         "largest_gated_fixture": "sp_lead_synth_100k",
          "largest_gated_fixture_bytes": 35 * 1024 ** 3},
         16 * 1024 ** 3)
     assert out["exceeds_shared_buffers"] is True
@@ -86,9 +95,7 @@ def test_an_all_resident_suite_is_recorded_as_such():
     rather than assumed."""
     out = reconcile_runner(
         _CLEAN_FLAGS, {"fixture_tables": 1, "fixture_live_tuples": 1},
-        {"largest_gated_fixture": "wordnet_frames",
-         "largest_gated_fixture_bytes": 5900 * 1024 ** 2},
-        16 * 1024 ** 3)
+        _SEEDED_SIZES, 16 * 1024 ** 3)
     assert out["exceeds_shared_buffers"] is False
 
 
@@ -158,3 +165,31 @@ def test_a_matching_environment_still_compares_normally():
     code, findings = _report(_run("vg-test-docker-persist"),
                              _run("vg-test-docker-persist"))
     assert not [f for f in findings if "COMPARISON REFUSED" in f["detail"]]
+
+
+def test_a_never_analyzed_seeded_stack_is_NOT_read_as_clean():
+    """THE DEFECT THE LIVE STACK EXPOSED.
+
+    `n_live_tup` is a statistics estimate and reads 0 for a table that has never
+    been ANALYZEd. On the real 105 GB seeded stack, 286 fixture tables are in
+    exactly that state — so a detector keyed on row counts called it CLEAN,
+    reproducing the bug it was written to fix. Bytes need no statistics.
+    """
+    out = reconcile_runner(
+        _CLEAN_FLAGS,
+        {"fixture_tables": 286, "fixture_live_tuples": 0},   # never ANALYZEd
+        {"space_bytes": {"lead_nurture_grouped": 45 * 1024 ** 3}}, None)
+    assert out["class"] == "vg-test-docker-persist", (
+        "seeded must be proved by bytes, not by a row estimate that ANALYZE "
+        "has not populated")
+    assert out["observed"]["seed_space_bytes"] > 0
+
+
+def test_a_clean_run_creating_its_own_fixtures_is_still_clean():
+    """Fixture TABLES prove nothing — a clean run creates them as it goes. Only
+    the seed-only spaces holding data prove the volume persisted."""
+    out = reconcile_runner(
+        _CLEAN_FLAGS,
+        {"fixture_tables": 40, "fixture_live_tuples": 1000},
+        {"space_bytes": {"sp_graph_skew_2k": 300 * 1024 ** 2}}, None)
+    assert out["class"] == "vg-test-docker-clean"

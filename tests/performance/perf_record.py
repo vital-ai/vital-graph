@@ -101,6 +101,14 @@ def runner_stamp() -> Dict[str, Any]:
     }
 
 
+# Spaces that exist ONLY on the seeded, persisted stack. Their presence WITH
+# DATA is what distinguishes a resident run from a clean one — a clean run
+# creates its own fixtures as it goes, so the existence of fixture tables proves
+# nothing on its own. `issues/189` records twelve baseline cells reading
+# `wordnet_frames` and `space_lead_dataset_test` under a stamp claiming clean.
+SEED_ONLY_SPACES = ("wordnet_frames", "space_lead_dataset_test",
+                    "lead_nurture_grouped")
+
 # The tables whose STATISTICS decide the plans this suite measures. Prefix
 # match, so every per-space table of a benchmark fixture is covered.
 STATS_FIXTURE_PREFIXES = ("sp_lead_synth_", "sp_graph_synth_", "sp_graph_skew_",
@@ -228,12 +236,29 @@ def reconcile_runner(runner: Dict[str, Any], stats: Dict[str, Any],
     out = dict(runner)
     tables = int(stats.get("fixture_tables") or 0)
     tuples = int(stats.get("fixture_live_tuples") or 0)
-    # A clean container DB has no fixture tables at all — it is empty on every
-    # `up`. Any fixture rows mean the volume persisted or was seeded.
-    observed_persist = tables > 0 and tuples > 0
+
+    # DERIVED FROM BYTES, NOT FROM `n_live_tup`.
+    #
+    # The obvious test is "are there fixture rows", and it is wrong: the first
+    # version of this read `fixture_live_tuples > 0` and reported the live
+    # 105 GB seeded stack as CLEAN. `n_live_tup` is a STATISTICS estimate and
+    # reads 0 for a table that has never been ANALYZEd, which is the state 286
+    # fixture tables on that stack are in — the same trap as `entity_slot_sort`
+    # carrying 3,877,000 rows with `last_analyze` NULL (`issues/194`). A
+    # detector for "was this seeded" must not depend on the thing the seeding
+    # forgot to do.
+    #
+    # `pg_total_relation_size` is exact and needs no statistics. And the signal
+    # is the SEED-ONLY spaces rather than total size, because a clean run
+    # creates its own fixtures as it goes: presence of tables proves nothing,
+    # presence of THESE spaces with data in them proves the volume persisted.
+    seed_bytes = sum(b for sp, b in (sizes.get("space_bytes") or {}).items()
+                     if any(sp.startswith(x) for x in SEED_ONLY_SPACES))
+    observed_persist = seed_bytes > 0
     observed_seeded = observed_persist
     out["observed"] = {"persist": observed_persist, "seeded": observed_seeded,
-                       "fixture_tables": tables, "fixture_live_tuples": tuples}
+                       "fixture_tables": tables, "fixture_live_tuples": tuples,
+                       "seed_space_bytes": seed_bytes}
     flags = {"persist": bool(runner.get("persist")),
              "seeded": bool(runner.get("seeded"))}
     out["flags"] = flags
@@ -246,9 +271,9 @@ def reconcile_runner(runner: Dict[str, Any], stats: Dict[str, Any],
     if flags["persist"] != observed_persist or flags["seeded"] != observed_seeded:
         out["flags_disagree"] = (
             f"VG_PERF_PERSIST/VG_PERF_SEEDED say persist={flags['persist']} "
-            f"seeded={flags['seeded']}, but the database holds {tables} fixture "
-            f"table(s) and {tuples:,} live tuple(s). Class taken from the "
-            f"DATABASE. See issues/189.")
+            f"seeded={flags['seeded']}, but the seed-only spaces hold "
+            f"{seed_bytes:,} bytes across {tables} fixture table(s). Class "
+            f"taken from the DATABASE. See issues/189.")
         out["promotion_blocked"] = out["flags_disagree"]
 
     # THE RESIDENCY PROPERTY, ASSERTED RATHER THAN INHERITED. Exactly one gated
