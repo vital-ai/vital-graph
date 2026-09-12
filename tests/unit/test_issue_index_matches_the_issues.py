@@ -86,3 +86,28 @@ def test_the_check_can_see_the_index():
     """Guard the guard: a regex that matches nothing would pass forever."""
     rows = _index_rows()
     assert len(rows) > 10, f"parsed only {len(rows)} rows — the row pattern broke"
+
+
+def test_issue_numbers_are_unique():
+    """Two files sharing a number is a silent editing hazard, not just untidy.
+
+    Added 2026-09-12 after doing it: `194` was first written as `190`, which
+    already existed. The number collided and so did the EDIT — a later script
+    reached for the file with `glob("190_*.md")`, matched the other one, and its
+    assertion failed, so a commit landed whose message described a body that was
+    never written.
+
+    Checking 185-189 for a free number and stopping there is what caused it; the
+    highest in use was 193.
+    """
+    import collections
+    import pathlib as _p
+    import re as _re
+
+    nums = collections.defaultdict(list)
+    for f in (_p.Path(__file__).resolve().parents[2] / "issues").glob("*.md"):
+        m = _re.match(r"^(\d+)_", f.name)
+        if m:
+            nums[m.group(1)].append(f.name)
+    dupes = {n: sorted(v) for n, v in nums.items() if len(v) > 1}
+    assert not dupes, f"issue numbers used more than once: {dupes}"
