@@ -623,3 +623,74 @@ def test_geo_predicates_are_real_predicates():
         + "\n\nA default that names a nonexistent predicate matches nothing and "
           "misleads every later reader into thinking it exists. Verify the URI "
           "against domain_schema before adding it.")
+
+
+def test_every_sync_called_is_also_IMPORTABLE_in_that_scope():
+    """A called name that does not resolve is a NameError at runtime.
+
+    `_maintains` was hardened to require a CALL rather than a mention, which
+    stopped an import from passing for a call. It does not check the reverse,
+    and the reverse happened: wiring `issues/194` put the calls in
+    `update_subjects_graph` while the imports landed in a sibling method's
+    scope. The matrix went green and the write path raised
+
+        update_subjects_graph failed: name 'sync_entity_slot_sort_before_delete'
+        is not defined
+
+    caught only by `test_write_conn_composition`. A maintenance call that cannot
+    run is worse than one that is missing, because the matrix reports the table
+    as maintained.
+
+    Scoped PER FUNCTION, matching `_maintains`: these modules import inside the
+    method deliberately, to keep a heavy import off the module's load path.
+    """
+    import ast
+
+    markers = {m for spec, _why in DERIVED.values() for m in spec
+               if m != _REBUILD}
+    problems = []
+    for label, path in MODULES.items():
+        src = path.read_text()
+        tree = ast.parse(src)
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            body = ast.get_source_segment(src, fn) or ""
+            called = {n for n in _called_sync_names(body, markers)}
+            if not called:
+                continue
+            imported = set()
+            for node in ast.walk(fn):
+                if isinstance(node, ast.ImportFrom):
+                    imported |= {a.name for a in node.names}
+                elif isinstance(node, ast.Import):
+                    imported |= {(a.asname or a.name).split(".")[0] for a in node.names}
+            # A module-level import satisfies it too.
+            for node in tree.body:
+                if isinstance(node, ast.ImportFrom):
+                    imported |= {a.name for a in node.names}
+            missing = called - imported
+            if missing:
+                problems.append(f"{label}.{fn.name}: {sorted(missing)}")
+    assert not problems, (
+        "sync functions are CALLED but not importable in that scope — this is a "
+        "NameError the matrix cannot see, because the call is present:\n  "
+        + "\n  ".join(problems))
+
+
+def _called_sync_names(body: str, markers) -> set:
+    """Names CALLED in `body` that start with one of the table markers.
+
+    WORD-ANCHORED, and the first version was not: the marker `sync_edge_table`
+    matched inside `resync_edge_table`, so every module that calls the resync
+    was reported as calling an unimportable `sync_edge_table`. The same
+    substring trap `_maintains` documents, reproduced in the guard written to
+    catch a different one.
+    """
+    import re
+    out = set()
+    for m in markers:
+        for name in re.findall(r"\b" + re.escape(m) + r"\w*", body):
+            if re.search(r"\b" + re.escape(name) + r"\(", body):
+                out.add(name)
+    return out

@@ -1671,6 +1671,12 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                         from ..db.sparql_sql.sync_edge_table import sync_edge_table_before_delete
                         await sync_edge_table_before_delete(conn, space_id, s_uuids, context_uuid=g_uuid)
                         _s2 = _time.monotonic()
+                        from ..db.sparql_sql.sync_entity_slot_sort import (
+                            sync_entity_slot_sort_before_delete)
+                        from ..db.sparql_sql.sync_entity_prop_sort import (
+                            sync_entity_prop_sort_after_change)
+                        from ..db.sparql_sql.sync_frame_prop_sort import (
+                            sync_frame_prop_sort_after_change)
                         # `entity_slot_sort` BEFORE the delete (`issues/194`):
                         # its rows are reached through the edge table the delete
                         # invalidates, so afterwards they cannot be found — and

@@ -1908,7 +1908,29 @@ async def _generate_sql(
                             continue
                         v = max(_total - v, 0)
                     _measured.append(((_p, None, None), v))
+                # ONLY CRITERIA THE HOP CAN USE (`issues/195`).
+                #
+                # This loop took the most selective measured criterion ANYWHERE
+                # in the query — the comment above says "any measured criterion
+                # qualifies" — and that is right only while the criterion
+                # narrows the hop. One edge further out it cannot: the hop is
+                # still walked in full to reach the node the filter applies to,
+                # and hop-wise emission then loses to the flat plan, which can
+                # use the frame_slot collapse.
+                #
+                # Measured on sp_graph_synth_10k, same shape, filter moved one
+                # level out: 434 flat against 1,083,090 hop-wise. 2,500x, and
+                # the gate chose hop-wise BECAUSE it priced that criterion
+                # correctly at 10%. The pricing was never wrong; counting it was.
+                #
+                # An empty set leaves `_crit` None, which is the same state as
+                # carrying no criterion at all and declines to hop-wise — the
+                # behaviour the structure-only query already had, at cost 47.
+                from .traversal_chain import chain_criterion_predicates
+                _usable = chain_criterion_predicates(plan, _chains[0])
                 for (p_uuid, _op, _lit), n in _measured:
+                    if _usable and p_uuid not in _usable:
+                        continue
                     total = (getattr(aliases, "pred_stats", None) or {}).get(p_uuid)
                     if total and (_crit is None or n / total < _crit / _pred):
                         _crit, _pred = n, total

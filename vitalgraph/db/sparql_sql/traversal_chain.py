@@ -481,6 +481,84 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set,
     return chains
 
 
+def chain_criterion_predicates(plan: PlanV2, chain: TraversalChain) -> set:
+    """Predicate uuids of criteria that constrain a node ON `chain`.
+
+    `issues/195`. The gate's rule is "a pinned end and a MEASURED criterion, so
+    walk hop by hop", and it counted ANY measured criterion anywhere in the
+    query — its own comment said "any measured criterion qualifies". That is
+    right only while the criterion narrows the HOP. A criterion one edge further
+    out cannot: the hop still has to be walked in full to reach the node the
+    filter applies to.
+
+    Measured on `sp_graph_synth_10k`, estimated plan cost, same query shape and
+    the filter moved one level out:
+
+        ?f{n}  hasScore ?sc . FILTER(?sc >= 50)      flat      434
+        ?nf{n} hasScore ?nsc . FILTER(?nsc >= 50)    hop-wise  1,083,090
+
+    2,500x, and the gate chose hop-wise for the second BECAUSE it could price
+    the criterion at 10% — which it did correctly. Pricing was never the
+    problem; counting a criterion the hop cannot use was.
+
+    "On the chain" means the criterion's SUBJECT variable sits at one of the
+    chain links' own source or destination columns. Returns the predicate uuids
+    that qualify, so the caller can keep those and drop the rest; an empty set
+    means "no criterion this walk can exploit", which is the same state as
+    having none and correctly declines to hop-wise.
+    """
+    bgp = _bgp_for(plan, {l.ref_id for l in chain.links})
+    if bgp is None:
+        return set()
+
+    col_var: Dict[Tuple[str, str], str] = {}
+    for var, slot in (bgp.var_slots or {}).items():
+        for ref_id, col in (getattr(slot, "positions", None) or []):
+            col_var[(ref_id, col)] = var
+
+    # The nodes this walk actually touches.
+    on_chain = set()
+    for link in chain.links:
+        for col in (link.source_col, link.dest_col):
+            v = col_var.get((link.ref_id, col))
+            if v is not None:
+                on_chain.add(v)
+    if not on_chain:
+        return set()
+
+    leaf_terms = getattr(bgp, "leaf_terms", None) or {}
+    out = set()
+    for (ref_id, col), term in leaf_terms.items():
+        if col != "predicate_uuid":
+            continue
+        subj = col_var.get((ref_id, "subject_uuid"))
+        if subj is None or subj not in on_chain:
+            continue
+        try:
+            from .emit_update import _generate_term_uuid
+            text, ttype = term[0], term[1]
+        except Exception:
+            continue
+        if ttype != "U":
+            continue
+        out.add(_generate_term_uuid(text, ttype))
+    return out
+
+
+def _bgp_for(plan: PlanV2, ref_ids: set, depth: int = 0):
+    """The BGP whose tables include `ref_ids`, or None."""
+    if plan is None or depth > 24 or not ref_ids:
+        return None
+    have = {t.ref_id for t in (getattr(plan, "tables", None) or [])}
+    if ref_ids <= have:
+        return plan
+    for child in (getattr(plan, "children", None) or []):
+        got = _bgp_for(child, ref_ids, depth + 1)
+        if got is not None:
+            return got
+    return None
+
+
 def describe_chains(plan: PlanV2) -> List[TraversalChain]:
     """Find chains and LOG them.
 
