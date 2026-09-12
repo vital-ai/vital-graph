@@ -1,8 +1,10 @@
 # Both Prop-Sort Tables Are Unmaintained By Seven Write Paths, And Were Absent From The Matrix
 
-## Status: PARTLY FIXED 2026-09-12 (`c00a5f83`). The entity side is repaired:
-## coverage counts PAIRS and the maintenance loop now backfills. Still open —
-## `frame_prop_sort`, and wiring the syncs into the seven write paths.
+## Status: FIXED 2026-09-12 (`c00a5f83`, `82a9e5eb`) for both prop tables:
+## coverage counts PAIRS and the maintenance loop repairs in bounded batches.
+## Still open — `entity_slot_sort`'s probe has the same keying, and the seven
+## write paths are still unwired (now a convergence-speed issue, not a
+## correctness one).
 
 The twin of `issues/187`, found by asking why `entity_prop_sort` existed in no
 local space. It does not reproduce 187 — it is a *different set of tables* with a
@@ -179,13 +181,31 @@ bounded batch for the worst-short space per cycle. Two details are load-bearing:
 
 ### STILL OPEN
 
-1. **`frame_prop_sort` is unchanged, deliberately.** Its probe's denominator
-   counts every `KGFrame` (`$1..$4` only) while the derivation stores ASSERTION
-   frames only, so re-keying it to pairs would multiply an adjacent pre-existing
-   denominator question rather than just fix the keying. And it does not complete
-   within two minutes against prod `cardiff_kg`, so the change could not be
-   validated the way the entity side was. Both need settling first: does any prod
-   space carry non-Assertion frames that this probe counts?
+1. ~~`frame_prop_sort` is unchanged~~ — **DONE in `82a9e5eb`.** Both reasons for
+   deferring it were wrong, and both are worth recording because they are the
+   kind of reason that sounds sufficient:
+
+   * "the probe does not finish in two minutes against prod `cardiff_kg`" — that
+     was a COMMAND TIMEOUT, not a property of the system. Raising it, the pair
+     comparison completes in about two minutes.
+   * "its denominator counts every `KGFrame` while the derivation stores
+     Assertion frames only" — taken from `scripts/migrate_frame_prop_sort.py`,
+     whose docstring was STALE. `_select_rows` indexes every frame and resolves
+     form type to a column; membership by form type could only answer traversals
+     whose results happened to share one (all 900,000 child frames on
+     `lead_nurture_grouped` are Aspect). There was no mismatch. The docstring is
+     corrected so the same inference is not drawn again.
+
+   The general lesson: a deferral justified by a tool limit and a comment is not
+   justified. Neither reason survived being checked.
+
+   And the validation did not need prod at all. "Does this block anything live?"
+   is a pair-count comparison — all four frame tables measured exactly complete
+   (cardiff_kg 1,214,433, lead_data 659,772, wordnet_frames 570,696, lead_prod
+   566,283) — while CORRECTNESS belongs in the local integration fixture, which
+   creates these tables. Re-running the expensive probe against a 48M-quad
+   production table would only have recomputed numbers already in hand.
+
 2. **`entity_slot_sort_coverage` has the same per-subject keying** and is not
    changed here either. Its gating is entangled with `issues/187`'s convergence
    machinery, and making it stricter could take blocks on live spaces — measure
@@ -198,7 +218,13 @@ bounded batch for the worst-short space per cycle. Two details are load-bearing:
    is missing pairs, at 500 per cycle — about 220 cycles. A one-off
    `resync_all_auxiliary_tables` (or the unbounded backfill in a maintenance
    window) repairs it at once. Not done: this issue has not touched prod.
-5. **`prop_sort_coverage` stores pair counts in columns named `entities_in_table`
+5. **Watch the probe's cost on the maintenance loop.** Re-keying to pairs adds a
+   join, so both probes are more expensive than before. The job wraps them in
+   `maintenance_timeouts` with `PROBE_CLIENT_TIMEOUT_S` and skips on failure via
+   `log_probe_failure`, so a probe that gets too slow degrades to "no coverage
+   recorded" — it takes no new block, but it also stops releasing old ones. The
+   place to learn this is the job's own telemetry, not ad-hoc scans of prod.
+6. **`prop_sort_coverage` stores pair counts in columns named `entities_in_table`
    / `entities_of_type`.** Not renamed — that is a prod migration for a comment's
    worth of clarity — but the names now understate what they hold. Note that the
    same table also receives FRAME type rows in its `entity_type_uuid` column,
