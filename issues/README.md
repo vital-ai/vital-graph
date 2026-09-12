@@ -1,7 +1,7 @@
 # Issues
 
 Numbered, append-only, one defect each. Resolved ones move to `archive/` —
-76 there, 100 live. An issue is archived only when nothing remains to do:
+76 there, 116 live. An issue is archived only when nothing remains to do:
 "FIXED in the converter, existing spaces need reloading" is not resolved, it is
 half-done, and it stays here.
 
@@ -142,6 +142,22 @@ caller, which is what makes that file worth a sweep rather than two point fixes.
 | 084 | FIXED | Load-test setup wrote an empty entity list over a TRACKED file when the space was already seeded, printed it as success, and told you to re-run the command that did it |
 
 | 022 | RESOLVED | **RESOLVED 2026-08-18 — the last class is swept.** E2E list-visibility flake under parallel load; one class not swept |
+
+## The performance suite's own coverage — found 2026-09-12
+
+Six gaps in the measurement apparatus, not in the database. Survey and
+sequencing: `planning/planning_performance/perf_coverage_gaps_plan.md`. The
+ordering is load-bearing — `190` must come after `188` and `189`, or a fresh
+baseline bakes both in.
+
+| | status | |
+|---|---|---|
+| **188** | PARTLY FIXED | **The gate that was disabled rather than failing.** A metric with no rule in `thresholds.toml` was dropped at a bare `continue` — 106 of 121 recorded names, and 37/108 query cells had no gating metric and no plan shape. The absence is now reported; the rules are still unwritten. Read for the `issues/081` shape repeating |
+| 189 | OPEN | `runner.class` is stamped from an env var, so the committed baseline says `vg-test-docker-clean` and was measured on a seeded 105 GB stack. Also: the aggregate tuple count is the wrong stat — per-fixture size is what decides whether a plan is representative |
+| 190 | OPEN | Both baselines promoted 2026-08-22 from a DIRTY tree; 126 commits to `vitalgraph/` since. Blocked on 188 and 189 by design |
+| 191 | PARTLY FIXED | The test stack matches production's `shared_buffers` and `effective_cache_size` exactly and diverges on `random_page_cost` (4 vs 1.1) — the right-sized server with the wrong cost model. README corrected; the setting changes plan shapes, so it lands with 190 |
+| 192 | OPEN | Whole subsystems with no bench: SPARQL UPDATE/DELETE, vector, geo, text search, export, entity-graph. Writes are 3 cells. R6 re-counted |
+| 193 | OPEN | **No bench anywhere touches OPTIONAL, MINUS, BIND, a sub-SELECT or a property path.** `178`-`182` are all shape defects and none is benched. The harness (`query_shape_audit.py`) and the shape enumeration (1,120 DAWG `.rq`) both already exist |
 
 ## Other
 
