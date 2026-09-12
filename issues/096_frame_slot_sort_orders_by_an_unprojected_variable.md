@@ -175,11 +175,57 @@ value. The same trap appeared in the test suite — a precedence test that was
 green under a mutation that broke precedence, because with the first key
 constant the leading key is unobservable. Worth a cap with the rest declining.
 
-**What remains.** `entity_property_filters` and a slot with no frame hop are
-still declined and still unmeasured. The no-frame-hop shape CANNOT be served
-this way at all — it is absent from the table by construction — so it is the
-one genuine candidate left for a direction gate, and the gate should be judged
-on it rather than on the two queries at the top of this issue.
+**What remains, measured 2026-09-11.** Both surviving declines were priced.
+Neither yields a direction gate, and one of them turned up a different defect
+entirely.
+
+**A. `entity_property_filters` + sort.** Slow only when the filter is BROAD:
+
+    + status eq ACTIVE  (matches all 2,863)   1,007,597 buf   548.9 ms
+    + hasName eq        (matches one)               341 buf     0.4 ms
+
+A selective property filter already drives the query and needs nothing. The
+broad one is genuinely slow, and the table CAN answer it — an entity-property
+EXISTS against the quad table, correlated on `entity_uuid`. The floor is **8,755
+buffers / 136.7 ms**, 115x fewer buffers than the pipeline.
+
+**But the planner will not choose it, and the reason is not this table.** Every
+natural formulation came out SLOWER than the pipeline it would replace:
+
+    correlated EXISTS                        674,061 buf   1,373.6 ms
+    filter set as a MATERIALIZED CTE, IN     674,061 buf   1,431.9 ms
+    the same, with a hash join forced          8,755 buf     136.7 ms
+
+The nested loop is driven by the filter set, probing the sort index 8,755 times.
+Its cause is the QUAD table's `(predicate_uuid, object_uuid)` estimate: **1 row
+against 8,755 actual**, despite `rdf_quad` being analyzed and extended
+statistics being in place on exactly that pair (see the section above, and
+`issues/139`). Forcing the join is available but it is a fence, and this
+codebase has a measured history of fences that win one shape and lose another.
+So A is left OPEN and blocked on a cardinality estimate, not on a missing
+feature. Reopening it should start from that estimate.
+
+**B. A slot with no frame hop — THE SHAPE HAS NO DATA.** This was the one
+candidate left for a direction gate, since it cannot come from the table by
+construction. It cannot be measured either:
+
+    cardiff_kg          entity-sourced Edge_hasKGSlot          0
+    sp_lead_synth_100k  slots 3,877,000 = framed sort rows 3,877,000
+
+The generated query looks for `Edge_hasKGSlot` whose source is the entity rather
+than a frame, and no local space contains one. So **the direction gate now has
+no measured case at all**: its 2.9x arm is served by the table, its 87x arm is
+the regression, the two-key shape was better answered another way, the
+property-filter shape is blocked on an estimate, and this shape does not occur.
+It should not be built until a real query needs it.
+
+**And the real find was elsewhere.** Chasing A's `rows=1` showed that
+`entity_slot_sort` **was never ANALYZEd** — absent from
+`_maybe_analyze_aux_tables`, and nothing else in the tree analyzes it. Found
+with 3,877,000 rows and `last_analyze` NULL on `sp_lead_synth_100k`, and 304,923
+rows never analyzed on `cardiff_kg`. Every plan joining the sort table was being
+chosen with no statistics for it. Fixed in `562d111a` with a static guard,
+though it does NOT fix A: the estimate blocking A is the quad table's.
 
 What landed, all in `vitalgraph/sparql/kg_query_builder.py`:
 
