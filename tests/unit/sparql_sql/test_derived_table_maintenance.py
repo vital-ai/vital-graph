@@ -152,6 +152,22 @@ DERIVED = {
                           "delete_entity_slot_sort_for_context", _REBUILD),
                          "denormalised entity->frame->slot sort values; a slot "
                          "sort reads its ORDER from this table"),
+    # ADDED 2026-09-12. These were absent while `entity_slot_sort` was present,
+    # which is the blind spot `issues/185` was about repeating one level down:
+    # the matrix can only report on tables it lists.
+    #
+    # WORSE FAILURE MODE THAN THE SLOT TABLE, and that is why they belong here.
+    # `entity_slot_sort` going stale mis-ORDERS a page. These two are read by a
+    # FILTER as well, and their read gate (`prop_sort_block`) is a BLOCK-LIST —
+    # absence means SERVE — so a short table is not declined, it answers with a
+    # plausible SUBSET and a count that agrees with it.
+    "entity_prop_sort": (("sync_entity_prop_sort",
+                          "delete_entity_prop_sort_for_context", _REBUILD),
+                         "denormalised direct entity properties; a property "
+                         "sort or FILTER reads this table"),
+    "frame_prop_sort": (("sync_frame_prop_sort",
+                         "delete_frame_prop_sort_for_context", _REBUILD),
+                        "the same for top-level (Assertion) frames"),
     # STATS IS DELIBERATELY NOT IN THIS MATRIX ANY MORE.
     #
     # `rdf_stats` is no longer a write-path-maintained mirror. It is RECOMPUTED
@@ -191,6 +207,15 @@ EXEMPT: dict[tuple[str, str], str] = {
     (("kg_backend", "update_entity_subject_only"), "edge"): _SUBJECT_ONLY,
     (("kg_backend", "update_entity_subject_only"), "frame_slot"): _SUBJECT_ONLY,
     (("kg_backend", "update_entity_subject_only"), "entity_slot_sort"): _SUBJECT_ONLY,
+    # `frame_prop_sort` for the SAME reason as `frame_slot`: an entity subject is
+    # not a frame, so no top-level-frame property row can describe it.
+    (("kg_backend", "update_entity_subject_only"), "frame_prop_sort"): _SUBJECT_ONLY,
+    # `entity_prop_sort` is DELIBERATELY NOT EXEMPT HERE. The reason above stops
+    # exactly short of it: the entity subject carries no edge and is not a frame,
+    # but its OWN direct quads are precisely what `entity_prop_sort` indexes. A
+    # path that deletes them and leaves that table is the one case where
+    # "subject only" makes the mirror wrong rather than irrelevant. Listed in
+    # KNOWN_GAPS below, and it is the most severe of them.
 }
 
 # Pairs that are KNOWN BROKEN, kept as expected failures so the test passes on
@@ -222,6 +247,25 @@ _ESS_GAP = (
     "`issues/187`; these stay named here until wired."
 )
 
+_PROP_GAP = (
+    "maintains `edge` and `frame_slot` but NEITHER prop-sort table. Surfaced "
+    "2026-09-12 by adding them to DERIVED; they were simply absent before, which "
+    "is `issues/185` one level down -- the matrix reports only on tables it "
+    "lists. WORSE THAN THE SLOT-TABLE GAP: these are read by a FILTER as well as "
+    "a sort, and their gate (`prop_sort_block`) is a BLOCK-LIST, so absence means "
+    "SERVE. A short table is not declined -- it answers with a plausible SUBSET "
+    "and a count that agrees with it. Tracked in `issues/190`."
+)
+
+_EPS_SUBJECT_GAP = (
+    "THE SEVERE ONE. `update_entity_subject_only` deletes exactly the quads "
+    "hanging off the entity subject, and those are precisely what "
+    "`entity_prop_sort` indexes -- so unlike `edge`, `frame_slot` and "
+    "`entity_slot_sort`, which are legitimately exempt on this path, here the "
+    "mirror is left describing properties the entity no longer has. A FILTER on "
+    "a removed value still matches. Tracked in `issues/190`."
+)
+
 KNOWN_GAPS: dict[tuple[str, str], str] = {
     (("kg_backend", "upsert_objects_atomic"), "entity_slot_sort"): _ESS_GAP,
     (("kg_backend", "update_entity_graph"), "entity_slot_sort"): _ESS_GAP,
@@ -229,6 +273,22 @@ KNOWN_GAPS: dict[tuple[str, str], str] = {
     (("data_import", "import_ntriples_incremental"), "entity_slot_sort"): _ESS_GAP,
     (("data_import", "import_jsonl_quads_incremental"), "entity_slot_sort"): _ESS_GAP,
     (("data_import", "import_vital_block_incremental"), "entity_slot_sort"): _ESS_GAP,
+    # `entity_prop_sort` / `frame_prop_sort`, surfaced 2026-09-12 by listing them
+    # in DERIVED at all. See `issues/190`. Same seven paths as the slot table,
+    # plus the subject-only path for `entity_prop_sort` (see EXEMPT above).
+    (("kg_backend", "update_entity_subject_only"), "entity_prop_sort"): _EPS_SUBJECT_GAP,
+    (("kg_backend", "upsert_objects_atomic"), "entity_prop_sort"): _PROP_GAP,
+    (("kg_backend", "update_entity_graph"), "entity_prop_sort"): _PROP_GAP,
+    (("kg_backend", "update_subjects_graph"), "entity_prop_sort"): _PROP_GAP,
+    (("data_import", "import_ntriples_incremental"), "entity_prop_sort"): _PROP_GAP,
+    (("data_import", "import_jsonl_quads_incremental"), "entity_prop_sort"): _PROP_GAP,
+    (("data_import", "import_vital_block_incremental"), "entity_prop_sort"): _PROP_GAP,
+    (("kg_backend", "upsert_objects_atomic"), "frame_prop_sort"): _PROP_GAP,
+    (("kg_backend", "update_entity_graph"), "frame_prop_sort"): _PROP_GAP,
+    (("kg_backend", "update_subjects_graph"), "frame_prop_sort"): _PROP_GAP,
+    (("data_import", "import_ntriples_incremental"), "frame_prop_sort"): _PROP_GAP,
+    (("data_import", "import_jsonl_quads_incremental"), "frame_prop_sort"): _PROP_GAP,
+    (("data_import", "import_vital_block_incremental"), "frame_prop_sort"): _PROP_GAP,
 }
 
 
