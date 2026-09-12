@@ -242,9 +242,42 @@ bounded batch for the worst-short space per cycle. Two details are load-bearing:
      exact count runs ONLY to explain a nonzero cheap one, and the two causes
      are subtracted before anything is logged.
 
-   So the honest state is: a missing slot type is now VISIBLE at ERROR, and
-   still not gated. Gating it needs the per-type attribution, and that wants its
-   own measurement.
+   **AND REPAIRED, `c6716b0f`.** The alarm on its own had nothing able to act on
+   it: `backfill_entity_slot_sort_batch` seeds on entities with NO rows, so an
+   entity holding slot-A rows while missing slot-B is never selected. That is
+   exactly the state `entity_prop_sort` was in, and the reason fixing only a
+   probe produces a permanent, correct, unactionable error.
+
+   `backfill_entity_slot_sort_missing_slots` seeds on the ABSENT SLOTS, in three
+   bounded steps: find them (the `NOT EXISTS` probes the primary key
+   `(slot_uuid, context_uuid)`, one index probe per candidate, `LIMIT` stops
+   early), resolve their entities from `frame_slot`, which stores
+   `(slot_uuid, entity_uuid)` directly, then re-derive those entities
+   idempotently. `frame_slot` rather than a reverse walk up `edge`: that needs
+   recursion through nested frames for the same answer, and this derivation
+   already walks `edge`, so it is the same class of dependency, not a new one.
+
+   Slots with no `frame_slot` row are counted as **`unattributed`** and reported
+   at ERROR, not skipped — both mirrors are short for those, so nothing
+   incremental can rebuild them and `resync_all_auxiliary_tables` is the remedy.
+   Returning 0 rows silently would read as "nothing to do" on a space that needs
+   a full resync. (The commit message for `c6716b0f` lost that field name to
+   shell backtick expansion; the field is `unattributed`.)
+
+   **GATING IS STILL NOT DONE, and may not be the right goal.** Both available
+   routes are bad:
+
+   * per-ENTITY-TYPE attribution, which `slot_sort_block` is keyed on, needs the
+     entity->frame->slot walk `issues/151` removed from this loop;
+   * a WHOLE-SPACE block is exact and needs no attribution, but it turns the
+     fast path off for everything — the schema comments already record an
+     eleven-minute outage on a 74.5M-quad space from taking one — and it would
+     do that over a shortfall that may be a single row in 3.8M.
+
+   With a working repair the gap now closes on its own, which is what a gate was
+   wanted for. The remaining question is whether a shortfall large enough to
+   matter should escalate to a block, and that is a threshold decision rather
+   than a measurement.
 3. **Wire the syncs into the seven write paths**, starting with
    `update_entity_subject_only` for `entity_prop_sort`. Lower priority now: with
    a pair-keyed probe and a working repair the drift self-heals, so this is a
