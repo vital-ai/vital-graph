@@ -187,7 +187,9 @@ def can_serve(criteria) -> bool:
             # query, exactly as it does on the filter path: a partially applied
             # conjunction is a wrong answer, not a slow one.
             return False
-    if getattr(criteria, "entity_property_filters", None):
+    # Entity-property filters are SERVED when every one is an equality on a
+    # URI-valued property (`entity_prop_filters` explains the restriction).
+    if entity_prop_filters(criteria) is None:
         return False
     if getattr(criteria, "entity_uris", None):
         return False
@@ -245,6 +247,99 @@ def _filter_exists(t: str, criteria, args: list) -> str:
     return "\n              ".join(out)
 
 
+def entity_prop_filters(criteria):
+    """The entity-property filters this path can answer, or None if any cannot.
+
+    None means DECLINE THE WHOLE QUERY. Applying some filters and ignoring the
+    rest returns a superset with a plausible count and no error, which is the
+    same rule `fast_slot_filter._eq_criteria` follows for frame criteria.
+
+    ONLY `eq` ON A URI-VALUED PROPERTY. The value has to be resolved to a
+    `term_uuid` to probe the quad table, and for a URI that hash is unambiguous
+    (`uuid5(ns, text + "\x00U")`, which is `_term_uuid` here). A LITERAL also
+    folds in `lang` and a space-local numeric `datatype_id`, so guessing it
+    wrong does not error -- it matches no term, and the page comes back EMPTY
+    but well-formed. Declining costs a fallback; guessing costs a wrong answer.
+
+    The datatype is DECLARED, not inferred, in the builder's own map, so this
+    reads that map rather than sniffing the value. Today it admits
+    `hasObjectStatusType` and `hasKGEntityType`; the other three declared
+    properties are string or dateTime and decline here.
+    """
+    epf = getattr(criteria, "entity_property_filters", None)
+    if not epf:
+        return []
+    try:
+        from ...sparql.kg_query_builder import _FILTERABLE_ENTITY_PROPERTIES
+    except Exception:
+        return None
+    out = []
+    for f in epf:
+        if getattr(f, "operator", None) != "eq":
+            return None
+        val = getattr(f, "value", None)
+        if not isinstance(val, str):
+            return None
+        if _FILTERABLE_ENTITY_PROPERTIES.get(getattr(f, "property_uri", None)) != "uri":
+            return None
+        out.append((f.property_uri, val))
+    return out
+
+
+def _prop_filter_exists(space_id: str, props, args: list) -> str:
+    """EXISTS clauses on the quad table, correlated on `entity_uuid`.
+
+    The property lives on the ENTITY, not in `entity_slot_sort`, so unlike the
+    frame criteria in `_filter_exists` this cannot stay inside the sort table.
+    Scoped to `context_uuid` because the generated SPARQL puts these patterns
+    inside `GRAPH <...>`; an unscoped probe would match a property asserted in
+    another graph.
+
+    Measured on `cardiff_kg`, a broad filter (status ACTIVE, matching all 2,863)
+    with a CompanyName sort: 1,007,597 buffers / 548.9 ms through the general
+    pipeline, against 8,751 buffers / 23 ms here. The planner picks a hash semi
+    join unaided -- the `rows=1` misestimate that first appeared while probing
+    this was an artefact of resolving the constants with inline sub-SELECTs,
+    which are opaque at plan time; as bound parameters the estimate is 8,666
+    against 8,755 actual.
+    """
+    q = f"{space_id}_rdf_quad"
+    out = []
+    for i, (prop_uri, val) in enumerate(props):
+        # INLINED AS LITERALS, NOT BOUND AS PARAMETERS -- deliberately, and it is
+        # the difference between 10 ms and 1,180 ms.
+        #
+        # asyncpg prepares every statement, and PostgreSQL switches a prepared
+        # statement to a GENERIC plan after five executions. A generic plan
+        # cannot see the parameter values, so it cannot know this predicate
+        # matches 8,755 rows, and it reverts to the nested loop that drives off
+        # the filter set. Measured on one connection, same statement:
+        #
+        #     exec 1-5     ~10 ms      custom plan, values known
+        #     exec 6+    ~1,180 ms     generic plan
+        #
+        # A pooled server holds prepared statements across requests, so real
+        # traffic lands on the second number, permanently. The frame-criteria
+        # EXISTS in `_filter_exists` does NOT have this problem and stays
+        # parameterised: it probes `entity_slot_sort` on its own leading index
+        # columns, where the generic plan is the same good plan (measured flat
+        # at 0.6 ms over eight executions).
+        #
+        # Safe to inline because these are `uuid.UUID` values produced by
+        # `_term_uuid`, a uuid5 hash -- not caller text. The assertion keeps it
+        # that way rather than trusting the call site.
+        prop_u, val_u = _term_uuid(prop_uri), _term_uuid(val)
+        assert isinstance(prop_u, uuid.UUID) and isinstance(val_u, uuid.UUID)
+        a = f"p{i}"
+        out.append(
+            f"AND EXISTS (SELECT 1 FROM {q} {a}"
+            f" WHERE {a}.subject_uuid = {space_id}_entity_slot_sort.entity_uuid"
+            f"   AND {a}.context_uuid = $1"
+            f"   AND {a}.predicate_uuid = '{prop_u}'::uuid"
+            f"   AND {a}.object_uuid = '{val_u}'::uuid)")
+    return "\n              ".join(out)
+
+
 def _grouped(space_id: str, graph_uri: str, criteria, keys):
     """The grouped population the page and the count must BOTH be drawn from.
 
@@ -287,6 +382,9 @@ def _grouped(space_id: str, graph_uri: str, criteria, keys):
 
     # Filters append to `args`, so every placeholder above must already be in it.
     where_filters = _filter_exists(t, criteria, args)
+    props = entity_prop_filters(criteria)
+    if props:
+        where_filters += "\n              " + _prop_filter_exists(space_id, props, args)
     where = (f"context_uuid = $1 AND entity_type_uuid = $2 "
              f"AND frame_type_path = $3 "
              f"AND slot_type_uuid IN ({', '.join(slot_ph)})"

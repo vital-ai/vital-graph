@@ -23,13 +23,19 @@ and letting it reach the general pipeline.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from vitalgraph.db.sparql_sql.fast_slot_sort import (
-    MAX_SORT_KEYS, can_serve, sort_keys)
+    MAX_SORT_KEYS, _prop_filter_exists, can_serve, entity_prop_filters,
+    sort_keys)
 
 HALEY = "http://vital.ai/ontology/haley-ai-kg#"
 TEXT = HALEY + "KGTextSlot"
+_STATUS = "http://vital.ai/ontology/vital-aimp#hasObjectStatusType"
+_ACTIVE = "http://vital.ai/ontology/vital-aimp#ObjectStatusType_ACTIVE"
+_ENTITY_TYPE = "http://vital.ai/ontology/haley-ai-kg#hasKGEntityType"
 
 
 class _Sort:
@@ -155,7 +161,47 @@ def test_entity_uris_is_refused_and_the_direction_gate_depends_on_it():
     assert not can_serve(_Crit(entity_uris=["urn:e:1"]))
 
 
-def test_entity_property_filters_are_refused():
+class _Prop:
+    def __init__(self, property_uri=_STATUS, operator="eq", value=_ACTIVE):
+        self.property_uri, self.operator, self.value = property_uri, operator, value
+
+
+def test_an_equality_on_a_URI_valued_property_IS_served():
+    """Served since 2026-09-11. Measured on cardiff_kg: a broad status filter
+    with a slot sort was 1,007,597 buffers / 548.9 ms through the general
+    pipeline, against ~15 ms here."""
+    assert can_serve(_Crit(entity_property_filters=[_Prop()]))
+
+
+def test_a_non_equality_operator_is_refused():
+    assert not can_serve(_Crit(entity_property_filters=[_Prop(operator="contains")]))
+
+
+@pytest.mark.parametrize("prop", [
+    "http://vital.ai/ontology/vital-core#hasName",                  # string
+    "http://vital.ai/ontology/vital-aimp#hasObjectCreationTime",    # dateTime
+    "http://vital.ai/ontology/vital-core#nonesuch",                 # undeclared
+])
+def test_a_property_that_is_not_URI_valued_is_refused(prop):
+    """A literal's term uuid folds in lang and a space-local numeric datatype
+    id. Guessing it wrong does not error — it matches no term, and the page
+    comes back EMPTY but well formed. So only URI values, whose hash is
+    unambiguous, are served."""
+    assert not can_serve(_Crit(entity_property_filters=[_Prop(property_uri=prop)]))
+
+
+def test_one_unservable_filter_refuses_the_WHOLE_query():
+    """Applying some filters and ignoring the rest returns a superset with a
+    plausible count and no error."""
+    assert not can_serve(_Crit(entity_property_filters=[
+        _Prop(), _Prop(property_uri="http://vital.ai/ontology/vital-core#hasName")]))
+
+
+def test_a_non_string_value_is_refused():
+    assert not can_serve(_Crit(entity_property_filters=[_Prop(value=["a", "b"])]))
+
+
+def test_a_filter_object_without_an_operator_is_refused():
     assert not can_serve(_Crit(entity_property_filters=[object()]))
 
 
@@ -184,3 +230,41 @@ def test_an_equality_frame_criterion_IS_served():
     c = _Crit(frame_criteria=[_Frame()])
     assert _eq_criteria(c.frame_criteria), "precondition: parses as an equality"
     assert can_serve(c)
+
+
+# --- the generic-plan defence -----------------------------------------------
+
+def test_the_property_constants_are_INLINED_not_bound():
+    """A bound parameter here costs 100x after five executions.
+
+    asyncpg prepares every statement and PostgreSQL switches to a GENERIC plan
+    on the sixth execution. A generic plan cannot see the value, so it cannot
+    know the predicate matches 8,755 rows, and it reverts to a nested loop.
+    Measured on one connection, same statement: ~10 ms for executions 1-5, then
+    ~1,180 ms for 6 onward, permanently — and a pooled server keeps prepared
+    statements across requests.
+
+    So this asserts the SHAPE of the emitted SQL, because the cost of getting it
+    wrong does not show up in any correctness test and does not appear until the
+    sixth call.
+    """
+    args = ["ctx"]
+    sql = _prop_filter_exists("sp", entity_prop_filters(
+        _Crit(entity_property_filters=[_Prop()])), args)
+    assert "::uuid" in sql, "constants must be inlined as literals"
+    assert args == ["ctx"], (
+        f"nothing may be appended to args — a $n placeholder is the generic-plan "
+        f"bug this guards. got {args!r}")
+    import re
+    # $1 is the context and stays bound; no OTHER placeholder may appear.
+    assert not set(re.findall(r"\$(\d+)", sql)) - {"1"}, sql
+
+
+def test_each_filter_gets_its_own_alias():
+    """Two filters on one query must not collide on the subquery alias."""
+    props = entity_prop_filters(_Crit(entity_property_filters=[
+        _Prop(), _Prop(property_uri=_ENTITY_TYPE, value="urn:t:E")]))
+    sql = _prop_filter_exists("sp", props, ["ctx"])
+    assert sql.count("EXISTS") == 2
+    aliases = set(re.findall(r"FROM sp_rdf_quad (\w+)", sql))
+    assert len(aliases) == 2, f"aliases collide: {aliases}"

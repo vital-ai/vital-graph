@@ -33,6 +33,9 @@ _E = "urn:mk:entity:E"
 _E2 = "urn:mk:entity:E2"
 _F = "urn:mk:frame:F"
 _A, _B = "urn:mk:slot:A", "urn:mk:slot:B"
+_STATUS = "http://vital.ai/ontology/vital-aimp#hasObjectStatusType"
+_ACTIVE = "http://vital.ai/ontology/vital-aimp#ObjectStatusType_ACTIVE"
+_ARCHIVED = "http://vital.ai/ontology/vital-aimp#ObjectStatusType_ARCHIVED"
 
 
 def _sort(slot, order="asc", priority=1):
@@ -190,3 +193,66 @@ async def test_paging_partitions_the_result(pg_conn, test_space):
     assert first == ["urn:mk:e:3", "urn:mk:e:2"]
     assert second == ["urn:mk:e:4", "urn:mk:e:1"]
     assert not set(first) & set(second)
+
+
+# --- entity-property filters, served via a quad-table EXISTS ----------------
+
+async def _load_with_status(pg_conn, sp):
+    """The tie fixture's four entities, two ACTIVE and two ARCHIVED.
+
+    A filter that matches EVERYTHING cannot detect a dropped filter — on real
+    data `hasObjectStatusType` had exactly one value across all 8,755 quads, so
+    the first version of this check would have passed with the filter ignored.
+    Here the split is deliberate.
+    """
+    from vitalgraph.db.sparql_sql.fast_slot_sort import _term_uuid
+    await _load(pg_conn, sp)
+    ctx, pred = _term_uuid(_G), _term_uuid(_STATUS)
+    rows = []
+    for e_uri, status in (("urn:mk:e:1", _ACTIVE), ("urn:mk:e:2", _ARCHIVED),
+                          ("urn:mk:e:3", _ACTIVE), ("urn:mk:e:4", _ARCHIVED)):
+        rows.append((_term_uuid(e_uri), pred, _term_uuid(status), ctx))
+    await pg_conn.executemany(
+        f"INSERT INTO {sp}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
+        f" context_uuid) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING", rows)
+
+
+def _with_status(value, *keys):
+    from vitalgraph.sparql.kg_query_builder import EntityPropertyFilter
+    c = _criteria(*keys)
+    c.entity_property_filters = [EntityPropertyFilter(
+        property_uri=_STATUS, operator="eq", value=value)]
+    return c
+
+
+async def test_the_property_filter_is_actually_applied(pg_conn, test_space):
+    """The assertion a silently-dropped filter would fail."""
+    await _load_with_status(pg_conn, test_space)
+    got = await _page(pg_conn, test_space,
+                      _with_status(_ACTIVE, _sort(_A), _sort(_B, priority=2)))
+    assert got == ["urn:mk:e:3", "urn:mk:e:1"], (
+        "only the two ACTIVE entities, still ordered by B (a < d)")
+
+
+async def test_the_other_value_returns_the_COMPLEMENT(pg_conn, test_space):
+    """Paired with the test above so neither passes on a filter stuck to one
+    answer."""
+    await _load_with_status(pg_conn, test_space)
+    got = await _page(pg_conn, test_space,
+                      _with_status(_ARCHIVED, _sort(_A), _sort(_B, priority=2)))
+    assert got == ["urn:mk:e:2", "urn:mk:e:4"]
+
+
+async def test_a_value_matching_nothing_returns_an_empty_page(pg_conn, test_space):
+    await _load_with_status(pg_conn, test_space)
+    got = await _page(pg_conn, test_space,
+                      _with_status("urn:mk:status:nonesuch", _sort(_A)))
+    assert got == []
+
+
+async def test_the_count_follows_the_property_filter(pg_conn, test_space):
+    from vitalgraph.db.sparql_sql.fast_slot_sort import fast_slot_sort_count
+    await _load_with_status(pg_conn, test_space)
+    n = await fast_slot_sort_count(pg_conn, test_space, _G,
+                                   _with_status(_ACTIVE, _sort(_A)))
+    assert n == 2, "the count must be drawn from the same filtered population"
