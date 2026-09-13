@@ -87,6 +87,61 @@ rewrite next to it does not.
 Had it logged `declined: frame_slot table absent`, `issues/195` would have been
 a one-line diagnosis.
 
+## 4. THE GATE MAY NO LONGER HAVE A JOB — measured 2026-09-12
+
+Fifteen tests in `test_traversal_direction_gate.py` fail, and they are not a
+regression in the gate. They are the gate being CORRECTLY bypassed.
+
+The test that fails first says so itself:
+
+> `decide` needs a chain AND a measured criterion. If either goes missing — **a
+> rewrite that stops producing a chain for this shape** — every direction
+> assertion below would pass by never running, which is the failure mode this
+> whole suite exists to avoid.
+
+That is exactly what happened, and the rewrite that stopped producing a chain is
+the `frame_slot` collapse, which now fires on `sp_graph_skew_2k` because
+`issues/195` migrated the fixture. Measured on the gate's own query, same
+query, collapse forced off and on:
+
+    collapse OFF (the state the tests were written in)   201,539 buffers  159.9 ms
+    collapse ON  (today)                                  53,278 buffers   42.4 ms
+
+**3.8x fewer buffers and 3.8x faster with the gate not firing at all.** The
+collapse dominates the thing the gate was choosing between, so `decide` returns
+None and every direction assertion has nothing to assert against.
+
+So the question in step 3 below is not hypothetical, and this is its answer so
+far: on every shape available in this fixture, the collapse beats hop-wise, and
+the gate has no case. Extending the detector to see these shapes would be
+building machinery for a choice that no longer matters.
+
+**What the tests should become** is the real question. They are good tests —
+the first one caught this precisely — but they assert a mechanism rather than an
+outcome. Either they move to a query the collapse CANNOT serve (which is the
+same query step 3 needs, so one piece of work answers both), or they are
+rewritten to assert the outcome — that this shape is served in ~53k buffers,
+however that is achieved.
+
+## 5. Five tests query a table that was dropped
+
+Separate and simpler. `test_traversal_direction_gate.py` queries
+`{space}_frame_entity` directly at four sites, and asserts on it at a fifth:
+
+    line 250   FROM {SKEW.space}_frame_entity fe
+    line 276   SELECT count(*) FROM {SKEW.space}_frame_entity fe ...
+    line 291   SELECT count(*) FROM {SKEW.space}_frame_entity fe ...
+    line 358   assert f"{SKEW.space}_frame_entity" in gen.sql
+
+These fail with `UndefinedTableError: relation "sp_graph_skew_2k_frame_entity"
+does not exist` — the table was dropped by `b94484a9` on 2026-09-10 and the
+tests were not updated with it. `graph_fixtures.py` line 202 also documents a
+row count for it.
+
+Mechanical: the replacement is `frame_slot`, with the role as data rather than
+in the column names. Worth doing regardless of how 4 is resolved, since these
+five say nothing about the gate — they just error.
+
 ## Ordered fix
 
 1. **Record the decline.** Smallest, and it is the one that would have saved the
