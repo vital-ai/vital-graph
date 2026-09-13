@@ -1231,9 +1231,17 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
         "frame_types": FRAME_TYPES,
         "relation_types": RELATION_TYPES,
         "categories": [c for c, _w in CATEGORIES],
+        # The RANGE each predicate spans and its TYPE. The shape of the
+        # distribution inside that range lives in `value_distributions` and is
+        # not uniform for most of these — saying "uniform" here contradicted
+        # that field and invited thresholds chosen for the wrong density: score
+        # is lognormal and averages 23.8, so `>= 50` selects ~10% of rows, not
+        # half.
         "criteria_predicates": {
-            "score": f"{HALEY}hasScore (xsd:integer, uniform [0,100))",
-            "weight": f"{HALEY}hasWeight (xsd:double, uniform [0,1))",
+            "score": f"{HALEY}hasScore (xsd:integer, [0,100) — see "
+                     f"value_distributions, lognormal not uniform)",
+            "weight": f"{HALEY}hasWeight (xsd:double, [0,1) — see "
+                      f"value_distributions, Beta(2,5) not uniform)",
             "occurred": f"{HALEY}hasOccurredAt (xsd:dateTime, 3-year window)",
             "label": f"{HALEY}hasLabel (xsd:string, 50 values)",
             "category": f"{HALEY}hasCategory (xsd:string, 8 weighted values)",

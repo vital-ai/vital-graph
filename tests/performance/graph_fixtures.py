@@ -218,6 +218,11 @@ def kind_uri(kind: str) -> str:
     return f"{BASE}:kind:{kind}"
 
 
+def reltype_uri(rel_type: str) -> str:
+    """`relation_types` from the manifest — Knows, Owns, Supersedes."""
+    return f"{BASE}:reltype:{rel_type}"
+
+
 # ---------------------------------------------------------------------------
 # Query construction — shared so a bench and a correctness test walk the graph
 # the same way
@@ -316,7 +321,39 @@ def relation_hop(n: int, from_var: str, to_var: str, criterion: str = "") -> str
     return f"""
         ?r{n} a <{HALEY}Edge_hasKGRelation> .
         ?r{n} <{VITAL}hasEdgeSource> {from_var} .
-        ?r{n} <{VITAL}hasEdgeDestination> {to_var} .{criterion.format(n=n)}"""
+        ?r{n} <{VITAL}hasEdgeDestination> {to_var} .{criterion.format(
+            n=n, to_var=to_var, from_var=from_var)}"""
+
+
+# Criteria for the GENERAL traversal shape — node -edge-> node, no frames and no
+# slots anywhere. `CRITERIA` above cannot be used here: every one of them binds
+# `?f{n}`, the FRAME variable, which `relation_hop` never introduces, so pairing
+# them leaves it unbound and the query becomes a cross product that looks like a
+# criterion doing nothing (`issues/198`, withdrawn for exactly that).
+#
+# Criteria on BOTH kinds of graph object, because they are different shapes to
+# the planner: the edge ones hang off `?r{n}`, which the edge-table rewrite
+# collapses, while the node one hangs off the hop's destination and constrains a
+# table the walk has to reach anyway.
+#
+# No manifest key. The frame criteria each name a precomputed walk; these have
+# none, so tests assert them DIFFERENTIALLY — a criterion-filtered walk must be
+# a non-empty proper subset of the open walk at the same depth. That needs no
+# ground truth and cannot silently compare against the wrong answer.
+RELATION_CRITERIA = {
+    "edge_score_gte_50": (
+        f'\n        ?r{{n}} <{HALEY}hasScore> ?rsc{{n}} . '
+        f'FILTER(?rsc{{n}} >= 50)'),
+    "edge_type_is_Knows": (
+        f'\n        ?r{{n}} <{HALEY}hasKGRelationType> '
+        f'<{BASE}:reltype:Knows> .'),
+    "edge_weight_gte_half": (
+        f'\n        ?r{{n}} <{HALEY}hasWeight> ?rw{{n}} . '
+        f'FILTER(?rw{{n}} >= 0.5)'),
+    "node_kind_is_Person": (
+        f'\n        {{to_var}} <{HALEY}hasKGEntityType> '
+        f'<{BASE}:kind:Person> .'),
+}
 
 
 def chain_query(fx: GraphFixture, start: int, depth: int, *,
