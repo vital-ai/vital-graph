@@ -334,13 +334,22 @@ def decide(chain: Optional[TraversalChain],
     # `choose_direction` decides from statistics rather than by convention
     # (issues/090: 9.2x choosing right, 4.2x choosing wrong).
     #
-    # Emission has not caught up: `emit_hop_wise` serves a head-driven walk
-    # only and declines a tail-driven one, with its own recorded reason. That
-    # decline stays THERE rather than being duplicated here, because the two
-    # answer different questions — this module decides what is BEST, the
-    # emitter decides what it can BUILD. Folding "not implemented" into the
-    # strategy would make the decision unable to express the thing issues/090
-    # needs it to express: that the tail is the better end.
+    # Emission HAS caught up, since `f7f2af46` (2026-08-17): `emit_hop_wise`
+    # reverses the chain when this returns "tail". The paragraph here used to
+    # say it "serves a head-driven walk only and declines a tail-driven one",
+    # which stopped being true in the commit that added the reversal and was
+    # never revisited — the emitter's own comment says it "used to decline
+    # anything not head-pinned".
+    #
+    # The separation it argued for still holds and is still worth keeping: this
+    # module decides what is BEST and the emitter decides what it can BUILD, so
+    # a decline belongs there rather than being duplicated here.
+    #
+    # MEASURED 2026-09-13 and NOT yet acted on: on a general traversal with a
+    # numeric criterion, the end this picks is the slower one in 3 of 4 cases
+    # (see `sync_entity_fanout` for the table). The cause is visible below — with
+    # only one end priceable this does not compare the ends at all, it takes the
+    # one-knowable-end branch and drives from it.
 
     # A MEASURED criterion is required. Not a selective one — see below.
     #

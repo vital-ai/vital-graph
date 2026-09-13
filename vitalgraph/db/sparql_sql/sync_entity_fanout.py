@@ -18,13 +18,49 @@ tried and measured:
     criterion — a three-way conjunction on one data point, which is a rule
     fitted to noise. See `traversal_chain_plan.md` GAP 7b for the table.
 
-  * **Choosing traversal DIRECTION: unavailable, not untested.** A per-entity
-    forward/backward split is exactly what a direction choice would want, and
-    there is no direction to choose: `emit_hop_wise` declines tail pins
-    outright, so no reverse BGP walk exists. (`emit_path` gained a reverse
-    recursion in `6a83ebe`, but that is the property-path emitter and it does
-    not consult this table.) If reverse BGP traversal is ever implemented, this
-    becomes the first real candidate consumer and should be measured then.
+  * **Choosing traversal DIRECTION: MEASURED 2026-09-13, no value found.**
+    This used to read "unavailable, not untested — `emit_hop_wise` declines tail
+    pins outright, so no reverse BGP walk exists", and said this became the
+    first real candidate consumer if reverse traversal were ever implemented.
+    IT WAS, TWO DAYS LATER: `f7f2af46` (2026-08-17) made `emit_hop_wise` honour
+    `choose_direction` by reversing the chain, and this note was never revisited.
+
+    Measured on the shape where direction is genuinely live — general
+    `node -edge-> node` traversal with a numeric criterion on `sp_graph_rel_10k`,
+    which emits hop-wise; a frame walk cannot be used because hop-wise is gated
+    off for `frame_slot` shapes, and without a criterion both alternatives
+    decline for reasons unrelated to direction. Warm, median of 7, each query
+    generated twice with the direction forced:
+
+        depth  constrained  head_ms  tail_ms  faster  rule picked
+        2      head           261.3    152.1  tail    head   WRONG
+        2      tail           215.8    363.5  head    tail   WRONG
+        3      head           404.8    515.3  head    head   right
+        3      tail           172.0    321.5  head    tail   WRONG
+
+    Two findings, and only the first is about this table.
+
+    **This table cannot help.** The ends of these queries are kind-constrained
+    SETS, not individual entities, and per-entity hub data has to be aggregated
+    by kind to say anything: totalled that way it is near-uniform (avg fan-out
+    49.1 to 62.3 across the five kinds), so the rule reduces to "which set is
+    smaller" — which is what the pair counts already measure, and which is the
+    answer being got wrong above.
+
+    **The direction rule itself is wrong 3 of 4 here**, and not because its
+    statistics are poor: it is not COMPARING the ends. Only the constrained end
+    is priceable, so `choose_direction` takes its one-knowable-end branch and
+    drives from it. `edge_fanout` — the table actually built for this, keyed on
+    (edge type, relation type, direction) — does carry the asymmetry, forward
+    2.18-2.21 avg against backward 2.32-2.36, max 68-71 against 91-98, pointing
+    at "head", which matches 3 of the 4 measurements.
+
+    That is NOT evidence `edge_fanout` works. Its signal is CONSTANT across
+    every case testable here — forward is cheaper for all three relation types —
+    so it cannot be told apart from "head happens to win on this graph". Four
+    queries on one synthetic dataset. Confirming it needs a graph where backward
+    is the cheaper direction, to check the signal FLIPS; fitting a rule to this
+    would be the same mistake as the hub rule rejected above.
 
 So: query it from a shell, put it in an operator report, use it to explain a
 slow query. Do not branch on it in the planner without a measurement that
