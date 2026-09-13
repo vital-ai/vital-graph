@@ -181,6 +181,58 @@ Which settles the scope question in the other direction: the gate IS earning its
 keep on general traversal. What remains unsolved here is the nested-criterion
 pathology on FRAME-SLOT shapes, and only that.
 
+## MEASURED IN WALL-CLOCK, 2026-09-13 — and a correction to this issue
+
+Everything above quotes PLAN COST ESTIMATES. That was the wrong instrument, and
+this issue overstated in places because of it. Measured with
+`EXPLAIN ANALYZE` and `statement_timeout = 120s`, same fixture, same starts:
+
+| shape | d1 | d2 | d3 |
+|---|---:|---:|---:|
+| `has_nested` (structure only) | 1.2 ms | 2.1 ms | 2.3 ms |
+| `nested_category_in_alpha_beta` | 1,769 ms | 1,458 ms | **KILLED at 120 s** |
+| `nested_score_gte_50` | 2,208 ms | **KILLED** | **KILLED** |
+
+**The pathology is real** — three of six cases do not finish in two minutes, and
+the ones that do are a thousand times slower than the structure-only query. But
+the estimates are unreliable in BOTH directions: `nested_category` at depth 2
+estimates 486,294,496 and runs in 1.5 s. So "19 trillion" and "7.85e15" in this
+issue are estimates of plans, not measurements of time, and should be read that
+way.
+
+The one number here that WAS wall-clock is the original: the frame-slot depth-2
+walk that ran 24m41s before the fixture migration. That still stands.
+
+### What the plan does wrong
+
+At depth 1, where it is small enough to read: `has_nested` runs in tight nested
+loops driven from the pinned start entity. Add a value filter on the nested
+frame and the planner abandons that for a **Seq Scan over all 144,598 rows of
+the edge table**, hash-joined to 123,395 rows.
+
+The query is pinned to ONE entity (`FILTER(?e0 = <entity:45>)`). That pin should
+drive. Instead the nested criterion does, because a filter looks selective to
+the planner while the pin is expressed as a join it does not start from.
+
+`enable_seqscan=off` as a diagnostic confirms the direction without fixing it:
+
+    d1  default 792 ms (1 seq scan)   seqscan off 518 ms (0)
+    d2  default 4,699 ms (2)          seqscan off 1,175 ms (0)   4x
+
+Better, and still three orders off `has_nested`. So the seq scan is a symptom of
+the join order, not the cause, and forcing it off is not the fix.
+
+### Why this is left open rather than fixed
+
+It is a join-order problem on a shape where the pin is the most selective thing
+in the query and is not driving. That is `reorder_joins` territory, it is not
+recorded in `plan_decisions` for this query, and a change there affects every
+query in the system.
+
+One wrong fix has already shipped from this issue (`c80fff87`). The next attempt
+should start by establishing why the pin does not drive — and should be measured
+in WALL-CLOCK on all six cells above, not in plan cost.
+
 ## What is still wrong in the code
 
 Clearing the data does not fix what the investigation exposed, and all of it
