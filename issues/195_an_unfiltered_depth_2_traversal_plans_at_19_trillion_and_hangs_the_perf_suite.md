@@ -1,11 +1,11 @@
 # An Unfiltered Depth-2 Traversal Plans At 19 Trillion And Hangs The Perf Suite
 
-## Status: ROOT CAUSE CONFIRMED AND CLEARED ON THE TEST STACK 2026-09-12. The
-## perf fixtures had no `{space}_frame_slot` table, so the collapse could not
-## fire and an unfiltered depth-2 walk planned at 19 trillion. Migrating the
-## fixtures took the same plan to **47.77** and the hanging bench to **1.54 s**.
-## Still open: the CODE defects the investigation exposed (see "What is still
-## wrong in the code").
+## Status: FIXED 2026-09-13 in two parts. The DATA half: the perf fixtures had
+## no `{space}_frame_slot` table, so the collapse could not fire — migrating
+## them took the hanging bench from 24m41s to 1.54 s. The CODE half
+## (`bc6ff22a`): frame-slot shapes now take the flat path, which takes
+## `nested_category` depth 2 from a 90 s timeout to 1 ms. Remaining code
+## observations are recorded in `issues/197`.
 
 **Related:** `issues/188` (blocked by this), `issues/190` (blocked by this),
 `issues/096` / `issues/181` (the traversal gate and what it can see),
@@ -342,6 +342,44 @@ The next attempt should probably NOT be another ordering heuristic. The
 alternative worth pricing is refusing hop-wise for this shape outright — the
 flat path already answers it in 1.2 ms, and `has_nested` proves the shape is
 cheap when it takes that path.
+
+### THE FIX THAT WORKED (`bc6ff22a`) — the fourth attempt
+
+What the first three lacked was a wall-clock A/B across BOTH hop shapes. With
+hop-wise forced on and off:
+
+| shape | hop-wise ON | hop-wise OFF |
+|---|---|---|
+| `frame_hop` nested_category | 1,665 ms / **KILLED** | 0 ms / 1 ms |
+| `frame_hop` nested_score | 1,771 ms / **KILLED** | 34 ms / 27 ms |
+| `frame_hop` occurred | 685 ms / 2 ms | 192 ms / 0 ms |
+| `frame_hop` score | 219 ms / 270 ms | 214 ms / 141 ms |
+| **`relation_hop` score** | **0.06 / 0.12 / 0.15 ms** | 7.54 / 8.88 / 25.76 ms |
+
+**That last row is why the first three attempts failed.** Every one of them
+tried to make hop-wise behave, or to stop it firing, on the evidence of
+frame-slot shapes alone. On a pure edge walk hop-wise is 125-170x FASTER, so
+neither "fix hop-wise" nor "turn it off" could be right — the two shapes want
+opposite answers.
+
+The discriminator is the `frame_slot` collapse, which serves the FLAT path only.
+Where it applies the flat path wins and hop-wise cannot compete, because
+`reorder_joins` is never called there. Where it does not apply the edge table
+carries the walk and hop-wise wins.
+
+Detected on the TABLES, not the criterion: `frame_hop` presents
+`['edge', 'frame_slot', 'quad']`, `relation_hop` presents `['edge', 'quad']`.
+Three attempts to discriminate by criterion shape were each measured worse; the
+table kinds are unambiguous.
+
+### Why the earlier framing kept misleading
+
+Every wrong attempt shared one defect: it was argued from a model of what
+hop-wise SHOULD do, and checked against plan cost estimates or a single shape.
+The estimates here are unreliable in both directions — 486,294,496 estimated for
+a 1.5 s query — and the single shape was always `frame_hop`, where the collapse
+had already changed the answer. The fix arrived the moment both shapes were
+measured in wall-clock in the same table.
 
 ### The fix, and why it is not attempted here
 
