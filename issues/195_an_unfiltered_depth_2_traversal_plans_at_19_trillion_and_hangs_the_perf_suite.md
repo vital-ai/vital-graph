@@ -256,6 +256,59 @@ only after the criterion side has been materialised. With the pin driving there
 are a handful of frames to check; with the criterion driving there are 123,395
 rows before the pin is applied at all.
 
+### ROOT CAUSE FOUND, 2026-09-13: hop-wise emission never reorders joins
+
+`reorder_joins` is the only component that picks a selective root. Counted per
+query:
+
+    has_nested            reorder_joins calls = 1   (5 quad tables)
+    nested_score_gte_50   reorder_joins calls = 0
+
+**Zero.** It is not called at all for the slow shape, so nothing ever considers
+selectivity and the pin cannot be chosen to drive.
+
+The reason is the emitter. `emit_traversal` mentions `reorder_joins` twice and
+both are COMMENTS; it does not call it. It places tables by lexical scope —
+"within the hop it hangs on the last-placed table it mentions, so every
+reference is already in scope" — which is a DEPENDENCY rule, not a selectivity
+one. Correct SQL, arbitrary order.
+
+So the full chain is:
+
+1. the nested criterion is measured, so the gate chooses hop-wise;
+2. `emit_traversal` emits it, ordering tables by scope alone;
+3. `reorder_joins` never runs, so no leaf is chosen as a selective root;
+4. the pin — one entity, the most selective thing in the query — does not
+   drive, and lands as a late `Filter`;
+5. the plan seq-scans 144,598 edge rows and hash-joins 123,395 before the pin
+   applies.
+
+`has_nested` carries no measured criterion, takes the flat path through
+`emit_bgp`, gets `reorder_joins`, and runs in 1.2 ms.
+
+**This reframes hop-wise entirely.** It is not inherently slow — it is
+UNORDERED. Where the emitter's incidental order happens to be good it wins big
+(the 134x in `traversal_decision`'s docstring); where it is not, nothing
+corrects it. That is why the same mechanism measures 134x better on one shape
+and a thousand times worse on another.
+
+It also explains why `issues/197`'s direction gate has so little to show: the
+gate chooses WHICH END to drive from, while the thing that decides whether any
+selective leaf drives at all is a component the hop-wise path does not use.
+
+### The fix, and why it is not attempted here
+
+Hop-wise emission needs selectivity-aware placement — at minimum a selective
+root per hop, which is what `reorder_joins` already computes for the flat path.
+That is a real piece of work in `emit_traversal`, not a guard to add, and it
+should be measured in wall-clock on all six cells of the table above plus the
+`CRITERIA` family that hop-wise currently wins on.
+
+Two fixes have already been attempted from this issue on worse evidence than
+this — one shipped and reverted (`c80fff87`), one eliminated before shipping
+(the index-choice hypothesis). This one has a mechanism, a count, and a
+reproduction, which the others did not.
+
 ### Why this is left open rather than fixed
 
 It is a join-order problem on a shape where the pin is the most selective thing
