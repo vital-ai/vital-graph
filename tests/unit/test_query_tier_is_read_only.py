@@ -20,8 +20,13 @@ PERF = pathlib.Path(__file__).resolve().parents[1] / "performance"
 # Executing statements, not strings that merely mention them: `create_space_indexes_sql`
 # builds SQL to compare against pg_indexes and never runs it, and `_load_manifest`
 # reads a JSON file. Both are read-only and must not trip this.
+# `resync_*` is in here because a test can mutate through a HELPER without any
+# SQL of its own: `test_entity_fanout` called `resync_entity_fanout`, which
+# TRUNCATEs and re-INSERTs, and this scan passed it as read-only. A guard that
+# only reads literal SQL sees the shape of the write, not the write.
 MUTATORS = re.compile(
-    r"create_space_with_tables|drop_space|DROP\s+INDEX|INSERT\s+INTO|\.executemany\("
+    r"create_space_with_tables|drop_space|DROP\s+INDEX|INSERT\s+INTO"
+    r"|\.executemany\(|\bresync_[a-z_]+\("
 )
 
 

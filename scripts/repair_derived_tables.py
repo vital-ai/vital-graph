@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Populate `frame_slot`, `entity_fanout`, `rdf_value_stats` and
+"""Populate `frame_slot`, `rdf_value_stats` and
 `entity_slot_sort` where empty.
 
 THE GAP. `migrate_space_schema.py` CREATES a missing derived table and says so
@@ -10,7 +10,7 @@ reports read zero. It is only wrong at query time, where an empty derived table
 is indistinguishable from a graph that genuinely has no frames.
 
 Measured on the local host cluster 2026-08-15: 43 of 77 spaces had at least one
-unpopulated derived table, and `frame_slot` / `entity_fanout` were empty on
+unpopulated derived table, and `frame_slot` was empty on
 EVERY space with data — including one where frame_slot should hold 200,000
 rows. The edge tables were populated throughout, so this is specifically the
 layer derived FROM edge that never got built.
@@ -18,14 +18,12 @@ layer derived FROM edge that never got built.
 WHAT DEPENDS ON THEM, i.e. why an empty table is not a cosmetic problem:
   * `frame_slot` collapses six tables per hop into one for entity/frame
     traversal. Without it, that plan is unavailable.
-  * `entity_fanout` records hub entities so the planner can avoid driving a
-    walk from a high-degree node.
   * `rdf_value_stats` holds the value histograms behind the criterion gate.
     Empty means every value criterion reads as unmeasured.
 
-ORDER IS NOT OPTIONAL. `resync_entity_fanout` rebuilds from `frame_slot`, so
-running it first writes an empty hub list from an empty source and reports
-success. frame_slot therefore always runs first here rather than leaving the
+ORDER IS NOT OPTIONAL. A table rebuilt FROM another writes an empty result from
+an empty source and reports success, so frame_slot always runs first rather than
+leaving the
 ordering to whoever calls this — the same footgun as backfilling
 `value_stats.pred_rows` before `rdf_pred_stats` exists.
 
@@ -107,7 +105,6 @@ async def survey_space(conn, space_id: str) -> dict | None:
         return None
 
     fe = await _count(conn, space_id, "frame_slot")
-    ef = await _count(conn, space_id, "entity_fanout")
     vs = await _count(conn, space_id, "rdf_value_stats")
     edge = await _count(conn, space_id, "edge")
 
@@ -137,34 +134,16 @@ async def survey_space(conn, space_id: str) -> dict | None:
         if rate > STALE_ORPHAN_PCT:
             need.append("frame_slot")
             stale.append(f"frame_slot {rate * 100:.0f}% orphaned")
-    # entity_fanout is rebuilt FROM frame_slot, so it is only meaningful where
-    # frame_slot has rows — AND only where some entity actually clears
-    # min_fanout. It is a HUB list, not a copy: a space whose busiest entity has
-    # one neighbour has no hubs, and zero rows is the right answer. Mirroring
-    # the threshold here, like the value_stats test above, is the difference
-    # between a report that converges and one that always says "1 remaining".
-    if ef is not None and not ef and fe:
-        from vitalgraph.db.sparql_sql.sync_entity_fanout import MIN_FANOUT_DEFAULT
-        # A SELF-JOIN on the frame, matching `resync_entity_fanout` exactly.
-        # `frame_entity` held both ends of a relationship on ONE row
-        # (`source_entity_uuid`, `dest_entity_uuid`); `frame_slot` is one row
-        # per SLOT and has neither column — so the old form raises
-        # `column does not exist` rather than returning a wrong answer, and it
-        # raises precisely when `entity_fanout` is empty and `frame_slot` is
-        # populated: the state a fresh `frame_slot` migration produces.
-        hubbed = await conn.fetchval(f"""
-            SELECT EXISTS (
-              SELECT 1
-              FROM {space_id}_frame_slot a
-              JOIN {space_id}_frame_slot b
-                ON b.frame_uuid = a.frame_uuid
-               AND b.context_uuid = a.context_uuid
-               AND b.entity_uuid IS DISTINCT FROM a.entity_uuid
-              WHERE a.entity_uuid IS NOT NULL AND b.entity_uuid IS NOT NULL
-              GROUP BY a.entity_uuid, a.context_uuid
-              HAVING count(DISTINCT b.entity_uuid) >= $1)""", MIN_FANOUT_DEFAULT)
-        if hubbed:
-            need.append("entity_fanout")
+    # entity_fanout is NOT repaired. Removed 2026-09-13: nothing reads the
+    # table, both uses it was kept for have been measured and rejected, and the
+    # rebuild is a self-join over `frame_slot` that costs 4.09 s at 947k rows.
+    # The PROBE that used to decide whether to rebuild was the same self-join
+    # again, so leaving it would have kept most of the cost while removing the
+    # result. `sync_entity_fanout` carries the measurements; the function is
+    # still there for an operator who wants the hub list deliberately.
+    #
+    # `edge_fanout` is a different case and is untouched: `generator.py` loads
+    # it on every query and `emit_slice` reads it for the direction gate.
     # Same trap as frame_slot: empty is only wrong if there is something to
     # put in it. Histograms are built from numeric and temporal literals, so a
     # space carrying neither has zero rows correctly, and flagging it queues a
@@ -252,20 +231,14 @@ async def survey_space(conn, space_id: str) -> dict | None:
 
 async def repair_space(conn, space_id: str, need: list[str]) -> dict:
     from vitalgraph.db.sparql_sql.sync_frame_slot_table import resync_frame_slot_table
-    from vitalgraph.db.sparql_sql.sync_entity_fanout import resync_entity_fanout
     from vitalgraph.db.sparql_sql.sync_value_stats import resync_value_stats
 
     out: dict = {}
-    # frame_slot FIRST — entity_fanout reads from it.
+    # frame_slot FIRST — what follows is derived from it.
     if "frame_slot" in need:
         t0 = time.time()
         out["frame_slot"] = await resync_frame_slot_table(conn, space_id)
         out["frame_slot_s"] = round(time.time() - t0, 1)
-    if "entity_fanout" in need or "frame_slot" in need:
-        t0 = time.time()
-        r = await resync_entity_fanout(conn, space_id)
-        out["entity_fanout"] = sum(r.values()) if isinstance(r, dict) else r
-        out["entity_fanout_s"] = round(time.time() - t0, 1)
     if "value_stats" in need:
         t0 = time.time()
         r = await resync_value_stats(conn, space_id)

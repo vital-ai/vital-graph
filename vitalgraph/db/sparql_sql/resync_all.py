@@ -144,17 +144,28 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
         logger.warning("resync_all(%s): edge fan-out skipped (%s)",
                        space_id, exc)
 
-    # 3b. Entity fan-out — the hub list. Same rationale as edge fan-out: a
-    # periodic full rebuild, never incremental. It is also FAIL-SAFE, so a
-    # failure here costs an optimisation and never an answer.
+    # 3b. Entity fan-out — NOT REBUILT. Removed 2026-09-13.
+    #
+    # Nothing reads `{space}_entity_fanout`. Not the query path, not an admin
+    # endpoint, not a report, not operator tooling — two writers and zero
+    # readers. Both uses it was kept for have now been measured and rejected:
+    # choosing the emission shape by a start's fan-out (dedup won 5 of 6 hub
+    # cases), and choosing traversal direction (the ends of those queries are
+    # kind-constrained SETS, and per-entity hubs aggregate to near-uniform
+    # across kinds, so it reduces to what the pair counts already measure).
+    # `sync_entity_fanout`'s docstring carries both tables.
+    #
+    # So the rebuild was pure cost. It is a self-join over `frame_slot` with a
+    # count(DISTINCT), and it scales with that table: measured 1.21 s at 91k
+    # `frame_slot` rows, 2.51 s at 571k, 4.09 s at 947k.
+    #
+    # This is NOT the case for `edge_fanout` above, which looks similar and is
+    # not: `generator.py` loads it on every query and `emit_slice` reads it for
+    # the traversal-direction gate. That one stays.
+    #
+    # The table and `resync_entity_fanout` are both kept, so an operator can
+    # still populate it deliberately to answer "how wide does this walk get".
     entity_hubs = {}
-    try:
-        async with conn.transaction():
-            from .sync_entity_fanout import resync_entity_fanout
-            entity_hubs = await resync_entity_fanout(conn, space_id)
-    except Exception as exc:
-        logger.warning("resync_all(%s): entity fan-out skipped (%s)",
-                       space_id, exc)
 
     # 4. Geo table — extract lat/lon from existing quads
     geo_points = 0
@@ -283,6 +294,9 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
         'pred_stats_rows': stats['pred_stats'],
         'quad_stats_rows': stats['quad_stats'],
         'edge_fanout_rows': fanout_rows,
+        # Always 0 now — kept in the result so callers reading this key do not
+        # have to change, and so a resync that reports it does not read as one
+        # that silently stopped reporting.
         'entity_fanout_rows': sum(entity_hubs.values()) if entity_hubs else 0,
         'geo_points': geo_points,
     }

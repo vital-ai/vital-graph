@@ -20,8 +20,29 @@ import pytest
 from .conftest import skip_no_pg, space_exists
 from .graph_fixtures import SMALL
 
-pytestmark = [pytest.mark.performance, skip_no_pg,
-              pytest.mark.asyncio(loop_scope="session")]
+# DISABLED 2026-09-13 — nothing populates `entity_fanout` any more.
+#
+# `resync_all` no longer rebuilds it and `repair_derived_tables` no longer
+# repairs it: nothing reads the table, both uses it was kept for were measured
+# and rejected, and the rebuild is a self-join over `frame_slot` costing 4.09 s
+# at 947k rows. These tests were the last thing writing it — each calls
+# `resync_entity_fanout` itself and then asserts on the result — so they were
+# testing a function no automatic path calls, and paying the rebuild to do it.
+#
+# SKIPPED RATHER THAN DELETED. The table and `resync_entity_fanout` both still
+# exist for an operator who wants the hub list deliberately, and these are the
+# only tests that say what "correct" means for it: that an entity ABSENT from
+# the list is genuinely not a hub. Delete them and that definition goes with
+# them. Re-enable by removing this mark if anything starts populating it.
+#
+# `ingest_bench` is kept and is not redundant: it records WHY this belongs to
+# the write tier if the skip is ever lifted — it TRUNCATEs and re-INSERTs, and
+# it had been sitting in the read-only tier writing on every run.
+pytestmark = [pytest.mark.performance, pytest.mark.ingest_bench, skip_no_pg,
+              pytest.mark.asyncio(loop_scope="session"),
+              pytest.mark.skip(reason="entity_fanout is no longer populated by "
+                                      "any automatic path; see "
+                                      "sync_entity_fanout's docstring")]
 
 
 async def _rebuilt(conn, space):

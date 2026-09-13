@@ -1,6 +1,27 @@
 """Compute `{space}_entity_fanout`: how wide a traversal gets from one entity.
 
 AN OPERATOR DIAGNOSTIC. NOT A QUERY-PATH INPUT. Decided 2026-08-15.
+NO LONGER POPULATED AUTOMATICALLY. Decided 2026-09-13.
+===================================================================
+Nothing calls this on any automatic path any more. `resync_all` no longer
+rebuilds the table and `repair_derived_tables` no longer repairs it — not even
+the probe that decided whether to, which was the same self-join again and so
+carried most of the cost while producing no result.
+
+The reason is below and unchanged in substance: nothing reads the table, and
+both uses it was kept for have now been measured and rejected. The rebuild was
+therefore pure cost, and it scales with `frame_slot` — measured 1.21 s at 91k
+rows, 2.51 s at 571k, 4.09 s at 947k, as a self-join with a count(DISTINCT).
+
+The TABLE and this FUNCTION both remain. An operator who wants the hub list can
+still call `resync_entity_fanout` deliberately, which is what the diagnostic was
+always for; what has gone is paying for it on every resync whether anyone wants
+it or not. Existing rows are left alone rather than dropped, so a space that has
+one keeps it until something rebuilds or removes it.
+
+Do not confuse this with `edge_fanout`, which looks like a sibling and is not:
+`generator.py` loads it on every query and `emit_slice` reads it for the
+traversal-direction gate. That one is maintained and must stay.
 ===================================================================
 Nothing in the SQL pipeline reads this table and nothing should start to
 without new evidence. It exists to answer an operator's question — "why is this
