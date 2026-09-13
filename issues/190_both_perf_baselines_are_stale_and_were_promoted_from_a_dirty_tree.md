@@ -155,35 +155,65 @@ only FAILs on a *regression*, so carrying the 7 failures forward costs nothing a
 loses no signal. The earlier recommendation to triage before promoting was wrong.
 
 Investigating how the two tiers should split for next time produced a plainer
-answer than expected: **there is no split to maintain.**
+answer than expected — and it was WRONG. Recorded here because the wrong
+answer is the instructive part.
 
-* `query.json` (108 benches) and `ingest.json` (51) were fully disjoint.
-* All 51 `ingest.json` ids are now inside the promoted `query.json`.
-* `ingest.json`'s entire informational content is **3** ok benches —
-  `query.growth.entity_page_buffers`, `write.ingest.bulk_vs_executemany`,
-  `write.per_write_curve.incremental_probe` — and all three are ok in the
-  promotion too. Its other 48 are 47 `unrecorded` + 1 `skipped`.
-* So `ingest.json` is entirely subsumed. It is stale (`573c46f`, class
-  `vg-test-docker-clean`) and carries nothing the promoted baseline lacks.
+**What I concluded:** that the two baselines were an accident, that `ingest.json`
+was subsumed and should be retired, and that the 48 `paging_fence_coverage`
+benches sitting in it were misfiled query tests that belonged in `query.json`.
 
-The 48 benches both files hold as `unrecorded` are not a tier that records
-elsewhere. They are every parametrisation of
-`query.kgquery.paging_fence_coverage`, and
-`tests/performance/test_paging_fence_covers_every_shape.py` **never calls
-`perf_record`** — it asserts buffer ratios inline. They wear a `bench` mark, so
-`conftest` mints a bench id and then flags it "test passed without recording
-metrics". They can never be ok in any baseline, in any pass.
+**What is actually true:** the suite has two tiers and the split is on **whether a
+test writes**. Imports, exports and modifications are one tier; read-only
+queries are the other. The read-only tier is the one that stays fast, because it
+is the one run and promoted as query fixes land — that is the entire purpose.
 
-The only genuine second pass is the API tier: `run-perf-tests.sh` runs `-k bench`
-with the app up and writes `${RECORD_PATH%.json}-api.json`. That is a separate
-file already, and is not what `ingest.json` holds.
+The mechanism was never lost. `ingest_bench` is a registered marker and
+`scripts/check.sh` routes on it (`-m "not ingest_bench"` / `-m "ingest_bench"`).
 
-### Actions
+Two things had drifted, and they are what the evidence was really showing:
 
-1. Retire `ingest.json` — subsumed, stale, and no invocation reproduces it.
-   Keep one baseline per pass: the suite baseline, and `-api.json` for the API pass.
-2. Stop minting bench ids for the 48 paging-fence assertions, or make them
-   record. Carrying 48 permanent holes is what made the split look meaningful.
+1. **`run-perf-tests.sh` ignored the split.** It ran one merged pass over
+   `-m "integration or performance"` into a single record file. That is how one
+   run came to be promoted over `query.json` carrying all 158 benches — both
+   tiers — which is why the baselines looked subsumed. The merge was mine, not a
+   property of the tiers.
+2. **Three query-tier files were mutating:** `test_partition_pruning` (creates
+   spaces, INSERTs), `test_frame_nesting_hops` (creates a space, COPYs edges),
+   `test_covering_benchmark` (DROPs an index, then the space).
+
+The 48 `paging_fence_coverage` benches are **correctly** in the ingest tier: they
+build their own data, so they are modifications however query-shaped their
+assertions are. Moving them, as I proposed, would have put data-building work
+straight into the tier that has to stay fast.
+
+The misreading had a specific cause worth noting: the marker described itself as
+"a benchmark that BUILDS its own throwaway data — its cost is the data, not the
+plan". That is a statement about **cost**, so the tier reads as a speed
+optimisation, and once it reads that way the paging-fence benches look misfiled.
+The description now states the rule instead: tier is decided by whether the test
+writes, not by what it asserts.
+
+Fixed in `659d7c0b`: `--tier=query|ingest|all` on the runner, resolved before
+docker so a bad combination costs a message rather than a stack; a guard
+refusing to promote one tier's run over the other's baseline, or a `--tier=all`
+run at all; the three files marked; and a static scan
+(`tests/unit/test_query_tier_is_read_only.py`) failing any unmarked perf file
+that mutates. Tiers move 255/52 to 247/60.
+
+### Still true, and still to do
+
+* `ingest.json` is stale (`573c46f`, class `vg-test-docker-clean`).
+* `query.json` currently holds the merged 158-bench promotion, which matches
+  NEITHER tier. Both need re-promoting, each from its own `--tier=` pass.
+* The 48 `paging_fence_coverage` benches never record:
+  `test_paging_fence_covers_every_shape.py` never calls `perf_record`, it
+  asserts buffer ratios inline. They wear a `bench` mark, so `conftest` mints an
+  id and then flags "test passed without recording metrics". They can never be
+  ok in any baseline, in any pass — either stop minting ids for them or make
+  them record.
+* The API pass is a third thing again, orthogonal to the tiers: `-k bench` with
+  the app up, writing `${RECORD_PATH%.json}-api.json`.
+
 
 ## A bench can vanish from the baseline instead of failing
 
