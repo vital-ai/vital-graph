@@ -761,6 +761,26 @@ def graph_stats(edges, n_entities: int, rng: random.Random) -> dict:
     }
 
 
+def _entity_criteria(n_entities: int, seed: int):
+    """One `Criteria` per entity, on a stream of its own (see the call site)."""
+    r = random.Random(seed + 7919)
+    return [Criteria(r) for _ in range(n_entities)]
+
+
+def _adjacency_by_dest(edges, keep_dest):
+    """Adjacency keeping only edges whose DESTINATION satisfies `keep_dest`.
+
+    A criterion on the NODE is not expressible as a predicate over the edge's
+    own values, the way `_adjacency` filters, because what qualifies the hop is
+    a property of the thing it arrives at.
+    """
+    adj = {}
+    for src, dst, _crit, _kind in edges:
+        if keep_dest(dst):
+            adj.setdefault(src, set()).add(dst)
+    return adj
+
+
 def _adjacency(edges, predicate=None):
     adj = {}
     for src, dst, crit, kind in edges:
@@ -803,7 +823,7 @@ def _reachable(adj, start: int, depth: int) -> set:
 
 
 def compute_ground_truth(frame_edges, relation_edges, n_entities, seed,
-                         nested_matching=None):
+                         nested_matching=None, entity_kind=None):
     """Walk the finished edge lists and record the answers a query must give."""
     rng = random.Random(seed + 1)
 
@@ -811,6 +831,13 @@ def compute_ground_truth(frame_edges, relation_edges, n_entities, seed,
     rel_adj = _adjacency(relation_edges)
     # One filtered view per criterion family, so a bench can assert a FILTERED
     # traversal rather than only an open one.
+    rel_adj_score50 = _adjacency(
+        relation_edges, lambda c, _k: c.score >= 50)
+    rel_adj_type0 = _adjacency(
+        relation_edges, lambda _c, k: k == RELATION_TYPES[0])
+    rel_adj_dest_kind = _adjacency_by_dest(
+        relation_edges,
+        lambda d: entity_kind is not None and entity_kind[d] == ENTITY_KINDS[0])
     frame_adj_score50 = _adjacency(
         frame_edges, lambda c, _k: c.score >= 50)
     frame_adj_cat_ab = _adjacency(
@@ -894,21 +921,57 @@ def compute_ground_truth(frame_edges, relation_edges, n_entities, seed,
         extra = [c for c in candidates if c not in starts]
         starts = sorted(set(starts + extra[:N_SAMPLE_STARTS - len(starts)]))
 
-    def walk(adj):
+    def walk_from(adj, from_starts):
         return {
             str(s): {str(d): sorted(_reachable(adj, s, d))
                      for d in TRAVERSAL_DEPTHS}
-            for s in starts
+            for s in from_starts
         }
+
+    def walk(adj):
+        return walk_from(adj, starts)
+
+    # Starts for the GENERAL `node -edge-> node` shape, chosen on the RELATION
+    # graph rather than the frame graph.
+    #
+    # Everything above this point reads `frame_edges` only — the degree seeding,
+    # the reachability filter, all of it — so `sample_starts` describes where the
+    # FRAME walk is interesting. The relation graph is a different graph over the
+    # same entities, and a frame hub is routinely a relation leaf: measured on
+    # the 10k fixture, those starts gave relation walks ranging from (1, 1, 1) to
+    # (3, 17, 30) while the frame walks from the same starts reached hundreds. A
+    # general-traversal test reading `sample_starts` is therefore testing the
+    # thin corner of its own graph, and mostly asserting `[]`.
+    #
+    # Kept SEPARATE rather than merged into `sample_starts`, which would change
+    # every frame answer already recorded at this seed.
+    rel_out = {}
+    for s_, _d, _c, _k in relation_edges:
+        rel_out[s_] = rel_out.get(s_, 0) + 1
+    rel_ranked = sorted(rel_out, key=lambda e: -rel_out[e])
+    rel_starts = sorted(set(
+        [e for e in rel_ranked if _reachable(rel_adj, e, deepest)][:N_SAMPLE_STARTS]
+    )) or starts
 
     return {
         "sample_starts": starts,
+        "relation_sample_starts": rel_starts,
         "frame_traversal": walk(frame_adj),
         "frame_traversal_score_gte_50": walk(frame_adj_score50),
         "frame_traversal_category_in_alpha_beta": walk(frame_adj_cat_ab),
         "frame_traversal_type_is_" + FRAME_TYPES[0]: walk(frame_adj_type0),
         "frame_traversal_occurred_second_half": walk(frame_adj_recent),
-        "relation_traversal": walk(rel_adj),
+        "relation_traversal": walk_from(rel_adj, rel_starts),
+        # The general `node -edge-> node` shape, filtered. It had ONLY the open
+        # walk, so a criterion test on this shape had no ground truth to assert
+        # against and could only compare a query against another query.
+        "relation_traversal_score_gte_50": walk_from(rel_adj_score50, rel_starts),
+        "relation_traversal_type_is_" + RELATION_TYPES[0]:
+            walk_from(rel_adj_type0, rel_starts),
+        # A criterion on the NODE rather than on the edge — a different shape to
+        # the planner, since it constrains the thing the hop arrives at.
+        "relation_traversal_dest_kind_is_" + ENTITY_KINDS[0]:
+            walk_from(rel_adj_dest_kind, rel_starts),
         **{k: walk(adj) for k, adj in nested_adj.items()},
     }
 
@@ -979,7 +1042,8 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
              rare_entity_fraction: float = 0.0,
              attribute_slot_fraction: float = 0.0,
              mistyped_role_slot_fraction: float = 0.0,
-             form_type_fraction: float = 0.0) -> dict:
+             form_type_fraction: float = 0.0,
+             node_criteria: bool = False) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     for old in out_dir.glob("graph_syn_*.nt"):
         old.unlink()
@@ -991,6 +1055,17 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
 
     rng = random.Random(seed + 2)
     entity_kind = [rng.choice(ENTITY_KINDS) for _ in range(n_entities)]
+    # Data properties for the NODES themselves. Until now an entity carried only
+    # its type, a name and a description, so a criterion on a node could only
+    # ever be "is of kind X" — there was no numeric, date or boolean property to
+    # filter a node by, and the general `node -edge-> node` traversal had no way
+    # to test one. Frames and relation edges have carried the full set all along.
+    #
+    # Drawn from a SEPARATE stream. Taking them from `rng` would shift every
+    # later draw and silently change every existing dataset's ground truth at
+    # the same seed, so the generator would stop being reproducible across this
+    # commit.
+    entity_criteria = _entity_criteria(n_entities, seed)
     # The rare minority, chosen by INDEX rather than by an rng draw so the set is
     # derivable from the manifest alone. A test that has to replay the
     # generator's rng stream to know which entities it built is a test that
@@ -1032,6 +1107,8 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
                 _lit(e, f"{HALEY}hasKGraphDescription",
                      f"synthetic {kind} number {i}", f"{XSD}string"),
             ]
+            if node_criteria:
+                buf.append(entity_criteria[i].triples(e))
             fh.write("".join(buf))
             n_triples += len(buf)
 
@@ -1269,7 +1346,7 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
         "nesting": nesting,
         "traversal": compute_ground_truth(
             frame_edges, relation_edges, n_entities, seed,
-            nested_matching=nested_matching),
+            nested_matching=nested_matching, entity_kind=entity_kind),
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
@@ -1308,7 +1385,14 @@ def main() -> int:
                          "FILTERED walk alive to depth 3: at ~50%% selectivity "
                          "a fan-out of 2 collapses to nothing by depth 2")
     ap.add_argument("--relation-fanout", type=int, default=2,
-                    help="KG relations out of each entity")
+                    help="KG relations out of each entity. The same warning as "
+                         "--fanout applies and 2 is BELOW it: a filtered "
+                         "general traversal collapses to nothing by depth 2 at "
+                         "this value. Measured on the 10k fixture, score >= 50 "
+                         "returned 0 of 54 reachable nodes at depth 2. Use 4+ "
+                         "for a dataset meant to test FILTERED node -edge-> "
+                         "node walks; the default stays 2 so existing datasets "
+                         "regenerate unchanged.")
     ap.add_argument("--seed", type=int, default=20260814)
     ap.add_argument("--shard-entities", type=int, default=5000)
     ap.add_argument("--rare-entity-fraction", type=float, default=0.0,
@@ -1344,6 +1428,14 @@ def main() -> int:
                          "the space, fold_dead_not_exists removes the "
                          "Assertion filter entirely, and the 9.7 s case "
                          "that remains open cannot be reproduced.")
+    ap.add_argument("--node-criteria", action="store_true",
+                    help="give every ENTITY the same data properties frames and "
+                         "relation edges carry (score, weight, occurred, label, "
+                         "category, active, tags). Without it a node can only be "
+                         "filtered by its TYPE, so a general node -edge-> node "
+                         "traversal has no numeric or date criterion to test. "
+                         "OFF by default: it adds triples, and an existing "
+                         "dataset must regenerate identically at the same seed.")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
@@ -1352,7 +1444,8 @@ def main() -> int:
              rare_entity_fraction=args.rare_entity_fraction,
              attribute_slot_fraction=args.attribute_slot_fraction,
              mistyped_role_slot_fraction=args.mistyped_role_slot_fraction,
-             form_type_fraction=args.form_type_fraction)
+             form_type_fraction=args.form_type_fraction,
+             node_criteria=args.node_criteria)
     return 0
 
 

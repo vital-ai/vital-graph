@@ -90,7 +90,10 @@ async def test_relation_traversal_matches_the_manifest(perf_conn, depth):
     """
     fx = SMALL
     await _require(perf_conn, fx)
-    for start in fx.sample_starts()[:4]:
+    # The RELATION starts, not the frame ones. `sample_starts` is chosen on the
+    # frame graph, and once the generator gave the relation walk its own starts
+    # this key stopped being recorded for them at all.
+    for start in fx.relation_sample_starts()[:4]:
         expected = fx.expected("relation_traversal", start, depth)
         got, _sql = await _run(
             perf_conn, fx, chain_query(fx, start, depth, hop=relation_hop))

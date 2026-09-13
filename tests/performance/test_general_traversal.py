@@ -44,7 +44,8 @@ DEPTHS = [1, 2, 3]
 def _hub(fx):
     """The sample start with the widest depth-3 reach."""
     walks = fx.manifest()["traversal"]["relation_traversal"]
-    return max(fx.sample_starts(), key=lambda s: len(walks[str(s)]["3"]))
+    return max(fx.relation_sample_starts(),
+               key=lambda s: len(walks[str(s)]["3"]))
 
 
 @pytest.mark.parametrize("depth", DEPTHS)
@@ -53,7 +54,7 @@ async def test_the_open_walk_matches_the_manifest(perf_conn, depth):
     wrong from a leaf is a bug this would otherwise report as a pass."""
     fx = SMALL
     await _require(perf_conn, fx)
-    for start in fx.sample_starts():
+    for start in fx.relation_sample_starts():
         got, _ = await _run(perf_conn, fx,
                             chain_query(fx, start, depth, hop=relation_hop))
         assert got == fx.expected("relation_traversal", start, depth), (
@@ -97,7 +98,7 @@ async def test_a_criterion_never_admits_a_row_the_open_walk_excludes(
     await _require(perf_conn, fx)
     criterion = RELATION_CRITERIA[name]
     total_open = total_filtered = 0
-    for start in fx.sample_starts():
+    for start in fx.relation_sample_starts():
         open_set, _ = await _run(perf_conn, fx,
                                  chain_query(fx, start, 1, hop=relation_hop))
         got, _ = await _run(perf_conn, fx,
@@ -132,7 +133,7 @@ async def test_an_edge_criterion_survives_two_hops(perf_conn):
     await _require(perf_conn, fx)
     criterion = RELATION_CRITERIA["edge_type_is_Knows"]
     total_open = total_filtered = 0
-    for start in fx.sample_starts():
+    for start in fx.relation_sample_starts():
         open_set, _ = await _run(perf_conn, fx,
                                  chain_query(fx, start, 2, hop=relation_hop))
         got, _ = await _run(perf_conn, fx,

@@ -120,6 +120,23 @@ class GraphFixture:
     def sample_starts(self) -> list:
         return self.manifest()["traversal"]["sample_starts"]
 
+    def relation_sample_starts(self) -> list:
+        """Starts for the GENERAL `node -edge-> node` walk.
+
+        `sample_starts` is chosen entirely on the FRAME graph — degree seeding
+        and reachability both read `frame_edges` — and the relation graph is a
+        different graph over the same entities, where a frame hub is routinely a
+        leaf. Measured on a 400-entity dataset, moving the relation walks onto
+        their own starts took the open depth-3 total from 294 to 1,502 and every
+        FILTERED depth-3 walk from empty or near-empty to usable.
+
+        Falls back to `sample_starts` for fixtures generated before the key
+        existed, so a test reads the best starts the loaded manifest has rather
+        than failing on an older one.
+        """
+        return self.manifest()["traversal"].get(
+            "relation_sample_starts") or self.sample_starts()
+
     def nesting(self) -> dict:
         """The nested-frame ground truth, or a clear failure if this fixture predates it.
 
