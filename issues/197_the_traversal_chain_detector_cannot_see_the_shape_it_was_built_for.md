@@ -155,6 +155,24 @@ on `?f{n}`, the hop's own frame, which is exactly the shape hop-wise exists for
 and exactly what `issues/195` established the gate SHOULD count. That it reads
 as unmeasured there is a separate defect from anything recorded here.
 
+### 4b. SCOPE — all of section 4 is about FRAME-SLOT shapes only
+
+Stated because I had blurred it. The `frame_slot` collapse serves frame-slot
+traversals and nothing else. On the same fixture:
+
+    frame_hop     frame_slot=True   edge=False   decision=None
+    relation_hop  frame_slot=False  edge=True    decision=hop-wise, depth 2
+
+Every measurement in section 4 — the 3.8x, the 118x, the twelve failing tests —
+is a `frame_hop` query, where the collapse takes the work and `decide` returns
+None. None of it generalises to traversal over the edge table, where the
+collapse never applies and the gate is the only mechanism.
+
+So "the gate may no longer have a job" is true FOR FRAME-SLOT SHAPES and is not
+a statement about the gate in general. The question in step 3 — whether the
+detector should be extended — still needs a query the collapse cannot serve,
+and `relation_hop` is that query. `issues/198` is what happens on it.
+
 ## 5. Five tests query a table that was dropped
 
 Separate and simpler. `test_traversal_direction_gate.py` queries

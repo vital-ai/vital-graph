@@ -140,20 +140,38 @@ worse. Reverted in `c80fff87`.
 **So the nested-criterion pathology is UNSOLVED** and the benches will stall the
 suite as before.
 
-### What the accident is evidence for
+### What the accident is evidence for — AND A FRAMING ERROR, corrected
 
-Disabling hop-wise globally made the nested family fast (47-522), left the
-non-nested `CRITERIA` family completely unchanged (46/99/151, 434/449/496), and
-let the suite run. Alongside `issues/197` — the collapse beating the gate 3.8x
-on the direction tests and 118x on the bench — that is a real question:
+I first wrote that this raised the question "does hop-wise emission still earn
+its keep now that `frame_slot` exists?" **That question is not supported by any
+of the evidence here, and the reason is a distinction I had collapsed.**
 
-> Does hop-wise emission still earn its keep now that `frame_slot` exists?
+The `frame_slot` rewrite applies ONLY to frame-slot shaped traversals. It has
+nothing to do with general traversal over the edge table. Verified directly on
+the same fixture:
 
-`traversal_decision`'s 134x measurement predates the collapse. Every shape
-measured since has either been indifferent to hop-wise or worse with it. That
-deserves a deliberate measurement — one that turns hop-wise off on purpose and
-prices the whole bench suite both ways — and NOT a fix shipped as the side
-effect of a type error.
+    frame_hop     frame_slot=True   edge=False   decision=None
+    relation_hop  frame_slot=False  edge=True    decision=hop-wise, depth 2
+
+So on `frame_hop` the collapse takes the query and **the gate never runs at
+all** — `decide` returns None. Every measurement I cited for that question was a
+`frame_hop` shape: the nested family, the `CRITERIA` family, the `issues/197`
+direction tests, the `issues/197` bench. "Disabling hop-wise left `CRITERIA`
+unchanged" says nothing, because hop-wise was not running on `CRITERIA` in the
+first place.
+
+**For general traversal the collapse is irrelevant and the gate is the only
+mechanism there is.** Hop-wise is not superseded on that path; nothing else
+serves it.
+
+What the accident actually showed is narrower and still worth having: on
+frame-slot shapes, where the collapse already wins, the criteria the gate
+measures are not doing useful work. That is a statement about one shape, not
+about hop-wise.
+
+And it makes `issues/198` more serious rather than less: a criterion at depth 2
+on `relation_hop` is unrunnable, that IS the general traversal path, and there
+is no collapse to fall back on.
 
 ## What is still wrong in the code
 
