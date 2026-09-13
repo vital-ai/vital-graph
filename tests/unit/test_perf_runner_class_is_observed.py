@@ -253,3 +253,54 @@ def test_the_cliff_metric_is_no_longer_counted_as_unruled():
     rule = mod.rule_for(mod.load_thresholds(), "any_bench", "flips_within_range")
     assert rule is not None
     assert not rule.get("report_only"), "report_only would not gate the flip"
+
+
+# --- dirty must mean "the code differs from the commit" ---------------------
+
+def test_dirty_ignores_untracked_files(monkeypatch, tmp_path):
+    """`issues/190`. A tree with scratch files in it is not a dirty TREE.
+
+    `git_stamp` used `git status --porcelain`, which lists untracked files, so
+    any captured plan or throwaway probe stamped the run `dirty: true`. Since
+    `190` disqualifies a baseline promoted from a dirty tree, that made EVERY
+    run unpromotable — with 24 untracked files present at the time — and the
+    reason was indistinguishable from the real one.
+
+    Uncommitted changes to TRACKED files mean the run measured code matching no
+    commit, which is disqualifying. Untracked files say nothing about what ran.
+    """
+    from tests.performance import perf_record
+
+    calls = []
+
+    def fake_sh(*args):
+        calls.append(args)
+        if args[:2] == ("git", "status"):
+            assert "--untracked-files=no" in args, (
+                "dirty must be computed from TRACKED changes only")
+            return ""                      # no tracked modifications
+        if args[:2] == ("git", "ls-files"):
+            return "scratch_a.py\nscratch_b.py\n"
+        return "abc123"
+
+    monkeypatch.setattr(perf_record, "_sh", fake_sh)
+    g = perf_record.git_stamp()
+    assert g["dirty"] is False, "untracked scratch must not make a tree dirty"
+    assert g["untracked_files"] == 2, "but it is still recorded"
+
+
+def test_a_modified_tracked_file_IS_dirty(monkeypatch):
+    """The half that must keep working: real uncommitted changes disqualify."""
+    from tests.performance import perf_record
+
+    def fake_sh(*args):
+        if args[:2] == ("git", "status"):
+            return " M vitalgraph/db/sparql_sql/generator.py"
+        if args[:2] == ("git", "ls-files"):
+            return ""
+        return "abc123"
+
+    monkeypatch.setattr(perf_record, "_sh", fake_sh)
+    g = perf_record.git_stamp()
+    assert g["dirty"] is True
+    assert g["untracked_files"] == 0

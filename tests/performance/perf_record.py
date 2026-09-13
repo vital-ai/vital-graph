@@ -53,12 +53,31 @@ def _sh(*args: str) -> Optional[str]:
 
 
 def git_stamp() -> Dict[str, Any]:
-    dirty = _sh("git", "status", "--porcelain")
+    """What code this run measured.
+
+    `dirty` COUNTS TRACKED CHANGES ONLY (`issues/190`). It was
+    `git status --porcelain`, which lists untracked files too, so a tree holding
+    any scratch file — a perf probe, a captured plan, anything not committed —
+    stamped every run `dirty: true`. That is not a small thing: `issues/190`
+    disqualifies a baseline promoted from a dirty tree, so with 24 untracked
+    files present NO run could ever be promoted, and the reason looked identical
+    to the real one.
+
+    The distinction is exactly the one that matters. Uncommitted changes to
+    TRACKED files mean the run measured code that corresponds to no commit,
+    which is disqualifying. Untracked scratch files mean nothing about what ran.
+
+    `untracked` is recorded rather than dropped, because a run taken beside a
+    pile of scratch is worth knowing about even when it is promotable.
+    """
+    tracked = _sh("git", "status", "--porcelain", "--untracked-files=no")
+    untracked = _sh("git", "ls-files", "--others", "--exclude-standard")
     return {
         "commit": _sh("git", "rev-parse", "HEAD"),
         "short": _sh("git", "rev-parse", "--short", "HEAD"),
         "branch": _sh("git", "rev-parse", "--abbrev-ref", "HEAD"),
-        "dirty": bool(dirty),
+        "dirty": bool(tracked),
+        "untracked_files": len((untracked or "").splitlines()),
     }
 
 
