@@ -325,6 +325,39 @@ STATS_RECOMPUTE_CYCLE_BUDGET_S = float(
 
 _recompute_slot: Dict[str, int] = {}
 
+# `edge_fanout` on its own slot and its own interval. Longer than the stats one
+# because the statistic is a property of the SCHEMA — how much one traversal
+# step multiplies rows, per (edge type, relation type, direction) — and that
+# moves with the shape of the data rather than with its volume.
+#
+# It is refreshed rather than maintained incrementally, deliberately:
+# `compute_edge_fanout` records avg, p99 and max per bucket, so keeping it
+# current under every write would mean maintaining a DISTRIBUTION on the write
+# path. Its own docstring rejects that and says a periodic recompute is enough —
+# the gap this closes is that no periodic anything existed. Before this, the
+# table was rebuilt only by an explicit admin resync, a data import, or the bulk
+# loader, so ordinary CRUD drifted it with nothing to notice.
+EDGE_FANOUT_INTERVAL_S = float(
+    os.getenv("VITALGRAPH_EDGE_FANOUT_INTERVAL_S", "21600"))    # 6h
+
+_edge_fanout_slot: Dict[str, int] = {}
+
+
+def edge_fanout_due(space_id: str, interval_s: Optional[float] = None,
+                    now: Optional[float] = None) -> bool:
+    """True when *space_id* has entered a new edge-fanout interval."""
+    iv = EDGE_FANOUT_INTERVAL_S if interval_s is None else interval_s
+    t = time.time() if now is None else now
+    last = _edge_fanout_slot.get(space_id)
+    return last is None or _recompute_slot_of(space_id, iv, t) != last
+
+
+def mark_edge_fanout_done(space_id: str, interval_s: Optional[float] = None,
+                          now: Optional[float] = None) -> None:
+    iv = EDGE_FANOUT_INTERVAL_S if interval_s is None else interval_s
+    t = time.time() if now is None else now
+    _edge_fanout_slot[space_id] = _recompute_slot_of(space_id, iv, t)
+
 
 def recompute_phase_offset(space_id: str, interval_s: float) -> float:
     """Where in the interval this space runs, in [0, interval_s).
@@ -591,6 +624,14 @@ class MaintenanceJob:
             if graphreg_result:
                 summary["graph_registration"] = graphreg_result
 
+            # --- Edge fan-out: refresh the traversal-amplification guard ---
+            # Read on every query and it does change plans, so an empty or
+            # stale table is a wrong plan. Nothing refreshed it periodically
+            # before this: only an admin resync, an import, or the bulk loader.
+            fanout_result = await self._run_edge_fanout_refresh(list(stats.keys()))
+            if fanout_result:
+                summary["edge_fanout_refresh"] = fanout_result
+
             # --- Stats: ONE recompute, replacing integrity + prune + rebuild ---
             stats_result = await self._run_stats_recompute(list(stats.keys()))
             if stats_result:
@@ -686,6 +727,10 @@ class MaintenanceJob:
                 ("grouping_self_link", self._run_grouping_self_link_check),
                 ("single_valued_integrity", self._run_single_valued_integrity),
                 ("graph_registration", self._run_graph_registration_check),
+                # Forced for the same reason as stats below: an explicit
+                # trigger must not be declined by the per-space schedule.
+                ("edge_fanout_refresh",
+                 lambda ids: self._run_edge_fanout_refresh(ids, force=True)),
                 # Forced: an explicit trigger must not be declined by the
                 # per-space schedule (see `_run_stats_recompute`).
                 ("stats_recompute",
@@ -1379,6 +1424,92 @@ class MaintenanceJob:
                              space_id, exc)
                 continue
         return None
+
+    async def _run_edge_fanout_refresh(self, space_ids: List[str],
+                                       force: bool = False) -> Optional[Dict]:
+        """Recompute `{space}_edge_fanout` when it is EMPTY or its slot is due.
+
+        The table is read on every query — `generator.py` loads it and
+        `emit_slice` asks `assess_traversal` whether a two-phase probe's
+        traversal amplifies — and it DOES change plans: measured across the
+        whole query tier, 61 consultations, 2 declines ("hop tail 468 exceeds
+        16 — this direction fans out"). So a stale or absent value is a wrong
+        plan, not a missed optimisation.
+
+        TWO GATES, IN COST ORDER, and the first is the one that matters.
+
+        EMPTY IS NOT SAFE, it is SILENT. `emit_slice` guards its use with
+        `if fanout:`, so a space whose table has no rows skips the check
+        entirely and gets no protection and no warning — absence reads as
+        "nothing amplifies" when it means "nobody measured". Found on
+        `sp_lead_synth_100k`, which has zero rows while every graph fixture has
+        8-10. That case is repaired whenever it is seen, regardless of schedule.
+
+        Otherwise SCHEDULE-GATED, per space and phase-offset, like
+        `_run_stats_recompute`. Not change-gated: the cheap change probes count
+        ROWS, and fan-out can shift without the row count moving — rewiring the
+        same number of edges onto one hub changes the distribution and nothing
+        else. A row-count gate would miss exactly the change that matters.
+        """
+        if not self._pool:
+            return None
+        from vitalgraph.db.sparql_sql.sync_edge_fanout import compute_edge_fanout
+
+        refreshed, repaired, failed = {}, [], []
+        for sid in space_ids:
+            try:
+                async with self._pool.acquire() as conn:
+                    try:
+                        empty = not await conn.fetchval(
+                            f"SELECT 1 FROM {sid}_edge_fanout LIMIT 1")
+                        # Only asked when the table is EMPTY, and that ordering
+                        # is not cosmetic. `edge_type_uuid` need not be indexed,
+                        # so on a space whose edges are ALL untyped this stops
+                        # only at the end of the table — a full scan, per space,
+                        # per cycle, to answer a question that does not arise
+                        # unless there are no rows to begin with.
+                        #
+                        # A space with no TYPED edges has no fan-out to record
+                        # and zero rows is the right answer, so flagging it
+                        # would queue a rebuild that can never converge.
+                        has_edges = bool(empty) and bool(await conn.fetchval(
+                            f"SELECT 1 FROM {sid}_edge "
+                            f"WHERE edge_type_uuid IS NOT NULL LIMIT 1"))
+                    except asyncpg.UndefinedTableError:
+                        continue            # no edge/fanout table (non-KG space)
+                    except asyncpg.UndefinedColumnError:
+                        continue            # predates edge_type_uuid
+
+                    if empty and has_edges:
+                        reason = "empty"
+                    elif force or edge_fanout_due(sid):
+                        reason = "due"
+                    else:
+                        continue
+
+                    async with conn.transaction():
+                        rows = await compute_edge_fanout(conn, sid)
+                    mark_edge_fanout_done(sid)
+                    refreshed[sid] = rows
+                    if reason == "empty":
+                        repaired.append(sid)
+                        logger.warning(
+                            "edge_fanout: %s had NO rows while carrying typed "
+                            "edges, so the traversal-amplification guard was "
+                            "skipped for every query. Rebuilt %d bucket(s).",
+                            sid, rows)
+            except Exception as exc:
+                failed.append(sid)
+                log_probe_failure("edge_fanout_refresh", sid, exc)
+
+        if not refreshed and not failed:
+            return None
+        out: Dict = {"refreshed": refreshed}
+        if repaired:
+            out["repaired_empty"] = repaired
+        if failed:
+            out["failed"] = failed
+        return out
 
     async def _run_stats_recompute(self, space_ids: List[str],
                                    force: bool = False) -> Optional[Dict]:
