@@ -56,7 +56,10 @@ HAS_PG18 = _has_pg18()
 skip_no_pg18 = pytest.mark.skipif(
     not HAS_PG18, reason="Requires PostgreSQL 18 (uuidv7) on :5433")
 
-pytestmark = [pytest.mark.performance, skip_no_pg18,
+# Creates its own partitioned spaces and INSERTs into them, so it is a
+# modification, not a read-only query bench — it belongs to the ingest tier
+# however query-shaped its assertions are.
+pytestmark = [pytest.mark.performance, pytest.mark.ingest_bench, skip_no_pg18,
               pytest.mark.asyncio(loop_scope="session")]
 
 

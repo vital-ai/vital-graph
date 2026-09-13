@@ -84,8 +84,8 @@ case "$TIER" in
     run tests/performance -m "not ingest_bench"
     ;;
   ingest)
-    # The benches that build their own data. Their own baseline, promoted on
-    # their own schedule; the query tier never needs them.
+    # Imports, exports and modifications. Their own baseline, promoted on their
+    # own schedule; the read-only query tier never needs them.
     run tests/performance -m "ingest_bench"
     ;;
   full)

@@ -56,6 +56,12 @@ SEED_DATA=false        # --seed-data: load the realistic benchmark datasets
 API_BENCHES=false      # --api-benches: also run the REST latency benches
 RECORD=false           # --record: capture a structured run file
 RECORD_PATH=""
+TIER="query"           # --tier query|ingest|all: which benchmark tier to run.
+                       # The tiers split on whether a test WRITES. `ingest_bench`
+                       # marks imports, exports and modifications; everything else is
+                       # read-only. The read-only tier is the one that stays fast, so
+                       # it can be run and promoted on every query fix — which is the
+                       # whole point of keeping them apart. Separate baselines.
 BASELINE=""            # --baseline NAME: compare the recorded run against it
 PROMOTE=""             # --promote NAME: make the recorded run the new baseline
 PYTEST_ARGS=()
@@ -78,6 +84,8 @@ for arg in "$@"; do
     --reset-data) PERSIST=true; RESET_DATA=true ;;
     --seed-data)   SEED_DATA=true; PERSIST=true ;;
     --api-benches) API_BENCHES=true; SEED_DATA=true; PERSIST=true ;;
+    --tier=*)     TIER="${arg#*=}" ;;
+    --ingest)     TIER="ingest" ;;
     --record)     RECORD=true ;;
     --record=*)   RECORD=true; RECORD_PATH="${arg#*=}" ;;
     --baseline)   RECORD=true; NEXT=baseline ;;
@@ -88,6 +96,33 @@ for arg in "$@"; do
     *)            PYTEST_ARGS+=("$arg") ;;
   esac
 done
+
+# Resolve the tier before touching docker: an unusable combination should cost a
+# message, not a container stack.
+case "$TIER" in
+  query)  MARK_EXPR="(integration or performance) and not ingest_bench"
+          TIER_NOTE="query tier — read-only, the fast pass" ;;
+  ingest) MARK_EXPR="performance and ingest_bench"
+          TIER_NOTE="ingest tier — imports, exports and modifications; slow by nature" ;;
+  all)    MARK_EXPR="integration or performance"
+          TIER_NOTE="BOTH tiers in one pass — records a file matching NEITHER baseline" ;;
+  *)      echo "❌ --tier must be query, ingest or all (got '$TIER')"; exit 2 ;;
+esac
+
+# A run of one tier must not be promoted over the other tier's baseline: it would
+# bury that tier's benches as absent and silently shrink it. `all` matches neither.
+if [ -n "$PROMOTE" ] && [ "$TIER" != "all" ] && [ "$PROMOTE" != "$TIER" ]; then
+  echo "❌ refusing to promote a '$TIER' run over the '$PROMOTE' baseline."
+  echo "   Run --tier=$PROMOTE, or promote to '$TIER'."
+  exit 2
+fi
+if [ -n "$PROMOTE" ] && [ "$TIER" = "all" ]; then
+  echo "❌ refusing to promote a --tier=all run: it spans both baselines."
+  echo "   Promote each tier from its own pass."
+  exit 2
+fi
+
+
 
 # Result recording (performance_regression_tracking_plan.md). The suite is inert
 # unless VG_PERF_RECORD names an output path.
@@ -245,8 +280,10 @@ if $API_BENCHES; then
   PYTEST_ARGS+=(-k "not bench")
 fi
 
+echo "🎯 $TIER_NOTE"
+
 PYTEST_STATUS=0
-"$PYTHON" -m pytest -m "integration or performance" -p no:cacheprovider "${PYTEST_ARGS[@]}" \
+"$PYTHON" -m pytest -m "$MARK_EXPR" -p no:cacheprovider "${PYTEST_ARGS[@]}" \
   || PYTEST_STATUS=$?
 
 # Compare / promote before propagating the pytest status: a bench can regress

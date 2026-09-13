@@ -33,7 +33,9 @@ from .conftest import skip_no_pg
 from .harness import (explain_json, total_shared_buffers, node_types,
                       index_only_heap_fetches, has_seq_scan_on)
 
-pytestmark = [pytest.mark.performance, pytest.mark.slow, skip_no_pg,
+# DROPs an index to measure the pre-index behavior and drops the space after:
+# a modification, so ingest tier.
+pytestmark = [pytest.mark.performance, pytest.mark.ingest_bench, pytest.mark.slow, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
 
 SPACE = "perf_covbench"

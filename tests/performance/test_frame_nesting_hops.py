@@ -21,7 +21,8 @@ from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
 from .conftest import skip_no_pg
 from .harness import assert_plan, node_types
 
-pytestmark = [pytest.mark.performance, skip_no_pg,
+# Creates a space and COPYs edge rows into it: a modification, so ingest tier.
+pytestmark = [pytest.mark.performance, pytest.mark.ingest_bench, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
 
 SPACE = "perf_edgehop"
