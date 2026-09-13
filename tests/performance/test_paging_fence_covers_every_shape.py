@@ -185,7 +185,7 @@ async def _warm(conn, sql):
 @pytest.mark.parametrize("shape_id,make", SHAPES, ids=[s[0] for s in SHAPES])
 @pytest.mark.parametrize("page_size", PAGE_SIZES, ids=[f"p{n}" for n in PAGE_SIZES])
 async def test_a_flippable_shape_is_always_fenced(
-        perf_conn, fx, entity_type, shape_id, make, page_size):
+        perf_conn, perf_record, fx, entity_type, shape_id, make, page_size):
     """`needs_ordered_scan` must be set for any shape whose plan would flip."""
     reason = await require_usable(perf_conn, fx)
     if reason:
@@ -261,6 +261,23 @@ async def test_a_flippable_shape_is_always_fenced(
             f"`needs_ordered_scan` IS set, so the executor forces the worse "
             f"plan. Forcing `enable_sort = off` on a shape that needs a sort is "
             f"the 273x regression this repository already documents.")
+
+    # RECORD what was already measured. This bench wore a `bench` mark and never
+    # called `perf_record`, so `conftest` minted an id and then flagged it "test
+    # passed but recorded no metrics" — 48 parametrisations that could never be
+    # `ok` in any baseline, in any pass, carried as permanent holes.
+    #
+    # A side that did not finish stays None rather than becoming 0. A zero would
+    # read as "free" to every comparison downstream, and "this plan does not
+    # finish" is the opposite of free — it is the finding. The ratio is omitted
+    # for the same reason instead of dividing by a number that is not there.
+    metrics = {"fenced_buffers": fenced, "unfenced_buffers": unfenced,
+               "needs_ordered_scan": bool(flag), "page_size": page_size}
+    if fenced is not None and unfenced:
+        metrics["fence_ratio"] = round(fenced / unfenced, 3)
+    perf_record(kind="sql", dataset=fx.space, metrics=metrics,
+                notes=f"{shape_id} / {entity_type.rsplit(':', 1)[-1]} / "
+                      f"page {page_size} — issues/190 fence coverage")
 
 
 @pytest.mark.ingest_bench

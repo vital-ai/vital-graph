@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "env": {
-    "started_at": "2026-09-13T13:19:21.473972+00:00",
+    "started_at": "2026-09-13T23:36:55.731706+00:00",
     "git": {
-      "commit": "bc6ff22a975ca8b2399704f596c12790b38c4618",
-      "short": "bc6ff22a",
+      "commit": "862363ee834a56ee900e484b39ca7ed970c8d8c9",
+      "short": "862363ee",
       "branch": "main",
       "dirty": false,
       "untracked_files": 48
@@ -14,7 +14,7 @@
       "platform": "macOS-14.6.1-arm64-arm-64bit",
       "machine": "arm64",
       "cpu_count": 10,
-      "python": "3.12.2"
+      "python": "3.12.11"
     },
     "runner": {
       "class": "vg-test-docker-persist",
@@ -27,13 +27,15 @@
         "persist": true,
         "seeded": true,
         "fixture_tables": 296,
-        "fixture_live_tuples": 6369372,
-        "seed_space_bytes": 55745413120
+        "fixture_live_tuples": 6372884,
+        "seed_space_bytes": 55745470464
       },
       "flags": {
         "persist": true,
-        "seeded": true
+        "seeded": false
       },
+      "flags_disagree": "VG_PERF_PERSIST/VG_PERF_SEEDED say persist=True seeded=False, but the seed-only spaces hold 55,745,470,464 bytes across 296 fixture table(s). Class taken from the DATABASE. See issues/189.",
+      "promotion_blocked": "VG_PERF_PERSIST/VG_PERF_SEEDED say persist=True seeded=False, but the seed-only spaces hold 55,745,470,464 bytes across 296 fixture table(s). Class taken from the DATABASE. See issues/189.",
       "largest_gated_fixture": "lead_nurture_grouped",
       "largest_gated_fixture_bytes": 49077829632,
       "shared_buffers_bytes": 17179869184,
@@ -52,17 +54,18 @@
     },
     "stats": {
       "fixture_tables": 296,
-      "fixture_live_tuples": 6369372,
-      "fixture_last_analyze": "2026-09-13T00:55:45.265136+00:00"
+      "fixture_live_tuples": 6372884,
+      "fixture_last_analyze": "2026-09-13T17:44:14.555477+00:00"
     },
     "sizes": {
       "space_bytes": {
         "lead_nurture_grouped": 49077829632,
-        "sp_lead_synth_100k": 39322165248,
-        "sp_graph_synth_100k": 10681851904,
-        "wordnet_frames": 6537969664,
+        "sp_lead_synth_100k": 39322181632,
+        "sp_graph_synth_100k": 10681884672,
+        "wordnet_frames": 6538027008,
         "sp_lead_synth_10k": 3789103104,
         "sp_graph_forms_20k": 2878218240,
+        "sp_graph_rel_10k": 1824317440,
         "sp_graph_synth_10k": 1411350528,
         "sp_lead_types": 689528832,
         "sp_graph_skew_2k": 348930048,
@@ -215,7 +218,7 @@
       "largest_gated_fixture": "lead_nurture_grouped",
       "largest_gated_fixture_bytes": 49077829632
     },
-    "finished_at": "2026-09-13T14:18:01.265717+00:00"
+    "finished_at": "2026-09-13T23:52:31.885296+00:00"
   },
   "benches": [
     {
@@ -223,9 +226,9 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "first_page_ms": 128.4,
-        "deep_page_ms": 109.6,
-        "deep_offset_ratio": 0.85,
+        "first_page_ms": 81.6,
+        "deep_page_ms": 84.3,
+        "deep_offset_ratio": 1.03,
         "offset": 375,
         "rows": 25
       },
@@ -237,8 +240,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 132.3,
-        "sorted_ms": 85.4,
+        "unsorted_ms": 114.9,
+        "sorted_ms": 109.2,
         "rows": 25
       },
       "dataset": "synthetic:400frames",
@@ -249,9 +252,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_currency_min_ms": 501.4,
-        "agg_currency_avg_ms": 256.9,
-        "agg_currency_ratio": 1.95
+        "agg_currency_min_ms": 386.6,
+        "agg_currency_avg_ms": 343.1,
+        "agg_currency_ratio": 1.13
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN vs AVG on Currency \u2014 issues/029 sort-per-group"
@@ -261,9 +264,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_double_min_ms": 967.4,
-        "agg_double_avg_ms": 8698.9,
-        "agg_double_ratio": 0.11
+        "agg_double_min_ms": 1018.3,
+        "agg_double_avg_ms": 5936.3,
+        "agg_double_ratio": 0.17
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN vs AVG on Double \u2014 issues/029 sort-per-group"
@@ -273,9 +276,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_integer_min_ms": 909.8,
-        "agg_integer_avg_ms": 3363.3,
-        "agg_integer_ratio": 0.27
+        "agg_integer_min_ms": 879.0,
+        "agg_integer_avg_ms": 7750.3,
+        "agg_integer_ratio": 0.11
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN vs AVG on Integer \u2014 issues/029 sort-per-group"
@@ -285,9 +288,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_currency_min_ms": 249.1,
-        "agg_currency_avg_ms": 203.0,
-        "agg_currency_ratio": 1.23
+        "agg_currency_min_ms": 231.1,
+        "agg_currency_avg_ms": 207.0,
+        "agg_currency_ratio": 1.12
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Currency \u2014 issues/029 sort-per-group"
@@ -297,9 +300,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_double_min_ms": 277.3,
-        "agg_double_avg_ms": 188.7,
-        "agg_double_ratio": 1.47
+        "agg_double_min_ms": 237.5,
+        "agg_double_avg_ms": 193.9,
+        "agg_double_ratio": 1.22
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Double \u2014 issues/029 sort-per-group"
@@ -309,9 +312,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_integer_min_ms": 335.3,
-        "agg_integer_avg_ms": 180.7,
-        "agg_integer_ratio": 1.85
+        "agg_integer_min_ms": 376.5,
+        "agg_integer_avg_ms": 158.3,
+        "agg_integer_ratio": 2.38
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Integer \u2014 issues/029 sort-per-group"
@@ -321,12 +324,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 2424.7,
-        "agg_max_ms": 2331.5,
-        "agg_avg_ms": 1574.6,
-        "agg_sum_ms": 1550.2,
-        "agg_count_ms": 910.9,
-        "min_over_avg": 1.54
+        "agg_min_ms": 2314.1,
+        "agg_max_ms": 2264.8,
+        "agg_avg_ms": 1442.3,
+        "agg_sum_ms": 1533.4,
+        "agg_count_ms": 765.2,
+        "min_over_avg": 1.6
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "aggregate cost, group_by=True \u2014 issues/029 sort-per-group"
@@ -336,12 +339,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 1212.0,
-        "agg_max_ms": 932.3,
-        "agg_avg_ms": 4343.3,
-        "agg_sum_ms": 5607.4,
-        "agg_count_ms": 46.5,
-        "min_over_avg": 0.28
+        "agg_min_ms": 1071.1,
+        "agg_max_ms": 997.3,
+        "agg_avg_ms": 10613.3,
+        "agg_sum_ms": 9135.6,
+        "agg_count_ms": 44.9,
+        "min_over_avg": 0.1
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "aggregate cost, group_by=False \u2014 issues/029 sort-per-group"
@@ -351,12 +354,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 211.3,
-        "agg_max_ms": 172.4,
-        "agg_avg_ms": 122.5,
-        "agg_sum_ms": 123.9,
-        "agg_count_ms": 87.7,
-        "min_over_avg": 1.73
+        "agg_min_ms": 167.8,
+        "agg_max_ms": 204.5,
+        "agg_avg_ms": 121.7,
+        "agg_sum_ms": 111.4,
+        "agg_count_ms": 77.7,
+        "min_over_avg": 1.38
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "aggregate cost, group_by=True \u2014 issues/029 sort-per-group"
@@ -366,12 +369,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 264.2,
-        "agg_max_ms": 227.8,
-        "agg_avg_ms": 157.9,
-        "agg_sum_ms": 165.7,
-        "agg_count_ms": 3.2,
-        "min_over_avg": 1.67
+        "agg_min_ms": 310.2,
+        "agg_max_ms": 227.6,
+        "agg_avg_ms": 197.7,
+        "agg_sum_ms": 165.9,
+        "agg_count_ms": 3.4,
+        "min_over_avg": 1.57
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "aggregate cost, group_by=False \u2014 issues/029 sort-per-group"
@@ -381,9 +384,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "min_in_memory_ms": 886.8,
-        "min_spilled_ms": 869.0,
-        "spill_ratio": 0.98
+        "min_in_memory_ms": 929.4,
+        "min_spilled_ms": 1096.8,
+        "spill_ratio": 1.18
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN with and without a work_mem spill at 4MB \u2014 issues/029"
@@ -393,50 +396,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "min_in_memory_ms": 226.4,
-        "min_spilled_ms": 257.1,
-        "spill_ratio": 1.14
+        "min_in_memory_ms": 281.7,
+        "min_spilled_ms": 301.3,
+        "spill_ratio": 1.07
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN with and without a work_mem spill at 1MB \u2014 issues/029"
-    },
-    {
-      "bench_id": "query.covering.advantage_growth",
-      "kind": "query",
-      "status": "ok",
-      "shape": {
-        "node_types": [
-          "Index Only Scan"
-        ],
-        "indexes": [
-          "idx_perf_covbench_quad_ctx_pred"
-        ],
-        "seq_scans": [],
-        "tree": [
-          "Index Only Scan",
-          []
-        ]
-      },
-      "metrics": {
-        "shared_buffers": 124,
-        "shared_read": 0,
-        "temp_written": 0,
-        "actual_rows": 9000,
-        "max_actual_rows": 9000,
-        "estimated_rows": 9340,
-        "heap_fetches": 0,
-        "planning_ms": 0.744,
-        "execution_ms": 3.451,
-        "with_index_buffers": 124,
-        "with_index_node": "Index Only Scan",
-        "without_index_buffers": 9010,
-        "without_index_node": "Bitmap Heap Scan",
-        "advantage_ratio": 72.661,
-        "with_growth": 7.294,
-        "without_growth": 8.992
-      },
-      "dataset": "synthetic:900000",
-      "notes": "sizes=[100000, 300000, 900000]"
     },
     {
       "bench_id": "query.covering.graph_scoped_scan_index_only",
@@ -457,14 +422,14 @@
       },
       "metrics": {
         "shared_buffers": 5,
-        "shared_read": 3,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 100,
         "max_actual_rows": 100,
         "estimated_rows": 100,
         "heap_fetches": 0,
-        "planning_ms": 2.239,
-        "execution_ms": 2.081,
+        "planning_ms": 0.381,
+        "execution_ms": 0.436,
         "matched_rows": 100
       },
       "dataset": "space_lead_dataset_test"
@@ -512,14 +477,14 @@
       },
       "metrics": {
         "shared_buffers": 989,
-        "shared_read": 4,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 1025,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.208,
-        "execution_ms": 81.073
+        "planning_ms": 0.147,
+        "execution_ms": 128.659
       },
       "dataset": "wordnet_frames"
     },
@@ -566,14 +531,14 @@
       },
       "metrics": {
         "shared_buffers": 127,
-        "shared_read": 2,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 2.129,
-        "execution_ms": 11.444
+        "planning_ms": 3.756,
+        "execution_ms": 4.714
       },
       "dataset": "wordnet_frames"
     },
@@ -626,41 +591,10 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.212,
-        "execution_ms": 2.861
+        "planning_ms": 0.157,
+        "execution_ms": 2.652
       },
       "dataset": "wordnet_frames"
-    },
-    {
-      "bench_id": "query.frame_nesting.edge_hops_index_only",
-      "kind": "query",
-      "status": "ok",
-      "shape": {
-        "node_types": [
-          "Index Only Scan"
-        ],
-        "indexes": [
-          "idx_perf_edgehop_edge_src_dst"
-        ],
-        "seq_scans": [],
-        "tree": [
-          "Index Only Scan",
-          []
-        ]
-      },
-      "metrics": {
-        "shared_buffers": 3,
-        "shared_read": 0,
-        "temp_written": 0,
-        "actual_rows": 10,
-        "max_actual_rows": 10,
-        "estimated_rows": 10,
-        "heap_fetches": 0,
-        "planning_ms": 0.243,
-        "execution_ms": 0.018
-      },
-      "dataset": "synthetic:edges",
-      "notes": "forward hop (source\u2192dest)"
     },
     {
       "bench_id": "query.generated_sql.plan[lead_entity_type]",
@@ -710,14 +644,14 @@
       },
       "metrics": {
         "shared_buffers": 154,
-        "shared_read": 49,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 4.037,
-        "execution_ms": 13.032,
+        "planning_ms": 0.698,
+        "execution_ms": 4.039,
         "sql_chars": 6702,
         "joins": 0
       },
@@ -773,14 +707,14 @@
       },
       "metrics": {
         "shared_buffers": 96,
-        "shared_read": 48,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 1649,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 4.692,
-        "execution_ms": 10.452,
+        "planning_ms": 1.435,
+        "execution_ms": 4.085,
         "sql_chars": 3811,
         "joins": 0
       },
@@ -847,14 +781,14 @@
       },
       "metrics": {
         "shared_buffers": 205,
-        "shared_read": 25,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 1.185,
-        "execution_ms": 17.89,
+        "planning_ms": 1.105,
+        "execution_ms": 10.64,
         "sql_chars": 6687,
         "joins": 0
       },
@@ -933,8 +867,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 1.785,
-        "execution_ms": 14.042,
+        "planning_ms": 1.132,
+        "execution_ms": 17.57,
         "sql_chars": 6961,
         "joins": 0
       },
@@ -990,14 +924,14 @@
       },
       "metrics": {
         "shared_buffers": 1248,
-        "shared_read": 1146,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 109745,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 1.086,
-        "execution_ms": 75.191,
+        "planning_ms": 0.691,
+        "execution_ms": 100.576,
         "sql_chars": 3801,
         "joins": 0
       },
@@ -1005,26 +939,14 @@
       "notes": "typed subject page (the KGEntity listing shape)"
     },
     {
-      "bench_id": "query.growth.entity_page_buffers",
-      "kind": "query",
-      "status": "ok",
-      "metrics": {
-        "growth_class": "flat",
-        "buffers_at_50000": 104,
-        "buffers_at_150000": 104,
-        "buffers_at_450000": 104
-      },
-      "dataset": "synthetic:[50000, 150000, 450000]"
-    },
-    {
       "bench_id": "query.kgquery.deep_paging.curve[100k]",
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "page_ms_offset_0": 21.1,
-        "page_ms_offset_250": 193.2,
-        "page_ms_offset_1000": 174.1,
-        "deep_ratio": 8.2
+        "page_ms_offset_0": 33.0,
+        "page_ms_offset_250": 149.0,
+        "page_ms_offset_1000": 152.0,
+        "deep_ratio": 4.6
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "cost across offsets \u2014 issues/078; flat means fixed"
@@ -1034,10 +956,10 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "page_ms_offset_0": 26.5,
-        "page_ms_offset_250": 34.5,
-        "page_ms_offset_1000": 26.6,
-        "deep_ratio": 1.3
+        "page_ms_offset_0": 29.4,
+        "page_ms_offset_250": 29.4,
+        "page_ms_offset_1000": 26.7,
+        "deep_ratio": 1.0
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "cost across offsets \u2014 issues/078; flat means fixed"
@@ -1226,16 +1148,16 @@
         ]
       },
       "metrics": {
-        "shared_buffers": 174338,
+        "shared_buffers": 174345,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 33333,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 50.307,
-        "execution_ms": 215.156,
-        "min_ratio": 1.151,
+        "planning_ms": 39.694,
+        "execution_ms": 148.481,
+        "min_ratio": 1.14,
         "offsets_measured": 3,
         "deepest_offset": 1000
       },
@@ -1427,9 +1349,9 @@
         "max_actual_rows": 10000,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 38.332,
-        "execution_ms": 29.358,
-        "min_ratio": 1.249,
+        "planning_ms": 41.31,
+        "execution_ms": 31.959,
+        "min_ratio": 1.098,
         "offsets_measured": 2,
         "deepest_offset": 250
       },
@@ -1623,8 +1545,8 @@
         "max_actual_rows": 50469,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 46.075,
-        "execution_ms": 445.77,
+        "planning_ms": 47.378,
+        "execution_ms": 306.151,
         "rows": 25,
         "distinct": 25,
         "duplicate_anchors": 398
@@ -1819,8 +1741,8 @@
         "max_actual_rows": 699,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 42.4,
-        "execution_ms": 281.439,
+        "planning_ms": 45.367,
+        "execution_ms": 297.749,
         "rows": 25,
         "distinct": 25,
         "duplicate_anchors": 398
@@ -2043,14 +1965,14 @@
       },
       "metrics": {
         "shared_buffers": 104030,
-        "shared_read": 219,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 56.889,
-        "execution_ms": 153.554,
+        "planning_ms": 52.003,
+        "execution_ms": 81.806,
         "sparql_chars": 1872,
         "sql_chars": 6585,
         "joins": 0
@@ -2245,14 +2167,14 @@
       },
       "metrics": {
         "shared_buffers": 14163,
-        "shared_read": 1249,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 50.603,
-        "execution_ms": 330.585,
+        "planning_ms": 49.057,
+        "execution_ms": 99.415,
         "sparql_chars": 1836,
         "sql_chars": 6558,
         "joins": 0
@@ -2440,14 +2362,14 @@
       },
       "metrics": {
         "shared_buffers": 21444,
-        "shared_read": 76,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 13,
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 46.143,
-        "execution_ms": 26.906,
+        "planning_ms": 43.505,
+        "execution_ms": 17.415,
         "sparql_chars": 1844,
         "sql_chars": 6558,
         "joins": 0
@@ -2610,8 +2532,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 44.123,
-        "execution_ms": 40.618,
+        "planning_ms": 44.673,
+        "execution_ms": 58.974,
         "total_matches": 9220,
         "page_size": 25,
         "buffers_per_match": 2.365
@@ -2780,8 +2702,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 70.127,
-        "execution_ms": 201.374,
+        "planning_ms": 57.426,
+        "execution_ms": 31.083,
         "total_matches": 908,
         "page_size": 25,
         "buffers_per_match": 32.797
@@ -2950,14 +2872,14 @@
       },
       "metrics": {
         "shared_buffers": 148839,
-        "shared_read": 5659,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 3713,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 29.997,
-        "execution_ms": 4137.706,
+        "planning_ms": 47.21,
+        "execution_ms": 4391.006,
         "total_matches": 3713,
         "page_size": 25,
         "buffers_per_match": 40.086
@@ -3126,14 +3048,14 @@
       },
       "metrics": {
         "shared_buffers": 14732,
-        "shared_read": 136,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 365,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 30.049,
-        "execution_ms": 226.405,
+        "planning_ms": 39.663,
+        "execution_ms": 379.815,
         "total_matches": 365,
         "page_size": 25,
         "buffers_per_match": 40.362
@@ -3290,14 +3212,14 @@
       },
       "metrics": {
         "shared_buffers": 35360,
-        "shared_read": 9,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 43.408,
-        "execution_ms": 55.081,
+        "planning_ms": 44.581,
+        "execution_ms": 57.822,
         "total_matches": 5531,
         "page_size": 25,
         "buffers_per_match": 6.393
@@ -3460,14 +3382,14 @@
       },
       "metrics": {
         "shared_buffers": 46244,
-        "shared_read": 7,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 51.186,
-        "execution_ms": 156.724,
+        "planning_ms": 55.893,
+        "execution_ms": 172.173,
         "total_matches": 547,
         "page_size": 25,
         "buffers_per_match": 84.541
@@ -3624,14 +3546,14 @@
       },
       "metrics": {
         "shared_buffers": 40893,
-        "shared_read": 18,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 42.399,
-        "execution_ms": 582.108,
+        "planning_ms": 51.376,
+        "execution_ms": 497.633,
         "total_matches": 7337,
         "page_size": 25,
         "buffers_per_match": 5.574
@@ -3794,14 +3716,14 @@
       },
       "metrics": {
         "shared_buffers": 39039,
-        "shared_read": 10,
+        "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 57.747,
-        "execution_ms": 236.547,
+        "planning_ms": 55.538,
+        "execution_ms": 189.639,
         "total_matches": 765,
         "page_size": 25,
         "buffers_per_match": 51.031
@@ -3976,8 +3898,8 @@
         "max_actual_rows": 878,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 32.137,
-        "execution_ms": 715.845,
+        "planning_ms": 39.939,
+        "execution_ms": 621.575,
         "total_matches": 878,
         "page_size": 25,
         "buffers_per_match": 40.329
@@ -4152,8 +4074,8 @@
         "max_actual_rows": 96,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 30.437,
-        "execution_ms": 34.77,
+        "planning_ms": 47.873,
+        "execution_ms": 55.806,
         "total_matches": 96,
         "page_size": 25,
         "buffers_per_match": 41.344
@@ -4166,11 +4088,11 @@
       "kind": "query",
       "status": "ok",
       "metrics": {
-        "growth_ratio": 0.38,
+        "growth_ratio": 0.4,
         "match_spread": 4.23,
-        "growth_vs_matches": -0.191,
-        "buffers_smallest": 1275697,
-        "buffers_largest": 490267
+        "growth_vs_matches": -0.186,
+        "buffers_smallest": 1278653,
+        "buffers_largest": 510269
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "[100k] 25-row page, matches 878\u21923,713. O(page) predicts ~1.0; O(matches) predicts ~4.2"
@@ -4180,11 +4102,11 @@
       "kind": "query",
       "status": "ok",
       "metrics": {
-        "growth_ratio": 0.64,
+        "growth_ratio": 0.71,
         "match_spread": 3.8,
-        "growth_vs_matches": -0.129,
+        "growth_vs_matches": -0.104,
         "buffers_smallest": 505851,
-        "buffers_largest": 323303
+        "buffers_largest": 358933
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "[10k] 25-row page, matches 96\u2192365. O(page) predicts ~1.0; O(matches) predicts ~3.8"
@@ -4356,8 +4278,8 @@
         "max_actual_rows": 878,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 29.099,
-        "execution_ms": 41.421,
+        "planning_ms": 29.678,
+        "execution_ms": 43.674,
         "rows": 25,
         "distinct": 25
       },
@@ -4531,8 +4453,8 @@
         "max_actual_rows": 96,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 28.867,
-        "execution_ms": 3.654,
+        "planning_ms": 29.679,
+        "execution_ms": 4.723,
         "rows": 25,
         "distinct": 25
       },
@@ -4706,8 +4628,8 @@
         "max_actual_rows": 878,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 28.428,
-        "execution_ms": 42.162,
+        "planning_ms": 30.117,
+        "execution_ms": 41.37,
         "rows": 25,
         "distinct": 25
       },
@@ -4881,8 +4803,8 @@
         "max_actual_rows": 96,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 29.385,
-        "execution_ms": 3.824,
+        "planning_ms": 33.827,
+        "execution_ms": 6.099,
         "rows": 25,
         "distinct": 25
       },
@@ -4934,255 +4856,15 @@
       "notes": "[10k] largest page still served by an ordered, early-terminating scan (entity_type=urn:acme:kg:entity:Lead)"
     },
     {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-generic-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-generic-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-specific-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-specific-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-generic-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-generic-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-specific-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-specific-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-generic-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-generic-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-specific-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-specific-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-generic-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-generic-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-specific-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-specific-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-generic-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-generic-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-specific-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-specific-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-generic-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-generic-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-specific-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-specific-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-generic-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-generic-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-specific-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-specific-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-generic-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-generic-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-specific-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-specific-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-generic-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-generic-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-specific-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-specific-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-generic-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-generic-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-specific-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-specific-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-generic-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-generic-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-specific-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-specific-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-generic-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-generic-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-specific-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-specific-10k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
       "bench_id": "query.kgquery.range_penalty[100k]",
       "kind": "query",
-      "status": "failed",
+      "status": "ok",
       "metrics": {
         "buffers_per_match_tightest": 3.3,
-        "buffers_extreme": 4333470,
+        "buffers_extreme": 5570,
         "extreme_matches": 145,
-        "buffers_per_match_extreme": 29886.0,
-        "extreme_vs_equality": 12634.64,
+        "buffers_per_match_extreme": 38.4,
+        "extreme_vs_equality": 16.24,
         "equality_buffers_per_match": 2.4,
         "range_vs_equality": 1.41,
         "flatness": 12.097,
@@ -5190,19 +4872,18 @@
         "buffers_tightest": 32953
       },
       "dataset": "sp_lead_synth_100k",
-      "notes": "[100k] MQLRating >= 90 returns 9,907 rows and still reads 32,953 buffers \u2014 the candidate set, not the match set (issues/040)",
-      "reason": "assertion/error during call"
+      "notes": "[100k] MQLRating >= 90 returns 9,907 rows and still reads 32,953 buffers \u2014 the candidate set, not the match set (issues/040)"
     },
     {
       "bench_id": "query.kgquery.range_penalty[10k]",
       "kind": "query",
-      "status": "failed",
+      "status": "ok",
       "metrics": {
         "buffers_per_match_tightest": 28.8,
-        "buffers_extreme": 1791573,
+        "buffers_extreme": 2108,
         "extreme_matches": 16,
-        "buffers_per_match_extreme": 111973.3,
-        "extreme_vs_equality": 3414.1,
+        "buffers_per_match_extreme": 131.8,
+        "extreme_vs_equality": 4.02,
         "equality_buffers_per_match": 32.8,
         "range_vs_equality": 0.88,
         "flatness": 11.131,
@@ -5210,17 +4891,16 @@
         "buffers_tightest": 29697
       },
       "dataset": "sp_lead_synth_10k",
-      "notes": "[10k] MQLRating >= 90 returns 1,031 rows and still reads 29,697 buffers \u2014 the candidate set, not the match set (issues/040)",
-      "reason": "assertion/error during call"
+      "notes": "[10k] MQLRating >= 90 returns 1,031 rows and still reads 29,697 buffers \u2014 the candidate set, not the match set (issues/040)"
     },
     {
       "bench_id": "query.kgquery.sorted_paging.depth[100k]",
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "sorted_ms_offset_0": 428.7,
-        "sorted_ms_offset_250": 466.3,
-        "sorted_ms_offset_1000": 485.0,
+        "sorted_ms_offset_0": 403.7,
+        "sorted_ms_offset_250": 421.0,
+        "sorted_ms_offset_1000": 447.3,
         "sorted_depth_ratio": 1.1
       },
       "dataset": "sp_lead_synth_100k",
@@ -5231,10 +4911,10 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "sorted_ms_offset_0": 44.4,
-        "sorted_ms_offset_250": 45.3,
-        "sorted_ms_offset_1000": 38.9,
-        "sorted_depth_ratio": 1.0
+        "sorted_ms_offset_0": 43.0,
+        "sorted_ms_offset_250": 40.6,
+        "sorted_ms_offset_1000": 56.5,
+        "sorted_depth_ratio": 0.9
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "sorted page cost across offsets \u2014 issues/080"
@@ -5244,9 +4924,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 22.3,
-        "sorted_ms": 436.4,
-        "sort_ratio": 19.6
+        "unsorted_ms": 24.9,
+        "sorted_ms": 503.1,
+        "sort_ratio": 20.2
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "entity_property sort vs the same query unsorted (issues/080)"
@@ -5256,9 +4936,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 28.0,
-        "sorted_ms": 42.7,
-        "sort_ratio": 1.5
+        "unsorted_ms": 26.8,
+        "sorted_ms": 57.0,
+        "sort_ratio": 2.1
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "entity_property sort vs the same query unsorted (issues/080)"
@@ -5278,8 +4958,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 168.6,
-        "min_ms": 164.7,
+        "wall_ms": 170.9,
+        "min_ms": 165.2,
         "page_size": 100,
         "results": 100
       },
@@ -5291,8 +4971,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 48.2,
-        "min_ms": 44.1,
+        "wall_ms": 45.2,
+        "min_ms": 44.0,
         "page_size": 100,
         "results": 100
       },
@@ -5304,8 +4984,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 26.3,
-        "min_ms": 25.8,
+        "wall_ms": 28.8,
+        "min_ms": 27.1,
         "page_size": 100,
         "results": 100
       },
@@ -5317,8 +4997,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 213.6,
-        "min_ms": 165.9,
+        "wall_ms": 160.3,
+        "min_ms": 159.0,
         "page_size": 25,
         "results": 25
       },
@@ -5330,8 +5010,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 41.5,
-        "min_ms": 40.7,
+        "wall_ms": 37.7,
+        "min_ms": 37.6,
         "page_size": 25,
         "results": 25
       },
@@ -5343,8 +5023,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 17.9,
-        "min_ms": 16.8,
+        "wall_ms": 16.5,
+        "min_ms": 14.8,
         "page_size": 25,
         "results": 25
       },
@@ -5356,8 +5036,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 219.7,
-        "min_ms": 200.7,
+        "wall_ms": 211.0,
+        "min_ms": 207.4,
         "page_size": 100,
         "results": 100
       },
@@ -5369,8 +5049,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 77.3,
-        "min_ms": 75.7,
+        "wall_ms": 72.5,
+        "min_ms": 71.5,
         "page_size": 100,
         "results": 100
       },
@@ -5382,8 +5062,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 78.5,
-        "min_ms": 75.4,
+        "wall_ms": 75.9,
+        "min_ms": 75.2,
         "page_size": 100,
         "results": 73
       },
@@ -5395,8 +5075,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 176.7,
-        "min_ms": 171.2,
+        "wall_ms": 179.0,
+        "min_ms": 177.1,
         "page_size": 25,
         "results": 25
       },
@@ -5408,8 +5088,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 53.1,
-        "min_ms": 50.3,
+        "wall_ms": 49.8,
+        "min_ms": 48.4,
         "page_size": 25,
         "results": 25
       },
@@ -5421,8 +5101,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 44.3,
-        "min_ms": 40.5,
+        "wall_ms": 41.8,
+        "min_ms": 38.7,
         "page_size": 25,
         "results": 25
       },
@@ -5434,8 +5114,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 194.8,
-        "min_ms": 189.5,
+        "wall_ms": 215.9,
+        "min_ms": 200.5,
         "page_size": 100,
         "results": 100
       },
@@ -5447,8 +5127,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 76.9,
-        "min_ms": 72.5,
+        "wall_ms": 113.2,
+        "min_ms": 76.6,
         "page_size": 100,
         "results": 100
       },
@@ -5460,8 +5140,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 34.8,
-        "min_ms": 33.9,
+        "wall_ms": 35.5,
+        "min_ms": 34.8,
         "page_size": 100,
         "results": 99
       },
@@ -5473,8 +5153,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 203.6,
-        "min_ms": 196.9,
+        "wall_ms": 171.2,
+        "min_ms": 169.9,
         "page_size": 25,
         "results": 25
       },
@@ -5486,8 +5166,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 51.8,
-        "min_ms": 51.6,
+        "wall_ms": 49.8,
+        "min_ms": 49.5,
         "page_size": 25,
         "results": 25
       },
@@ -5499,8 +5179,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 22.0,
-        "min_ms": 21.0,
+        "wall_ms": 26.2,
+        "min_ms": 25.0,
         "page_size": 25,
         "results": 25
       },
@@ -5512,8 +5192,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 313.1,
-        "min_ms": 295.8,
+        "wall_ms": 309.5,
+        "min_ms": 292.9,
         "page_size": 100,
         "results": 100
       },
@@ -5525,8 +5205,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 157.0,
-        "min_ms": 152.7,
+        "wall_ms": 154.0,
+        "min_ms": 153.0,
         "page_size": 100,
         "results": 100
       },
@@ -5538,8 +5218,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 33.9,
-        "min_ms": 32.4,
+        "wall_ms": 33.2,
+        "min_ms": 31.1,
         "page_size": 100,
         "results": 13
       },
@@ -5551,8 +5231,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 191.0,
-        "min_ms": 186.2,
+        "wall_ms": 200.8,
+        "min_ms": 197.0,
         "page_size": 25,
         "results": 25
       },
@@ -5564,8 +5244,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 65.3,
-        "min_ms": 64.4,
+        "wall_ms": 69.3,
+        "min_ms": 68.8,
         "page_size": 25,
         "results": 25
       },
@@ -5577,8 +5257,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 49.5,
-        "min_ms": 37.0,
+        "wall_ms": 35.3,
+        "min_ms": 33.0,
         "page_size": 25,
         "results": 13
       },
@@ -5590,7 +5270,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "convergent_ms": 5626.6,
+        "convergent_ms": 5513.9,
         "convergent_rows": 1313755
       },
       "dataset": "sp_kg_rel",
@@ -5612,7 +5292,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_friendof_ms": 72.0,
+        "rel_friendof_ms": 64.8,
         "rel_friendof_rows": 14625
       },
       "dataset": "sp_kg_rel",
@@ -5623,7 +5303,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_reportsto_ms": 40.2,
+        "rel_reportsto_ms": 33.4,
         "rel_reportsto_rows": 4750
       },
       "dataset": "sp_kg_rel",
@@ -5634,7 +5314,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_worksfor_ms": 49.8,
+        "rel_worksfor_ms": 47.3,
         "rel_worksfor_rows": 4875
       },
       "dataset": "sp_kg_rel",
@@ -5657,9 +5337,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "values_1_ms": 0.69,
-        "values_20_ms": 4.22,
-        "values_growth": 6.1
+        "values_1_ms": 0.53,
+        "values_20_ms": 3.68,
+        "values_growth": 7.0
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "VALUES cost against list length \u2014 issues/087"
@@ -5669,9 +5349,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "values_ms": 0.53,
-        "literal_subject_ms": 0.84,
-        "values_ratio": 0.6
+        "values_ms": 0.44,
+        "literal_subject_ms": 0.51,
+        "values_ratio": 0.9
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "VALUES vs an equivalent literal subject \u2014 issues/087"
@@ -5681,9 +5361,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "values_ms": 0.6,
-        "literal_subject_ms": 0.49,
-        "values_ratio": 1.2
+        "values_ms": 0.64,
+        "literal_subject_ms": 0.62,
+        "values_ratio": 1.0
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "VALUES vs an equivalent literal subject \u2014 issues/087"
@@ -5693,7 +5373,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 4119.2,
+        "wall_ms": 3907.0,
         "rows": 4
       },
       "dataset": "wordnet_frames",
@@ -5704,7 +5384,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 1401.0,
+        "wall_ms": 411.1,
         "rows": 1
       },
       "dataset": "wordnet_frames",
@@ -5715,7 +5395,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 671.0,
+        "wall_ms": 275.6,
         "rows": 425
       },
       "dataset": "wordnet_frames",
@@ -5726,7 +5406,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 298.1,
+        "wall_ms": 141.4,
         "rows": 45
       },
       "dataset": "wordnet_frames",
@@ -5749,8 +5429,298 @@
     },
     {
       "bench_id": "traversal.skew2k.dedup.depth3",
-      "status": "failed",
-      "reason": "assertion/error during call"
+      "kind": "query",
+      "status": "ok",
+      "shape": {
+        "node_types": [
+          "Unique",
+          "Sort",
+          "Nested Loop",
+          "Nested Loop",
+          "CTE Scan",
+          "Unique",
+          "Sort",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Bitmap Heap Scan",
+          "Bitmap Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Unique",
+          "Sort",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "CTE Scan",
+          "Bitmap Heap Scan",
+          "Bitmap Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Unique",
+          "Sort",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "Nested Loop",
+          "CTE Scan",
+          "Bitmap Heap Scan",
+          "Bitmap Index Scan",
+          "Index Only Scan",
+          "Index Scan",
+          "Index Scan",
+          "Index Only Scan",
+          "Index Only Scan",
+          "Index Scan"
+        ],
+        "indexes": [
+          "idx_sp_graph_skew_2k_fs_entity_role",
+          "idx_sp_graph_skew_2k_fs_frame_role",
+          "idx_sp_graph_skew_2k_quad_ctx_pred",
+          "idx_sp_graph_skew_2k_term_num",
+          "sp_graph_skew_2k_rdf_quad_pkey",
+          "sp_graph_skew_2k_term_pkey"
+        ],
+        "seq_scans": [],
+        "tree": [
+          "Unique",
+          [
+            [
+              "Sort",
+              [
+                [
+                  "Nested Loop",
+                  [
+                    [
+                      "Index Scan",
+                      []
+                    ],
+                    [
+                      "Nested Loop",
+                      [
+                        [
+                          "CTE Scan",
+                          [
+                            [
+                              "Unique",
+                              [
+                                [
+                                  "Sort",
+                                  [
+                                    [
+                                      "Nested Loop",
+                                      [
+                                        [
+                                          "Index Only Scan",
+                                          []
+                                        ],
+                                        [
+                                          "Nested Loop",
+                                          [
+                                            [
+                                              "Index Scan",
+                                              []
+                                            ],
+                                            [
+                                              "Nested Loop",
+                                              [
+                                                [
+                                                  "Index Scan",
+                                                  []
+                                                ],
+                                                [
+                                                  "Nested Loop",
+                                                  [
+                                                    [
+                                                      "Bitmap Heap Scan",
+                                                      [
+                                                        [
+                                                          "Bitmap Index Scan",
+                                                          []
+                                                        ]
+                                                      ]
+                                                    ],
+                                                    [
+                                                      "Index Only Scan",
+                                                      []
+                                                    ]
+                                                  ]
+                                                ]
+                                              ]
+                                            ]
+                                          ]
+                                        ]
+                                      ]
+                                    ]
+                                  ]
+                                ]
+                              ]
+                            ],
+                            [
+                              "Unique",
+                              [
+                                [
+                                  "Sort",
+                                  [
+                                    [
+                                      "Nested Loop",
+                                      [
+                                        [
+                                          "Index Only Scan",
+                                          []
+                                        ],
+                                        [
+                                          "Nested Loop",
+                                          [
+                                            [
+                                              "Index Scan",
+                                              []
+                                            ],
+                                            [
+                                              "Nested Loop",
+                                              [
+                                                [
+                                                  "Index Scan",
+                                                  []
+                                                ],
+                                                [
+                                                  "Nested Loop",
+                                                  [
+                                                    [
+                                                      "Index Only Scan",
+                                                      []
+                                                    ],
+                                                    [
+                                                      "Nested Loop",
+                                                      [
+                                                        [
+                                                          "Bitmap Heap Scan",
+                                                          [
+                                                            [
+                                                              "Bitmap Index Scan",
+                                                              []
+                                                            ]
+                                                          ]
+                                                        ],
+                                                        [
+                                                          "CTE Scan",
+                                                          []
+                                                        ]
+                                                      ]
+                                                    ]
+                                                  ]
+                                                ]
+                                              ]
+                                            ]
+                                          ]
+                                        ]
+                                      ]
+                                    ]
+                                  ]
+                                ]
+                              ]
+                            ],
+                            [
+                              "Unique",
+                              [
+                                [
+                                  "Sort",
+                                  [
+                                    [
+                                      "Nested Loop",
+                                      [
+                                        [
+                                          "Index Scan",
+                                          []
+                                        ],
+                                        [
+                                          "Nested Loop",
+                                          [
+                                            [
+                                              "Index Only Scan",
+                                              []
+                                            ],
+                                            [
+                                              "Nested Loop",
+                                              [
+                                                [
+                                                  "Index Scan",
+                                                  []
+                                                ],
+                                                [
+                                                  "Nested Loop",
+                                                  [
+                                                    [
+                                                      "Index Only Scan",
+                                                      []
+                                                    ],
+                                                    [
+                                                      "Nested Loop",
+                                                      [
+                                                        [
+                                                          "Bitmap Heap Scan",
+                                                          [
+                                                            [
+                                                              "Bitmap Index Scan",
+                                                              []
+                                                            ]
+                                                          ]
+                                                        ],
+                                                        [
+                                                          "CTE Scan",
+                                                          []
+                                                        ]
+                                                      ]
+                                                    ]
+                                                  ]
+                                                ]
+                                              ]
+                                            ]
+                                          ]
+                                        ]
+                                      ]
+                                    ]
+                                  ]
+                                ]
+                              ]
+                            ]
+                          ]
+                        ],
+                        [
+                          "Index Only Scan",
+                          []
+                        ]
+                      ]
+                    ]
+                  ]
+                ]
+              ]
+            ]
+          ]
+        ]
+      },
+      "metrics": {
+        "shared_buffers": 12092,
+        "shared_read": 0,
+        "temp_written": 0,
+        "actual_rows": 17,
+        "max_actual_rows": 2022,
+        "estimated_rows": 1,
+        "heap_fetches": 0,
+        "planning_ms": 11.669,
+        "execution_ms": 8.083,
+        "rows": 17
+      },
+      "dataset": "sp_graph_skew_2k",
+      "notes": "DISTINCT above a depth-3 walk \u2014 set-based emission"
     },
     {
       "bench_id": "traversal.skew2k.pinned.depth2",
@@ -5902,45 +5872,18 @@
         "max_actual_rows": 17029,
         "estimated_rows": 6,
         "heap_fetches": 0,
-        "planning_ms": 41.408,
-        "execution_ms": 143.054,
+        "planning_ms": 42.145,
+        "execution_ms": 121.842,
         "rows": 17029
       },
       "dataset": "sp_graph_skew_2k",
       "notes": "no criterion \u2014 must stay flat (traversal_decision)"
-    },
-    {
-      "bench_id": "write.ingest.bulk_vs_executemany",
-      "kind": "write",
-      "status": "ok",
-      "metrics": {
-        "executemany_quads_per_sec": 4975,
-        "copy_quads_per_sec": 61562,
-        "bulk_e2e_quads_per_sec": 36873,
-        "index_rebuild_s": 4.351,
-        "copy_speedup": 12.375,
-        "e2e_speedup": 7.412
-      },
-      "dataset": "synthetic:400000q"
-    },
-    {
-      "bench_id": "write.per_write_curve.incremental_probe",
-      "kind": "write",
-      "status": "ok",
-      "metrics": {
-        "growth_class": "log",
-        "probe_ms_at_100000q": 84.86,
-        "probe_ms_at_300000q": 98.3,
-        "probe_ms_at_900000q": 124.25
-      },
-      "dataset": "synthetic:[50000, 150000, 450000]",
-      "notes": "probe=300 quads, min of 3 rolled-back runs"
     }
   ],
   "baseline": {
     "name": "query",
-    "promoted_from": "/tmp/perf_full3.json",
-    "reason": "First promotion since 2026-08-22. Full run at bc6ff22a on the seeded vg-test stack: 158 benches, 3564s, class derived from the database, dirty=false. Captures current state including 21 known failures, which compare_bench records as known holes rather than targets (issues/190).",
+    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260913T233653Z-862363ee.json",
+    "reason": "",
     "pg_stamped": true
   }
 }
