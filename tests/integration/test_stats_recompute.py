@@ -251,15 +251,41 @@ async def test_every_predicate_gets_its_biggest_before_any_gets_its_second(
     Sized to the space rather than to a constant, because `test_space` is shared
     and carries predicates from other tests — which is exactly the condition the
     first version of this test got wrong.
+
+    It ESTABLISHES its second predicate rather than hoping a sibling left one.
+    Sizing to the shared space is right; depending on it is not. `test_space` is
+    module-scoped, so predicates accumulate across the file — and a
+    module-scoped fixture is per WORKER, so under xdist's `--dist load` a worker
+    can receive this test and none of its siblings, build a fresh space, and see
+    exactly one predicate. That failed as `assert 1 >= 2` for a reason with
+    nothing to do with fairness, and reproduced with no parallelism at all: the
+    file passes in order and this test FAILS run on its own (`issues/200`).
     """
     sp, P, anchor = anchor_space
+
+    # A second predicate with a biggest pair AND a tail, so "every predicate's
+    # biggest before any predicate's second" is a claim about Q as well as P.
+    # Small next to the anchor: the point is that it is a DIFFERENT predicate,
+    # not that it is large.
+    Q, q_ctx, q_big = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    q_quads = [(uuid.uuid4(), Q, q_big, q_ctx) for _ in range(100)]
+    for _ in range(20):
+        o = uuid.uuid4()
+        q_quads += [(uuid.uuid4(), Q, o, q_ctx) for _ in range(2)]
+    await pg_conn.executemany(
+        f"INSERT INTO {sp}_rdf_quad (subject_uuid, predicate_uuid, object_uuid,"
+        f" context_uuid) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING", q_quads)
+    await pg_conn.execute(f"ANALYZE {sp}_rdf_quad")
 
     truth = {r["predicate_uuid"]: r["mx"] for r in await pg_conn.fetch(
         f"SELECT predicate_uuid, max(rc) AS mx FROM ("
         f"  SELECT predicate_uuid, object_uuid, count(*) AS rc "
         f"  FROM {sp}_rdf_quad GROUP BY 1, 2 HAVING count(*) >= 2) x "
         f"GROUP BY 1")}
-    assert len(truth) >= 2, "need at least two predicates to show fairness"
+    assert len(truth) >= 2, (
+        "need at least two predicates to show fairness — this test now inserts "
+        "its own, so reaching here means the insert above did not land")
+    assert Q in truth, "the second predicate this test inserted is missing"
 
     # Exactly one slot per predicate: every rank-1 fits and nothing else does.
     await S.recompute_stats_tables(pg_conn, sp, keep_top_n=len(truth))
