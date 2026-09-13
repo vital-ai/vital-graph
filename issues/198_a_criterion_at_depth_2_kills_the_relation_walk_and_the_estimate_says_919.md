@@ -1,12 +1,70 @@
 # A Criterion At Depth 2 Kills The Relation Walk, And The Estimate Says 919
 
-## Status: OPEN, found 2026-09-13 while checking whether the traversal gate
-## still has a job (`issues/197` item 4). Distinct from `issues/195`: both
-## emission arms are affected, so this is not a gate mis-choice.
+## Status: WITHDRAWN 2026-09-13 — INVALID. The query I measured was a CROSS
+## PRODUCT, not a traversal with a criterion, and the engine was answering it
+## correctly. General traversal with a real criterion is 0.3-2.4 ms and hop-wise
+## at every depth. Kept rather than deleted because the mistake is easy to
+## repeat and the corrected measurement is worth having.
 
 **Related:** `issues/195` (the nested-criterion family, fixed — same theme,
 different shape), `issues/197` (the gate's relevance), `issues/151` (hop-wise
 vs flat)
+
+## WHY IT IS INVALID
+
+I built the query by pairing `relation_hop` with `CRITERIA["score_gte_50"]`.
+`relation_hop` binds `?r{n}`, `?e{n-1}` and `?e{n}`. That criterion constrains
+`?f{n}` — the frame — because it was written for `frame_hop`. So the SPARQL I
+measured was:
+
+    ?r1 a Edge_hasKGRelation . ?r1 hasEdgeSource ?e0 . ?r1 hasEdgeDestination ?e1 .
+    ?f1 hasScore ?sc1 . FILTER(?sc1 >= 50)          <-- ?f1 APPEARS NOWHERE ELSE
+    ?r2 a Edge_hasKGRelation . ?r2 hasEdgeSource ?e1 . ?r2 hasEdgeDestination ?e2 .
+    ?f2 hasScore ?sc2 . FILTER(?sc2 >= 50)          <-- nor does ?f2
+
+`?f1` and `?f2` are unbound. Each joins the whole set of subjects carrying
+`hasScore >= 50` — about 2,006 — against the walk, unconstrained. At depth 1
+that is one such factor and runs in 67 ms; at depth 2 it is 2,006 x 2,006, four
+million rows of cartesian product, and the query never returns.
+
+**The engine was right and the query was wrong.** A cross product is what that
+SPARQL asks for. Nothing here was a planner or gate defect, and the estimate of
+919 was not an under-estimate of a traversal — it was an estimate of a different
+query than the one I thought I had written.
+
+The real benches never make this mistake: `test_relation_traversal` calls
+`chain_query(..., hop=relation_hop)` with NO criterion.
+
+## THE CORRECTED MEASUREMENT
+
+With the criterion bound to what the walk actually reaches —
+`?e{n} hasScore ?sc{n} . FILTER(?sc{n} >= 50)` — on the same fixture:
+
+| depth | estimate | actual | decision |
+|---|---:|---:|---|
+| 1 | 76.29 | **0.32 ms** | hop-wise, depth 1 |
+| 2 | 57.14 | **2.42 ms** | hop-wise, depth 2 |
+| 3 | 74.51 | **0.27 ms** | hop-wise, depth 3 |
+
+Fast at every depth, the chain detected at full depth, and hop-wise chosen every
+time. **General traversal with a criterion works**, which is the path where the
+`frame_slot` collapse does not apply and the gate is the only mechanism. The
+gate is earning its keep there.
+
+## The lesson worth keeping
+
+`CRITERIA` and `NESTED_CRITERIA` are written against `frame_hop`'s variables.
+Pairing either with `relation_hop` silently produces a cross product rather than
+an error, because SPARQL has no notion of an unused variable being a mistake.
+`chain_query`'s docstring warns that a criterion "must be numbered per hop"; it
+does not warn that the criterion must reference variables the HOP BINDS, and
+that is the trap.
+
+A guard in `graph_fixtures` — refuse a criterion whose variables the hop does
+not bind — would have turned this into an immediate error instead of a day
+chasing a planner defect that was not there.
+
+## What was originally filed (retained for the record)
 
 ## The defect
 

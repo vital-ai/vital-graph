@@ -169,9 +169,17 @@ frame-slot shapes, where the collapse already wins, the criteria the gate
 measures are not doing useful work. That is a statement about one shape, not
 about hop-wise.
 
-And it makes `issues/198` more serious rather than less: a criterion at depth 2
-on `relation_hop` is unrunnable, that IS the general traversal path, and there
-is no collapse to fall back on.
+I originally added that this made `issues/198` more serious — a criterion at
+depth 2 on `relation_hop` being unrunnable, on the path with no collapse to fall
+back on. **`issues/198` is WITHDRAWN as invalid**: that query paired
+`relation_hop` with a criterion written for `frame_hop`, leaving `?f{n}`
+unbound, so it measured a cross product. With a criterion bound to the walk,
+general traversal runs in 0.32-2.42 ms at depths 1 to 3 and chooses hop-wise
+every time.
+
+Which settles the scope question in the other direction: the gate IS earning its
+keep on general traversal. What remains unsolved here is the nested-criterion
+pathology on FRAME-SLOT shapes, and only that.
 
 ## What is still wrong in the code
 
