@@ -30,9 +30,9 @@ from __future__ import annotations
 
 import pytest
 
-from .conftest import skip_no_pg
+from .conftest import skip_no_pg, space_exists
 from .graph_fixtures import (
-    SMALL, RELATION_CRITERIA, chain_query, relation_hop)
+    SMALL, REL, RELATION_CRITERIA, chain_query, relation_hop)
 from .test_graph_traversal_fixture import _require, _run
 
 pytestmark = [pytest.mark.performance, skip_no_pg,
@@ -146,3 +146,82 @@ async def test_an_edge_criterion_survives_two_hops(perf_conn):
         "no two-hop walk survived a Knows-at-every-hop criterion; if the "
         "fixture changed, check the per-hop numbering before the data")
     assert total_filtered < total_open
+
+
+# ---------------------------------------------------------------------------
+# Exact ground truth, on the fixture built for this shape
+# ---------------------------------------------------------------------------
+#
+# Each criterion against the manifest walk that records its answer. The tests
+# above compare a filtered walk to the OPEN walk, which needs no ground truth
+# and works on any fixture; these compare it to the recorded answer, which is
+# strictly stronger — a criterion that drops too MANY rows still looks like a
+# valid subset above, and is caught here.
+#
+# The semantics line up hop for hop: `_adjacency_by_dest` and `_adjacency` both
+# keep an edge only when it satisfies the criterion, and `_reachable` then
+# follows only kept edges, so the recorded walk requires the criterion at EVERY
+# hop — which is exactly what a criterion template numbered per hop asks for.
+RELATION_WALKS = {
+    "edge_score_gte_50": "relation_traversal_score_gte_50",
+    "edge_type_is_Knows": "relation_traversal_type_is_Knows",
+    "node_kind_is_Person": "relation_traversal_dest_kind_is_Person",
+}
+
+
+async def _require_rel(conn):
+    if not REL.available:
+        pytest.skip(f"{REL.manifest_path} not generated")
+    if "relation_traversal_score_gte_50" not in REL.manifest()["traversal"]:
+        pytest.skip("this fixture predates the relation criterion walks")
+    if not await space_exists(conn, REL.space):
+        pytest.skip(f"{REL.space} not loaded")
+
+
+@pytest.mark.parametrize("depth", DEPTHS)
+@pytest.mark.parametrize("name", sorted(RELATION_WALKS))
+async def test_a_filtered_general_walk_matches_the_manifest(
+        perf_conn, name, depth):
+    fx = REL
+    await _require_rel(perf_conn)
+    key = RELATION_WALKS[name]
+    criterion = RELATION_CRITERIA[name]
+    total = 0
+    for start in fx.relation_sample_starts():
+        got, _ = await _run(perf_conn, fx,
+                            chain_query(fx, start, depth, hop=relation_hop,
+                                        criterion=criterion))
+        expected = fx.expected(key, start, depth)
+        assert got == expected, (
+            f"{name} at depth {depth} from entity {start} disagrees with "
+            f"{key}")
+        total += len(expected)
+
+    # Comparing empty against empty passes while proving nothing, and a filtered
+    # walk going empty is exactly how this fixture family fails — SMALL's
+    # relation walks collapse by depth 2 under every criterion. Assert the
+    # answers had content, so a fixture that degenerates fails here rather than
+    # going quiet.
+    assert total, (
+        f"{key} records nothing at depth {depth} from any start, so the "
+        f"comparison above asserted nothing. The fixture is too thin for this "
+        f"criterion at this depth")
+
+
+@pytest.mark.parametrize("depth", DEPTHS)
+async def test_the_open_walk_matches_the_manifest_on_the_rel_fixture(
+        perf_conn, depth):
+    """The same check as above on SMALL, on the fixture whose walks are dense.
+
+    SMALL's general walks are thin — its starts are chosen on the frame graph —
+    so a traversal bug that only shows up with real fan-out has nowhere to
+    surface there. Here depth 3 reaches 8,858 nodes summed over starts rather
+    than 30.
+    """
+    fx = REL
+    await _require_rel(perf_conn)
+    for start in fx.relation_sample_starts():
+        got, _ = await _run(perf_conn, fx,
+                            chain_query(fx, start, depth, hop=relation_hop))
+        assert got == fx.expected("relation_traversal", start, depth), (
+            f"depth {depth} from entity {start} disagrees with the manifest")
