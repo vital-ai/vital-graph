@@ -177,12 +177,26 @@ def partition_hops(plan: PlanV2, chain: TraversalChain,
     known = set(by_alias)
 
     link_aliases = [l.ref_id for l in chain.links]
-    if not all(a in by_alias for a in link_aliases):
+    # A hop may occupy TWO aliases. `frame_slot` holds one end per row, so a hop
+    # is a self-join of two arms of the same frame (`issues/197`), and both
+    # belong to their hop BY CONSTRUCTION.
+    #
+    # They have to be assigned here rather than discovered below, because the
+    # walk cannot tell this apart from the case it exists to refuse: hop 0's
+    # destination arm shares its entity variable with hop 1's source arm, so it
+    # reaches both hops and reads as a cross-hop correlation. That is the chain
+    # condition itself, which is allowed to cross a boundary — and letting
+    # reachability judge it declined every frame walk.
+    hop_of: Dict[str, int] = {}
+    for i, l in enumerate(chain.links):
+        for a in getattr(l, "aliases", (l.ref_id,)):
+            hop_of[a] = i
+    if not all(a in by_alias for a in hop_of):
         return HOP_PARTITION.decline(
             "chain link(s) are not BGP tables",
-            missing=[a for a in link_aliases if a not in by_alias],
+            missing=[a for a in hop_of if a not in by_alias],
             tables=sorted(known))
-    hop_of = {a: i for i, a in enumerate(link_aliases)}
+    hop_link_aliases = set(hop_of)
 
     # Adjacency between non-link tables, and each table's direct link contacts.
     adj: Dict[str, set] = {a: set() for a in known}
@@ -217,6 +231,10 @@ def partition_hops(plan: PlanV2, chain: TraversalChain,
     for alias, hop in hop_of.items():
         if alias not in link_aliases:
             groups[hop].tables.append(by_alias[alias])
+    # `link_alias` stays the SOURCE arm — it is what `_place` orders on and what
+    # the chain's columns are read from — so a two-arm hop carries its other arm
+    # as an ordinary member of the group, which is where the emitter expects
+    # every non-link table of a hop to be.
 
     # Which table carries the driving end's constraint, so `_place` can order it
     # first. Computed here rather than in the emitter because ORDER is decided
@@ -697,7 +715,9 @@ def dedup_feasible(root, chain, text_needed_vars):
         alias, col = slot.positions[0]
         if alias in last_aliases:
             final_vars.add(var)
-        if alias == groups[-1].link_alias and col == chain.links[-1].dest_col:
+        # The destination end lives on the hop's DEST arm, which is a different
+        # alias from `link_alias` whenever a hop spans two tables (`frame_slot`).
+        if alias == chain.links[-1].dest_ref and col == chain.links[-1].dest_col:
             final_dest_var = var
         if alias == first.link_alias and col == chain.links[0].source_col:
             head_var = var
@@ -796,6 +816,11 @@ def emit_dedup_chain(plan: PlanV2, chain: TraversalChain,
     for i, g in enumerate(groups):
         allowed = {t.alias for t in g.tables}
         if i:
+            # The previous hop's DESTINATION arm, which is the alias the chain
+            # condition actually reaches back to. For a one-table hop that is
+            # its link alias; for a two-arm `frame_slot` hop it is the other
+            # arm, and naming the link alias here declined every frame walk.
+            allowed.add(chain.links[i - 1].dest_ref)
             allowed.add(groups[i - 1].link_alias)
         for sql in list(g.where) + list(g.crit_where) + \
                 [c for cs in g.on_map.values() for c in cs]:
@@ -810,7 +835,11 @@ def emit_dedup_chain(plan: PlanV2, chain: TraversalChain,
     ctes = []
     for i, g in enumerate(groups):
         link = chain.links[i]
-        parts = [f"SELECT DISTINCT {g.link_alias}.{link.dest_col} AS e"]
+        # The set this hop produces is its DESTINATION end, and that column is
+        # on the hop's dest arm — a different alias whenever a hop spans two
+        # tables. The arm itself is already joined below as a member of the
+        # group, so it is in scope here.
+        parts = [f"SELECT DISTINCT {link.dest_ref}.{link.dest_col} AS e"]
         if i == 0:
             # The pinned head is a constant, so carrying it costs no extra rows
             # and keeps a text-needed head variable resolvable.
@@ -831,8 +860,16 @@ def emit_dedup_chain(plan: PlanV2, chain: TraversalChain,
             parts.append(f"JOIN {t.table_name} AS {t.alias} ON "
                          + (" AND ".join(conds) if conds else "TRUE"))
         # The chain condition is now expressed by the join to the previous CTE.
+        # The chain condition is now expressed by the join to the previous CTE,
+        # so it must not also survive as a WHERE — it names an alias that is
+        # inside the previous CTE and out of scope here. It reaches back to the
+        # previous hop's DEST arm, which for a two-arm hop is not its link
+        # alias: stripping only the link alias left `fsmv1.entity_uuid` in d1's
+        # WHERE and PostgreSQL rejected the query outright.
+        prev_aliases = ({groups[i - 1].link_alias, chain.links[i - 1].dest_ref}
+                        if i else set())
         where = [c for c in g.where
-                 if not (i and f"{groups[i-1].link_alias}." in c)]
+                 if not any(f"{a}." in c for a in prev_aliases)]
         if where:
             parts.append("WHERE " + " AND ".join(where))
         ctes.append(f"d{i} AS MATERIALIZED (\n" + "\n".join(parts) + "\n)")
@@ -844,7 +881,7 @@ def emit_dedup_chain(plan: PlanV2, chain: TraversalChain,
         if not slot.positions:
             continue
         alias, col = slot.positions[0]
-        if var in final_vars and alias == groups[last].link_alias \
+        if var in final_vars and alias == chain.links[last].dest_ref \
                 and col == chain.links[last].dest_col:
             cols.append(f"d{last}.e AS {sn}__uuid")
         elif alias == head.link_alias and col == head_src:

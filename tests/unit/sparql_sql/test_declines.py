@@ -200,7 +200,15 @@ def test_entity_fanout_is_not_read_by_the_query_path():
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        if "entity_fanout" not in text:
+        # The MODULE that maintains the table is not a consumer of it. Its name
+        # contains the table's name, so a plain substring test counts a mention
+        # of `sync_entity_fanout` — in a comment, even — as a read, and this
+        # guard failed on a docstring that only cited it as precedent. Strip the
+        # module names first rather than word-anchoring: a real reference is
+        # `{space}_entity_fanout`, which a `_` boundary would also reject.
+        probe = (text.replace("resync_entity_fanout", "")
+                     .replace("sync_entity_fanout", ""))
+        if "entity_fanout" not in probe:
             continue
         if path.name in allowed:
             seen_allowed.add(path.name)

@@ -261,3 +261,67 @@ references per hop against `edge`'s one, confirmed at depths 1, 2 and 3 by
 shape, and adding a line with columns that do not exist would find nothing while
 looking like a fix. A hop has to become a PAIR of tables in the representation
 before the detector can link one.
+
+
+## FIXED 2026-09-13 — a hop can span two aliases
+
+The detector links frame walks again and the set-based emission is reached.
+Measured on `sp_graph_synth_10k` from the widest hub start, warm, median of 3,
+answers identical to the manifest at both depths:
+
+    depth 2     15.7 ms  ->   6.1 ms    2.6x
+    depth 3    159.3 ms  ->  21.6 ms    7.4x
+
+The A/B reverted the two source files with `git checkout HEAD --` and confirmed
+the revert took (`dest_ref_id` absent, then present again) rather than trusting
+a stash, which has silently done nothing here before.
+
+Five places assumed a hop is ONE table. Each was found by running the query and
+reading the next decline, not by reasoning ahead:
+
+1. `ChainLink` gained `dest_ref_id`. `edge` and the retired `frame_entity` put
+   both ends on one row; `frame_slot` stores the role as DATA, so a hop is a
+   self-join of two arms of the same frame.
+2. `_frame_slot_hops` pairs arms by the frame VARIABLE they share, which is what
+   `rewrite_frame_slot_table` relies on to emit the `frame_uuid` equality. A
+   group without exactly two entity-binding arms is skipped rather than guessed
+   at — a frame with a third slot has an arm that is not an end of the walk.
+3. `_orient_frame_slot` takes direction from the SHAPE, not the row. Which role
+   counts as "forward" is a per-dataset question the pipeline deliberately
+   refuses to answer (`sync_entity_fanout` says so outright), so the hops are
+   treated as a path over entity variables and walked from the pinned end.
+   Cycles and branches return nothing rather than a guess.
+4. `partition_hops` assigns BOTH arms to their hop directly. Hop 0's dest arm
+   shares its entity variable with hop 1's source arm, so reachability saw it
+   reach two hops and refused it as a cross-hop correlation. It is the chain
+   condition, which is allowed to cross — and letting reachability judge it
+   declined every frame walk.
+5. `emit_dedup_chain` reads the hop's destination from the dest arm, and strips
+   the chain condition by the alias it ACTUALLY names.
+
+### The mistake worth recording
+
+Fixing (4) made the boundary check pass without making the SQL valid. The
+condition was still emitted into the next CTE's WHERE, where its alias is out of
+scope, and PostgreSQL rejected the query: `missing FROM-clause entry for table
+"fsmv1"`. Failures went 3 -> 13. The check and the emission had to agree, and
+loosening the check alone just moved the error later.
+
+### Regression diff, by failing test NAME
+
+    test_graph_traversal_fixture      3 -> 0
+    test_traversal_direction_gate     7 -> 3   (4 fixed)
+    test_traversal_bench              5 -> 4   (test_dedup_depth_3 fixed)
+    test_general_traversal            0 -> 0
+    test_relation_traversal           0 -> 0
+    test_nested_frame_traversal       0 -> 0
+
+Zero new failures. Whole unit suite exit 0; integration exit 0 (0 failures,
+xdist) plus the serial tests.
+
+### Still open
+
+Two disjoint frame chains in one BGP decline: the orientation requires the hops
+to form ONE path and returns nothing when the walk does not cover all of them.
+That is safe — the flat path still answers — but it is not optimal, and it is
+the obvious next case if a query shape turns up needing it.

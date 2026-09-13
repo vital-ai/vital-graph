@@ -72,11 +72,34 @@ _TRAVERSAL_KINDS: Dict[str, Tuple[str, str]] = {
 
 @dataclass
 class ChainLink:
-    """One hop: the table that carries it and the columns it joins on."""
+    """One hop: the table(s) that carry it and the columns it joins on.
+
+    USUALLY ONE TABLE. `edge` puts both ends of a step on a single row
+    (`source_node_uuid`, `dest_node_uuid`), and `frame_entity` did the same
+    before it was retired, so `ref_id` alone described the hop.
+
+    `frame_slot` does not. It holds one row per (frame, slot) with the role as
+    DATA (`issues/183`), so a hop is a SELF-JOIN: two arms of the same frame,
+    joined on `frame_uuid`, each carrying one end in its own `entity_uuid`.
+    `dest_ref_id` names the second arm. It is None when one table carries both
+    ends, which keeps every existing kind unchanged.
+    """
     ref_id: str
     kind: str
     source_col: str
     dest_col: str
+    dest_ref_id: Optional[str] = None
+
+    @property
+    def dest_ref(self) -> str:
+        """The alias carrying the DESTINATION end."""
+        return self.dest_ref_id or self.ref_id
+
+    @property
+    def aliases(self) -> Tuple[str, ...]:
+        """Every alias this hop occupies, source end first."""
+        return ((self.ref_id,) if self.dest_ref_id is None
+                else (self.ref_id, self.dest_ref_id))
 
 
 @dataclass
@@ -148,8 +171,10 @@ class TraversalChain:
         a chain that lies about its own direction.
         """
         return TraversalChain(
-            links=[ChainLink(ref_id=l.ref_id, kind=l.kind,
-                             source_col=l.dest_col, dest_col=l.source_col)
+            links=[ChainLink(ref_id=l.dest_ref, kind=l.kind,
+                             source_col=l.dest_col, dest_col=l.source_col,
+                             dest_ref_id=(None if l.dest_ref_id is None
+                                          else l.ref_id))
                    for l in reversed(self.links)],
             pinned_head=self.pinned_tail,
             pinned_tail=self.pinned_head,
@@ -175,13 +200,110 @@ class TraversalChain:
                 f"pinned={ends or 'none'} {[l.ref_id for l in self.links]})")
 
 
-def _traversal_tables(bgp: PlanV2) -> Dict[str, ChainLink]:
+# `frame_slot` is not in `_TRAVERSAL_KINDS` because it cannot be described by a
+# (source column, destination column) pair: one row holds ONE end. The columns
+# a hop is built from instead.
+FRAME_SLOT_KIND = "frame_slot"
+FRAME_SLOT_FRAME_COL = "frame_uuid"
+FRAME_SLOT_ENTITY_COL = "entity_uuid"
+
+
+def _frame_slot_hops(bgp: PlanV2, col_var: Dict[Tuple[str, str], str]):
+    """Unoriented `frame_slot` hops as `(alias_a, var_a, alias_b, var_b)`.
+
+    A hop is the pair of ARMS of one frame. `rewrite_frame_slot_table` emits one
+    `frame_slot` join per arm and lets the frame VARIABLE, which has a position
+    on every arm, produce the `frame_uuid` equality — so the arms of a hop are
+    exactly the aliases sharing a frame variable.
+
+    Declines a group that does not have exactly two arms binding an entity
+    variable. A frame with a third slot (a criterion on the frame, say) has an
+    arm that is not an end of the walk, and guessing which two of three are the
+    ends is how a traversal silently answers a different question.
+    """
+    by_frame: Dict[str, list] = {}
+    for tbl in (bgp.tables or []):
+        if getattr(tbl, "kind", None) != FRAME_SLOT_KIND:
+            continue
+        fvar = col_var.get((tbl.ref_id, FRAME_SLOT_FRAME_COL))
+        if fvar is None:
+            continue
+        by_frame.setdefault(fvar, []).append(tbl.ref_id)
+
+    hops = []
+    for fvar, arms in by_frame.items():
+        ends = [(a, col_var.get((a, FRAME_SLOT_ENTITY_COL))) for a in arms]
+        ends = [(a, v) for a, v in ends if v is not None]
+        if len(ends) != 2 or ends[0][1] == ends[1][1]:
+            logger.debug("frame-slot hop on %s has %d entity arm(s), skipping",
+                         fvar, len(ends))
+            continue
+        hops.append((ends[0][0], ends[0][1], ends[1][0], ends[1][1]))
+    return hops
+
+
+def _orient_frame_slot(hops, pinned_vars) -> Dict[str, ChainLink]:
+    """Order the unoriented hops into links, or `{}` if they are not a path.
+
+    Which arm is the SOURCE is not a property of the row — `frame_slot` records
+    the role as data, and which role counts as "forward" is a per-dataset
+    question the pipeline deliberately refuses to answer (see
+    `sync_entity_fanout`). So direction comes from the SHAPE instead: the hops
+    form a path over entity variables, and the walk runs from its pinned end, or
+    from either end when neither is pinned — `choose_direction` decides that
+    later and `TraversalChain.reversed()` can still flip it.
+    """
+    if not hops:
+        return {}
+    deg: Dict[str, int] = {}
+    for _a, va, _b, vb in hops:
+        deg[va] = deg.get(va, 0) + 1
+        deg[vb] = deg.get(vb, 0) + 1
+    endpoints = [v for v, d in deg.items() if d == 1]
+    if not endpoints:
+        return {}                         # a cycle, or a star: not a walk
+    start = next((v for v in endpoints if v in pinned_vars), endpoints[0])
+
+    # Adjacency, so the walk can be followed without rescanning.
+    at: Dict[str, list] = {}
+    for i, (a, va, b, vb) in enumerate(hops):
+        at.setdefault(va, []).append(i)
+        at.setdefault(vb, []).append(i)
+
+    out: Dict[str, ChainLink] = {}
+    used, cur = set(), start
+    while True:
+        nxt = next((i for i in at.get(cur, []) if i not in used), None)
+        if nxt is None:
+            break
+        used.add(nxt)
+        a, va, b, vb = hops[nxt]
+        # Orient this hop so it LEAVES the variable we arrived on.
+        if va == cur:
+            src_alias, dst_alias, cur = a, b, vb
+        else:
+            src_alias, dst_alias, cur = b, a, va
+        out[src_alias] = ChainLink(
+            ref_id=src_alias, kind=FRAME_SLOT_KIND,
+            source_col=FRAME_SLOT_ENTITY_COL, dest_col=FRAME_SLOT_ENTITY_COL,
+            dest_ref_id=dst_alias)
+    if len(used) != len(hops):
+        return {}                         # branches: not a single walk
+    return out
+
+
+def _traversal_tables(bgp: PlanV2,
+                      col_var: Optional[Dict[Tuple[str, str], str]] = None,
+                      pinned_vars=frozenset()) -> Dict[str, ChainLink]:
     out: Dict[str, ChainLink] = {}
     for tbl in (bgp.tables or []):
         cols = _TRAVERSAL_KINDS.get(tbl.kind)
         if cols:
             out[tbl.ref_id] = ChainLink(ref_id=tbl.ref_id, kind=tbl.kind,
                                         source_col=cols[0], dest_col=cols[1])
+    if col_var is not None:
+        out.update(_orient_frame_slot(_frame_slot_hops(bgp, col_var),
+                                      pinned_vars))
     return out
 
 
@@ -321,23 +443,26 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set,
     would break on a spacing change, on the operands being emitted in the other
     order, or on a hop whose join is expressed through a third table.
     """
-    links = _traversal_tables(bgp)
-    if not links:
-        return []
-
-    # (ref_id, column) -> variable, from the structural record.
+    # (ref_id, column) -> variable, from the structural record. Built BEFORE the
+    # tables are read: a `frame_slot` hop is identified by the frame VARIABLE
+    # shared across its arms, so the link builder needs this map to see a hop at
+    # all.
     col_var: Dict[Tuple[str, str], str] = {}
     for var, slot in (bgp.var_slots or {}).items():
         for ref_id, col in (getattr(slot, "positions", None) or []):
             col_var[(ref_id, col)] = var
+
+    links = _traversal_tables(bgp, col_var, pinned_vars)
+    if not links:
+        return []
 
     # A variable at hop A's destination and hop B's source means B follows A.
     # Built from the variable's own position list rather than by pairing tables.
     source_of: Dict[str, str] = {}      # var -> ref_id whose SOURCE it is
     dest_of: Dict[str, str] = {}        # var -> ref_id whose DEST it is
     for ref_id, link in links.items():
-        v_src = col_var.get((ref_id, link.source_col))
-        v_dst = col_var.get((ref_id, link.dest_col))
+        v_src = col_var.get((link.ref_id, link.source_col))
+        v_dst = col_var.get((link.dest_ref, link.dest_col))
         if v_src is not None:
             source_of[v_src] = ref_id
         if v_dst is not None:
@@ -451,16 +576,16 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set,
             cur = successor.get(cur)
         if ordered:
             _head = _constrained(ordered[0].ref_id, ordered[0].source_col)
-            _tail = _constrained(ordered[-1].ref_id, ordered[-1].dest_col)
+            _tail = _constrained(ordered[-1].dest_ref, ordered[-1].dest_col)
             chains.append(TraversalChain(
                 links=ordered,
                 pinned_head=_pinned(ordered[0].ref_id, ordered[0].source_col),
-                pinned_tail=_pinned(ordered[-1].ref_id, ordered[-1].dest_col),
+                pinned_tail=_pinned(ordered[-1].dest_ref, ordered[-1].dest_col),
                 head_constraint=_head[0], head_constraint_alias=_head[1],
                 tail_constraint=_tail[0], tail_constraint_alias=_tail[1],
                 head_constants=_all_constants(ordered[0].ref_id,
                                               ordered[0].source_col),
-                tail_constants=_all_constants(ordered[-1].ref_id,
+                tail_constants=_all_constants(ordered[-1].dest_ref,
                                               ordered[-1].dest_col)))
 
     # A cycle has no head, so the walk above never starts on it. Emit each
@@ -468,16 +593,16 @@ def _chains_in_bgp(bgp: PlanV2, pinned_vars: set,
     for ref_id, link in links.items():
         if ref_id not in seen:
             seen.add(ref_id)
-            _head = _constrained(ref_id, link.source_col)
-            _tail = _constrained(ref_id, link.dest_col)
+            _head = _constrained(link.ref_id, link.source_col)
+            _tail = _constrained(link.dest_ref, link.dest_col)
             chains.append(TraversalChain(
                 links=[link],
-                pinned_head=_pinned(ref_id, link.source_col),
-                pinned_tail=_pinned(ref_id, link.dest_col),
+                pinned_head=_pinned(link.ref_id, link.source_col),
+                pinned_tail=_pinned(link.dest_ref, link.dest_col),
                 head_constraint=_head[0], head_constraint_alias=_head[1],
                 tail_constraint=_tail[0], tail_constraint_alias=_tail[1],
-                head_constants=_all_constants(ref_id, link.source_col),
-                tail_constants=_all_constants(ref_id, link.dest_col)))
+                head_constants=_all_constants(link.ref_id, link.source_col),
+                tail_constants=_all_constants(link.dest_ref, link.dest_col)))
     return chains
 
 
