@@ -117,6 +117,44 @@ either fixed or excluded from the suite.
 This belongs with `issues/197` (the detector cannot link these shapes) rather
 than here: this issue is about the data gap, which is closed.
 
+## THE CODE FIX WAS WRONG AND IS REVERTED (2026-09-13)
+
+`4614b3f5` claimed to make the gate count only criteria the hop can use. It did
+not. `chain_criterion_predicates` returned `uuid.UUID` objects while
+`range_stats` / `text_stats` / `in_stats` key their predicates by STRING, so
+`p_uuid not in _usable` was true for EVERY predicate and every criterion was
+dropped. Hop-wise emission was globally disabled, and the result reported here
+— 7.85e15 down to 122 — was that side effect rather than the restriction
+working.
+
+Corrected to compare like with like, the filter is actively HARMFUL:
+
+    filter off             d2   458,118,635   d3   1,468,974,130
+    filter on, corrected   d2 5,620,525,005,640,507
+                           d3 1,328,856,705,654,390
+
+The nested criterion it was written to exclude reads as ON-CHAIN, so the
+restriction never applied to it; where it does change a decision it chooses
+worse. Reverted in `c80fff87`.
+
+**So the nested-criterion pathology is UNSOLVED** and the benches will stall the
+suite as before.
+
+### What the accident is evidence for
+
+Disabling hop-wise globally made the nested family fast (47-522), left the
+non-nested `CRITERIA` family completely unchanged (46/99/151, 434/449/496), and
+let the suite run. Alongside `issues/197` — the collapse beating the gate 3.8x
+on the direction tests and 118x on the bench — that is a real question:
+
+> Does hop-wise emission still earn its keep now that `frame_slot` exists?
+
+`traversal_decision`'s 134x measurement predates the collapse. Every shape
+measured since has either been indifferent to hop-wise or worse with it. That
+deserves a deliberate measurement — one that turns hop-wise off on purpose and
+prices the whole bench suite both ways — and NOT a fix shipped as the side
+effect of a type error.
+
 ## What is still wrong in the code
 
 Clearing the data does not fix what the investigation exposed, and all of it
