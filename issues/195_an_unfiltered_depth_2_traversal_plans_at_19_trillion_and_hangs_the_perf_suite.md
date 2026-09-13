@@ -296,6 +296,53 @@ It also explains why `issues/197`'s direction gate has so little to show: the
 gate chooses WHICH END to drive from, while the thing that decides whether any
 selective leaf drives at all is a component the hop-wise path does not use.
 
+### THE OBVIOUS FIX WAS TRIED AND IS A REGRESSION (2026-09-13)
+
+Given the root cause above, the obvious fix is to give hop-wise placement the
+selectivity `reorder_joins` already computes: pass `_leaf_cardinality` into
+`emit_hop_wise` -> `partition_hops` -> `_place`, and order each hop's greedy
+choice by cheapest leaf after the existing `prefer`.
+
+Implemented, and measured A/B with two repetitions per cell:
+
+| case | baseline | with cardinality ordering |
+|---|---|---|
+| `nested_category` d1 | 1,451 / 840 ms | 1,751 / 713 ms (noise) |
+| **`nested_category` d2** | **12,288 / 12,617 ms** | **KILLED / KILLED (>90 s)** |
+| `nested_score` d1 | 1,113 / 1,014 ms | 1,591 / 990 ms (noise) |
+
+**Worse, decisively, at the depth that matters.** Reverted, not committed.
+
+Why it backfires is not established, and the honest answer is that it is not
+obvious. A plausible reading: within a hop the tables form a correlated lateral,
+and the dependency order the greedy loop produces keeps each join driven by the
+row already in hand. Reordering by leaf cardinality breaks that correlation for
+a leaf that looks cheap in isolation, which is exactly the trade `reorder_joins`
+does not have to make on the flat path.
+
+### Three hypotheses now measured and rejected
+
+1. **Count only criteria the hop can use** — shipped, then reverted
+   (`c80fff87`). Harmful when implemented correctly.
+2. **The planner picks the wrong index** — eliminated before shipping.
+   `enable_indexonlyscan=off` is worse.
+3. **Give hop-wise placement selectivity** — this one. Worse at depth 2.
+
+All three were sound in reasoning and wrong in measurement. That is worth
+recording as a property of this area: the plan is sensitive to something the
+obvious models do not capture, and every attempt so far has been decided by
+wall-clock rather than by argument.
+
+**What is established and not in doubt:** `reorder_joins` runs 0 times on the
+hop-wise path and once on the flat path, the pin lands as a late `Filter` rather
+than an index condition, and the flat path is a thousand times faster on this
+shape. The mechanism is known; the remedy is not.
+
+The next attempt should probably NOT be another ordering heuristic. The
+alternative worth pricing is refusing hop-wise for this shape outright — the
+flat path already answers it in 1.2 ms, and `has_nested` proves the shape is
+cheap when it takes that path.
+
 ### The fix, and why it is not attempted here
 
 Hop-wise emission needs selectivity-aware placement — at minimum a selective
