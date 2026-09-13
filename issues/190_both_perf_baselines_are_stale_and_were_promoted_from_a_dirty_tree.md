@@ -57,12 +57,67 @@ error instantly on a dropped table now actually execute, and
 instruction is 3-4 samples on an unmodified tree, which is now 3-4 hours rather
 than impossible.
 
-### The order from here
+### CORRECTION — "triage the failures first" was wrong
 
-1. Triage the nine uninvestigated failures, or declare them expected.
-2. Decide whether the twelve `issues/197` ones are fixed or the tests rewritten
-   BEFORE promoting, since a baseline that records them makes them permanent.
-3. Then sample and promote.
+I first wrote that the 21 failures had to be triaged before promoting, because
+"a baseline that records them makes them permanent". That is not how this
+baseline works, and the tooling already says so.
+
+`compare_bench` handles a non-ok baseline entry explicitly:
+
+    baseline ok      -> now failing   FAIL   "REGRESSED — was measured in the baseline"
+    baseline not ok  -> still failing WARN   "known hole"
+    baseline not ok  -> now ok        INFO
+
+So promoting an imperfect run records the failures AS FAILURES, not as targets
+to match. A known hole stays visible as a warning and turns into an INFO the
+day it starts passing. That is exactly "capture the current state and do better
+next time", and it is built in.
+
+Nor does promotion refuse a run with failures. Its only guards are `--partial`
+(never promote a subset, it bakes missing benches in as holes) and a refusal to
+promote a run with no PostgreSQL settings. A full run with failures is an
+expected input.
+
+**And this issue's own caution was narrower than I read it.** "Re-promote AFTER
+`issues/188` and `issues/189`" is about the unruled metrics and the false runner
+class — both now done. It never said "wait for a clean suite", and waiting for
+one means no baseline at all, which is strictly worse than a baseline with
+recorded holes: today there is no drift detection whatsoever.
+
+### The real cost of promoting now, which is smaller and specific
+
+Not 21 failures — **10 benches that are `ok` in the committed baseline and would
+not be `ok` in the new one.** Those are the reference points actually lost,
+because each currently produces a FAIL against the old baseline and would become
+a "known hole" against the new one:
+
+    query.kgquery.range_penalty[10k]                  now failed
+    query.kgquery.range_penalty[100k]                 now failed
+    query.kgquery.sorted_paging.page_shape[10k]       now skipped
+    query.kgquery.sorted_paging.page_shape[100k]      now skipped
+    query.partition.graph_scoped_pruning              now ABSENT
+    traversal.skew2k.constrained_common_head.depth2   now failed
+    traversal.skew2k.constrained_rare_head.depth2     now failed
+    traversal.skew2k.constrained_rare_tail.depth2     now failed
+    (and 2 more)
+
+Three of those are the `skew2k` gate benches `issues/197` explains as outdated
+expectations rather than regressions. The rest are not yet understood.
+
+Against that, promoting gains drift detection on 101 benches plus 3 that the
+committed baseline does not cover at all.
+
+### The one open question, which is not about failures
+
+The two committed baselines split into tiers — `query.json` is 108 benches
+(api/query/traversal), `ingest.json` is 51 (query/write) — and the prefixes
+OVERLAP, so the split rule cannot be recovered from the files. A single full run
+covers both (158 benches). `run-perf-tests.sh --promote NAME` promotes whatever
+run it has to that name, with no tier filter, so promoting a full run to `query`
+would redefine what that baseline contains and leave `ingest.json` stale.
+
+That is a decision about how baselines are organised, not about the failures.
 
 ## Ordering — this is the part that matters
 
