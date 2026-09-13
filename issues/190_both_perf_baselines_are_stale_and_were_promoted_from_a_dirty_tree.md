@@ -141,3 +141,72 @@ Then:
   already warns; the warning did not stop this.
 * Warn when the baseline commit is more than N commits behind HEAD. Both are
   cheap, and either would have surfaced this without anyone going looking.
+
+## Resolution of the query tier, and what the two-baseline split actually is
+
+`query.json` was promoted from a full run at `bc6ff22a` (`125d0c7b`): 158 benches,
+101 ok / 48 unrecorded / 7 failed / 2 skipped, class `vg-test-docker-persist`,
+`dirty` false. It compares clean against itself — 0 failing, 57 warning, 0
+informational, 243 uncompared.
+
+The promotion captured current state, errors included, which is the right shape
+for a baseline: `compare_bench` records a non-ok entry as a "known hole" WARN and
+only FAILs on a *regression*, so carrying the 7 failures forward costs nothing and
+loses no signal. The earlier recommendation to triage before promoting was wrong.
+
+Investigating how the two tiers should split for next time produced a plainer
+answer than expected: **there is no split to maintain.**
+
+* `query.json` (108 benches) and `ingest.json` (51) were fully disjoint.
+* All 51 `ingest.json` ids are now inside the promoted `query.json`.
+* `ingest.json`'s entire informational content is **3** ok benches —
+  `query.growth.entity_page_buffers`, `write.ingest.bulk_vs_executemany`,
+  `write.per_write_curve.incremental_probe` — and all three are ok in the
+  promotion too. Its other 48 are 47 `unrecorded` + 1 `skipped`.
+* So `ingest.json` is entirely subsumed. It is stale (`573c46f`, class
+  `vg-test-docker-clean`) and carries nothing the promoted baseline lacks.
+
+The 48 benches both files hold as `unrecorded` are not a tier that records
+elsewhere. They are every parametrisation of
+`query.kgquery.paging_fence_coverage`, and
+`tests/performance/test_paging_fence_covers_every_shape.py` **never calls
+`perf_record`** — it asserts buffer ratios inline. They wear a `bench` mark, so
+`conftest` mints a bench id and then flags it "test passed without recording
+metrics". They can never be ok in any baseline, in any pass.
+
+The only genuine second pass is the API tier: `run-perf-tests.sh` runs `-k bench`
+with the app up and writes `${RECORD_PATH%.json}-api.json`. That is a separate
+file already, and is not what `ingest.json` holds.
+
+### Actions
+
+1. Retire `ingest.json` — subsumed, stale, and no invocation reproduces it.
+   Keep one baseline per pass: the suite baseline, and `-api.json` for the API pass.
+2. Stop minting bench ids for the 48 paging-fence assertions, or make them
+   record. Carrying 48 permanent holes is what made the split look meaningful.
+
+## A bench can vanish from the baseline instead of failing
+
+`query.partition.graph_scoped_pruning` is in the old `query.json` and in the tree
+at `tests/performance/test_partition_pruning.py:132`, but is **absent from the
+promotion entirely** — not failed, not unrecorded, gone.
+
+Its fixture raised rather than its test failing:
+
+    assert ok, f"space manager failed to create {sid}"
+    E  AssertionError: space manager failed to create p3test_a95bc974
+
+On a fixture error the test never reaches the status machinery, so the bench id
+is never stamped and the bench simply disappears from the record. The promotion
+then bakes the absence in, and `compare_bench` cannot warn about a bench that is
+in neither side.
+
+Diffing the 47 `@pytest.mark.bench` ids declared in the tree against the run
+found this is the only real instance (`query.fastpath.entity_page` also looked
+missing but is a docstring example in `perf_record.py`). One is enough: the
+failure mode is silent, so the count is only ever a lower bound.
+
+Fix: have the runner diff declared bench ids against recorded ones and fail the
+promotion on any that are declared-but-absent, so a fixture error costs a loud
+error rather than a quietly smaller baseline. Separately, find out why
+`create_space_with_tables(partition_quads=4)` now returns False.
