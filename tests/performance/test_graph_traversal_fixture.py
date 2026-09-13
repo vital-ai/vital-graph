@@ -145,18 +145,28 @@ async def test_a_filter_actually_narrows(perf_conn):
 
 
 async def test_the_collapse_applies_per_hop(perf_conn):
-    """Each hop is its own 6-table group and should become one frame_entity
+    """Each hop is its own 6-table group and should become one frame_slot
     join. One join at depth 3 would mean only the first hop collapsed while the
     rest stayed raw quads — a failure that still reads as a working
-    optimisation (issues/048)."""
+    optimisation (issues/048).
+
+    Asserted against `frame_slot`: `frame_entity` was retired for it
+    (`issues/183`), and this test went on counting the retired name, so it read
+    0 collapsed hops at every depth and failed for a reason that had nothing to
+    do with the collapse."""
     fx = SMALL
     await _require(perf_conn, fx)
     start = fx.sample_starts()[0]
     for depth in (1, 2, 3):
         _got, sql = await _run(perf_conn, fx, chain_query(fx, start, depth))
-        assert sql.count(f"{fx.space}_frame_entity") == depth, (
+        # TWO mentions per hop, not one. `frame_entity` pre-joined source and
+        # dest into a single row, so one hop was one table reference. `frame_slot`
+        # is one row per (frame, slot) keyed by `role_uuid`, so a hop is a
+        # self-join: the source slot and the dest slot. Counting 1 per hop is
+        # what the retired table looked like, not what a collapsed hop costs.
+        assert sql.count(f"{fx.space}_frame_slot") == 2 * depth, (
             f"depth {depth} collapsed "
-            f"{sql.count(f'{fx.space}_frame_entity')} hop(s)")
+            f"{sql.count(f'{fx.space}_frame_slot') / 2:.1f} hop(s)")
 
 
 # ---------------------------------------------------------------------------
@@ -252,9 +262,23 @@ async def test_the_fixture_has_hub_structure(perf_conn):
     fx = SMALL
     await _require(perf_conn, fx)
 
+    # `frame_entity` carried both ends of a step on ONE row
+    # (source_entity_uuid -> dest_entity_uuid) and was retired for `frame_slot`
+    # (`issues/183`), which records one row per (frame, slot) and no direction at
+    # all. Out-degree is therefore a SELF-JOIN on the frame, and the co-frame
+    # relation it measures is symmetric — the same shape
+    # `resync_entity_fanout` uses. `IS DISTINCT FROM` rather than `<>` so a
+    # NULL-valued slot cannot silently drop a neighbour.
     top_out = await perf_conn.fetchval(
-        f"SELECT max(n) FROM (SELECT count(DISTINCT dest_entity_uuid) n "
-        f"FROM {fx.space}_frame_entity GROUP BY source_entity_uuid) d")
+        f"SELECT max(n) FROM ("
+        f"  SELECT count(DISTINCT b.entity_uuid) n"
+        f"  FROM {fx.space}_frame_slot a"
+        f"  JOIN {fx.space}_frame_slot b"
+        f"    ON b.frame_uuid = a.frame_uuid"
+        f"   AND b.context_uuid = a.context_uuid"
+        f"   AND b.entity_uuid IS DISTINCT FROM a.entity_uuid"
+        f"  WHERE a.entity_uuid IS NOT NULL AND b.entity_uuid IS NOT NULL"
+        f"  GROUP BY a.entity_uuid, a.context_uuid) d")
     assert top_out >= 25, (
         f"largest out-degree is {top_out}: the graph has no hubs, so a forward "
         f"traversal cannot fan out and the criterion gate is untestable here")

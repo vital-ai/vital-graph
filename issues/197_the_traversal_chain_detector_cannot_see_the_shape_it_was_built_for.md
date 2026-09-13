@@ -206,3 +206,58 @@ five say nothing about the gate — they just error.
    document that it does not apply here — rather than being extended to a case
    nothing needs. That is a design question, and it should be answered with a
    query that the collapse CANNOT serve.
+
+## The cost, measured: the set-based emission is DEAD for frame traversals
+
+Found 2026-09-13 while surveying the query tier for slow cases.
+`test_graph_traversal_fixture.py` fails three paged-traversal assertions, all
+`assert "MATERIALIZED" in sql` — "a paged traversal did not take the set-based
+path — ORDER is being refused again, which costs 20x".
+
+**"DELIBERATELY INERT" understates this.** `traversal_chain`'s own docstring says
+it "detects and records, it changes no SQL", which reads as harmless. But the
+chains it produces are what `generator.py:2013` passes to `decide_for_plan`, and
+the result lands on `aliases.traversal_decision`, which is the FIRST thing
+`_try_hop_wise` reads:
+
+    decision = getattr(ctx.aliases, "traversal_decision", None)
+    if decision is None or decision.chain is None:
+        return None                      # emit_bgp.py:192-194
+
+and the SET-BASED dedup form is tried inside that function, BEFORE any hop-wise
+gate and explicitly not subject to the criterion gate (`emit_bgp.py:216-232`).
+So an empty chain list does not merely skip hop-wise. It skips dedup too, and
+nothing is logged, because there is no decline to record — the function returned
+before reaching one. That is why this cost nothing visible for so long.
+
+### The differential
+
+Same fixture, same start, same depth 3, same `LIMIT 25`; only the hop kind
+differs (`chain_query(..., hop=frame_hop)` vs `hop=relation_hop`):
+
+    shape          MATERIALIZED   frame_slot refs   edge refs
+    frame_hop      False          6 (2 per hop)     0
+    relation_hop   True           0                 3 (1 per hop)
+
+`edge` is in `_TRAVERSAL_KINDS`; `frame_slot` is not. The relation walk gets the
+deduplicating CTEs and the frame walk gets a flat six-table join.
+
+The value being lost is recorded in the code that emits it: 26x on
+graph_synth_100k unfiltered depth 3 (2,555 ms -> 98 ms), 35x on the wordnet
+depth-3 walk (501,538 rows -> 671 -> 583 -> 3,108), and the 20x on paged
+traversals that the failing test was written to protect.
+
+### Why it is not a one-line addition
+
+`_TRAVERSAL_KINDS` maps a kind to `(arrive_column, leave_column)` — ONE table per
+hop, both ends on one row. That was true of `frame_entity`, which "named its two
+roles in COLUMNS". `frame_slot` carries the role as DATA (`issues/183`): one row
+per (frame, slot), so a hop is a SELF-JOIN of two rows on `frame_uuid`, with
+`entity_uuid` at both ends.
+
+The emitted SQL already shows it — the collapse produces **two** `frame_slot`
+references per hop against `edge`'s one, confirmed at depths 1, 2 and 3 by
+`test_the_collapse_applies_per_hop`. So the descriptor model cannot express this
+shape, and adding a line with columns that do not exist would find nothing while
+looking like a fix. A hop has to become a PAIR of tables in the representation
+before the detector can link one.
