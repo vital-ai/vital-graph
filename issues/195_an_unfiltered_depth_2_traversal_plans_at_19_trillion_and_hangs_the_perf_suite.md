@@ -222,6 +222,40 @@ the planner while the pin is expressed as a join it does not start from.
 Better, and still three orders off `has_nested`. So the seq scan is a symptom of
 the join order, not the cause, and forcing it off is not the fix.
 
+### Narrowed further, 2026-09-13 — two hypotheses eliminated
+
+**The pin IS materialised.** `FILTER(?e0 = <entity:45>)` becomes a literal uuid
+in the SQL, once, in both the fast and slow cases. So this is not a
+constant-folding failure.
+
+**Where it lands is the difference:**
+
+    has_nested       Index Cond:  (role_uuid = ... AND entity_uuid = '1b90c259...')
+    nested_category  Filter:      (entity_uuid = '1b90c259...')
+
+In the fast plan the pin is an index condition on `idx_fs_role_entity` and
+drives the scan. In the slow one it is a Filter on an `idx_fs_cover` scan,
+applied after a Seq Scan of all 144,598 edge rows has been hash-joined to
+123,395.
+
+**ELIMINATED — the index choice.** `fs_cover` leads with `context_uuid`, so the
+pin cannot be an index condition on it, and `idx_fs_entity_role` (entity-leading)
+exists and would allow it. That made "the planner picks the wrong index" the
+obvious hypothesis. It is wrong: `enable_indexonlyscan=off` forces a different
+index and makes it WORSE — 1,339 ms to 3,012 ms at depth 1, neutral at depth 2.
+The covering index is a reasonable choice.
+
+**ELIMINATED — the sequential scan as a cause.** `enable_seqscan=off` is 4x
+better at depth 2 (4,699 ms to 1,175 ms) and still three orders of magnitude off
+`has_nested`. It is a symptom.
+
+**What is left** is the join order itself. The nested criterion is a filter on a
+frame one edge out; the planner starts from it because a filter looks selective,
+while the pin — one entity, the most selective thing in the query — is reached
+only after the criterion side has been materialised. With the pin driving there
+are a handful of frames to check; with the criterion driving there are 123,395
+rows before the pin is applied at all.
+
 ### Why this is left open rather than fixed
 
 It is a join-order problem on a shape where the pin is the most selective thing
