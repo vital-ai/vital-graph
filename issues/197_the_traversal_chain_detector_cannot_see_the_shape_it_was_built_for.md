@@ -123,6 +123,38 @@ same query step 3 needs, so one piece of work answers both), or they are
 rewritten to assert the outcome — that this shape is served in ~53k buffers,
 however that is achieved.
 
+### 4a. The five `test_traversal_bench` failures are the same class, different cause
+
+Measured the same way, on `test_pinned_depth_2`'s own query:
+
+    collapse ON  (today)      29,011 buffers    18.4 ms   decision None
+    collapse OFF (before)  1,853,488 buffers  2,176.5 ms   decision "as-is"
+
+**64x fewer buffers and 118x faster**, which is a larger margin than the gate
+tests showed.
+
+But the cause is NOT the collapse, and the "before" column says so: with the
+collapse off the decision is already `as-is: depth 1, pinned but no measured
+criterion` — flat either way. These benches assert hop-wise and dedup emission
+and were getting flat regardless, because **the gate never measured their
+criterion**. That predates the collapse and predates the
+`issues/195` change (verified by reverting it: identical failures).
+
+So the two sets fail for different reasons and arrive at the same place:
+
+| tests | why no hop-wise | current vs previous |
+|---|---|---|
+| 7 in `test_traversal_direction_gate` | the collapse removed the chain, so `decide` returns None | 3.8x better |
+| 5 in `test_traversal_bench` | the criterion is not measured, so the gate says "as-is" | 118x better |
+
+Every one of the twelve asserts a MECHANISM that no longer runs, while the plan
+that replaced it is between 3.8x and 118x better. None of them is a regression.
+
+The unmeasured criterion in the second set is worth its own look: `SCORE` sits
+on `?f{n}`, the hop's own frame, which is exactly the shape hop-wise exists for
+and exactly what `issues/195` established the gate SHOULD count. That it reads
+as unmeasured there is a separate defect from anything recorded here.
+
 ## 5. Five tests query a table that was dropped
 
 Separate and simpler. `test_traversal_direction_gate.py` queries
