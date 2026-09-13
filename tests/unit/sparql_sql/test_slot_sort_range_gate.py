@@ -165,3 +165,76 @@ class TestEveryOrderingComparatorIsCovered:
         bgp, al = _make(matches=1000, op=op)
         got = slot_range_constraint(bgp, al, SPACE, "val", op, 99)
         assert got is not None and f"value_num {op} 99" in got[1]
+
+
+# ---------------------------------------------------------------------------
+# The ENTITY-anchored narrowing (`issues/111`)
+# ---------------------------------------------------------------------------
+
+from vitalgraph.db.sparql_sql.slot_sort_range import (      # noqa: E402
+    entity_range_constraint, VITALTYPE_URI,
+)
+from vitalgraph.db.sparql_sql.sync_entity_slot_sort import (  # noqa: E402
+    ENTITY_FRAME_EDGE_URI,
+)
+
+VITALTYPE_U = "aaaaaaaa-0000-5000-8000-000000000004"
+ENTITY_TYPE = f"{H}KGEntity"
+
+
+def _with_vitaltype(bgp, al, *, subjects):
+    """Add one `?subj vitaltype <type>` quad per (var, type_uri) in `subjects`."""
+    for i, (var, type_uri) in enumerate(subjects):
+        a = f"v{i}"
+        bgp.tables.append(TableRef(ref_id=a, kind="quad",
+                                   table_name=f"{SPACE}_rdf_quad", alias=a))
+        bgp.leaf_terms[(a, "predicate_uuid")] = (VITALTYPE_URI, "U")
+        bgp.leaf_terms[(a, "object_uuid")] = (type_uri, "U")
+        bgp.var_slots[var] = VarSlot(name=var, positions=[(a, "subject_uuid")])
+    return bgp, al
+
+
+class TestTheEntityNarrowing:
+
+    def test_it_fires_and_projects_the_entity(self):
+        bgp, al = _make(matches=1000, slot_total=100_000)
+        _with_vitaltype(bgp, al, subjects=[("entity", ENTITY_TYPE)])
+        got = entity_range_constraint(bgp, al, SPACE, "val", ">=", 99)
+        assert got is not None
+        alias, sql = got
+        assert alias == "v0", "it must anchor on the ENTITY's quad, not the slot's"
+        assert "SELECT entity_uuid FROM" in sql
+        assert "value_num >= 99" in sql
+
+    def test_it_never_mentions_frame_type_path(self):
+        """The set must stay a SUPERSET of the answer. `frame_type_path` is the
+        column `issues/111` warns returns WRONG ROWS on a near-miss, and
+        narrowing by it is not needed to make the set small."""
+        bgp, al = _make(matches=1000)
+        _with_vitaltype(bgp, al, subjects=[("entity", ENTITY_TYPE)])
+        _, sql = entity_range_constraint(bgp, al, SPACE, "val", ">=", 99)
+        assert "frame_type_path" not in sql
+        assert "entity_type_uuid" not in sql
+        assert "context_uuid" not in sql
+
+    def test_it_declines_when_only_walk_edges_are_typed(self):
+        """Every edge on the walk carries a vitaltype quad too. Mistaking one for
+        the entity would intersect two disjoint populations and return NOTHING,
+        so a shape with no entity must decline rather than pick."""
+        bgp, al = _make(matches=1000)
+        _with_vitaltype(bgp, al,
+                        subjects=[("frame_edge_0", ENTITY_FRAME_EDGE_URI)])
+        assert entity_range_constraint(bgp, al, SPACE, "val", ">=", 99) is None
+
+    def test_it_declines_when_the_entity_is_ambiguous(self):
+        bgp, al = _make(matches=1000)
+        _with_vitaltype(bgp, al, subjects=[("entity", ENTITY_TYPE),
+                                           ("other", f"{H}KGDocument")])
+        assert entity_range_constraint(bgp, al, SPACE, "val", ">=", 99) is None
+
+    def test_a_loose_range_declines_here_too(self):
+        """It inherits the selectivity gate: a 9,907-row IN list destroys a plan
+        that already works, which is why the slot narrowing is gated at all."""
+        bgp, al = _make(matches=9907, slot_total=100_000)     # 9.9%
+        _with_vitaltype(bgp, al, subjects=[("entity", ENTITY_TYPE)])
+        assert entity_range_constraint(bgp, al, SPACE, "val", ">=", 99) is None

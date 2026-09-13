@@ -750,11 +750,20 @@ def _try_numeric_filter(
     # Adds a constraint the surrounding chain already implies; see
     # `slot_sort_range` for why it anchors on the slot and not the entity.
     if ctx is not None:
-        from .slot_sort_range import slot_range_constraint
+        from .slot_sort_range import (slot_range_constraint,
+                                      entity_range_constraint)
         extra = slot_range_constraint(bgp, ctx.aliases, ctx.space_id,
                                       var_name, op, literal, value_sql)
         if extra and extra not in bgp.tagged_constraints:
             bgp.tagged_constraints.append(extra)
+        # AND narrow the entity itself. The slot set above is small and the
+        # planner does not drive from it — the page is ordered by the entity, so
+        # the entity is the side that has to be narrow. See
+        # `entity_range_constraint` for why this cannot drop a row.
+        extra_e = entity_range_constraint(bgp, ctx.aliases, ctx.space_id,
+                                          var_name, op, literal, value_sql)
+        if extra_e and extra_e not in bgp.tagged_constraints:
+            bgp.tagged_constraints.append(extra_e)
 
     logger.debug("Numeric filter pushdown: %s %s %s -> %s",
                  var_name, op, literal, constraint_sql[:80])

@@ -69,6 +69,10 @@ from typing import Optional, Tuple
 logger = logging.getLogger(__name__)
 
 SLOT_TYPE_PRED = "http://vital.ai/ontology/haley-ai-kg#hasKGSlotType"
+VITALTYPE_URI = "http://vital.ai/ontology/vital-core#vitaltype"
+from .sync_entity_slot_sort import (ENTITY_FRAME_EDGE_URI,
+                                    SLOT_EDGE_URI,
+                                    CHILD_FRAME_EDGE_URI)
 
 # Value predicate -> the column `sync_entity_slot_sort` writes it to. Anything
 # absent DECLINES rather than defaulting: writing a date into the numeric lane
@@ -187,9 +191,12 @@ def _const_terms(aliases) -> dict:
             for (text, _tt, _lg, _dt), col in aliases.constants.items()}
 
 
-def slot_range_constraint(bgp, aliases, space_id: str, value_var: str,
-                          op: str, literal, value_sql=None) -> Optional[Tuple[str, str]]:
-    """`(alias, sql)` narrowing the slot to those `entity_slot_sort` agrees with.
+def _range_shape(bgp, aliases, value_var: str, op: str, literal):
+    """The parts both narrowings need, or None if the shape is not recognised.
+
+    Returns `(slot_var, lane, type_token, sslot, pred_of, obj_of)`. Split out so
+    the slot-anchored and entity-anchored constraints cannot drift apart on what
+    they consider a recognisable shape — they differ only in what they narrow.
 
     None whenever the shape is not exactly:
 
@@ -273,6 +280,26 @@ def slot_range_constraint(bgp, aliases, space_id: str, value_var: str,
                      "enough to drive", value_var, op, literal, slot_total)
         return None
 
+    return (slot_var, lane, type_token, sslot, pred_of, obj_of)
+
+
+def slot_range_constraint(bgp, aliases, space_id: str, value_var: str,
+                          op: str, literal, value_sql=None) -> Optional[Tuple[str, str]]:
+    """`(alias, sql)` narrowing the SLOT to those `entity_slot_sort` agrees with.
+
+    None whenever the shape is not exactly:
+
+        ?slot hasKGSlotType <T> .  ?slot has<X>SlotValue ?value_var
+
+    within THIS bgp, with `<T>` a resolved constant and `has<X>SlotValue` a
+    predicate whose lane is known. Every other shape declines — a constraint
+    derived from a misread chain would exclude rows the query should return.
+    """
+    shape = _range_shape(bgp, aliases, value_var, op, literal)
+    if shape is None:
+        return None
+    slot_var, lane, type_token, sslot, _pred_of, _obj_of = shape
+
     # Anchor on any position of the slot variable; subject_uuid is the natural
     # one and is what the chain joins on.
     anchor = next(((a, c) for a, c in sslot.positions if c == "subject_uuid"),
@@ -287,6 +314,92 @@ def slot_range_constraint(bgp, aliases, space_id: str, value_var: str,
            f"AND {lane} {op} {value_sql if value_sql is not None else literal})")
     logger.debug("slot-sort range: %s %s %s narrowed via %s", slot_var, op,
                  literal, ess)
+    return (alias, sql)
+
+
+# The entity type a FRAME carries, so a frame's `vitaltype` quad is not mistaken
+# for the entity's. Frames are identified by `vitaltype = KGFrame` and the
+# specific frame type lives elsewhere, so this one URI separates the two.
+KGFRAME_URI = "http://vital.ai/ontology/haley-ai-kg#KGFrame"
+
+# Everything on the walk carries a `vitaltype` quad, not just the entity: the
+# frame, and each of the three EDGES linking entity -> frame -> child frame ->
+# slot. Those edge types are named here from the same constants
+# `sync_entity_slot_sort` walks to BUILD the table, so what counts as "not the
+# entity" cannot drift from what the column was derived with.
+_NOT_AN_ENTITY = frozenset((
+    KGFRAME_URI,
+    ENTITY_FRAME_EDGE_URI,
+    SLOT_EDGE_URI,
+    CHILD_FRAME_EDGE_URI,
+))
+
+
+def entity_range_constraint(bgp, aliases, space_id: str, value_var: str,
+                            op: str, literal, value_sql=None) -> Optional[Tuple[str, str]]:
+    """`(alias, sql)` narrowing the ENTITY to those owning a matching slot.
+
+    The slot-anchored constraint hands PostgreSQL a small set of SLOTS, and
+    measured it does not drive from it: at the selective end the planner still
+    walks the whole edge table and probes `rdf_quad` tens of thousands of times
+    (`issues/111`). The page is ordered by the ENTITY, so the entity is what has
+    to be narrow.
+
+    WHY THIS CANNOT DROP A ROW. `entity_slot_sort` holds one row per (slot,
+    context) carrying the entity at the top of the path. Every entity the query
+    can return owns a slot of this type with a value on this side of the
+    threshold — that is what the criterion says — so every such entity has a row
+    here and survives the IN. The set is a SUPERSET of the answer: the frame
+    path, the graph and the entity type are all left unconstrained precisely so
+    it stays one. Narrowing it further with `frame_type_path` is what
+    `issues/111` warns returns WRONG ROWS on a near-miss, and it is not needed to
+    make the set small.
+
+    Declines unless exactly ONE variable is a plausible entity, because applying
+    this to a frame or a slot variable would intersect two disjoint populations
+    and return nothing at all.
+    """
+    shape = _range_shape(bgp, aliases, value_var, op, literal)
+    if shape is None:
+        return None
+    slot_var, lane, type_token, _sslot, pred_of, obj_of = shape
+
+    _cand_obj = {}
+    candidates = set()
+    for alias, pred in pred_of.items():
+        if pred != VITALTYPE_URI:
+            continue
+        # A frame's own vitaltype quad names KGFrame; the entity's names its
+        # entity type. Anything unresolved is skipped rather than guessed.
+        obj = obj_of.get(alias)
+        if not obj or obj in _NOT_AN_ENTITY:
+            continue
+        for var, vslot in (bgp.var_slots or {}).items():
+            if any(a == alias and c == "subject_uuid" for a, c in vslot.positions):
+                candidates.add(var)
+                _cand_obj[var] = obj
+
+    candidates.discard(slot_var)
+    if len(candidates) != 1:
+        logger.debug("entity-sort range: %d entity candidates %s, declining",
+                     len(candidates), sorted(
+                         (v, _cand_obj.get(v, "?")) for v in candidates))
+        return None
+    entity_var = candidates.pop()
+
+    eslot = (bgp.var_slots or {}).get(entity_var)
+    anchor_pos = next(((a, c) for a, c in (eslot.positions if eslot else [])
+                       if c == "subject_uuid"), None)
+    if anchor_pos is None:
+        return None
+    alias, col = anchor_pos
+
+    ess = f"{space_id}_entity_slot_sort"
+    sql = (f"{alias}.{col} IN (SELECT entity_uuid FROM {ess} "
+           f"WHERE slot_type_uuid = {type_token} "
+           f"AND {lane} {op} {value_sql if value_sql is not None else literal})")
+    logger.debug("entity-sort range: %s %s %s narrowed via %s on %s",
+                 entity_var, op, literal, ess, entity_var)
     return (alias, sql)
 
 

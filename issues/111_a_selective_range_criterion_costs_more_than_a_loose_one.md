@@ -1,6 +1,59 @@
 # The More Selective a Range Criterion, the More It Costs
 
-## Status: FIXED 2026-08-20 — and it was never a performance problem
+## Status: the remaining half is BUILT 2026-09-13 — entity-anchored narrowing
+
+The correctness half was fixed 2026-08-20 (below). "What remains" — 1.66 s and
+1,496,337 buffers for 1,017 rows — is now fixed too, by narrowing the ENTITY
+rather than the slot.
+
+    fixture              buffers/match before    after
+    10k   (16 matches)            106,617.4      147.8     721x
+    100k  (145 matches)            24,662.0       46.2     534x
+
+`test_range_comparator_pays_for_every_candidate` passes at both sizes, and at
+the comparable threshold the range is now 0.9x the equality baseline rather than
+a multiple of it. The bench went 166.5 s -> 15.0 s, and its file 371 s -> 235 s
+with its two failures gone.
+
+### Why the slot-anchored version was not enough
+
+`slot_range_constraint` was firing the whole time, and its subquery is cheap —
+5.12 ms, 273 buffers, and it does use `idx_ess_num`. The problem was never the
+narrowing's own cost. The page is ordered by the ENTITY, and the planner will
+not drive from a set of SLOTS: at t=99.9 it still scanned 497,633 edge rows in
+one pass and probed `rdf_quad` 91,900 times. Narrowing the entity instead
+collapsed that to 148 probes.
+
+### Why this does NOT risk the wrong rows this issue warns about
+
+The danger recorded above is matching `frame_type_path` loosely. This constraint
+does not match it at all — `frame_type_path`, `entity_type_uuid` and
+`context_uuid` are ALL left unconstrained, deliberately, so the set stays a
+strict SUPERSET of the answer. Every entity the query can return owns a slot of
+that type past the threshold, which is what the criterion says, so every one has
+a row in `entity_slot_sort` and survives the IN. Intersecting with a superset
+cannot drop a row. A unit test asserts those three columns never appear in the
+emitted SQL.
+
+So the entity-anchored plan turned out NOT to need the risky part either. The
+measured 1.56 ms index-only scan above used the full key; this reaches the same
+outcome with `(slot_type_uuid, value_num)` alone, because the win is in what the
+planner DRIVES from, not in the subquery's own cost.
+
+### Two attempts that measured worse first
+
+* Excluding frames by `KGFrame` DECLINED: the extra candidates were the walk's
+  EDGES, which carry their own `vitaltype` quad. They are now excluded using the
+  same URIs `sync_entity_slot_sort` walks to build the table, so what counts as
+  "not the entity" cannot drift from what the column was derived with.
+* Before that it was actively WORSE — a new node at 205,772 buffers over 50,000
+  loops, the planner evaluating the IN per row. That is this issue's own
+  "push filters into the driver, consistently worse" trap.
+
+It inherits the existing selectivity gate, so a loose threshold still declines
+rather than building a 9,907-row IN list: t=0 is unchanged at 2,724 buffers.
+
+## Original status: FIXED 2026-08-20 — and it was never a performance problem
 
 **The tight threshold was not filtering.** `MQLRating >= 99` with a 60,000-row
 page returned 60,000 rows where 1,017 match, and neither `num_val` nor `99`
