@@ -190,6 +190,36 @@ SYNTH = [
 SMALL = SYNTH[0]
 LARGE = SYNTH[1]
 
+# The GENERAL-TRAVERSAL fixture: node -edge-> node, with no frame and no slot on
+# the path. `SMALL` can express the shape but is a poor place to test it — its
+# starts are chosen on the frame graph, its relation fan-out is 2, and its nodes
+# carry no property to filter on, so a FILTERED general walk collapses to
+# nothing by depth 2. The numbers, same generator, same entity count:
+#
+#     depth-3 open walk, summed over starts      SMALL 30      REL 8,858
+#     depth-3 filtered walks non-empty           0 of 4        4 of 4
+#
+# Generated with `--relation-fanout 4 --node-criteria`, so entities carry the
+# same score/weight/occurred/category/active/tags that frames and edges do and a
+# criterion on a NODE is expressible at all.
+#
+#   python scripts/generate_graph_dataset.py --entities 10000 \
+#       --relation-fanout 4 --node-criteria --seed 20260913 \
+#       --out internal_data/graph_rel_10k
+#   python -c "import asyncio,sys; sys.path.insert(0,'scripts'); \
+#       import perf_seed_data as p; asyncio.run(p.ensure_space('sp_graph_rel_10k'))"
+#   python scripts/convert_nt_to_csv.py internal_data/graph_rel_10k/*.nt \
+#       --out test_data/graph_rel_10k.csv --graph urn:sp_graph_rel_10k \
+#       --dataset graph_synth
+#   python scripts/load_wordnet_csv.py --space sp_graph_rel_10k \
+#       --quads-csv test_data/graph_rel_10k.csv \
+#       --terms-csv test_data/graph_rel_10k_terms.csv
+#
+# The space must exist BEFORE the load: `load_wordnet_csv.py` truncates, it does
+# not create. Tests skip cleanly while it is unloaded.
+REL = GraphFixture("sp_graph_rel_10k", "urn:sp_graph_rel_10k", "rel10k",
+                   "graph_rel_10k")
+
 # The SKEWED fixture (issues/090). Small on purpose — its job is a distribution,
 # not a size.
 #
