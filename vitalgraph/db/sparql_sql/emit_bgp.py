@@ -233,6 +233,38 @@ def _try_hop_wise(plan: PlanV2, ctx: EmitContext, quad_tables,
 
         if not decision.hop_wise:
             return None
+
+        # A FRAME-SLOT SHAPE GOES FLAT (`issues/195`). Measured on
+        # `sp_graph_synth_10k`, wall-clock, hop-wise forced on and off:
+        #
+        #   shape                      hop-wise ON      hop-wise OFF
+        #   frame_hop nested_category  1,665 ms / KILLED     0 ms / 1 ms
+        #   frame_hop nested_score     1,771 ms / KILLED    34 ms / 27 ms
+        #   frame_hop occurred         685 ms / 2 ms       192 ms / 0 ms
+        #   frame_hop score            219 ms / 270 ms     214 ms / 141 ms
+        #   relation_hop score         0.06 / 0.12 / 0.15  7.54 / 8.88 / 25.76
+        #
+        # On frame-slot shapes hop-wise never wins and sometimes does not
+        # finish; on a pure edge walk it is 125-170x FASTER. The difference is
+        # the `frame_slot` collapse: it serves the FLAT path only, and
+        # `reorder_joins` — which is what picks a selective root — is never
+        # called on the hop-wise path, so there the pin lands as a late Filter
+        # and the plan opens on whatever the emitter placed first.
+        #
+        # So the discriminator is whether this BGP has a `frame_slot` table:
+        # present means the flat path has the collapse and wins, absent means
+        # the edge table carries the walk and hop-wise wins. Checked on the
+        # tables rather than on the criterion, because three attempts to
+        # discriminate by criterion shape were each measured worse.
+        if any(getattr(t, "kind", None) == "frame_slot" for t in quad_tables):
+            # Through the RULE, not a debug log. `issues/197` records that a
+            # rewrite which neither fires nor declines is invisible, and that a
+            # silent decline here cost a day of diagnosis.
+            from .emit_traversal import HOP_WISE
+            return HOP_WISE.decline(
+                "the frame_slot collapse serves the flat path for this shape, "
+                "and hop-wise has no reorder_joins to place the pin",
+                tables=sorted({getattr(t, "kind", "?") for t in quad_tables}))
         # The direction is the decision's, not the emitter's: it is chosen
         # from statistics loaded at an earlier stage (issues/090).
         return emit_hop_wise(plan, decision.chain, quad_tables, sql_names,
