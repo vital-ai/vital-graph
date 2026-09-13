@@ -247,7 +247,8 @@ class TestTheFixtureCanCatchADroppedSlotConstraint:
         await _require(perf_conn)
         rows = await perf_conn.fetch(
             f"""SELECT DISTINCT o.term_text
-                FROM {SKEW.space}_frame_entity fe
+                FROM (SELECT DISTINCT frame_uuid
+                          FROM {SKEW.space}_frame_slot) fe
                 JOIN {SKEW.space}_edge e ON e.source_node_uuid = fe.frame_uuid
                 JOIN {SKEW.space}_rdf_quad ty ON ty.subject_uuid = e.dest_node_uuid
                 JOIN {SKEW.space}_term p ON p.term_uuid = ty.predicate_uuid
@@ -273,7 +274,8 @@ class TestTheFixtureCanCatchADroppedSlotConstraint:
         doing its job, whatever the engine does."""
         await _require(perf_conn)
         scoped = await perf_conn.fetchval(
-            f"""SELECT count(*) FROM {SKEW.space}_frame_entity fe WHERE EXISTS (
+            f"""SELECT count(*) FROM (SELECT DISTINCT frame_uuid
+                          FROM {SKEW.space}_frame_slot) fe WHERE EXISTS (
                   SELECT 1 FROM {SKEW.space}_edge e
                   JOIN {SKEW.space}_rdf_quad st ON st.subject_uuid = e.dest_node_uuid
                   JOIN {SKEW.space}_term sp ON sp.term_uuid = st.predicate_uuid
@@ -288,7 +290,8 @@ class TestTheFixtureCanCatchADroppedSlotConstraint:
                   WHERE e.source_node_uuid = fe.frame_uuid)""",
             f"{HALEY}hasKGSlotType", f"{VITAL}vitaltype", f"{HALEY}KGTextSlot")
         unscoped = await perf_conn.fetchval(
-            f"""SELECT count(*) FROM {SKEW.space}_frame_entity fe WHERE EXISTS (
+            f"""SELECT count(*) FROM (SELECT DISTINCT frame_uuid
+                          FROM {SKEW.space}_frame_slot) fe WHERE EXISTS (
                   SELECT 1 FROM {SKEW.space}_edge e
                   JOIN {SKEW.space}_rdf_quad ty ON ty.subject_uuid = e.dest_node_uuid
                   JOIN {SKEW.space}_term tp ON tp.term_uuid = ty.predicate_uuid
@@ -355,7 +358,7 @@ class TestASlotTypeConstraintNoLongerKillsTheCollapse:
                 ?ds <{HALEY}hasEntitySlotValue> ?e1 .
                 ?ss a <{HALEY}{cls}> .
             }} }}""")
-        assert f"{SKEW.space}_frame_entity" in gen.sql, (
+        assert f"{SKEW.space}_frame_slot" in gen.sql, (
             "the rewrite declined again — a slot type constraint is back to "
             "costing the whole collapse (issues/048)")
         assert (await perf_conn.fetch(gen.sql))[0][0] == want
@@ -387,7 +390,7 @@ class TestASlotEdgeTypeConstraintIsAbsorbedToo:
                 ?ds <{HALEY}hasEntitySlotValue> ?e1 .
                 ?se <{VITAL}vitaltype> <{HALEY}{etype}> .
             }} }}""")
-        assert f"{SKEW.space}_frame_entity" in gen.sql, (
+        assert f"{SKEW.space}_frame_slot" in gen.sql, (
             "the rewrite declined — a slot EDGE type constraint is back to "
             "costing the whole collapse (issues/048)")
         assert (await perf_conn.fetch(gen.sql))[0][0] == want
