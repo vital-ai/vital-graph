@@ -1,7 +1,9 @@
 # Seven Lead Fixtures Predate The Grouping-URI Fix
 
-## Status: OPEN — the generator is CORRECT; the generated DATA on disk is stale.
-## Found 2026-09-14 while choosing a fixture for the entity-graph fan-out bench.
+## Status: DONE for the six generated fixtures (2026-09-14). One fixture
+## remains and cannot be fixed this way: `sp_sql_lead_dataset` is the only
+## NON-generated one, so there is nothing to re-run. Found while choosing a
+## fixture for the entity-graph fan-out bench.
 
 ## The invariant
 
@@ -133,6 +135,58 @@ scripts would have quietly changed what the fixtures are:
 Untrimmed generation emits full graphs rather than the criteria frames, which
 is a different fixture, not a regenerated one. The regeneration used the
 manifest values.
+
+## What was done — 2026-09-14
+
+Regenerated with manifest parameters and reloaded. Verified against source:
+
+    sp_lead_dup            371,226 quads      53,270 grouping   MATCHES .nt
+    sp_lead_types        1,483,310 quads     213,080 grouping   MATCHES .nt
+    sp_lead_synth_10k    7,416,550 quads   1,065,400 grouping   MATCHES .nt
+    sp_lead_synth_100k  74,165,500 quads  10,654,000 grouping   MATCHES .nt
+
+`lead_depth1` and `lead_empty` are regenerated on disk; neither is loaded as
+a space here. `lead_nurture_100k` was left alone as superseded.
+
+### The fixtures did not match their sources, and the reason was not this issue
+
+Immediately after loading, every space held MORE quads than its `.nt`: exactly
+three per KGEntity — `hasObjectCreationTime`,
+`hasObjectModificationDateTime`, `hasObjectStatusType`, all with epoch
+defaults. Not a defect: `backfill_server_properties_task` stamps
+server-managed properties on entities, incrementally, 200 per batch.
+
+What WAS a defect is that it stamped spaces the operator had declared
+off-limits. The test stack set `VG_MAINTENANCE_EXCLUDE_SPACES` to twelve
+benchmark spaces and `BACKFILL_EXCLUDE_SPACES` to nothing, so maintenance
+skipped them and the backfill did not. The task's own comment names exactly
+this as its motivating case — "it changes the dataset *while a performance run
+is measuring it* — buffer counts drift between runs and baseline comparisons
+stop meaning anything."
+
+Fixed by making `BACKFILL_EXCLUDE_SPACES` DEFAULT to the maintenance list when
+unset, rather than duplicating a twelve-name list in compose — the file already
+warns that keeping two such lists in step has failed before. Explicit still
+wins, and an explicitly empty value still means "back-fill everything".
+
+The stamps were then removed from the four reloaded spaces so each matches its
+regenerated source exactly. Safe to remove here, checked first rather than
+assumed: `sync_entity_prop_sort` sorts on precisely those three predicates, so
+they are functional data — but no perf bench references prop-sort or those
+properties, the prop-sort integration tests build their own spaces, and these
+fixtures have no `entity_prop_sort` table at all.
+
+`lead_nurture_grouped` (300,000 stamps), `wordnet_frames` (329,235) and
+`sp_graph_skew_2k` (6,000) keep theirs. They are stable, their existing
+baselines reflect them, and the exclusion now stops them drifting. Stripping
+them too would invalidate more baselines than it would make uniform.
+
+### The trap this leaves behind
+
+A loaded benchmark space will NOT match its manifest `n_triples` by exactly
+three times its entity count, unless the stamps have been removed. That gap is
+the backfill working correctly, not data loss. Read it the other way and the
+obvious conclusion — "the load dropped quads" — is wrong.
 
 ## Do not let it recur silently
 
