@@ -100,13 +100,24 @@ done
 # Resolve the tier before touching docker: an unusable combination should cost a
 # message, not a container stack.
 case "$TIER" in
-  query)  MARK_EXPR="(integration or performance) and not ingest_bench"
+  query)  MARK_EXPR="(integration or performance) and not ingest_bench and not coverage_bench"
           TIER_NOTE="query tier — read-only, the fast pass" ;;
-  ingest) MARK_EXPR="performance and ingest_bench"
-          TIER_NOTE="ingest tier — imports, exports and modifications; slow by nature" ;;
+  ingest) MARK_EXPR="performance and ingest_bench and not coverage_bench"
+          TIER_NOTE="ingest tier — imports, exports and modifications" ;;
+  # A COVERAGE SWEEP is READ-ONLY but SLOW, which is neither of the above. It
+  # asks whether every shape is served, and its runtime is deliberate TIMEOUTS —
+  # 20 s probe, 120 s retry, per parametrisation — not the work under test. It
+  # was marked `ingest_bench` under a "builds its own data" reading that is not
+  # true of it: the file contains no INSERT, CREATE, DELETE or TRUNCATE at all.
+  #
+  # Parked in the write tier it was 35 of that tier's 46 minutes and set the
+  # price of every write bench, so adding a 15-second delete bench cost a
+  # 46-minute promotion (`issues/192`).
+  coverage) MARK_EXPR="performance and coverage_bench"
+          TIER_NOTE="coverage tier — shape sweeps, timeout-bound; promote on its own cadence" ;;
   all)    MARK_EXPR="integration or performance"
           TIER_NOTE="BOTH tiers in one pass — records a file matching NEITHER baseline" ;;
-  *)      echo "❌ --tier must be query, ingest or all (got '$TIER')"; exit 2 ;;
+  *)      echo "❌ --tier must be query, ingest, coverage or all (got '$TIER')"; exit 2 ;;
 esac
 
 # A run of one tier must not be promoted over the other tier's baseline: it would
@@ -117,7 +128,7 @@ if [ -n "$PROMOTE" ] && [ "$TIER" != "all" ] && [ "$PROMOTE" != "$TIER" ]; then
   exit 2
 fi
 if [ -n "$PROMOTE" ] && [ "$TIER" = "all" ]; then
-  echo "❌ refusing to promote a --tier=all run: it spans both baselines."
+  echo "❌ refusing to promote a --tier=all run: it spans all three baselines."
   echo "   Promote each tier from its own pass."
   exit 2
 fi

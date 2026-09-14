@@ -175,7 +175,7 @@ async def _warm(conn, sql):
         await _cost(conn, sql, fenced=fenced, warm=True)
 
 
-@pytest.mark.ingest_bench   # two ANALYZEd plans per shape; not an edit-loop bench
+@pytest.mark.coverage_bench   # two ANALYZEd plans per shape; not an edit-loop bench
 @pytest.mark.bench("query.kgquery.paging_fence_coverage")
 @pytest.mark.parametrize("fx", FIXTURES, ids=[f.label for f in FIXTURES])
 @pytest.mark.parametrize("entity_type", [
@@ -280,7 +280,7 @@ async def test_a_flippable_shape_is_always_fenced(
                       f"page {page_size} — issues/190 fence coverage")
 
 
-@pytest.mark.ingest_bench
+@pytest.mark.coverage_bench
 @pytest.mark.asyncio(loop_scope="session")
 async def test_the_three_text_needle_regimes_stay_ordered(perf_conn):
     """Match, empty, and unservable cost strictly more in that order.

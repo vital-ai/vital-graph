@@ -43,6 +43,11 @@ def _declared() -> dict:
 
 
 def _recorded() -> set:
+    """Every bench id across ALL baselines — query, ingest and coverage.
+
+    Globbed rather than named, so adding a tier does not silently narrow this
+    check to the tiers someone remembered to list.
+    """
     ids = set()
     for b in sorted(_BASELINES.glob("*.json")):
         for entry in json.loads(b.read_text(encoding="utf-8"))["benches"]:

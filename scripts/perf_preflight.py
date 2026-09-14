@@ -57,17 +57,21 @@ def check_run_is_promotable(path: pathlib.Path, tier: str | None) -> list:
     if not present:
         return [f"{path} records no benches at all"]
 
-    # A run of ONE tier legitimately lacks the other tier's benches, so only
-    # complain about a declaration whose own file belongs to this pass.
-    ingest = {p.name for p in PERF.glob("test_*.py")
-              if "ingest_bench" in p.read_text(encoding="utf-8")}
+    # A run of ONE tier legitimately lacks the other tiers' benches, so only
+    # complain about a declaration whose own file belongs to this pass. Three
+    # tiers now: read-only-and-fast, writes, and read-only-but-slow sweeps.
+    def _tier_of(path: pathlib.Path) -> str:
+        txt = path.read_text(encoding="utf-8")
+        if "coverage_bench" in txt:
+            return "coverage"
+        return "ingest" if "ingest_bench" in txt else "query"
+
+    owner = {p.name: _tier_of(p) for p in PERF.glob("test_*.py")}
     problems = []
     for bench, fname in sorted(declared.items()):
         if bench in present:
             continue
-        if tier == "ingest" and fname not in ingest:
-            continue
-        if tier == "query" and fname in ingest:
+        if tier and owner.get(fname) != tier:
             continue
         problems.append(
             f"{bench} ({fname}) is declared but ABSENT from the run — a bench "
@@ -80,8 +84,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--run", type=pathlib.Path,
                     help="a recorded run file to check for promotability")
-    ap.add_argument("--tier", choices=("query", "ingest"),
-                    help="which tier produced the run, so the other tier's "
+    ap.add_argument("--tier", choices=("query", "ingest", "coverage"),
+                    help="which tier produced the run, so the other tiers' "
                          "benches are not reported as missing")
     args = ap.parse_args()
 

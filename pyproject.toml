@@ -294,6 +294,7 @@ markers = [
     "integration: Tier 3 integration tests (require PG + Jena sidecar)",
     "api: Tier 4 API end-to-end tests (require running VitalGraph server)",
     "serial: must not run under pytest-xdist - measures a shared resource (pool capacity, timing) that parallel workers change",
+    "coverage_bench: a READ-ONLY sweep that is SLOW. It asks whether every shape is served, and its runtime is deliberate TIMEOUTS (20s probe, 120s retry, per parametrisation) rather than the work under test. Read-only, so it is not a write bench; far too slow to sit with the fast read-only ones. Its own tier and baseline: parked in the write tier it was 35 of that tier's 46 minutes and set the price of every write bench, so adding a 15-second delete bench cost a 46-minute promotion (issues/192)",
     "ingest_bench: a benchmark that MUTATES the database - an import, an export, or any modification (creating a space, INSERT/COPY, dropping an index). The other tier is read-only, which is what keeps it fast enough to run and promote on every query fix. Tier is decided by whether the test writes, NOT by what it asserts: a test that builds data and then queries it belongs here (separate baseline)",
 ]
 
