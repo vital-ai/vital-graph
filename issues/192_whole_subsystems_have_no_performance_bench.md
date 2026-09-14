@@ -1,6 +1,46 @@
 # Whole Subsystems Have No Performance Bench
 
-## Status: OPEN. Ranked, not enumerated — deletes first.
+## Status: OPEN — the top row is CLOSED 2026-09-14, three remain
+
+**SPARQL UPDATE / DELETE is benched** (`15d53122`,
+`tests/performance/test_delete_throughput.py`,
+`write.delete.concrete_vs_deferred`, baselined in `ingest.json`).
+
+A delete is THREE costs and only the first is visible to the caller, so the
+bench takes all three — a change that speeds up the caller's path by deferring
+more work to the sweep is not an improvement, and measuring either half alone
+would report it as one. `deferred_share` is the metric that moves when that
+happens.
+
+    concrete_quads_per_sec      2,048     DELETE DATA, subjects enumerable, syncs inline
+    where_bound_quads_per_sec   6,251     DELETE WHERE, marks the space and DEFERS
+    orphans_before_sweep        1,000     what the deferral leaves behind
+    sweep_s                     0.019     O(edge table) — 181s at 4.98M rows (issues/079)
+    deferred_share              0.039
+
+The caller's path is 3x faster precisely because it defers. That is the
+relationship worth watching, and neither number alone shows it.
+
+It asserts what it measures — zero orphans after the concrete path, the space
+MARKED after the WHERE-bound one, zero after the sweep — so a bench that
+silently stops deleting fails rather than reporting a fast number for doing
+nothing.
+
+### What closing it cost, which is worth knowing before closing the next one
+
+One bench required a full ingest-tier promotion (46 minutes) to baseline,
+because `test_every_declared_bench_is_in_a_baseline` cannot distinguish a NEW
+bench from a VANISHED one — both are declared-but-absent — and an unbaselined
+bench detects nothing. That is correct discipline, not a flaw, but it means the
+two remaining justified rows (**concurrency at scale**, **entity-graph
+endpoint**) should be written TOGETHER and share one promotion rather than
+taking one each.
+
+The bottom four (vector, geo, fuzzy/text, bulk export) are still deliberately
+not written: per the rule below, the case has to be "a regression here would
+ship silently", and no incident has made it.
+
+## Original filing: Ranked, not enumerated — deletes first.
 
 **Related:** `performance_regression_tracking_plan.md` R6 (write/update parity,
 this is that item re-counted), `unexplored_performance_surface.md` §1,
