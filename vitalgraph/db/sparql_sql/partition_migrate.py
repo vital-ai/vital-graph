@@ -27,7 +27,11 @@ from .sparql_sql_schema import SparqlSQLSchema
 
 logger = logging.getLogger(__name__)
 
-_CORE = ("rdf_quad", "edge", "frame_entity")
+# The core tables a partition migration moves. `frame_entity` was retired for
+# `frame_slot` (`issues/183`) and this constant kept the old spelling — it is
+# unused, so nothing broke, but it is the kind of stale name that gets copied
+# into something that does run. `_new_core_ddl` reads `t["frame_slot"]`.
+_CORE = ("rdf_quad", "edge", "frame_slot")
 
 
 def _bare(name: str) -> str:

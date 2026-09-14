@@ -162,12 +162,12 @@ async def test_graph_scoped_query_prunes_to_one_partition(pg18_pool, part_space,
                              "node_types": ",".join(node_types(plan))})
 
 
-async def test_edge_and_frame_entity_are_co_partitioned(pg18_pool, part_space):
-    """rdf_quad, edge, frame_entity are all HASH(context_uuid)-partitioned with
+async def test_edge_and_frame_slot_are_co_partitioned(pg18_pool, part_space):
+    """rdf_quad, edge, frame_slot are all HASH(context_uuid)-partitioned with
     the same modulus, so edge-rewrite joins can be partition-wise."""
     sid = part_space
     async with pg18_pool.acquire() as conn:
-        for tbl in ("rdf_quad", "edge", "frame_entity"):
+        for tbl in ("rdf_quad", "edge", "frame_slot"):
             n = await conn.fetchval(
                 "SELECT count(*) FROM pg_inherits i "
                 "JOIN pg_class p ON p.oid = i.inhparent WHERE p.relname = $1",
@@ -302,24 +302,24 @@ async def test_migrate_preserves_every_core_column_and_its_data(
             f"({', '.join('$' + str(i + 1) for i in range(len(edge_cols)))})",
             *edge_vals)
 
-        fe_cols = await columns(conn, f"{sid}_frame_entity")
+        fe_cols = await columns(conn, f"{sid}_frame_slot")
         fe_vals = [uuid.uuid4() for _ in fe_cols]
         fe_vals[fe_cols.index("context_uuid")] = g
         await conn.execute(
-            f"INSERT INTO {sid}_frame_entity ({', '.join(fe_cols)}) VALUES "
+            f"INSERT INTO {sid}_frame_slot ({', '.join(fe_cols)}) VALUES "
             f"({', '.join('$' + str(i + 1) for i in range(len(fe_cols)))})",
             *fe_vals)
 
         before = {c: await columns(conn, f"{sid}_{c}")
-                  for c in ("rdf_quad", "edge", "frame_entity")}
+                  for c in ("rdf_quad", "edge", "frame_slot")}
 
         async with conn.transaction():
             await migrate_space_to_partitioned(conn, sid, n_partitions=4)
 
         after = {c: await columns(conn, f"{sid}_{c}")
-                 for c in ("rdf_quad", "edge", "frame_entity")}
+                 for c in ("rdf_quad", "edge", "frame_slot")}
         edge_after = await conn.fetchrow(f"SELECT * FROM {sid}_edge")
-        fe_after = await conn.fetchrow(f"SELECT * FROM {sid}_frame_entity")
+        fe_after = await conn.fetchrow(f"SELECT * FROM {sid}_frame_slot")
 
     assert before == after, (
         "migration changed a core table's columns — a hand-maintained copy of "
@@ -327,7 +327,7 @@ async def test_migrate_preserves_every_core_column_and_its_data(
     assert edge_after is not None, "the edge row did not survive migration"
     assert [edge_after[c] for c in edge_cols] == edge_vals, (
         "an edge column's value was lost across the migration")
-    assert fe_after is not None, "the frame_entity row did not survive migration"
+    assert fe_after is not None, "the frame_slot row did not survive migration"
     assert [fe_after[c] for c in fe_cols] == fe_vals
 
 

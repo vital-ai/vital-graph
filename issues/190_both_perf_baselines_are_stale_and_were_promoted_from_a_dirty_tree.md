@@ -240,3 +240,40 @@ Fix: have the runner diff declared bench ids against recorded ones and fail the
 promotion on any that are declared-but-absent, so a fixture error costs a loud
 error rather than a quietly smaller baseline. Separately, find out why
 `create_space_with_tables(partition_quads=4)` now returns False.
+
+### ROOT CAUSE FOUND 2026-09-13 — `frame_slot` was never declared partitioned
+
+`create_space_with_tables(partition_quads=4)` returned False because
+`SparqlSQLSchema.create_space` raised:
+
+    "p3test_23d76817_frame_slot" is not partitioned
+
+The schema calls `_partition_children(t['frame_slot'], partition_quads)` but the
+`CREATE TABLE` for `frame_slot` ended with `)'''` where every other partitioned
+table ends with `){_part}'''`. The table was created unpartitioned and
+PostgreSQL then refused its children.
+
+NOT A TEST-ONLY PROBLEM. Creating ANY space with `partition_quads > 0` failed
+outright. It is a regression from the `frame_entity` -> `frame_slot`
+replacement (`issues/183`): the new table was written without carrying the
+partition clause over, and the only caller exercising it was this bench, which
+was silently absent rather than failing — so nothing reported it.
+
+The PK `(frame_uuid, slot_uuid, context_uuid)` already contains the partition
+key, so `PARTITION BY HASH (context_uuid)` is valid and the fix is the missing
+suffix.
+
+`test_partition_pruning` goes from 4 errors + 2 failures to 6 passing, and
+`query.partition.graph_scoped_pruning` records again:
+
+    query.partition.graph_scoped_pruning  ok  partitions_scanned, partitions_total, node_types
+
+The other two failures were the same retired-name class: the co-partitioning
+check and the migration round-trip both named `frame_entity`.
+`partition_migrate._CORE` did too — unused, so nothing broke, but it is the kind
+of stale name that gets copied into something that does run.
+
+The declared-vs-recorded guard is still worth building. It is what FOUND this,
+run by hand: 46 bench ids declared in the tree, 45 present across both
+baselines, 1 absent. A fixture error should cost a loud failure rather than a
+quietly smaller baseline, and nothing automated notices today.

@@ -1124,7 +1124,7 @@ class SparqlSQLSchema:
                 context_uuid     UUID NOT NULL,
                 frame_type_uuid  UUID,
                 PRIMARY KEY (frame_uuid, slot_uuid, context_uuid)
-            )''')
+            ){_part}''')
 
         # 7. `frame_entity` is NO LONGER CREATED. It named two
         # `hasKGSlotType` VALUES in its columns, so it could only ever
