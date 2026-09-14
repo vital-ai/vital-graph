@@ -256,7 +256,54 @@ def _try_hop_wise(plan: PlanV2, ctx: EmitContext, quad_tables,
         # the edge table carries the walk and hop-wise wins. Checked on the
         # tables rather than on the criterion, because three attempts to
         # discriminate by criterion shape were each measured worse.
-        if any(getattr(t, "kind", None) == "frame_slot" for t in quad_tables):
+        # NARROWED 2026-09-14 (`issues/201`) to frame_slot AND edge TOGETHER.
+        #
+        # The table above is all PINNED chains, and pinned chains at depth >= 2
+        # reach `emit_dedup_chain`, which is tried FIRST and is not subject to
+        # this gate — so on the shapes it was justified by, the gate is inert.
+        # Measured per shape with hop-wise forced both ways, its real effect
+        # splits exactly on whether an `edge` table is present:
+        #
+        #   edge  shapes                      hop-wise vs flat
+        #      1  pinned/nested_*/d1  (2)     28x and 113x WORSE
+        #      0  everything else    (21)     13 better (to 0.05x), 8 worse (<=1.85x)
+        #
+        # An edge table appears when a NESTED criterion adds an
+        # `Edge_hasKGFrame` link, which the edge rewrite collapses. Hop-wise
+        # must nest that join inside every hop's lateral, and it fans out —
+        # which is the "1,665 ms / KILLED" in the table above.
+        #
+        # Without the edge table the gate was pure cost: those 21 shapes total
+        # 26,708 ms gated and 16,817 ms ungated, 37% faster, concentrated in the
+        # constrained ends where `dedup_feasible` declines for want of a pinned
+        # head and flat is all that is left.
+        #
+        # NOT discriminated by criterion shape, which `issues/195` records three
+        # failed attempts at, and not by the pin, which was tried and left the
+        # nested cases slow. `frame_slot` table COUNT was also tried and rejected
+        # — it is 2 per hop whether the criterion is nested or not.
+        # AND a TEXT-FILTERED plan keeps the flat path too. `issues/181` measured
+        # driving from a text-filtered end at 126,592,971 buffers against
+        # 5,151,498 for the text push alone — ~25x worse — and
+        # `test_the_traversal_is_driven_by_the_text_anchor` caught this narrowing
+        # doing exactly that: 400 loops to return 2 rows, a ratio of 200 against
+        # a limit of 50.
+        #
+        # Whole-plan rather than per-end, deliberately. Matching the filter to a
+        # specific chain end needs the col_var mapping this function does not
+        # have, and the conservative form costs only that text-anchored
+        # traversals keep the behaviour they already had.
+        _root = getattr(ctx.aliases, "plan_root", None)
+        _text = set()
+        if _root is not None:
+            try:
+                from .traversal_chain import _text_filtered_vars
+                _text = _text_filtered_vars(_root, set())
+            except Exception:
+                _text = set()       # a statistic must never fail a query
+        _has_edge = any(getattr(t, "kind", None) == "edge" for t in quad_tables)
+        if (_has_edge or _text) and any(getattr(t, "kind", None) == "frame_slot"
+                                        for t in quad_tables):
             # Through the RULE, not a debug log. `issues/197` records that a
             # rewrite which neither fires nor declines is invisible, and that a
             # silent decline here cost a day of diagnosis.
