@@ -34,13 +34,11 @@ CANDIDATES = ALL + [DUP, DEPTH1, EMPTY, TYPES]
 # `grouped=True` on the fixture in the same change, or this test will fail on
 # the mismatch, which is the point.
 KNOWN_UNGROUPED = {
-    "sp_lead_synth",
-    "sp_lead_synth_10k",
-    "sp_lead_synth_100k",
-    "sp_lead_types",
-    "sp_lead_dup",
-    "sp_lead_depth1",
-    "sp_lead_empty",
+    # The only one left. It is the sole NON-GENERATED fixture -- 100 entities of
+    # real data with no generator and no manifest -- so it cannot be regenerated
+    # the way the other seven were on 2026-09-14. Closing it needs a re-export
+    # from a source that sets the grouping URIs, or the SQL-injection path in
+    # `issues/204`.
     "sp_sql_lead_dataset",
 }
 
