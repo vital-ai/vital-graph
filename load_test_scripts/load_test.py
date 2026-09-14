@@ -282,7 +282,7 @@ async def _worker(cfg, ops, weights, deadline, metrics, think):
         await client.close()
 
 
-def _write_records(path, records, cfg):
+async def _write_records(path, records, cfg):
     """Write bench records in the perf-framework run format.
 
     Reuses tests/performance/perf_record for the environment stamp so a load run
@@ -302,6 +302,36 @@ def _write_records(path, records, cfg):
     # runs only ever compare against load runs against the same server.
     from urllib.parse import urlparse
     run.env["runner"]["class"] = f"api-{urlparse(cfg['url']).netloc}"
+
+    # STAMP THE DATABASE TOO, even though this driver never queries it. A run
+    # compared against an unrecorded CONFIGURATION is meaningless (`issues/081`)
+    # and the statistics state is as load-bearing, because the application
+    # ANALYZEs on its own schedule (`issues/112`). Without this the run warns
+    # "recorded NO PostgreSQL settings" and is not comparable with anything —
+    # which made the concurrency row unbaselineable rather than merely unbenched
+    # (`issues/192`).
+    #
+    # Opened solely for the stamp and closed immediately: the load itself must
+    # go through the API, or it stops measuring the client->service path this
+    # driver exists for.
+    try:
+        import asyncpg
+        from tests.performance import perf_record as _pr
+
+        if True:
+            conn = await asyncpg.connect(
+                host=os.environ.get("VG_TEST_PG_HOST", "localhost"),
+                port=int(os.environ.get("VG_TEST_PG_PORT", "5433")),
+                database=os.environ.get("VG_TEST_PG_DATABASE", "sparql_sql_graph"),
+                user=os.environ.get("VG_TEST_PG_USER", "postgres"),
+                password=os.environ.get("VG_TEST_PG_PASSWORD", "testpass"))
+            try:
+                run.env["pg"] = await _pr.pg_stamp(conn)
+                run.env["stats"] = await _pr.stats_stamp(conn)
+            finally:
+                await conn.close()
+    except Exception as exc:                     # never fail a run over a stamp
+        print(f"  WARNING: could not stamp PostgreSQL settings: {exc}")
     for rec in records:
         run.add(rec.pop("bench_id"), **rec)
     run.write()
@@ -339,9 +369,10 @@ async def run(users, duration, ramp, think, read_only, record_path=None):
     await asyncio.gather(*tasks)
     fails = metrics.report(duration, users)
     if record_path:
-        _write_records(record_path,
-                       metrics.to_records(duration, users, ramp, think, read_only),
-                       cfg)
+        await _write_records(
+            record_path,
+            metrics.to_records(duration, users, ramp, think, read_only),
+            cfg)
     return 1 if fails else 0
 
 
