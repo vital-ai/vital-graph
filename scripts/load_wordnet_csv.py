@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import gzip
 import os
 import sys
 import time
@@ -75,10 +76,41 @@ def dsn() -> str:
             f"user={p['user']} password={p['password']}")
 
 
+def resolve_csv(path: str) -> str:
+    """The path to actually read, preferring an exact match over a `.gz` one.
+
+    The bulk CSVs are large enough to be worth keeping compressed — the
+    `lead_nurture_grouped` pair was 12.6G as plain text and 2.3G gzipped, on a
+    volume that sits at 97% full. Falling back to a `.gz` sibling means callers
+    that were written against `quads.csv` keep working after the file is
+    compressed, instead of silently regenerating it from the .nt files.
+    """
+    if os.path.exists(path):
+        return path
+    if not path.endswith(".gz") and os.path.exists(path + ".gz"):
+        return path + ".gz"
+    return path
+
+
+def open_csv_binary(path: str):
+    path = resolve_csv(path)
+    return gzip.open(path, "rb") if path.endswith(".gz") else open(path, "rb")
+
+
+def open_csv_text(path: str):
+    path = resolve_csv(path)
+    if path.endswith(".gz"):
+        return gzip.open(path, "rt", encoding="utf-8")
+    return open(path, "r", encoding="utf-8")
+
+
 async def copy_file(cur, sql: str, path: str) -> float:
     t0 = time.time()
     async with cur.copy(sql) as cp:
-        with open(path, "rb") as fh:
+        # Decompressing here rather than shelling out to `zcat` keeps the
+        # streaming shape: COPY still gets BLOCK-sized chunks and the whole file
+        # is never held in memory, which matters at 74M quads.
+        with open_csv_binary(path) as fh:
             while chunk := fh.read(BLOCK):
                 await cp.write(chunk)
     return time.time() - t0
@@ -135,7 +167,7 @@ async def run(space: str, quads_csv: str, terms_csv: str,
             # column order, so it needs a staging table and an INSERT..SELECT to
             # project the four columns across — measured at 134s on top of a 69s
             # COPY for wordnet's 8.58M quads.
-            with open(quads_csv, "r", encoding="utf-8") as fh:
+            with open_csv_text(quads_csv) as fh:
                 header = fh.readline().strip().replace('"', '').split(",")
             slim = header == ["subject_uuid", "predicate_uuid",
                               "object_uuid", "context_uuid"]
