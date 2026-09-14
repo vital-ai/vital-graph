@@ -1,0 +1,281 @@
+{
+  "schema": 1,
+  "env": {
+    "started_at": "2026-09-14T17:35:39.105595+00:00",
+    "git": {
+      "commit": "cd516f89f4ede433fbaee23d0acb459c49b8585f",
+      "short": "cd516f89",
+      "branch": "main",
+      "dirty": false,
+      "untracked_files": 49
+    },
+    "machine": {
+      "host": "ip-192-168-1-153.ec2.internal",
+      "platform": "macOS-14.6.1-arm64-arm-64bit",
+      "machine": "arm64",
+      "cpu_count": 10,
+      "python": "3.12.2"
+    },
+    "runner": {
+      "class": "api-localhost:8002",
+      "persist": false,
+      "seeded": false,
+      "pg_host": "localhost",
+      "pg_port": "5433",
+      "pg_database": "sparql_sql_graph"
+    },
+    "pg": {
+      "server_version": "18.4 (Debian 18.4-1.pgdg13+1)",
+      "shared_buffers": "16GB",
+      "work_mem": "64MB",
+      "maintenance_work_mem": "64MB",
+      "effective_cache_size": "48GB",
+      "max_parallel_workers_per_gather": "2",
+      "random_page_cost": "4",
+      "jit": "on",
+      "default_statistics_target": "100"
+    },
+    "stats": {
+      "fixture_tables": 296,
+      "fixture_live_tuples": 6372884,
+      "fixture_last_analyze": "2026-09-13T23:42:12.769738+00:00"
+    },
+    "load_target": "http://localhost:8002",
+    "finished_at": "2026-09-14T17:35:39.426893+00:00"
+  },
+  "benches": [
+    {
+      "bench_id": "load.read_only.get_entity",
+      "kind": "load",
+      "status": "ok",
+      "metrics": {
+        "p50_ms": 12.6,
+        "p95_ms": 85.2,
+        "p99_ms": 159.9,
+        "max_ms": 2146.8,
+        "avg_ms": 32.9,
+        "requests": 383,
+        "failures": 0
+      },
+      "params": {
+        "users": 10,
+        "duration_s": 60.0,
+        "ramp_s": 2.0,
+        "think_min_s": 0.1,
+        "think_max_s": 0.5
+      }
+    },
+    {
+      "bench_id": "load.read_only.get_entity+graph",
+      "kind": "load",
+      "status": "ok",
+      "metrics": {
+        "p50_ms": 14.0,
+        "p95_ms": 93.5,
+        "p99_ms": 630.6,
+        "max_ms": 878.9,
+        "avg_ms": 35.9,
+        "requests": 205,
+        "failures": 0
+      },
+      "params": {
+        "users": 10,
+        "duration_s": 60.0,
+        "ramp_s": 2.0,
+        "think_min_s": 0.1,
+        "think_max_s": 0.5
+      }
+    },
+    {
+      "bench_id": "load.read_only.kgquery_deep_page",
+      "kind": "load",
+      "status": "ok",
+      "metrics": {
+        "p50_ms": 44.8,
+        "p95_ms": 227.9,
+        "p99_ms": 475.4,
+        "max_ms": 538.5,
+        "avg_ms": 77.1,
+        "requests": 67,
+        "failures": 0
+      },
+      "params": {
+        "users": 10,
+        "duration_s": 60.0,
+        "ramp_s": 2.0,
+        "think_min_s": 0.1,
+        "think_max_s": 0.5
+      }
+    },
+    {
+      "bench_id": "load.read_only.kgquery_page1",
+      "kind": "load",
+      "status": "ok",
+      "metrics": {
+        "p50_ms": 37.4,
+        "p95_ms": 100.8,
+        "p99_ms": 206.9,
+        "max_ms": 218.5,
+        "avg_ms": 45.2,
+        "requests": 145,
+        "failures": 0
+      },
+      "params": {
+        "users": 10,
+        "duration_s": 60.0,
+        "ramp_s": 2.0,
+        "think_min_s": 0.1,
+        "think_max_s": 0.5
+      }
+    },
+    {
+      "bench_id": "load.read_only.kgquery_sorted",
+      "kind": "load",
+      "status": "ok",
+      "metrics": {
+        "p50_ms": 338.5,
+        "p95_ms": 959.6,
+        "p99_ms": 2026.4,
+        "max_ms": 2026.4,
+        "avg_ms": 431.8,
+        "requests": 47,
+        "failures": 0
+      },
+      "params": {
+        "users": 10,
+        "duration_s": 60.0,
+        "ramp_s": 2.0,
+        "think_min_s": 0.1,
+        "think_max_s": 0.5
+      }
+    },
+    {
+      "bench_id": "load.read_only.list_entities",
+      "kind": "load",
+      "status": "ok",
+      "metrics": {
+        "p50_ms": 11.9,
+        "p95_ms": 39.2,
+        "p99_ms": 97.6,
+        "max_ms": 533.9,
+        "avg_ms": 18.4,
+        "requests": 476,
+        "failures": 0
+      },
+      "params": {
+        "users": 10,
+        "duration_s": 60.0,
+        "ramp_s": 2.0,
+        "think_min_s": 0.1,
+        "think_max_s": 0.5
+      }
+    },
+    {
+      "bench_id": "load.read_only.list_frames",
+      "kind": "load",
+      "status": "ok",
+      "metrics": {
+        "p50_ms": 23.7,
+        "p95_ms": 82.9,
+        "p99_ms": 551.9,
+        "max_ms": 2416.4,
+        "avg_ms": 53.9,
+        "requests": 162,
+        "failures": 0
+      },
+      "params": {
+        "users": 10,
+        "duration_s": 60.0,
+        "ramp_s": 2.0,
+        "think_min_s": 0.1,
+        "think_max_s": 0.5
+      }
+    },
+    {
+      "bench_id": "load.read_only.list_graphs",
+      "kind": "load",
+      "status": "ok",
+      "metrics": {
+        "p50_ms": 5.0,
+        "p95_ms": 48.4,
+        "p99_ms": 98.2,
+        "max_ms": 124.0,
+        "avg_ms": 11.2,
+        "requests": 85,
+        "failures": 0
+      },
+      "params": {
+        "users": 10,
+        "duration_s": 60.0,
+        "ramp_s": 2.0,
+        "think_min_s": 0.1,
+        "think_max_s": 0.5
+      }
+    },
+    {
+      "bench_id": "load.read_only.list_spaces",
+      "kind": "load",
+      "status": "ok",
+      "metrics": {
+        "p50_ms": 4.0,
+        "p95_ms": 8.7,
+        "p99_ms": 116.8,
+        "max_ms": 220.7,
+        "avg_ms": 9.2,
+        "requests": 77,
+        "failures": 0
+      },
+      "params": {
+        "users": 10,
+        "duration_s": 60.0,
+        "ramp_s": 2.0,
+        "think_min_s": 0.1,
+        "think_max_s": 0.5
+      }
+    },
+    {
+      "bench_id": "load.read_only.sparql_select",
+      "kind": "load",
+      "status": "ok",
+      "metrics": {
+        "p50_ms": 9.9,
+        "p95_ms": 21.2,
+        "p99_ms": 229.3,
+        "max_ms": 229.3,
+        "avg_ms": 16.0,
+        "requests": 47,
+        "failures": 0
+      },
+      "params": {
+        "users": 10,
+        "duration_s": 60.0,
+        "ramp_s": 2.0,
+        "think_min_s": 0.1,
+        "think_max_s": 0.5
+      }
+    },
+    {
+      "bench_id": "load.read_only.throughput",
+      "kind": "load",
+      "status": "ok",
+      "metrics": {
+        "requests_per_sec": 28.23,
+        "requests": 1694,
+        "failures": 0
+      },
+      "params": {
+        "users": 10,
+        "duration_s": 60.0,
+        "ramp_s": 2.0,
+        "think_min_s": 0.1,
+        "think_max_s": 0.5
+      }
+    }
+  ],
+  "baseline": {
+    "name": "load",
+    "promoted_from": "/tmp/load_clean.json",
+    "reason": "",
+    "pg_stamped": true
+  }
+}

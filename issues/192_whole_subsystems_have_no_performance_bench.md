@@ -172,12 +172,29 @@ this is that item re-counted), `unexplored_performance_surface.md` §1,
 |---|---|---|---|
 | writes / ingest | yes | **3** | `copy_speedup`, `e2e_speedup`, `quads_per_sec` |
 | SPARQL UPDATE / DELETE | yes | **0** | deletes touch the derived tables; that rebuild is exactly the cost that has surprised us before. **Highest value.** |
-| concurrency at scale | driver exists | **0 in a baseline** | `load_test_scripts/load_test.py` emits the record format and `thresholds.toml` has `requests_per_sec` / `failures` rules — no load record has ever been promoted, so neither rule has ever fired. Configuration, not construction. |
-| entity-graph endpoint | yes | **0** | the path a real client page fans out 25-wide |
+| concurrency at scale | driver exists | **11, BASELINED 2026-09-14** | `baselines/load.json` @ `cd516f89` — 10 users/60s read-only, 28.2 req/s, 0 failures, 10 per-operation cells plus throughput |
+| entity-graph flag | yes | **1 WARM, cold still 0** | `load.read_only.get_entity+graph` p50 14ms — but `_entity_graph_cache` holds 10k entries for 900s, so no volume of load traffic reaches the cold 25-wide fan-out. The warm steady state is now baselined; the cold path needs a deliberate bench |
 | vector / semantic search | yes | **0** | |
 | geo | yes | **0** | |
 | fuzzy / text search | yes | **0** | |
 | bulk export | yes | **0** | |
+
+### What the load baseline may be gated on — measured, not assumed
+
+Two runs of the SAME command against the same data, back to back, compared
+against each other:
+
+    p50_ms            within ~20%   (37.4->42.6, 23.7->28.7, 9.9->10.9, 4->4.4)
+    requests_per_sec  within ~3%    (27.5 vs 28.2)
+    p95_ms / p99_ms   up to +400%   (list_spaces p95 8.7->43.7, sparql_select 21.2->102.7)
+
+The tails are not signal at this scale: several operations draw only 43-85
+samples in a 60s run, so one scheduling hiccup moves p95 by a factor of five.
+Gate on `requests_per_sec` and on `p50_ms` for the high-count operations, with
+a wide band; leave p95/p99 informational until the sample count justifies
+otherwise. This is the same trap `issues/188` describes for the 91 numeric
+threshold rules — a threshold set from a single observation flaps, and a
+flapping gate gets ignored, which is worse than no gate.
 
 The other 48 cells in `ingest.json` are the status-only fence-coverage cells
 (`76a9e1d8`), which are deliberate coverage detection rather than measurements.
