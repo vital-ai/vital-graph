@@ -67,6 +67,23 @@ within noise of each other, and warm is sometimes the slower of the two. An
 earlier draft gated on `warm < cold` and failed on its first honest run. That
 assertion encoded the first-touch regime as though it were universal.
 
+AND THE WARM-UP BELOW DOES NOT FULLY CONTROL THE REGIME. Measured across two
+runs of this same bench against the same fixture:
+
+    standalone, buffers resident   base 667ms  cold  861ms  fan-out  193ms
+    full tier after a restart      base 692ms  cold 2836ms  fan-out 2144ms
+
+The BASE query barely moved (667 -> 692); the fan-out moved 11-fold. One
+warm-up page cannot make a 74M-quad working set resident, and nothing cheap
+can. So `fanout_cold_ms` is a REGIME-DEPENDENT ABSOLUTE and a swing of that
+size between runs is buffer state, NOT a regression — check `env.pg` and
+whether the stack was restarted before reading anything into it.
+
+The ratio is the sturdier signal but is not regime-free either: it went 1.3x
+to 4.1x across those same two runs. The 6x gate below is set from that spread
+with deliberate headroom, and is why it is a bound on the shape rather than a
+threshold on the milliseconds.
+
 Query tier: read-only, no writes, no fixture construction.
 """
 from __future__ import annotations

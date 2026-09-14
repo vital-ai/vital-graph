@@ -206,6 +206,15 @@ and conflating them was wrong by a factor of twenty:
 In steady state the fan-out adds **193ms** for 18,653 quads. That is not the
 problem this row was filed to catch.
 
+**The baseline records 2,144ms, not 193ms**, and both are correct. The tier
+run follows a container restart, so the 74M-quad working set is not resident
+and the bench lands nearer first touch. The base query barely moves across
+the two regimes (667 -> 692ms) while the fan-out moves elevenfold, so the
+ratio swings 1.3x -> 4.1x too. `fanout_cold_ms` is therefore a
+regime-dependent absolute: a large swing between runs is buffer state, not a
+regression, and the gate is a 6x bound on the shape rather than a threshold
+on the milliseconds.
+
 **What the numbers actually indict is the BASE query**: 667ms to return a
 25-entity page from a 74.5M-quad space with no graph attached at all. That is
 the same finding as `issues/203` from the other direction — the expensive thing
