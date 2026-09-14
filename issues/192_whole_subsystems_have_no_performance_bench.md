@@ -174,10 +174,10 @@ this is that item re-counted), `unexplored_performance_surface.md` §1,
 | SPARQL UPDATE / DELETE | yes | **0** | deletes touch the derived tables; that rebuild is exactly the cost that has surprised us before. **Highest value.** |
 | concurrency at scale | driver exists | **11, BASELINED 2026-09-14** | `baselines/load.json` @ `cd516f89` — 10 users/60s read-only, 28.2 req/s, 0 failures, 10 per-operation cells plus throughput |
 | entity-graph flag | yes | **8, BENCHED 2026-09-14** | `query.entity_graph.fanout` on `lead_nurture_grouped` — the ONLY fixture with `hasKGGraphURI` at scale. Steady state: base 667ms, cold 861ms, warm 874ms, fan-out delta **193ms** for 18,653 quads. The fan-out is NOT the expensive part |
-| vector / semantic search | yes | **0** | |
-| geo | yes | **0** | |
-| fuzzy / text search | yes | **0** | |
-| bulk export | yes | **0** | |
+| vector / semantic search | yes | **1, DONE** | `vector.index_and_search` in `ingest.json` — HNSW over a populated index (it builds the index, so ingest tier) |
+| geo | yes | **1, DONE** | `geo.populate_and_search` in `ingest.json` — both halves, because an empty geo table answers instantly and benches nothing |
+| fuzzy / text search | yes | **0 — BLOCKED** | needs `issues/202`: a servable needle matching nothing is the slowest text shape, so a bench written now would enshrine the defect as the baseline |
+| bulk export | yes | **1, DONE** | `write.export.copy_round_trip` in `ingest.json` |
 
 ### The entity-graph fan-out, once actually measured — 2026-09-14
 
