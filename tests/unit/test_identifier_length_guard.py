@@ -77,16 +77,50 @@ class TestTheSchemaEnforcesItAtGeneration:
             sch.create_space_tables_sql(sid)
 
     def test_an_over_long_space_id_is_refused_before_any_ddl_runs(self):
-        sch = SparqlSQLSchema()
+        """The SPACE is still refused outright — that is where it belongs.
+
+        Creating it is where a rename is free. Refusing at the first migration
+        that happens to touch the space is months later and after data has been
+        loaded (`issues/196`).
+        """
+        import asyncio
         with pytest.raises(ValueError, match="SILENTLY TRUNCATED"):
-            sch.create_space_indexes_sql("x" * (max_space_id_bytes() + 1))
+            asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+                SparqlSQLSchema.create_space(None, "x" * (max_space_id_bytes() + 1)))
+
+    def test_indexes_are_refused_ONE_BY_ONE_not_all_at_once(self):
+        """An existing over-long space still gets every index that fits.
+
+        This used to raise, which denied the space EVERY index over one
+        over-long name on an unrelated table: `space_lead_dataset_test` had 1
+        index where a healthy space has 7, and the cost was the frame-slot
+        collapse permanently (`issues/196`).
+        """
+        sch = SparqlSQLSchema()
+        fits = sch.create_space_indexes_sql("x" * max_space_id_bytes())
+        over = sch.create_space_indexes_sql("x" * (max_space_id_bytes() + 2))
+        assert over, "an over-long space id now yields NO indexes at all"
+        assert len(over) < len(fits), (
+            "nothing was refused — the over-long names are being emitted, and "
+            "PostgreSQL will truncate them silently")
+        assert all(len(n.encode("utf-8")) <= PG_MAX_IDENTIFIER_BYTES
+                   for n in identifiers_in(over)), (
+            "an emitted statement still carries a name that cannot fit")
 
     def test_the_boundary_is_exact(self):
-        sch = SparqlSQLSchema()
+        import asyncio
         limit = max_space_id_bytes()
-        sch.create_space_indexes_sql("x" * limit)              # must not raise
+        loop = asyncio.get_event_loop_policy().new_event_loop()
+        # At the limit the id is accepted, so it fails LATER on the None conn
+        # rather than on its length — any error but ValueError proves that.
+        with pytest.raises(Exception) as at_limit:
+            loop.run_until_complete(
+                SparqlSQLSchema.create_space(None, "x" * limit))
+        assert not isinstance(at_limit.value, ValueError), (
+            "a space id AT the limit was rejected for its length")
         with pytest.raises(ValueError):
-            sch.create_space_indexes_sql("x" * (limit + 1))
+            loop.run_until_complete(
+                SparqlSQLSchema.create_space(None, "x" * (limit + 1)))
 
     def test_every_space_id_this_suite_uses_fits(self):
         """The discipline is short space ids, not a schema that stretches.

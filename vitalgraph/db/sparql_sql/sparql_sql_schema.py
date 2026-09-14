@@ -217,6 +217,42 @@ def identifiers_in(statements) -> List[str]:
     return out
 
 
+def split_by_identifier_fit(statements, context: str = ""):
+    """`(ok, rejected)` — statements whose identifiers all fit, and those that do not.
+
+    PER STATEMENT, which is the whole point. `assert_identifiers_fit` is
+    all-or-nothing over a list, and used on a space's index DDL that means ONE
+    over-long name denies the space EVERY index it could legally have. Measured
+    on `space_lead_dataset_test` (`issues/196`): one 65-byte name on
+    `document_segmentation_config` left the space with 1 index where a healthy
+    one has 7, including six `frame_slot` indexes of 34-42 bytes that fit
+    comfortably. The cost is the frame-slot collapse, permanently.
+
+    The REFUSAL itself is right and is kept: PostgreSQL truncates silently, so
+    the object is created under a shortened name and every lookup by the name it
+    was asked for misses it. What changes is the blast radius.
+
+    Collisions among the SURVIVORS are still fatal, via `assert_identifiers_fit`
+    below. Dropping the over-long statements cannot create a collision — an
+    over-long name is the only kind that truncates — so what remains is either
+    clean or was already colliding on its own terms.
+
+    `rejected` is `(statement, [over-long names])`. Callers must report it;
+    returning fewer indexes silently is the same class of defect as truncating
+    silently, just one level up.
+    """
+    ok, rejected = [], []
+    for stmt in statements or []:
+        over = [n for n in identifiers_in([stmt])
+                if len(n.encode("utf-8")) > PG_MAX_IDENTIFIER_BYTES]
+        if over:
+            rejected.append((stmt, over))
+        else:
+            ok.append(stmt)
+    assert_identifiers_fit(ok, context)
+    return ok, rejected
+
+
 def assert_identifiers_fit(statements, context: str = "") -> None:
     """Raise if any generated identifier would exceed PostgreSQL's byte limit.
 
@@ -1520,6 +1556,7 @@ class SparqlSQLSchema:
         ''')
 
         assert_identifiers_fit(stmts, f"space_id={space_id!r}")
+
         return stmts
 
     def create_space_indexes_sql(self, space_id: str) -> List[str]:
@@ -1883,8 +1920,19 @@ class SparqlSQLSchema:
             # "who are the hubs, widest first" — the only query this table has.
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_entity_fanout_top ON {t['entity_fanout']} (direction, fanout DESC)",
         ]
-        # Fail here rather than let PostgreSQL truncate silently.
-        assert_identifiers_fit(_idx, f"space_id={space_id!r}")
+        # Refuse the statements that do not fit, not the whole space. One
+        # over-long name used to deny every index here (`issues/196`).
+        _idx, _rejected = split_by_identifier_fit(_idx, f"space_id={space_id!r}")
+        if _rejected:
+            logger.error(
+                "space_id=%r: %d index(es) NOT created — their names exceed "
+                "PostgreSQL's %d-byte limit and would be silently truncated: "
+                "%s. The space id is %d bytes; the longest this schema supports "
+                "is %d. Every other index for this space WAS created; rename the "
+                "space to recover these.",
+                space_id, len(_rejected), PG_MAX_IDENTIFIER_BYTES,
+                sorted({n for _s, names in _rejected for n in names})[:3],
+                len(space_id.encode("utf-8")), max_space_id_bytes())
         return _idx
 
     def drop_space_tables_sql(self, space_id: str) -> List[str]:
@@ -1963,7 +2011,27 @@ class SparqlSQLSchema:
         caller running this inside a transaction gets a complete space or none
         at all. Pass ``strict=False`` only to tolerate bootstrap failures and
         leave a space without its vector/FTS infrastructure.
+
+        REFUSES A SPACE ID THAT CANNOT CARRY THIS SCHEMA'S NAMES. Checked HERE,
+        at creation, because that is where a rename is free. The generators
+        cannot do it — `max_space_id_bytes` derives the limit BY calling them,
+        so a check inside one recurses — and the names that overflow first are
+        INDEX names, so the table DDL never sees the problem at all.
+
+        Without this, an over-long id created a space that looked fine and was
+        missing indexes, discovered months later at whatever migration first
+        generated them. `space_lead_dataset_test` reached that state and cannot
+        be repaired without a rename (`issues/196`).
         """
+        _limit = max_space_id_bytes()
+        if len(space_id.encode("utf-8")) > _limit:
+            raise ValueError(
+                f"space_id={space_id!r} is {len(space_id.encode('utf-8'))} "
+                f"bytes; the longest this schema supports is {_limit}. Index "
+                f"names derived from it would exceed PostgreSQL's "
+                f"{PG_MAX_IDENTIFIER_BYTES}-byte limit and be SILENTLY "
+                f"TRUNCATED. Shorten the space id — renaming is free now and "
+                f"is not once data is loaded.")
         await SparqlSQLSchema.create_space_core(conn, space_id, partition_quads)
         await SparqlSQLSchema.bootstrap_space_extras(conn, space_id, strict=strict)
         logger.info("Created space tables for: %s", space_id)

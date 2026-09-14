@@ -1,9 +1,38 @@
 # One Over-Long Identifier Blocks EVERY Index For The Space
 
-## Status: OPEN, found 2026-09-12 while migrating the perf fixtures for
-## `issues/195`. `space_lead_dataset_test` has a `frame_slot` table with 0 rows
-## and 1 index where a healthy space has 7, and cannot be repaired without
-## renaming the space.
+## Status: FIXED 2026-09-14 — options 1 and 2, and the fixture is repaired
+
+Both halves of the recommendation below, and the space did NOT need renaming.
+
+**1. The check is per-STATEMENT now.** `split_by_identifier_fit` emits the index
+SQL that fits and refuses only the statements that do not, reporting them at
+ERROR with the space id's byte count and the limit. `space_lead_dataset_test`
+went from raising — 0 index statements — to 70 of 71.
+
+**2. The limit is enforced where a space is CREATED.** `SparqlSQLSchema.create_space`
+refuses an over-long id outright, which is where a rename is free.
+
+That second half is not optional, and finding out why was the useful part: the
+generators CANNOT hold this check. `max_space_id_bytes` derives the limit by
+CALLING them, so a check inside one recurses — and the names that overflow first
+are INDEX names, so `create_space_tables_sql` never sees the problem at all.
+Without the creation-time check, making index generation partial would have
+traded a loud refusal for a silent one: an over-long space would be created
+looking fine and quietly missing indexes.
+
+**The fixture is repaired.** `space_lead_dataset_test_frame_slot` now has 7
+indexes, matching a healthy space exactly, applied from the SQL the fixed
+generator produces.
+
+    before   1 index   (PK only, created with the table)
+    after    7 indexes (== sp_graph_rel_10k_frame_slot)
+
+The one genuinely impossible name — `space_lead_dataset_test_document_segmentation
+_config_doc_type_idx` at 65 bytes — is still refused, still reported, and still
+needs a rename or option 3 to recover. That is one index on one table, not the
+whole space.
+
+## Original filing
 
 **Related:** `issues/195` (found here — the fixture that could not be
 migrated), `issues/183` (the `frame_slot` retirement this surfaced during)
