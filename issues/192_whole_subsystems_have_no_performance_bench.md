@@ -173,11 +173,55 @@ this is that item re-counted), `unexplored_performance_surface.md` §1,
 | writes / ingest | yes | **3** | `copy_speedup`, `e2e_speedup`, `quads_per_sec` |
 | SPARQL UPDATE / DELETE | yes | **0** | deletes touch the derived tables; that rebuild is exactly the cost that has surprised us before. **Highest value.** |
 | concurrency at scale | driver exists | **11, BASELINED 2026-09-14** | `baselines/load.json` @ `cd516f89` — 10 users/60s read-only, 28.2 req/s, 0 failures, 10 per-operation cells plus throughput |
-| entity-graph flag | yes | **1 WARM, cold still 0** | `load.read_only.get_entity+graph` p50 14ms — but `_entity_graph_cache` holds 10k entries for 900s, so no volume of load traffic reaches the cold 25-wide fan-out. The warm steady state is now baselined; the cold path needs a deliberate bench |
+| entity-graph flag | yes | **8, BENCHED 2026-09-14** | `query.entity_graph.fanout` on `lead_nurture_grouped` — the ONLY fixture with `hasKGGraphURI` at scale. Steady state: base 667ms, cold 861ms, warm 874ms, fan-out delta **193ms** for 18,653 quads. The fan-out is NOT the expensive part |
 | vector / semantic search | yes | **0** | |
 | geo | yes | **0** | |
 | fuzzy / text search | yes | **0** | |
 | bulk export | yes | **0** | |
+
+### The entity-graph fan-out, once actually measured — 2026-09-14
+
+Benched in `tests/performance/test_entity_graph_fanout_bench.py`. Three
+corrections to what this row said before, all of them found by measuring:
+
+**1. It is not 25 queries.** `_fetch_entity_graphs` does not call
+`build_entity_graph_collection_query` at all. It filters the page against the
+cache and issues ONE SPARQL query for the misses, with a 25-element `VALUES`
+clause and a two-branch UNION. Branch 2 (`?s hasKGGraphURI ?entity_uri`) is the
+half that collects frames and slots, and is the product value of the flag.
+
+**2. The obvious fixture measures nothing.** `sp_lead_synth_100k` (50.5M quads)
+has ZERO `hasKGGraphURI` quads, so branch 2 matches nothing there and the flag
+returns 8 quads per entity instead of ~745. A bench written against it would
+have reported the fan-out at ~100ms — fast, green, and measuring a query that
+did no work. Only `lead_nurture_grouped` (74.5M quads, 10.65M `hasKGGraphURI`)
+carries the shape.
+
+**3. The 3.5-second figure was FIRST TOUCH, not the fan-out.** Two regimes,
+and conflating them was wrong by a factor of twenty:
+
+    first touch (PostgreSQL buffers cold)  base 0.7-1.2s  cold 3.2-4.3s  warm ~1.0s
+    steady state (buffers warm)            base ~0.8s     cold 0.86-1.14s  warm ~1.0s
+
+In steady state the fan-out adds **193ms** for 18,653 quads. That is not the
+problem this row was filed to catch.
+
+**What the numbers actually indict is the BASE query**: 667ms to return a
+25-entity page from a 74.5M-quad space with no graph attached at all. That is
+the same finding as `issues/203` from the other direction — the expensive thing
+is the entity paging query, not the decoration on top of it.
+
+**And the cache does not pay for itself in steady state.** `page_warm_ms`
+(874ms) is SLOWER than `page_cold_ms` (861ms) — within noise, but the cache
+should have saved the 193ms fan-out and did not. `_entity_graph_cache` holds up
+to 10,000 entity graphs for 900s (at ~745 quads each that is millions of quads
+resident) and carries invalidation machinery on every write path. Its
+demonstrated benefit is confined to the first-touch regime. Whether it hits at
+all in steady state is NOT yet established and is the open question here —
+`_effective_graph = graph_id or "default"` is the kind of key mismatch that
+would make it silently never hit. Not yet filed — it needs the
+server's cache-stats endpoint checked first, and a guess in an issue is
+worse than no issue.
 
 ### What the load baseline may be gated on — measured, not assumed
 

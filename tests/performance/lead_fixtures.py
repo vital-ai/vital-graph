@@ -36,11 +36,28 @@ class LeadFixture:
     not for the growth curve.
     """
 
-    def __init__(self, space, graph, label, manifest_dir=None, synthetic=True):
+    def __init__(self, space, graph, label, manifest_dir=None, synthetic=True,
+                 grouped=False):
         self.space = space
         self.graph = graph
         self.label = label
         self.synthetic = synthetic
+        # Whether the data carries the dual grouping URIs
+        # (`hasKGGraphURI`/`hasFrameGraphURI`) that the write path always sets.
+        # `issues/171` fixed the generator to emit them; `issues/204` records
+        # that seven of the eight datasets on disk were never regenerated and
+        # still lack them entirely.
+        #
+        # This is a property of the DATA, not of the query, so it does not make
+        # a fixture unusable: the criteria benches ask frame/slot questions that
+        # never touch the predicate and remain valid. It matters only to work
+        # that retrieves an entity GRAPH, where an ungrouped fixture answers
+        # from the entity's own triples alone and returns ~8 quads per entity
+        # instead of ~745 -- fast, green, and empty.
+        #
+        # Declared here so such a bench selects a fixture BY NAME rather than by
+        # counting quads and hoping. See `GROUPED` below.
+        self.grouped = grouped
         self.manifest_path = (
             _ROOT / "internal_data" / manifest_dir / "manifest.json"
             if manifest_dir else None)
@@ -110,7 +127,34 @@ TYPES = LeadFixture("sp_lead_types", "urn:lead_types", "types2k", "lead_types")
 
 # Everything the API bench can time. The growth curve uses SYNTH only, since it
 # needs the manifest.
+HAS_KG_GRAPH_URI = "http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI"
+
 ALL = [REAL] + SYNTH
+
+# The fixtures whose data carries the grouping invariant, and can therefore
+# answer "give me this entity's whole graph" the way production data does.
+#
+# It is deliberately a list and deliberately almost empty. `issues/204` is the
+# work that should grow it; until then, anything needing a production-shaped
+# entity graph has exactly one honest choice, and a bench that wants one should
+# assert this is non-empty rather than reach for the biggest fixture it can see.
+GROUPED = [f for f in ALL + [DUP, DEPTH1, EMPTY, TYPES] if f.grouped]
+
+
+async def has_grouping_uris(conn, fx) -> bool:
+    """Whether `fx`'s loaded data actually carries `hasKGGraphURI`.
+
+    The declared `grouped` flag says what the data SHOULD be; this says what it
+    is. They disagree exactly when a fixture has been regenerated (or not) since
+    the flag was last set, which is the drift `issues/204` is about.
+    """
+    # EQUALITY, not `LIKE '%...%'`. A leading wildcard cannot use the index, so
+    # on a 74M-quad term table the negative case -- the one this helper exists
+    # to detect -- would seq-scan the whole table to prove a absence. The
+    # predicate is a fixed URI, so match it exactly.
+    return bool(await conn.fetchval(
+        f"SELECT 1 FROM {fx.space}_term WHERE term_text = $1 LIMIT 1",
+        HAS_KG_GRAPH_URI))
 
 
 async def duplicate_anchor_rows(conn, fx) -> int:
