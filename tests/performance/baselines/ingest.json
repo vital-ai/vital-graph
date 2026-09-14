@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "env": {
-    "started_at": "2026-09-14T16:25:36.922035+00:00",
+    "started_at": "2026-09-14T17:09:54.400286+00:00",
     "git": {
-      "commit": "2590b8d179a39209b93b98222e441af6de3a3b8d",
-      "short": "2590b8d1",
+      "commit": "1fdf728957ffd6232f75a5d045c7afd3264f766d",
+      "short": "1fdf7289",
       "branch": "main",
       "dirty": false,
       "untracked_files": 48
@@ -213,12 +213,13 @@
         "inttest_strdt_b24d09c": 1253376,
         "inttest_strdt_2029c94": 1253376,
         "inttest_strdt_9f4d5d5": 1253376,
-        "inttest_strdt_ba121b3": 1253376
+        "inttest_strdt_ba121b3": 1253376,
+        "perfimp_694c5c4f": 1220608
       },
       "largest_gated_fixture": "lead_nurture_grouped",
       "largest_gated_fixture_bytes": 49077829632
     },
-    "finished_at": "2026-09-14T16:33:52.007175+00:00"
+    "finished_at": "2026-09-14T17:19:06.909181+00:00"
   },
   "benches": [
     {
@@ -226,11 +227,11 @@
       "kind": "query",
       "status": "ok",
       "metrics": {
-        "seed_quads_per_sec": 1188,
-        "populate_geo_s": 2.067,
+        "seed_quads_per_sec": 1381,
+        "populate_geo_s": 1.533,
         "points_upserted": 2000,
-        "points_per_sec": 967,
-        "geo_search_ms": 17.9,
+        "points_per_sec": 1305,
+        "geo_search_ms": 16.9,
         "rows_returned": 25
       },
       "dataset": "synthetic:2000points",
@@ -259,10 +260,10 @@
         "temp_written": 0,
         "actual_rows": 9000,
         "max_actual_rows": 9000,
-        "estimated_rows": 9172,
+        "estimated_rows": 9365,
         "heap_fetches": 0,
-        "planning_ms": 1.306,
-        "execution_ms": 3.009,
+        "planning_ms": 0.704,
+        "execution_ms": 2.737,
         "with_index_buffers": 124,
         "with_index_node": "Index Only Scan",
         "without_index_buffers": 9010,
@@ -299,8 +300,8 @@
         "max_actual_rows": 10,
         "estimated_rows": 10,
         "heap_fetches": 0,
-        "planning_ms": 0.375,
-        "execution_ms": 0.036
+        "planning_ms": 0.191,
+        "execution_ms": 0.019
       },
       "dataset": "synthetic:edges",
       "notes": "forward hop (source\u2192dest)"
@@ -333,11 +334,11 @@
       "kind": "query",
       "status": "ok",
       "metrics": {
-        "seed_quads_per_sec": 1391,
-        "index_ddl_s": 0.004,
+        "seed_quads_per_sec": 1458,
+        "index_ddl_s": 0.006,
         "vectors_upserted": 2000,
-        "vectors_per_sec": 325,
-        "vector_search_ms": 6.42,
+        "vectors_per_sec": 288,
+        "vector_search_ms": 2.35,
         "rows_returned": 10
       },
       "dataset": "synthetic:2000vectors:384d",
@@ -348,29 +349,46 @@
       "kind": "write",
       "status": "ok",
       "metrics": {
-        "seed_quads_per_sec": 2009,
-        "concrete_quads_per_sec": 2610,
-        "where_bound_quads_per_sec": 8690,
-        "concrete_s": 1.15,
-        "where_bound_s": 0.345,
-        "sweep_s": 0.004,
-        "deferred_share": 0.012,
+        "seed_quads_per_sec": 1844,
+        "concrete_quads_per_sec": 2651,
+        "where_bound_quads_per_sec": 9582,
+        "concrete_s": 1.131,
+        "where_bound_s": 0.313,
+        "sweep_s": 0.006,
+        "deferred_share": 0.017,
         "orphans_before_sweep": 1000
       },
       "dataset": "synthetic:2000edges",
       "notes": "issues/192 \u2014 concrete vs WHERE-bound delete and the deferred referential sweep (issues/064, issues/079)"
     },
     {
+      "bench_id": "write.export.copy_round_trip",
+      "kind": "write",
+      "status": "ok",
+      "metrics": {
+        "source_quads": 596458,
+        "export_s": 1.014,
+        "export_quads_per_sec": 587979,
+        "export_bytes": 78073823,
+        "import_s": 23.807,
+        "import_quads_per_sec": 25054,
+        "import_over_export": 23.47,
+        "edge_rows_rebuilt": 38957
+      },
+      "dataset": "sp_graph_skew_2k",
+      "notes": "issues/192 \u2014 binary COPY export then import, including the derived-table resync the import performs"
+    },
+    {
       "bench_id": "write.ingest.bulk_vs_executemany",
       "kind": "write",
       "status": "ok",
       "metrics": {
-        "executemany_quads_per_sec": 4626,
-        "copy_quads_per_sec": 31757,
-        "bulk_e2e_quads_per_sec": 21451,
-        "index_rebuild_s": 6.052,
-        "copy_speedup": 6.866,
-        "e2e_speedup": 4.637
+        "executemany_quads_per_sec": 4663,
+        "copy_quads_per_sec": 51677,
+        "bulk_e2e_quads_per_sec": 31505,
+        "index_rebuild_s": 4.956,
+        "copy_speedup": 11.082,
+        "e2e_speedup": 6.756
       },
       "dataset": "synthetic:400000q"
     },
@@ -380,9 +398,9 @@
       "status": "ok",
       "metrics": {
         "growth_class": "flat",
-        "probe_ms_at_100000q": 80.62,
-        "probe_ms_at_300000q": 88.8,
-        "probe_ms_at_900000q": 88.78
+        "probe_ms_at_100000q": 84.74,
+        "probe_ms_at_300000q": 91.67,
+        "probe_ms_at_900000q": 117.54
       },
       "dataset": "synthetic:[50000, 150000, 450000]",
       "notes": "probe=300 quads, min of 3 rolled-back runs"
@@ -390,7 +408,7 @@
   ],
   "baseline": {
     "name": "ingest",
-    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260914T162535Z-2590b8d1.json",
+    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260914T170952Z-1fdf7289.json",
     "reason": "",
     "pg_stamped": true
   }

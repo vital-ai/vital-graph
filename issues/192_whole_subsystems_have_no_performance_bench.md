@@ -84,6 +84,55 @@ number describes the INDEX, not a model.
 8m14s promotion. The delete bench alone cost 46 minutes before the coverage
 sweep was moved out of the write tier.
 
+### bulk export is CLOSED 2026-09-14
+
+`1fdf7289`, `write.export.copy_round_trip`, baselined in `ingest.json`.
+
+    export    1.014 s   587,979 quads/sec
+    import   23.807 s    25,054 quads/sec
+    import_over_export  23.5x   (28.2x on a separate run — 23-28x, stable in magnitude)
+
+The RESTORE is 23-28x the export, and that ratio is the point: `export_space`
+COPYs in one REPEATABLE READ snapshot, `import_space` COPYs back and then
+RESYNCS the derived tables. Measuring export alone reports 588k quads/sec and
+calls it the cost of a restore.
+
+The source space is chosen, not defaulted: `sp_graph_rel_10k` (2.9M quads)
+exceeded asyncpg's pool `command_timeout=60`, which fires in the DRIVER as a
+bare `CancelledError` — the same cancellation that made the inline orphan
+cleanup clean nothing in `issues/079`.
+
+### fuzzy / text is BLOCKED on `issues/202`
+
+Not deferred. Two of its three regimes do not finish in 15 seconds: a
+SERVABLE six-character needle matching nothing is 3,290 ms warm on 10k and times
+out on 100k, which is 5x slower than the two-character needle the index cannot
+serve. A read-only query taking that long is a defect, not a tier-placement
+question, so the bench waits rather than being written around a timeout.
+
+### "entity-graph endpoint" is NOT an endpoint — corrected 2026-09-14
+
+It is a FLAG on the KGQuery endpoint, and the distinction matters for whoever
+benches it:
+
+    route    POST /kgqueries                       (kgquery_endpoint.py)
+    flag     KGQueryRequest.include_entity_graph   (kgqueries_model.py:92, default FALSE)
+    path     _fetch_entity_graphs(...)             (kgquery_endpoint.py:848)
+    sparql   build_entity_graph_collection_query() (kg_query_builder.py:479)
+
+"Fans out 25-wide" means a page of 25 entities triggers a graph-collection query
+each when the flag is set.
+
+**It is CACHE-FRONTED** — `_entity_graph_cache`, invalidated through signals in
+`vitalgraphapp_impl.py`. A bench that measures it warm measures the CACHE, not
+the fan-out, and would look excellent while the path underneath rotted. That is
+the same "fast number for doing nothing" trap the geo and vector benches guard
+against with explicit assertions, and it has to be designed for here rather than
+discovered.
+
+Reachable from the perf tier without the app: the query comes from the same
+builder the vector and geo benches already drive.
+
 ### What the remaining rows need
 
 **Not all four are the same job.** All four surfaces have correctness tests, but
