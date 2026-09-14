@@ -200,19 +200,37 @@ run at all; the three files marked; and a static scan
 (`tests/unit/test_query_tier_is_read_only.py`) failing any unmarked perf file
 that mutates. Tiers move 255/52 to 247/60.
 
-### Still true, and still to do
+### RESOLVED 2026-09-14 — all three defects are fixed
 
-* `ingest.json` is stale (`573c46f`, class `vg-test-docker-clean`).
-* `query.json` currently holds the merged 158-bench promotion, which matches
-  NEITHER tier. Both need re-promoting, each from its own `--tier=` pass.
-* The 48 `paging_fence_coverage` benches never record:
-  `test_paging_fence_covers_every_shape.py` never calls `perf_record`, it
-  asserts buffer ratios inline. They wear a `bench` mark, so `conftest` mints an
-  id and then flags "test passed without recording metrics". They can never be
-  ok in any baseline, in any pass — either stop minting ids for them or make
-  them record.
+    query.json    105 benches  99 ok / 2 skipped / 4 failed   862363ee  clean
+    ingest.json    54 benches  53 ok / 1 unrecorded           f74e0efd  clean
+    overlap                              0
+
+* **Both baselines are promoted from their OWN tier pass.** `query.json` was the
+  merged 158-bench run matching neither tier; it is now 105, with 182 ingest-tier
+  tests deselected by the marker. `ingest.json` was stale at `573c46f` on class
+  `vg-test-docker-clean`; it is current and on the persist class.
+* **The 48 `paging_fence_coverage` benches record.** The test computed fenced and
+  unfenced buffer counts, asserted on their relationship, and threw the numbers
+  away. 47 are `ok` and 1 is a hole from a genuinely failing sibling — they were
+  47 unrecorded + 1 skipped, permanently un-ok in any pass.
+* **A vanished bench can no longer be promoted.** `scripts/perf_preflight.py`
+  refuses a run missing a bench the tree declares, and `run-perf-tests.sh` gates
+  promotion on it. `tests/unit/test_every_declared_bench_is_in_a_baseline.py` is
+  the same rule against the committed baselines, on every check run.
+
+What that guard was built for is worth keeping visible: it found
+`query.partition.graph_scoped_pruning` ABSENT rather than failing, and the cause
+was a production defect — `frame_slot` was never declared partitioned, so
+creating any partitioned space failed outright (`f74e0efd`). A bench that
+disappears reports nothing, which is how a broken path stayed unreported.
+
+### Still an observation, not a defect
+
 * The API pass is a third thing again, orthogonal to the tiers: `-k bench` with
-  the app up, writing `${RECORD_PATH%.json}-api.json`.
+  the app up, writing `${RECORD_PATH%.json}-api.json`. Not a defect — it has its
+  own file and always did — but anyone reasoning about "the tiers" should know
+  there are three passes, not two.
 
 
 ## A bench can vanish from the baseline instead of failing
