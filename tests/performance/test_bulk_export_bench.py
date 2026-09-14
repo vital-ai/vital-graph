@@ -31,8 +31,16 @@ pytestmark = [pytest.mark.performance, pytest.mark.ingest_bench, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
 
 # A loaded fixture with real derived tables, so the import's resync has work to
-# do. Small enough that the bench is a measurement rather than a load test.
-SOURCE_SPACE = "sp_graph_rel_10k"
+# do, and SMALL ENOUGH TO FINISH. `sp_graph_rel_10k` (2.9M quads) was tried
+# first and the round-trip exceeded asyncpg's pool `command_timeout=60`, which
+# fires in the DRIVER and surfaces as a bare CancelledError — the same
+# cancellation that made the inline orphan cleanup clean nothing in
+# `issues/079`. A bench that is cancelled measures nothing and says so
+# confusingly, so the source is one that fits inside the budget.
+#
+# `sp_graph_skew_2k`: ~596k quads and ~39k edge rows, so the resync half still
+# has real work rather than being a no-op.
+SOURCE_SPACE = "sp_graph_skew_2k"
 
 PG = dict(
     host=os.environ.get("VG_TEST_PG_HOST", "localhost"),
