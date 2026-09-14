@@ -57,6 +57,33 @@ The split is now on two axes rather than one (`a429435f`):
 Zero overlap between all three baselines. A write bench now costs the write
 tier, not the sweep — which is what makes the remaining rows worth writing.
 
+### vector and geo are CLOSED 2026-09-14
+
+`835ad340` (geo), `2590b8d1` (vector), baselined in `ingest.json`.
+
+    geo.populate_and_search    1,164 points/s populated   17.9 ms search, 25 rows
+    vector.index_and_search      317 vectors/s upserted     6.4 ms search, 10 rows
+
+**The driver this file predicted was not needed.** `EntityQueryCriteria` carries
+`geo_criteria` and `vector_criteria`, and `build_entity_query_sparql` -> sidecar
+-> `generate_sql` works with NO app — verified before either bench was written.
+The fixture was the whole cost, and there was none: zero `*_vec_*` tables and
+162 `*_geo` tables all holding zero rows.
+
+Both benches ASSERT BEFORE THEY TIME. An empty geo table or vector index answers
+instantly, so a search-only bench against an unpopulated one reports a plausible
+latency for matching nothing. Each checks the row count, that the generated SQL
+touches `{space}_geo` / `{space}_vec_{index}`, and that rows came back.
+
+Embedding is deliberately outside the vector measurement: `VectorCriteria` takes
+a pre-computed `vector` literal rather than `search_text`, which would vectorise
+server-side and drag an OpenAI call or a local MiniLM load into a perf run. The
+number describes the INDEX, not a model.
+
+**And the tier fix paid for itself immediately.** These two benches cost ONE
+8m14s promotion. The delete bench alone cost 46 minutes before the coverage
+sweep was moved out of the write tier.
+
 ### What the remaining rows need
 
 **Not all four are the same job.** All four surfaces have correctness tests, but

@@ -1,13 +1,13 @@
 {
   "schema": 1,
   "env": {
-    "started_at": "2026-09-14T15:46:41.640669+00:00",
+    "started_at": "2026-09-14T16:25:36.922035+00:00",
     "git": {
-      "commit": "a429435fbdd4573934769007752154129b774fff",
-      "short": "a429435f",
+      "commit": "2590b8d179a39209b93b98222e441af6de3a3b8d",
+      "short": "2590b8d1",
       "branch": "main",
       "dirty": false,
-      "untracked_files": 49
+      "untracked_files": 48
     },
     "machine": {
       "host": "ip-192-168-1-153.ec2.internal",
@@ -218,9 +218,24 @@
       "largest_gated_fixture": "lead_nurture_grouped",
       "largest_gated_fixture_bytes": 49077829632
     },
-    "finished_at": "2026-09-14T15:57:40.760191+00:00"
+    "finished_at": "2026-09-14T16:33:52.007175+00:00"
   },
   "benches": [
+    {
+      "bench_id": "geo.populate_and_search",
+      "kind": "query",
+      "status": "ok",
+      "metrics": {
+        "seed_quads_per_sec": 1188,
+        "populate_geo_s": 2.067,
+        "points_upserted": 2000,
+        "points_per_sec": 967,
+        "geo_search_ms": 17.9,
+        "rows_returned": 25
+      },
+      "dataset": "synthetic:2000points",
+      "notes": "issues/192 \u2014 geo populate + vg:geoDistance search, radius 200000m top_k 25"
+    },
     {
       "bench_id": "query.covering.advantage_growth",
       "kind": "query",
@@ -244,10 +259,10 @@
         "temp_written": 0,
         "actual_rows": 9000,
         "max_actual_rows": 9000,
-        "estimated_rows": 9220,
+        "estimated_rows": 9172,
         "heap_fetches": 0,
-        "planning_ms": 0.795,
-        "execution_ms": 4.184,
+        "planning_ms": 1.306,
+        "execution_ms": 3.009,
         "with_index_buffers": 124,
         "with_index_node": "Index Only Scan",
         "without_index_buffers": 9010,
@@ -284,8 +299,8 @@
         "max_actual_rows": 10,
         "estimated_rows": 10,
         "heap_fetches": 0,
-        "planning_ms": 0.562,
-        "execution_ms": 0.033
+        "planning_ms": 0.375,
+        "execution_ms": 0.036
       },
       "dataset": "synthetic:edges",
       "notes": "forward hop (source\u2192dest)"
@@ -314,17 +329,32 @@
       "dataset": "synthetic:4part"
     },
     {
+      "bench_id": "vector.index_and_search",
+      "kind": "query",
+      "status": "ok",
+      "metrics": {
+        "seed_quads_per_sec": 1391,
+        "index_ddl_s": 0.004,
+        "vectors_upserted": 2000,
+        "vectors_per_sec": 325,
+        "vector_search_ms": 6.42,
+        "rows_returned": 10
+      },
+      "dataset": "synthetic:2000vectors:384d",
+      "notes": "issues/192 \u2014 HNSW top-10 over 2000 384-d vectors, pre-computed probe (no embedding)"
+    },
+    {
       "bench_id": "write.delete.concrete_vs_deferred",
       "kind": "write",
       "status": "ok",
       "metrics": {
-        "seed_quads_per_sec": 1221,
-        "concrete_quads_per_sec": 2290,
-        "where_bound_quads_per_sec": 5161,
-        "concrete_s": 1.31,
-        "where_bound_s": 0.581,
-        "sweep_s": 0.008,
-        "deferred_share": 0.014,
+        "seed_quads_per_sec": 2009,
+        "concrete_quads_per_sec": 2610,
+        "where_bound_quads_per_sec": 8690,
+        "concrete_s": 1.15,
+        "where_bound_s": 0.345,
+        "sweep_s": 0.004,
+        "deferred_share": 0.012,
         "orphans_before_sweep": 1000
       },
       "dataset": "synthetic:2000edges",
@@ -335,12 +365,12 @@
       "kind": "write",
       "status": "ok",
       "metrics": {
-        "executemany_quads_per_sec": 3939,
-        "copy_quads_per_sec": 49152,
-        "bulk_e2e_quads_per_sec": 27175,
-        "index_rebuild_s": 6.581,
-        "copy_speedup": 12.479,
-        "e2e_speedup": 6.9
+        "executemany_quads_per_sec": 4626,
+        "copy_quads_per_sec": 31757,
+        "bulk_e2e_quads_per_sec": 21451,
+        "index_rebuild_s": 6.052,
+        "copy_speedup": 6.866,
+        "e2e_speedup": 4.637
       },
       "dataset": "synthetic:400000q"
     },
@@ -350,9 +380,9 @@
       "status": "ok",
       "metrics": {
         "growth_class": "flat",
-        "probe_ms_at_100000q": 107.33,
-        "probe_ms_at_300000q": 102.67,
-        "probe_ms_at_900000q": 106.44
+        "probe_ms_at_100000q": 80.62,
+        "probe_ms_at_300000q": 88.8,
+        "probe_ms_at_900000q": 88.78
       },
       "dataset": "synthetic:[50000, 150000, 450000]",
       "notes": "probe=300 quads, min of 3 rolled-back runs"
@@ -360,7 +390,7 @@
   ],
   "baseline": {
     "name": "ingest",
-    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260914T154640Z-a429435f.json",
+    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260914T162535Z-2590b8d1.json",
     "reason": "",
     "pg_stamped": true
   }
