@@ -308,6 +308,22 @@ fi
 COMPARE_STATUS=0
 if $RECORD && [ -f "$RECORD_PATH" ]; then
   if [ -n "$PROMOTE" ]; then
+    # A run missing a bench the tree DECLARES is not promotable. A bench whose
+    # fixture errors is never stamped, so it leaves the run silently — not
+    # failed, ABSENT — and promoting that bakes the absence in, after which
+    # `compare_bench` cannot warn because the bench is gone from both sides.
+    #
+    # This gate exists because it was learned the expensive way: the ingest tier
+    # was promoted with `query.partition.graph_scoped_pruning` missing, the
+    # errors that caused it turned out to be a real schema defect, and the tier
+    # had to be re-run. 78 minutes for one baseline.
+    if ! "$PYTHON" "$PROJECT_ROOT/scripts/perf_preflight.py" \
+            --run "$RECORD_PATH" --tier "$TIER"; then
+      echo "❌ NOT promoting: the run is incomplete (see above)."
+      echo "   Fix the cause and re-run, or promote by hand if the absence is"
+      echo "   intended: $PYTHON scripts/perf_compare.py $RECORD_PATH --promote $PROMOTE"
+      exit 2
+    fi
     "$PYTHON" "$PROJECT_ROOT/scripts/perf_compare.py" "$RECORD_PATH" --promote "$PROMOTE"
   fi
   if [ -n "$BASELINE" ]; then
