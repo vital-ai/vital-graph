@@ -26,7 +26,51 @@ MARKED after the WHERE-bound one, zero after the sweep — so a bench that
 silently stops deleting fails rather than reporting a fast number for doing
 nothing.
 
-### What closing it cost, which is worth knowing before closing the next one
+### The tier split was wrong, and fixing it made write benches cheap
+
+Closing one row cost a 46-minute promotion, which was the wrong shape. Measured
+per file, 35 of those 46 minutes were ONE file:
+
+    test_paging_fence_covers_every_shape   >=1800s (capped)
+    test_covering_benchmark                  291s
+    test_ingest_throughput                   124s
+    test_per_write_curve                     102s
+    test_growth_curve                        101s
+    test_partition_pruning                    25s
+    test_delete_throughput                    15s
+    test_frame_nesting_hops                    8s
+
+And the sweep is NOT A WRITE BENCH. The file has no INSERT, CREATE, DELETE or
+TRUNCATE at all — it reads pre-seeded fixtures and runs EXPLAIN probes, and its
+runtime is deliberate TIMEOUTS (20 s probe, 120 s retry, per parametrisation).
+It carried `ingest_bench` under a "builds its own data" reading that is not true
+of it, and parked there it set the price of every write bench.
+
+The split is now on two axes rather than one (`a429435f`):
+
+    query      read-only AND fast     266 tests   105 benches
+    ingest     writes                  15 tests     7 benches
+    coverage   read-only but SLOW      49 tests    48 benches
+
+    write-tier promotion   46 min  ->  11 min
+
+Zero overlap between all three baselines. A write bench now costs the write
+tier, not the sweep — which is what makes the remaining rows worth writing.
+
+### What the remaining rows need
+
+**Not all four are the same job.** All four surfaces have correctness tests, but
+where they live decides the cost:
+
+    fuzzy / text   integration  test_search_trigram_index, test_short_needle_probe_is_bounded
+    bulk export    integration  test_bulk_export
+    vector         API ONLY     13 api files, 1 integration (a text-search file that mentions it)
+    geo            API ONLY      4 api files, 1 the same
+
+Text and export are the "a `@pytest.mark.bench` and a `perf_record` call away"
+case this file describes. Vector and geo are not: their correctness lives in the
+API tier, so benching them in the perf tier needs a driver against
+`vitalgraph/vectorization/` rather than an existing test to hang a mark on.
 
 One bench required a full ingest-tier promotion (46 minutes) to baseline,
 because `test_every_declared_bench_is_in_a_baseline` cannot distinguish a NEW

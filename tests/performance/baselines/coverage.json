@@ -1,0 +1,885 @@
+{
+  "schema": 1,
+  "env": {
+    "started_at": "2026-09-14T15:10:04.801827+00:00",
+    "git": {
+      "commit": "a429435fbdd4573934769007752154129b774fff",
+      "short": "a429435f",
+      "branch": "main",
+      "dirty": false,
+      "untracked_files": 48
+    },
+    "machine": {
+      "host": "ip-192-168-1-153.ec2.internal",
+      "platform": "macOS-14.6.1-arm64-arm-64bit",
+      "machine": "arm64",
+      "cpu_count": 10,
+      "python": "3.12.11"
+    },
+    "runner": {
+      "class": "vg-test-docker-persist",
+      "persist": true,
+      "seeded": true,
+      "pg_host": "localhost",
+      "pg_port": "5433",
+      "pg_database": "sparql_sql_graph",
+      "observed": {
+        "persist": true,
+        "seeded": true,
+        "fixture_tables": 296,
+        "fixture_live_tuples": 6372884,
+        "seed_space_bytes": 55745544192
+      },
+      "flags": {
+        "persist": true,
+        "seeded": false
+      },
+      "flags_disagree": "VG_PERF_PERSIST/VG_PERF_SEEDED say persist=True seeded=False, but the seed-only spaces hold 55,745,544,192 bytes across 296 fixture table(s). Class taken from the DATABASE. See issues/189.",
+      "promotion_blocked": "VG_PERF_PERSIST/VG_PERF_SEEDED say persist=True seeded=False, but the seed-only spaces hold 55,745,544,192 bytes across 296 fixture table(s). Class taken from the DATABASE. See issues/189.",
+      "largest_gated_fixture": "lead_nurture_grouped",
+      "largest_gated_fixture_bytes": 49077829632,
+      "shared_buffers_bytes": 17179869184,
+      "exceeds_shared_buffers": true
+    },
+    "pg": {
+      "server_version": "18.4 (Debian 18.4-1.pgdg13+1)",
+      "shared_buffers": "16GB",
+      "work_mem": "64MB",
+      "maintenance_work_mem": "64MB",
+      "effective_cache_size": "48GB",
+      "max_parallel_workers_per_gather": "2",
+      "random_page_cost": "4",
+      "jit": "on",
+      "default_statistics_target": "100"
+    },
+    "stats": {
+      "fixture_tables": 296,
+      "fixture_live_tuples": 6372884,
+      "fixture_last_analyze": "2026-09-13T23:42:12.769738+00:00"
+    },
+    "sizes": {
+      "space_bytes": {
+        "lead_nurture_grouped": 49077829632,
+        "sp_lead_synth_100k": 39322181632,
+        "sp_graph_synth_100k": 10681884672,
+        "wordnet_frames": 6538051584,
+        "sp_lead_synth_10k": 3789103104,
+        "sp_graph_forms_20k": 2878218240,
+        "sp_graph_rel_10k": 1824415744,
+        "sp_graph_synth_10k": 1411350528,
+        "sp_lead_types": 689528832,
+        "sp_graph_skew_2k": 348930048,
+        "sp_kg_rel": 190668800,
+        "sp_lead_dup": 166092800,
+        "sp_sql_lead_dataset": 152502272,
+        "space_lead_dataset_test": 129662976,
+        "inttest_blauto_aa80": 30941184,
+        "inttest_b6b4fb5fb80a": 25534464,
+        "kg_load_test": 22634496,
+        "inttest_blem_c496": 18628608,
+        "e2e_test_space": 16089088,
+        "inttest_blauto_898d": 13787136,
+        "proportional": 12058624,
+        "inttest_trgm_14e3d4ca": 10469376,
+        "sp_kg_types": 2932736,
+        "inttest_crud_11d7a6a9": 2146304,
+        "inttest_lock_d79ec390": 2138112,
+        "inttest_count_9929e3e": 2121728,
+        "inttest_fe_37382a57": 2072576,
+        "inttest_fe_b4984969": 1998848,
+        "inttest_ddc47b92f17c": 1720320,
+        "inttest_23c001e0ead5": 1720320,
+        "inttest_41aa8cca9418": 1720320,
+        "inttest_0d425578a601": 1720320,
+        "inttest_b142990a5bbf": 1720320,
+        "inttest_exdst_0637": 1679360,
+        "inttest_exsrc_5da8": 1679360,
+        "inttest_defer_95d0a8b": 1654784,
+        "inttest_chn_9f83d8eb": 1646592,
+        "inttest_exsrc_b516": 1581056,
+        "inttest_exsrc_b227": 1581056,
+        "inttest_cou_15fb4a74": 1581056,
+        "inttest_22bc8adf10b2": 1523712,
+        "inttest_d6569d801e68": 1523712,
+        "inttest_cdc1e5dd31f1": 1523712,
+        "inttest_2d597b90f0f1": 1523712,
+        "inttest_898ebdbc4dc5": 1523712,
+        "inttest_f8775897b69e": 1523712,
+        "inttest_a77048c22bd4": 1523712,
+        "inttest_exsrc_d5e0": 1523712,
+        "inttest_exsrc_16f6": 1523712,
+        "inttest_exdst_02d9": 1523712,
+        "inttest_exsrc_68fa": 1523712,
+        "inttest_exdst_c8f8": 1523712,
+        "inttest_ct_6e5dbe63": 1523712,
+        "inttest_ct_baa9844a": 1523712,
+        "inttest_fd7633c64aa8": 1523712,
+        "inttest_e5e3afdcb158": 1523712,
+        "inttest_54847ad4c47e": 1523712,
+        "inttest_2d74d74c13a3": 1523712,
+        "inttest_b3d76408cd9e": 1523712,
+        "inttest_ct_5a54bd86": 1523712,
+        "inttest_ct_bde51e10": 1523712,
+        "inttest_ct_34bdce55": 1523712,
+        "inttest_dtacc_14c0a6d": 1523712,
+        "inttest_ct_f53bd761": 1523712,
+        "inttest_dtacc_73a6ac6": 1523712,
+        "inttest_dtacc_f28f937": 1523712,
+        "inttest_dtacc_849903c": 1523712,
+        "inttest_dtacc_97f36d3": 1523712,
+        "inttest_dtacc_16b6d73": 1523712,
+        "inttest_dteq_4937bfba": 1523712,
+        "inttest_dtacc_3eb9d3c": 1523712,
+        "inttest_dtacc_e6e6ca7": 1523712,
+        "inttest_dtacc_058c1ca": 1523712,
+        "inttest_dg_27147e7a": 1523712,
+        "inttest_dstat_eac3677": 1523712,
+        "inttest_greg_39fc808b": 1523712,
+        "inttest_dteq_dc3c046a": 1523712,
+        "inttest_dteq_74bc5b73": 1523712,
+        "inttest_lm_79f90b8a": 1523712,
+        "inttest_dtq_f4dfa15e": 1523712,
+        "inttest_dtq_d466219c": 1523712,
+        "inttest_dtq_63db6180": 1523712,
+        "inttest_dtq_424b9ea3": 1523712,
+        "inttest_dtq_2ef41015": 1523712,
+        "inttest_dtq_29eb2e71": 1523712,
+        "inttest_dg_867df776": 1523712,
+        "inttest_dg_2d4881a1": 1523712,
+        "inttest_dg_105251f9": 1523712,
+        "inttest_lm_a69c8939": 1523712,
+        "inttest_dg_a8ce6fb5": 1523712,
+        "inttest_dstat_bfac803": 1523712,
+        "inttest_dstat_5e4f648": 1523712,
+        "inttest_cyc_334959f6": 1523712,
+        "inttest_greg_cfde0b36": 1523712,
+        "inttest_lm_f4b46a96": 1523712,
+        "inttest_lock_78156924": 1523712,
+        "inttest_c6de6b59dc2e": 1499136,
+        "inttest_dstat_71c0389": 1449984,
+        "inttest_7579568efc6c": 1449984,
+        "inttest_tp_1520ab36": 1253376,
+        "inttest_tp_b1de347b": 1253376,
+        "inttest_527da2a2f063": 1253376,
+        "inttest_tp_1d0bbcfb": 1253376,
+        "inttest_exdst_cf70": 1253376,
+        "inttest_tp_54cddf19": 1253376,
+        "inttest_exdst_5e1b": 1253376,
+        "inttest_exdst_f402": 1253376,
+        "inttest_tp_3feb4c1e": 1253376,
+        "inttest_blem_33da": 1253376,
+        "inttest_tp_080534fe": 1253376,
+        "inttest_tp_9cf408b9": 1253376,
+        "inttest_tp_06a4c75d": 1253376,
+        "inttest_tp_726dae4f": 1253376,
+        "inttest_tp_8262afb3": 1253376,
+        "inttest_tp_a63a8368": 1253376,
+        "inttest_tp_d28af529": 1253376,
+        "inttest_tp_d465ad1d": 1253376,
+        "inttest_dteq_d3142f54": 1253376,
+        "inttest_dteq_d174ff06": 1253376,
+        "inttest_dteq_126f040c": 1253376,
+        "inttest_dteq_842e8d70": 1253376,
+        "inttest_dteq_72955602": 1253376,
+        "inttest_dteq_e03977bb": 1253376,
+        "inttest_dteq_021c820e": 1253376,
+        "inttest_dteq_df53deb1": 1253376,
+        "inttest_dteq_2c6dbdc5": 1253376,
+        "inttest_lm_8f75847a": 1253376,
+        "inttest_lm_1741913d": 1253376,
+        "inttest_tp_65614310": 1253376,
+        "inttest_lm_7ce0ddf5": 1253376,
+        "inttest_lm_b1cf9538": 1253376,
+        "inttest_lm_5c8ea875": 1253376,
+        "inttest_lm_589a7152": 1253376,
+        "inttest_lm_236ab8d7": 1253376,
+        "inttest_lm_e7d007e3": 1253376,
+        "inttest_lm_7da1e24e": 1253376,
+        "inttest_lm_9ae13a50": 1253376,
+        "inttest_lm_344a6ef1": 1253376,
+        "inttest_lm_1647a2d3": 1253376,
+        "inttest_lm_363270e7": 1253376,
+        "inttest_lm_0efb0185": 1253376,
+        "inttest_9e9913e818f1": 1253376,
+        "inttest_79eba30da51a": 1253376,
+        "inttest_tp_ffaafb35": 1253376,
+        "inttest_tp_9e078f28": 1253376,
+        "inttest_tp_d915b65e": 1253376,
+        "inttest_tp_13fd5d29": 1253376,
+        "inttest_tp_2dd0674e": 1253376,
+        "inttest_strdt_2ac9832": 1253376,
+        "inttest_strdt_0c5b63c": 1253376,
+        "inttest_strdt_58c3ea9": 1253376,
+        "inttest_strdt_b24d09c": 1253376,
+        "inttest_strdt_2029c94": 1253376,
+        "inttest_strdt_9f4d5d5": 1253376,
+        "inttest_strdt_ba121b3": 1253376
+      },
+      "largest_gated_fixture": "lead_nurture_grouped",
+      "largest_gated_fixture_bytes": 49077829632
+    },
+    "finished_at": "2026-09-14T15:46:39.665594+00:00"
+  },
+  "benches": [
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-generic-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 26372,
+        "unfenced_buffers": 26372,
+        "needs_ordered_scan": true,
+        "page_size": 100,
+        "fence_ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "contains / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 25948,
+        "unfenced_buffers": 25948,
+        "needs_ordered_scan": true,
+        "page_size": 100,
+        "fence_ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "contains / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-specific-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 24174,
+        "unfenced_buffers": 889499,
+        "needs_ordered_scan": true,
+        "page_size": 100,
+        "fence_ratio": 0.027
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "contains / Lead / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-generic-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 115989,
+        "unfenced_buffers": 115989,
+        "needs_ordered_scan": true,
+        "page_size": 100,
+        "fence_ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "eq-common / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 114766,
+        "unfenced_buffers": 114766,
+        "needs_ordered_scan": true,
+        "page_size": 100,
+        "fence_ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "eq-common / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-specific-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 109026,
+        "unfenced_buffers": 10184347,
+        "needs_ordered_scan": true,
+        "page_size": 100,
+        "fence_ratio": 0.011
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "eq-common / Lead / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 108011,
+        "unfenced_buffers": 1020556,
+        "needs_ordered_scan": true,
+        "page_size": 100,
+        "fence_ratio": 0.106
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "eq-common / Lead / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-generic-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 1261663,
+        "unfenced_buffers": 35709,
+        "needs_ordered_scan": false,
+        "page_size": 100,
+        "fence_ratio": 35.332
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "eq-rare / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 508109,
+        "unfenced_buffers": 4253,
+        "needs_ordered_scan": false,
+        "page_size": 100,
+        "fence_ratio": 119.471
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "eq-rare / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-specific-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 40287,
+        "unfenced_buffers": 35709,
+        "needs_ordered_scan": false,
+        "page_size": 100,
+        "fence_ratio": 1.128
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "eq-rare / Lead / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 13986,
+        "unfenced_buffers": 4253,
+        "needs_ordered_scan": false,
+        "page_size": 100,
+        "fence_ratio": 3.289
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "eq-rare / Lead / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-generic-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 40037,
+        "unfenced_buffers": 40037,
+        "needs_ordered_scan": true,
+        "page_size": 100,
+        "fence_ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "range-loose / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 31007,
+        "unfenced_buffers": 31007,
+        "needs_ordered_scan": true,
+        "page_size": 100,
+        "fence_ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-loose / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-specific-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 37895,
+        "unfenced_buffers": 11867746,
+        "needs_ordered_scan": true,
+        "page_size": 100,
+        "fence_ratio": 0.003
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "range-loose / Lead / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 29291,
+        "unfenced_buffers": 1151532,
+        "needs_ordered_scan": true,
+        "page_size": 100,
+        "fence_ratio": 0.025
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-loose / Lead / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-generic-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 2896200,
+        "unfenced_buffers": 22592,
+        "needs_ordered_scan": false,
+        "page_size": 100,
+        "fence_ratio": 128.196
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 515917,
+        "unfenced_buffers": 15320,
+        "needs_ordered_scan": false,
+        "page_size": 100,
+        "fence_ratio": 33.676
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-specific-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 1466168,
+        "unfenced_buffers": 1999615,
+        "needs_ordered_scan": false,
+        "page_size": 100,
+        "fence_ratio": 0.733
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "range-mid / Lead / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 1052718,
+        "unfenced_buffers": 1469190,
+        "needs_ordered_scan": false,
+        "page_size": 100,
+        "fence_ratio": 0.717
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-mid / Lead / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-generic-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 11860360,
+        "unfenced_buffers": 15876,
+        "needs_ordered_scan": false,
+        "page_size": 100,
+        "fence_ratio": 747.062
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 504483,
+        "unfenced_buffers": 2364,
+        "needs_ordered_scan": false,
+        "page_size": 100,
+        "fence_ratio": 213.402
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-specific-100k]",
+      "status": "unrecorded",
+      "reason": "test passed but recorded no metrics"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 1144325,
+        "unfenced_buffers": 1595788,
+        "needs_ordered_scan": false,
+        "page_size": 100,
+        "fence_ratio": 0.717
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-tight / Lead / page 100 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-generic-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 7096,
+        "unfenced_buffers": 7096,
+        "needs_ordered_scan": true,
+        "page_size": 25,
+        "fence_ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "contains / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 6528,
+        "unfenced_buffers": 6528,
+        "needs_ordered_scan": true,
+        "page_size": 25,
+        "fence_ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "contains / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-specific-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 6614,
+        "unfenced_buffers": 6614,
+        "needs_ordered_scan": true,
+        "page_size": 25,
+        "fence_ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "contains / Lead / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 6068,
+        "unfenced_buffers": 889199,
+        "needs_ordered_scan": true,
+        "page_size": 25,
+        "fence_ratio": 0.007
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "contains / Lead / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-generic-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 21809,
+        "unfenced_buffers": 21809,
+        "needs_ordered_scan": true,
+        "page_size": 25,
+        "fence_ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "eq-common / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 29780,
+        "unfenced_buffers": 29780,
+        "needs_ordered_scan": true,
+        "page_size": 25,
+        "fence_ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "eq-common / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-specific-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 20417,
+        "unfenced_buffers": 20417,
+        "needs_ordered_scan": true,
+        "page_size": 25,
+        "fence_ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "eq-common / Lead / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 27935,
+        "unfenced_buffers": 1020256,
+        "needs_ordered_scan": true,
+        "page_size": 25,
+        "fence_ratio": 0.027
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "eq-common / Lead / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-generic-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 1331671,
+        "unfenced_buffers": 35409,
+        "needs_ordered_scan": false,
+        "page_size": 25,
+        "fence_ratio": 37.608
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "eq-rare / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 505851,
+        "unfenced_buffers": 3969,
+        "needs_ordered_scan": false,
+        "page_size": 25,
+        "fence_ratio": 127.45
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "eq-rare / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-specific-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 30136,
+        "unfenced_buffers": 35409,
+        "needs_ordered_scan": false,
+        "page_size": 25,
+        "fence_ratio": 0.851
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "eq-rare / Lead / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 6023,
+        "unfenced_buffers": 3969,
+        "needs_ordered_scan": false,
+        "page_size": 25,
+        "fence_ratio": 1.518
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "eq-rare / Lead / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-generic-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 11909,
+        "unfenced_buffers": 11909,
+        "needs_ordered_scan": true,
+        "page_size": 25,
+        "fence_ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "range-loose / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 6748,
+        "unfenced_buffers": 6748,
+        "needs_ordered_scan": true,
+        "page_size": 25,
+        "fence_ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-loose / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-specific-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 11258,
+        "unfenced_buffers": 11258,
+        "needs_ordered_scan": true,
+        "page_size": 25,
+        "fence_ratio": 1.0
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "range-loose / Lead / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 6330,
+        "unfenced_buffers": 1151232,
+        "needs_ordered_scan": true,
+        "page_size": 25,
+        "fence_ratio": 0.005
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-loose / Lead / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-generic-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 2648917,
+        "unfenced_buffers": 12095,
+        "needs_ordered_scan": false,
+        "page_size": 25,
+        "fence_ratio": 219.009
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 505665,
+        "unfenced_buffers": 15020,
+        "needs_ordered_scan": false,
+        "page_size": 25,
+        "fence_ratio": 33.666
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-specific-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 360477,
+        "unfenced_buffers": 569220,
+        "needs_ordered_scan": false,
+        "page_size": 25,
+        "fence_ratio": 0.633
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "range-mid / Lead / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 287419,
+        "unfenced_buffers": 410420,
+        "needs_ordered_scan": false,
+        "page_size": 25,
+        "fence_ratio": 0.7
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-mid / Lead / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-generic-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 11849945,
+        "unfenced_buffers": 5424,
+        "needs_ordered_scan": false,
+        "page_size": 25,
+        "fence_ratio": 2184.724
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-generic-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 504483,
+        "unfenced_buffers": 2364,
+        "needs_ordered_scan": false,
+        "page_size": 25,
+        "fence_ratio": 213.402
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-specific-100k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 3085214,
+        "unfenced_buffers": 4103251,
+        "needs_ordered_scan": false,
+        "page_size": 25,
+        "fence_ratio": 0.752
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "range-tight / Lead / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-specific-10k]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 1144325,
+        "unfenced_buffers": 1595788,
+        "needs_ordered_scan": false,
+        "page_size": 25,
+        "fence_ratio": 0.717
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "range-tight / Lead / page 25 \u2014 issues/190 fence coverage"
+    }
+  ],
+  "baseline": {
+    "name": "coverage",
+    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260914T151002Z-a429435f.json",
+    "reason": "",
+    "pg_stamped": true
+  }
+}

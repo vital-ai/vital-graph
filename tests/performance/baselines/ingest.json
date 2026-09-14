@@ -1,13 +1,13 @@
 {
   "schema": 1,
   "env": {
-    "started_at": "2026-09-14T13:22:12.457923+00:00",
+    "started_at": "2026-09-14T15:46:41.640669+00:00",
     "git": {
-      "commit": "15d5312232ed5a214b787e6d47b315ae8f9bc8f6",
-      "short": "15d53122",
+      "commit": "a429435fbdd4573934769007752154129b774fff",
+      "short": "a429435f",
       "branch": "main",
       "dirty": false,
-      "untracked_files": 48
+      "untracked_files": 49
     },
     "machine": {
       "host": "ip-192-168-1-153.ec2.internal",
@@ -218,7 +218,7 @@
       "largest_gated_fixture": "lead_nurture_grouped",
       "largest_gated_fixture_bytes": 49077829632
     },
-    "finished_at": "2026-09-14T14:08:27.231823+00:00"
+    "finished_at": "2026-09-14T15:57:40.760191+00:00"
   },
   "benches": [
     {
@@ -244,10 +244,10 @@
         "temp_written": 0,
         "actual_rows": 9000,
         "max_actual_rows": 9000,
-        "estimated_rows": 8918,
+        "estimated_rows": 9220,
         "heap_fetches": 0,
-        "planning_ms": 1.198,
-        "execution_ms": 3.748,
+        "planning_ms": 0.795,
+        "execution_ms": 4.184,
         "with_index_buffers": 124,
         "with_index_node": "Index Only Scan",
         "without_index_buffers": 9010,
@@ -284,8 +284,8 @@
         "max_actual_rows": 10,
         "estimated_rows": 10,
         "heap_fetches": 0,
-        "planning_ms": 0.25,
-        "execution_ms": 0.023
+        "planning_ms": 0.562,
+        "execution_ms": 0.033
       },
       "dataset": "synthetic:edges",
       "notes": "forward hop (source\u2192dest)"
@@ -303,669 +303,6 @@
       "dataset": "synthetic:[50000, 150000, 450000]"
     },
     {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 26372,
-        "unfenced_buffers": 26372,
-        "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "contains / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 25948,
-        "unfenced_buffers": 25948,
-        "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "contains / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 24560,
-        "unfenced_buffers": 9189455,
-        "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 0.003
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "contains / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 24174,
-        "unfenced_buffers": 889499,
-        "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 0.027
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "contains / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 115989,
-        "unfenced_buffers": 115989,
-        "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "eq-common / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 114766,
-        "unfenced_buffers": 114766,
-        "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "eq-common / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 109026,
-        "unfenced_buffers": 10184347,
-        "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 0.011
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "eq-common / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 108011,
-        "unfenced_buffers": 1020556,
-        "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 0.106
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "eq-common / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 1335217,
-        "unfenced_buffers": 35709,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 37.392
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "eq-rare / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 508108,
-        "unfenced_buffers": 4253,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 119.47
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "eq-rare / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 40287,
-        "unfenced_buffers": 35709,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 1.128
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "eq-rare / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 13986,
-        "unfenced_buffers": 4253,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 3.289
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "eq-rare / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 40037,
-        "unfenced_buffers": 40037,
-        "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-loose / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 31007,
-        "unfenced_buffers": 31007,
-        "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-loose / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-specific-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 29291,
-        "unfenced_buffers": 1151532,
-        "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 0.025
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-loose / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 2814063,
-        "unfenced_buffers": 18846,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 149.319
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 513930,
-        "unfenced_buffers": 13120,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 39.171
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 1154158,
-        "unfenced_buffers": 1687605,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 0.684
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-mid / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 1057573,
-        "unfenced_buffers": 1474045,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 0.717
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-mid / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 11858368,
-        "unfenced_buffers": 13896,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 853.366
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 504163,
-        "unfenced_buffers": 2044,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 246.655
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 8521736,
-        "unfenced_buffers": 11822842,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 0.721
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-tight / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 1150019,
-        "unfenced_buffers": 1601482,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 0.718
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-tight / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 7096,
-        "unfenced_buffers": 7096,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "contains / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 6528,
-        "unfenced_buffers": 6528,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "contains / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 6614,
-        "unfenced_buffers": 6614,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "contains / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 6068,
-        "unfenced_buffers": 889199,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 0.007
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "contains / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 21809,
-        "unfenced_buffers": 21809,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "eq-common / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 29780,
-        "unfenced_buffers": 29780,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "eq-common / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 20417,
-        "unfenced_buffers": 20417,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "eq-common / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 27935,
-        "unfenced_buffers": 1020256,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 0.027
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "eq-common / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 1312042,
-        "unfenced_buffers": 35409,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 37.054
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "eq-rare / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 505851,
-        "unfenced_buffers": 3969,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 127.45
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "eq-rare / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 30136,
-        "unfenced_buffers": 35409,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 0.851
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "eq-rare / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 6023,
-        "unfenced_buffers": 3969,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 1.518
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "eq-rare / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 11909,
-        "unfenced_buffers": 11909,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-loose / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 6748,
-        "unfenced_buffers": 6748,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-loose / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 11258,
-        "unfenced_buffers": 11258,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-loose / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 6330,
-        "unfenced_buffers": 1151232,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 0.005
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-loose / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 2885116,
-        "unfenced_buffers": 9849,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 292.935
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 505185,
-        "unfenced_buffers": 12820,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 39.406
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 283772,
-        "unfenced_buffers": 492515,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 0.576
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-mid / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 288742,
-        "unfenced_buffers": 411743,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 0.701
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-mid / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 11849412,
-        "unfenced_buffers": 4924,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 2406.461
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 504163,
-        "unfenced_buffers": 2044,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 246.655
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 2428940,
-        "unfenced_buffers": 3446977,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 0.705
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-tight / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 1150019,
-        "unfenced_buffers": 1601482,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 0.718
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-tight / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
       "bench_id": "query.partition.graph_scoped_pruning",
       "kind": "query",
       "status": "ok",
@@ -981,13 +318,13 @@
       "kind": "write",
       "status": "ok",
       "metrics": {
-        "seed_quads_per_sec": 2107,
-        "concrete_quads_per_sec": 2048,
-        "where_bound_quads_per_sec": 6251,
-        "concrete_s": 1.465,
-        "where_bound_s": 0.48,
-        "sweep_s": 0.019,
-        "deferred_share": 0.039,
+        "seed_quads_per_sec": 1221,
+        "concrete_quads_per_sec": 2290,
+        "where_bound_quads_per_sec": 5161,
+        "concrete_s": 1.31,
+        "where_bound_s": 0.581,
+        "sweep_s": 0.008,
+        "deferred_share": 0.014,
         "orphans_before_sweep": 1000
       },
       "dataset": "synthetic:2000edges",
@@ -998,12 +335,12 @@
       "kind": "write",
       "status": "ok",
       "metrics": {
-        "executemany_quads_per_sec": 3782,
-        "copy_quads_per_sec": 49922,
-        "bulk_e2e_quads_per_sec": 29236,
-        "index_rebuild_s": 5.669,
-        "copy_speedup": 13.2,
-        "e2e_speedup": 7.73
+        "executemany_quads_per_sec": 3939,
+        "copy_quads_per_sec": 49152,
+        "bulk_e2e_quads_per_sec": 27175,
+        "index_rebuild_s": 6.581,
+        "copy_speedup": 12.479,
+        "e2e_speedup": 6.9
       },
       "dataset": "synthetic:400000q"
     },
@@ -1012,10 +349,10 @@
       "kind": "write",
       "status": "ok",
       "metrics": {
-        "growth_class": "log",
-        "probe_ms_at_100000q": 86.9,
-        "probe_ms_at_300000q": 84.23,
-        "probe_ms_at_900000q": 130.13
+        "growth_class": "flat",
+        "probe_ms_at_100000q": 107.33,
+        "probe_ms_at_300000q": 102.67,
+        "probe_ms_at_900000q": 106.44
       },
       "dataset": "synthetic:[50000, 150000, 450000]",
       "notes": "probe=300 quads, min of 3 rolled-back runs"
@@ -1023,7 +360,7 @@
   ],
   "baseline": {
     "name": "ingest",
-    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260914T132210Z-15d53122.json",
+    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260914T154640Z-a429435f.json",
     "reason": "",
     "pg_stamped": true
   }
