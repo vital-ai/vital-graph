@@ -95,7 +95,11 @@ async def test_the_schema_ships_the_index(pg_conn):
     """
     from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
     ddl = " ".join(SparqlSQLSchema().create_space_indexes_sql("probe_space"))
-    assert "active_doc_uq" in ddl
+    # `sj_active_uq`, not `active_doc_uq`: the name was shortened along with its
+    # four siblings to raise the longest supported space id from 21 bytes to 34
+    # (`issues/196`). The WHERE clause below is the part that carries the
+    # invariant, and it is unchanged.
+    assert "sj_active_uq" in ddl
     assert "CREATE UNIQUE INDEX" in ddl
     assert "WHERE status IN ('pending', 'in_progress')" in ddl
 

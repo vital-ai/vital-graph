@@ -300,8 +300,14 @@ def max_space_id_bytes() -> int:
     """The longest space id the schema can name objects for.
 
     Derived from the schema rather than asserted, so it stays true when a suffix
-    changes. Currently bounded by
-    `{space}_document_segmentation_config_doc_type_idx`.
+    changes — which it has. It was bounded by
+    `{space}_document_segmentation_config_doc_type_idx` at 42 bytes of suffix,
+    giving a ceiling of 21; shortening that name and its four `segmentation_jobs`
+    siblings (`issues/196`) moved the bound to the TABLE name
+    `{space}_document_segmentation_config` at 29, so the ceiling is now 34.
+
+    Note the bound is a TABLE now, not an index. Anything measuring this over
+    `create_space_indexes_sql` alone will disagree with it by 6 bytes.
     """
     # A ONE-CHARACTER probe, deliberately. A long one would trip
     # `assert_identifiers_fit` inside the generators this calls — the measurement
@@ -1867,12 +1873,12 @@ class SparqlSQLSchema:
             # SegmentationJobManager / SegmentationConfigManager and were created
             # on demand with their tables, so a space had them only if the
             # feature had run against it. Schema comes from one place now.
-            f"CREATE INDEX IF NOT EXISTS {t['segmentation_jobs']}_status_idx "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_sj_status "
             f"ON {t['segmentation_jobs']} (status, created_at) "
             f"WHERE status IN ('pending', 'failed', 'vectorizing')",
-            f"CREATE INDEX IF NOT EXISTS {t['segmentation_jobs']}_document_idx "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_sj_doc "
             f"ON {t['segmentation_jobs']} (document_uri, created_at DESC)",
-            f"CREATE INDEX IF NOT EXISTS {t['segmentation_jobs']}_space_idx "
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_sj_space "
             f"ON {t['segmentation_jobs']} (space_id, status)",
             # ONE ACTIVE JOB PER DOCUMENT (`issues/174` item 3).
             #
@@ -1897,11 +1903,11 @@ class SparqlSQLSchema:
             # for production's shorter ids, which is exactly why only the test
             # caught it.
             f"CREATE UNIQUE INDEX IF NOT EXISTS "
-            f"{t['segmentation_jobs']}_active_doc_uq "
+            f"idx_{space_id}_sj_active_uq "
             f"ON {t['segmentation_jobs']} (document_uri) "
             f"WHERE status IN ('pending', 'in_progress')",
             f"CREATE INDEX IF NOT EXISTS "
-            f"{t['document_segmentation_config']}_doc_type_idx "
+            f"idx_{space_id}_dsc_doctype "
             f"ON {t['document_segmentation_config']} (document_type_uri) "
             f"WHERE enabled = TRUE",
 

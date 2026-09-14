@@ -97,8 +97,14 @@ class TestTheSchemaEnforcesItAtGeneration:
         collapse permanently (`issues/196`).
         """
         sch = SparqlSQLSchema()
-        fits = sch.create_space_indexes_sql("x" * max_space_id_bytes())
-        over = sch.create_space_indexes_sql("x" * (max_space_id_bytes() + 2))
+        # Long enough to overflow an INDEX name specifically. The overall limit
+        # is bound by a TABLE name, which this generator never emits, so a space
+        # id just past `max_space_id_bytes()` still produces index SQL that fits
+        # — correctly. Measure against the longest INDEX name instead.
+        longest_idx = max(len(n) for n in
+                          identifiers_in(sch.create_space_indexes_sql("x"))) - 1
+        fits = sch.create_space_indexes_sql("x" * (PG_MAX_IDENTIFIER_BYTES - longest_idx))
+        over = sch.create_space_indexes_sql("x" * (PG_MAX_IDENTIFIER_BYTES - longest_idx + 2))
         assert over, "an over-long space id now yields NO indexes at all"
         assert len(over) < len(fits), (
             "nothing was refused — the over-long names are being emitted, and "
@@ -167,6 +173,12 @@ class TestTheSchemaEnforcesItAtGeneration:
         # number.
         limit = max_space_id_bytes()
         assert 0 < limit < PG_MAX_IDENTIFIER_BYTES
+        # Over BOTH generators. The index names used to be the longest by far,
+        # so measuring only those happened to agree; once they were shortened
+        # (`issues/196`) the binding name became a TABLE — `{space}_document_
+        # segmentation_config` — and an index-only measurement disagreed with
+        # the real limit by 6 bytes.
         longest = max(len(n) for n in
-                      identifiers_in(SparqlSQLSchema().create_space_indexes_sql("x")))
+                      identifiers_in(SparqlSQLSchema().create_space_indexes_sql("x")
+                                     + SparqlSQLSchema().create_space_tables_sql("x")))
         assert limit == PG_MAX_IDENTIFIER_BYTES - (longest - 1)

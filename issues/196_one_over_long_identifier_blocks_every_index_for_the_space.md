@@ -27,10 +27,48 @@ generator produces.
     before   1 index   (PK only, created with the table)
     after    7 indexes (== sp_graph_rel_10k_frame_slot)
 
-The one genuinely impossible name — `space_lead_dataset_test_document_segmentation
-_config_doc_type_idx` at 65 bytes — is still refused, still reported, and still
-needs a rename or option 3 to recover. That is one index on one table, not the
-whole space.
+**Option 3 as well, 2026-09-14 — the suffix is shortened, so nothing is refused.**
+
+The name that bound everything was 42 bytes of suffix. It and its four
+`segmentation_jobs` siblings now use the `idx_{space}_<short>` convention the
+schema already used elsewhere:
+
+    {space}_document_segmentation_config_doc_type_idx  ->  idx_{space}_dsc_doctype
+    {space}_segmentation_jobs_status_idx               ->  idx_{space}_sj_status
+    {space}_segmentation_jobs_document_idx             ->  idx_{space}_sj_doc
+    {space}_segmentation_jobs_space_idx                ->  idx_{space}_sj_space
+    {space}_segmentation_jobs_active_doc_uq            ->  idx_{space}_sj_active_uq
+
+    longest supported space id   21 bytes  ->  34 bytes
+
+`space_lead_dataset_test` (23 bytes) now generates all 71 index statements with
+NOTHING refused, so it does not need renaming after all — which is the answer to
+"why not just rename it": the rename would have cost 15 baseline benches, ~10
+source files and a re-promotion, to buy a correctly-named index on an empty
+table. This buys the ceiling for every space at once instead.
+
+The bound is now the TABLE name `{space}_document_segmentation_config` at 29
+bytes. Moving that needs a data migration and is a different change; worth doing
+only if 34 ever proves tight.
+
+### The existing spaces are migrated, not just the schema
+
+`scripts/migrate_shorten_index_names.py` renamed **769 indexes across 156
+spaces** with `ALTER INDEX ... RENAME TO` — a catalogue update, atomic, no
+rebuild, and no window where a live table is unindexed. Total index count
+17,075 before and after, which is the check that it renamed rather than dropped.
+
+It matches TRUNCATED names too, and that is the part worth keeping. The 65-byte
+name existed as `..._doc_type_i` at exactly 63 bytes — created before the guard,
+silently shortened by PostgreSQL, and therefore an orphan under a name the
+schema never asked for. It is now `idx_space_lead_dataset_test_dsc_doctype`.
+That is this issue's own failure mode, found already realised in the data.
+
+Left alone deliberately: 161 `{space}_segmentation_jobs_pkey` names, which
+PostgreSQL generates for primary keys and whose 23-byte suffix does not bind;
+and the 63-byte `..._key` UNIQUE constraint names, which PostgreSQL truncates
+itself and disambiguates, so they are not the silent-collision hazard the guard
+addresses.
 
 ## Original filing
 
