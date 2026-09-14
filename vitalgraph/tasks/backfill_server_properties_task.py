@@ -134,10 +134,24 @@ class BackfillServerPropertiesTask:
         # That is correct behaviour, but it changes the dataset *while a
         # performance run is measuring it* — buffer counts drift between runs and
         # baseline comparisons stop meaning anything.
-        self.exclude_spaces = {
-            s.strip() for s in os.environ.get('BACKFILL_EXCLUDE_SPACES', '').split(',')
-            if s.strip()
-        }
+        # FALLS BACK to VG_MAINTENANCE_EXCLUDE_SPACES when unset, because the
+        # two answer the SAME question -- which spaces are benchmark fixtures --
+        # and keeping two copies of that list in step is a known failure here.
+        # docker-compose.test.yml already carries the warning for its pair of
+        # them ("KEEP THIS LIST IN STEP WITH STATS_FIXTURE_PREFIXES"), recording
+        # that sp_lead_types and space_lead_dataset_test were once stamped but
+        # not excluded and produced a spurious environment NOTE.
+        #
+        # That is exactly what happened here: the test stack excluded twelve
+        # benchmark spaces from MAINTENANCE and none from BACKFILL, so reloading
+        # a fixture left the backfill free to append to the very spaces the
+        # operator had declared off-limits. Defaulting rather than overriding --
+        # an explicit BACKFILL_EXCLUDE_SPACES still wins, including an explicit
+        # empty value meaning "back-fill everything".
+        _raw = os.environ.get('BACKFILL_EXCLUDE_SPACES')
+        if _raw is None:
+            _raw = os.environ.get('VG_MAINTENANCE_EXCLUDE_SPACES', '')
+        self.exclude_spaces = {s.strip() for s in _raw.split(',') if s.strip()}
         self.batch_size = _env_int('BACKFILL_BATCH_SIZE', 200)
         self.active_interval = _env_float('BACKFILL_ACTIVE_INTERVAL', 0.5)
         self.idle_timeout = _env_float('BACKFILL_IDLE_TIMEOUT', 1800.0)
