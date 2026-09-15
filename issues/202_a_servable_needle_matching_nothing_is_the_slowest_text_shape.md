@@ -1,6 +1,8 @@
 # A Servable Needle Matching Nothing Is the Slowest Text Shape
 
-## Status: OPEN, found 2026-09-14 while writing the text bench for `issues/192`.
+## Status: FIXED 2026-09-15 (`3ab41a2e`). An empty servable needle is now
+## PROVABLY EMPTY and costs 0 buffers, against 1,681,156 before. Found
+## 2026-09-14 while writing the text bench for `issues/192`.
 ## DIAGNOSED AND CONFIRMED 2026-09-15 (below): the cost is a missing early
 ## exit, not the text index. `emit_slice` correctly declines the fast plan for
 ## text filters; the fallback has no way to stop early. Plans captured.
@@ -180,3 +182,58 @@ logic it touches is what stops a split from silently returning wrong rows. That
 is the reason this was stopped rather than pushed through: the guard being
 worked around is load-bearing, and `issues/030` and `issues/046` both record
 what shipping past one costs.
+
+## FIXED 2026-09-15 — the same treatment `issues/073` gave an absent constant
+
+Not the fix `emit_slice` named, and not in `emit_slice` at all. The attempt
+above established that the driver already carries the ILIKE and that the empty
+needle never reaches it, so the remaining question was not how to make the scan
+cheaper but whether it needs to happen. It does not.
+
+`query_is_provably_empty` already short-circuits a query that REQUIRES a
+constant absent from the term table, for a defect described in the same words
+this issue used: "that makes 'search for a value that is not there' the WORST
+case, when it should be the cheapest". It now also reports empty when a required
+TEXT filter was measured at zero, and the existing `LIMIT 0` wrapper answers it.
+
+    empty servable needle    1,681,156 buffers  ->  0
+    matching needle              7,516 buffers  ->  unchanged
+    unservable needle        1,445,969 buffers  ->  unchanged
+
+WHY ZERO IS SAFE TO ACT ON. `text_stats` counts QUADS whose predicate matches
+and whose object is in the needle's term set, under a `LIMIT` cap. A cap can
+only turn a large number into a smaller one, never a non-zero into a zero, so a
+zero is EXACT — and a triple pattern whose object can match no term cannot bind.
+
+WHERE IT IS CHECKED. After `_load_missing_pair_stats`, not at the Stage-2-post
+site, because `text_stats` does not exist until that call. At the original site
+the check could never have seen a text measurement.
+
+WHAT IT DELIBERATELY DOES NOT DO. A variable predicate has no
+`(predicate, needle)` measurement, so there is nothing to act on and it is left
+alone.
+
+### The risk this carries, and how it is pinned
+
+`issues/093` is the cautionary case: the same optimisation for constants once
+decided "required" carelessly, and every query with a `GRAPH ?g` over an empty
+default graph returned ZERO ROWS — silently, because `LIMIT 0` is not an error
+and an empty answer is a legitimate one.
+
+So the requiredness walk is REUSED rather than re-derived. `_EMPTY_PROPAGATES`
+and the `KIND_LEFT_JOIN` special case already encode that emptiness does not
+propagate through `UNION` (a sibling may match), `LEFT_JOIN`'s right side (an
+OPTIONAL that matches nothing still yields its outer row) or `GROUP` (an
+aggregate over zero rows still produces a row). Eleven unit tests pin those, and
+an end-to-end check confirms an absent needle under `OPTIONAL` still returns its
+outer rows.
+
+### Still open
+
+The general case. A needle matching FEW but non-zero terms still has no early
+exit — the same enumerate-everything plan, with a smaller candidate set. That is
+the plan-shaping work the section above describes, and it is unaffected by this.
+
+`issues/192`'s text bench is unblocked: two of its three regimes now finish
+quickly, and the ordering test records all three values so the next drift is
+visible as a number rather than as an inversion.
