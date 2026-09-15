@@ -798,12 +798,32 @@ class KGQueriesEndpoint:
                     offset=0,
                 )
             
+            # THE COUNT IS THE EXPENSIVE HALF, and it was the only one not cached.
+            # `count_only` above already reads `_count_cache`; the PAGED path issued
+            # the same count query on every request and discarded the answer.
+            # Measured on lead_nurture_grouped, a 25-entity page: page ~50 ms, count
+            # ~340 ms -- so the count was ~85% of the request.
+            #
+            # It cannot be made cheap by paging. As the note on TOTAL_COUNT_CAP says,
+            # a count is COUNT(DISTINCT ?entity) over the whole match set and costs
+            # O(matches) however cheap the page is. So the lever is not computing it
+            # again -- and the cache is already trusted for this exact query: keyed on
+            # the count SPARQL's hash, and invalidated by ANY write to (space, graph)
+            # rather than merely aged out.
+            _qh = _count_cache.query_hash(count_query)
+            _cached_total = _count_cache.get(space_id, graph_id, _qh)
+
             # Count-first short-circuit: when offset > 0 run the cheap count
             # query first so we can skip the expensive paginated query if the
             # caller has already paged past the end of the result set.
             if query_request.offset > 0:
-                count_results = await _checked_query(backend, space_id, count_query)
-                total_count = self._extract_total_count(count_results)
+                if _cached_total is not None:
+                    total_count = _cached_total
+                else:
+                    count_results = await _checked_query(
+                        backend, space_id, count_query)
+                    total_count = self._extract_total_count(count_results)
+                    _count_cache.put(space_id, graph_id, _qh, total_count)
                 if query_request.offset >= total_count:
                     t_query = _time.monotonic()
                     self.logger.info(
@@ -821,6 +841,15 @@ class KGQueriesEndpoint:
                 results = await _checked_query(
                     backend, space_id, sparql_query,
                     multi_vector_config=_mv_config)
+            elif _cached_total is not None:
+                # The count is known, so the page is the only work left. Running it
+                # alone rather than as the pair below IS the saving:
+                # `_gather_cancelling` is concurrent, but the request still waits for
+                # the SLOWER of the two, and that is the count.
+                total_count = _cached_total
+                results = await _checked_query(
+                    backend, space_id, sparql_query,
+                    multi_vector_config=_mv_config)
             else:
                 # First page: run both in parallel for lowest latency
                 results, count_results = await _gather_cancelling(
@@ -829,6 +858,7 @@ class KGQueriesEndpoint:
                     _checked_query(backend, space_id, count_query),
                 )
                 total_count = self._extract_total_count(count_results)
+                _count_cache.put(space_id, graph_id, _qh, total_count)
             t_query = _time.monotonic()
             
             # Extract entity URIs
