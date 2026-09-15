@@ -176,7 +176,7 @@ this is that item re-counted), `unexplored_performance_surface.md` §1,
 | entity-graph flag | yes | **8, BENCHED 2026-09-14** | `query.entity_graph.fanout` on `lead_nurture_grouped` — the ONLY fixture with `hasKGGraphURI` at scale. Steady state: base 667ms, cold 861ms, warm 874ms, fan-out delta **193ms** for 18,653 quads. The fan-out is NOT the expensive part |
 | vector / semantic search | yes | **1, DONE** | `vector.index_and_search` in `ingest.json` — HNSW over a populated index (it builds the index, so ingest tier) |
 | geo | yes | **1, DONE** | `geo.populate_and_search` in `ingest.json` — both halves, because an empty geo table answers instantly and benches nothing |
-| fuzzy / text search | yes | **0 — BLOCKED** | needs `issues/202`: a servable needle matching nothing is the slowest text shape, so a bench written now would enshrine the defect as the baseline |
+| fuzzy / text search | yes | **1, UNBLOCKED 2026-09-15** | `issues/202` is fixed, so two of the three regimes now finish quickly. `query.kgquery.text_needle_regimes` records all three (empty 0 buffers, matching 7,516, unservable 1,445,968) — the values, not just the ordering |
 | bulk export | yes | **1, DONE** | `write.export.copy_round_trip` in `ingest.json` |
 
 ### The entity-graph fan-out, once actually measured — 2026-09-14
@@ -247,6 +247,33 @@ hides it completely on re-access, which is why nothing has ever flagged it, but
 every FIRST access to an entity pays it and production does that constantly.
 That is the standing rule's territory: no read-only query should take that
 long, and if it does the method is wrong.
+
+### 2026-09-15 — what closing 202 and 203 changed here
+
+**The text row is no longer blocked.** `issues/202` is fixed: a servable needle
+matching nothing is now provably empty and costs 0 buffers against 1,681,156.
+The ordering test that had been failing records all three regimes' VALUES, which
+is what this issue asked for — it drifted by orders of magnitude while the test
+stayed green, because an assertion between three regimes holds until they cross.
+
+**The load baseline moved, and not by a little.** `issues/203` closed, so the
+numbers recorded above for the concurrency row are stale by design:
+
+    kgquery_sorted     p50  338 ms -> 8.2 ms
+    kgquery_page1      p50   37 ms -> 5.6 ms
+    kgquery_deep_page  p50   45 ms -> 5.7 ms
+
+Re-promoted at `23348a64`. The caveat recorded above — that the driver's
+criteria omit `slot_class_uri`, so both kgquery cells measure the general
+pipeline — NO LONGER APPLIES: the driver now sends it, which is why the
+*unsorted* case improved 6.5x as well. The cells measure the fast paths now, and
+the earlier numbers should not be compared against these.
+
+**A dependency the baseline now carries.** `kg_load_test` needs an
+`{space}_entity_prop_sort` table for the sorted path to serve. Rebuild that
+space without it and `kgquery_sorted` silently returns to ~338 ms — a baseline
+regression with a DATA cause and no code change, which is the hardest kind to
+read from a comparison alone.
 
 ### What the load baseline may be gated on — measured, not assumed
 
