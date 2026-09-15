@@ -111,6 +111,18 @@ def sort_keys(criteria):
     if not 1 <= len(sc) <= MAX_SORT_KEYS:
         return None
     keys = sorted(sc, key=lambda x: getattr(x, "priority", 1))
+
+    # AN ALL-PROPERTY KEY SET IS SERVED FROM THE OTHER TABLE. `issues/203`: a
+    # frame-criteria filter with an ENTITY-PROPERTY sort was served by neither
+    # fast path -- this one refused the sort, and `fast_prop_sort` refuses the
+    # frame criteria. The two halves exist; only the pairing was missing.
+    #
+    # ALL or none, deliberately. Mixing a property key with a slot key would need
+    # both tables aggregated together, and the second key only breaks ties -- so
+    # the shape is declined rather than half-served.
+    if all(getattr(k, "sort_type", None) == "entity_property" for k in keys):
+        return keys if _prop_sort_keys_ok(keys) else None
+
     for s in keys:
         if s.sort_type not in ("entity_frame_slot", "frame_slot"):
             return None
@@ -205,8 +217,14 @@ def can_serve(criteria) -> bool:
 
 
 
-def _filter_exists(t: str, criteria, args: list) -> str:
+def _filter_exists(t: str, criteria, args: list, inner_t: str = None) -> str:
     """EXISTS clauses restricting the sorted population to the filter's matches.
+
+    `inner_t` is the table the CRITERIA live in; `t` is the one being correlated
+    against. They are the same for a slot sort and differ for a property sort,
+    where the population is anchored on `entity_prop_sort` while the frame
+    criteria are still only in `entity_slot_sort`. Conflating them silently
+    looked for frame criteria in a table that has no frame columns.
 
     `issues/172`. One clause per equality criterion, correlated on
     `entity_uuid`, each hitting `idx_{space}_ess_text` on its own leading
@@ -223,6 +241,7 @@ def _filter_exists(t: str, criteria, args: list) -> str:
     parsed = _eq_criteria(fcs)
     if not parsed:
         return ""
+    inner_t = inner_t or t
     out = []
     for path, slot_type, lane, val in parsed:
         args.append([_term_uuid(u) for u in path])
@@ -232,7 +251,7 @@ def _filter_exists(t: str, criteria, args: list) -> str:
         args.append(val)
         p_val = len(args)
         out.append(
-            f"AND EXISTS (SELECT 1 FROM {t} f{p_slot}"
+            f"AND EXISTS (SELECT 1 FROM {inner_t} f{p_slot}"
             f" WHERE f{p_slot}.context_uuid = $1"
             f"   AND f{p_slot}.entity_type_uuid = $2"
             f"   AND f{p_slot}.frame_type_path = ${p_path}"
@@ -340,6 +359,69 @@ def _prop_filter_exists(space_id: str, props, args: list) -> str:
     return "\n              ".join(out)
 
 
+def _prop_sort_keys_ok(keys) -> bool:
+    """Whether every key names a property `entity_prop_sort` can order on."""
+    from .fast_prop_sort import _DATATYPES, _SORT_LANE
+    for k in keys:
+        uri = getattr(k, "property_uri", None)
+        if not uri:
+            return False
+        if _SORT_LANE.get(_DATATYPES.get(uri) or "") is None:
+            return False
+    return True
+
+
+def is_prop_sort(keys) -> bool:
+    return bool(keys) and all(
+        getattr(k, "sort_type", None) == "entity_property" for k in keys)
+
+
+def _grouped_prop(space_id: str, graph_uri: str, criteria, keys):
+    """The same population as `_grouped`, anchored on `entity_prop_sort`.
+
+    Returns the identical tuple shape, so the page and count queries are unchanged
+    -- the only thing that differs is WHICH table supplies the ordering value and
+    how a key is identified in it (`property_uuid`, against the slot table's
+    `frame_type_path` + `slot_type_uuid`).
+
+    The frame criteria still come from `entity_slot_sort` via `_filter_exists`,
+    correlated on `entity_uuid`, which is what makes this the pairing `issues/203`
+    wanted: this table can order by the property, that one can filter by the
+    frame, and they join on the entity.
+    """
+    from .fast_prop_sort import _DATATYPES, _SORT_LANE
+
+    t = f"{space_id}_entity_prop_sort"
+    ess = f"{space_id}_entity_slot_sort"
+    args = [_term_uuid(graph_uri), _term_uuid(criteria.entity_type)]
+    prop_ph = []
+    for k in keys:
+        args.append(_term_uuid(k.property_uri))
+        prop_ph.append(f"${len(args)}")
+
+    sel, having, order = [], [], []
+    for i, (k, ph) in enumerate(zip(keys, prop_ph)):
+        col = _SORT_LANE[_DATATYPES[k.property_uri]]
+        descending = (k.sort_order or "asc").lower() == "desc"
+        # MIN ascending / MAX descending, exactly as the slot path does and for
+        # the same reason: order each entity by the value that will decide its
+        # position when a property carries more than one.
+        agg = (f"{'MAX' if descending else 'MIN'}({col}) "
+               f"FILTER (WHERE property_uuid = {ph})")
+        sel.append(f"{agg} AS sv{i}")
+        having.append(f"{agg} IS NOT NULL")
+        order.append(f"sv{i} {'DESC' if descending else 'ASC'}")
+
+    where_filters = _filter_exists(t, criteria, args, inner_t=ess)
+    props = entity_prop_filters(criteria)
+    if props:
+        where_filters += "\n              " + _prop_filter_exists(space_id, props, args)
+    where = (f"context_uuid = $1 AND entity_type_uuid = $2 "
+             f"AND property_uuid IN ({', '.join(prop_ph)})"
+             f"{where_filters}")
+    return t, args, ", ".join(sel), where, " AND ".join(having), order
+
+
 def _grouped(space_id: str, graph_uri: str, criteria, keys):
     """The grouped population the page and the count must BOTH be drawn from.
 
@@ -405,7 +487,8 @@ async def fast_slot_sort_page(
     keys = sort_keys(criteria)
     if keys is None:
         return None
-    t, args, sel, where, having, order = _grouped(
+    build = _grouped_prop if is_prop_sort(keys) else _grouped
+    t, args, sel, where, having, order = build(
         space_id, graph_uri, criteria, keys)
     t_term = f"{space_id}_term"
     n = len(args)
@@ -449,7 +532,8 @@ async def fast_slot_sort_count(
     keys = sort_keys(criteria)
     if keys is None:
         return None
-    t, args, sel, where, having, _order = _grouped(
+    build = _grouped_prop if is_prop_sort(keys) else _grouped
+    t, args, sel, where, having, _order = build(
         space_id, graph_uri, criteria, keys)
 
     try:
