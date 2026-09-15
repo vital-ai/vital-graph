@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +135,51 @@ async def frame_slot_row_count(conn, space_id: str) -> int:
     return await conn.fetchval(f"SELECT count(*) FROM {space_id}_frame_slot")
 
 
+# Spaces whose `{space}_frame_slot` is known to exist. Only a True short-circuits,
+# so a space migrated while the process is running is picked up on its next write
+# rather than needing a restart -- the same convention `ensure_frame_slot_table`
+# uses for its readiness cache.
+_frame_slot_present: Dict[str, bool] = {}
+
+
+def reset_present_cache() -> None:
+    _frame_slot_present.clear()
+
+
+async def _table_present(conn, space_id: str) -> bool:
+    """Whether the derived table exists at all, so a write may maintain it.
+
+    NOT `ensure_frame_slot_table`, which is the READ gate and answers "exists AND
+    holds rows". A table that exists and is empty must still be maintained by
+    writes or it would never fill, so the write side asks the weaker question.
+
+    WHY THIS EXISTS. `migrate_frame_slot_table` states the contract plainly: "a
+    space that is NOT migrated keeps working ... the rewrite declines, and queries
+    fall back to the quad joins". That held for reads and NOT for writes -- the
+    sync helpers named the table unconditionally, so on an unmigrated space every
+    delete failed with `relation "{space}_frame_slot" does not exist`. Observed on
+    the dev instance with 38 of 41 spaces unmigrated, which made the contract
+    false for the majority of them.
+
+    Checked with `to_regclass` rather than `information_schema`: it is a single
+    catalogue lookup, and it must not be a failed statement that gets caught,
+    because these run inside the caller's write transaction and a raised error
+    would poison it.
+    """
+    if _frame_slot_present.get(space_id):
+        return True
+    present = await conn.fetchval(
+        "SELECT to_regclass($1)", f"public.{space_id}_frame_slot") is not None
+    _frame_slot_present[space_id] = present
+    if not present:
+        logger.debug(
+            "%s_frame_slot absent — not maintaining it for this write. Run "
+            "`python scripts/migrate_frame_slot_table.py --space %s --apply` "
+            "to enable the frame-slot collapse for this space.",
+            space_id, space_id)
+    return present
+
+
 async def _forced(conn, sql, *args):
     """Run with a CUSTOM plan.
 
@@ -169,6 +214,8 @@ async def sync_frame_slot_after_edge_insert(conn, space_id: str,
     upsert cannot go stale that way and costs nothing when the row is unchanged.
     """
     if not touched_uuids:
+        return 0
+    if not await _table_present(conn, space_id):
         return 0
     t_fs = f"{space_id}_frame_slot"
     t_edge = f"{space_id}_edge"
@@ -220,6 +267,8 @@ async def sync_frame_slot_before_delete(conn, space_id: str,
     frame.
     """
     if not subject_uuids:
+        return 0
+    if not await _table_present(conn, space_id):
         return 0
     t_fs = f"{space_id}_frame_slot"
     t_edge = f"{space_id}_edge"
@@ -316,6 +365,8 @@ async def cleanup_stale_frame_slot(conn, space_id: str,
 async def delete_frame_slot_for_context(conn, space_id: str,
                                         context_uuid: uuid.UUID) -> int:
     """Drop every row for one graph — the counterpart of a graph-level delete."""
+    if not await _table_present(conn, space_id):
+        return 0
     result = await conn.execute(
         f"DELETE FROM {space_id}_frame_slot WHERE context_uuid = $1", context_uuid)
     return int(result.split()[-1]) if result else 0
