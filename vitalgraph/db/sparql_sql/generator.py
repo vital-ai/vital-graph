@@ -1844,6 +1844,21 @@ async def _generate_sql(
         with _decisions.stage("load_pair_stats"):
             await _load_missing_pair_stats(plan, aliases, space_id,
                                            conn=conn, conn_params=conn_params)
+
+        # RE-CHECKED HERE, because `text_stats` does not exist until the call
+        # above. The Stage-2-post check runs long before any pair stats are
+        # loaded, so a text filter measured at zero cannot be seen there.
+        #
+        # `issues/202`: a six-character needle absent from the space measured
+        # 19,500 ms and 1,681,156 shared buffers against 341 ms and 7,516 for one
+        # that matches, because a matching needle satisfies LIMIT 25 after a few
+        # candidates and an empty one has nothing to stop it. Saying "empty" is
+        # the same answer the scan would reach, without the scan -- exactly what
+        # issues/073 already does for an absent constant.
+        if not provably_empty and query_is_provably_empty(plan, aliases):
+            provably_empty = True
+            logger.info("Query is provably empty — a required text filter "
+                        "matched nothing (issues/202)")
         # A DEEP page wants the opposite plan, and the choice must be made HERE:
         # mark_semijoins SPLITS the anchor BGP, and a split is equivalent to the
         # original only AS a semi-join. The undo list is local to that function,

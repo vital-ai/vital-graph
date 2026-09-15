@@ -306,9 +306,10 @@ async def test_a_flippable_shape_is_always_fenced(
 
 
 @pytest.mark.coverage_bench
+@pytest.mark.bench("query.kgquery.text_needle_regimes")
 @pytest.mark.asyncio(loop_scope="session")
-async def test_the_three_text_needle_regimes_stay_ordered(perf_conn):
-    """Match, empty, and unservable cost strictly more in that order.
+async def test_the_three_text_needle_regimes_stay_ordered(perf_conn, perf_record):
+    """Empty, match, and unservable cost strictly more in that order.
 
     This started as "an empty result costs the whole walk" and that was assumed
     rather than measured. It is false: a SERVABLE needle matching nothing is
@@ -317,13 +318,25 @@ async def test_the_three_text_needle_regimes_stay_ordered(perf_conn):
     Three regimes, and the ordering between them is the property (issues/117,
     and `MIN_TRIGRAM_NEEDLE` from issues/070):
 
-      servable + matches      cheapest — the LIMIT short-circuits
-      servable + no match     more     — nothing to short-circuit on
+      servable + no match     CHEAPEST — provably empty, answered without a scan
+      servable + matches      more     — the LIMIT short-circuits after ~25
       UNSERVABLE (< 3 chars)  most     — the index cannot help, so it scans
 
-    Measured on the 10k fixture when written: 6,528 / 138,357 / 1,276,968
-    buffers. The gates are the ORDER, not those numbers, which move with the
-    fixture.
+    THE FIRST TWO SWAPPED PLACES on 2026-09-15, and that is a fix rather than a
+    drift. `issues/202` found the empty regime pathological — 1,681,156 buffers
+    against 7,516 for a matching needle — because nothing stops a scan that will
+    never satisfy its LIMIT. It is now caught before emission: a text filter
+    measured at zero makes the query provably empty, the same treatment
+    `issues/073` already gave an absent constant, so the regime costs 0.
+
+    The order this asserts therefore CHANGED, and the assertions say which
+    direction they now expect and why. An empty needle costing more than a
+    matching one again means the short-circuit stopped firing.
+
+    Measured on the 10k fixture: 0 / 7,516 / 1,445,969 buffers. The gates are
+    the ORDER, not those numbers, which move with the fixture — and the values
+    are now RECORDED, because `issues/202` drifted invisibly for exactly as long
+    as this test asserted a relation without keeping the numbers.
 
     The two-character needle is deliberate. `MIN_TRIGRAM_NEEDLE = 3` is a
     decision not to optimise 1- and 2-grams, and this pins its cost so the
@@ -359,10 +372,27 @@ async def test_the_three_text_needle_regimes_stay_ordered(perf_conn):
         f"{ABSENT_NEEDLE!r} matched {rows['empty']} rows — it is not absent, "
         f"so the 'empty' regime is measuring nothing")
 
-    assert cost["matches"] < cost["empty"], (
-        f"a matching needle ({cost['matches']:,}) did not cost less than an "
-        f"empty one ({cost['empty']:,}) — the LIMIT is not short-circuiting")
-    assert cost["empty"] < cost["unservable"], (
-        f"an empty SERVABLE needle ({cost['empty']:,}) cost as much as an "
-        f"UNSERVABLE one ({cost['unservable']:,}) — the text index has stopped "
-        f"answering the empty case, so it is scanning either way")
+    assert cost["empty"] < cost["matches"], (
+        f"an empty SERVABLE needle ({cost['empty']:,}) did not cost less than a "
+        f"matching one ({cost['matches']:,}). An absent needle is provably empty "
+        f"and should be answered without a scan (issues/202); costing more means "
+        f"the short-circuit stopped firing and the query is enumerating the "
+        f"candidate set to prove a zero")
+    assert cost["matches"] < cost["unservable"], (
+        f"a matching needle ({cost['matches']:,}) cost as much as an UNSERVABLE "
+        f"one ({cost['unservable']:,}) — the text index has stopped answering "
+        f"the served case, so it is scanning either way")
+
+    # RECORD THE VALUES, not just the relation. `issues/202` drifted by orders of
+    # magnitude while this test stayed green, because an assertion between three
+    # regimes still holds while all three move together — it only broke when they
+    # crossed. Buffers rather than milliseconds for the same reason the fence
+    # bench uses them: they do not move with what else the machine is doing.
+    perf_record(kind="sql", dataset=fx.space,
+                metrics={"empty_buffers": cost["empty"],
+                         "matching_buffers": cost["matches"],
+                         "unservable_buffers": cost["unservable"],
+                         "matching_rows": rows["matches"],
+                         "empty_rows": rows["empty"]},
+                notes="text needle regimes: empty < matching < unservable "
+                      "(issues/202 — empty is provably empty and costs 0)")

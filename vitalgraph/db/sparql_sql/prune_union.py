@@ -175,10 +175,81 @@ def query_is_provably_empty(plan: PlanV2, aliases: AliasGenerator) -> bool:
     is what a typo or an over-narrow filter produces.
     """
     unresolved = _unresolved_const_names(aliases)
-    if not unresolved:
+    if unresolved:
+        dead = {f"{_CONST_PREFIX}{col}{_CONST_SUFFIX}" for col in unresolved}
+        if _required_subtree_is_dead(plan, dead):
+            return True
+    return _required_text_matches_nothing(plan, aliases)
+
+
+def _required_text_matches_nothing(plan: PlanV2, aliases: AliasGenerator) -> bool:
+    """True when a REQUIRED text filter was measured to match zero quads.
+
+    THE SAME DEFECT AS THE DOCSTRING ABOVE, for `contains` instead of `eq`, and
+    it arrived by the same route: searching for something that is not there is
+    the most expensive thing the query can do, when it should be the cheapest.
+    `issues/202` measured a six-character needle absent from a 10k fixture at
+    19,500 ms and 1,681,156 shared buffers, against 341 ms and 7,516 for a needle
+    that matches — because a matching needle satisfies `LIMIT 25` after a handful
+    of candidates and an empty one has nothing to stop it, so it enumerates the
+    whole candidate set to prove the answer is zero.
+
+    WHY A ZERO IS SAFE TO ACT ON. `text_stats` is the count of QUADS whose
+    predicate matches and whose object is in the needle's term set, and it is
+    computed with a `LIMIT` cap — but a cap can only turn a large number into a
+    smaller one, never a non-zero into a zero. So zero is EXACT, and a triple
+    pattern whose object can match no term cannot bind.
+
+    WHY THE REQUIRED-SUBTREE WALK IS REUSED RATHER THAN RE-DERIVED. "Matches
+    nothing" only makes the QUERY empty when the filter must hold: under
+    `OPTIONAL` the outer row still survives, under `UNION` a sibling may match,
+    and an aggregate over zero rows still produces a row. `_EMPTY_PROPAGATES`
+    and the `KIND_LEFT_JOIN` special case already encode exactly that, and
+    getting it wrong here returns nothing with no error — which
+    `_dead_constant_is_required` records as the failure mode that matters.
+    """
+    text_stats = getattr(aliases, "text_stats", None) or {}
+    if not text_stats:
         return False
-    dead = {f"{_CONST_PREFIX}{col}{_CONST_SUFFIX}" for col in unresolved}
-    return _required_subtree_is_dead(plan, dead)
+    return _required_subtree_text_is_dead(plan, aliases, text_stats)
+
+
+def _required_subtree_text_is_dead(plan: PlanV2, aliases, text_stats,
+                                   depth: int = 0) -> bool:
+    from .semijoin import text_specs_of_filter, text_bgp_binding
+
+    specs, bgps = [], []
+
+    def gather(node, d=0):
+        if node is None or d > 24:
+            return
+        if node.kind == KIND_FILTER:
+            specs.extend(text_specs_of_filter(node))
+        elif node.kind == KIND_BGP:
+            bgps.append(node)
+        if node.kind == KIND_LEFT_JOIN:
+            # Only the left side is required; a dead OPTIONAL still yields its
+            # outer row, so descending into the right would be a wrong answer.
+            kids = node.children or []
+            if kids:
+                gather(kids[0], d + 1)
+            return
+        if node.kind not in _EMPTY_PROPAGATES:
+            return
+        for c in (node.children or []):
+            gather(c, d + 1)
+
+    gather(plan, depth)
+    if not specs or not bgps:
+        return False
+    for var, cond in specs:
+        for bgp in bgps:
+            hit = text_bgp_binding(bgp, var, aliases)
+            if hit is not None and text_stats.get((hit[1], cond)) == 0:
+                logger.info(
+                    "provably empty: %s matched 0 quads and is required", cond)
+                return True
+    return False
 
 
 # Comparisons where an ABSENT term means "this constraint does nothing", rather

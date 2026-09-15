@@ -402,6 +402,62 @@ def needed_ins(plan, aliases) -> set:
     return out
 
 
+def text_specs_of_filter(node):
+    """(var, term_condition) for each pushed LIKE-family text filter ON THIS NODE.
+
+    Per-node and NOT recursive, unlike `needed_texts`, because the caller that
+    needs this — `prune_union._required_subtree_is_dead` — is deciding whether a
+    filter is REQUIRED, and recursing would cross the OPTIONAL and UNION
+    boundaries that decision turns on.
+
+    Built exactly as `needed_texts` builds it. That module states the rule: "the
+    gate and the emitter must accept EXACTLY the same expressions", and a third
+    caller acting on a condition the gate never measured is the same bug in a
+    new place.
+    """
+    from .filter_pushdown import _text_search_operands, _esc, _like_escape
+    from ..jena_sparql.jena_types import ExprFunction
+    from .text_needle import is_servable
+
+    for expr in (getattr(node, "filter_exprs", None) or []):
+        if not isinstance(expr, ExprFunction):
+            continue
+        name = (expr.name or "").lower()
+        if name not in ("contains", "strstarts", "strends"):
+            continue
+        ops = _text_search_operands(expr)
+        if ops is None:
+            continue
+        var, _, literal, ci, _flags, _str = ops
+        if var is None or literal is None:
+            continue
+        # An unservable needle is never pushed, so it was never measured.
+        if not is_servable(name, literal):
+            continue
+        esc = _esc(_like_escape(literal))
+        like = "ILIKE" if ci else "LIKE"
+        if name == "contains":
+            cond = f"term_text {like} '%{esc}%'"
+        elif name == "strstarts":
+            cond = f"term_text {like} '{esc}%'"
+        else:
+            cond = f"term_text {like} '%{esc}'"
+        yield var, cond
+
+
+def text_bgp_binding(bgp, var, aliases):
+    """(alias, predicate_uuid) where `bgp` binds `var` under a bound predicate."""
+    slot = (getattr(bgp, "var_slots", None) or {}).get(var)
+    if not slot or not slot.positions:
+        return None
+    alias, _col = slot.positions[0]
+    pred = (getattr(bgp, "leaf_terms", None) or {}).get((alias, "predicate_uuid"))
+    if not pred:
+        return None
+    p_uuid = _term_uuid(aliases, *pred)
+    return (alias, p_uuid) if p_uuid else None
+
+
 def needed_texts(plan, aliases) -> set:
     """(predicate_uuid, term_condition) for each LIKE-family text match.
 
