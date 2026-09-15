@@ -1,12 +1,12 @@
 {
   "schema": 1,
   "env": {
-    "started_at": "2026-09-15T00:30:19.279245+00:00",
+    "started_at": "2026-09-15T04:57:09.198564+00:00",
     "git": {
-      "commit": "2150f19e4d19a669fcb3d6ccb5bea08480039f1e",
-      "short": "2150f19e",
+      "commit": "5b272a4f8dca274a4f6713fa127555074dd72f91",
+      "short": "5b272a4f",
       "branch": "main",
-      "dirty": false,
+      "dirty": true,
       "untracked_files": 48
     },
     "machine": {
@@ -27,15 +27,13 @@
         "persist": true,
         "seeded": true,
         "fixture_tables": 296,
-        "fixture_live_tuples": 193110,
-        "seed_space_bytes": 55745585152
+        "fixture_live_tuples": 193144,
+        "seed_space_bytes": 55745658880
       },
       "flags": {
-        "persist": false,
-        "seeded": false
+        "persist": true,
+        "seeded": true
       },
-      "flags_disagree": "VG_PERF_PERSIST/VG_PERF_SEEDED say persist=False seeded=False, but the seed-only spaces hold 55,745,585,152 bytes across 296 fixture table(s). Class taken from the DATABASE. See issues/189.",
-      "promotion_blocked": "VG_PERF_PERSIST/VG_PERF_SEEDED say persist=False seeded=False, but the seed-only spaces hold 55,745,585,152 bytes across 296 fixture table(s). Class taken from the DATABASE. See issues/189.",
       "largest_gated_fixture": "lead_nurture_grouped",
       "largest_gated_fixture_bytes": 49077829632,
       "shared_buffers_bytes": 17179869184,
@@ -54,24 +52,24 @@
     },
     "stats": {
       "fixture_tables": 296,
-      "fixture_live_tuples": 193110,
-      "fixture_last_analyze": "2026-09-14T22:04:41.870580+00:00"
+      "fixture_live_tuples": 193144,
+      "fixture_last_analyze": "2026-09-15T03:50:50.149636+00:00"
     },
     "sizes": {
       "space_bytes": {
         "lead_nurture_grouped": 49077829632,
-        "sp_lead_synth_100k": 48580280320,
+        "sp_lead_synth_100k": 48583606272,
         "sp_graph_synth_100k": 10681884672,
-        "wordnet_frames": 6538092544,
-        "sp_lead_synth_10k": 4886667264,
+        "wordnet_frames": 6538166272,
+        "sp_lead_synth_10k": 4888559616,
         "sp_graph_forms_20k": 2878218240,
         "sp_graph_rel_10k": 1824382976,
         "sp_graph_synth_10k": 1411350528,
-        "sp_lead_types": 919789568,
+        "sp_lead_types": 921337856,
         "sp_graph_skew_2k": 348930048,
-        "kg_load_test": 268075008,
-        "sp_lead_dup": 209321984,
-        "sp_kg_rel": 190636032,
+        "kg_load_test": 268042240,
+        "sp_lead_dup": 209682432,
+        "sp_kg_rel": 190668800,
         "sp_sql_lead_dataset": 152502272,
         "space_lead_dataset_test": 129662976,
         "inttest_blauto_aa80": 30941184,
@@ -85,47 +83,53 @@
         "inttest_crud_11d7a6a9": 2097152,
         "inttest_lock_d79ec390": 2072576,
         "inttest_count_9929e3e": 2056192,
-        "inttest_fe_37382a57": 2031616,
+        "inttest_fe_37382a57": 2048000,
         "inttest_fe_b4984969": 1949696,
-        "inttest_exsrc_5da8": 1679360,
-        "inttest_exdst_0637": 1679360,
         "inttest_ddc47b92f17c": 1654784,
-        "inttest_b142990a5bbf": 1654784,
-        "inttest_0d425578a601": 1654784,
-        "inttest_23c001e0ead5": 1654784,
         "inttest_41aa8cca9418": 1654784,
+        "inttest_0d425578a601": 1654784,
+        "inttest_b142990a5bbf": 1654784,
+        "inttest_23c001e0ead5": 1654784,
+        "inttest_exsrc_5da8": 1646592,
+        "inttest_exdst_0637": 1646592,
         "inttest_chn_9f83d8eb": 1613824,
         "inttest_defer_95d0a8b": 1589248,
-        "inttest_exsrc_b516": 1581056,
         "inttest_exsrc_b227": 1581056,
-        "inttest_22bc8adf10b2": 1523712,
-        "inttest_d6569d801e68": 1523712,
-        "inttest_cdc1e5dd31f1": 1523712,
-        "inttest_898ebdbc4dc5": 1523712,
-        "inttest_f8775897b69e": 1523712,
-        "inttest_a77048c22bd4": 1523712,
-        "inttest_exsrc_d5e0": 1523712,
-        "inttest_exsrc_16f6": 1523712,
         "inttest_exdst_02d9": 1523712,
+        "inttest_exsrc_16f6": 1523712,
         "inttest_exsrc_68fa": 1523712,
         "inttest_exdst_c8f8": 1523712,
-        "inttest_fd7633c64aa8": 1523712,
-        "inttest_e5e3afdcb158": 1523712,
-        "inttest_b3d76408cd9e": 1523712,
-        "inttest_54847ad4c47e": 1523712,
         "inttest_dstat_5e4f648": 1523712,
+        "inttest_exsrc_b516": 1515520,
         "inttest_cou_15fb4a74": 1515520,
-        "inttest_2d597b90f0f1": 1490944,
-        "inttest_ct_6e5dbe63": 1490944,
-        "inttest_ct_baa9844a": 1490944,
+        "inttest_a77048c22bd4": 1490944,
+        "inttest_exsrc_d5e0": 1490944,
+        "inttest_22bc8adf10b2": 1490944,
+        "inttest_d6569d801e68": 1490944,
+        "inttest_fd7633c64aa8": 1490944,
+        "inttest_b3d76408cd9e": 1490944,
+        "inttest_54847ad4c47e": 1490944,
         "inttest_2d74d74c13a3": 1490944,
         "inttest_ct_5a54bd86": 1490944,
         "inttest_ct_bde51e10": 1490944,
         "inttest_ct_34bdce55": 1490944,
+        "inttest_cdc1e5dd31f1": 1490944,
+        "inttest_2d597b90f0f1": 1490944,
         "inttest_dtacc_14c0a6d": 1490944,
-        "inttest_ct_f53bd761": 1490944,
         "inttest_dtacc_73a6ac6": 1490944,
+        "inttest_898ebdbc4dc5": 1490944,
+        "inttest_f8775897b69e": 1490944,
+        "inttest_ct_6e5dbe63": 1490944,
+        "inttest_ct_baa9844a": 1490944,
+        "inttest_dtq_63db6180": 1490944,
+        "inttest_dg_2d4881a1": 1490944,
+        "inttest_dg_105251f9": 1490944,
+        "inttest_dg_a8ce6fb5": 1490944,
+        "inttest_e5e3afdcb158": 1490944,
+        "inttest_ct_f53bd761": 1490944,
         "inttest_dtacc_849903c": 1490944,
+        "inttest_lm_79f90b8a": 1490944,
+        "inttest_lm_a69c8939": 1490944,
         "inttest_dtacc_f28f937": 1490944,
         "inttest_dtacc_16b6d73": 1490944,
         "inttest_dtacc_97f36d3": 1490944,
@@ -134,40 +138,39 @@
         "inttest_dtacc_3eb9d3c": 1490944,
         "inttest_dtacc_e6e6ca7": 1490944,
         "inttest_dteq_dc3c046a": 1490944,
-        "inttest_dtq_f4dfa15e": 1490944,
-        "inttest_dtq_d466219c": 1490944,
-        "inttest_dtq_63db6180": 1490944,
         "inttest_dtq_2ef41015": 1490944,
         "inttest_dg_27147e7a": 1490944,
-        "inttest_dg_2d4881a1": 1490944,
-        "inttest_dg_105251f9": 1490944,
-        "inttest_dg_a8ce6fb5": 1490944,
         "inttest_dstat_eac3677": 1490944,
         "inttest_greg_cfde0b36": 1490944,
-        "inttest_greg_39fc808b": 1490944,
         "inttest_dteq_74bc5b73": 1490944,
-        "inttest_lm_79f90b8a": 1490944,
-        "inttest_lm_a69c8939": 1490944,
+        "inttest_dtq_f4dfa15e": 1490944,
+        "inttest_dtq_d466219c": 1490944,
         "inttest_dtq_424b9ea3": 1490944,
         "inttest_dtq_29eb2e71": 1490944,
         "inttest_dg_867df776": 1490944,
         "inttest_dstat_bfac803": 1490944,
         "inttest_cyc_334959f6": 1490944,
-        "inttest_lock_78156924": 1490944,
+        "inttest_greg_39fc808b": 1490944,
         "inttest_lm_f4b46a96": 1490944,
+        "inttest_lock_78156924": 1490944,
         "inttest_7579568efc6c": 1449984,
         "inttest_dstat_71c0389": 1449984,
         "inttest_c6de6b59dc2e": 1433600,
         "inttest_tp_1520ab36": 1253376,
+        "inttest_blem_33da": 1253376,
         "inttest_tp_b1de347b": 1253376,
         "inttest_527da2a2f063": 1253376,
+        "inttest_dteq_126f040c": 1253376,
+        "inttest_dteq_842e8d70": 1253376,
         "inttest_tp_1d0bbcfb": 1253376,
         "inttest_tp_54cddf19": 1253376,
+        "inttest_dteq_021c820e": 1253376,
         "inttest_exdst_5e1b": 1253376,
         "inttest_exdst_cf70": 1253376,
         "inttest_exdst_f402": 1253376,
+        "inttest_dteq_df53deb1": 1253376,
+        "inttest_dteq_2c6dbdc5": 1253376,
         "inttest_tp_3feb4c1e": 1253376,
-        "inttest_blem_33da": 1253376,
         "inttest_tp_080534fe": 1253376,
         "inttest_tp_9cf408b9": 1253376,
         "inttest_tp_06a4c75d": 1253376,
@@ -176,30 +179,24 @@
         "inttest_tp_a63a8368": 1253376,
         "inttest_tp_d28af529": 1253376,
         "inttest_tp_d465ad1d": 1253376,
+        "inttest_tp_65614310": 1253376,
         "inttest_dteq_d174ff06": 1253376,
-        "inttest_dteq_126f040c": 1253376,
-        "inttest_dteq_842e8d70": 1253376,
+        "inttest_tp_d915b65e": 1253376,
+        "inttest_tp_13fd5d29": 1253376,
         "inttest_dteq_d3142f54": 1253376,
-        "inttest_dteq_021c820e": 1253376,
-        "inttest_dteq_df53deb1": 1253376,
-        "inttest_dteq_2c6dbdc5": 1253376,
         "inttest_dteq_72955602": 1253376,
         "inttest_dteq_e03977bb": 1253376,
+        "inttest_strdt_0c5b63c": 1253376,
+        "inttest_strdt_b24d09c": 1253376,
+        "inttest_lm_1741913d": 1253376,
+        "inttest_lm_8f75847a": 1253376,
         "inttest_lm_7ce0ddf5": 1253376,
         "inttest_lm_b1cf9538": 1253376,
         "inttest_lm_7da1e24e": 1253376,
         "inttest_lm_9ae13a50": 1253376,
-        "inttest_lm_8f75847a": 1253376,
         "inttest_9e9913e818f1": 1253376,
         "inttest_79eba30da51a": 1253376,
         "inttest_tp_9e078f28": 1253376,
-        "inttest_tp_65614310": 1253376,
-        "inttest_tp_d915b65e": 1253376,
-        "inttest_tp_13fd5d29": 1253376,
-        "inttest_tp_2dd0674e": 1253376,
-        "inttest_lm_1741913d": 1253376,
-        "inttest_strdt_2ac9832": 1253376,
-        "inttest_strdt_0c5b63c": 1253376,
         "inttest_lm_5c8ea875": 1253376,
         "inttest_lm_589a7152": 1253376,
         "inttest_lm_236ab8d7": 1253376,
@@ -208,9 +205,10 @@
         "inttest_lm_1647a2d3": 1253376,
         "inttest_lm_363270e7": 1253376,
         "inttest_lm_0efb0185": 1253376,
+        "inttest_tp_2dd0674e": 1253376,
         "inttest_tp_ffaafb35": 1253376,
+        "inttest_strdt_2ac9832": 1253376,
         "inttest_strdt_58c3ea9": 1253376,
-        "inttest_strdt_b24d09c": 1253376,
         "inttest_strdt_2029c94": 1253376,
         "inttest_strdt_9f4d5d5": 1253376,
         "inttest_strdt_ba121b3": 1253376
@@ -218,7 +216,7 @@
       "largest_gated_fixture": "lead_nurture_grouped",
       "largest_gated_fixture_bytes": 49077829632
     },
-    "finished_at": "2026-09-15T01:12:09.602992+00:00"
+    "finished_at": "2026-09-15T05:29:19.231612+00:00"
   },
   "benches": [
     {
@@ -251,8 +249,17 @@
     },
     {
       "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-specific-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 26684,
+        "unfenced_buffers": 10072682,
+        "needs_ordered_scan": true,
+        "page_size": 100,
+        "fence_ratio": 0.003
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "contains / Lead / page 100 \u2014 issues/190 fence coverage"
     },
     {
       "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-specific-10k]",
@@ -298,8 +305,17 @@
     },
     {
       "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-specific-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 117782,
+        "unfenced_buffers": 11520309,
+        "needs_ordered_scan": true,
+        "page_size": 100,
+        "fence_ratio": 0.01
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "eq-common / Lead / page 100 \u2014 issues/190 fence coverage"
     },
     {
       "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-specific-10k]",
@@ -320,7 +336,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 155461,
+        "fenced_buffers": 155471,
         "unfenced_buffers": 36358,
         "needs_ordered_scan": false,
         "page_size": 100,
@@ -401,8 +417,16 @@
     },
     {
       "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-specific-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 39995,
+        "unfenced_buffers": null,
+        "needs_ordered_scan": true,
+        "page_size": 100
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "range-loose / Lead / page 100 \u2014 issues/190 fence coverage"
     },
     {
       "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-specific-10k]",
@@ -423,11 +447,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 2085019,
-        "unfenced_buffers": 27087,
+        "fenced_buffers": 2239240,
+        "unfenced_buffers": 27901,
         "needs_ordered_scan": false,
         "page_size": 100,
-        "fence_ratio": 76.975
+        "fence_ratio": 80.257
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
@@ -479,11 +503,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 13843008,
-        "unfenced_buffers": 21175,
+        "fenced_buffers": 13843836,
+        "unfenced_buffers": 21995,
         "needs_ordered_scan": false,
         "page_size": 100,
-        "fence_ratio": 653.743
+        "fence_ratio": 629.408
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
@@ -504,8 +528,17 @@
     },
     {
       "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-specific-100k]",
-      "status": "failed",
-      "reason": "assertion/error during call"
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 8698942,
+        "unfenced_buffers": 11631590,
+        "needs_ordered_scan": false,
+        "page_size": 100,
+        "fence_ratio": 0.748
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "range-tight / Lead / page 100 \u2014 issues/190 fence coverage"
     },
     {
       "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-specific-10k]",
@@ -638,7 +671,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 66069,
+        "fenced_buffers": 66072,
         "unfenced_buffers": 36058,
         "needs_ordered_scan": false,
         "page_size": 25,
@@ -750,11 +783,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 2140485,
-        "unfenced_buffers": 14477,
+        "fenced_buffers": 2070935,
+        "unfenced_buffers": 14671,
         "needs_ordered_scan": false,
         "page_size": 25,
-        "fence_ratio": 147.854
+        "fence_ratio": 141.158
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
@@ -803,15 +836,24 @@
     },
     {
       "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-generic-100k]",
-      "status": "unrecorded",
-      "reason": "test passed but recorded no metrics"
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "fenced_buffers": 13828823,
+        "unfenced_buffers": 7012,
+        "needs_ordered_scan": false,
+        "page_size": 25,
+        "fence_ratio": 1972.165
+      },
+      "dataset": "sp_lead_synth_100k",
+      "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
     },
     {
       "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-generic-10k]",
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 534418,
+        "fenced_buffers": 534419,
         "unfenced_buffers": 2154,
         "needs_ordered_scan": false,
         "page_size": 25,
@@ -851,8 +893,8 @@
   ],
   "baseline": {
     "name": "coverage",
-    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260915T003016Z-2150f19e.json",
-    "reason": "",
+    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260915T045701Z-5b272a4f.json",
+    "reason": "First coverage baseline over the regenerated fixtures (issues/204) and the first with a clean stamp: flags {persist:True,seeded:True}, promotion_blocked NONE, which closes the issues/190 refusal for this tier. ZERO holes, against five before: 29f5d9b3 fixed the fence bench recording on every verdict path, so cells whose plan timed out now carry values instead of PASSING silently and leaving a hole. The DIRTY flag is a baseline JSON file only -- tests/performance/baselines/query.json was promoted moments earlier and not yet committed (it is now, 534ce2f3); no code or fixture differed. The one test failure is issues/202, a known open defect, and is not a bench cell.",
     "pg_stamped": true
   }
 }
