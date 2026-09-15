@@ -33,6 +33,7 @@ None means DO NOT ABSORB. Every failure path returns it.
 from __future__ import annotations
 
 import logging
+import time as _time
 from typing import Optional
 
 from .db_provider import bounded_lock_wait
@@ -66,6 +67,13 @@ VITALTYPE_URI = "http://vital.ai/ontology/vital-core#vitaltype"
 # table and read for free. Until then, bounded and usually None.
 AGREEMENT_TIMEOUT_MS = 250
 
+# How long the row count backing `_CACHE`'s key may be reused without re-reading
+# it. See the note in `frame_type_absorbable`: the count is a full scan and runs
+# per query, where the verdict it guards is a schema-level property that changes
+# only when the frames in a space stop agreeing about their own type.
+COUNT_MEMO_TTL_S = 30.0
+_COUNT_MEMO: dict = {}
+
 
 def clear_cache() -> None:
     _CACHE.clear()
@@ -93,12 +101,40 @@ async def frame_type_absorbable(space_id: str, type_predicate: str,
 
     t_fs = f"{space_id}_frame_slot"
     key = (space_id, "frame", type_predicate)
-    try:
-        async with bounded_lock_wait(conn):
-            rows = await conn.fetchval(f"SELECT count(*) FROM {t_fs}")
-    except Exception as exc:
-        logger.debug("frame-type agreement: count failed: %s", exc)
-        return None
+
+    # THE COUNT IS THE EXPENSIVE PART, not the verdict it guards.
+    #
+    # `_CACHE` keys the verdict on the table's row count, so a changed table
+    # re-derives it. But the count is a full scan, and this runs on EVERY query
+    # that mentions a frame type: measured on `lead_nurture_grouped`
+    # (4,077,000 rows / 1,779 MB) at ~180 ms, which was 98% of SQL GENERATION
+    # for an ordinary 25-entity page — 185 ms of generation against 68 ms of
+    # execution. The cache was saving a 250 ms verdict by paying 180 ms to ask
+    # whether it was still valid.
+    #
+    # So the count itself is memoised for a short window. This does NOT weaken
+    # the guard as much as it appears: the existing cache already reuses a
+    # verdict whenever the row count is unchanged, so a change that PRESERVES
+    # the count already yields a stale verdict. The window only adds staleness
+    # for a change that alters it.
+    #
+    # Short, and deliberately so. The dangerous direction is a table that became
+    # EMPTY being answered from a cached TRUE — the vacuous agreement that
+    # returned zero rows on eight tests in `issues/182`. A truncate followed by a
+    # query inside the window would do that, so the window is seconds rather than
+    # minutes, and a resync is far slower than it either way.
+    now = _time.monotonic()
+    memo = _COUNT_MEMO.get(key)
+    if memo is not None and (now - memo[0]) < COUNT_MEMO_TTL_S:
+        rows = memo[1]
+    else:
+        try:
+            async with bounded_lock_wait(conn):
+                rows = await conn.fetchval(f"SELECT count(*) FROM {t_fs}")
+        except Exception as exc:
+            logger.debug("frame-type agreement: count failed: %s", exc)
+            return None
+        _COUNT_MEMO[key] = (now, rows)
 
     if not rows:
         # VACUOUS, not agreement. An empty table produces no counterexample, so
