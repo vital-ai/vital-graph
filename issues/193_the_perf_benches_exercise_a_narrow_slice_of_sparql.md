@@ -117,10 +117,14 @@ number existed.
 
 ## Still absent
 
-    DESCRIBE, ASK          0
+    DESCRIBE               0   (ASK is now covered, and was a defect —
+                                see `issues/206`)
     SERVICE                0
     REGEX                  0   (CONTAINS and LCASE are now covered)
-    UPDATE forms           0   (issues/192 owns these)
+    UPDATE forms           DONE 2026-09-15 — `write.update.insert_vs_modify`
+                           covers INSERT DATA, INSERT WHERE and the MODIFY
+                           form; DELETE was already covered by
+                           `write.delete.concrete_vs_deferred`
     CONSTRUCT              1   (issues/178 and 182 are CONSTRUCT defects, and
                                 the one existing case is not either of them)
 

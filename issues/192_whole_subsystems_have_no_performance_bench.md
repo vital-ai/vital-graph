@@ -171,7 +171,7 @@ this is that item re-counted), `unexplored_performance_surface.md` §1,
 | surface | correctness tests | bench cells | |
 |---|---|---|---|
 | writes / ingest | yes | **3** | `copy_speedup`, `e2e_speedup`, `quads_per_sec` |
-| SPARQL UPDATE / DELETE | yes | **0** | deletes touch the derived tables; that rebuild is exactly the cost that has surprised us before. **Highest value.** |
+| SPARQL UPDATE / DELETE | yes | **2, DONE 2026-09-15** | DELETE was already covered by `write.delete.concrete_vs_deferred` (concrete, WHERE-bound, and the sweep) — this row read 0 while half the surface was benched. The INSERT side is now `write.update.insert_vs_modify`: INSERT DATA 6,074ms/6k quads, INSERT WHERE 1,415ms, MODIFY 745ms |
 | concurrency at scale | driver exists | **11, BASELINED 2026-09-14** | `baselines/load.json` @ `cd516f89` — 10 users/60s read-only, 28.2 req/s, 0 failures, 10 per-operation cells plus throughput |
 | entity-graph flag | yes | **8, BENCHED 2026-09-14** | `query.entity_graph.fanout` on `lead_nurture_grouped` — the ONLY fixture with `hasKGGraphURI` at scale. Steady state: base 667ms, cold 861ms, warm 874ms, fan-out delta **193ms** for 18,653 quads. The fan-out is NOT the expensive part |
 | vector / semantic search | yes | **1, DONE** | `vector.index_and_search` in `ingest.json` — HNSW over a populated index (it builds the index, so ingest tier) |
