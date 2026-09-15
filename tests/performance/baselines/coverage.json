@@ -1,12 +1,12 @@
 {
   "schema": 1,
   "env": {
-    "started_at": "2026-09-15T04:57:09.198564+00:00",
+    "started_at": "2026-09-15T13:12:03.756306+00:00",
     "git": {
-      "commit": "5b272a4f8dca274a4f6713fa127555074dd72f91",
-      "short": "5b272a4f",
+      "commit": "5651dfc3ab8a9e537009089b6039028589b63dcd",
+      "short": "5651dfc3",
       "branch": "main",
-      "dirty": true,
+      "dirty": false,
       "untracked_files": 48
     },
     "machine": {
@@ -216,7 +216,7 @@
       "largest_gated_fixture": "lead_nurture_grouped",
       "largest_gated_fixture_bytes": 49077829632
     },
-    "finished_at": "2026-09-15T05:29:19.231612+00:00"
+    "finished_at": "2026-09-15T13:49:19.768304+00:00"
   },
   "benches": [
     {
@@ -447,11 +447,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 2239240,
-        "unfenced_buffers": 27901,
+        "fenced_buffers": 2245648,
+        "unfenced_buffers": 21027,
         "needs_ordered_scan": false,
         "page_size": 100,
-        "fence_ratio": 80.257
+        "fence_ratio": 106.798
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
@@ -461,11 +461,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 544767,
-        "unfenced_buffers": 12868,
+        "fenced_buffers": 543127,
+        "unfenced_buffers": 11228,
         "needs_ordered_scan": false,
         "page_size": 100,
-        "fence_ratio": 42.335
+        "fence_ratio": 48.373
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
@@ -475,11 +475,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 1323010,
-        "unfenced_buffers": 1852532,
+        "fenced_buffers": 1627434,
+        "unfenced_buffers": 2156956,
         "needs_ordered_scan": false,
         "page_size": 100,
-        "fence_ratio": 0.714
+        "fence_ratio": 0.755
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "range-mid / Lead / page 100 \u2014 issues/190 fence coverage"
@@ -503,11 +503,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 13843836,
-        "unfenced_buffers": 21995,
+        "fenced_buffers": 13836928,
+        "unfenced_buffers": 15090,
         "needs_ordered_scan": false,
         "page_size": 100,
-        "fence_ratio": 629.408
+        "fence_ratio": 916.96
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
@@ -517,28 +517,19 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 534419,
-        "unfenced_buffers": 2154,
+        "fenced_buffers": 534159,
+        "unfenced_buffers": 1894,
         "needs_ordered_scan": false,
         "page_size": 100,
-        "fence_ratio": 248.105
+        "fence_ratio": 282.027
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
     },
     {
       "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 8698942,
-        "unfenced_buffers": 11631590,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 0.748
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-tight / Lead / page 100 \u2014 issues/190 fence coverage"
+      "status": "failed",
+      "reason": "assertion/error during call"
     },
     {
       "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-specific-10k]",
@@ -783,11 +774,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 2070935,
-        "unfenced_buffers": 14671,
+        "fenced_buffers": 2196677,
+        "unfenced_buffers": 11237,
         "needs_ordered_scan": false,
         "page_size": 25,
-        "fence_ratio": 141.158
+        "fence_ratio": 195.486
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
@@ -797,11 +788,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 536222,
-        "unfenced_buffers": 12640,
+        "fenced_buffers": 535722,
+        "unfenced_buffers": 11000,
         "needs_ordered_scan": false,
         "page_size": 25,
-        "fence_ratio": 42.423
+        "fence_ratio": 48.702
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
@@ -811,11 +802,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 227051,
-        "unfenced_buffers": 400585,
+        "fenced_buffers": 279251,
+        "unfenced_buffers": 452785,
         "needs_ordered_scan": false,
         "page_size": 25,
-        "fence_ratio": 0.567
+        "fence_ratio": 0.617
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "range-mid / Lead / page 25 \u2014 issues/190 fence coverage"
@@ -839,11 +830,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 13828823,
-        "unfenced_buffers": 7012,
+        "fenced_buffers": 13827122,
+        "unfenced_buffers": 5316,
         "needs_ordered_scan": false,
         "page_size": 25,
-        "fence_ratio": 1972.165
+        "fence_ratio": 2601.039
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
@@ -853,11 +844,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 534419,
-        "unfenced_buffers": 2154,
+        "fenced_buffers": 534159,
+        "unfenced_buffers": 1894,
         "needs_ordered_scan": false,
         "page_size": 25,
-        "fence_ratio": 248.105
+        "fence_ratio": 282.027
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
@@ -867,11 +858,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 1857958,
-        "unfenced_buffers": 2564828,
+        "fenced_buffers": 2285942,
+        "unfenced_buffers": 2992812,
         "needs_ordered_scan": false,
         "page_size": 25,
-        "fence_ratio": 0.724
+        "fence_ratio": 0.764
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "range-tight / Lead / page 25 \u2014 issues/190 fence coverage"
@@ -889,12 +880,26 @@
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "range-tight / Lead / page 25 \u2014 issues/190 fence coverage"
+    },
+    {
+      "bench_id": "query.kgquery.text_needle_regimes",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "empty_buffers": 0,
+        "matching_buffers": 7516,
+        "unservable_buffers": 1445968,
+        "matching_rows": 25.0,
+        "empty_rows": 0.0
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "text needle regimes: empty < matching < unservable (issues/202 \u2014 empty is provably empty and costs 0)"
     }
   ],
   "baseline": {
     "name": "coverage",
-    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260915T045701Z-5b272a4f.json",
-    "reason": "First coverage baseline over the regenerated fixtures (issues/204) and the first with a clean stamp: flags {persist:True,seeded:True}, promotion_blocked NONE, which closes the issues/190 refusal for this tier. ZERO holes, against five before: 29f5d9b3 fixed the fence bench recording on every verdict path, so cells whose plan timed out now carry values instead of PASSING silently and leaving a hole. The DIRTY flag is a baseline JSON file only -- tests/performance/baselines/query.json was promoted moments earlier and not yet committed (it is now, 534ce2f3); no code or fixture differed. The one test failure is issues/202, a known open defect, and is not a bench cell.",
+    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260915T131112Z-5651dfc3.json",
+    "reason": "",
     "pg_stamped": true
   }
 }
