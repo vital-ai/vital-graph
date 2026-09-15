@@ -220,17 +220,33 @@ on the milliseconds.
 the same finding as `issues/203` from the other direction — the expensive thing
 is the entity paging query, not the decoration on top of it.
 
-**And the cache does not pay for itself in steady state.** `page_warm_ms`
-(874ms) is SLOWER than `page_cold_ms` (861ms) — within noise, but the cache
-should have saved the 193ms fan-out and did not. `_entity_graph_cache` holds up
-to 10,000 entity graphs for 900s (at ~745 quads each that is millions of quads
-resident) and carries invalidation machinery on every write path. Its
-demonstrated benefit is confined to the first-touch regime. Whether it hits at
-all in steady state is NOT yet established and is the open question here —
-`_effective_graph = graph_id or "default"` is the kind of key mismatch that
-would make it silently never hit. Not yet filed — it needs the
-server's cache-stats endpoint checked first, and a guess in an issue is
-worse than no issue.
+**The cache DOES pay for itself, and my earlier reading here was wrong.**
+Measured 2026-09-15 against `/health/cache`, on offsets no run had touched:
+
+    offset 31337   cold 15,924ms -> repeat 1,041ms    25 misses then 25 hits
+    offset 44444   cold  4,510ms -> repeat 1,042ms    25 misses then 25 hits
+    offset 58888   cold  2,996ms -> repeat   865ms    25 misses then 25 hits
+
+Clean 25-miss/25-hit pairs every time, so there is NO key mismatch — the
+`_effective_graph = graph_id or "default"` suspicion recorded here earlier is
+disproved. Cumulative hit rate on the instance was 45.5% (125 hits / 150
+misses), and the entry count matched the fan-out bench exactly (150 = 6 pages
+x 25), which is what identifies those hits as the bench's own.
+
+The earlier conclusion — "warm is slower than cold, so the cache saves
+nothing" — was an artefact of WHICH PAGES were measured. Offsets 1000-3000 had
+already been pulled into PostgreSQL's buffers by previous probes, so "cold"
+there was only app-cache-cold and cost about the same as warm. On a page that
+is genuinely untouched the cache is worth 2 to 15 SECONDS.
+
+**Which makes the real finding the cold fan-out, not the cache.** A read-only
+entity-graph page over this 74.5M-quad space costs 3.0-15.9s on first touch,
+returning ~18,600 quads — roughly 1,200 quads/second at the worst offset, which
+is the signature of scattered random reads rather than an index walk. The cache
+hides it completely on re-access, which is why nothing has ever flagged it, but
+every FIRST access to an entity pays it and production does that constantly.
+That is the standing rule's territory: no read-only query should take that
+long, and if it does the method is wrong.
 
 ### What the load baseline may be gated on — measured, not assumed
 

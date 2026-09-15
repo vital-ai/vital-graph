@@ -231,6 +231,35 @@ async def test_a_flippable_shape_is_always_fenced(
     where = (f"[{fx.label}] {shape_id} / {entity_type.rsplit(':', 1)[-1]} / "
              f"page {page_size}")
 
+    def record():
+        """Record whatever was measured, including a HALF-measured pair.
+
+        Called on every path that reaches a verdict, not only the one where both
+        sides finished. The two `return`s below ARE verdicts -- "the fence is
+        applied to a shape that needs a sort" and "the unfenced plan is the one
+        served" -- and they returned without recording, so the cell passed and
+        still landed in the baseline as a hole.
+
+        That is the same defect the note at the end of this function describes,
+        fixed there for the both-finished path only. It cost four cells in
+        `coverage.json` on 2026-09-14, while the run reported 47 passed and ZERO
+        skipped: they read as never benched when in fact they had passed. A hole
+        gates nothing, and a hole produced BY A PASS is invisible, because there
+        is no failure to go and look at.
+
+        A side that did not finish stays None rather than 0 -- zero reads as
+        "free" to every comparison downstream and not-finishing is the opposite
+        -- and `fence_ratio` is omitted rather than divided by a number that is
+        not there, so the cell still gates on the side that did finish.
+        """
+        metrics = {"fenced_buffers": fenced, "unfenced_buffers": unfenced,
+                   "needs_ordered_scan": bool(flag), "page_size": page_size}
+        if fenced is not None and unfenced:
+            metrics["fence_ratio"] = round(fenced / unfenced, 3)
+        perf_record(kind="sql", dataset=fx.space, metrics=metrics,
+                    notes=f"{shape_id} / {entity_type.rsplit(':', 1)[-1]} / "
+                          f"page {page_size} — issues/190 fence coverage")
+
     # A side that could not finish is not the cheaper side.
     if fenced is None:
         assert not flag, (
@@ -239,12 +268,14 @@ async def test_a_flippable_shape_is_always_fenced(
             f"{WARM_TIMEOUT_MS}ms retry, while the unfenced one took "
             f"{unfenced:,} buffers. The fence is being applied to a shape that "
             f"needs a sort — the 273x shape this repository warns about.")
+        record()
         return
     if unfenced is None:
         assert flag, (
             f"{where}: the UNFENCED plan did not finish in {PROBE_TIMEOUT_MS}ms, "
             f"nor in a confirming {WARM_TIMEOUT_MS}ms retry on a warmed cache, "
             f"and `needs_ordered_scan` is NOT set, so that is the plan served.")
+        record()
         return
 
     if fenced * DECISIVE < unfenced:
@@ -271,13 +302,7 @@ async def test_a_flippable_shape_is_always_fenced(
     # read as "free" to every comparison downstream, and "this plan does not
     # finish" is the opposite of free — it is the finding. The ratio is omitted
     # for the same reason instead of dividing by a number that is not there.
-    metrics = {"fenced_buffers": fenced, "unfenced_buffers": unfenced,
-               "needs_ordered_scan": bool(flag), "page_size": page_size}
-    if fenced is not None and unfenced:
-        metrics["fence_ratio"] = round(fenced / unfenced, 3)
-    perf_record(kind="sql", dataset=fx.space, metrics=metrics,
-                notes=f"{shape_id} / {entity_type.rsplit(':', 1)[-1]} / "
-                      f"page {page_size} — issues/190 fence coverage")
+    record()
 
 
 @pytest.mark.coverage_bench
