@@ -209,3 +209,52 @@ full pytest output for the failing cell — specifically WHICH assertion fires
 (`fenced is None` with the flag set, `unfenced is None` with it unset, or the
 buffer comparison) — before changing anything. Two attempts have now been spent
 guessing at a message that was never in hand.
+
+## 2026-09-15, investigated properly — the cell OSCILLATES, and both outcomes are holes
+
+The assertion text still has not been read, and that is now a finding rather
+than an omission: across five coverage runs the cell reached an assertion three
+times and skipped twice, and it skipped on the run that was captured in full.
+
+    run 1  pre-fix          FAILED    37 min
+    run 2  record() fix     (202 failed instead)
+    run 3  202 fixed        FAILED    37 min
+    run 4  warm pairing     FAILED    51 min
+    run 5  reverted         SKIPPED   37 min   <- captured, tier PASSED
+
+Run standalone as a file it also SKIPS: "neither plan finished within the probe
+timeout", 48 passed 1 skipped.
+
+### What actually distinguishes the two outcomes
+
+Not load in the direction assumed. The test bails with a SKIP only when
+BOTH sides time out, and reaches an assertion when exactly ONE does:
+
+    both time out    -> skip, no verdict, tier passes, cell is an UNRECORDED hole
+    one finishes     -> a verdict is reached, the flag disagrees, tier FAILS
+
+So a warmer fixture makes failure MORE likely, not less, because it pushes one
+side over the 20 s line while the other stays under. That is why the warm-up
+pairing attempt above made things worse rather than better: it warmed each plan
+more effectively, which is movement toward the one-side-finishes state.
+
+### The consequence that matters
+
+EITHER OUTCOME IS A HOLE. A skip records nothing and a failure records nothing,
+so `coverage.json` carries this cell empty whichever way the run lands. The
+difference is only whether the tier reports red, which makes the red/green
+signal noise rather than information.
+
+### What would actually close it
+
+Make BOTH sides finish, reliably, so the buffer comparison can be made and a
+value recorded. `issues/117` measured this shape at ~5 s warm against >20 s
+cold, so the budget is not absurd — the difficulty is getting both plans warm
+at once on a fixture larger than the pool, which the paired warm-up moved
+toward and did not reach.
+
+That is a real piece of work with a measurable end state (the cell records a
+value instead of a hole), and it should be judged against its cost: the paired
+warm-up alone added 14 minutes to a 37-minute tier. Accepting the skip, as this
+issue originally proposed, remains defensible — but it should be an explicit
+choice, with the knowledge that the cell gates nothing either way.
