@@ -177,3 +177,35 @@ timing out should not take the rest of the sweep down with it.
 Updating the criterion this issue offered: anything other than `SKIPPED [1]`
 means something changed, but "something" includes the fixture getting bigger
 and the suite running longer, not only the shape regressing.
+
+## 2026-09-15 — the retry budget is NOT the lever, and neither is the warm-up
+
+This issue offered the criterion "a run reporting anything other than
+`SKIPPED [1]` here has changed something real", and suggested the retry budget
+as the lever. Both were tested and neither holds.
+
+**The budget is not it.** It is already `WARM_TIMEOUT_MS = 120_000`, and the
+cell PASSES ALONE at that budget. So 120 s is not the difference between
+passing alone and failing in a serial run.
+
+**The warm-up pairing is not it either.** Hypothesis: `_warm` warmed both plans
+up front, unfenced then fenced, so on a 22 GB fixture in a 16 GB pool warming
+the second evicts the first one's set and the first probe runs cold anyway —
+which would explain an outcome that depends on pool pressure. Implemented as
+pairing each warm-up with its own probe, with the retry re-warming too, then
+measured across a full coverage tier:
+
+    before   37 min   1 failed / 48 passed   hole: p100-range-tight-specific-100k
+    after    51 min   1 failed / 48 passed   hole: p100-range-tight-specific-100k
+
+Same cell, same hole, and 14 minutes slower — the retry re-warm costs most of
+that on the slow shapes. REVERTED (`90544013`): it fixes nothing observable and
+makes the tier 38% longer.
+
+**What the next attempt needs first.** Not another hypothesis. The assertion
+text has never actually been read: the tier is launched with `| tail -N`, which
+truncates the traceback, and the cell cannot be reproduced alone. Capture the
+full pytest output for the failing cell — specifically WHICH assertion fires
+(`fenced is None` with the flag set, `unfenced is None` with it unset, or the
+buffer comparison) — before changing anything. Two attempts have now been spent
+guessing at a message that was never in hand.
