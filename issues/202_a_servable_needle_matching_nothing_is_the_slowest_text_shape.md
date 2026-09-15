@@ -131,3 +131,52 @@ there is no index probe to return empty cheaply.
 
 Nothing here is about the trigram index being unusable. The 6-character needle
 is servable; it is simply never given the chance to drive.
+
+## Attempted 2026-09-15, REVERTED — the blocker is a layer above `emit_slice`
+
+The fix `emit_slice` names ("teach the driver to carry pushed filter
+conditions") was implemented and backed out, because the driver is never
+reached for this shape. What the attempt established:
+
+**1. The driver is already correct, and already carries the ILIKE.**
+`filter_pushdown` pushes the text condition INTO the BGP
+(`term_type = 'L' AND (term_text ILIKE ...)`), so `emit_bgp_anchor` emits it in
+the BGP's own WHERE. A differential run — same query with
+`_text_leaf_should_drive` forced False — returns an IDENTICAL row set, driven
+and undriven, for both the matching and the empty needle. So the comment's
+warning ("driving from its BGP drops the ILIKE entirely") describes a state the
+pushdown has since closed for this shape. A carrier added on top is INERT: it
+fires on no path, which is why it was reverted rather than kept.
+
+**2. The empty needle never reaches the driver at all.** Instrumented, it
+declines with `no 2-child JOIN within 6 hops` — the plan has no join to drive.
+The matching needle does get one and is already driven (`DISTINCT ON` in its
+SQL).
+
+**3. The plan shape is decided in `mark_semijoins`, and the decision is
+CORRECT.** It splits BGPs speculatively, then REVERTS any split the gate did
+not mark, because "a split BGP is only equivalent to the original as a
+semi-join" — keeping an unmarked split returns wrong rows (`issues/030`:
+0 rows instead of 96). The gate computes `sel = matches / candidates` and marks
+only when `sel >= MIN_SELECTIVITY`. An empty needle is `sel = 0`, so it refuses
+to probe — rightly, since probing an empty needle walks every candidate, which
+is `issues/070`'s pathology — and takes the set-based join instead.
+
+So all three plans are individually defensible and none is good:
+
+    probe (semi-join)   walks every candidate to find nothing   refused, rightly
+    set-based join      materialises the match set              chosen, and slow
+    text-driven         would be right                          plan reverted first
+
+### What the fix actually requires
+
+Not a carrier in `emit_slice`. The split has to SURVIVE for a measured-selective
+text leaf, in a form that is equivalent without being a semi-join — or
+`emit_slice` has to learn to drive from a text leaf inside a SINGLE unsplit BGP,
+where `reorder_bgp` already pins it first for join order.
+
+Either is a change to plan shaping rather than to emission, and the revert
+logic it touches is what stops a split from silently returning wrong rows. That
+is the reason this was stopped rather than pushed through: the guard being
+worked around is load-bearing, and `issues/030` and `issues/046` both record
+what shipping past one costs.
