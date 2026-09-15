@@ -150,11 +150,26 @@ _HAS_NAME = "http://vital.ai/ontology/vital-core#hasName"
 _DEEP_OFFSETS = [0, 25, 100, 500, 1000]
 
 
+# The slot's own class, which a real client sends because the model carries the
+# field. Without it `fast_slot_filter._eq_criteria` cannot derive the value LANE
+# (`_LANE.get(slot_class_uri or "")` returns None) and declines the whole
+# criterion, so BOTH kgquery operations here measured the general pipeline and
+# no fast path could ever be exercised -- recorded in `issues/203` when this
+# driver was first read, and the reason its sorted case cost 335 ms against
+# 32 ms unsorted.
+#
+# Verified against the fixture rather than assumed: every subject carrying
+# `hasKGSlotType StateSlot` in `kg_load_test` has `vitaltype KGTextSlot`.
+_STATE_SLOT_CLASS = "http://vital.ai/ontology/haley-ai-kg#KGTextSlot"
+
+
 def _state_criteria():
     from vitalgraph.model.kgentities_model import FrameCriteria, SlotCriteria
     return [FrameCriteria(
         frame_type=_ADDRESS_FRAME,
-        slot_criteria=[SlotCriteria(slot_type=_STATE_SLOT, value="California",
+        slot_criteria=[SlotCriteria(slot_type=_STATE_SLOT,
+                                    slot_class_uri=_STATE_SLOT_CLASS,
+                                    value="California",
                                     comparator="eq")])]
 
 
