@@ -1,7 +1,9 @@
 # The Perf Benches Exercise A Narrow Slice Of SPARQL
 
-## Status: OPEN. No bench anywhere touches OPTIONAL, MINUS, BIND, a sub-SELECT
-## or a property path. The largest coverage gap in the suite.
+## Status: PARTLY CLOSED 2026-09-15. Seven of the absent shapes are now benched
+## (`query.sparql_shape`), and the FIRST RUN found `issues/205`: MINUS at
+## 661,626 buffers and an alternation path at 477,751, for 25 rows. The
+## remaining gaps are listed at the end.
 
 **Related:** `issues/178`-`182` (five shape defects, none of them benched),
 `issues/179` (LCASE defeats the trigram index),
@@ -91,3 +93,36 @@ cliff appears. `test_paging_fence_covers_every_shape.py` is the precedent —
 
 Each shape this catches doing work disproportionate to its answer gets its own
 issue, which is exactly how `178`-`182` were worked.
+
+## 2026-09-15 — seven shapes benched, and the first run found a defect
+
+`tests/performance/test_sparql_shape_coverage.py` covers the shapes with a
+defect history rather than trying to cover SPARQL:
+
+    OPTIONAL   MINUS   BIND   sub-SELECT   alternation path
+    LCASE + CONTAINS (issues/179)   UNION-bound variable (issues/180)
+
+Each records BUFFERS and ROWS and asserts a row floor — a shape matching nothing
+is fast and measures nothing, which is the failure this suite keeps producing.
+
+**The first run found `issues/205`**, before the bench had measured anything
+twice: MINUS reads 661,626 buffers and an alternation path 477,751 to return 25
+rows, against 127-1,575 for the other five. Identical on a second run, so it is
+the plan and not the cache. That is a 5,000x spread between shapes returning the
+same page.
+
+This is the argument this issue was making, demonstrated on itself: the defect
+was not new, it was merely unmeasured, and it took one run to surface once a
+number existed.
+
+## Still absent
+
+    DESCRIBE, ASK          0
+    SERVICE                0
+    REGEX                  0   (CONTAINS and LCASE are now covered)
+    UPDATE forms           0   (issues/192 owns these)
+    CONSTRUCT              1   (issues/178 and 182 are CONSTRUCT defects, and
+                                the one existing case is not either of them)
+
+CONSTRUCT is the most valuable of those: `178` and `182` were both CONSTRUCT
+defects, both fixed, and neither can regress into a red cell today.
