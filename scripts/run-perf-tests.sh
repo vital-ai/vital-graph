@@ -255,6 +255,30 @@ if $SEED_DATA; then
   # them in that order — API first while the app is up, then stop it — so one
   # invocation covers both without the two interfering.
   if $API_BENCHES; then
+    # WAIT FOR THE APP TO SERVE, not merely to exist. `up -d` returns as soon as
+    # the container is created; uvicorn needs ~20s more. The perf conftest
+    # evaluates `HAS_API = _check_api()` ONCE at import with a 3s timeout, so
+    # starting pytest inside that window makes every API bench skip for the whole
+    # session -- and a skip is then promoted as a coverage HOLE, which reads as
+    # "never benched" rather than as a failure to investigate.
+    #
+    # Measured 2026-09-15: container started 02:33:35, uvicorn serving 02:33:56.
+    # 33 benches skipped and were promoted as holes, taking the query baseline
+    # from 2 holes to 33. This is the same lesson the PostgreSQL wait above
+    # records; the app had simply never been waited for, because it was usually
+    # already running from an earlier run.
+    echo "⏳ Waiting for the app API on :8002 ..."
+    elapsed=0
+    until curl -sf --max-time 3 http://localhost:8002/health >/dev/null 2>&1; do
+      if [ "$elapsed" -ge "$MAX_WAIT" ]; then
+        echo "❌ app API not ready in ${MAX_WAIT}s — refusing to run the API benches,"
+        echo "   because they would all skip and be promoted as coverage holes."
+        exit 1
+      fi
+      sleep 2; elapsed=$((elapsed + 2))
+    done
+    echo "✅ app API ready (${elapsed}s)"
+
     echo "🌐 Running API benches (app up)..."
     API_RECORD=""
     if $RECORD; then
@@ -308,6 +332,25 @@ import json, sys
 main_path, api_path = sys.argv[1], sys.argv[2]
 main = json.load(open(main_path))
 api = json.load(open(api_path))
+# THE STAMP LIVES ON THE API RECORD, NOT THE MAIN ONE. The main phase runs with
+# `-k "not bench"`, so it never acquires `perf_pool` and never reaches the
+# conftest hook that records env.pg / env.stats / runner.flags; the API phase
+# does. Without carrying it across, every --api-benches run produced an UNSTAMPED
+# record and perf_compare refused to promote it (issues/081) -- so
+# `--api-benches --promote` could never have succeeded.
+#
+# Both phases ran in one invocation against the same database, so the API
+# record's stamp describes the main record's environment exactly.
+for _k in ("pg", "stats"):
+    if not main["env"].get(_k) and api["env"].get(_k):
+        main["env"][_k] = api["env"][_k]
+_mr = main["env"].get("runner") or {}
+_ar = api["env"].get("runner") or {}
+for _k, _v in _ar.items():
+    if _k not in _mr or _mr[_k] in (None, {}, ""):
+        _mr[_k] = _v
+main["env"]["runner"] = _mr
+
 seen = {b["bench_id"] for b in main["benches"]}
 main["benches"].extend(b for b in api["benches"] if b["bench_id"] not in seen)
 main["benches"].sort(key=lambda b: b["bench_id"])
