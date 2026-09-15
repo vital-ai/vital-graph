@@ -146,3 +146,34 @@ argument for the sentence rather than against it.
 Not re-measured. This note records the count and which case, not a fresh
 timing — the 20s probe against a 22 GB fixture is the reason this is a skip in
 the first place.
+
+## 2026-09-14 — it now FAILS rather than SKIPS in a serial run, and costs four
+## other cells with it
+
+The note above says "a run reporting anything other than `SKIPPED [1]` here has
+changed something real". It reported FAILED, so that criterion fired — but what
+changed is not the shape. Checked rather than assumed: re-run ALONE immediately
+afterwards, it passes. That is exactly the boundary the bench's own comment
+describes ("failed here at ~70% of a long serial run and passed alone minutes
+later"), and the one retry at the warm budget was not enough to cross it on a
+fixture that `issues/204` had just made ~48% larger.
+
+The cost is not the single red cell. When it fails, the sweep stops, and every
+cell after it goes UNRECORDED — so `coverage.json` was promoted with FIVE holes
+where the previous baseline had two:
+
+    p100-range-tight-specific-100k   failed      (the shape itself)
+    p100-contains-specific-100k      unrecorded  } collateral: the sweep
+    p100-eq-common-specific-100k     unrecorded  } never reached them
+    p100-range-loose-specific-100k   unrecorded  }
+    p25-range-tight-generic-100k     unrecorded  }
+
+So a known, load-dependent flake in ONE shape silently removes gating from four
+others. Those four have no recorded values to compare against, and nothing in
+the promotion says why — it reads as though they were never benched. That is
+the part worth fixing: the cells are independent measurements and one of them
+timing out should not take the rest of the sweep down with it.
+
+Updating the criterion this issue offered: anything other than `SKIPPED [1]`
+means something changed, but "something" includes the fixture getting bigger
+and the suite running longer, not only the shape regressing.
