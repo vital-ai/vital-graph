@@ -15,6 +15,18 @@ services:
       - PORT=${PORT:-8001}
       - HOST=${HOST:-0.0.0.0}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      # Benchmark fixtures are not dev working data, and maintaining them
+      # competes with the API for the same PostgreSQL. Dev had NO exclusion at
+      # all while the test stack excluded twelve spaces, so the maintenance job
+      # was running integrity, drift and ANALYZE work across every space here --
+      # including multi-GB lead/graph fixtures left over from benchmarking.
+      #
+      # Measured 2026-09-15: cycle time climbed 92s -> 147s -> 335s -> 453s ->
+      # 625s as that work accumulated, on the same database serving requests.
+      #
+      # The backfill task inherits this list when BACKFILL_EXCLUDE_SPACES is
+      # unset, so one setting covers both.
+      - VG_MAINTENANCE_EXCLUDE_SPACES=${VG_MAINTENANCE_EXCLUDE_SPACES:-sp_lead_synth_100k,sp_lead_synth_10k,sp_lead_synth,sp_lead_dup,sp_lead_depth1,sp_lead_empty,sp_lead_types,sp_sql_lead_dataset,space_lead_dataset_test,cardiff_lead_dataset_test,wordnet_frames,sp_graph_synth_100k,sp_graph_synth_10k,sp_graph_skew_2k,sp_graph_forms_20k,kgquery_perf,lead_test}
       - WORKERS=${WORKERS:-1}
       # Entity registry embedding model, used for BOTH vectorization and search.
       #   vitalsigns_onnx                         384 — paraphrase-MiniLM-L3-v2 (default, English, bundled)
