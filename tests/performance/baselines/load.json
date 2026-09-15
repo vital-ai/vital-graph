@@ -1,13 +1,13 @@
 {
   "schema": 1,
   "env": {
-    "started_at": "2026-09-14T17:35:39.105595+00:00",
+    "started_at": "2026-09-15T21:15:30.887424+00:00",
     "git": {
-      "commit": "cd516f89f4ede433fbaee23d0acb459c49b8585f",
-      "short": "cd516f89",
+      "commit": "23348a64da5cf6614fceffa0a34da39dafabd0fc",
+      "short": "23348a64",
       "branch": "main",
       "dirty": false,
-      "untracked_files": 49
+      "untracked_files": 48
     },
     "machine": {
       "host": "ip-192-168-1-153.ec2.internal",
@@ -37,11 +37,11 @@
     },
     "stats": {
       "fixture_tables": 296,
-      "fixture_live_tuples": 6372884,
-      "fixture_last_analyze": "2026-09-13T23:42:12.769738+00:00"
+      "fixture_live_tuples": 193144,
+      "fixture_last_analyze": "2026-09-15T03:50:50.149636+00:00"
     },
     "load_target": "http://localhost:8002",
-    "finished_at": "2026-09-14T17:35:39.426893+00:00"
+    "finished_at": "2026-09-15T21:15:31.185254+00:00"
   },
   "benches": [
     {
@@ -49,12 +49,12 @@
       "kind": "load",
       "status": "ok",
       "metrics": {
-        "p50_ms": 12.6,
-        "p95_ms": 85.2,
-        "p99_ms": 159.9,
-        "max_ms": 2146.8,
-        "avg_ms": 32.9,
-        "requests": 383,
+        "p50_ms": 11.4,
+        "p95_ms": 26.5,
+        "p99_ms": 62.0,
+        "max_ms": 2023.3,
+        "avg_ms": 25.0,
+        "requests": 418,
         "failures": 0
       },
       "params": {
@@ -70,12 +70,12 @@
       "kind": "load",
       "status": "ok",
       "metrics": {
-        "p50_ms": 14.0,
-        "p95_ms": 93.5,
-        "p99_ms": 630.6,
-        "max_ms": 878.9,
-        "avg_ms": 35.9,
-        "requests": 205,
+        "p50_ms": 27.7,
+        "p95_ms": 47.1,
+        "p99_ms": 109.3,
+        "max_ms": 471.0,
+        "avg_ms": 30.2,
+        "requests": 254,
         "failures": 0
       },
       "params": {
@@ -91,12 +91,12 @@
       "kind": "load",
       "status": "ok",
       "metrics": {
-        "p50_ms": 44.8,
-        "p95_ms": 227.9,
-        "p99_ms": 475.4,
-        "max_ms": 538.5,
-        "avg_ms": 77.1,
-        "requests": 67,
+        "p50_ms": 5.7,
+        "p95_ms": 10.8,
+        "p99_ms": 13.2,
+        "max_ms": 34.9,
+        "avg_ms": 6.7,
+        "requests": 71,
         "failures": 0
       },
       "params": {
@@ -112,12 +112,12 @@
       "kind": "load",
       "status": "ok",
       "metrics": {
-        "p50_ms": 37.4,
-        "p95_ms": 100.8,
-        "p99_ms": 206.9,
-        "max_ms": 218.5,
-        "avg_ms": 45.2,
-        "requests": 145,
+        "p50_ms": 5.6,
+        "p95_ms": 15.5,
+        "p99_ms": 905.0,
+        "max_ms": 2022.9,
+        "avg_ms": 30.8,
+        "requests": 175,
         "failures": 0
       },
       "params": {
@@ -133,12 +133,12 @@
       "kind": "load",
       "status": "ok",
       "metrics": {
-        "p50_ms": 338.5,
-        "p95_ms": 959.6,
-        "p99_ms": 2026.4,
-        "max_ms": 2026.4,
-        "avg_ms": 431.8,
-        "requests": 47,
+        "p50_ms": 8.2,
+        "p95_ms": 19.7,
+        "p99_ms": 136.5,
+        "max_ms": 136.5,
+        "avg_ms": 13.1,
+        "requests": 40,
         "failures": 0
       },
       "params": {
@@ -154,12 +154,12 @@
       "kind": "load",
       "status": "ok",
       "metrics": {
-        "p50_ms": 11.9,
-        "p95_ms": 39.2,
-        "p99_ms": 97.6,
-        "max_ms": 533.9,
-        "avg_ms": 18.4,
-        "requests": 476,
+        "p50_ms": 10.2,
+        "p95_ms": 28.7,
+        "p99_ms": 94.3,
+        "max_ms": 1569.0,
+        "avg_ms": 17.8,
+        "requests": 496,
         "failures": 0
       },
       "params": {
@@ -175,12 +175,12 @@
       "kind": "load",
       "status": "ok",
       "metrics": {
-        "p50_ms": 23.7,
-        "p95_ms": 82.9,
-        "p99_ms": 551.9,
-        "max_ms": 2416.4,
-        "avg_ms": 53.9,
-        "requests": 162,
+        "p50_ms": 24.3,
+        "p95_ms": 42.2,
+        "p99_ms": 113.2,
+        "max_ms": 163.5,
+        "avg_ms": 26.8,
+        "requests": 149,
         "failures": 0
       },
       "params": {
@@ -196,12 +196,12 @@
       "kind": "load",
       "status": "ok",
       "metrics": {
-        "p50_ms": 5.0,
-        "p95_ms": 48.4,
-        "p99_ms": 98.2,
-        "max_ms": 124.0,
-        "avg_ms": 11.2,
-        "requests": 85,
+        "p50_ms": 4.6,
+        "p95_ms": 19.5,
+        "p99_ms": 83.4,
+        "max_ms": 895.3,
+        "avg_ms": 19.1,
+        "requests": 77,
         "failures": 0
       },
       "params": {
@@ -218,11 +218,11 @@
       "status": "ok",
       "metrics": {
         "p50_ms": 4.0,
-        "p95_ms": 8.7,
-        "p99_ms": 116.8,
-        "max_ms": 220.7,
-        "avg_ms": 9.2,
-        "requests": 77,
+        "p95_ms": 8.9,
+        "p99_ms": 10.2,
+        "max_ms": 10.5,
+        "avg_ms": 4.7,
+        "requests": 74,
         "failures": 0
       },
       "params": {
@@ -238,12 +238,12 @@
       "kind": "load",
       "status": "ok",
       "metrics": {
-        "p50_ms": 9.9,
-        "p95_ms": 21.2,
-        "p99_ms": 229.3,
-        "max_ms": 229.3,
-        "avg_ms": 16.0,
-        "requests": 47,
+        "p50_ms": 10.4,
+        "p95_ms": 21.5,
+        "p99_ms": 33.7,
+        "max_ms": 33.7,
+        "avg_ms": 12.3,
+        "requests": 42,
         "failures": 0
       },
       "params": {
@@ -259,8 +259,8 @@
       "kind": "load",
       "status": "ok",
       "metrics": {
-        "requests_per_sec": 28.23,
-        "requests": 1694,
+        "requests_per_sec": 29.93,
+        "requests": 1796,
         "failures": 0
       },
       "params": {
@@ -274,8 +274,8 @@
   ],
   "baseline": {
     "name": "load",
-    "promoted_from": "/tmp/load_clean.json",
-    "reason": "",
+    "promoted_from": "/tmp/load_new.json",
+    "reason": "Re-promoted after 24ccc380 (frame-filtered page sorted by an entity property is now served by fast_slot_sort, drawing the order value from entity_prop_sort) and the driver change that lets it be reached: SlotCriteria now carries slot_class_uri, without which _eq_criteria declined the criterion and both kgquery operations measured the general pipeline. kgquery_sorted p50 338ms -> 8ms, page1 37 -> 6ms, deep_page 45 -> 6ms. kg_load_test also gained an entity_prop_sort table, which the sorted path requires.",
     "pg_stamped": true
   }
 }

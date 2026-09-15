@@ -1,6 +1,8 @@
 # A Name Sort Costs Ten Times The Query It Sorts
 
-## Status: OPEN — found by the first concurrency baseline (`issues/192`),
+## Status: FIXED 2026-09-15 (`24ccc380` + `23348a64`). The sort tax is 1.55x,
+## against 10.5x: sorted 335.4ms -> 7.6ms, unsorted 32.0ms -> 4.9ms.
+## Originally OPEN — found by the first concurrency baseline (`issues/192`),
 ## measured serially, cause located in code, not yet fixed.
 
 ## The measurement
@@ -78,3 +80,52 @@ recorded here rather than changed.
     LOAD_TEST_ENV=test python load_test_scripts/setup.py --entities 400
     LOAD_TEST_ENV=test python load_test_scripts/load_test.py \
         -u 10 -t 60 --read-only --record /tmp/load.json
+
+## FIXED 2026-09-15 — the two fast paths each held one half
+
+`fast_slot_sort` already learned FRAME CRITERIA when `issues/172` was fixed; it
+simply refused any sort key that was not a slot. `fast_prop_sort` orders by an
+entity property but knows nothing about frame criteria. So this shape — a
+filtered list ordered by name, which is what clicking a column header on a
+filtered view produces — was served by neither.
+
+`fast_slot_sort` now accepts an ALL-entity-property key set and draws the
+ordering value from `{space}_entity_prop_sort`, while the frame criteria stay
+EXISTS clauses against `{space}_entity_slot_sort`, correlated on `entity_uuid`.
+One table orders by the property, the other filters by the frame, and they join
+on the entity.
+
+    page1 (no sort)    32.0 ms -> 4.9 ms
+    sorted (hasName)  335.4 ms -> 7.6 ms
+    the sort tax        10.5x  -> 1.55x
+
+Under load, 10 users / 60s: `kgquery_sorted` p50 338 ms -> 8.2 ms,
+`kgquery_page1` 37 -> 5.6, `kgquery_deep_page` 45 -> 5.7.
+
+### The driver had to change too, and this issue predicted it
+
+The note above — "the driver's filter would not reach the fast path even
+WITHOUT a sort, because `_state_criteria()` omits `slot_class_uri`" — was left
+deliberately, on the grounds that changing it would swap one unserved path for
+another while no fast path could serve the sorted shape. That is no longer true,
+so the driver now sends the field, as a real client does because the model
+carries it. Verified against the fixture rather than assumed: every subject with
+`hasKGSlotType StateSlot` in `kg_load_test` has `vitaltype KGTextSlot`.
+
+That is why the unsorted case improved 6.5x as well: the FILTER path could not
+be reached either.
+
+### What this needed that is not code
+
+`kg_load_test` had no `{space}_entity_prop_sort`. The sorted path cannot serve
+without it, and 0 of 41 spaces on the dev instance had one — which is the same
+gap that made a dev listing take 23.7 s. Code and table are both required.
+
+### Verified, not assumed
+
+Correctness was checked by reading the page's names back FROM THE QUADS rather
+than from the table it was ordered by: ordered, none missing the property, and
+ZERO entities outside the page holding a smaller value — the silent wrong-page
+failure a derived-table sort produces. ALL-or-none on the key set for the same
+reason: a half-served multi-key sort orders by the right values in the wrong
+precedence.
