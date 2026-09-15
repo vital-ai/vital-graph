@@ -161,18 +161,31 @@ async def _cost(conn, sql, *, fenced: bool, warm: bool = False,
         return None
 
 
-async def _warm(conn, sql):
-    """Run both plans once, untimed, so the timeout measures the PLAN.
+async def _warm_and_cost(conn, sql, *, fenced: bool, budget_ms: int | None = None):
+    """Warm THIS plan, then measure it — the warm-up paired with its own probe.
 
-    Without this the first probe pays to pull a 22 GB fixture's working set
-    into a 16 GB pool, and the timeout reports the buffer pool instead. It is
-    not a small effect: `range-tight/specific` measured 7.1x on a single cold
-    probe and 1.3x warm, alternating, median of three — and it exceeded the
-    20 s limit cold while finishing in about 5 s warm, so the shape was
-    reported as "neither plan finished" and skipped entirely (issues/117).
+    Without a warm-up the probe pays to pull a 22 GB fixture's working set into
+    a 16 GB pool, and the timeout reports the buffer pool instead. It is not a
+    small effect: `range-tight/specific` measured 7.1x on a single cold probe
+    and 1.3x warm, alternating, median of three — and it exceeded the 20 s limit
+    cold while finishing in about 5 s warm, so the shape was reported as
+    "neither plan finished" and skipped entirely (issues/117).
+
+    WHY PAIRED, AND NOT BOTH UP FRONT. The earlier version warmed both plans and
+    then measured both. On a fixture larger than the pool, warming the SECOND
+    plan evicts the first one's working set, so the first measurement runs cold
+    after all — and which side loses depends on pool pressure, which is why this
+    shape passed alone and failed at ~70% of a long serial run. The confirming
+    retry did not rescue it either: it raises the budget but does not re-warm,
+    so it re-runs the same cold plan with more time.
+
+    The timeout is on TIME, while the comparison is on BUFFERS, and a buffer
+    total is a property of the plan rather than of the cache — so warming each
+    side immediately before its own probe makes the timeout measure the plan
+    without changing what is being compared.
     """
-    for fenced in (False, True):
-        await _cost(conn, sql, fenced=fenced, warm=True)
+    await _cost(conn, sql, fenced=fenced, warm=True)
+    return await _cost(conn, sql, fenced=fenced, budget_ms=budget_ms)
 
 
 @pytest.mark.coverage_bench   # two ANALYZEd plans per shape; not an edit-loop bench
@@ -199,9 +212,8 @@ async def test_a_flippable_shape_is_always_fenced(
         pytest.skip(f"generation refused, nothing to fence: {str(gen.error)[:120]}")
 
     flag = bool(getattr(gen, "needs_ordered_scan", False))
-    await _warm(perf_conn, gen.sql)
-    unfenced = await _cost(perf_conn, gen.sql, fenced=False)
-    fenced = await _cost(perf_conn, gen.sql, fenced=True)
+    unfenced = await _warm_and_cost(perf_conn, gen.sql, fenced=False)
+    fenced = await _warm_and_cost(perf_conn, gen.sql, fenced=True)
 
     # A TIMEOUT IS A SUSPICION, NOT A VERDICT. Everything above compares
     # BUFFERS, which is why this test needs no threshold and does not care what
@@ -218,12 +230,15 @@ async def test_a_flippable_shape_is_always_fenced(
     # 120 s on an already-warmed cache, "this plan does not finish" is a
     # property of the plan rather than of the machine, and the assertions
     # below are entitled to say so.
+    # The retry RE-WARMS as well as raising the budget. Raising it alone re-runs
+    # a plan whose set the sibling probe has since evicted, which is more time
+    # for the same cold read.
     if unfenced is None:
-        unfenced = await _cost(perf_conn, gen.sql, fenced=False, warm=False,
-                               budget_ms=WARM_TIMEOUT_MS)
+        unfenced = await _warm_and_cost(perf_conn, gen.sql, fenced=False,
+                                        budget_ms=WARM_TIMEOUT_MS)
     if fenced is None:
-        fenced = await _cost(perf_conn, gen.sql, fenced=True, warm=False,
-                             budget_ms=WARM_TIMEOUT_MS)
+        fenced = await _warm_and_cost(perf_conn, gen.sql, fenced=True,
+                                      budget_ms=WARM_TIMEOUT_MS)
 
     if unfenced is None and fenced is None:
         pytest.skip("neither plan finished within the probe timeout")
@@ -360,7 +375,9 @@ async def test_the_three_text_needle_regimes_stay_ordered(perf_conn, perf_record
                                      entity_type=KGENTITY, page_size=25)
         if not gen.ok:
             pytest.skip(f"generation refused for {label}: {str(gen.error)[:100]}")
-        await _warm(perf_conn, gen.sql)
+        # Unfenced only: this test never fences, so warming the fenced variant
+        # would evict this plan's set for nothing.
+        await _cost(perf_conn, gen.sql, fenced=False, warm=True)
         doc = await explain_json(perf_conn, gen.sql)
         cost[label] = total_shared_buffers(doc)
         rows[label] = doc["Plan"].get("Actual Rows")
