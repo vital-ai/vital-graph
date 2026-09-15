@@ -83,6 +83,62 @@ SHAPES = [
 ]
 
 
+# Forms that are not a SELECT, so they carry their own query text rather than a
+# body for `_q`. CONSTRUCT is the valuable one: `issues/178` (half the triples
+# lost, 58 s in generation) and `issues/182` (every frame in the space
+# enumerated) were BOTH CONSTRUCT defects, both fixed, and neither could regress
+# into a red cell before this.
+FORMS = [
+    ("construct_frame_graph", 1, f"""{PREFIXES}
+CONSTRUCT {{ ?f ?p ?o }}
+WHERE {{ GRAPH <{GRAPH}> {{
+    ?f vital-core:vitaltype haley:KGFrame .
+    ?f ?p ?o .
+}} }} LIMIT 25"""),
+    ("construct_frame_with_slots", 1, f"""{PREFIXES}
+CONSTRUCT {{ ?f haley:hasKGFrameType ?ft . ?slot haley:hasKGSlotType ?st }}
+WHERE {{ GRAPH <{GRAPH}> {{
+    ?f haley:hasKGFrameType ?ft .
+    ?edge vital-core:hasEdgeSource ?f .
+    ?edge vital-core:hasEdgeDestination ?slot .
+    ?slot haley:hasKGSlotType ?st .
+}} }} LIMIT 25"""),
+    ("ask", 1, f"""{PREFIXES}
+ASK {{ GRAPH <{GRAPH}> {{ ?f vital-core:vitaltype haley:KGFrame }} }}"""),
+    # issues/179's sibling: REGEX rather than CONTAINS. Anchored, so the trigram
+    # index CAN serve it -- `text_needle.is_servable` accepts a prefix-anchored
+    # regex, and this is the case that pins that.
+    ("regex_anchored", 1, f"""{PREFIXES}
+SELECT * WHERE {{ GRAPH <{GRAPH}> {{
+    ?s haley:hasTextSlotValue ?v .
+    FILTER(REGEX(?v, "^A"))
+}} }} LIMIT 25"""),
+]
+
+
+@pytest.mark.bench("query.sparql_shape")
+@pytest.mark.parametrize("shape_id,min_rows,sparql", FORMS,
+                         ids=[f[0] for f in FORMS])
+async def test_sparql_form_is_measured(perf_conn, perf_record, shape_id,
+                                       min_rows, sparql):
+    """The non-SELECT forms, measured the same way as the SELECT shapes."""
+    sql = await _generate_sql(perf_conn, sparql, SPACE)
+    await perf_conn.fetch(sql)
+    doc = await explain_json(perf_conn, sql)
+    buffers = total_shared_buffers(doc)
+    rows = doc["Plan"].get("Actual Rows")
+
+    perf_record(kind="sql", dataset=SPACE,
+                metrics={"buffers": buffers, "rows": rows,
+                         "sql_chars": len(sql)},
+                notes=f"{shape_id} — issues/193 shape coverage")
+
+    assert rows is not None and rows >= min_rows, (
+        f"{shape_id} produced {rows} rows (< {min_rows}). A form that builds "
+        f"nothing is fast and measures nothing — check the fixture's predicates "
+        f"before reading the buffer count as an improvement.")
+
+
 @pytest.mark.bench("query.sparql_shape")
 @pytest.mark.parametrize("shape_id,min_rows,body", SHAPES,
                          ids=[s[0] for s in SHAPES])
