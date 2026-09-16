@@ -121,8 +121,20 @@ SELECT * WHERE {{ GRAPH <{GRAPH}> {{
                          ids=[f[0] for f in FORMS])
 async def test_sparql_form_is_measured(perf_conn, perf_record, shape_id,
                                        min_rows, sparql):
-    """The non-SELECT forms, measured the same way as the SELECT shapes."""
+    """The non-SELECT forms, measured as the RUNTIME executes them.
+
+    `_generate_sql` returns the GENERATOR's SQL, and the runtime rewrites it for
+    forms it specialises. Benching the generator's string measures something
+    that never runs — `issues/206` was filed on exactly that mistake and
+    withdrawn the same day: an ASK read as 23,426 buffers over 120,000 rows
+    ungated, and 9 buffers over 1 row as it actually executes.
+    """
     sql = await _generate_sql(perf_conn, sparql, SPACE)
+    if sparql.lstrip().upper().startswith(("PREFIX", "ASK")) and "\nASK" in f"\n{sparql}":
+        # The wrapper from `sparql_sql_space_impl.py:2167`. Applied here so the
+        # recorded number is the one a caller pays, not the one the generator
+        # emitted before the runtime specialised it.
+        sql = f"SELECT EXISTS (SELECT 1 FROM ({sql}) _ask_sub) AS _ask_result"
     await perf_conn.fetch(sql)
     doc = await explain_json(perf_conn, sql)
     buffers = total_shared_buffers(doc)

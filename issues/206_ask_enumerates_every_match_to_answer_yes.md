@@ -1,7 +1,9 @@
 # ASK Enumerates Every Match To Answer "Yes"
 
-## Status: OPEN, found 2026-09-15 by the `issues/193` shape bench — the second
-## defect that bench found, and it had not measured anything twice.
+## Status: WITHDRAWN 2026-09-15, same day. NOT A DEFECT — the optimisation
+## already exists and I measured the wrong SQL. Kept because the mistake is
+## reusable: a bench that reads the GENERATOR's output is not measuring what
+## runs.
 
 ## The measurement
 
@@ -57,3 +59,44 @@ used to produce a boolean.
 
 `tests/performance/test_sparql_shape_coverage.py::test_sparql_form_is_measured`,
 the `ask` case. The generated SQL is one `_generate_sql` call away.
+
+## WITHDRAWN — the wrapper exists, and the bench never saw it
+
+`sparql_sql_space_impl.py:2167`, in the execution path:
+
+    if cr.meta.query_type == 'ASK':
+        sql = f"SELECT EXISTS (SELECT 1 FROM ({sql}) _ask_sub) AS _ask_result"
+
+with a comment stating the very thing this issue "found": *"ASK only needs to
+know whether any row matches. The generator does not specialise on query_type,
+so without this the query materialises every matching row to answer a yes/no
+question."*
+
+Measured both, same query, same fixture:
+
+    raw (generator output)   23,426 buffers   120,000 rows
+    wrapped (what executes)           9        1
+
+Nine buffers. The production path was already doing the right thing.
+
+## What went wrong, and it is worth keeping
+
+The bench calls `_generate_sql`, which returns the GENERATOR's SQL. The runtime
+then applies transformations the generator does not: this ASK wrapper, and
+`enable_sort = off` when `needs_ordered_scan` is set. So the bench measures a
+string that is never executed for any form the runtime specialises.
+
+That is a general hazard, not an ASK one. Anything benched through
+`_generate_sql` should be read as "what the generator produced", and where the
+runtime rewrites it, the bench must rewrite it too or it is measuring fiction.
+
+Fixed in the bench by applying the same wrapper, so the recorded number is the
+one a caller pays.
+
+## The one thing here that was real
+
+The generator DOES emit a full projection for an ASK — term text, type, uuid,
+lang, datatype and all three value lanes — which the wrapper then discards. That
+is wasted generation work rather than wasted execution, and it is small: the
+wrapper reduces the whole thing to 9 buffers. Not worth chasing, recorded only
+so the next reader does not re-derive it.
