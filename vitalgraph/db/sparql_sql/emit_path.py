@@ -300,7 +300,8 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
                  graph_clause: str, cte_alias: str,
                  same_graph: bool = False,
                  seed_start_sql: Optional[str] = None,
-                 seed_end_sql: Optional[str] = None) -> Tuple[str, str]:
+                 seed_end_sql: Optional[str] = None,
+                 under_recursion: bool = False) -> Tuple[str, str]:
     """Convert a PathExpr to SQL.
 
     Returns (cte_prefix, select_sql) where cte_prefix is a WITH RECURSIVE
@@ -353,7 +354,8 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
         cte, inner_sql = _path_to_sql(path.sub, quad_table, term_table,
                                        graph_clause, cte_alias, same_graph,
                                        seed_start_sql=seed_end_sql,
-                                       seed_end_sql=seed_start_sql)
+                                       seed_end_sql=seed_start_sql,
+                                       under_recursion=under_recursion)
         sql = (
             f"SELECT inv.end_uuid AS start_uuid, inv.start_uuid AS end_uuid, "
             f"inv.ctx_uuid "
@@ -368,16 +370,36 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
         cte_l, sql_l = _path_to_sql(path.left, quad_table, term_table,
                                      graph_clause, cte_alias + "_l", same_graph,
                                      seed_start_sql=seed_start_sql,
-                                     seed_end_sql=seed_end_sql)
+                                     seed_end_sql=seed_end_sql,
+                                     under_recursion=under_recursion)
         cte_r, sql_r = _path_to_sql(path.right, quad_table, term_table,
                                      graph_clause, cte_alias + "_r", same_graph,
                                      seed_start_sql=seed_start_sql,
-                                     seed_end_sql=seed_end_sql)
+                                     seed_end_sql=seed_end_sql,
+                                     under_recursion=under_recursion)
         cte = ""
         if cte_l or cte_r:
             parts = [p for p in [cte_l, cte_r] if p]
             cte = "\n".join(parts)
-        sql = f"({sql_l}) UNION ({sql_r})"
+        # UNION ALL, NOT UNION, unless this alternation is beneath a recursive
+        # operator.
+        #
+        # SPARQL 1.1 translates `X p1|p2 Y` to `Union(BGP(X p1 Y), BGP(X p2 Y))`,
+        # and SPARQL's Union is MULTISET union — duplicates survive unless
+        # DISTINCT is asked for. A deduplicating UNION dropped them: measured
+        # `?s p|p ?o` returning 120,000 solutions where 240,000 is correct
+        # (`issues/205`). It also made the shape expensive, because a dedup must
+        # materialise and hash both arms before LIMIT can take a page — 477,751
+        # buffers to return 25 rows.
+        #
+        # BENEATH `+` OR `*` IT MUST STAY `UNION`. The header of this module
+        # records why: the recursive CTEs rely on dedup to terminate a closure
+        # over cyclic data — "revisiting a pair adds no new row" — and a runaway
+        # is exactly what happened when that was defeated. Bag semantics cannot
+        # survive a closure in any case, since the recursion's own UNION
+        # collapses them, so duplicates there would be cost without meaning.
+        joiner = "UNION" if under_recursion else "UNION ALL"
+        sql = f"({sql_l}) {joiner} ({sql_r})"
         return cte, sql
 
     # Sequence: JOIN on end→start; enforce same ctx_uuid when same_graph
@@ -386,10 +408,12 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
         # seeded. Seeding the right would anchor a middle node to the pin.
         cte_l, sql_l = _path_to_sql(path.left, quad_table, term_table,
                                      graph_clause, cte_alias + "_l", same_graph,
-                                     seed_start_sql=seed_start_sql)
+                                     seed_start_sql=seed_start_sql,
+                                     under_recursion=under_recursion)
         cte_r, sql_r = _path_to_sql(path.right, quad_table, term_table,
                                      graph_clause, cte_alias + "_r", same_graph,
-                                     seed_end_sql=seed_end_sql)
+                                     seed_end_sql=seed_end_sql,
+                                     under_recursion=under_recursion)
         cte = ""
         if cte_l or cte_r:
             parts = [p for p in [cte_l, cte_r] if p]
@@ -405,7 +429,8 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
     # One or more (+): WITH RECURSIVE
     if isinstance(path, PathOneOrMore):
         inner_cte, base_sql = _path_to_sql(path.sub, quad_table, term_table,
-                                            graph_clause, cte_alias + "_base", same_graph)
+                                            graph_clause, cte_alias + "_base", same_graph,
+                                            under_recursion=True)
         rec_name = _next_cte_name(f"{cte_alias}_rec")
         ctx_rec_constraint = " AND r.ctx_uuid = step.ctx_uuid" if same_graph else ""
         # Anchor the base term at the pin. `step` below stays UNFILTERED — see
@@ -451,7 +476,8 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
     # Zero or more (*): WITH RECURSIVE + identity base case
     if isinstance(path, PathZeroOrMore):
         inner_cte, base_sql = _path_to_sql(path.sub, quad_table, term_table,
-                                            graph_clause, cte_alias + "_base", same_graph)
+                                            graph_clause, cte_alias + "_base", same_graph,
+                                            under_recursion=True)
         rec_name = _next_cte_name(f"{cte_alias}_rec")
         # Identity: every node connected to itself (within its graph).
         #
@@ -506,7 +532,8 @@ def _path_to_sql(path: PathExpr, quad_table: str, term_table: str,
     # Zero or one (?): identity UNION one step
     if isinstance(path, PathZeroOrOne):
         _, base_sql = _path_to_sql(path.sub, quad_table, term_table,
-                                    graph_clause, cte_alias + "_base", same_graph)
+                                    graph_clause, cte_alias + "_base", same_graph,
+                                    under_recursion=True)
         # Same identity full-scan as `*`, and seeded the same way. Not
         # recursive, so it cannot run away — but unseeded it is still two full
         # passes over the quad table to produce the one row `<C> p? ?x` needs

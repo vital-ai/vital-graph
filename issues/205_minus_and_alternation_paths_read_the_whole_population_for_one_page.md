@@ -1,9 +1,9 @@
 # MINUS And An Alternation Path Read The Whole Population For One Page
 
-## Status: OPEN, and the alternation half is a CORRECTNESS defect as well as a
-## cost one: `?s p|p ?o` returns 120,000 solutions where SPARQL requires
-## 240,000. Diagnosed to `emit_path.py:380`. Found by the first run of the
-## `issues/193` shape bench.
+## Status: the ALTERNATION half is FIXED 2026-09-15 — `emit_path` now emits
+## `UNION ALL` for a bare `PathAlt` and keeps `UNION` beneath `+`/`*`. The MINUS
+## half is still OPEN and may be semantic rather than a defect. Found by the
+## first run of the `issues/193` shape bench.
 
 ## The measurement
 
@@ -130,3 +130,39 @@ duplicates there are exactly what the termination argument relies on not having.
   its SQL contains no UNION at all.
 - Whether other `UNION` uses in `emit_path.py` (lines 421, 440, 474, 498) are
   the recursive ones the header defends or further instances of this.
+
+## FIXED (the alternation half) 2026-09-15
+
+`emit_path._path_to_sql` now carries an `under_recursion` flag, set when
+descending into the sub-path of `PathOneOrMore` or `PathZeroOrMore` and carried
+unchanged through `PathAlt`, `PathSeq` and `PathInverse`. `PathAlt` emits:
+
+    UNION ALL   when not beneath a recursive operator   (multiset, per spec)
+    UNION       when it is                              (dedup terminates the closure)
+
+Scoped rather than global for the reason the module header records: the
+recursive CTEs rely on dedup to terminate a closure over cyclic data, and a
+runaway followed the one time that was defeated. Bag semantics cannot survive a
+closure regardless — the recursion's own `UNION` collapses duplicates — so
+preserving them there would be cost with no observable effect.
+
+### Pinned by four tests, two of which did not exist
+
+    unit  test_path_alt                                  bare alt emits UNION ALL
+    unit  test_path_alt_under_recursion_still_dedups     `(p|p)+` keeps UNION
+    integ test_bare_alternation_preserves_duplicates     `p|p` yields 2x
+    integ test_closure_over_a_cycle_terminates...        `p+` over a 3-cycle is
+                                                         9 pairs, and `(p|p)+`
+                                                         is still 9
+
+The cyclic-closure test is the one nothing asserted before, and it is the guard
+against fixing this too broadly. Verified that the bag test FAILS on the old
+code (`p|p` returned 3 where 6 is correct) and passes after — a test that passes
+either way pins nothing.
+
+### The MINUS half is still open
+
+No spec deviation is in play there: its SQL contains no UNION at all, and an
+anti-join may genuinely need the population before it can know what to exclude.
+661,626 buffers for 25 rows is still worth understanding, but it should be
+approached as "is this irreducible" rather than as a known defect.

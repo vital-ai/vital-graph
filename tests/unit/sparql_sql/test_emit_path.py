@@ -65,7 +65,13 @@ class TestEmitPath:
     # --- PathAlt ---
 
     def test_path_alt(self):
-        """PathAlt → UNION of two branches."""
+        """PathAlt → UNION ALL of two branches (multiset union, `issues/205`).
+
+        NOT a plain UNION. SPARQL 1.1 translates `X p1|p2 Y` to
+        `Union(BGP(X p1 Y), BGP(X p2 Y))` and SPARQL's Union preserves
+        duplicates, so deduplicating here DROPS SOLUTIONS — measured as
+        `?s p|p ?o` returning 120,000 where 240,000 is correct.
+        """
         from vitalgraph.db.sparql_sql.emit_path import emit_path
         ctx = _make_ctx({})
         plan = self._path_plan(PathAlt(
@@ -73,9 +79,36 @@ class TestEmitPath:
             right=PathLink(uri="http://ex.org/b"),
         ))
         sql = emit_path(plan, ctx)
-        assert "UNION" in sql
+        assert "UNION ALL" in sql, (
+            "a bare alternation must not deduplicate — SPARQL's Union is a "
+            "multiset union, and a plain UNION silently drops solutions")
         assert "ex.org/a" in sql
         assert "ex.org/b" in sql
+
+    def test_path_alt_under_recursion_still_deduplicates(self):
+        """`(p1|p2)+` must keep the dedup that TERMINATES the closure.
+
+        The module header records what defeating it costs: a transitive closure
+        over cyclic data stops because "revisiting a pair adds no new row", and
+        when that dedup was accidentally broken the recursion ran to the depth
+        cap — "300 rows with the depth column, 9 without, and 9 is the correct
+        answer".
+
+        Bag semantics cannot survive a closure anyway: the recursive CTE's own
+        UNION collapses duplicates, so preserving them in the base would be cost
+        with no observable effect.
+        """
+        from vitalgraph.db.sparql_sql.emit_path import emit_path
+        ctx = _make_ctx({})
+        plan = self._path_plan(PathOneOrMore(sub=PathAlt(
+            left=PathLink(uri="http://ex.org/a"),
+            right=PathLink(uri="http://ex.org/b"),
+        )))
+        sql = emit_path(plan, ctx)
+        assert "WITH RECURSIVE" in sql
+        assert "UNION ALL" not in sql, (
+            "an alternation beneath `+` must stay a deduplicating UNION, or the "
+            "closure loses the property that terminates it on cyclic data")
 
     # --- PathSeq ---
 
