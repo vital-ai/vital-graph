@@ -30,6 +30,23 @@ def _all_required(node, depth: int = 0) -> bool:
     return all(_all_required(c, depth + 1) for c in (node.children or []))
 
 
+def _has_values_table(node, depth: int = 0) -> bool:
+    """True if a VALUES block appears anywhere in this subtree.
+
+    `compute_scope` does NOT model UNDEF: a VALUES row binding `x` to UNDEF
+    still reports `x` as `defined`, so scope evidence alone would wrongly
+    prove the variable always bound. Per-variable VALUES evidence already
+    exists and is correct — `ColumnInfo.uuid_materialized`, set only when
+    EVERY row bound the variable — so scope is simply not consulted here.
+    """
+    from .ir import KIND_TABLE
+    if node is None or depth > 12:
+        return True
+    if node.kind == KIND_TABLE:
+        return True
+    return any(_has_values_table(c, depth + 1) for c in (node.children or []))
+
+
 def _boundness_col(alias: str, sql_name: str, info) -> str:
     """Column whose NULL-ness actually means "this variable is unbound".
 
@@ -260,7 +277,7 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
                 # falls back to a nested loop with a join filter. On is_empty —
                 # OPTIONAL + FILTER(!BOUND) — that was over 120s against 1.3s
                 # for the same query with a plain equality (issues/052).
-                def _always_bound(child, info):
+                def _always_bound(child, info, var):
                     # "child.kind is a BGP" was too strict: the left side of a
                     # LEFT JOIN is usually a JOIN of BGPs, whose variables are
                     # every bit as bound. What matters is that nothing in the
@@ -288,7 +305,34 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
                         # against. Other variables of the same block are
                         # judged independently.
                         return True
-                    return info.from_triple and _all_required(child)
+                    if info.from_triple and _all_required(child):
+                        return True
+                    # `_all_required` asks about the WHOLE subtree, which is too
+                    # coarse once OPTIONALs stack. The left side of the second
+                    # OPTIONAL contains the first one, so the node rule rejects
+                    # it — even though the join variable is bound by that
+                    # OPTIONAL's REQUIRED side and can never be NULL.
+                    #
+                    #   ?s :type ?t . OPTIONAL { ?s :text ?a } OPTIONAL { ?s :int ?b }
+                    #
+                    # `compute_scope` already answers this per variable: a
+                    # LEFT JOIN keeps its left arm's variables in `defined` and
+                    # moves only the right arm's to `maybe`. `?s` stays
+                    # `defined`, so the disjunct is provably dead — the same
+                    # evidence `emit_minus` folds on (`issues/205`).
+                    #
+                    # It matters for the same reason as every other guard here:
+                    # `(a IS NULL OR a = b)` is not an equijoin, so PostgreSQL
+                    # materialises the whole right side and nested-loops it.
+                    # Measured on a two-OPTIONAL slot projection: 405,014
+                    # buffers / 257.8 ms with the disjunct, 1,814 / 6.0 ms
+                    # without, same 81,540 rows (`issues/207`).
+                    if _has_values_table(child):
+                        return False
+                    try:
+                        return var in compute_scope(child).defined
+                    except Exception:
+                        return False
 
                 plain_left_join = (is_left and not right_is_table
                                    and not left_is_table)
@@ -303,9 +347,9 @@ def _emit_join_impl(plan: PlanV2, ctx: EmitContext, is_left: bool) -> str:
                 inner_join = not is_left
                 may_drop = plain_left_join or inner_join
                 disjuncts = []
-                if not (may_drop and _always_bound(left_child, left_info)):
+                if not (may_drop and _always_bound(left_child, left_info, v)):
                     disjuncts.append(f"{l_null_col} IS NULL")
-                if not (may_drop and _always_bound(right_child, right_info)):
+                if not (may_drop and _always_bound(right_child, right_info, v)):
                     disjuncts.append(f"{r_null_col} IS NULL")
                 if disjuncts:
                     cond = "(" + " OR ".join(disjuncts + [cond]) + ")"

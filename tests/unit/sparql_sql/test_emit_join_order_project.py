@@ -234,21 +234,50 @@ class TestEmitJoin:
         assert "IS NULL" not in sql
 
     def test_left_join_keeps_null_tolerance_when_a_side_can_be_unbound(self):
-        """A nested OPTIONAL under one side → disjuncts must come back.
+        """A nested OPTIONAL that may leave the shared var unbound.
 
-        This is the case the compatible-mapping form exists for: sequential
-        OPTIONALs sharing a variable, where the inner one may leave it unbound.
+        This is the case the compatible-mapping form exists for. The variable
+        must be reachable ONLY through the nested OPTIONAL's optional arm —
+        `{ ?y ... OPTIONAL { ?x ... } }` — because that is what makes it
+        genuinely absent on some rows.
+
+        The fixture used to bind "x" in all three BGPs, which does NOT express
+        that: a LEFT JOIN whose REQUIRED arm binds the variable always binds
+        it, so the disjunct it asserted was dead weight. Folding it is the
+        whole of `issues/207` (405,014 buffers -> 1,814, same rows), and this
+        cell passed only because the plan was not the one it described.
         """
         from vitalgraph.db.sparql_sql.emit_join import emit_left_join
         ctx = _make_ctx({})
         left = self._bgp_with_var("x")
         nested = PlanV2(kind=KIND_LEFT_JOIN,
-                        children=[self._bgp_with_var("x"),
+                        children=[self._bgp_with_var("y"),
                                   self._bgp_with_var("x")])
         plan = PlanV2(kind=KIND_LEFT_JOIN, children=[left, nested])
         sql = emit_left_join(plan, ctx)
         assert "LEFT JOIN" in sql
         assert "IS NULL" in sql
+
+    def test_stacked_optionals_fold_to_an_equijoin(self):
+        """`?s p ?t . OPTIONAL {...} OPTIONAL {...}` — the issues/207 shape.
+
+        The second OPTIONAL's left side CONTAINS the first, so the whole-node
+        `_all_required` rule rejects it. But the shared variable is bound by
+        the required BGP underneath, so it can never be NULL and the disjunct
+        is provably dead. Keeping it cost 982x: `(a IS NULL OR a = b)` is not
+        an equijoin, so PostgreSQL materialised the entire right side and
+        nested-looped it instead of using an index.
+        """
+        from vitalgraph.db.sparql_sql.emit_join import emit_left_join
+        ctx = _make_ctx({})
+        first = PlanV2(kind=KIND_LEFT_JOIN,
+                       children=[self._bgp_with_var("x"),
+                                 self._bgp_with_var("x")])
+        plan = PlanV2(kind=KIND_LEFT_JOIN,
+                      children=[first, self._bgp_with_var("x")])
+        sql = emit_left_join(plan, ctx)
+        assert "LEFT JOIN" in sql
+        assert "IS NULL" not in sql
 
     def test_left_join_with_exprs(self):
         """LEFT JOIN with filter expressions → appended to ON clause."""
