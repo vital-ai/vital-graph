@@ -160,6 +160,19 @@ against fixing this too broadly. Verified that the bag test FAILS on the old
 code (`p|p` returned 3 where 6 is correct) and passes after — a test that passes
 either way pins nothing.
 
+### Measured after the fix
+
+    property_path_alt   477,751 buffers  ->  215      (2,222x)
+    minus               661,626          ->  661,626  (unchanged, still open)
+
+Both still return 25 rows. The size of that is the dedup's real cost: a
+deduplicating UNION cannot stop at the LIMIT, because it must see every row of
+both arms before it knows which are distinct. With UNION ALL the page stops when
+it has 25, and the whole shape collapses to 215 buffers.
+
+So the correctness defect and the cost were one thing, not two that happened to
+share a line.
+
 ### The MINUS half is still open
 
 No spec deviation is in play there: its SQL contains no UNION at all, and an
