@@ -101,8 +101,66 @@ class TestEmitMinusUsesIt:
         assert "COALESCE(" in sql
 
     def test_still_emits_both_compatibility_and_domain_clauses(self):
-        """SPARQL §18.5 needs both halves; the fix must not drop one."""
+        """SPARQL §18.5 needs both halves; the fix must not drop one.
+
+        BOTH HALVES ARE STILL THERE, constant-folded. A VALUES row binds its
+        variable in every solution, so `compute_scope` puts it in `defined` on
+        both sides, the NULL arms of the compatibility test are dead, and the
+        domain intersection is satisfied by construction (`issues/205`):
+
+            compatibility   `l IS NULL OR r IS NULL OR l = r`  ->  `l = r`
+            domain          `l IS NOT NULL AND r IS NOT NULL`  ->  `TRUE`
+
+        That folding is the point rather than a side effect: PostgreSQL cannot
+        hash or index the three-part disjunction, so the correlated NOT EXISTS
+        re-scans the right side per outer row and a LIMIT never stops it —
+        661,626 buffers to return 25 rows on a 7.4M-quad fixture.
+
+        The unfolded form is still required where a variable is NOT provably
+        bound, and `test_optional_side_keeps_the_null_arms` covers that.
+        """
         sql = self._minus_sql()
         assert "NOT EXISTS" in sql
-        assert "IS NULL OR" in sql        # compatibility
-        assert "IS NOT NULL AND" in sql   # domain intersection
+        # The identity comparison survives in some form.
+        assert re.search(r"=\s*COALESCE|COALESCE[^=]*=", sql) or "= m" in sql, (
+            f"the compatibility test disappeared entirely:\n{sql}")
+
+    def test_optional_side_keeps_the_null_arms(self):
+        """A variable the right side only MAYBE binds keeps the full test.
+
+        This is the guard on the folding above. `compute_scope` puts an
+        OPTIONAL's right-hand variables in `maybe`, not `defined`, so the
+        unbound arms are live: a right-hand solution that does not bind ?s is
+        COMPATIBLE with a left-hand one that does, and must not remove it.
+        Folding to `l = r` there would delete rows SPARQL keeps.
+        """
+        from vitalgraph.db.sparql_sql.ir import (
+            PlanV2, KIND_MINUS, KIND_TABLE, KIND_LEFT_JOIN)
+        from vitalgraph.db.jena_sparql.jena_types import URINode
+        from .emit_helpers import _make_ctx
+
+        def _values(var, uri):
+            return PlanV2(kind=KIND_TABLE, values_vars=[var],
+                          values_rows=[{var: URINode(value=uri)}])
+
+        # right = { ?anchor ... } OPTIONAL { ?s ... }, so ?s is only MAYBE bound.
+        right = PlanV2(kind=KIND_LEFT_JOIN,
+                       children=[_values("anchor", "urn:anchor"),
+                                 _values("s", "urn:x")])
+        plan = PlanV2(kind=KIND_MINUS,
+                      children=[_values("s", "urn:a"), right])
+        from vitalgraph.db.sparql_sql.emit_minus import emit_minus
+        sql = emit_minus(plan, _make_ctx({}))
+
+        assert "IS NULL OR" in sql, (
+            "?s is only MAYBE bound on the right (it comes from an OPTIONAL), "
+            "so the compatibility test must keep its unbound arms — folding to "
+            "an equality would remove left rows that SPARQL keeps")
+
+    def test_a_provably_bound_variable_folds_to_equality(self):
+        """VALUES binds its variable, so the NULL arms are dead code."""
+        sql = self._minus_sql()
+        assert "IS NULL OR" not in sql, (
+            "a variable bound in every solution on both sides does not need the "
+            "unbound arms, and keeping them costs the anti-join its index "
+            "(issues/205)")

@@ -100,10 +100,33 @@ def emit_minus(plan: PlanV2, ctx: EmitContext) -> str:
         r_uuid = _identity_expr(r_alias, r_sn, r_info, ctx.space_id)
         # Rule 2: 3-part compatibility for joins (§10.5).
         # Compatible: if either side is NULL (unbound), it's fine; otherwise must match.
-        compat_parts.append(
-            f"({l_uuid} IS NULL OR {r_uuid} IS NULL OR {l_uuid} = {r_uuid})")
-        # Domain intersection: at least one var bound in both sides
-        nonempty_parts.append(f"({l_uuid} IS NOT NULL AND {r_uuid} IS NOT NULL)")
+        #
+        # WHEN THE VARIABLE IS DEFINITELY BOUND ON BOTH SIDES, the NULL arms are
+        # dead and the whole thing is an equality. That matters: PostgreSQL
+        # cannot hash or index `a IS NULL OR b IS NULL OR a = b`, so the
+        # correlated NOT EXISTS degrades to re-scanning the right side per outer
+        # row and the LIMIT never stops it early. Measured on a 7.4M-quad
+        # fixture, `?s a KGTextSlot . MINUS { ?s p ?b }` read 661,626 buffers to
+        # return 25 rows (`issues/205`).
+        #
+        # `defined` is the right test and not an approximation: OPTIONAL pushes
+        # its right side's variables into `maybe`, and UNION keeps only what both
+        # branches define, so a variable in `defined` on BOTH sides is bound in
+        # every solution of each. The identity expression cannot be spuriously
+        # NULL for such a variable either — `_identity_expr` derives one when the
+        # variable has no stored `__uuid`, which is what `issues/026` required.
+        both_bound = (v in left_scope.defined) and (v in right_scope.defined)
+        if both_bound:
+            compat_parts.append(f"{l_uuid} = {r_uuid}")
+            # Domain intersection is satisfied by construction: this variable is
+            # bound in both, so dom(μ1) ∩ dom(μ2) is non-empty whatever the rest
+            # of the shared variables do.
+            nonempty_parts.append("TRUE")
+        else:
+            compat_parts.append(
+                f"({l_uuid} IS NULL OR {r_uuid} IS NULL OR {l_uuid} = {r_uuid})")
+            # Domain intersection: at least one var bound in both sides
+            nonempty_parts.append(f"({l_uuid} IS NOT NULL AND {r_uuid} IS NOT NULL)")
 
     corr_clause = " AND ".join(compat_parts)
     domain_clause = " OR ".join(nonempty_parts)

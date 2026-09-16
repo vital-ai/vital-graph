@@ -1,9 +1,9 @@
 # MINUS And An Alternation Path Read The Whole Population For One Page
 
-## Status: the ALTERNATION half is FIXED 2026-09-15 — `emit_path` now emits
-## `UNION ALL` for a bare `PathAlt` and keeps `UNION` beneath `+`/`*`. The MINUS
-## half is still OPEN and may be semantic rather than a defect. Found by the
-## first run of the `issues/193` shape bench.
+## Status: FIXED 2026-09-15, both halves. Alternation 477,751 -> 215 buffers,
+## MINUS 661,626 -> 205, each still returning 25 rows. Neither was irreducible:
+## both were a SQL construct the planner could not optimise, so a LIMIT could
+## not stop the scan. Found by the first run of the `issues/193` shape bench.
 
 ## The measurement
 
@@ -179,3 +179,50 @@ No spec deviation is in play there: its SQL contains no UNION at all, and an
 anti-join may genuinely need the population before it can know what to exclude.
 661,626 buffers for 25 rows is still worth understanding, but it should be
 approached as "is this irreducible" rather than as a known defect.
+
+## FIXED (the MINUS half) 2026-09-15
+
+The guess above — "an anti-join may genuinely need the population" — was wrong.
+It was the same class of defect as the alternation: SQL the planner cannot
+optimise.
+
+`emit_minus` emits a correlated `NOT EXISTS`, which CAN stop at a LIMIT. What
+stopped it was the correlation:
+
+    (l_uuid IS NULL OR r_uuid IS NULL OR l_uuid = r_uuid)
+
+PostgreSQL cannot hash or index that disjunction, so the subquery degrades to
+re-scanning the right side per outer row. The three parts are SPARQL §10.5
+compatibility — an unbound variable cannot conflict — and they are necessary IN
+GENERAL.
+
+They are dead when the variable is bound in every solution of both sides, which
+`compute_scope` already knows: `defined` versus `maybe`. OPTIONAL pushes its
+right-hand variables into `maybe`, and UNION keeps only what both branches
+define, so a variable in `defined` on both sides is bound everywhere. For those,
+the clause folds:
+
+    compatibility   l IS NULL OR r IS NULL OR l = r   ->   l = r
+    domain          l IS NOT NULL AND r IS NOT NULL   ->   TRUE
+
+    minus   661,626 buffers  ->  205      (3,227x), still 25 rows
+
+### Why the folding is safe, and where it stops
+
+`_identity_expr` derives an identity when a variable has no stored `__uuid`, so
+a `defined` variable's identity cannot read as NULL — that was `issues/026`,
+where a VALUES/BIND value with a literal `NULL::uuid` made the domain test
+unsatisfiable and turned MINUS into a no-op.
+
+Pinned at two levels, and the data-level tests already existed:
+
+    unit   a provably bound variable folds to equality
+    unit   an OPTIONAL-side variable KEEPS the null arms
+    integ  test_plain_bgp_shared_var              (the folded path)
+    integ  test_unbound_var_still_reads_as_unbound (the unfolded path, OPTIONAL)
+    integ  test_values_*, test_bind_*             (issues/026's shapes)
+
+An existing test asserted the literal string `IS NULL OR`, which this change
+folds away in the VALUES case. It was pinning the old implementation's SYNTAX
+rather than §18.5's semantics — both halves are still emitted, constant-folded
+— so it now asserts the behaviour in both regimes instead.
