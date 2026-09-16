@@ -193,17 +193,26 @@ async def test_entity_graph_fanout_cold_vs_warm(perf_client, perf_record):
         f"matching -- check hasKGGraphURI in {SPACE} before reading the timing "
         f"as an improvement.")
 
-    # Deliberately NOT asserting warm < cold. In the steady state the two are
-    # within noise and warm is sometimes slower; see the module docstring. The
-    # cache's value is avoiding a cold-buffer read, which shows up on first
-    # touch and not here.
+    # NO RATIO GATE, and the reason is worth keeping: there was one, and fixing
+    # something else broke it.
     #
-    # What IS gateable is that the fan-out stays bounded relative to the page it
-    # decorates. A wide band, because the base query dominates the absolute
-    # figure and both move with machine load -- this catches the fan-out
-    # becoming the dominant cost, not a 20% drift.
-    assert med_cold < med_base * 6, (
-        f"cold fan-out ({med_cold:.0f}ms) is more than 6x the same page without "
-        f"it ({med_base:.0f}ms). In steady state the fan-out adds a fraction of "
-        f"the base query; this size of gap means either the buffers were cold "
-        f"(re-run) or branch 2 of the UNION has lost its index.")
+    # It asserted `cold < base * 6` -- the fan-out must not become the dominant
+    # cost of the page. On 2026-09-15 that failed at 2,800ms against 80ms, and
+    # the fan-out had not moved (2,412 / 2,836ms in earlier baselines). The BASE
+    # had: `cc7eb2cf` and `c3ab55bd` took it from ~761ms to ~80ms. The gate was a
+    # ratio against a denominator that was itself a defect, so repairing the
+    # defect broke the gate.
+    #
+    # Raising the multiplier would be the wrong repair. At 35x it stops bounding
+    # anything, and the premise is gone regardless: the fan-out IS now the
+    # dominant cost of the page, correctly, because the page got cheap.
+    #
+    # An absolute bound is no better -- `fanout_cold_ms` is regime-dependent by
+    # the measurements at the top of this file (193ms resident, 2,144ms after a
+    # restart), so any threshold either flaps or is so wide it gates nothing.
+    #
+    # What remains is the assertions ABOVE, which catch the failure that matters
+    # (a fan-out returning nothing), and the RECORDED values, which make a real
+    # regression visible as a number. That is the same conclusion `issues/202`
+    # reached: a relation between quantities holds right up until it does not,
+    # and the values are what show the drift.

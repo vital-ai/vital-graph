@@ -41,6 +41,23 @@ PG_SETTINGS = [
     "server_version", "shared_buffers", "work_mem", "maintenance_work_mem",
     "effective_cache_size", "max_parallel_workers_per_gather", "random_page_cost",
     "jit", "default_statistics_target",
+    # WAL AND CHECKPOINTING, because the WRITE benches are governed by it and
+    # nothing here recorded it. Observed on the test stack during an ingest run:
+    #
+    #     LOG: checkpoints are occurring too frequently (21 seconds apart)
+    #     LOG: checkpoints are occurring too frequently (11 seconds apart)
+    #     HINT: Consider increasing the configuration parameter "max_wal_size".
+    #
+    # with `max_wal_size = 1024MB` and a checkpoint distance of ~542MB, so the
+    # write tier spends much of its time in checkpoint I/O rather than in the
+    # write path it means to measure.
+    #
+    # That is `issues/081`'s failure for a different setting: conclusions drawn
+    # on a configuration nobody recorded. Two runs under different WAL settings
+    # would compare as though they measured the same thing, and the ingest
+    # baseline would move for a reason invisible in the stamp.
+    "max_wal_size", "min_wal_size", "checkpoint_timeout",
+    "checkpoint_completion_target", "wal_buffers", "synchronous_commit",
 ]
 
 
