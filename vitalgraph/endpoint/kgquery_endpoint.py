@@ -418,6 +418,58 @@ class KGQueriesEndpoint:
                 detail=f"Failed to execute relation query: {str(e)}"
             )
     
+    async def _project_slot_values(self, backend, space_id: str, graph_id: str,
+                                   entity_uris, query_request, entity_type):
+        """Slot values for a page, or None (`issues/208`).
+
+        A SHARED step rather than a fourth fast path, and deliberately so. The
+        projection is orthogonal to selection — it applies to whichever path
+        chose the page — so building it as its own gate would mean
+        re-implementing selection to have something to project. Called from all
+        THREE entity paths for the same reason: a field populated on one path
+        and silently absent on the others is exactly `issues/209`.
+
+        None on any doubt, and None is not silent: a projection that cannot be
+        served must not come back as empty columns, because a blank column reads
+        as "no value set". The response message says so instead.
+        """
+        cols = None
+        if getattr(query_request, "slot_projection", None) and entity_uris:
+            from ..db.sparql_sql.slot_projection import (
+                project_slot_values, resolve_columns)
+            cols = resolve_columns(query_request.slot_projection)
+        if cols is None:
+            return None
+        pool = getattr(getattr(backend, 'db_impl', None), 'connection_pool', None)
+        if pool is None:
+            return None
+        from ..db.sparql_sql.fast_slot_filter import slot_sort_is_blocked
+        async with pool.acquire() as conn:
+            # THE SAME GATE THE FILTER USES, and it applies even when the PAGE
+            # came from the quads: the page is authoritative, the projection is
+            # read from the derived table, and a short table renders a column
+            # blank with no error. `issues/149` measured a production type at
+            # 1.05% while its own drift probe reported converged.
+            if await slot_sort_is_blocked(conn, space_id, entity_type):
+                key = (space_id, entity_type, "projection")
+                if key not in _COVERAGE_WARNED:
+                    _COVERAGE_WARNED.add(key)
+                    self.logger.warning(
+                        "kgquery: entity_slot_sort is BLOCKED for space=%s "
+                        "type=%s — slot_projection is DECLINED rather than "
+                        "served from a table that may be short, which would "
+                        "render columns blank. Run "
+                        "`scripts/backfill_slot_sort_coverage.py --space %s`.",
+                        space_id, entity_type, space_id)
+                return None
+            t0 = _time.monotonic()
+            values = await project_slot_values(
+                conn, space_id, graph_id, entity_uris, cols)
+        self.logger.info(
+            "Slot projection: %d entities x %d columns, %.1fms",
+            len(entity_uris), len(cols), (_time.monotonic() - t0) * 1000)
+        return values
+
     async def _try_fast_slot_sort(self, backend, space_id: str, graph_id: str,
                                   entity_criteria, query_request):
         """The slot-sort page from `{space}_entity_slot_sort`, or None.
@@ -435,6 +487,7 @@ class KGQueriesEndpoint:
         if pool is None:
             return None
         entity_graphs = None
+        slot_values = None
         try:
             t0 = _time.monotonic()
             async with pool.acquire() as conn:
@@ -504,6 +557,9 @@ class KGQueriesEndpoint:
                 self.logger.info(
                     "Entity graph fetch (fast sort path): %d entities, %.0fms",
                     len(uris), (_time.monotonic() - t_eg) * 1000)
+            slot_values = await self._project_slot_values(
+                backend, space_id, graph_id, uris, query_request,
+                getattr(entity_criteria, "entity_type", None))
         except Exception as exc:
             self.logger.warning("fast slot sort declined (%s) — using SPARQL", exc)
             return None
@@ -516,6 +572,7 @@ class KGQueriesEndpoint:
             query_type="entity",
             entity_uris=uris,
             entity_graphs=entity_graphs,
+            entity_slot_values=slot_values,
             total_count=total,
             page_size=query_request.page_size,
             offset=query_request.offset,
@@ -569,6 +626,7 @@ class KGQueriesEndpoint:
         if pool is None:
             return None
         entity_graphs = None
+        slot_values = None
         try:
             t0 = _time.monotonic()
             async with pool.acquire() as conn:
@@ -624,6 +682,9 @@ class KGQueriesEndpoint:
                 self.logger.info(
                     "Entity graph fetch (fast filter path): %d entities, %.0fms",
                     len(uris), (_time.monotonic() - t_eg) * 1000)
+            slot_values = await self._project_slot_values(
+                backend, space_id, graph_id, uris, query_request,
+                getattr(entity_criteria, "entity_type", None))
         except Exception as exc:
             self.logger.warning("fast slot filter declined (%s) — using SPARQL", exc)
             return None
@@ -636,6 +697,7 @@ class KGQueriesEndpoint:
             query_type="entity",
             entity_uris=uris,
             entity_graphs=entity_graphs,
+            entity_slot_values=slot_values,
             total_count=total,
             page_size=query_request.page_size,
             offset=query_request.offset,
@@ -919,11 +981,20 @@ class KGQueriesEndpoint:
                 t_eg = _time.monotonic()
                 self.logger.info(f"Entity graph fetch: {len(entity_uris)} entities, {(t_eg - t_eg0)*1000:.0f}ms")
             
+            # The projection reaches the GENERAL path too. The page here came
+            # from the quads and the columns come from the derived table, which
+            # is a narrower trust claim than the fast paths make and is gated
+            # the same way.
+            slot_values = await self._project_slot_values(
+                backend, space_id, graph_id, entity_uris, query_request,
+                getattr(entity_criteria, "entity_type", None))
+
             return KGQueryResponse(
                 status=_read_status(entity_uris),
                 query_type="entity",
                 entity_uris=entity_uris,
                 entity_graphs=entity_graphs,
+                entity_slot_values=slot_values,
                 total_count=total_count,
                 page_size=query_request.page_size,
                 offset=query_request.offset

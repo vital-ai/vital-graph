@@ -13,6 +13,7 @@ from ...model.kgqueries_model import (
     KGQueryRequest,
     KGQueryResponse,
     KGQueryCriteria,
+    SlotProjection,
     FrameQueryResponse,
     KGEntityQueryResponse,
     RelationQueryResponse,
@@ -39,7 +40,8 @@ class KGQueriesEndpoint(BaseEndpoint):
         offset: int = 0,
         include_frame_graph: bool = False,
         include_entity_graph: bool = False,
-        count_only: bool = False
+        count_only: bool = False,
+        slot_projection: Optional[List[SlotProjection]] = None
     ) -> KGQueryResponse:
         """
         Query entity-to-entity connections based on criteria.
@@ -78,7 +80,8 @@ class KGQueriesEndpoint(BaseEndpoint):
                 offset=offset,
                 include_frame_graph=include_frame_graph,
                 include_entity_graph=include_entity_graph,
-                count_only=count_only
+                count_only=count_only,
+                slot_projection=slot_projection
             )
             
             # Log complete request for debugging
@@ -310,6 +313,7 @@ class KGQueriesEndpoint(BaseEndpoint):
         entity_property_filters: Optional[List[EntityPropertyFilter]] = None,
         query_mode: str = "edge",
         include_entity_graph: bool = False,
+        slot_projection: Optional[List[SlotProjection]] = None,
         page_size: int = 10,
         offset: int = 0,
         count_only: bool = False
@@ -323,6 +327,11 @@ class KGQueriesEndpoint(BaseEndpoint):
             entity_type: Optional entity type URI to filter by
             entity_uris: Optional list of specific entity URIs to filter
             frame_criteria: Optional list of FrameCriteria for filtering by frames/slots
+            slot_projection: Optional list of SlotProjection columns — slot values
+                to return for the entities of the page, read from the slot-sort
+                table rather than by fetching each entity's graph (issues/208).
+                Returned on the response as entity_slot_values: entity URI ->
+                alias -> list of values.
             query_mode: Query mode: 'edge' or 'direct' (default: 'edge')
             page_size: Number of results per page (default: 10)
             offset: Offset for pagination (default: 0)
@@ -357,7 +366,8 @@ class KGQueriesEndpoint(BaseEndpoint):
             page_size=page_size,
             offset=offset,
             include_entity_graph=include_entity_graph,
-            count_only=count_only
+            count_only=count_only,
+            slot_projection=slot_projection
         )
         response = KGEntityQueryResponse.from_raw(raw)
         
