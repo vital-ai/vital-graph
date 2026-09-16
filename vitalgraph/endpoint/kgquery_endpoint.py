@@ -434,6 +434,7 @@ class KGQueriesEndpoint:
         pool = getattr(getattr(backend, 'db_impl', None), 'connection_pool', None)
         if pool is None:
             return None
+        entity_graphs = None
         try:
             t0 = _time.monotonic()
             async with pool.acquire() as conn:
@@ -478,6 +479,31 @@ class KGQueriesEndpoint:
                     conn, space_id, graph_id, entity_criteria)
             if total is None:
                 return None
+            # THE PAGE IS FAST; THE FLAG IS STILL THE CALLER'S REQUEST
+            # (`issues/209`). The hydration block on the general path is BELOW
+            # this method's return, so a fast-served query used to answer with
+            # `entity_graphs` unset — a 200, a correct page, a correct total,
+            # and the field silently absent, indistinguishable from not having
+            # asked. Measured on `lead_nurture_grouped`: the sort path answered
+            # in 947ms with zero graphs where the general path answered in
+            # 38,670ms WITH 25 graphs and 18,937 quads.
+            #
+            # Hydrating here keeps the page win and pays the fan-out only
+            # because it was asked for. Declining the fast path instead would
+            # cost the whole 38,670ms to buy the same 4,080ms of hydration.
+            #
+            # Outside the pool block deliberately: `_fetch_entity_graphs` runs
+            # SPARQL and must not hold a pool connection while it does. Inside
+            # the `try` also deliberately: if hydration fails, the query returns
+            # to the general pipeline rather than being served with the field
+            # missing, which is the defect this fixes.
+            if query_request.include_entity_graph and uris:
+                t_eg = _time.monotonic()
+                entity_graphs = await self._fetch_entity_graphs(
+                    backend, space_id, graph_id, uris)
+                self.logger.info(
+                    "Entity graph fetch (fast sort path): %d entities, %.0fms",
+                    len(uris), (_time.monotonic() - t_eg) * 1000)
         except Exception as exc:
             self.logger.warning("fast slot sort declined (%s) — using SPARQL", exc)
             return None
@@ -489,6 +515,7 @@ class KGQueriesEndpoint:
             status=OperationStatus.FOUND if uris else OperationStatus.EMPTY,
             query_type="entity",
             entity_uris=uris,
+            entity_graphs=entity_graphs,
             total_count=total,
             page_size=query_request.page_size,
             offset=query_request.offset,
@@ -541,6 +568,7 @@ class KGQueriesEndpoint:
         pool = getattr(getattr(backend, 'db_impl', None), 'connection_pool', None)
         if pool is None:
             return None
+        entity_graphs = None
         try:
             t0 = _time.monotonic()
             async with pool.acquire() as conn:
@@ -585,6 +613,17 @@ class KGQueriesEndpoint:
                         query_request.page_size, query_request.offset)
                     if uris is None:
                         return None
+            # `issues/209`, the same hole on this path — see the note in
+            # `_try_fast_slot_sort`. `count_only` has no page, so there is
+            # nothing to hydrate and the flag is satisfied by the empty list,
+            # exactly as the general path's `and entity_uris` guard decides.
+            if query_request.include_entity_graph and uris:
+                t_eg = _time.monotonic()
+                entity_graphs = await self._fetch_entity_graphs(
+                    backend, space_id, graph_id, uris)
+                self.logger.info(
+                    "Entity graph fetch (fast filter path): %d entities, %.0fms",
+                    len(uris), (_time.monotonic() - t_eg) * 1000)
         except Exception as exc:
             self.logger.warning("fast slot filter declined (%s) — using SPARQL", exc)
             return None
@@ -596,6 +635,7 @@ class KGQueriesEndpoint:
             status=OperationStatus.FOUND if total else OperationStatus.EMPTY,
             query_type="entity",
             entity_uris=uris,
+            entity_graphs=entity_graphs,
             total_count=total,
             page_size=query_request.page_size,
             offset=query_request.offset,
