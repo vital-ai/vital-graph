@@ -457,6 +457,52 @@ async def edge_table_drift(conn, space_id: str,
     return int(expected or 0), int(edge_rows or 0)
 
 
+async def edge_table_dangling_endpoints(conn, space_id: str,
+                                        timeout: float | None = None) -> dict:
+    """Edge rows whose SOURCE or DEST node no longer exists in the quads.
+
+    THE OPPOSITE QUESTION TO `edge_table_orphan_rate`, which is why that probe
+    could not see this. That one asks whether the row's own defining quad is
+    gone — is this EDGE stale. This asks whether the thing the edge POINTS AT
+    is gone — is the graph still connected. A row can be a perfect
+    materialisation of a live edge quad and still reference a node that was
+    deleted out from under it.
+
+    Found on production 2026-09-17, and only sideways: 298 rows of 3,466,543
+    had a source node with no quads at all, holding up 298 intact child frames
+    and 828 intact slots carrying values. Nothing detected it. It surfaced
+    through `entity_slot_sort`'s row shortfall, several inferences away, and
+    the first two explanations offered for it were both wrong (`issues/212`).
+
+    Both directions are counted because they mean different things. A dangling
+    SOURCE is a deleted parent — the residue above. A dangling DEST is a
+    deleted child that something still points to. Production measured 298 and
+    **0**, and that asymmetry is a real signal about which deletion went wrong;
+    collapsing them into one number would have hidden it.
+
+    NOT SAMPLED, unlike its sibling. The condition is rare and a sample of 200
+    would report zero on a table with hundreds of genuine cases. Two anti-joins
+    over indexed uuid columns; on 3.4M rows this is seconds, which is why it
+    belongs on the maintenance cycle rather than in a request path.
+    """
+    t_edge = f"{space_id}_edge"
+    t_quad = f"{space_id}_rdf_quad"
+    row = await conn.fetchrow(
+        f"""
+        SELECT
+          (SELECT count(*) FROM {t_edge} e
+            WHERE NOT EXISTS (SELECT 1 FROM {t_quad} q
+                               WHERE q.subject_uuid = e.source_node_uuid))
+            AS dangling_source,
+          (SELECT count(*) FROM {t_edge} e
+            WHERE NOT EXISTS (SELECT 1 FROM {t_quad} q
+                               WHERE q.subject_uuid = e.dest_node_uuid))
+            AS dangling_dest
+        """, timeout=timeout)
+    return {"dangling_source": int(row["dangling_source"] or 0),
+            "dangling_dest": int(row["dangling_dest"] or 0)}
+
+
 async def edge_table_orphan_rate(conn, space_id: str, sample: int = 200,
                                  timeout: float | None = None) -> float:
     """Fraction of sampled edge rows that no longer correspond to any quad.

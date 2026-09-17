@@ -112,7 +112,26 @@ points at it.
 production is a FRAME; entity-sourced dangling edges measured ZERO. Recorded as
 a thing to check before relying on the default, not as a defect.
 
-## Nothing detects this
+## Detection ADDED 2026-09-17
+
+`edge_table_dangling_endpoints` (`sync_edge_table.py`) now runs per space in
+the maintenance edge-integrity pass and WARNS, naming both counts separately.
+Verified against production: it returns `{'dangling_source': 298,
+'dangling_dest': 0}` — the numbers this issue was written from, reproduced by
+the probe rather than by hand.
+
+It REPORTS and does not repair or gate, deliberately. Deleting a dangling row
+would destroy the only remaining evidence of what was orphaned, and the frames
+and slots below it would still be unreachable — a tidier table describing the
+same broken graph. Repair is a data decision.
+
+`tests/integration/test_edge_dangling_endpoints_are_detected.py` pins it in
+three parts: a control proving a healthy table reports zero, the residue shape
+reproduced by deleting a source node's quads, and an assertion that
+`edge_table_orphan_rate` still reports 0.0 on that same data — which is the
+whole reason a second probe was needed.
+
+## Nothing detected this (the gap that made it invisible)
 
 The residue was found sideways, through a slot-sort shortfall alarm, which is
 the part worth fixing. `maintenance_job` has `edge_table_orphan_rate`, but its

@@ -1,9 +1,9 @@
 # The Client Name Survives In Two Functional Positions
 
-## Status: OPEN, 2026-09-17. The 28 DOCUMENTARY occurrences are gone
-## (`f458f050`). These two are not comments — they name things the code
-## resolves, so removing them is a RENAME, not an edit, and needs a decision
-## rather than a commit.
+## Status: PARTLY FIXED 2026-09-17. The 28 DOCUMENTARY occurrences went in
+## `f458f050`; the probe script's five went by PARAMETERISING it, which was
+## available all along and wrongly written up here as needing a decision. ONE
+## occurrence remains, in `docker-compose.yml`, and that one really is a rename.
 
 ## The standing rule
 
@@ -40,11 +40,26 @@ still run and report nothing, which is worse than failing.
 explicitly). Recorded so the next sweep does not repeat it: a blind
 search-and-replace across this repo hits live identifiers.
 
-## What to do
+## Correction: (2) never needed a decision
 
-* For (1): rename the space, then the reference. Not a code change alone.
-* For (2): parameterise `NS`/`SPACE` from the environment, so the probe keeps
-  working against real data without the name being committed. Or accept that
-  this file is a local probe and untrack it.
+This issue said both items "need a rename or parameterisation, not an edit",
+and grouped them as one decision each. That was wrong about (2). A probe that
+hardcodes a space name does not need anyone's permission to read it from the
+environment instead — the name is an INPUT, and it was only committed because
+nobody made it one. Fixed: `SPACE` and `NS` now come from `VG_PROBE_SPACE` and
+`VG_PROBE_NS`, the script refuses with a usage line when they are unset rather
+than querying URIs that do not exist, and the table names derive from `SPACE`.
 
-Neither is urgent; both are one decision each.
+The lesson worth keeping is the one from the sweep, not the fix: a blind
+search-and-replace across this repo hits live identifiers, and it DID break this
+file before being reverted. Distinguish the positions before editing, not after.
+
+## What remains
+
+`docker-compose.yml:29` only. The value is compared against `space_id` at
+runtime, so it cannot be edited without renaming the space it names — on dev,
+where that space lives. Renaming first and updating the reference second is the
+order; doing it the other way round stops excluding the space in between, which
+is the `issues/192` failure (92 s -> 625 s cycles).
+
+Not urgent. One decision, not two.

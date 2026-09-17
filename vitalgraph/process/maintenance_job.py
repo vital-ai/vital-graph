@@ -1761,7 +1761,8 @@ class MaintenanceJob:
         from ..db.sparql_sql.sync_edge_table import (
             edge_table_drift, edge_table_orphan_rate,
             edge_table_untyped_rate, backfill_edge_table,
-            cleanup_orphan_edges, VITALTYPE_URI)
+            cleanup_orphan_edges, edge_table_dangling_endpoints,
+            VITALTYPE_URI)
 
         # Spaces whose SPARQL UPDATEs deferred a delete the per-subject hooks
         # could not reach. This used to run INLINE in the update request, where
@@ -1843,11 +1844,39 @@ class MaintenanceJob:
                     # every row reads NULL and nothing is wrong. Orphan
                     # detection stays with the referential probe above.
                     untyped_rate = await edge_table_untyped_rate(conn, space_id)
+                    # Is the graph still CONNECTED — a different question from
+                    # both probes above, and the one nothing was asking. They
+                    # ask whether a row is stale; this asks whether the node it
+                    # points at still exists. A row can be a faithful copy of a
+                    # live edge quad and still reference a deleted node.
+                    #
+                    # Production carried 298 such rows of 3,466,543, holding up
+                    # 298 intact frames and 828 intact slots, and nothing
+                    # detected them — they surfaced through an entity_slot_sort
+                    # shortfall several inferences away (`issues/212`).
+                    dangling = await edge_table_dangling_endpoints(
+                        conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
             except asyncpg.UndefinedTableError:
                 continue  # space has no edge table (e.g. non-KG) — skip
             except Exception as exc:
                 log_probe_failure("edge_integrity", space_id, exc)
                 continue
+            if dangling["dangling_source"] or dangling["dangling_dest"]:
+                # REPORTS, does not repair and does not gate. Deleting a
+                # dangling row would destroy the only remaining evidence of
+                # what was orphaned, and the surviving frames and slots below
+                # it would still be unreachable — a tidier table describing the
+                # same broken graph. Repair is a data decision, not a
+                # maintenance one (`issues/212`).
+                logger.warning(
+                    "edge_table DANGLING ENDPOINTS: %s has %d row(s) whose "
+                    "SOURCE node has no quads and %d whose DEST node has none. "
+                    "The rows are not stale — the nodes they point at were "
+                    "deleted without cascading. Anything below them is "
+                    "unreachable from an entity and invisible to every "
+                    "entity-led read. NOT repaired here: see issues/212.",
+                    space_id, dangling["dangling_source"],
+                    dangling["dangling_dest"])
             if untyped_rate > EDGE_UNTYPED_WARN_PCT:
                 # Reported, never acted on, and deliberately not called drift.
                 # Three conditions produce it and only one is actionable: the

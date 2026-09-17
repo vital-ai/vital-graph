@@ -5,8 +5,15 @@ count as a driving set"), measured it at 8.6x WORSE with ORDER BY + LIMIT, and
 closed as superseded by `rewrite_merge_bgp`. 096's shape is ALSO ORDER BY +
 LIMIT, so the same question applies before building anything.
 
-Reproduces 096's own two rows on 096's own fixture (cardiff_kg, CompanyName,
-2,863 KGLead):
+Reproduces 096's own two rows on 096's own fixture (CompanyName, 2,863 KGLead).
+
+The space and URI namespace are INPUTS, not constants — set them:
+
+    VG_PROBE_SPACE=<space_id> VG_PROBE_NS=urn:<ns>:kg python <this>
+
+They used to be hardcoded, which put a client name in a tracked file
+(`issues/214`). Refusing when unset is deliberate: defaulting to a guessed
+space would run, match nothing and report zero, which reads like a result.
 
     as generated today      507,492 buffers   360 ms
     entity pinned to ONE      222 buffers     0.7 ms
@@ -21,8 +28,13 @@ from vitalgraph.db.jena_sparql.jena_ast_mapper import map_compile_response
 from vitalgraph.db.jena_sparql.jena_sidecar_client import AsyncSidecarClient
 from vitalgraph.db.sparql_sql.generator import generate_sql
 
-SPACE, GRAPH = "cardiff_kg", "urn:cardiff_kg"
-NS, KG = "urn:cardiff:kg", "http://vital.ai/ontology/haley-ai-kg#"
+SPACE = os.environ.get("VG_PROBE_SPACE", "").strip()
+NS = os.environ.get("VG_PROBE_NS", "").strip()
+if not SPACE or not NS:
+    sys.exit("set VG_PROBE_SPACE=<space_id> and VG_PROBE_NS=urn:<ns>:kg — "
+             "this probe reads a real fixture and has no meaningful default")
+GRAPH = f"urn:{SPACE}"
+KG = "http://vital.ai/ontology/haley-ai-kg#"
 PAGE = 25
 
 
@@ -115,8 +127,8 @@ async def main():
                                  database="sparql_sql_graph", user="hadfield")
     try:
         uri = await conn.fetchval(
-            "select t.term_text from cardiff_kg_entity_slot_sort s "
-            "join cardiff_kg_term t on t.term_uuid=s.entity_uuid "
+            f"select t.term_text from {SPACE}_entity_slot_sort s "
+            f"join {SPACE}_term t on t.term_uuid=s.entity_uuid "
             "where s.slot_type_uuid='125ec323-2dff-58ed-afbf-b1e4490e8cef' limit 1")
         print(f"\n  fixture: {SPACE}  2,863 KGLead  CompanyName  page {PAGE}")
         print(f"  096 recorded: list 507,492 buf / 360 ms   pinned 222 buf / 0.7 ms\n")
