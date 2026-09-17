@@ -19,10 +19,20 @@ SPARQL 1.1 §10.2 defines both halves, and BOTH are wrong here:
     solution, so the surrounding solutions SURVIVE. Here they are destroyed,
     which is the opposite of what SILENT asks for.
 
-Both cells are `xfail` rather than deleted: they describe the semantics, so
-whichever way this is resolved — implementing federation, or rejecting the
-query up front — one of them turns green and says so. Rejecting is a perfectly
-good resolution; silently answering the wrong question is not. See issues/211.
+FIXED by rejecting at translation time (`map_op` fails closed). Both forms now
+raise `UnsupportedSparqlElement`, which `execute_sparql_query` returns as
+`success: False` with the message — a domain outcome, not a 500.
+
+REJECTING `SILENT` IS A DELIBERATE DEVIATION from §10.2, and the cell below
+says so rather than asserting compliance we do not have. SILENT exists to mean
+"carry on if the remote is unavailable", and a strictly compliant store would
+return the 3 local solutions. This store never attempts the call at all, so
+"carrying on" would mean quietly returning an answer assembled from half the
+query — the same silence this issue was filed about, merely better spelled. An
+explicit refusal is the honest outcome while federation is unimplemented.
+
+If federation is ever implemented, the SILENT cell is the one to change back.
+See issues/211.
 """
 
 from __future__ import annotations
@@ -88,9 +98,6 @@ async def test_the_local_pattern_alone_matches(seeded, backend_adapter):
     assert len(rows) == 3, f"fixture did not seed: {len(rows)} rows"
 
 
-@pytest.mark.xfail(reason="issues/211 — SERVICE compiles to an empty relation "
-                          "INNER joined, so it annihilates the local "
-                          "solutions instead of raising", strict=False)
 async def test_unreachable_service_is_an_error_not_an_empty_answer(
         seeded, backend_adapter):
     space_id, graph = seeded
@@ -102,15 +109,23 @@ async def test_unreachable_service_is_an_error_not_an_empty_answer(
         "cannot distinguish that from a legitimately empty remote result")
 
 
-@pytest.mark.xfail(reason="issues/211 — SILENT must preserve the surrounding "
-                          "solutions (§10.2); here it destroys them",
-                   strict=False)
-async def test_silent_service_preserves_the_local_solutions(
+async def test_silent_service_is_refused_rather_than_silently_emptied(
         seeded, backend_adapter):
+    """SILENT is refused too, and the refusal is explicit.
+
+    §10.2 would have SILENT preserve the 3 local solutions. It does not here,
+    and that is the deviation recorded in the module docstring: returning
+    solutions assembled from half the query, without saying so, is the defect
+    this file exists to prevent. What is asserted is the part that matters —
+    the caller is TOLD, rather than handed a quietly wrong answer.
+    """
     space_id, graph = seeded
-    _, rows = await _run(backend_adapter, space_id,
-                         _with_service(graph, silent=True))
-    assert len(rows) == 3, (
-        f"SERVICE SILENT left {len(rows)} of 3 local solutions. SILENT means "
-        f"the failed pattern contributes one empty solution, which JOINs "
-        f"identically — it does not mean the query returns nothing.")
+    result, rows = await _run(backend_adapter, space_id,
+                              _with_service(graph, silent=True))
+    assert result.get("success") is False and result.get("error"), (
+        "SERVICE SILENT returned success — either it federated (in which case "
+        "assert the 3 solutions per §10.2 and update issues/211) or it "
+        "annihilated them silently again")
+    assert "SERVICE" in str(result["error"]), (
+        f"the error must name what was refused, or the caller cannot act on "
+        f"it: {result['error']!r}")

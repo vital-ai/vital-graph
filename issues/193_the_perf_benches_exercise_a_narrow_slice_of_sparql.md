@@ -126,15 +126,20 @@ number existed.
                            would record the WHERE phase and call it DESCRIBE —
                            the `issues/206` mistake exactly. ASK is covered and
                            was that defect.
-    SERVICE                BLOCKED on `issues/211` — it stays unbenched on
-                           purpose. Asking why it had no bench is what found
-                           the defect: a SERVICE block compiles to
-                           `JOIN (SELECT 1 WHERE FALSE) ON TRUE`, so it
-                           silently annihilates the local solutions (5 rows
-                           without it, 0 with). A bench records what a shape
-                           COSTS, and this one returns nothing, so the cost is
-                           meaningless. Pinned by three cells in
-                           `test_service_clause_semantics.py` instead.
+    SERVICE                N/A — REJECTED by design, so there is nothing to
+                           bench. Asking why it had no bench is what found
+                           `issues/211`: a SERVICE block compiled to
+                           `JOIN (SELECT 1 WHERE FALSE) ON TRUE` and silently
+                           annihilated the local solutions (5 rows without it,
+                           0 with). `map_op` now fails closed for any
+                           unregistered operator, so the query is refused
+                           instead of answered wrongly. Pinned by three cells
+                           in `test_service_clause_semantics.py`.
+
+                           Worth keeping as a lesson about this issue's own
+                           method: the gap list is what found the defect. The
+                           bench was never written, and looking for it was
+                           still the whole value.
     REGEX                  0   (CONTAINS and LCASE are now covered)
     UPDATE forms           DONE 2026-09-15 — `write.update.insert_vs_modify`
                            covers INSERT DATA, INSERT WHERE and the MODIFY

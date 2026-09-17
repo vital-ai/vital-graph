@@ -1,8 +1,9 @@
 # A SERVICE Clause Silently Annihilates The Result Set
 
-## Status: OPEN, filed 2026-09-16 while closing the `issues/193` shape-coverage
-## gap. Found by asking why SERVICE had no bench; it has no bench because it
-## does not work, and the way it does not work is silent.
+## Status: FIXED 2026-09-16 by failing closed in `map_op`. Filed while closing
+## the `issues/193` shape-coverage gap — found by asking why SERVICE had no
+## bench; it had none because it did not work, and the way it did not work was
+## silent. The root cause was broader than SERVICE: see "The actual fault".
 
 ## What happens
 
@@ -36,6 +37,30 @@ SPARQL 1.1 §10.2 defines the two cases, and neither holds:
 The SILENT case is the more serious of the two. A caller writes SILENT
 *precisely* to say "carry on without the remote part", and gets back nothing.
 
+## The actual fault was not SERVICE-specific
+
+`map_op` mapped ANY unregistered operator to `OpNull`, with a log warning as
+the only trace:
+
+    logger.warning("Unknown op type: %s — returning OpNull", otype)
+    return OpNull()
+
+`OpNull` emits `SELECT 1 WHERE FALSE`, and an unknown op is joined to the rest
+of the query, so the empty relation annihilates every solution above it.
+SERVICE was simply the operator we happened to hit; anything else Jena emits
+without a mapper here behaved the same way, and would have been just as quiet.
+
+This module already had the policy and the exception for it.
+`UnsupportedSparqlElement` sits 250 lines above, and its docstring says
+"Raised instead of degrading to an empty pattern." The UPDATE path has raised
+it since `issues/023`, for the mirror-image reason: there a dropped element
+WIDENS the pattern, so a whole-graph DELETE reports success. Query and update
+disagreed; they now agree.
+
+`execute_sparql_query` already wraps translation in a try/except that returns
+`{'success': False, 'error': str(e)}`, so the refusal surfaces as a domain
+outcome rather than a 500 — no endpoint change was needed.
+
 ## Not implementing federation is fine
 
 This is not an argument that the store must federate. Declining is a
@@ -46,18 +71,31 @@ Rejecting the query at parse time — "SERVICE is not supported" — resolves th
 completely and is probably the right fix. It is also much less work than
 federation, and it turns a silent data-loss bug into an error message.
 
+## Rejecting SILENT deviates from §10.2, deliberately
+
+This is the one part of the fix that is a judgement call rather than a
+correction, so it is recorded as such.
+
+§10.2 would have `SERVICE SILENT` preserve the surrounding solutions. It does
+not here — both forms are refused. The reasoning: SILENT means "carry on if the
+remote is unavailable", and this store never attempts the call at all. Carrying
+on would mean quietly returning an answer assembled from half the query, which
+is the same silence this issue was filed about, merely better spelled. While
+federation is unimplemented, an explicit refusal is the honest outcome.
+
+If federation is ever implemented, this is the decision to revisit, and
+`test_silent_service_is_refused_rather_than_silently_emptied` is the cell that
+has to change back.
+
 ## Pinned by
 
-`tests/integration/test_service_clause_semantics.py`, three cells:
+`tests/integration/test_service_clause_semantics.py`, three cells, all passing:
 
   * a control proving the local pattern matches 3 rows, so the others are not
     vacuous;
-  * `xfail`: unreachable SERVICE should error, not answer empty;
-  * `xfail`: SILENT should preserve the local solutions.
-
-`strict=False` on both, because either resolution — implementing federation or
-rejecting the query — turns one or both green, and neither should then fail
-for having succeeded.
+  * unreachable SERVICE returns `success: False` with an error;
+  * SILENT is refused too, and the error NAMES what was refused — asserted,
+    because an error the caller cannot act on is barely better than silence.
 
 ## Why there is no bench
 

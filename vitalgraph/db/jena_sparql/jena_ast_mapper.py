@@ -279,8 +279,31 @@ def map_op(o: Dict[str, Any]) -> Op:
     mapper = _OP_MAPPERS.get(otype)
     if mapper:
         return mapper(o)
-    logger.warning("Unknown op type: %s — returning OpNull", otype)
-    return OpNull()
+    # FAIL CLOSED, for the reason `UnsupportedSparqlElement` above already
+    # gives: degrading to an empty pattern answers a DIFFERENT question and
+    # says nothing about having done so.
+    #
+    # `OpNull` emits `SELECT 1 WHERE FALSE` (`emit_null.py`), and an unknown op
+    # is joined to the rest of the query, so an empty relation INNER joined
+    # ANNIHILATES every solution above it. The same local pattern measured 5
+    # rows without a SERVICE block and 0 with one — no error, no marker,
+    # `success` not false. A caller cannot tell that from a legitimately empty
+    # answer (`issues/211`).
+    #
+    # The update path 700 lines down has done this since `issues/023`, for the
+    # mirror-image reason: there a dropped element WIDENS the pattern and can
+    # delete more than intended. Query and update now agree.
+    if otype == "OpService":
+        raise UnsupportedSparqlElement(
+            "SERVICE is not supported: this store does not federate. "
+            "Refusing to translate the query — dropping the SERVICE block "
+            "would silently return zero rows for a pattern that matches. "
+            "This applies to SERVICE SILENT too; see issues/211 for why that "
+            "deviates from SPARQL 1.1 §10.2.")
+    raise UnsupportedSparqlElement(
+        f"Unsupported SPARQL operator {otype!r}. Refusing to translate: "
+        f"dropping it would silently annihilate the result set rather than "
+        f"answer the query asked.")
 
 
 @_register_op("OpBGP")
