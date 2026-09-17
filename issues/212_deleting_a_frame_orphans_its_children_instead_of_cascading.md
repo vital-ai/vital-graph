@@ -38,34 +38,61 @@ table means no edge has them as a target either. They are referenced ONLY as
 `source_node_uuid` on those 298 rows. They were deleted; everything below them
 was not.
 
-## The mechanism
+## CORRECTION 2026-09-17: the first mechanism named here was wrong
 
-`kgframes_endpoint.py:298` `_delete_frames` says, in its own comment:
+This issue was filed naming `kgframes_endpoint.py:298` `_delete_frames` — which
+comments "Delete frame and its associated slots" and calls `delete_object`,
+removing only quads whose SUBJECT is the URI. That produces exactly this shape,
+so it looked conclusive. It is not the cause, because **it is dead code**:
+`_delete_frames` is called only by `_delete_entities` (line 373, "for test
+compatibility"), and NOTHING calls `_delete_entities` — not a route, not a test.
+The comment is still wrong and the helper is still worth deleting, but neither
+can strand anything.
 
-    # Delete frame and its associated slots
-    result = await backend_adapter.delete_object(space_id, graph_id, frame_uri)
+**The dedicated frame-delete route is protected, and has been since
+2026-05-03** (`55a40b02`). `_delete_frames_by_uris` (line 1530) calls
+`find_child_frames` for every URI and then either REFUSES —
 
-It does not delete associated slots. `delete_objects`
-(`endpoint/impl/objects_impl.py:76`) resolves `get_existing_quads_for_uris` —
-quads whose SUBJECT is the URI — and removes exactly those. Child frames, slots
-and the edge rows referencing the deleted node all survive, which is precisely
-the shape above.
+    "Cannot delete frames with children (use recursive=true to cascade)"
 
-The same behaviour is already recorded elsewhere as deliberate, for a DIFFERENT
-subject: `test_derived_table_maintenance.py` exempts the entity path because it
-"deletes ONLY quads whose subject IS the entity ... The entity subject carries
-no edge-source/dest properties and is not a frame, so no edge, frame_slot or
-slot-sort row can describe it." That reasoning is sound for an ENTITY and does
-not transfer to a FRAME: a frame IS an edge source, and deleting one strands
-whatever hung from it.
+— or, with `recursive=true`, collects all descendants first. The per-frame
+delete beneath it (`_delete_frame_from_backend`, line 2690) is a complete
+cascade in two phases: the frame graph (frame, slots, slot edges), then every
+edge REFERENCING the frame, `Edge_hasKGFrame` and `Edge_hasEntityKGFrame`
+included. So the recommendation this issue originally made — "make frame
+deletion cascade, or refuse" — was already implemented before the issue existed.
 
-Cascade machinery exists and this path does not use it —
-`KGSlotDeleteProcessor` is imported in the same file and driven at line 473 for
-slot deletion.
+## What the residue actually tells us
 
-**Not proven:** that this endpoint deleted these 99. The residue matches its
-shape exactly, but any caller of `delete_object` on a frame URI produces the
-same thing, and nothing in the data records which ran.
+Two facts constrain the cause:
+
+**It is not a stale edge table.** All 298 dangling `_edge` rows still have their
+edge OBJECT present in the quads. The table faithfully mirrors data that is
+really there; nothing here is a sync gap. (Worth stating because an edge table
+on this space HAS shipped ~25% incomplete before.)
+
+**Only the 99 frame nodes' own triples were removed.** Their outgoing edges,
+their child frames and those frames' slots all survive untouched. That is the
+signature of a delete-by-subject applied to the frame URI alone.
+
+## A live path that produces this shape
+
+`kgentities_endpoint.py:1898`, the REPLACE path, deletes a frame graph with two
+SPARQL updates per URI:
+
+    1. DELETE every subject where ?s haley:hasFrameGraphURI <uri>
+    2. DELETE <uri>'s own triples
+
+Step 1 is keyed on the deleted frame's OWN URI. The 298 survivors carry
+`hasFrameGraphURI` of a CAMPAIGN grouping URI instead
+(`urn:<client>:campaign:cer:nurture:...`), so step 1 never matched them, and
+step 2 removed only the parent. Descendants grouped under a different
+`hasFrameGraphURI` than the frame being deleted are exactly what survives here.
+
+**Still not proven.** Any delete-by-subject on a frame URI — this path, the dead
+helper before it died, a direct SPARQL update, a migration — leaves identical
+residue, and nothing in the data records which ran. What has changed is that
+the dedicated route is ruled OUT, and this one is ruled IN as capable.
 
 ## Why this was mistaken for a derivation bug
 
@@ -102,12 +129,19 @@ entity — an export, a migration, a grouping-URI read — will pick them up.
 
 ## What to do
 
-1. **Make frame deletion cascade**, or make it refuse a frame that still has
-   children. Either is defensible; silently orphaning is not.
-2. **Decide about the existing 298 + 828 + 99.** Removing them is a data
+1. **Audit the REPLACE path** (`kgentities_endpoint.py:1898`). Deleting a frame
+   graph by `hasFrameGraphURI` only reaches descendants that share the deleted
+   frame's grouping URI, and these did not. The dedicated route's
+   `find_child_frames` / `_delete_frame_from_backend` pair already solves this
+   correctly and is the thing to reuse.
+2. **Delete the dead helper** `_delete_frames` / `_delete_entities`
+   (`kgframes_endpoint.py:298`, `:373`). Unreachable, and its comment claims a
+   cascade it does not perform — the next person to read it will believe the
+   comment, as this issue initially did.
+3. **Decide about the existing 298 + 828 + 99.** Removing them is a data
    change on production and needs its own authorisation — do not fold it into
    a code fix.
-3. **Consider teaching the `issues/194` alarm about unreachability**, so a
+4. **Consider teaching the `issues/194` alarm about unreachability**, so a
    legitimately-absent slot stops being reported as a suspected gap. The
    arithmetic there subtracts only valueless slots and says so in its own
    comment.
