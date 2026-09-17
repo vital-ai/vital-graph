@@ -940,7 +940,7 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         # function, and not reliably autovacuum either, because these tables are
         # populated by bulk load. Found with 3,877,000 rows and `last_analyze`
         # NULL on `sp_lead_synth_100k`, and 304,923 rows never analyzed on
-        # `cardiff_kg`, where the planner consequently estimated `rows=1` for it.
+        # `<space>`, where the planner consequently estimated `rows=1` for it.
         # That estimate is what `issues/096` noticed in its plans without
         # tracing it back here. Compensating for bulk load is the whole reason
         # this function exists, so excluding the biggest bulk-loaded table was

@@ -314,7 +314,7 @@ def _prop_filter_exists(space_id: str, props, args: list) -> str:
     inside `GRAPH <...>`; an unscoped probe would match a property asserted in
     another graph.
 
-    Measured on `cardiff_kg`, a broad filter (status ACTIVE, matching all 2,863)
+    Measured on `<space>`, a broad filter (status ACTIVE, matching all 2,863)
     with a CompanyName sort: 1,007,597 buffers / 548.9 ms through the general
     pipeline, against 8,751 buffers / 23 ms here. The planner picks a hash semi
     join unaided -- the `rows=1` misestimate that first appeared while probing
@@ -430,7 +430,7 @@ def _grouped(space_id: str, graph_uri: str, criteria, keys):
     the pieces rather than a query so each caller adds only its own tail.
 
     N keys is N conditional aggregates over ONE index-only scan, not N-1 joins.
-    Measured on `cardiff_kg`, two keys, page 25: 165 buffers / 3.6 ms with zero
+    Measured on `<space>`, two keys, page 25: 165 buffers / 3.6 ms with zero
     heap fetches, against 1,405,617 buffers / 778.5 ms for the same page through
     the general pipeline, and 650 / 11.3 for the self-join form.
 

@@ -89,7 +89,7 @@ def test_a_second_sort_key_IS_served():
     """Served since 2026-09-11 as N conditional aggregates over one scan.
 
     Was a decline, on the reasoning that "the index orders ONE value column".
-    Measured on cardiff_kg, page 25: the declined two-key sort cost 1,405,617
+    Measured on <space>, page 25: the declined two-key sort cost 1,405,617
     buffers / 778.5 ms through the general pipeline, against 165 buffers /
     3.6 ms served here with zero heap fetches.
     """
@@ -167,7 +167,7 @@ class _Prop:
 
 
 def test_an_equality_on_a_URI_valued_property_IS_served():
-    """Served since 2026-09-11. Measured on cardiff_kg: a broad status filter
+    """Served since 2026-09-11. Measured on <space>: a broad status filter
     with a slot sort was 1,007,597 buffers / 548.9 ms through the general
     pipeline, against ~15 ms here."""
     assert can_serve(_Crit(entity_property_filters=[_Prop()]))

@@ -52,7 +52,7 @@ WRONG page, not a slow one); a non-equality frame criterion;
 `entity_property_filters`; `entity_uris`; and any of the vector, geo, slot or
 search-string criteria.
 
-**MEASURED 2026-09-11 on this issue's own fixture** — `cardiff_kg`, 2,863
+**MEASURED 2026-09-11 on this issue's own fixture** — `<space>`, 2,863
 KGLead, `CompanyName`, page 25, via `test_scripts/perf/measure_merge_bgp_reaches_096.py`.
 Both rows of the table above reproduce at HEAD:
 
@@ -234,7 +234,7 @@ measured against it. Worth revisiting where it exists.
 candidate left for a direction gate, since it cannot come from the table by
 construction. It cannot be measured either:
 
-    cardiff_kg          entity-sourced Edge_hasKGSlot          0
+    <space>          entity-sourced Edge_hasKGSlot          0
     sp_lead_synth_100k  slots 3,877,000 = framed sort rows 3,877,000
 
 The generated query looks for `Edge_hasKGSlot` whose source is the entity rather
@@ -248,7 +248,7 @@ It should not be built until a real query needs it.
 `entity_slot_sort` **was never ANALYZEd** — absent from
 `_maybe_analyze_aux_tables`, and nothing else in the tree analyzes it. Found
 with 3,877,000 rows and `last_analyze` NULL on `sp_lead_synth_100k`, and 304,923
-rows never analyzed on `cardiff_kg`. Every plan joining the sort table was being
+rows never analyzed on `<space>`. Every plan joining the sort table was being
 chosen with no statistics for it. Fixed in `562d111a` with a static guard,
 though it does NOT fix A: the estimate blocking A is the quad table's.
 

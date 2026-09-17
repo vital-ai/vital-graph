@@ -32,7 +32,7 @@ term text for each row it will never return.
 
 The cost tracks the match set, and ASK is the form a caller reaches for
 PRECISELY when they do not want the rows. On this 7.4M-quad fixture it is 23,427
-buffers; `cardiff_kg` in production is 48.7M quads, where the same question
+buffers; `<space>` in production is 48.7M quads, where the same question
 against a common type would enumerate proportionally more.
 
 An existence check over an indexed predicate should be a single index probe —

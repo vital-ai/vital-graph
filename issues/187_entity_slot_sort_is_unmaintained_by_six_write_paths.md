@@ -57,7 +57,7 @@ Run 2026-09-11 with `entity_slot_sort_coverage`, which counts entities from the
 QUADS and so cannot be confirmed by the derivation it checks:
 
     PRODUCTION
-      cardiff_kg    2,898,205 rows    no shortfall
+      <space>    2,898,205 rows    no shortfall
       lead_data     1,102,169 rows    no shortfall
       lead_prod       797,006 rows    no shortfall
 

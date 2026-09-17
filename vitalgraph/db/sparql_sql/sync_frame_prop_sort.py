@@ -465,7 +465,7 @@ async def frame_prop_sort_coverage(conn, space_id: str, limit: int = 5,
     # probe that counts subjects cannot validate it.
     #
     # All four prod tables were verified pair-complete before this changed
-    # (cardiff_kg 1,214,433, lead_data 659,772, wordnet_frames 570,696,
+    # (<space> 1,214,433, lead_data 659,772, wordnet_frames 570,696,
     # lead_prod 566,283), so re-keying blocks nothing that was being served.
     _present = (f"EXISTS (SELECT 1 FROM {space_id}_frame_prop_sort f"
                 f"  WHERE f.frame_uuid = y.frame_uuid"

@@ -604,7 +604,7 @@ async def backfill_entity_slot_sort_missing_slots(
     # RESOLVED THROUGH THE EDGE TABLE, not `frame_slot.entity_uuid`.
     #
     # That column looked ideal — one indexed lookup for slot -> entity — and it
-    # is NULL FOR EVERY ROW on all three live production spaces (`cardiff_kg`,
+    # is NULL FOR EVERY ROW on all three live production spaces (`<space>`,
     # `lead_data`, `lead_prod`); only `wordnet_frames`, loaded later, has it
     # populated. A repair keyed on it finds nothing and reports every slot
     # `unattributed`, which is silent and total failure on exactly the spaces
@@ -682,7 +682,7 @@ async def entity_slot_sort_row_shortfall(conn, space_id: str,
     THE NUMBER IS AN UPPER BOUND ON THE GAP, not the gap. `shortfall` also counts
     slots that are legitimately absent: the derivation joins the slot's value as
     INNER, so a slot carrying a type but NO value derives nothing at all. On
-    `cardiff_kg` that is 10 slots of 304,933 (0.003%) — real, and correctly
+    `<space>` that is 10 slots of 304,933 (0.003%) — real, and correctly
     excluded. Use `entity_slot_sort_valueless_slots` to resolve a nonzero
     shortfall into the two causes; it is the expensive form, so only run it when
     this says there is something to explain.

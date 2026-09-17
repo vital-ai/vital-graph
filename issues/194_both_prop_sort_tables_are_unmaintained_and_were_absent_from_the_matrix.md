@@ -42,7 +42,7 @@ Three live spaces are **exactly** complete — quad-side equals table-side for
 every sortable property, and `prop_sort_coverage` records them verified
 2026-09-08 with no drift since:
 
-    cardiff_kg   5 of 5 properties complete, 84,605 entities each, 32/32 types
+    <space>   5 of 5 properties complete, 84,605 entities each, 32/32 types
     lead_data    5 of 5 complete
     lead_prod    5 of 5 complete
 
@@ -156,7 +156,7 @@ on (entity, context, property). Validated read-only against prod before and
 after, which is the point of the change:
 
     wordnet_frames   4 of 4 types SHORT    219,490 / 548,725 pairs
-    cardiff_kg       complete              423,036 / 423,036
+    <space>       complete              423,036 / 423,036
     lead_data        complete              395,705 / 395,705
     lead_prod        complete              186,865 / 186,865
 
@@ -186,7 +186,7 @@ bounded batch for the worst-short space per cycle. Two details are load-bearing:
    deferring it were wrong, and both are worth recording because they are the
    kind of reason that sounds sufficient:
 
-   * "the probe does not finish in two minutes against prod `cardiff_kg`" — that
+   * "the probe does not finish in two minutes against prod `<space>`" — that
      was a COMMAND TIMEOUT, not a property of the system. Raising it, the pair
      comparison completes in about two minutes.
    * "its denominator counts every `KGFrame` while the derivation stores
@@ -202,7 +202,7 @@ bounded batch for the worst-short space per cycle. Two details are load-bearing:
 
    And the validation did not need prod at all. "Does this block anything live?"
    is a pair-count comparison — all four frame tables measured exactly complete
-   (cardiff_kg 1,214,433, lead_data 659,772, wordnet_frames 570,696, lead_prod
+   (<space> 1,214,433, lead_data 659,772, wordnet_frames 570,696, lead_prod
    566,283) — while CORRECTNESS belongs in the local integration fixture, which
    creates these tables. Re-running the expensive probe against a 48M-quad
    production table would only have recomputed numbers already in hand.
@@ -211,9 +211,9 @@ bounded batch for the worst-short space per cycle. Two details are load-bearing:
    **ADDRESSED in `00adfc70`, as an ALARM rather than a gate.**
 
    Measured first, and locally: all three local spaces with data are exactly
-   complete at slot level (cardiff_kg 304,923, sp_lead_synth_100k 3,877,000,
+   complete at slot level (<space> 304,923, sp_lead_synth_100k 3,877,000,
    sp_lead_types 77,290), so the blindness is LATENT here, not active. The 10
-   cardiff_kg slots absent from the table all carry no value and are correctly
+   <space> slots absent from the table all carry no value and are correctly
    excluded — the derivation joins the value as INNER.
 
    The new check counts at the table's own key. The primary key is
@@ -341,7 +341,7 @@ bounded batch for the worst-short space per cycle. Two details are load-bearing:
    / `entities_of_type`.** Not renamed — that is a prod migration for a comment's
    worth of clarity — but the names now understate what they hold. Note that the
    same table also receives FRAME type rows in its `entity_type_uuid` column,
-   which is why `cardiff_kg` shows 32 rows for 5 entity types.
+   which is why `<space>` shows 32 rows for 5 entity types.
 2. Until then, consider whether the import paths should take a whole-space
    `prop_sort_block`, the way `bulk_export` already does for the slot table —
    that is the mechanism designed for exactly this, and it converts a wrong

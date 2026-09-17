@@ -2,7 +2,7 @@
 
 `issues/096`. `can_serve` declined `len(sort_criteria) != 1`, so a two-key list
 view — sort by company, then by lead id — fell to the general pipeline. Measured
-on `cardiff_kg`, page 25: 1,405,617 buffers / 778.5 ms there, against 165
+on `<space>`, page 25: 1,405,617 buffers / 778.5 ms there, against 165
 buffers / 3.6 ms served from `entity_slot_sort` with zero heap fetches. N keys
 are N conditional aggregates over ONE index-only scan, not N-1 joins, and the
 served time is flat in the key count (4.4 / 2.7 / 3.0 ms at one, two, three).

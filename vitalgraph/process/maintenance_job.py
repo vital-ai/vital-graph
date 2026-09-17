@@ -2314,7 +2314,7 @@ class MaintenanceJob:
         #     that `issues/151` took off this loop.
         #   * the cheap number is an UPPER BOUND: slots with a type but no value
         #     derive nothing and are correctly absent (10 of 304,933 on
-        #     `cardiff_kg`). Blocking a live space over that would be a
+        #     `<space>`). Blocking a live space over that would be a
         #     regression, and failing closed is only safe when the number is
         #     exact.
         #
@@ -2367,7 +2367,7 @@ class MaintenanceJob:
                                 # no value. It is not. A slot not reachable from
                                 # an entity derives nothing, and so does one
                                 # whose value lane the table does not split on.
-                                # Measured on production `cardiff_kg`: 927 slots
+                                # Measured on production `<space>`: 927 slots
                                 # absent, 99 of them value-less, so this
                                 # arithmetic claims 828 — while the per-entity
                                 # coverage probe, which IS exact for its own
