@@ -26,7 +26,7 @@ services:
       #
       # The backfill task inherits this list when BACKFILL_EXCLUDE_SPACES is
       # unset, so one setting covers both.
-      - VG_MAINTENANCE_EXCLUDE_SPACES=${VG_MAINTENANCE_EXCLUDE_SPACES:-sp_lead_synth_100k,sp_lead_synth_10k,sp_lead_synth,sp_lead_dup,sp_lead_depth1,sp_lead_empty,sp_lead_types,sp_sql_lead_dataset,space_lead_dataset_test,cardiff_lead_dataset_test,wordnet_frames,sp_graph_synth_100k,sp_graph_synth_10k,sp_graph_skew_2k,sp_graph_forms_20k,kgquery_perf,lead_test}
+      - VG_MAINTENANCE_EXCLUDE_SPACES=${VG_MAINTENANCE_EXCLUDE_SPACES:-sp_lead_synth_100k,sp_lead_synth_10k,sp_lead_synth,sp_lead_dup,sp_lead_depth1,sp_lead_empty,sp_lead_types,sp_sql_lead_dataset,space_lead_dataset_test,wordnet_frames,sp_graph_synth_100k,sp_graph_synth_10k,sp_graph_skew_2k,sp_graph_forms_20k,kgquery_perf,lead_test}
       - WORKERS=${WORKERS:-1}
       # Entity registry embedding model, used for BOTH vectorization and search.
       #   vitalsigns_onnx                         384 — paraphrase-MiniLM-L3-v2 (default, English, bundled)
