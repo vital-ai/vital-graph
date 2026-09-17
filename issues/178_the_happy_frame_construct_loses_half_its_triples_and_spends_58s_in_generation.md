@@ -100,7 +100,7 @@ that ARE projected through the same groups are what needs checking.
 
 ### CONFIRMED 2026-09-08 — the generator declares four variables, not six
 
-Reproduced outside the server with `test_scripts/debug/_issue178_varmap.py`,
+Reproduced outside the server with `test_scripts/debug/measure_construct_variable_binding.py`,
 which drives the server's own path (sidecar compile -> `generate_sql`) against
 the same space. It produces **byte-identical SQL, 29,872 chars**, so this is the
 same generation, not a lookalike.
@@ -173,6 +173,21 @@ took one run to settle what the reading could not.
 Table references in the generated SQL: `frame_entity` x1, `edge` x2, `rdf_quad`
 x7.
 
+### Re-run 2026-09-16 — the probe now shows the FIXED state, as it should
+
+`measure_construct_variable_binding.py` is tracked under that name as of
+2026-09-16 (it was `_issue178_varmap.py`, untracked, so this reproduce step
+existed on one machine). Run at HEAD it no longer prints the numbers above:
+
+    sparql_vars: all SIX names          (was four)
+    SQL 50,500 chars                     (was 29,872)
+    wordnet_frames_frame_entity x0       (was x1)
+
+That is defect 1's fix and the `frame_entity` retirement (`b94484a9`) showing
+through, not the probe rotting. Kept because it drives the server's own path —
+sidecar compile then `generate_sql` — so it is the cheapest way to see what the
+generator actually declares for this query today.
+
 ### The line that drops them — `rewrite_frame_entity_table.py:570`
 
 The scope model is not wrong. `compute_scope` for a BGP returns
@@ -219,6 +234,13 @@ the projection. The information is available — `plan.project_vars` upstream,
 through the same generator twice — as shipped, and with
 `rewrite_frame_entity_table` and `rewrite_edge_table` patched to identity — with
 no LIMIT, and diffs the full result sets.
+
+**This probe CANNOT RUN at HEAD** (checked 2026-09-16) and was deliberately not
+promoted to a tracked name with the other three: it imports
+`rewrite_frame_entity_table`, deleted by `9ad58c00`, and fails at import. The
+measurement below stands — it was taken on 2026-09-09 against code that still
+had the module — but reproducing it now means checking out that commit. It
+remains an untracked scratch file.
 
     shipped: 425 rows | SQL 29,814 chars | frame_entity x1, edge x2, rdf_quad x7
     plain:   425 rows | SQL 39,018 chars | frame_entity x0, edge x0, rdf_quad x17
@@ -379,7 +401,7 @@ In the post-fix CONSTRUCT SQL, none of `v12`/`v13`/`v15`/`v16` has a NULL uuid.
 
 ### Measured
 
-`test_scripts/debug/_issue178_edgevar.py` projects `?sourceEdge` — the case the
+`test_scripts/debug/verify_edge_rewrite_projected_variable.py` projects `?sourceEdge` — the case the
 reference CONSTRUCT never exercises — and runs it with the edge rewrite on and
 off:
 

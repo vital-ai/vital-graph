@@ -53,7 +53,7 @@ WRONG page, not a slow one); a non-equality frame criterion;
 search-string criteria.
 
 **MEASURED 2026-09-11 on this issue's own fixture** — `cardiff_kg`, 2,863
-KGLead, `CompanyName`, page 25, via `test_scripts/perf/_issue096_direction.py`.
+KGLead, `CompanyName`, page 25, via `test_scripts/perf/measure_merge_bgp_reaches_096.py`.
 Both rows of the table above reproduce at HEAD:
 
 | shape | 096 recorded | HEAD |

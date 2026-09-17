@@ -329,7 +329,7 @@ The marker is written by the maintenance coverage probe, and this space is in
 alone. Excluded from the jobs means excluded from the probe that enables the
 fast path. Running it by hand takes 2.2s and reports 100,000 of 100,000 covered:
 
-    test_scripts/perf/_record_coverage.py lead_nurture_100k
+    test_scripts/perf/record_slot_sort_coverage.py lead_nurture_100k
 
 after which the marker reads True and the shapes above are served in ~20ms.
 
