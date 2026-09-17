@@ -1,13 +1,13 @@
 {
   "schema": 1,
   "env": {
-    "started_at": "2026-09-15T13:12:03.756306+00:00",
+    "started_at": "2026-09-17T02:15:10.392318+00:00",
     "git": {
-      "commit": "5651dfc3ab8a9e537009089b6039028589b63dcd",
-      "short": "5651dfc3",
+      "commit": "2a479ae2ac04cb1b797e7237b3f17e656222d499",
+      "short": "2a479ae2",
       "branch": "main",
       "dirty": false,
-      "untracked_files": 48
+      "untracked_files": 44
     },
     "machine": {
       "host": "ip-192-168-1-153.ec2.internal",
@@ -27,13 +27,15 @@
         "persist": true,
         "seeded": true,
         "fixture_tables": 296,
-        "fixture_live_tuples": 193144,
-        "seed_space_bytes": 55745658880
+        "fixture_live_tuples": 193110,
+        "seed_space_bytes": 55745691648
       },
       "flags": {
         "persist": true,
-        "seeded": true
+        "seeded": false
       },
+      "flags_disagree": "VG_PERF_PERSIST/VG_PERF_SEEDED say persist=True seeded=False, but the seed-only spaces hold 55,745,691,648 bytes across 296 fixture table(s). Class taken from the DATABASE. See issues/189.",
+      "promotion_blocked": "VG_PERF_PERSIST/VG_PERF_SEEDED say persist=True seeded=False, but the seed-only spaces hold 55,745,691,648 bytes across 296 fixture table(s). Class taken from the DATABASE. See issues/189.",
       "largest_gated_fixture": "lead_nurture_grouped",
       "largest_gated_fixture_bytes": 49077829632,
       "shared_buffers_bytes": 17179869184,
@@ -48,39 +50,45 @@
       "max_parallel_workers_per_gather": "2",
       "random_page_cost": "4",
       "jit": "on",
-      "default_statistics_target": "100"
+      "default_statistics_target": "100",
+      "max_wal_size": "1GB",
+      "min_wal_size": "80MB",
+      "checkpoint_timeout": "5min",
+      "checkpoint_completion_target": "0.9",
+      "wal_buffers": "16MB",
+      "synchronous_commit": "on"
     },
     "stats": {
       "fixture_tables": 296,
-      "fixture_live_tuples": 193144,
-      "fixture_last_analyze": "2026-09-15T03:50:50.149636+00:00"
+      "fixture_live_tuples": 193110,
+      "fixture_last_analyze": "2026-09-17T01:54:15.453636+00:00"
     },
     "sizes": {
       "space_bytes": {
         "lead_nurture_grouped": 49077829632,
         "sp_lead_synth_100k": 48583606272,
         "sp_graph_synth_100k": 10681884672,
-        "wordnet_frames": 6538166272,
+        "wordnet_frames": 6538199040,
         "sp_lead_synth_10k": 4888559616,
         "sp_graph_forms_20k": 2878218240,
-        "sp_graph_rel_10k": 1824382976,
+        "sp_graph_rel_10k": 1824071680,
         "sp_graph_synth_10k": 1411350528,
         "sp_lead_types": 921337856,
         "sp_graph_skew_2k": 348930048,
-        "kg_load_test": 268042240,
+        "kg_load_test": 271441920,
         "sp_lead_dup": 209682432,
         "sp_kg_rel": 190668800,
         "sp_sql_lead_dataset": 152502272,
         "space_lead_dataset_test": 129662976,
-        "inttest_blauto_aa80": 30941184,
-        "inttest_b6b4fb5fb80a": 25501696,
-        "inttest_blem_c496": 18628608,
-        "e2e_test_space": 16023552,
-        "inttest_blauto_898d": 13787136,
+        "inttest_blauto_aa80": 30908416,
+        "inttest_b6b4fb5fb80a": 25534464,
+        "inttest_blem_c496": 18595840,
+        "e2e_test_space": 16089088,
+        "inttest_blauto_898d": 13754368,
         "proportional": 12017664,
         "inttest_trgm_14e3d4ca": 10469376,
-        "sp_kg_types": 2867200,
-        "inttest_crud_11d7a6a9": 2097152,
+        "sp_kg_types": 3006464,
+        "inttest_crud_11d7a6a9": 2129920,
         "inttest_lock_d79ec390": 2072576,
         "inttest_count_9929e3e": 2056192,
         "inttest_fe_37382a57": 2048000,
@@ -94,83 +102,80 @@
         "inttest_exdst_0637": 1646592,
         "inttest_chn_9f83d8eb": 1613824,
         "inttest_defer_95d0a8b": 1589248,
-        "inttest_exsrc_b227": 1581056,
-        "inttest_exdst_02d9": 1523712,
-        "inttest_exsrc_16f6": 1523712,
-        "inttest_exsrc_68fa": 1523712,
-        "inttest_exdst_c8f8": 1523712,
+        "inttest_exsrc_b227": 1548288,
+        "inttest_d6569d801e68": 1523712,
+        "inttest_dteq_4937bfba": 1523712,
+        "inttest_dteq_dc3c046a": 1523712,
+        "inttest_dteq_74bc5b73": 1523712,
+        "inttest_dtq_f4dfa15e": 1523712,
+        "inttest_dtq_d466219c": 1523712,
+        "inttest_dtq_63db6180": 1523712,
+        "inttest_dtq_424b9ea3": 1523712,
+        "inttest_dtq_2ef41015": 1523712,
+        "inttest_dtq_29eb2e71": 1523712,
+        "inttest_dg_27147e7a": 1523712,
+        "inttest_dg_867df776": 1523712,
+        "inttest_dg_2d4881a1": 1523712,
+        "inttest_dg_105251f9": 1523712,
+        "inttest_dg_a8ce6fb5": 1523712,
+        "inttest_dstat_eac3677": 1523712,
+        "inttest_dstat_bfac803": 1523712,
         "inttest_dstat_5e4f648": 1523712,
         "inttest_exsrc_b516": 1515520,
         "inttest_cou_15fb4a74": 1515520,
-        "inttest_a77048c22bd4": 1490944,
         "inttest_exsrc_d5e0": 1490944,
         "inttest_22bc8adf10b2": 1490944,
-        "inttest_d6569d801e68": 1490944,
+        "inttest_cdc1e5dd31f1": 1490944,
+        "inttest_2d597b90f0f1": 1490944,
+        "inttest_dtacc_14c0a6d": 1490944,
+        "inttest_898ebdbc4dc5": 1490944,
+        "inttest_f8775897b69e": 1490944,
+        "inttest_a77048c22bd4": 1490944,
+        "inttest_exsrc_16f6": 1490944,
+        "inttest_exdst_02d9": 1490944,
+        "inttest_exsrc_68fa": 1490944,
+        "inttest_exdst_c8f8": 1490944,
+        "inttest_ct_6e5dbe63": 1490944,
+        "inttest_ct_baa9844a": 1490944,
         "inttest_fd7633c64aa8": 1490944,
+        "inttest_e5e3afdcb158": 1490944,
         "inttest_b3d76408cd9e": 1490944,
         "inttest_54847ad4c47e": 1490944,
         "inttest_2d74d74c13a3": 1490944,
         "inttest_ct_5a54bd86": 1490944,
         "inttest_ct_bde51e10": 1490944,
         "inttest_ct_34bdce55": 1490944,
-        "inttest_cdc1e5dd31f1": 1490944,
-        "inttest_2d597b90f0f1": 1490944,
-        "inttest_dtacc_14c0a6d": 1490944,
-        "inttest_dtacc_73a6ac6": 1490944,
-        "inttest_898ebdbc4dc5": 1490944,
-        "inttest_f8775897b69e": 1490944,
-        "inttest_ct_6e5dbe63": 1490944,
-        "inttest_ct_baa9844a": 1490944,
-        "inttest_dtq_63db6180": 1490944,
-        "inttest_dg_2d4881a1": 1490944,
-        "inttest_dg_105251f9": 1490944,
-        "inttest_dg_a8ce6fb5": 1490944,
-        "inttest_e5e3afdcb158": 1490944,
         "inttest_ct_f53bd761": 1490944,
+        "inttest_dtacc_73a6ac6": 1490944,
         "inttest_dtacc_849903c": 1490944,
-        "inttest_lm_79f90b8a": 1490944,
-        "inttest_lm_a69c8939": 1490944,
         "inttest_dtacc_f28f937": 1490944,
         "inttest_dtacc_16b6d73": 1490944,
         "inttest_dtacc_97f36d3": 1490944,
         "inttest_dtacc_058c1ca": 1490944,
-        "inttest_dteq_4937bfba": 1490944,
         "inttest_dtacc_3eb9d3c": 1490944,
         "inttest_dtacc_e6e6ca7": 1490944,
-        "inttest_dteq_dc3c046a": 1490944,
-        "inttest_dtq_2ef41015": 1490944,
-        "inttest_dg_27147e7a": 1490944,
-        "inttest_dstat_eac3677": 1490944,
-        "inttest_greg_cfde0b36": 1490944,
-        "inttest_dteq_74bc5b73": 1490944,
-        "inttest_dtq_f4dfa15e": 1490944,
-        "inttest_dtq_d466219c": 1490944,
-        "inttest_dtq_424b9ea3": 1490944,
-        "inttest_dtq_29eb2e71": 1490944,
-        "inttest_dg_867df776": 1490944,
-        "inttest_dstat_bfac803": 1490944,
+        "inttest_lm_a69c8939": 1490944,
         "inttest_cyc_334959f6": 1490944,
         "inttest_greg_39fc808b": 1490944,
         "inttest_lm_f4b46a96": 1490944,
+        "inttest_lm_79f90b8a": 1490944,
         "inttest_lock_78156924": 1490944,
-        "inttest_7579568efc6c": 1449984,
+        "inttest_greg_cfde0b36": 1490944,
         "inttest_dstat_71c0389": 1449984,
+        "inttest_7579568efc6c": 1449984,
         "inttest_c6de6b59dc2e": 1433600,
         "inttest_tp_1520ab36": 1253376,
-        "inttest_blem_33da": 1253376,
         "inttest_tp_b1de347b": 1253376,
         "inttest_527da2a2f063": 1253376,
-        "inttest_dteq_126f040c": 1253376,
         "inttest_dteq_842e8d70": 1253376,
         "inttest_tp_1d0bbcfb": 1253376,
         "inttest_tp_54cddf19": 1253376,
-        "inttest_dteq_021c820e": 1253376,
         "inttest_exdst_5e1b": 1253376,
         "inttest_exdst_cf70": 1253376,
         "inttest_exdst_f402": 1253376,
-        "inttest_dteq_df53deb1": 1253376,
-        "inttest_dteq_2c6dbdc5": 1253376,
+        "inttest_dteq_021c820e": 1253376,
         "inttest_tp_3feb4c1e": 1253376,
+        "inttest_blem_33da": 1253376,
         "inttest_tp_080534fe": 1253376,
         "inttest_tp_9cf408b9": 1253376,
         "inttest_tp_06a4c75d": 1253376,
@@ -179,44 +184,47 @@
         "inttest_tp_a63a8368": 1253376,
         "inttest_tp_d28af529": 1253376,
         "inttest_tp_d465ad1d": 1253376,
-        "inttest_tp_65614310": 1253376,
-        "inttest_dteq_d174ff06": 1253376,
-        "inttest_tp_d915b65e": 1253376,
-        "inttest_tp_13fd5d29": 1253376,
         "inttest_dteq_d3142f54": 1253376,
+        "inttest_dteq_d174ff06": 1253376,
+        "inttest_dteq_126f040c": 1253376,
         "inttest_dteq_72955602": 1253376,
         "inttest_dteq_e03977bb": 1253376,
-        "inttest_strdt_0c5b63c": 1253376,
-        "inttest_strdt_b24d09c": 1253376,
+        "inttest_dteq_df53deb1": 1253376,
+        "inttest_dteq_2c6dbdc5": 1253376,
         "inttest_lm_1741913d": 1253376,
         "inttest_lm_8f75847a": 1253376,
+        "inttest_tp_65614310": 1253376,
         "inttest_lm_7ce0ddf5": 1253376,
         "inttest_lm_b1cf9538": 1253376,
-        "inttest_lm_7da1e24e": 1253376,
-        "inttest_lm_9ae13a50": 1253376,
-        "inttest_9e9913e818f1": 1253376,
-        "inttest_79eba30da51a": 1253376,
-        "inttest_tp_9e078f28": 1253376,
         "inttest_lm_5c8ea875": 1253376,
         "inttest_lm_589a7152": 1253376,
         "inttest_lm_236ab8d7": 1253376,
         "inttest_lm_e7d007e3": 1253376,
+        "inttest_lm_7da1e24e": 1253376,
+        "inttest_lm_9ae13a50": 1253376,
         "inttest_lm_344a6ef1": 1253376,
         "inttest_lm_1647a2d3": 1253376,
         "inttest_lm_363270e7": 1253376,
         "inttest_lm_0efb0185": 1253376,
-        "inttest_tp_2dd0674e": 1253376,
+        "inttest_9e9913e818f1": 1253376,
+        "inttest_79eba30da51a": 1253376,
         "inttest_tp_ffaafb35": 1253376,
-        "inttest_strdt_2ac9832": 1253376,
-        "inttest_strdt_58c3ea9": 1253376,
+        "inttest_tp_9e078f28": 1253376,
+        "inttest_tp_d915b65e": 1253376,
+        "inttest_tp_13fd5d29": 1253376,
+        "inttest_tp_2dd0674e": 1253376,
         "inttest_strdt_2029c94": 1253376,
         "inttest_strdt_9f4d5d5": 1253376,
-        "inttest_strdt_ba121b3": 1253376
+        "inttest_strdt_ba121b3": 1253376,
+        "inttest_strdt_2ac9832": 1253376,
+        "inttest_strdt_0c5b63c": 1253376,
+        "inttest_strdt_58c3ea9": 1253376,
+        "inttest_strdt_b24d09c": 1253376
       },
       "largest_gated_fixture": "lead_nurture_grouped",
       "largest_gated_fixture_bytes": 49077829632
     },
-    "finished_at": "2026-09-15T13:49:19.768304+00:00"
+    "finished_at": "2026-09-17T02:55:15.315161+00:00"
   },
   "benches": [
     {
@@ -253,10 +261,9 @@
       "status": "ok",
       "metrics": {
         "fenced_buffers": 26684,
-        "unfenced_buffers": 10072682,
+        "unfenced_buffers": null,
         "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 0.003
+        "page_size": 100
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "contains / Lead / page 100 \u2014 issues/190 fence coverage"
@@ -309,10 +316,9 @@
       "status": "ok",
       "metrics": {
         "fenced_buffers": 117782,
-        "unfenced_buffers": 11520309,
+        "unfenced_buffers": null,
         "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 0.01
+        "page_size": 100
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "eq-common / Lead / page 100 \u2014 issues/190 fence coverage"
@@ -447,11 +453,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 2245648,
-        "unfenced_buffers": 21027,
+        "fenced_buffers": 2154732,
+        "unfenced_buffers": 27087,
         "needs_ordered_scan": false,
         "page_size": 100,
-        "fence_ratio": 106.798
+        "fence_ratio": 79.549
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
@@ -461,11 +467,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 543127,
-        "unfenced_buffers": 11228,
+        "fenced_buffers": 544767,
+        "unfenced_buffers": 12868,
         "needs_ordered_scan": false,
         "page_size": 100,
-        "fence_ratio": 48.373
+        "fence_ratio": 42.335
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
@@ -475,11 +481,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 1627434,
-        "unfenced_buffers": 2156956,
+        "fenced_buffers": 1369015,
+        "unfenced_buffers": 1898537,
         "needs_ordered_scan": false,
         "page_size": 100,
-        "fence_ratio": 0.755
+        "fence_ratio": 0.721
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "range-mid / Lead / page 100 \u2014 issues/190 fence coverage"
@@ -489,11 +495,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 1337750,
-        "unfenced_buffers": 1809414,
+        "fenced_buffers": 1387340,
+        "unfenced_buffers": 1859004,
         "needs_ordered_scan": false,
         "page_size": 100,
-        "fence_ratio": 0.739
+        "fence_ratio": 0.746
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "range-mid / Lead / page 100 \u2014 issues/190 fence coverage"
@@ -503,11 +509,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 13836928,
-        "unfenced_buffers": 15090,
+        "fenced_buffers": 13842976,
+        "unfenced_buffers": 21175,
         "needs_ordered_scan": false,
         "page_size": 100,
-        "fence_ratio": 916.96
+        "fence_ratio": 653.741
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
@@ -517,11 +523,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 534159,
-        "unfenced_buffers": 1894,
+        "fenced_buffers": 534419,
+        "unfenced_buffers": 2154,
         "needs_ordered_scan": false,
         "page_size": 100,
-        "fence_ratio": 282.027
+        "fence_ratio": 248.105
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
@@ -536,11 +542,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 1336826,
-        "unfenced_buffers": 1808490,
+        "fenced_buffers": 1386761,
+        "unfenced_buffers": 1858425,
         "needs_ordered_scan": false,
         "page_size": 100,
-        "fence_ratio": 0.739
+        "fence_ratio": 0.746
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "range-tight / Lead / page 100 \u2014 issues/190 fence coverage"
@@ -774,11 +780,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 2196677,
-        "unfenced_buffers": 11237,
+        "fenced_buffers": 2133059,
+        "unfenced_buffers": 12692,
         "needs_ordered_scan": false,
         "page_size": 25,
-        "fence_ratio": 195.486
+        "fence_ratio": 168.063
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
@@ -788,11 +794,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 535722,
-        "unfenced_buffers": 11000,
+        "fenced_buffers": 536221,
+        "unfenced_buffers": 12640,
         "needs_ordered_scan": false,
         "page_size": 25,
-        "fence_ratio": 48.702
+        "fence_ratio": 42.423
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
@@ -802,11 +808,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 279251,
-        "unfenced_buffers": 452785,
+        "fenced_buffers": 234906,
+        "unfenced_buffers": 408440,
         "needs_ordered_scan": false,
         "page_size": 25,
-        "fence_ratio": 0.617
+        "fence_ratio": 0.575
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "range-mid / Lead / page 25 \u2014 issues/190 fence coverage"
@@ -816,11 +822,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 419429,
-        "unfenced_buffers": 576873,
+        "fenced_buffers": 434979,
+        "unfenced_buffers": 592423,
         "needs_ordered_scan": false,
         "page_size": 25,
-        "fence_ratio": 0.727
+        "fence_ratio": 0.734
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "range-mid / Lead / page 25 \u2014 issues/190 fence coverage"
@@ -830,11 +836,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 13827122,
-        "unfenced_buffers": 5316,
+        "fenced_buffers": 13828671,
+        "unfenced_buffers": 6811,
         "needs_ordered_scan": false,
         "page_size": 25,
-        "fence_ratio": 2601.039
+        "fence_ratio": 2030.344
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
@@ -844,11 +850,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 534159,
-        "unfenced_buffers": 1894,
+        "fenced_buffers": 534419,
+        "unfenced_buffers": 2154,
         "needs_ordered_scan": false,
         "page_size": 25,
-        "fence_ratio": 282.027
+        "fence_ratio": 248.105
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
@@ -858,11 +864,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 2285942,
-        "unfenced_buffers": 2992812,
+        "fenced_buffers": 1923188,
+        "unfenced_buffers": 2630058,
         "needs_ordered_scan": false,
         "page_size": 25,
-        "fence_ratio": 0.764
+        "fence_ratio": 0.731
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "range-tight / Lead / page 25 \u2014 issues/190 fence coverage"
@@ -872,11 +878,11 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "fenced_buffers": 1336826,
-        "unfenced_buffers": 1808490,
+        "fenced_buffers": 1386761,
+        "unfenced_buffers": 1858425,
         "needs_ordered_scan": false,
         "page_size": 25,
-        "fence_ratio": 0.739
+        "fence_ratio": 0.746
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "range-tight / Lead / page 25 \u2014 issues/190 fence coverage"
@@ -888,7 +894,7 @@
       "metrics": {
         "empty_buffers": 0,
         "matching_buffers": 7516,
-        "unservable_buffers": 1445968,
+        "unservable_buffers": 1445969,
         "matching_rows": 25.0,
         "empty_rows": 0.0
       },
@@ -898,7 +904,7 @@
   ],
   "baseline": {
     "name": "coverage",
-    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260915T131112Z-5651dfc3.json",
+    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260917T021508Z-2a479ae2.json",
     "reason": "",
     "pg_stamped": true
   }
