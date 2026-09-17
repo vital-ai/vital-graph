@@ -344,6 +344,13 @@ api = json.load(open(api_path))
 for _k in ("pg", "stats"):
     if not main["env"].get(_k) and api["env"].get(_k):
         main["env"][_k] = api["env"][_k]
+# `pg_stamp_missing` was stamped by `write()` BEFORE this merge, when the main
+# record's `pg` slot was still empty. Filling it above makes that warning false,
+# and a baseline carrying both a populated stamp and "no server settings
+# recorded" is worse than either alone — the next reader cannot tell which to
+# believe. query.json shipped in exactly that state.
+if main["env"].get("pg"):
+    main["env"].pop("pg_stamp_missing", None)
 _mr = main["env"].get("runner") or {}
 _ar = api["env"].get("runner") or {}
 for _k, _v in _ar.items():
