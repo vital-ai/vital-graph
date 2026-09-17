@@ -95,7 +95,7 @@ graph and will outlive any projection surface.
 ## REPRODUCED, then FIXED — 2026-09-16
 
 `lead_nurture_grouped` on the vg-test stack, four requests, all four with
-`include_entity_graph=True` except the control. `test_scripts/perf/_issue209_verify.py`.
+`include_entity_graph=True` except the control. `test_scripts/perf/verify_entity_graph_on_fast_paths.py`.
 
     BEFORE                            uris    total   graphs    quads       ms
     baseline (no sort, no filter)       25  100,000       25   18,937   43,451

@@ -216,9 +216,11 @@ the three tables, so the estimates are poor (7,160 against 90,025 actual on the
 page scan) while the plans chosen are the natural ones; nothing was ANALYZEd for
 this, because doing so would perturb the perf baselines.
 
-    test_scripts/perf/_issue208_projection_probe.py     A-E, agreement check
-    test_scripts/perf/_issue208_attribute_offset.py     page vs projection
-    test_scripts/perf/_issue208_cold_vs_offset.py       cold vs deep offset
+    test_scripts/perf/measure_slot_projection.py              A-E, agreement
+    test_scripts/perf/measure_property_projection.py         the property half
+    test_scripts/perf/measure_projection_page_attribution.py page vs projection
+    test_scripts/perf/measure_projection_cold_vs_offset.py   cold vs deep offset
+    test_scripts/perf/verify_projection_api.py               end to end, all paths
 
 ### One mistake, recorded because it generalises
 
