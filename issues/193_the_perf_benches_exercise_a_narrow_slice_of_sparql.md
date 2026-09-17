@@ -117,9 +117,24 @@ number existed.
 
 ## Still absent
 
-    DESCRIBE               0   (ASK is now covered, and was a defect —
-                                see `issues/206`)
-    SERVICE                0
+    DESCRIBE               DONE 2026-09-16 — `query.sparql_shape[describe]`,
+                           and it is NOT one query: the runtime resolves
+                           targets from the WHERE clause and then issues a
+                           second VALUES-constrained SELECT
+                           (`_describe_triples`). The bench sums both phases,
+                           because benching only what `_generate_sql` returns
+                           would record the WHERE phase and call it DESCRIBE —
+                           the `issues/206` mistake exactly. ASK is covered and
+                           was that defect.
+    SERVICE                BLOCKED on `issues/211` — it stays unbenched on
+                           purpose. Asking why it had no bench is what found
+                           the defect: a SERVICE block compiles to
+                           `JOIN (SELECT 1 WHERE FALSE) ON TRUE`, so it
+                           silently annihilates the local solutions (5 rows
+                           without it, 0 with). A bench records what a shape
+                           COSTS, and this one returns nothing, so the cost is
+                           meaningless. Pinned by three cells in
+                           `test_service_clause_semantics.py` instead.
     REGEX                  0   (CONTAINS and LCASE are now covered)
     UPDATE forms           DONE 2026-09-15 — `write.update.insert_vs_modify`
                            covers INSERT DATA, INSERT WHERE and the MODIFY

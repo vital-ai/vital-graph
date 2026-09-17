@@ -116,6 +116,58 @@ SELECT * WHERE {{ GRAPH <{GRAPH}> {{
 ]
 
 
+# DESCRIBE is not in FORMS because it is not ONE query. The runtime resolves
+# targets from the WHERE clause and then issues a second, VALUES-constrained
+# SELECT for the triples (`sparql_sql_space_impl.py:2293` ->
+# `_describe_triples`). Benching only what `_generate_sql` returns would record
+# the WHERE phase and call it DESCRIBE — `issues/206` again. Both phases are
+# ordinary SPARQL through the ordinary pipeline, so both are measurable; the
+# recorded number is their sum, which is what the caller pays.
+@pytest.mark.bench("query.sparql_shape")
+@pytest.mark.parametrize("shape_id", ["describe"])
+async def test_describe_is_measured_across_both_phases(perf_conn, perf_record,
+                                                       shape_id):
+    where_q = f"""{PREFIXES}
+DESCRIBE ?f WHERE {{ GRAPH <{GRAPH}> {{
+    ?f vital-core:vitaltype haley:KGFrame
+}} }} LIMIT 25"""
+    where_sql = await _generate_sql(perf_conn, where_q, SPACE)
+    await perf_conn.fetch(where_sql)
+    bound = await perf_conn.fetch(where_sql)
+    doc = await explain_json(perf_conn, where_sql)
+    where_buffers = total_shared_buffers(doc)
+
+    # `describe_targets` keeps IRIs only, and `_describe_triples` drops any URI
+    # carrying a character an IRI cannot contain rather than interpolating it.
+    illegal = set('<>"{}|^`\\ \t\n\r')
+    targets = [r["v0"] for r in bound
+               if r["v0"] and not (illegal & set(r["v0"]))]
+    assert targets, ("DESCRIBE bound no targets, so the second phase would be "
+                     "skipped entirely and the bench would measure half a query")
+
+    values = " ".join(f"<{u}>" for u in targets)
+    fetch_q = (f"SELECT ?s ?p ?o WHERE {{ VALUES ?s {{ {values} }} ?s ?p ?o . }}")
+    fetch_sql = await _generate_sql(perf_conn, fetch_q, SPACE)
+    await perf_conn.fetch(fetch_sql)
+    fetch_doc = await explain_json(perf_conn, fetch_sql)
+    fetch_buffers = total_shared_buffers(fetch_doc)
+    triples = fetch_doc["Plan"].get("Actual Rows")
+
+    perf_record(kind="sql", dataset=SPACE,
+                metrics={"buffers": where_buffers + fetch_buffers,
+                         "where_buffers": where_buffers,
+                         "fetch_buffers": fetch_buffers,
+                         "targets": len(targets),
+                         "rows": triples,
+                         "sql_chars": len(where_sql) + len(fetch_sql)},
+                notes="describe — issues/193 shape coverage; BOTH phases "
+                      "(WHERE + VALUES fetch), which is what a caller pays")
+
+    assert triples is not None and triples >= 1, (
+        f"DESCRIBE of {len(targets)} target(s) produced {triples} triples. A "
+        f"description that returns nothing is fast and measures nothing.")
+
+
 @pytest.mark.bench("query.sparql_shape")
 @pytest.mark.parametrize("shape_id,min_rows,sparql", FORMS,
                          ids=[f[0] for f in FORMS])
