@@ -18,7 +18,7 @@ from vitalgraph.endpoint import kgquery_endpoint as mod
 from vitalgraph.endpoint.kgquery_endpoint import KGQueriesEndpoint
 from vitalgraph.model.kgentities_model import EntityQueryCriteria
 from vitalgraph.model.kgqueries_model import (
-    KGQueryCriteria, KGQueryRequest, SlotProjection)
+    KGQueryCriteria, KGQueryRequest, PropertyProjection, SlotProjection)
 
 _KG = "http://vital.ai/ontology/haley-ai-kg#"
 _URIS = ["urn:e:a", "urn:e:b"]
@@ -44,14 +44,15 @@ class _Backend:
         self.db_impl = type("Impl", (), {"connection_pool": _Pool()})()
 
 
-def _request(projection):
+def _request(projection, properties=None):
     return KGQueryRequest(
         criteria=KGQueryCriteria(
             query_type="entity",
             source_entity_criteria=EntityQueryCriteria(
                 entity_type="urn:t:entity:E")),
         page_size=25, offset=0,
-        slot_projection=projection)
+        slot_projection=projection,
+        property_projection=properties)
 
 
 class _Criteria:
@@ -92,12 +93,13 @@ def endpoint(monkeypatch):
     ep.projected = []
 
     async def _project(backend, space_id, graph_id, uris, request, entity_type):
-        if not getattr(request, "slot_projection", None) or not uris:
+        if not uris or not (getattr(request, "slot_projection", None)
+                            or getattr(request, "property_projection", None)):
             return None
         ep.projected.append((list(uris), entity_type))
         return dict(_VALUES)
 
-    ep._project_slot_values = _project
+    ep._project_entity_values = _project
     return ep
 
 
@@ -114,9 +116,9 @@ async def test_every_path_returns_the_projection(endpoint, which):
 
     assert resp is not None, f"the {which} path declined; nothing is pinned"
     assert resp.entity_uris == _URIS
-    assert resp.entity_slot_values == _VALUES, (
-        f"the {which} path returned entity_slot_values="
-        f"{resp.entity_slot_values!r} for a request that asked for a column")
+    assert resp.entity_values == _VALUES, (
+        f"the {which} path returned entity_values="
+        f"{resp.entity_values!r} for a request that asked for a column")
     assert endpoint.projected == [(_URIS, "urn:t:entity:E")], (
         "the projection must be asked for the page this path chose, and for "
         "the entity type whose coverage gates it")
@@ -127,7 +129,7 @@ async def test_no_projection_asked_for_means_none_returned(endpoint, which):
     resp = await _run(endpoint, which, _request(None))
 
     assert resp is not None
-    assert resp.entity_slot_values is None
+    assert resp.entity_values is None
     assert endpoint.projected == []
 
 
@@ -135,3 +137,21 @@ def test_two_columns_cannot_share_an_alias():
     """The response is keyed by alias, so a duplicate silently drops a column."""
     with pytest.raises(ValueError, match="duplicate projection alias"):
         _request([_COLUMN, _COLUMN])
+
+
+def test_a_slot_and_a_property_column_cannot_share_an_alias():
+    """The two lists feed ONE map, so they collide with each other too."""
+    with pytest.raises(ValueError, match="duplicate projection alias"):
+        _request([_COLUMN], [PropertyProjection(
+            alias="name", property_uri="http://vital.ai/ontology/vital-core#hasName")])
+
+
+@pytest.mark.parametrize("which", ["sort", "filter", "general"])
+async def test_a_property_only_projection_is_served_everywhere(endpoint, which):
+    """Properties come from the quads, so they must not need a slot column."""
+    resp = await _run(endpoint, which, _request(None, [PropertyProjection(
+        alias="name", property_uri="http://vital.ai/ontology/vital-core#hasName")]))
+
+    assert resp is not None
+    assert resp.entity_values == _VALUES
+    assert endpoint.projected == [(_URIS, "urn:t:entity:E")]

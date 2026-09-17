@@ -14,6 +14,7 @@ from ...model.kgqueries_model import (
     KGQueryResponse,
     KGQueryCriteria,
     SlotProjection,
+    PropertyProjection,
     FrameQueryResponse,
     KGEntityQueryResponse,
     RelationQueryResponse,
@@ -41,7 +42,8 @@ class KGQueriesEndpoint(BaseEndpoint):
         include_frame_graph: bool = False,
         include_entity_graph: bool = False,
         count_only: bool = False,
-        slot_projection: Optional[List[SlotProjection]] = None
+        slot_projection: Optional[List[SlotProjection]] = None,
+        property_projection: Optional[List[PropertyProjection]] = None
     ) -> KGQueryResponse:
         """
         Query entity-to-entity connections based on criteria.
@@ -81,7 +83,8 @@ class KGQueriesEndpoint(BaseEndpoint):
                 include_frame_graph=include_frame_graph,
                 include_entity_graph=include_entity_graph,
                 count_only=count_only,
-                slot_projection=slot_projection
+                slot_projection=slot_projection,
+                property_projection=property_projection
             )
             
             # Log complete request for debugging
@@ -314,6 +317,7 @@ class KGQueriesEndpoint(BaseEndpoint):
         query_mode: str = "edge",
         include_entity_graph: bool = False,
         slot_projection: Optional[List[SlotProjection]] = None,
+        property_projection: Optional[List[PropertyProjection]] = None,
         page_size: int = 10,
         offset: int = 0,
         count_only: bool = False
@@ -332,6 +336,9 @@ class KGQueriesEndpoint(BaseEndpoint):
                 table rather than by fetching each entity's graph (issues/208).
                 Returned on the response as entity_slot_values: entity URI ->
                 alias -> list of values.
+            property_projection: Optional list of PropertyProjection columns —
+                DIRECT entity properties, read from the quads and returned in
+                the same entity_values map as the slot columns.
             query_mode: Query mode: 'edge' or 'direct' (default: 'edge')
             page_size: Number of results per page (default: 10)
             offset: Offset for pagination (default: 0)
@@ -367,7 +374,8 @@ class KGQueriesEndpoint(BaseEndpoint):
             offset=offset,
             include_entity_graph=include_entity_graph,
             count_only=count_only,
-            slot_projection=slot_projection
+            slot_projection=slot_projection,
+            property_projection=property_projection
         )
         response = KGEntityQueryResponse.from_raw(raw)
         

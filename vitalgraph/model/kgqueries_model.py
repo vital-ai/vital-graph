@@ -151,6 +151,35 @@ class SlotProjection(BaseModel):
         return self
 
 
+class PropertyProjection(BaseModel):
+    """One column of a DIRECT entity-property projection (`issues/208`).
+
+    The sibling of `SlotProjection` for properties hanging straight off the
+    entity rather than reached through a frame. Read from the QUADS, not from
+    `entity_prop_sort` — measured at 0.31 ms against that table's 0.07 ms for
+    five columns over a 25-entity page, which is noise either way, and the
+    quads are authoritative (no coverage gate, so a column cannot go quietly
+    blank) and hold EVERY property rather than the seven that table maintains.
+
+    No datatype is declared, and none is needed: `SlotProjection` names a slot
+    class because the sort table splits values into three lanes and one must be
+    chosen. A quad carries its object directly, so the lexical form is the
+    value.
+    """
+
+    alias: str = Field(..., description="Name this column is returned under")
+    property_uri: str = Field(..., description="Direct property URI on the entity")
+
+    @model_validator(mode='after')
+    def validate_property_projection(self) -> 'PropertyProjection':
+        if not self.alias.strip():
+            raise ValueError("alias is required and cannot be blank")
+        if not self.property_uri.strip():
+            raise ValueError(
+                f"property_uri is required for projection '{self.alias}'")
+        return self
+
+
 class KGQueryRequest(BaseModel):
     """Request model for KG queries."""
     criteria: KGQueryCriteria = Field(..., description="Query criteria")
@@ -166,6 +195,13 @@ class KGQueryRequest(BaseModel):
             "{space}_entity_slot_sort. Each column names its frame_path, "
             "slot_type and slot_class_uri. Answered for entity queries; "
             "count_only has no page and returns none."))
+    property_projection: Optional[List[PropertyProjection]] = Field(
+        None,
+        description=(
+            "Direct entity properties to return for the entities of the page, "
+            "read from the quads. Shares the response map with "
+            "slot_projection, so a list view gets one row per entity whichever "
+            "kind each column is; aliases must be unique across both."))
 
     @model_validator(mode='after')
     def validate_projection_aliases(self) -> 'KGQueryRequest':
@@ -173,10 +209,12 @@ class KGQueryRequest(BaseModel):
 
         The response is keyed by alias, so a duplicate does not merge or error
         at read time -- it returns one column where the caller asked for two,
-        with nothing saying which one survived.
+        with nothing saying which one survived. Checked ACROSS both projection
+        lists, because they share one response map: a slot column and a
+        property column under one name collide exactly as two slot columns do.
         """
         seen = set()
-        for p in (self.slot_projection or []):
+        for p in list(self.slot_projection or []) + list(self.property_projection or []):
             if p.alias in seen:
                 raise ValueError(
                     f"duplicate projection alias '{p.alias}' — the response is "
@@ -240,11 +278,13 @@ class KGQueryResponse(BasePaginatedResponse):
     # Case 2 (entity)
     entity_uris: Optional[List[str]] = Field(None, description="Matching entity URIs (when query_type='entity')")
     entity_graphs: Optional[Dict[str, List[Dict[str, Any]]]] = Field(None, description="Entity graphs as JSON quads ({s,p,o,g}) keyed by entity URI (when include_entity_graph=True)")
-    entity_slot_values: Optional[Dict[str, Dict[str, List[Any]]]] = Field(
+    entity_values: Optional[Dict[str, Dict[str, List[Any]]]] = Field(
         None,
         description=(
-            "Projected slot values (when slot_projection is set): entity URI -> "
-            "alias -> LIST of values. A list because an entity may legitimately "
+            "Projected column values (when slot_projection or "
+            "property_projection is set): entity URI -> alias -> LIST of "
+            "values, with both kinds of column in ONE map so a list view gets "
+            "one row per entity. A list because an entity may legitimately "
             "carry several slots of one type — measured up to 6 on a production "
             "space — and returning one of them would be a silent choice. An "
             "entity with no such slot has an empty list for that alias; an "
@@ -290,7 +330,7 @@ class KGEntityQueryResponse(BasePaginatedResponse):
     entity_uris: List[str] = Field(default_factory=list, description="Matching entity URIs")
     entity_graphs: Optional[Dict[str, List[Dict[str, Any]]]] = Field(None, description="Entity graphs as JSON quads ({s,p,o,g}) keyed by URI (when include_entity_graph=True)")
     entity_graph_objects: Optional[Dict[str, List[Any]]] = Field(None, exclude=True, description="Hydrated GraphObjects keyed by URI (populated client-side only)")
-    entity_slot_values: Optional[Dict[str, Dict[str, List[Any]]]] = Field(None, description="Projected slot values keyed by entity URI, then alias (when slot_projection was set)")
+    entity_values: Optional[Dict[str, Dict[str, List[Any]]]] = Field(None, description="Projected column values keyed by entity URI, then alias (when a projection was requested)")
 
     @classmethod
     def from_raw(cls, raw: 'KGQueryResponse') -> 'KGEntityQueryResponse':
@@ -299,7 +339,7 @@ class KGEntityQueryResponse(BasePaginatedResponse):
             message=raw.message,
             entity_uris=raw.entity_uris or [],
             entity_graphs=raw.entity_graphs,
-            entity_slot_values=raw.entity_slot_values,
+            entity_values=raw.entity_values,
             total_count=raw.total_count,
             page_size=raw.page_size,
             offset=raw.offset,

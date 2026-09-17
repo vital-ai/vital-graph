@@ -418,9 +418,16 @@ class KGQueriesEndpoint:
                 detail=f"Failed to execute relation query: {str(e)}"
             )
     
-    async def _project_slot_values(self, backend, space_id: str, graph_id: str,
-                                   entity_uris, query_request, entity_type):
-        """Slot values for a page, or None (`issues/208`).
+    async def _project_entity_values(self, backend, space_id: str, graph_id: str,
+                                     entity_uris, query_request, entity_type):
+        """Projected columns for a page, or None (`issues/208`).
+
+        TWO SOURCES, ONE MAP. Slot columns come from `entity_slot_sort`, which
+        collapses a frame walk that costs 57.65 ms against the quads. Property
+        columns come from the QUADS, because a direct property has no walk to
+        collapse — measured at 0.31 ms against `entity_prop_sort`'s 0.07 ms,
+        both noise — and the quads are authoritative, so that half needs no
+        coverage gate and cannot go quietly blank.
 
         A SHARED step rather than a fourth fast path, and deliberately so. The
         projection is orthogonal to selection — it applies to whichever path
@@ -433,12 +440,16 @@ class KGQueriesEndpoint:
         served must not come back as empty columns, because a blank column reads
         as "no value set". The response message says so instead.
         """
-        cols = None
-        if getattr(query_request, "slot_projection", None) and entity_uris:
-            from ..db.sparql_sql.slot_projection import (
-                project_slot_values, resolve_columns)
-            cols = resolve_columns(query_request.slot_projection)
-        if cols is None:
+        if not entity_uris:
+            return None
+        from ..db.sparql_sql.property_projection import (
+            project_property_values, resolve_property_columns)
+        from ..db.sparql_sql.slot_projection import (
+            project_slot_values, resolve_columns)
+        cols = resolve_columns(getattr(query_request, "slot_projection", None))
+        prop_cols = resolve_property_columns(
+            getattr(query_request, "property_projection", None))
+        if cols is None and prop_cols is None:
             return None
         pool = getattr(getattr(backend, 'db_impl', None), 'connection_pool', None)
         if pool is None:
@@ -450,7 +461,8 @@ class KGQueriesEndpoint:
             # read from the derived table, and a short table renders a column
             # blank with no error. `issues/149` measured a production type at
             # 1.05% while its own drift probe reported converged.
-            if await slot_sort_is_blocked(conn, space_id, entity_type):
+            if cols is not None and await slot_sort_is_blocked(
+                    conn, space_id, entity_type):
                 key = (space_id, entity_type, "projection")
                 if key not in _COVERAGE_WARNED:
                     _COVERAGE_WARNED.add(key)
@@ -461,13 +473,24 @@ class KGQueriesEndpoint:
                         "render columns blank. Run "
                         "`scripts/backfill_slot_sort_coverage.py --space %s`.",
                         space_id, entity_type, space_id)
+                # The WHOLE projection declines, not just its slot half. A
+                # response carrying the property columns and silently missing
+                # the slot ones is the blank-column failure in another form.
                 return None
             t0 = _time.monotonic()
-            values = await project_slot_values(
-                conn, space_id, graph_id, entity_uris, cols)
+            values = {uri: {} for uri in entity_uris}
+            if cols is not None:
+                for uri, row in (await project_slot_values(
+                        conn, space_id, graph_id, entity_uris, cols)).items():
+                    values[uri].update(row)
+            if prop_cols is not None:
+                for uri, row in (await project_property_values(
+                        conn, space_id, graph_id, entity_uris, prop_cols)).items():
+                    values[uri].update(row)
         self.logger.info(
-            "Slot projection: %d entities x %d columns, %.1fms",
-            len(entity_uris), len(cols), (_time.monotonic() - t0) * 1000)
+            "Projection: %d entities x %d slot + %d property columns, %.1fms",
+            len(entity_uris), len(cols or ()), len(prop_cols or ()),
+            (_time.monotonic() - t0) * 1000)
         return values
 
     async def _try_fast_slot_sort(self, backend, space_id: str, graph_id: str,
@@ -557,7 +580,7 @@ class KGQueriesEndpoint:
                 self.logger.info(
                     "Entity graph fetch (fast sort path): %d entities, %.0fms",
                     len(uris), (_time.monotonic() - t_eg) * 1000)
-            slot_values = await self._project_slot_values(
+            slot_values = await self._project_entity_values(
                 backend, space_id, graph_id, uris, query_request,
                 getattr(entity_criteria, "entity_type", None))
         except Exception as exc:
@@ -572,7 +595,7 @@ class KGQueriesEndpoint:
             query_type="entity",
             entity_uris=uris,
             entity_graphs=entity_graphs,
-            entity_slot_values=slot_values,
+            entity_values=slot_values,
             total_count=total,
             page_size=query_request.page_size,
             offset=query_request.offset,
@@ -682,7 +705,7 @@ class KGQueriesEndpoint:
                 self.logger.info(
                     "Entity graph fetch (fast filter path): %d entities, %.0fms",
                     len(uris), (_time.monotonic() - t_eg) * 1000)
-            slot_values = await self._project_slot_values(
+            slot_values = await self._project_entity_values(
                 backend, space_id, graph_id, uris, query_request,
                 getattr(entity_criteria, "entity_type", None))
         except Exception as exc:
@@ -697,7 +720,7 @@ class KGQueriesEndpoint:
             query_type="entity",
             entity_uris=uris,
             entity_graphs=entity_graphs,
-            entity_slot_values=slot_values,
+            entity_values=slot_values,
             total_count=total,
             page_size=query_request.page_size,
             offset=query_request.offset,
@@ -985,7 +1008,7 @@ class KGQueriesEndpoint:
             # from the quads and the columns come from the derived table, which
             # is a narrower trust claim than the fast paths make and is gated
             # the same way.
-            slot_values = await self._project_slot_values(
+            slot_values = await self._project_entity_values(
                 backend, space_id, graph_id, entity_uris, query_request,
                 getattr(entity_criteria, "entity_type", None))
 
@@ -994,7 +1017,7 @@ class KGQueriesEndpoint:
                 query_type="entity",
                 entity_uris=entity_uris,
                 entity_graphs=entity_graphs,
-                entity_slot_values=slot_values,
+                entity_values=slot_values,
                 total_count=total_count,
                 page_size=query_request.page_size,
                 offset=query_request.offset

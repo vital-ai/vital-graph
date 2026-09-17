@@ -1,9 +1,11 @@
 # Nothing Reads A Slot Value Out Of `entity_slot_sort`
 
-## Status: BUILT 2026-09-16. `slot_projection` on `POST /kgqueries` returns
-## `entity_slot_values` — entity URI -> alias -> LIST of values — served from
-## `entity_slot_sort` on ALL THREE entity paths and gated on the same
-## block-list the filter uses. Verified end to end on a 74.5M-quad space: 25
+## Status: BUILT 2026-09-16, both halves. `slot_projection` and
+## `property_projection` on `POST /kgqueries` return `entity_values` — entity
+## URI -> alias -> LIST of values, both kinds of column in ONE map — on ALL
+## THREE entity paths. Slots come from `entity_slot_sort` behind the filter's
+## block-list; DIRECT PROPERTIES COME FROM THE QUADS, which is not what this
+## issue predicted and is the better answer for a measured reason (below). Verified end to end on a 74.5M-quad space: 25
 ## entities x 8 columns across 7 frame paths, **200 of 200 values filled, 3.3-6.3
 ## ms server-side**, against the 18,000-quad `include_entity_graph` fan-out it
 ## replaces. Design decisions and what is NOT covered are below.
@@ -262,29 +264,73 @@ the derived table, so a short table renders a BLANK COLUMN that reads as "no
 value set" — the filter's asymmetry, not the sort's. Blocked means the field is
 absent and the log says so, never empty columns.
 
+### The property half: measured, and it changed the plan
+
+This issue named `entity_prop_sort` as the obvious next increment. Measured on
+`lead_nurture_grouped`, five properties across a 25-entity page:
+
+    entity_prop_sort   0.07 ms     62 buffers    PK seek — entity leads the PK
+    the quads          0.31 ms    696 buffers    PK seek — subject leads the PK
+
+identical values, 125 pairs checked. 4x, where the slot half is 76x — and both
+are noise beside the 0.76 ms the slot half costs. The reason for the difference
+is in `sync_entity_prop_sort`'s own docstring: these properties hang STRAIGHT
+OFF the entity, so there is no walk to collapse. The derived table earns its
+keep for a SORT or FILTER over a whole population, which is O(total) on the
+quads and O(page) on an ordered index. A projection is neither — the page is
+already chosen, so the probe is bounded by it.
+
+At equal cost the quads win on everything else:
+
+  * **Authoritative.** `entity_prop_sort` is derived and gated by a block-list,
+    and a short one renders a BLANK COLUMN — `issues/194` found it unmaintained
+    by seven write paths with `wordnet_frames` missing 329,235 rows. A quad
+    projection cannot be stale, so this half needs no gate.
+  * **Every property, not seven.** That table maintains
+    `SORTABLE_PROPERTY_URIS`; anything else would project as empty for a
+    property the entity plainly has.
+
+So `property_projection` names only an alias and a `property_uri` — no
+datatype, because a quad carries its object directly and the lexical form IS
+the value. `SlotProjection` needs `slot_class_uri` only because the sort table
+splits values across three lanes.
+
+The slot half still gates on `slot_sort_is_blocked`, and a block declines the
+WHOLE projection rather than returning the property columns alone — a response
+missing half its columns is the blank-column failure wearing a different hat.
+
 ### Verified end to end
 
 `lead_nurture_grouped`, 25 entities, the same eight columns across seven frame
 paths, through `POST /kgqueries`:
 
-    case                          uris   ents   values    quads      ms
-    general  + projection           25     25      200        0   3,981
-    fast sort + projection          25     25      200        0     194
-    fast filter + projection        25     25      200        0     138
-    fast sort, include_entity_graph 25      -        -   18,000     533
-    fast sort, neither              25      -        -        0     126
+    case                           uris   ents   values    quads     ms
+    general  + both                  25     25      275        0    912
+    fast sort + both                 25     25      275        0    167
+    fast filter + both               25     25      275        0     79
+    fast sort + slots only           25     25      200        0    120
+    fast sort + props only           25     25       75        0    112
+    fast sort, include_entity_graph  25      -        -   18,000    338
+    fast sort, neither               25      -        -        0    125
 
-200 of 200 filled, and a row reads as it should:
+275 = 25 entities x 11 columns (8 slots across 7 frame paths, 3 properties),
+all filled, and a row reads as a list view wants it:
 
-    company  ['M&M Insulation Co']      city     ['Dyer']
+    company  ['M&M Insulation Co']          city     ['Dyer']
     status   ['...enum:LeadStatus:Working']  state    ['Tennessee']
-    mql      ['15.3']                   started  ['2020-07-03T00:00:00']
-    age      ['14.3']                   sales    ['17564.78']
+    mql      ['15.3']                        started  ['2020-07-03T00:00:00']
+    age      ['14.3']                        sales    ['17564.78']
+    name     ['Charles Ramirez']             modified ['2026-09-06T15:25:30...']
+    obj_status ['...vital-aimp#ObjectStatusType_ACTIVE']
+
+the last three being direct properties and the rest slots — one map, one row.
 
 The wall-clock column is single samples over HTTP on a busy machine — indicative
 only. The repeatable number is the server's own, logged per request:
 
-    Slot projection: 25 entities x 8 columns, 3.3-6.3 ms   (warm)
+    Projection: 25 entities x 8 slot + 3 property columns, 5.0-6.9 ms  (warm)
+    Projection: 25 entities x 8 slot + 0 property columns, 2.2-2.3 ms
+    Projection: 25 entities x 0 slot + 3 property columns, 1.9-2.2 ms
 
 against 533 ms for the fan-out that returns 18,000 quads to render the same
 eight columns, on the same page, in the same state.
@@ -303,8 +349,6 @@ median of the next eleven, same connection.
 
 ### Not covered, deliberately
 
-  * Direct entity properties (`entity_prop_sort`). A real list view mixes them
-    with slot values; this is slots only.
   * Slots hanging directly off an entity. Not in the table at all
     (`sync_entity_slot_sort.py:57`), which is why `frame_path` is required
     rather than optional — an empty path would project as absent rather than as
