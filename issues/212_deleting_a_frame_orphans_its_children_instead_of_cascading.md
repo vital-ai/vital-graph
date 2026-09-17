@@ -75,24 +75,58 @@ on this space HAS shipped ~25% incomplete before.)
 their child frames and those frames' slots all survive untouched. That is the
 signature of a delete-by-subject applied to the frame URI alone.
 
-## A live path that produces this shape
+## Every live deletion path, audited 2026-09-17
 
-`kgentities_endpoint.py:1898`, the REPLACE path, deletes a frame graph with two
-SPARQL updates per URI:
+The second filing named the REPLACE path as the likely culprit. That was also
+wrong, and for the same reason as the first: a partial read. REPLACE is
+complete. Full audit of everything that can delete a frame:
 
-    1. DELETE every subject where ?s haley:hasFrameGraphURI <uri>
-    2. DELETE <uri>'s own triples
+| path | descendants | edges | verdict |
+|---|---|---|---|
+| `DELETE /kgframes` -> `_delete_frames_by_uris:1530` | refuses, or `collect_all_descendants` | `_delete_frame_from_backend` phase 2: `Edge_hasKGFrame` + `Edge_hasEntityKGFrame` | SAFE |
+| entity frames REPLACE `kgentities_endpoint.py:1855` | `collect_all_descendants` | incoming + outgoing `Edge_hasKGFrame`, then `Edge_hasEntityKGFrame` | SAFE |
+| `DELETE /kgentities?delete_entity_graph=true` | whole group by `kgGraphURI` | group-wide | SAFE |
+| `_delete_frames:298` | none | none | DEAD — unreachable |
 
-Step 1 is keyed on the deleted frame's OWN URI. The 298 survivors carry
-`hasFrameGraphURI` of a CAMPAIGN grouping URI instead
-(`urn:<client>:campaign:cer:nurture:...`), so step 1 never matched them, and
-step 2 removed only the parent. Descendants grouped under a different
-`hasFrameGraphURI` than the frame being deleted are exactly what survives here.
+**Both frame paths gained descendant collection on 2026-05-03** (`3b512618`,
+`55a40b02`). Since that date neither can strand a child frame or an edge, so
+the residue predates it or came from outside the API.
 
-**Still not proven.** Any delete-by-subject on a frame URI — this path, the dead
-helper before it died, a direct SPARQL update, a migration — leaves identical
-residue, and nothing in the data records which ran. What has changed is that
-the dedicated route is ruled OUT, and this one is ruled IN as capable.
+**Conclusion: this cannot recur through any live path.** The remaining value of
+this issue is the residue itself, the missing detection, and the dead helper —
+not a fix to the deletion code, which is correct.
+
+## One latent case, asserted as possible and NOT as occurring
+
+`DELETE /kgentities` defaults to `delete_entity_graph=false`, which deletes
+only the entity's own quads. `Edge_hasEntityKGFrame` has the ENTITY as its
+SOURCE, so an entity deleted in this mode while it still has frames would leave
+that edge with a dangling source — the same shape, one level up.
+
+`test_derived_table_maintenance.py` exempts this path on the reasoning that
+"the entity subject carries no edge-source/dest properties and is not a frame",
+which is true of the entity NODE and does not address the edge OBJECT that
+points at it.
+
+**No evidence it has happened.** Every one of the 298 dangling sources on
+production is a FRAME; entity-sourced dangling edges measured ZERO. Recorded as
+a thing to check before relying on the default, not as a defect.
+
+## Nothing detects this
+
+The residue was found sideways, through a slot-sort shortfall alarm, which is
+the part worth fixing. `maintenance_job` has `edge_table_orphan_rate`, but its
+orphan is "a row whose defining EDGE is gone" — the quad missing under a row.
+The condition here is the opposite and is not probed anywhere: a row whose
+SOURCE NODE has no quads.
+
+One query finds it, and it is cheap enough to run per cycle:
+
+    SELECT count(*) FROM {space}_edge e
+     WHERE NOT EXISTS (SELECT 1 FROM {space}_rdf_quad q
+                        WHERE q.subject_uuid = e.source_node_uuid)
+
+On production that returns 298 of 3,466,543, and zero for the destination form.
 
 ## Why this was mistaken for a derivation bug
 
@@ -129,11 +163,9 @@ entity — an export, a migration, a grouping-URI read — will pick them up.
 
 ## What to do
 
-1. **Audit the REPLACE path** (`kgentities_endpoint.py:1898`). Deleting a frame
-   graph by `hasFrameGraphURI` only reaches descendants that share the deleted
-   frame's grouping URI, and these did not. The dedicated route's
-   `find_child_frames` / `_delete_frame_from_backend` pair already solves this
-   correctly and is the thing to reuse.
+1. **Probe for dangling edge endpoints** in the maintenance cycle, per the
+   query above. This is the only recommendation that would have caught the
+   residue directly; everything else here was found by accident.
 2. **Delete the dead helper** `_delete_frames` / `_delete_entities`
    (`kgframes_endpoint.py:298`, `:373`). Unreachable, and its comment claims a
    cascade it does not perform — the next person to read it will believe the
