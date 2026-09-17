@@ -1,13 +1,13 @@
 {
   "schema": 1,
   "env": {
-    "started_at": "2026-09-16T03:28:12.139886+00:00",
+    "started_at": "2026-09-17T01:50:02.461256+00:00",
     "git": {
-      "commit": "9d3c17379fcfa1c681266de032067a787ce07bc0",
-      "short": "9d3c1737",
+      "commit": "808eb7989653bf006c99ac1e3147dbbc8cb12e04",
+      "short": "808eb798",
       "branch": "main",
       "dirty": false,
-      "untracked_files": 48
+      "untracked_files": 44
     },
     "machine": {
       "host": "ip-192-168-1-153.ec2.internal",
@@ -27,13 +27,15 @@
         "persist": true,
         "seeded": true,
         "fixture_tables": 296,
-        "fixture_live_tuples": 193144,
-        "seed_space_bytes": 55745667072
+        "fixture_live_tuples": 0,
+        "seed_space_bytes": 55745683456
       },
       "flags": {
         "persist": true,
-        "seeded": true
+        "seeded": false
       },
+      "flags_disagree": "VG_PERF_PERSIST/VG_PERF_SEEDED say persist=True seeded=False, but the seed-only spaces hold 55,745,683,456 bytes across 296 fixture table(s). Class taken from the DATABASE. See issues/189.",
+      "promotion_blocked": "VG_PERF_PERSIST/VG_PERF_SEEDED say persist=True seeded=False, but the seed-only spaces hold 55,745,683,456 bytes across 296 fixture table(s). Class taken from the DATABASE. See issues/189.",
       "largest_gated_fixture": "lead_nurture_grouped",
       "largest_gated_fixture_bytes": 49077829632,
       "shared_buffers_bytes": 17179869184,
@@ -58,11 +60,172 @@
     },
     "stats": {
       "fixture_tables": 296,
-      "fixture_live_tuples": 193144,
-      "fixture_last_analyze": "2026-09-16T00:07:44.733221+00:00"
+      "fixture_live_tuples": 0,
+      "fixture_last_analyze": "1970-01-01T00:00:00+00:00"
     },
-    "finished_at": "2026-09-16T03:36:24.820920+00:00",
-    "pg_stamp_missing": "no server settings recorded \u2014 timings in this run are NOT comparable across machines or configurations. See issues/081."
+    "sizes": {
+      "space_bytes": {
+        "lead_nurture_grouped": 49077829632,
+        "sp_lead_synth_100k": 48583606272,
+        "sp_graph_synth_100k": 10681884672,
+        "wordnet_frames": 6538190848,
+        "sp_lead_synth_10k": 4888559616,
+        "sp_graph_forms_20k": 2878218240,
+        "sp_graph_rel_10k": 1824071680,
+        "sp_graph_synth_10k": 1411350528,
+        "sp_lead_types": 921337856,
+        "sp_graph_skew_2k": 348930048,
+        "kg_load_test": 271409152,
+        "sp_lead_dup": 209682432,
+        "sp_kg_rel": 190636032,
+        "sp_sql_lead_dataset": 152502272,
+        "space_lead_dataset_test": 129662976,
+        "inttest_blauto_aa80": 30908416,
+        "inttest_b6b4fb5fb80a": 25534464,
+        "inttest_blem_c496": 18595840,
+        "e2e_test_space": 16023552,
+        "inttest_blauto_898d": 13754368,
+        "proportional": 12017664,
+        "inttest_trgm_14e3d4ca": 10469376,
+        "perf_frame_slot_page": 5783552,
+        "sp_kg_types": 2940928,
+        "inttest_crud_11d7a6a9": 2129920,
+        "inttest_lock_d79ec390": 2072576,
+        "inttest_count_9929e3e": 2056192,
+        "inttest_fe_37382a57": 2048000,
+        "inttest_fe_b4984969": 1949696,
+        "inttest_ddc47b92f17c": 1654784,
+        "inttest_41aa8cca9418": 1654784,
+        "inttest_0d425578a601": 1654784,
+        "inttest_b142990a5bbf": 1654784,
+        "inttest_23c001e0ead5": 1654784,
+        "inttest_exsrc_5da8": 1646592,
+        "inttest_exdst_0637": 1646592,
+        "inttest_chn_9f83d8eb": 1613824,
+        "inttest_defer_95d0a8b": 1589248,
+        "inttest_exsrc_b227": 1548288,
+        "inttest_dteq_4937bfba": 1523712,
+        "inttest_dteq_dc3c046a": 1523712,
+        "inttest_dteq_74bc5b73": 1523712,
+        "inttest_dtq_f4dfa15e": 1523712,
+        "inttest_dtq_d466219c": 1523712,
+        "inttest_dtq_63db6180": 1523712,
+        "inttest_dtq_424b9ea3": 1523712,
+        "inttest_dtq_2ef41015": 1523712,
+        "inttest_dtq_29eb2e71": 1523712,
+        "inttest_dg_27147e7a": 1523712,
+        "inttest_dg_867df776": 1523712,
+        "inttest_dg_2d4881a1": 1523712,
+        "inttest_dg_105251f9": 1523712,
+        "inttest_dg_a8ce6fb5": 1523712,
+        "inttest_dstat_eac3677": 1523712,
+        "inttest_dstat_bfac803": 1523712,
+        "inttest_dstat_5e4f648": 1523712,
+        "inttest_exsrc_b516": 1515520,
+        "inttest_cou_15fb4a74": 1515520,
+        "inttest_exsrc_d5e0": 1490944,
+        "inttest_22bc8adf10b2": 1490944,
+        "inttest_d6569d801e68": 1490944,
+        "inttest_cdc1e5dd31f1": 1490944,
+        "inttest_2d597b90f0f1": 1490944,
+        "inttest_dtacc_14c0a6d": 1490944,
+        "inttest_898ebdbc4dc5": 1490944,
+        "inttest_f8775897b69e": 1490944,
+        "inttest_a77048c22bd4": 1490944,
+        "inttest_exsrc_16f6": 1490944,
+        "inttest_exdst_02d9": 1490944,
+        "inttest_exsrc_68fa": 1490944,
+        "inttest_exdst_c8f8": 1490944,
+        "inttest_ct_6e5dbe63": 1490944,
+        "inttest_ct_baa9844a": 1490944,
+        "inttest_fd7633c64aa8": 1490944,
+        "inttest_e5e3afdcb158": 1490944,
+        "inttest_b3d76408cd9e": 1490944,
+        "inttest_54847ad4c47e": 1490944,
+        "inttest_2d74d74c13a3": 1490944,
+        "inttest_ct_5a54bd86": 1490944,
+        "inttest_ct_bde51e10": 1490944,
+        "inttest_ct_34bdce55": 1490944,
+        "inttest_ct_f53bd761": 1490944,
+        "inttest_dtacc_73a6ac6": 1490944,
+        "inttest_dtacc_849903c": 1490944,
+        "inttest_dtacc_f28f937": 1490944,
+        "inttest_dtacc_16b6d73": 1490944,
+        "inttest_dtacc_97f36d3": 1490944,
+        "inttest_dtacc_058c1ca": 1490944,
+        "inttest_dtacc_3eb9d3c": 1490944,
+        "inttest_dtacc_e6e6ca7": 1490944,
+        "inttest_lm_a69c8939": 1490944,
+        "inttest_cyc_334959f6": 1490944,
+        "inttest_greg_39fc808b": 1490944,
+        "inttest_lm_f4b46a96": 1490944,
+        "inttest_lm_79f90b8a": 1490944,
+        "inttest_lock_78156924": 1490944,
+        "inttest_greg_cfde0b36": 1490944,
+        "inttest_dstat_71c0389": 1449984,
+        "inttest_7579568efc6c": 1449984,
+        "inttest_c6de6b59dc2e": 1433600,
+        "inttest_tp_1520ab36": 1253376,
+        "inttest_tp_b1de347b": 1253376,
+        "inttest_527da2a2f063": 1253376,
+        "inttest_dteq_842e8d70": 1253376,
+        "inttest_tp_1d0bbcfb": 1253376,
+        "inttest_tp_54cddf19": 1253376,
+        "inttest_exdst_5e1b": 1253376,
+        "inttest_exdst_cf70": 1253376,
+        "inttest_exdst_f402": 1253376,
+        "inttest_dteq_021c820e": 1253376,
+        "inttest_tp_3feb4c1e": 1253376,
+        "inttest_blem_33da": 1253376,
+        "inttest_tp_080534fe": 1253376,
+        "inttest_tp_9cf408b9": 1253376,
+        "inttest_tp_06a4c75d": 1253376,
+        "inttest_tp_726dae4f": 1253376,
+        "inttest_tp_8262afb3": 1253376,
+        "inttest_tp_a63a8368": 1253376,
+        "inttest_tp_d28af529": 1253376,
+        "inttest_tp_d465ad1d": 1253376,
+        "inttest_dteq_d3142f54": 1253376,
+        "inttest_dteq_d174ff06": 1253376,
+        "inttest_dteq_126f040c": 1253376,
+        "inttest_dteq_72955602": 1253376,
+        "inttest_dteq_e03977bb": 1253376,
+        "inttest_dteq_df53deb1": 1253376,
+        "inttest_dteq_2c6dbdc5": 1253376,
+        "inttest_lm_1741913d": 1253376,
+        "inttest_lm_8f75847a": 1253376,
+        "inttest_tp_65614310": 1253376,
+        "inttest_lm_7ce0ddf5": 1253376,
+        "inttest_lm_b1cf9538": 1253376,
+        "inttest_lm_5c8ea875": 1253376,
+        "inttest_lm_589a7152": 1253376,
+        "inttest_lm_236ab8d7": 1253376,
+        "inttest_lm_e7d007e3": 1253376,
+        "inttest_lm_7da1e24e": 1253376,
+        "inttest_lm_9ae13a50": 1253376,
+        "inttest_lm_344a6ef1": 1253376,
+        "inttest_lm_1647a2d3": 1253376,
+        "inttest_lm_363270e7": 1253376,
+        "inttest_lm_0efb0185": 1253376,
+        "inttest_9e9913e818f1": 1253376,
+        "inttest_79eba30da51a": 1253376,
+        "inttest_tp_ffaafb35": 1253376,
+        "inttest_tp_9e078f28": 1253376,
+        "inttest_tp_d915b65e": 1253376,
+        "inttest_tp_13fd5d29": 1253376,
+        "inttest_tp_2dd0674e": 1253376,
+        "inttest_strdt_2029c94": 1253376,
+        "inttest_strdt_9f4d5d5": 1253376,
+        "inttest_strdt_ba121b3": 1253376,
+        "inttest_strdt_2ac9832": 1253376,
+        "inttest_strdt_0c5b63c": 1253376,
+        "inttest_strdt_58c3ea9": 1253376,
+        "inttest_strdt_b24d09c": 1253376
+      },
+      "largest_gated_fixture": "lead_nurture_grouped",
+      "largest_gated_fixture_bytes": 49077829632
+    },
+    "finished_at": "2026-09-17T02:07:40.765241+00:00"
   },
   "benches": [
     {
@@ -70,9 +233,9 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "first_page_ms": 31.9,
-        "deep_page_ms": 53.4,
-        "deep_offset_ratio": 1.68,
+        "first_page_ms": 22.9,
+        "deep_page_ms": 34.6,
+        "deep_offset_ratio": 1.51,
         "offset": 375,
         "rows": 25
       },
@@ -84,36 +247,21 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 79.4,
-        "sorted_ms": 63.4,
+        "unsorted_ms": 24.5,
+        "sorted_ms": 24.6,
         "rows": 25
       },
       "dataset": "synthetic:400frames",
       "notes": "page 1 of 400 frames, page_size=25"
     },
     {
-      "bench_id": "geo.populate_and_search",
-      "kind": "query",
-      "status": "ok",
-      "metrics": {
-        "seed_quads_per_sec": 749,
-        "populate_geo_s": 2.032,
-        "points_upserted": 2000,
-        "points_per_sec": 984,
-        "geo_search_ms": 20.1,
-        "rows_returned": 25
-      },
-      "dataset": "synthetic:2000points",
-      "notes": "issues/192 \u2014 geo populate + vg:geoDistance search, radius 200000m top_k 25"
-    },
-    {
       "bench_id": "query.aggregate.by_datatype[100k-Currency]",
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_currency_min_ms": 1320.3,
-        "agg_currency_avg_ms": 732.0,
-        "agg_currency_ratio": 1.8
+        "agg_currency_min_ms": 868.9,
+        "agg_currency_avg_ms": 992.0,
+        "agg_currency_ratio": 0.88
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN vs AVG on Currency \u2014 issues/029 sort-per-group"
@@ -123,9 +271,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_double_min_ms": 1308.6,
-        "agg_double_avg_ms": 6111.6,
-        "agg_double_ratio": 0.21
+        "agg_double_min_ms": 1297.7,
+        "agg_double_avg_ms": 2698.1,
+        "agg_double_ratio": 0.48
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN vs AVG on Double \u2014 issues/029 sort-per-group"
@@ -135,9 +283,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_integer_min_ms": 1038.2,
-        "agg_integer_avg_ms": 9813.0,
-        "agg_integer_ratio": 0.11
+        "agg_integer_min_ms": 1003.8,
+        "agg_integer_avg_ms": 6039.3,
+        "agg_integer_ratio": 0.17
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN vs AVG on Integer \u2014 issues/029 sort-per-group"
@@ -147,9 +295,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_currency_min_ms": 363.0,
-        "agg_currency_avg_ms": 376.8,
-        "agg_currency_ratio": 0.96
+        "agg_currency_min_ms": 328.3,
+        "agg_currency_avg_ms": 284.5,
+        "agg_currency_ratio": 1.15
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Currency \u2014 issues/029 sort-per-group"
@@ -159,9 +307,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_double_min_ms": 299.0,
-        "agg_double_avg_ms": 268.7,
-        "agg_double_ratio": 1.11
+        "agg_double_min_ms": 350.7,
+        "agg_double_avg_ms": 305.2,
+        "agg_double_ratio": 1.15
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Double \u2014 issues/029 sort-per-group"
@@ -171,9 +319,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_integer_min_ms": 235.5,
-        "agg_integer_avg_ms": 315.2,
-        "agg_integer_ratio": 0.75
+        "agg_integer_min_ms": 326.6,
+        "agg_integer_avg_ms": 235.0,
+        "agg_integer_ratio": 1.39
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN vs AVG on Integer \u2014 issues/029 sort-per-group"
@@ -183,12 +331,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 2612.2,
-        "agg_max_ms": 3626.4,
-        "agg_avg_ms": 2338.5,
-        "agg_sum_ms": 2364.5,
-        "agg_count_ms": 1112.0,
-        "min_over_avg": 1.12
+        "agg_min_ms": 2409.2,
+        "agg_max_ms": 2047.6,
+        "agg_avg_ms": 1601.2,
+        "agg_sum_ms": 1354.8,
+        "agg_count_ms": 686.6,
+        "min_over_avg": 1.5
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "aggregate cost, group_by=True \u2014 issues/029 sort-per-group"
@@ -198,12 +346,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 2331.5,
-        "agg_max_ms": 1120.8,
-        "agg_avg_ms": 19188.3,
-        "agg_sum_ms": 13046.1,
-        "agg_count_ms": 60.9,
-        "min_over_avg": 0.12
+        "agg_min_ms": 1298.4,
+        "agg_max_ms": 1103.4,
+        "agg_avg_ms": 3442.3,
+        "agg_sum_ms": 2431.7,
+        "agg_count_ms": 43.3,
+        "min_over_avg": 0.38
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "aggregate cost, group_by=False \u2014 issues/029 sort-per-group"
@@ -213,12 +361,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 383.2,
-        "agg_max_ms": 255.1,
-        "agg_avg_ms": 201.4,
-        "agg_sum_ms": 261.3,
-        "agg_count_ms": 143.1,
-        "min_over_avg": 1.9
+        "agg_min_ms": 180.6,
+        "agg_max_ms": 214.0,
+        "agg_avg_ms": 166.8,
+        "agg_sum_ms": 124.3,
+        "agg_count_ms": 83.4,
+        "min_over_avg": 1.08
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "aggregate cost, group_by=True \u2014 issues/029 sort-per-group"
@@ -228,12 +376,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "agg_min_ms": 322.6,
-        "agg_max_ms": 415.1,
-        "agg_avg_ms": 425.5,
-        "agg_sum_ms": 349.1,
-        "agg_count_ms": 5.0,
-        "min_over_avg": 0.76
+        "agg_min_ms": 489.4,
+        "agg_max_ms": 332.0,
+        "agg_avg_ms": 578.6,
+        "agg_sum_ms": 394.1,
+        "agg_count_ms": 3.4,
+        "min_over_avg": 0.85
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "aggregate cost, group_by=False \u2014 issues/029 sort-per-group"
@@ -243,9 +391,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "min_in_memory_ms": 1154.8,
-        "min_spilled_ms": 1095.2,
-        "spill_ratio": 0.95
+        "min_in_memory_ms": 965.2,
+        "min_spilled_ms": 1067.3,
+        "spill_ratio": 1.11
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "MIN with and without a work_mem spill at 4MB \u2014 issues/029"
@@ -255,50 +403,12 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "min_in_memory_ms": 364.0,
-        "min_spilled_ms": 270.5,
-        "spill_ratio": 0.74
+        "min_in_memory_ms": 255.1,
+        "min_spilled_ms": 274.8,
+        "spill_ratio": 1.08
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "MIN with and without a work_mem spill at 1MB \u2014 issues/029"
-    },
-    {
-      "bench_id": "query.covering.advantage_growth",
-      "kind": "query",
-      "status": "ok",
-      "shape": {
-        "node_types": [
-          "Index Only Scan"
-        ],
-        "indexes": [
-          "idx_perf_covbench_quad_ctx_pred"
-        ],
-        "seq_scans": [],
-        "tree": [
-          "Index Only Scan",
-          []
-        ]
-      },
-      "metrics": {
-        "shared_buffers": 124,
-        "shared_read": 0,
-        "temp_written": 0,
-        "actual_rows": 9000,
-        "max_actual_rows": 9000,
-        "estimated_rows": 8484,
-        "heap_fetches": 0,
-        "planning_ms": 1.804,
-        "execution_ms": 3.52,
-        "with_index_buffers": 124,
-        "with_index_node": "Index Only Scan",
-        "without_index_buffers": 9010,
-        "without_index_node": "Bitmap Heap Scan",
-        "advantage_ratio": 72.661,
-        "with_growth": 7.294,
-        "without_growth": 8.992
-      },
-      "dataset": "synthetic:900000",
-      "notes": "sizes=[100000, 300000, 900000]"
     },
     {
       "bench_id": "query.covering.graph_scoped_scan_index_only",
@@ -325,8 +435,8 @@
         "max_actual_rows": 100,
         "estimated_rows": 100,
         "heap_fetches": 0,
-        "planning_ms": 1.628,
-        "execution_ms": 2.013,
+        "planning_ms": 0.435,
+        "execution_ms": 1.143,
         "matched_rows": 100
       },
       "dataset": "space_lead_dataset_test"
@@ -336,12 +446,12 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "page_no_graph_ms": 83.3,
-        "page_cold_ms": 1177.1,
-        "page_warm_ms": 260.6,
-        "fanout_cold_ms": 1093.8,
-        "cold_min_ms": 973.8,
-        "cold_max_ms": 1306.5,
+        "page_no_graph_ms": 68.2,
+        "page_cold_ms": 2334.2,
+        "page_warm_ms": 252.8,
+        "fanout_cold_ms": 2266.0,
+        "cold_min_ms": 1970.0,
+        "cold_max_ms": 3243.6,
         "quads_returned": 18653,
         "page_size": 25,
         "samples": 5
@@ -392,14 +502,14 @@
       },
       "metrics": {
         "shared_buffers": 989,
-        "shared_read": 4,
+        "shared_read": 890,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 1025,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.17,
-        "execution_ms": 63.288
+        "planning_ms": 0.196,
+        "execution_ms": 60.518
       },
       "dataset": "wordnet_frames"
     },
@@ -445,15 +555,15 @@
         ]
       },
       "metrics": {
-        "shared_buffers": 130,
-        "shared_read": 2,
+        "shared_buffers": 127,
+        "shared_read": 57,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 10.182,
-        "execution_ms": 4.569
+        "planning_ms": 20.699,
+        "execution_ms": 14.881
       },
       "dataset": "wordnet_frames"
     },
@@ -500,47 +610,16 @@
       },
       "metrics": {
         "shared_buffers": 125,
-        "shared_read": 0,
+        "shared_read": 28,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 0.266,
-        "execution_ms": 1.974
+        "planning_ms": 0.619,
+        "execution_ms": 31.084
       },
       "dataset": "wordnet_frames"
-    },
-    {
-      "bench_id": "query.frame_nesting.edge_hops_index_only",
-      "kind": "query",
-      "status": "ok",
-      "shape": {
-        "node_types": [
-          "Index Only Scan"
-        ],
-        "indexes": [
-          "idx_perf_edgehop_edge_src_dst"
-        ],
-        "seq_scans": [],
-        "tree": [
-          "Index Only Scan",
-          []
-        ]
-      },
-      "metrics": {
-        "shared_buffers": 3,
-        "shared_read": 0,
-        "temp_written": 0,
-        "actual_rows": 10,
-        "max_actual_rows": 10,
-        "estimated_rows": 10,
-        "heap_fetches": 0,
-        "planning_ms": 0.549,
-        "execution_ms": 0.034
-      },
-      "dataset": "synthetic:edges",
-      "notes": "forward hop (source\u2192dest)"
     },
     {
       "bench_id": "query.generated_sql.plan[lead_entity_type]",
@@ -590,14 +669,14 @@
       },
       "metrics": {
         "shared_buffers": 154,
-        "shared_read": 1,
+        "shared_read": 49,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 4.149,
-        "execution_ms": 9.885,
+        "planning_ms": 44.904,
+        "execution_ms": 179.748,
         "sql_chars": 6702,
         "joins": 0
       },
@@ -653,14 +732,14 @@
       },
       "metrics": {
         "shared_buffers": 96,
-        "shared_read": 20,
+        "shared_read": 49,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 1649,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 2.095,
-        "execution_ms": 6.201,
+        "planning_ms": 13.805,
+        "execution_ms": 161.721,
         "sql_chars": 3811,
         "joins": 0
       },
@@ -727,14 +806,14 @@
       },
       "metrics": {
         "shared_buffers": 205,
-        "shared_read": 25,
+        "shared_read": 96,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 1.48,
-        "execution_ms": 20.599,
+        "planning_ms": 22.536,
+        "execution_ms": 224.246,
         "sql_chars": 6687,
         "joins": 0
       },
@@ -807,14 +886,14 @@
       },
       "metrics": {
         "shared_buffers": 306,
-        "shared_read": 0,
+        "shared_read": 49,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 1.732,
-        "execution_ms": 4.166,
+        "planning_ms": 1.045,
+        "execution_ms": 122.491,
         "sql_chars": 6961,
         "joins": 0
       },
@@ -870,14 +949,14 @@
       },
       "metrics": {
         "shared_buffers": 1248,
-        "shared_read": 1146,
+        "shared_read": 1147,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 109745,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 1.69,
-        "execution_ms": 195.27,
+        "planning_ms": 9.381,
+        "execution_ms": 543.31,
         "sql_chars": 3801,
         "joins": 0
       },
@@ -885,26 +964,14 @@
       "notes": "typed subject page (the KGEntity listing shape)"
     },
     {
-      "bench_id": "query.growth.entity_page_buffers",
-      "kind": "query",
-      "status": "ok",
-      "metrics": {
-        "growth_class": "flat",
-        "buffers_at_50000": 104,
-        "buffers_at_150000": 104,
-        "buffers_at_450000": 104
-      },
-      "dataset": "synthetic:[50000, 150000, 450000]"
-    },
-    {
       "bench_id": "query.kgquery.deep_paging.curve[100k]",
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "page_ms_offset_0": 43.7,
-        "page_ms_offset_250": 401.2,
-        "page_ms_offset_1000": 480.0,
-        "deep_ratio": 11.0
+        "page_ms_offset_0": 33.3,
+        "page_ms_offset_250": 295.7,
+        "page_ms_offset_1000": 287.5,
+        "deep_ratio": 8.6
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "cost across offsets \u2014 issues/078; flat means fixed"
@@ -914,10 +981,10 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "page_ms_offset_0": 23.9,
-        "page_ms_offset_250": 34.0,
-        "page_ms_offset_1000": 34.1,
-        "deep_ratio": 1.4
+        "page_ms_offset_0": 17.4,
+        "page_ms_offset_250": 26.1,
+        "page_ms_offset_1000": 26.3,
+        "deep_ratio": 1.5
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "cost across offsets \u2014 issues/078; flat means fixed"
@@ -1113,9 +1180,9 @@
         "max_actual_rows": 33333,
         "estimated_rows": 1,
         "heap_fetches": 1,
-        "planning_ms": 101.469,
-        "execution_ms": 503.217,
-        "min_ratio": 1.09,
+        "planning_ms": 39.189,
+        "execution_ms": 275.149,
+        "min_ratio": 1.067,
         "offsets_measured": 3,
         "deepest_offset": 1000
       },
@@ -1307,9 +1374,9 @@
         "max_actual_rows": 10000,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 66.494,
-        "execution_ms": 73.344,
-        "min_ratio": 1.805,
+        "planning_ms": 49.479,
+        "execution_ms": 30.135,
+        "min_ratio": 1.271,
         "offsets_measured": 2,
         "deepest_offset": 250
       },
@@ -1497,8 +1564,8 @@
         "max_actual_rows": 53469,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 41.966,
-        "execution_ms": 557.917,
+        "planning_ms": 65.849,
+        "execution_ms": 475.602,
         "rows": 25,
         "distinct": 25,
         "duplicate_anchors": 398
@@ -1687,8 +1754,8 @@
         "max_actual_rows": 699,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 40.258,
-        "execution_ms": 549.402,
+        "planning_ms": 41.668,
+        "execution_ms": 448.559,
         "rows": 25,
         "distinct": 25,
         "duplicate_anchors": 398
@@ -1911,14 +1978,14 @@
       },
       "metrics": {
         "shared_buffers": 104030,
-        "shared_read": 103,
+        "shared_read": 243,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 62.59,
-        "execution_ms": 167.906,
+        "planning_ms": 55.345,
+        "execution_ms": 116.47,
         "sparql_chars": 1872,
         "sql_chars": 6585,
         "joins": 0
@@ -2113,14 +2180,14 @@
       },
       "metrics": {
         "shared_buffers": 14163,
-        "shared_read": 196,
+        "shared_read": 1500,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 50.01,
-        "execution_ms": 141.371,
+        "planning_ms": 58.786,
+        "execution_ms": 274.297,
         "sparql_chars": 1836,
         "sql_chars": 6558,
         "joins": 0
@@ -2308,14 +2375,14 @@
       },
       "metrics": {
         "shared_buffers": 21444,
-        "shared_read": 33,
+        "shared_read": 89,
         "temp_written": 0,
         "actual_rows": 13,
         "max_actual_rows": 38550,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 58.772,
-        "execution_ms": 27.795,
+        "planning_ms": 47.712,
+        "execution_ms": 52.082,
         "sparql_chars": 1844,
         "sql_chars": 6558,
         "joins": 0
@@ -2478,8 +2545,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 96.47,
-        "execution_ms": 459.744,
+        "planning_ms": 54.788,
+        "execution_ms": 72.216,
         "total_matches": 9227,
         "page_size": 25,
         "buffers_per_match": 3.846
@@ -2648,8 +2715,8 @@
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 56.089,
-        "execution_ms": 192.881,
+        "planning_ms": 55.84,
+        "execution_ms": 68.338,
         "total_matches": 911,
         "page_size": 25,
         "buffers_per_match": 22.967
@@ -2818,14 +2885,14 @@
       },
       "metrics": {
         "shared_buffers": 147887,
-        "shared_read": 21889,
+        "shared_read": 34417,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 3687,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 45.87,
-        "execution_ms": 9550.352,
+        "planning_ms": 48.051,
+        "execution_ms": 14200.963,
         "total_matches": 3687,
         "page_size": 25,
         "buffers_per_match": 40.11
@@ -2994,14 +3061,14 @@
       },
       "metrics": {
         "shared_buffers": 14277,
-        "shared_read": 1291,
+        "shared_read": 2963,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 345,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 34.855,
-        "execution_ms": 646.577,
+        "planning_ms": 51.027,
+        "execution_ms": 909.327,
         "total_matches": 345,
         "page_size": 25,
         "buffers_per_match": 41.383
@@ -3158,14 +3225,14 @@
       },
       "metrics": {
         "shared_buffers": 78381,
-        "shared_read": 3681,
+        "shared_read": 8858,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 87.127,
-        "execution_ms": 2228.542,
+        "planning_ms": 127.434,
+        "execution_ms": 3173.213,
         "total_matches": 5438,
         "page_size": 25,
         "buffers_per_match": 14.414
@@ -3324,14 +3391,14 @@
       },
       "metrics": {
         "shared_buffers": 8012911,
-        "shared_read": 1569,
+        "shared_read": 4937,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 513,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 51.019,
-        "execution_ms": 10829.836,
+        "planning_ms": 57.247,
+        "execution_ms": 7551.332,
         "total_matches": 523,
         "page_size": 25,
         "buffers_per_match": 15321.054
@@ -3488,14 +3555,14 @@
       },
       "metrics": {
         "shared_buffers": 52332,
-        "shared_read": 2194,
+        "shared_read": 6012,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 72.064,
-        "execution_ms": 1244.951,
+        "planning_ms": 80.016,
+        "execution_ms": 2450.345,
         "total_matches": 7259,
         "page_size": 25,
         "buffers_per_match": 7.209
@@ -3657,18 +3724,18 @@
         ]
       },
       "metrics": {
-        "shared_buffers": 39815,
-        "shared_read": 1139,
+        "shared_buffers": 39817,
+        "shared_read": 5700,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 25,
         "estimated_rows": 25,
         "heap_fetches": 0,
-        "planning_ms": 69.584,
-        "execution_ms": 964.514,
+        "planning_ms": 55.197,
+        "execution_ms": 1761.206,
         "total_matches": 738,
         "page_size": 25,
-        "buffers_per_match": 53.95
+        "buffers_per_match": 53.953
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "[10k] CompanyStateCode = TX \u2014 738 matches, 25-row page"
@@ -3834,14 +3901,14 @@
       },
       "metrics": {
         "shared_buffers": 36058,
-        "shared_read": 5079,
+        "shared_read": 7985,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 892,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 32.716,
-        "execution_ms": 1808.278,
+        "planning_ms": 35.376,
+        "execution_ms": 2505.836,
         "total_matches": 892,
         "page_size": 25,
         "buffers_per_match": 40.424
@@ -4010,14 +4077,14 @@
       },
       "metrics": {
         "shared_buffers": 3740,
-        "shared_read": 309,
+        "shared_read": 722,
         "temp_written": 0,
         "actual_rows": 25,
         "max_actual_rows": 88,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 41.036,
-        "execution_ms": 165.807,
+        "planning_ms": 62.792,
+        "execution_ms": 246.029,
         "total_matches": 88,
         "page_size": 25,
         "buffers_per_match": 42.5
@@ -4044,11 +4111,11 @@
       "kind": "query",
       "status": "ok",
       "metrics": {
-        "growth_ratio": 0.51,
+        "growth_ratio": 0.53,
         "match_spread": 3.92,
-        "growth_vs_matches": -0.169,
+        "growth_vs_matches": -0.16,
         "buffers_smallest": 535084,
-        "buffers_largest": 271459
+        "buffers_largest": 285102
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "[10k] 25-row page, matches 88\u2192345. O(page) predicts ~1.0; O(matches) predicts ~3.9"
@@ -4220,8 +4287,8 @@
         "max_actual_rows": 892,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 31.193,
-        "execution_ms": 65.763,
+        "planning_ms": 32.544,
+        "execution_ms": 40.606,
         "rows": 25,
         "distinct": 25
       },
@@ -4395,8 +4462,8 @@
         "max_actual_rows": 88,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 36.481,
-        "execution_ms": 5.116,
+        "planning_ms": 31.631,
+        "execution_ms": 4.433,
         "rows": 25,
         "distinct": 25
       },
@@ -4570,8 +4637,8 @@
         "max_actual_rows": 892,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 35.264,
-        "execution_ms": 58.552,
+        "planning_ms": 32.516,
+        "execution_ms": 43.861,
         "rows": 25,
         "distinct": 25
       },
@@ -4745,8 +4812,8 @@
         "max_actual_rows": 88,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 31.047,
-        "execution_ms": 4.891,
+        "planning_ms": 30.744,
+        "execution_ms": 4.476,
         "rows": 25,
         "distinct": 25
       },
@@ -4798,675 +4865,15 @@
       "notes": "[10k] largest page still served by an ordered, early-terminating scan (entity_type=urn:acme:kg:entity:Lead)"
     },
     {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 29336,
-        "unfenced_buffers": 29336,
-        "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "contains / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 29871,
-        "unfenced_buffers": 29871,
-        "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "contains / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 26684,
-        "unfenced_buffers": 10072682,
-        "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 0.003
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "contains / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-contains-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 27168,
-        "unfenced_buffers": 1001048,
-        "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 0.027
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "contains / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 127537,
-        "unfenced_buffers": 127537,
-        "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "eq-common / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 118675,
-        "unfenced_buffers": 118675,
-        "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "eq-common / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 117782,
-        "unfenced_buffers": null,
-        "needs_ordered_scan": true,
-        "page_size": 100
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "eq-common / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-common-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 109348,
-        "unfenced_buffers": 1153193,
-        "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 0.095
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "eq-common / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 155471,
-        "unfenced_buffers": 36358,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 4.276
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "eq-rare / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 537352,
-        "unfenced_buffers": 3992,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 134.607
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "eq-rare / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 41163,
-        "unfenced_buffers": 36358,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 1.132
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "eq-rare / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-eq-rare-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 13749,
-        "unfenced_buffers": 3992,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 3.444
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "eq-rare / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 43116,
-        "unfenced_buffers": 43116,
-        "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-loose / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 37526,
-        "unfenced_buffers": 37526,
-        "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-loose / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 39995,
-        "unfenced_buffers": null,
-        "needs_ordered_scan": true,
-        "page_size": 100
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-loose / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-loose-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 34741,
-        "unfenced_buffers": 1269165,
-        "needs_ordered_scan": true,
-        "page_size": 100,
-        "fence_ratio": 0.027
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-loose / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 2339604,
-        "unfenced_buffers": 21841,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 107.12
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 543127,
-        "unfenced_buffers": 11228,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 48.373
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 1813444,
-        "unfenced_buffers": 2342966,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 0.774
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-mid / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-mid-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 1537750,
-        "unfenced_buffers": 2009414,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 0.765
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-mid / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 13837734,
-        "unfenced_buffers": 15910,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 869.751
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 534159,
-        "unfenced_buffers": 1894,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 282.027
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-specific-100k]",
-      "status": "skipped",
-      "reason": "Skipped: neither plan finished within the probe timeout"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p100-range-tight-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 1536826,
-        "unfenced_buffers": 2008490,
-        "needs_ordered_scan": false,
-        "page_size": 100,
-        "fence_ratio": 0.765
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-tight / Lead / page 100 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 7906,
-        "unfenced_buffers": 7906,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "contains / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 7516,
-        "unfenced_buffers": 7516,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "contains / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 7205,
-        "unfenced_buffers": 7205,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "contains / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-contains-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 6816,
-        "unfenced_buffers": 1000748,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 0.007
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "contains / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 35490,
-        "unfenced_buffers": 35490,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "eq-common / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 20923,
-        "unfenced_buffers": 20923,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "eq-common / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 32581,
-        "unfenced_buffers": 32581,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "eq-common / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-common-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 19194,
-        "unfenced_buffers": 1152893,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 0.017
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "eq-common / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 66072,
-        "unfenced_buffers": 36058,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 1.832
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "eq-rare / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 535084,
-        "unfenced_buffers": 3740,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 143.071
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "eq-rare / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 32381,
-        "unfenced_buffers": 36058,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 0.898
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "eq-rare / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-eq-rare-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 6001,
-        "unfenced_buffers": 3740,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 1.605
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "eq-rare / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 7524,
-        "unfenced_buffers": 7524,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-loose / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 8440,
-        "unfenced_buffers": 8440,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-loose / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 6945,
-        "unfenced_buffers": 6945,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 1.0
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-loose / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-loose-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 7767,
-        "unfenced_buffers": 1268865,
-        "needs_ordered_scan": true,
-        "page_size": 25,
-        "fence_ratio": 0.006
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-loose / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 2522158,
-        "unfenced_buffers": 11432,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 220.623
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 535722,
-        "unfenced_buffers": 11000,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 48.702
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-mid / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 311151,
-        "unfenced_buffers": 484685,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 0.642
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-mid / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-mid-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 482129,
-        "unfenced_buffers": 639573,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 0.754
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-mid / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-generic-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": null,
-        "unfenced_buffers": 5517,
-        "needs_ordered_scan": false,
-        "page_size": 25
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-generic-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 534159,
-        "unfenced_buffers": 1894,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 282.027
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-tight / //vital.ai/ontology/haley-ai-kg#KGEntity / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-specific-100k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 2547352,
-        "unfenced_buffers": 3254222,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 0.783
-      },
-      "dataset": "sp_lead_synth_100k",
-      "notes": "range-tight / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
-      "bench_id": "query.kgquery.paging_fence_coverage[p25-range-tight-specific-10k]",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "fenced_buffers": 1536826,
-        "unfenced_buffers": 2008490,
-        "needs_ordered_scan": false,
-        "page_size": 25,
-        "fence_ratio": 0.765
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "range-tight / Lead / page 25 \u2014 issues/190 fence coverage"
-    },
-    {
       "bench_id": "query.kgquery.range_penalty[100k]",
       "kind": "query",
       "status": "ok",
       "metrics": {
         "buffers_per_match_tightest": 4.0,
-        "buffers_extreme": 5517,
+        "buffers_extreme": 7051,
         "extreme_matches": 149,
-        "buffers_per_match_extreme": 37.0,
-        "extreme_vs_equality": 9.63,
+        "buffers_per_match_extreme": 47.3,
+        "extreme_vs_equality": 12.3,
         "equality_buffers_per_match": 3.8,
         "range_vs_equality": 1.04,
         "flatness": 13.6,
@@ -5482,10 +4889,10 @@
       "status": "ok",
       "metrics": {
         "buffers_per_match_tightest": 35.0,
-        "buffers_extreme": 1894,
+        "buffers_extreme": 2284,
         "extreme_matches": 13,
-        "buffers_per_match_extreme": 145.7,
-        "extreme_vs_equality": 6.34,
+        "buffers_per_match_extreme": 175.7,
+        "extreme_vs_equality": 7.65,
         "equality_buffers_per_match": 23.0,
         "range_vs_equality": 1.53,
         "flatness": 12.241,
@@ -5500,10 +4907,10 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "sorted_ms_offset_0": 918.9,
-        "sorted_ms_offset_250": 733.1,
-        "sorted_ms_offset_1000": 900.4,
-        "sorted_depth_ratio": 1.0
+        "sorted_ms_offset_0": 437.1,
+        "sorted_ms_offset_250": 498.0,
+        "sorted_ms_offset_1000": 471.8,
+        "sorted_depth_ratio": 1.1
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "sorted page cost across offsets \u2014 issues/080"
@@ -5513,10 +4920,10 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "sorted_ms_offset_0": 143.9,
-        "sorted_ms_offset_250": 58.8,
-        "sorted_ms_offset_1000": 55.5,
-        "sorted_depth_ratio": 0.4
+        "sorted_ms_offset_0": 37.0,
+        "sorted_ms_offset_250": 41.7,
+        "sorted_ms_offset_1000": 39.5,
+        "sorted_depth_ratio": 1.1
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "sorted page cost across offsets \u2014 issues/080"
@@ -5526,9 +4933,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 42.9,
-        "sorted_ms": 819.0,
-        "sort_ratio": 19.1
+        "unsorted_ms": 33.8,
+        "sorted_ms": 921.2,
+        "sort_ratio": 27.2
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "entity_property sort vs the same query unsorted (issues/080)"
@@ -5538,9 +4945,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "unsorted_ms": 23.7,
-        "sorted_ms": 47.8,
-        "sort_ratio": 2.0
+        "unsorted_ms": 20.7,
+        "sorted_ms": 43.7,
+        "sort_ratio": 2.1
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "entity_property sort vs the same query unsorted (issues/080)"
@@ -5556,26 +4963,12 @@
       "reason": "Skipped: could not identify the sort column in the projection"
     },
     {
-      "bench_id": "query.kgquery.text_needle_regimes",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "empty_buffers": 0,
-        "matching_buffers": 7516,
-        "unservable_buffers": 1445968,
-        "matching_rows": 25.0,
-        "empty_rows": 0.0
-      },
-      "dataset": "sp_lead_synth_10k",
-      "notes": "text needle regimes: empty < matching < unservable (issues/202 \u2014 empty is provably empty and costs 0)"
-    },
-    {
       "bench_id": "query.lead.kgquery[hierarchical-p100-100k]",
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 31.3,
-        "min_ms": 30.3,
+        "wall_ms": 30.9,
+        "min_ms": 29.9,
         "page_size": 100,
         "results": 100
       },
@@ -5587,7 +4980,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 34.7,
+        "wall_ms": 38.7,
         "min_ms": 31.6,
         "page_size": 100,
         "results": 100
@@ -5600,8 +4993,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 26.7,
-        "min_ms": 25.7,
+        "wall_ms": 54.4,
+        "min_ms": 38.4,
         "page_size": 100,
         "results": 100
       },
@@ -5613,8 +5006,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 24.3,
-        "min_ms": 24.1,
+        "wall_ms": 79.6,
+        "min_ms": 38.4,
         "page_size": 25,
         "results": 25
       },
@@ -5626,8 +5019,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 25.1,
-        "min_ms": 24.6,
+        "wall_ms": 24.7,
+        "min_ms": 24.1,
         "page_size": 25,
         "results": 25
       },
@@ -5639,8 +5032,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 17.9,
-        "min_ms": 16.7,
+        "wall_ms": 16.0,
+        "min_ms": 15.6,
         "page_size": 25,
         "results": 25
       },
@@ -5652,8 +5045,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 86.8,
-        "min_ms": 83.1,
+        "wall_ms": 76.0,
+        "min_ms": 75.2,
         "page_size": 100,
         "results": 100
       },
@@ -5665,8 +5058,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 116.5,
-        "min_ms": 89.3,
+        "wall_ms": 71.9,
+        "min_ms": 65.6,
         "page_size": 100,
         "results": 100
       },
@@ -5678,8 +5071,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 170.5,
-        "min_ms": 111.1,
+        "wall_ms": 89.0,
+        "min_ms": 69.1,
         "page_size": 100,
         "results": 73
       },
@@ -5691,8 +5084,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 49.5,
-        "min_ms": 40.2,
+        "wall_ms": 37.5,
+        "min_ms": 37.3,
         "page_size": 25,
         "results": 25
       },
@@ -5704,8 +5097,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 41.0,
-        "min_ms": 38.9,
+        "wall_ms": 37.8,
+        "min_ms": 35.5,
         "page_size": 25,
         "results": 25
       },
@@ -5717,8 +5110,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 52.9,
-        "min_ms": 45.7,
+        "wall_ms": 45.3,
+        "min_ms": 37.8,
         "page_size": 25,
         "results": 25
       },
@@ -5730,8 +5123,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 85.0,
-        "min_ms": 80.9,
+        "wall_ms": 71.3,
+        "min_ms": 65.8,
         "page_size": 100,
         "results": 100
       },
@@ -5743,8 +5136,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 70.1,
-        "min_ms": 67.2,
+        "wall_ms": 77.0,
+        "min_ms": 70.1,
         "page_size": 100,
         "results": 100
       },
@@ -5756,8 +5149,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 51.4,
-        "min_ms": 45.9,
+        "wall_ms": 38.6,
+        "min_ms": 36.9,
         "page_size": 100,
         "results": 99
       },
@@ -5769,8 +5162,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 48.6,
-        "min_ms": 41.8,
+        "wall_ms": 37.5,
+        "min_ms": 36.0,
         "page_size": 25,
         "results": 25
       },
@@ -5782,8 +5175,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 37.3,
-        "min_ms": 35.3,
+        "wall_ms": 36.7,
+        "min_ms": 34.9,
         "page_size": 25,
         "results": 25
       },
@@ -5795,8 +5188,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 25.2,
-        "min_ms": 23.9,
+        "wall_ms": 79.9,
+        "min_ms": 28.6,
         "page_size": 25,
         "results": 25
       },
@@ -5808,8 +5201,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 250.3,
-        "min_ms": 216.7,
+        "wall_ms": 166.1,
+        "min_ms": 161.6,
         "page_size": 100,
         "results": 100
       },
@@ -5821,8 +5214,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 276.7,
-        "min_ms": 211.3,
+        "wall_ms": 172.8,
+        "min_ms": 156.5,
         "page_size": 100,
         "results": 100
       },
@@ -5834,8 +5227,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 60.4,
-        "min_ms": 39.9,
+        "wall_ms": 36.8,
+        "min_ms": 34.3,
         "page_size": 100,
         "results": 13
       },
@@ -5847,8 +5240,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 147.7,
-        "min_ms": 108.8,
+        "wall_ms": 57.9,
+        "min_ms": 55.8,
         "page_size": 25,
         "results": 25
       },
@@ -5860,8 +5253,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 51.5,
-        "min_ms": 47.4,
+        "wall_ms": 51.6,
+        "min_ms": 46.1,
         "page_size": 25,
         "results": 25
       },
@@ -5873,8 +5266,8 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 56.0,
-        "min_ms": 48.1,
+        "wall_ms": 33.9,
+        "min_ms": 32.8,
         "page_size": 25,
         "results": 13
       },
@@ -5882,22 +5275,11 @@
       "notes": "[real100 p25] Find leads in California"
     },
     {
-      "bench_id": "query.partition.graph_scoped_pruning",
-      "kind": "query",
-      "status": "ok",
-      "metrics": {
-        "partitions_scanned": 1,
-        "partitions_total": 4,
-        "node_types": "Seq Scan"
-      },
-      "dataset": "synthetic:4part"
-    },
-    {
       "bench_id": "query.relation.convergent_fan_in",
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "convergent_ms": 6897.6,
+        "convergent_ms": 6237.0,
         "convergent_rows": 1313755
       },
       "dataset": "sp_kg_rel",
@@ -5919,7 +5301,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_friendof_ms": 70.0,
+        "rel_friendof_ms": 57.4,
         "rel_friendof_rows": 14625
       },
       "dataset": "sp_kg_rel",
@@ -5930,7 +5312,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_reportsto_ms": 50.3,
+        "rel_reportsto_ms": 43.1,
         "rel_reportsto_rows": 4750
       },
       "dataset": "sp_kg_rel",
@@ -5941,7 +5323,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "rel_worksfor_ms": 51.4,
+        "rel_worksfor_ms": 36.7,
         "rel_worksfor_rows": 4875
       },
       "dataset": "sp_kg_rel",
@@ -5996,6 +5378,21 @@
       "notes": "construct_frame_with_slots \u2014 issues/193 shape coverage"
     },
     {
+      "bench_id": "query.sparql_shape[describe]",
+      "kind": "sql",
+      "status": "ok",
+      "metrics": {
+        "buffers": 2827,
+        "where_buffers": 1372,
+        "fetch_buffers": 1455,
+        "targets": 25,
+        "rows": 173.0,
+        "sql_chars": 14768
+      },
+      "dataset": "sp_lead_synth_10k",
+      "notes": "describe \u2014 issues/193 shape coverage; BOTH phases (WHERE + VALUES fetch), which is what a caller pays"
+    },
+    {
       "bench_id": "query.sparql_shape[lcase_contains]",
       "kind": "sql",
       "status": "ok",
@@ -6012,9 +5409,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "buffers": 661625,
+        "buffers": 205,
         "rows": 25.0,
-        "sql_chars": 10023
+        "sql_chars": 9922
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "minus \u2014 issues/193 shape coverage"
@@ -6060,7 +5457,7 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "buffers": 1572,
+        "buffers": 1573,
         "rows": 25.0,
         "sql_chars": 7942
       },
@@ -6096,9 +5493,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "values_1_ms": 0.54,
-        "values_20_ms": 3.79,
-        "values_growth": 7.1
+        "values_1_ms": 1.41,
+        "values_20_ms": 17.53,
+        "values_growth": 12.5
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "VALUES cost against list length \u2014 issues/087"
@@ -6108,9 +5505,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "values_ms": 0.65,
-        "literal_subject_ms": 0.55,
-        "values_ratio": 1.2
+        "values_ms": 0.63,
+        "literal_subject_ms": 0.49,
+        "values_ratio": 1.3
       },
       "dataset": "sp_lead_synth_100k",
       "notes": "VALUES vs an equivalent literal subject \u2014 issues/087"
@@ -6120,9 +5517,9 @@
       "kind": "sql",
       "status": "ok",
       "metrics": {
-        "values_ms": 0.66,
-        "literal_subject_ms": 0.62,
-        "values_ratio": 1.1
+        "values_ms": 0.65,
+        "literal_subject_ms": 0.81,
+        "values_ratio": 0.8
       },
       "dataset": "sp_lead_synth_10k",
       "notes": "VALUES vs an equivalent literal subject \u2014 issues/087"
@@ -6132,7 +5529,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 2300.0,
+        "wall_ms": 5392.0,
         "rows": 4
       },
       "dataset": "wordnet_frames",
@@ -6143,7 +5540,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 1057.0,
+        "wall_ms": 498.1,
         "rows": 1
       },
       "dataset": "wordnet_frames",
@@ -6154,7 +5551,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 519.4,
+        "wall_ms": 643.2,
         "rows": 425
       },
       "dataset": "wordnet_frames",
@@ -6165,7 +5562,7 @@
       "kind": "api",
       "status": "ok",
       "metrics": {
-        "wall_ms": 747.2,
+        "wall_ms": 496.8,
         "rows": 45
       },
       "dataset": "wordnet_frames",
@@ -6194,11 +5591,11 @@
           "Nested Loop",
           "Nested Loop",
           "Nested Loop",
+          "Index Only Scan",
           "Nested Loop",
           "Index Only Scan",
           "Index Only Scan",
           "Index Scan",
-          "Index Only Scan",
           "Nested Loop",
           "Bitmap Heap Scan",
           "Bitmap Index Scan",
@@ -6357,14 +5754,14 @@
                                           "Nested Loop",
                                           [
                                             [
-                                              "Index Only Scan",
+                                              "Index Scan",
                                               []
                                             ],
                                             [
                                               "Nested Loop",
                                               [
                                                 [
-                                                  "Index Scan",
+                                                  "Index Only Scan",
                                                   []
                                                 ],
                                                 [
@@ -6402,15 +5799,15 @@
         ]
       },
       "metrics": {
-        "shared_buffers": 40194,
+        "shared_buffers": 44943,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 70,
         "max_actual_rows": 9266,
         "estimated_rows": 54,
         "heap_fetches": 0,
-        "planning_ms": 2.389,
-        "execution_ms": 29.615,
+        "planning_ms": 3.307,
+        "execution_ms": 43.9,
         "rows": 70
       },
       "dataset": "sp_graph_skew_2k",
@@ -6437,11 +5834,11 @@
           "Nested Loop",
           "Nested Loop",
           "Nested Loop",
+          "Index Only Scan",
           "Nested Loop",
           "Index Only Scan",
           "Index Only Scan",
           "Index Scan",
-          "Index Only Scan",
           "Nested Loop",
           "Bitmap Heap Scan",
           "Bitmap Index Scan",
@@ -6590,14 +5987,14 @@
                                           "Nested Loop",
                                           [
                                             [
-                                              "Index Only Scan",
+                                              "Index Scan",
                                               []
                                             ],
                                             [
                                               "Nested Loop",
                                               [
                                                 [
-                                                  "Index Scan",
+                                                  "Index Only Scan",
                                                   []
                                                 ],
                                                 [
@@ -6635,15 +6032,15 @@
         ]
       },
       "metrics": {
-        "shared_buffers": 4306,
+        "shared_buffers": 4822,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 21,
         "max_actual_rows": 191,
         "estimated_rows": 6,
         "heap_fetches": 0,
-        "planning_ms": 2.66,
-        "execution_ms": 5.218,
+        "planning_ms": 2.683,
+        "execution_ms": 6.02,
         "rows": 21
       },
       "dataset": "sp_graph_skew_2k",
@@ -6680,11 +6077,11 @@
           "Bitmap Index Scan",
           "Nested Loop",
           "Nested Loop",
+          "Index Only Scan",
           "Nested Loop",
           "Index Only Scan",
           "Index Only Scan",
           "Index Scan",
-          "Index Only Scan",
           "Memoize",
           "Index Scan",
           "Memoize",
@@ -6790,14 +6187,14 @@
                                               "Nested Loop",
                                               [
                                                 [
-                                                  "Index Only Scan",
+                                                  "Index Scan",
                                                   []
                                                 ],
                                                 [
                                                   "Nested Loop",
                                                   [
                                                     [
-                                                      "Index Scan",
+                                                      "Index Only Scan",
                                                       []
                                                     ],
                                                     [
@@ -6868,15 +6265,15 @@
         ]
       },
       "metrics": {
-        "shared_buffers": 2893,
+        "shared_buffers": 3013,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 7,
         "max_actual_rows": 144,
         "estimated_rows": 6,
         "heap_fetches": 0,
-        "planning_ms": 2.547,
-        "execution_ms": 3.411,
+        "planning_ms": 6.191,
+        "execution_ms": 9.972,
         "rows": 7
       },
       "dataset": "sp_graph_skew_2k",
@@ -6931,8 +6328,8 @@
           "Bitmap Index Scan",
           "Index Only Scan",
           "Index Scan",
-          "Index Scan",
           "Index Only Scan",
+          "Index Scan",
           "Index Only Scan",
           "Index Scan"
         ],
@@ -7029,14 +6426,14 @@
                                       "Nested Loop",
                                       [
                                         [
-                                          "Index Only Scan",
+                                          "Index Scan",
                                           []
                                         ],
                                         [
                                           "Nested Loop",
                                           [
                                             [
-                                              "Index Scan",
+                                              "Index Only Scan",
                                               []
                                             ],
                                             [
@@ -7163,15 +6560,15 @@
         ]
       },
       "metrics": {
-        "shared_buffers": 12092,
+        "shared_buffers": 12767,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 17,
         "max_actual_rows": 2022,
         "estimated_rows": 1,
         "heap_fetches": 0,
-        "planning_ms": 11.861,
-        "execution_ms": 8.763,
+        "planning_ms": 13.752,
+        "execution_ms": 14.295,
         "rows": 17
       },
       "dataset": "sp_graph_skew_2k",
@@ -7194,11 +6591,11 @@
           "Nested Loop",
           "Nested Loop",
           "Nested Loop",
+          "Index Only Scan",
           "Nested Loop",
           "Index Only Scan",
           "Index Only Scan",
           "Index Scan",
-          "Index Only Scan",
           "Nested Loop",
           "Bitmap Heap Scan",
           "Bitmap Index Scan",
@@ -7332,14 +6729,14 @@
                               "Nested Loop",
                               [
                                 [
-                                  "Index Only Scan",
+                                  "Index Scan",
                                   []
                                 ],
                                 [
                                   "Nested Loop",
                                   [
                                     [
-                                      "Index Scan",
+                                      "Index Only Scan",
                                       []
                                     ],
                                     [
@@ -7371,15 +6768,15 @@
         ]
       },
       "metrics": {
-        "shared_buffers": 537,
+        "shared_buffers": 570,
         "shared_read": 0,
         "temp_written": 0,
         "actual_rows": 1,
         "max_actual_rows": 27,
         "estimated_rows": 4,
         "heap_fetches": 0,
-        "planning_ms": 1.673,
-        "execution_ms": 0.789,
+        "planning_ms": 4.434,
+        "execution_ms": 3.214,
         "rows": 1
       },
       "dataset": "sp_graph_skew_2k",
@@ -7530,109 +6927,17 @@
         "max_actual_rows": 17029,
         "estimated_rows": 6,
         "heap_fetches": 0,
-        "planning_ms": 39.777,
-        "execution_ms": 148.367,
+        "planning_ms": 62.216,
+        "execution_ms": 132.218,
         "rows": 17029
       },
       "dataset": "sp_graph_skew_2k",
       "notes": "no criterion \u2014 must stay flat (traversal_decision)"
-    },
-    {
-      "bench_id": "vector.index_and_search",
-      "kind": "query",
-      "status": "ok",
-      "metrics": {
-        "seed_quads_per_sec": 1152,
-        "index_ddl_s": 0.006,
-        "vectors_upserted": 2000,
-        "vectors_per_sec": 323,
-        "vector_search_ms": 6.84,
-        "rows_returned": 10
-      },
-      "dataset": "synthetic:2000vectors:384d",
-      "notes": "issues/192 \u2014 HNSW top-10 over 2000 384-d vectors, pre-computed probe (no embedding)"
-    },
-    {
-      "bench_id": "write.delete.concrete_vs_deferred",
-      "kind": "write",
-      "status": "ok",
-      "metrics": {
-        "seed_quads_per_sec": 1550,
-        "concrete_quads_per_sec": 1658,
-        "where_bound_quads_per_sec": 6533,
-        "concrete_s": 1.809,
-        "where_bound_s": 0.459,
-        "sweep_s": 0.007,
-        "deferred_share": 0.015,
-        "orphans_before_sweep": 1000
-      },
-      "dataset": "synthetic:2000edges",
-      "notes": "issues/192 \u2014 concrete vs WHERE-bound delete and the deferred referential sweep (issues/064, issues/079)"
-    },
-    {
-      "bench_id": "write.export.copy_round_trip",
-      "kind": "write",
-      "status": "ok",
-      "metrics": {
-        "source_quads": 596458,
-        "export_s": 1.629,
-        "export_quads_per_sec": 366088,
-        "export_bytes": 78073823,
-        "import_s": 25.404,
-        "import_quads_per_sec": 23479,
-        "import_over_export": 15.59,
-        "edge_rows_rebuilt": 38957
-      },
-      "dataset": "sp_graph_skew_2k",
-      "notes": "issues/192 \u2014 binary COPY export then import, including the derived-table resync the import performs"
-    },
-    {
-      "bench_id": "write.ingest.bulk_vs_executemany",
-      "kind": "write",
-      "status": "ok",
-      "metrics": {
-        "executemany_quads_per_sec": 4483,
-        "copy_quads_per_sec": 47227,
-        "bulk_e2e_quads_per_sec": 28972,
-        "index_rebuild_s": 5.336,
-        "copy_speedup": 10.534,
-        "e2e_speedup": 6.462
-      },
-      "dataset": "synthetic:400000q"
-    },
-    {
-      "bench_id": "write.per_write_curve.incremental_probe",
-      "kind": "write",
-      "status": "ok",
-      "metrics": {
-        "growth_class": "flat",
-        "probe_ms_at_100000q": 85.94,
-        "probe_ms_at_300000q": 84.1,
-        "probe_ms_at_900000q": 93.47
-      },
-      "dataset": "synthetic:[50000, 150000, 450000]",
-      "notes": "probe=300 quads, min of 3 rolled-back runs"
-    },
-    {
-      "bench_id": "write.update.insert_vs_modify",
-      "kind": "sql",
-      "status": "ok",
-      "metrics": {
-        "insert_data_ms": 6369.4,
-        "insert_where_ms": 710.3,
-        "modify_ms": 622.7,
-        "edges_after_insert": 2000,
-        "edges_after_modify": 2000,
-        "remarked_quads": 2000,
-        "n_edges": 2000
-      },
-      "dataset": "perfdel_79776dbb",
-      "notes": "SPARQL UPDATE: INSERT DATA / INSERT WHERE / MODIFY over 2000 edges \u2014 issues/192"
     }
   ],
   "baseline": {
     "name": "query",
-    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260916T022029Z-9d3c1737.json",
+    "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260917T014936Z-808eb798.json",
     "reason": "",
     "pg_stamped": true
   }
