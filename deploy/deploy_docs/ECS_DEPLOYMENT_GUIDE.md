@@ -437,7 +437,7 @@ services:
     build: ./vitalgraph-jena-sidecar
 
   minio:              # S3-compatible storage (ports 9000, 9001)
-    image: minio/minio
+    image: quay.io/minio/minio
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin

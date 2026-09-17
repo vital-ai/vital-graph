@@ -67,7 +67,7 @@ services:
       - vitalgraph_network
 
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     container_name: vitalgraph-minio
     ports:
       - "9000:9000"  # MinIO API

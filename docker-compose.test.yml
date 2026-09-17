@@ -237,7 +237,7 @@ services:
       - vitalgraph_test
 
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     container_name: vitalgraph-test-minio
     command: server /data --console-address ":9001"
     environment:
