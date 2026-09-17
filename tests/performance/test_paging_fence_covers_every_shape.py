@@ -162,7 +162,14 @@ async def _cost(conn, sql, *, fenced: bool, warm: bool = False,
 
 
 async def _warm(conn, sql):
-    """Run both plans once, untimed, so the timeout measures the PLAN.
+    """Run both plans once, on the warm budget, so the timeout measures the PLAN.
+
+    "Untimed", as this said until 2026-09-17, describes behaviour the code no
+    longer has: `_cost(warm=True)` applies `WARM_TIMEOUT_MS`. The distinction
+    matters to anyone budgeting this suite's runtime — untimed makes a cell's
+    worst case unbounded, and bounded makes it warm 120s x2 + probe 20s x2 +
+    retry 120s x2 = ~520 s. The slowest cell measured 404 s, which is inside
+    that and is therefore the design, not a runaway (`issues/188`).
 
     Without this the first probe pays to pull a 22 GB fixture's working set
     into a 16 GB pool, and the timeout reports the buffer pool instead. It is

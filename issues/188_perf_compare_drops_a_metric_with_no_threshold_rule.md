@@ -1,9 +1,12 @@
 # `perf_compare` Drops A Metric With No Threshold Rule, In Silence
 
 ## Status: PARTLY FIXED 2026-09-12 — the absence is VISIBLE, and the one metric
-## that needed no sampling is now GATED (`1834b857`). The 91 NUMERIC rules are
-## still unwritten, and BLOCKED ON A SUITE THAT CANNOT BE SAMPLED — see
-## "Why the numbers could not be measured".
+## that needed no sampling is now GATED (`1834b857`). The numeric rules are
+## still unwritten. NO LONGER BLOCKED: the suite was believed unsamplable
+## because a bench appeared to run 15 minutes; re-measured 2026-09-17 on a
+## larger stack, the longest statement is 118 s and the suite completes in
+## ~57 min. See "(2) was done". The gap has GROWN to 160 unruled metrics and
+## 92 of 189 cells that cannot fail.
 
 **Related:** `issues/081` (a gate disabled by absence, same shape),
 `issues/112` (the one metric where this was noticed and fixed),
@@ -128,6 +131,53 @@ Two ways forward, and the choice is not obvious:
 
 (2) first, on the grounds that a 15-minute bench is either a bug or a fixture
 that should not be in a suite anyone is expected to re-run.
+
+### (2) was done 2026-09-17. There is no 15-minute query.
+
+Re-run with `--durations=40` and a sampler polling `pg_stat_activity` every
+10 s, on a **120 GB** test stack — LARGER than the 105 GB the 2026-09-12
+attempt used, and carrying the same big fixtures (74M-quad
+`lead_nurture_grouped` and `sp_lead_synth_100k`).
+
+    suite                 ~57 min, 0 failures, 4 skips
+    longest STATEMENT     118 s   (an EXPLAIN (ANALYZE, BUFFERS))
+    samples over 45 s     89
+    slowest TEST          404 s
+
+The suite is slow by CONSTRUCTION, not stalled. Seven of the ten slowest
+tests are one parametrised cell, `test_a_flippable_shape_is_always_fenced`,
+whose budget is warm 120s x2 sides + probe 20s x2 + confirming retry 120s x2
+= ~520 s worst case. 404 s is inside that. The 118 s statement is a warm-up
+reaching `WARM_TIMEOUT_MS`, which is a measurement, not a hang.
+
+So the suspicion behind (2) does not survive. The warm-up bound was added in
+`4c614997` (2026-08-22) and revised in `f8ef28c7` (2026-09-08) — BOTH before
+the 2026-09-12 attempt — so whatever ran for 15 minutes that day was not an
+unbounded fence warm-up, and it did not recur here. It is not worth chasing
+further without a reproduction.
+
+**This unblocks (1), and more than partially.** "A benchmark suite that cannot
+be run four times" was the premise; it CAN be run, in about an hour. Four
+samples is ~4 hours of wall clock. That is expensive and it is a scheduling
+question, not a blocker, and it no longer justifies leaving 160 metrics
+unruled.
+
+### The gap is wider than this issue recorded
+
+Re-measured 2026-09-17 against the four current baselines, after the
+re-promotions of that day:
+
+| | 2026-09-12 | 2026-09-17 |
+|---|---|---|
+| distinct metric names | 121 | **181** |
+| with a rule | 15 | 21 |
+| unruled, never compared | 106 | **160** |
+| cells that cannot fail | 37 / 108 | **92 / 189** |
+
+Half the cells in the promoted baselines cannot fail. Benches added since
+(shape coverage, DESCRIBE, entity-graph fan-out, update throughput) each
+brought claim metrics and no rules, so the gap grows with every bench added.
+A bench whose claim metric has no rule records a number and gates nothing.
 
 ## What remains
 
