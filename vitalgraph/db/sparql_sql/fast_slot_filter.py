@@ -286,6 +286,34 @@ async def release_slot_sort_block(conn, space_id: str,
             space_id, entity_type_uuid)
 
 
+async def _space_has_no_slots(conn, space_id: str) -> bool:
+    """True when the space contains no slot-typed subject at all.
+
+    The difference between "nothing to measure" and "could not measure". An
+    EXISTS against the predicate index short-circuits on the first row, so this
+    is cheap even on a large space — and it is only reached when a coverage
+    sweep came back empty, which on a space with data means something is wrong
+    and the block should stay.
+    """
+    # IMPORTED, not re-derived. A local uuid5 would be a second definition of
+    # the same constant, and if the namespace or the URI ever moved this probe
+    # would quietly match nothing — which reads as "no slots", which releases a
+    # block it should have held. Imported inside the function because
+    # `sync_entity_slot_sort` is the heavier module and nothing else here needs
+    # it at import time.
+    from .sync_entity_slot_sort import _SLOT_TYPE as slot_type
+    try:
+        found = await conn.fetchval(
+            f"SELECT EXISTS (SELECT 1 FROM {space_id}_rdf_quad "
+            f" WHERE predicate_uuid = $1)", slot_type)
+        return not found
+    except Exception as exc:
+        # Could not answer -> do NOT release. Absence of evidence is the one
+        # thing this function must never read as evidence of absence.
+        logger.debug("slot presence probe failed for %s: %s", space_id, exc)
+        return False
+
+
 async def release_whole_space_block_if_complete(conn, space_id: str,
                                                coverage_rows,
                                                slot_shortfall: int = 0) -> bool:
@@ -308,11 +336,34 @@ async def release_whole_space_block_if_complete(conn, space_id: str,
     coverage") true by construction.
 
     Releases only when the sweep saw at least one type AND every one of them is
-    complete. An empty sweep is not evidence of completeness — it is a space
-    whose types could not be measured — so it holds the block.
+    complete.
+
+    AN EMPTY SWEEP IS TWO DIFFERENT SITUATIONS and this used to treat them as
+    one. "Types could not be measured" must hold the block. "There are no types
+    to measure" must not — a space with no slot data has nothing to cover, so
+    the table is complete by vacuity and holding the block switches off a fast
+    path that could never have served anything anyway.
+
+    Conflating them held eleven dev spaces blocked from the moment an upgrade
+    seeded them (2026-09-06) with no way out, all of them slot-free test
+    spaces. The cost was not the disabled fast path — there was nothing for it
+    to serve — it was the alarm: every cycle, for every one of them,
+    "the repair is not converging, or nothing is working on it", which is how a
+    warning that matters gets tuned out.
+
+    One indexed EXISTS separates them, and it is asked ONLY on the empty-sweep
+    path, so the normal case pays nothing.
     """
     rows = list(coverage_rows or [])
     if not rows:
+        if await _space_has_no_slots(conn, space_id):
+            try:
+                await release_slot_sort_block(conn, space_id, None)
+            except Exception as exc:
+                logger.debug("could not release whole-space block for %s: %s",
+                             space_id, exc)
+                return False
+            return True
         return False
     if not all(r["in_table"] >= r["of_type"] and r["of_type"] > 0 for r in rows):
         return False
