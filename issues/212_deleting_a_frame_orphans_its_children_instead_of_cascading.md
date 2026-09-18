@@ -1,9 +1,13 @@
 # Deleting A Frame Orphans Its Children Instead Of Cascading
 
-## Status: OPEN, found 2026-09-17 on PRODUCTION while explaining the
-## `entity_slot_sort` shortfall alarm (`issues/194`). The residue is real,
-## contained, and currently unread; the code path that produces its exact shape
-## is identified, though which caller actually ran is not provable from the data.
+## Status: CAUSE IDENTIFIED 2026-09-18, cannot recur. The residue came from
+## `DELETE /kgframes` BEFORE `55a40b02` (2026-05-03), whose per-frame delete
+## removed the frame's own quads and its own slots and never touched
+## `Edge_hasKGFrame` — so child frames, their slots and the edges pointing at
+## them survived. All 298 dangling rows on production are that one edge type,
+## which is what pins it. Post-`55a40b02` the endpoint refuses or cascades.
+## What REMAINS is a decision about the existing residue, which needs its own
+## authorisation, and detection, which is now in place.
 
 **Related:** `issues/194` (the alarm this surfaced under — NOT a defect, see
 "Why this was mistaken for a derivation bug"), `issues/091` (grouping URIs that
@@ -175,41 +179,63 @@ One query finds it, and it is cheap enough to run per cycle:
 
 On production that returns 298 of 3,466,543, and zero for the destination form.
 
-## The cause is NOT known, and cannot be recovered from the data
+## CAUSE IDENTIFIED 2026-09-18 — `DELETE /kgframes` before the cascade landed
 
-Stated plainly so nobody spends a second afternoon on it. What is established:
+I had written, in this document, that the cause "cannot be recovered from the
+data". That was wrong. It could not be recovered from the DATA; it was sitting
+in the history of the endpoint. The suggestion that the frame-delete endpoint
+had simply been used without deleting the whole graph is what found it.
 
-  * WHAT happened — 99 frames had their own quads deleted while their 298
-    outgoing edges, 298 child frames and 828 slots survived. That is a
-    delete-by-subject on frame URIs and nothing else produces that shape.
-  * WHAT did not do it — every live deletion path cascades correctly, both
-    frame paths since 2026-05-03, and the helper originally blamed is dead
-    code. Two mechanisms were named in this document and both were wrong.
-  * It is not a stale edge table: all 298 edge OBJECTS are still in the quads.
+`_delete_frame_from_backend` before `55a40b02` (2026-05-03) issued exactly two
+deletes per frame:
 
-What cannot be established is WHEN, and therefore WHICH caller. Checked
-2026-09-18:
+    1. DELETE <frame_uri> ?p ?o                     -- the frame's own quads
+    2. DELETE ?slot/?edge WHERE ?edge a Edge_hasKGSlot ;
+                                hasEdgeSource <frame_uri>   -- its OWN slots
 
-    rdf_quad columns          subject, predicate, object, context, quad, dataset
-    edge columns              edge, source, dest, context, edge_type
-    affected frames           carry no server properties (no modification time)
-    track_commit_timestamp    OFF in production
+`Edge_hasKGFrame` appears nowhere. Child frames, the edges pointing at them and
+everything below them were never touched. The residue is that gap, exactly:
 
-No timestamp anywhere — not in the row, not in the data, not in the transaction
-log. The deleted rows themselves are long vacuumed. So it is not possible to
-say whether this predates the 2026-05-03 cascade fix (which would close it) or
-postdates it (which would mean a path still unfound), and no amount of querying
-will change that.
+    what the old code deleted        what we observe
+    ---------------------------      -----------------------------------------
+    the frame's own quads       ->   99 frames with ZERO quads
+    its own slots + slot edges  ->   ZERO dangling Edge_hasKGSlot rows
+    (nothing else)              ->   298 dangling Edge_hasKGFrame rows
+                                     298 intact child frames
+                                     828 intact slots — the CHILDREN's, not
+                                     the deleted frames'
 
-**What would settle it is the next occurrence, not this one.** The
-dangling-endpoint probe added for this issue runs every maintenance cycle, so a
-new instance is dated by when the alarm first fires — which converts an
-undatable mystery into an ordinary bug report. That is the reason the probe was
-worth more than a repair.
+Confirmed on production: every one of the 298 dangling rows is
+`Edge_hasKGFrame` and there are no others. That single fact distinguishes this
+explanation from every other one — a delete that missed slots would leave
+dangling `Edge_hasKGSlot` rows, and there are none.
 
-Turning on `track_commit_timestamp` would make this class of question
-answerable in future. It is not free and it is not proposed here; it is noted
-because this is the second time the absence has mattered.
+It also explains the asymmetry noted below: zero entity-sourced dangling edges,
+because this path only ever ran on frames.
+
+**Nobody did anything wrong.** There was no flag to forget — the pre-`55a40b02`
+endpoint took no `recursive` parameter and had no cascade for child frames at
+all. Any caller deleting a frame that had children produced this. The
+capability was missing, not the caller's care.
+
+**It necessarily predates 2026-05-03 and cannot recur.** After that commit the
+endpoint either refuses ("Cannot delete frames with children (use
+recursive=true to cascade)") or collects all descendants, and
+`_delete_frame_from_backend` became a two-phase cascade that includes both edge
+types. So the dating question this document could not answer from the data is
+answered by the code: the residue is older than the fix, and the fix is what
+stopped it.
+
+## What this cost, as a lesson
+
+Three mechanisms were proposed in this document before the right one. The first
+two were guesses at WHICH CURRENT code path did it, and both were wrong because
+I read part of a function and stopped. The third was a conclusion that the
+question was unanswerable, reached by exhausting the DATA and never once
+looking at what the endpoint used to do.
+
+The residue is a fossil. The way to date a fossil is to ask what was alive at
+the time.
 
 ## Why this was mistaken for a derivation bug
 
