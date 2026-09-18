@@ -54,6 +54,7 @@ from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
 from ai_haley_kg_domain.model.KGEntity import KGEntity
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.Edge_hasKGFrame import Edge_hasKGFrame
+from ..utils.db_retry import SparqlQueryFailed
 
 
 class OperationMode(str, Enum):
@@ -552,6 +553,26 @@ class KGEntitiesEndpoint:
             )
             return resp
 
+        except SparqlQueryFailed as e:
+            # 200 WITH THE FAILURE STATED, not 200 with an empty list.
+            #
+            # A killed query used to arrive here as zero bindings and was
+            # returned as a successful empty page — the same response a
+            # genuinely empty space gives. Observed: this endpoint answered 0
+            # entities after a 56 s statement timeout and 25 entities warm a
+            # minute later, both 200 (`issues/215`).
+            #
+            # `status` is the single source of truth and `success` derives from
+            # it, so QUERY_FAILED cannot be emitted as a success by accident.
+            # 200 rather than 500 because this is the domain-outcome contract
+            # every other fault on these routes already uses.
+            self.logger.error("LIST_ENTITIES query failed on %s: %s", space_id, e)
+            return QuadResponse(
+                results=[], total_count=0, page_size=page_size, offset=offset,
+                has_more=None,
+                status=OperationStatus.QUERY_FAILED,
+                message=f"Query failed: {e.error or e}",
+            )
         except HTTPException:
             raise
         except Exception as e:

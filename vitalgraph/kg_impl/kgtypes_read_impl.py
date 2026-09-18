@@ -13,6 +13,7 @@ from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from ai_haley_kg_domain.model.KGType import KGType
 from .kg_backend_utils import KGBackendInterface
 from .kg_graph_retrieval_utils import GraphObjectRetriever
+from ..utils.db_retry import SparqlQueryFailed
 
 
 class KGTypesReadProcessor:
@@ -778,6 +779,12 @@ OFFSET {offset}
     @staticmethod
     def _extract_bindings(results) -> list:
         """Extract SPARQL result bindings from various response shapes."""
+        # A FAILED query is not an EMPTY one. `execute_sparql_query` returns
+        # `{'results': {'bindings': []}, 'success': False, 'error': ...}` when
+        # it fails, and reading `bindings` alone made a killed query and an
+        # empty space the same value (`issues/215`).
+        if isinstance(results, dict) and results.get('success') is False:
+            raise SparqlQueryFailed(str(results.get('error') or ''))
         if isinstance(results, dict):
             return results.get('results', {}).get('bindings', [])
         return results if results else []

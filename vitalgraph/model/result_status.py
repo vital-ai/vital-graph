@@ -49,6 +49,12 @@ class OperationStatus(str, Enum):
     # ── domain faults (success=False, still HTTP 200) ──
     INVALID_REQUEST = "invalid_request"   # bad/missing params, no valid objects
     STORE_FAILED = "store_failed"         # write failed for a describable data reason
+    QUERY_FAILED = "query_failed"         # READ failed — the symmetric case, and it
+                                          # was missing. A killed or errored query
+                                          # was reported as EMPTY, which is a
+                                          # SUCCESS status, so a 56s statement
+                                          # timeout and a genuinely empty space
+                                          # were the same response (`issues/215`).
     ERROR = "error"                       # server-level internal error (also → HTTP 500)
 
 

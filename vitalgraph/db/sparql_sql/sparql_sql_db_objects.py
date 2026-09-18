@@ -19,6 +19,7 @@ import logging
 from typing import List, Dict, Any, Optional, Tuple
 
 from rdflib import URIRef, Literal
+from ...utils.db_retry import SparqlQueryFailed
 
 logger = logging.getLogger(__name__)
 
@@ -619,6 +620,12 @@ class SparqlSQLDbObjects:
     @staticmethod
     def _extract_bindings(result: Any) -> List[Dict[str, Any]]:
         """Unwrap SPARQL JSON results to a list of binding dicts."""
+        # A FAILED query is not an EMPTY one. `execute_sparql_query` returns
+        # `{'results': {'bindings': []}, 'success': False, 'error': ...}` when
+        # it fails, and reading `bindings` alone made a killed query and an
+        # empty space the same value (`issues/215`).
+        if isinstance(result, dict) and result.get('success') is False:
+            raise SparqlQueryFailed(str(result.get('error') or ''))
         if isinstance(result, dict):
             if 'results' in result and 'bindings' in result['results']:
                 return result['results']['bindings']

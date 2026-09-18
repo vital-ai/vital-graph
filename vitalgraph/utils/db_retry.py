@@ -54,6 +54,34 @@ _TRANSIENT_MSG_FRAGMENTS = (
 )
 
 
+class SparqlQueryFailed(Exception):
+    """A SPARQL read did not complete. NOT "it matched nothing".
+
+    `execute_sparql_query` reports failure correctly, returning
+    `{'results': {'bindings': []}, 'success': False, 'error': ...}`. Every
+    `_extract_bindings` helper then read `results.bindings` and never looked at
+    `success`, so a killed query and an empty space produced the same value —
+    an empty list — and the distinction was gone before any caller could act
+    on it.
+
+    Observed on the dev instance: the same listing returned 0 entities after a
+    56 s statement timeout and 25 entities warm a minute later, both HTTP 200
+    (`issues/215`).
+
+    Raised rather than returned so it cannot be flattened again by accident.
+    Callers that want the 200-with-error contract catch it and set
+    `OperationStatus.QUERY_FAILED`; callers that do not catch it get a loud
+    failure, which is still strictly better than a confident empty answer.
+    """
+
+    def __init__(self, error: str = "", space_id: str = ""):
+        self.error = error
+        self.space_id = space_id
+        super().__init__(
+            f"SPARQL query failed{f' on {space_id}' if space_id else ''}: "
+            f"{error or 'no error text reported'}")
+
+
 class DatabaseUnavailableError(Exception):
     """Raised when the database is unreachable after all retry attempts.
 

@@ -1,8 +1,9 @@
 # A Timed-Out Listing Is Reported As An Empty One
 
-## Status: OPEN, observed on the dev instance 2026-09-18. Not inferred from
-## code — the SAME request was seen returning 0 entities and 25 entities minutes
-## apart, both HTTP 200, the difference being only whether the query finished.
+## Status: FIXED 2026-09-18. Observed, not inferred — the SAME request was seen
+## returning 0 entities and 25 entities minutes apart, both HTTP 200, the
+## difference being only whether the query finished. The listing now answers 200
+## with `status=QUERY_FAILED`; the other two helpers raise rather than flatten.
 
 **Related:** `issues/211` (the same silence from a different cause — a SPARQL
 block that annihilated results and reported success), `issues/188` (a gate
@@ -80,19 +81,37 @@ slow is a tuning question. A killed query that reports an empty result is a
 correctness question, and it would read identically on a space that is
 genuinely empty.
 
-## What to do
+## The fix
 
-1. **Carry the failure.** `_extract_bindings` should not flatten it — either
-   raise on `success is False`, or return it so the caller must handle it.
-   Raising is the smaller change and matches the policy `issues/211` settled
-   on: refuse rather than degrade to an empty answer.
-2. **Decide the HTTP contract deliberately.** The convention here is 200 for
-   domain outcomes and non-200 only for server-level errors. A statement
-   timeout is the latter, so 500 is defensible — but 200 with an explicit
-   error in the body is equally defensible and less disruptive to clients.
-   What is NOT defensible is the current 200 with an empty success.
-3. **Check the other 16 call sites.** The listing is where it was seen; it is
-   unlikely to be the only place the same flattening hides a failure.
+**`OperationStatus.QUERY_FAILED`**, the read-side counterpart to
+`STORE_FAILED`. Its ABSENCE is why the bug existed: a failed read had no status
+to land on except `EMPTY`, and `EMPTY` is a success status. It sits outside
+`_SUCCESS_STATUSES`, so `success` derives to False and the pair cannot be
+emitted inconsistently.
+
+**`SparqlQueryFailed`** (`utils/db_retry.py`), RAISED rather than returned so
+it cannot be flattened again by accident. It carries the error text, and the
+test asserts the text survives — an error the caller cannot read is barely
+better than the silence it replaced.
+
+**All three `_extract_bindings` copies** refuse to flatten. They were fixed
+together because they are three copies of one function with one flaw, and
+fixing one is how this comes back.
+
+**The listing answers 200 with the failure stated**: `status=QUERY_FAILED`,
+`message`, empty results, `has_more=None`. 200 rather than 500 because that is
+the domain-outcome contract every other fault on these routes already uses.
+
+## Uneven, deliberately, and worth finishing
+
+Only the entity listing catches `SparqlQueryFailed` and converts it to the
+200-with-error contract. `kgtypes_read_impl` and `sparql_sql_db_objects` raise
+into their existing handlers, which produce a 500.
+
+That is strictly better than a confident empty answer and it is not the same
+contract. Those paths deserve the same treatment; the listing was fixed first
+because it is the one that was OBSERVED failing, and extending a contract to
+paths with no evidence of the fault is how a small fix becomes a large one.
 
 ## What this does NOT need
 

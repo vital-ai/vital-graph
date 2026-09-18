@@ -29,6 +29,7 @@ from vitalgraph.sparql.kg_query_builder import escape_sparql_string
 
 # Count cache — shared with the /kgentities/count endpoint; invalidated on writes.
 from vitalgraph.cache.count_cache import _count_cache
+from ..utils.db_retry import SparqlQueryFailed
 
 # ---------------------------------------------------------------------------
 # KGEntity subclass type clause — matches KGEntity and all known subclasses.
@@ -55,6 +56,12 @@ _MATERIALIZED_FILTER = (
 
 def _extract_bindings(result) -> list:
     """Normalise SPARQL result to a list of binding dicts."""
+    # A FAILED query is not an EMPTY one. `execute_sparql_query` returns
+    # `{'results': {'bindings': []}, 'success': False, 'error': ...}` when it
+    # fails, and reading `bindings` alone made a killed query and an empty
+    # space the same value (`issues/215`).
+    if isinstance(result, dict) and result.get('success') is False:
+        raise SparqlQueryFailed(str(result.get('error') or ''))
     if isinstance(result, list):
         return result
     if isinstance(result, dict):
