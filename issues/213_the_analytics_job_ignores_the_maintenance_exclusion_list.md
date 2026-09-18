@@ -1,8 +1,11 @@
 # The Analytics Job Ignores The Maintenance Exclusion List
 
-## Status: OPEN, found 2026-09-17 while triaging a dev slowdown. Minor — it runs
-## DAILY, so it cannot explain a sustained stall, and saying so is the point:
-## it was briefly mistaken for the cause before the interval was checked.
+## Status: FIXED 2026-09-18. `run()` now reads the exclusion list with the same
+## fallback contract the backfill task uses, and the misleading "fast" comment
+## on the unguarded query is corrected. Found 2026-09-17 while triaging a dev
+## slowdown; minor, and saying so is the point — it runs DAILY, so it could
+## never have explained a sustained stall, and it was briefly blamed for one
+## before the interval was checked.
 
 **Related:** `issues/192` (the maintenance incident that created the exclusion
 list), `issues/109` (a scoped trigger that silently ran everything — same job,
@@ -46,9 +49,20 @@ real ones and no fixtures, so the exposure is dev's.
 makes it impossible. The actual cause was memory pressure. Noted so the next
 reader does not re-run the same wrong inference.
 
-## What to do
+## The fix
 
-1. Read `VG_MAINTENANCE_EXCLUDE_SPACES` in `AnalyticsJob.run()`, by the same
-   fallback rule the backfill task uses.
-2. Move `distinct_pred_count` BELOW the size guard, or correct the comment. The
-   value is genuinely useful and genuinely not free; one of the two has to give.
+1. `run()` reads `ANALYTICS_EXCLUDE_SPACES`, falling back to
+   `VG_MAINTENANCE_EXCLUDE_SPACES` when unset — the contract the backfill task
+   states, where an explicit EMPTY value means "compute everything" rather than
+   falling back. Without that distinction a deployment could not re-enable
+   analytics for a space without also re-enabling maintenance for it, which is
+   the whole reason the backfill task spells it out. Four cells test it.
+
+2. The comment, not the query. "Move it below the guard, or correct the
+   comment" were the two options and the SECOND is right: the note beside the
+   skip return wants a real number there deliberately, so the UI shows one
+   honest figure instead of a blank panel. Nulling it to save 4.1 s would have
+   traded a feature for a cost that (1) removes anyway — the fixtures that made
+   it expensive are exactly the spaces now excluded. The comment claiming
+   "fast — index-only scan" is corrected: that is true of the plan and false of
+   the cost.

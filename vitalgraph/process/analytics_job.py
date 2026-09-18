@@ -11,6 +11,7 @@ Can also be triggered on-demand for a single space via trigger_compute().
 
 import json
 import logging
+import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -71,6 +72,27 @@ class AnalyticsJob:
         results: Dict[str, Any] = {}
         try:
             spaces = await self._list_spaces()
+            # HONOUR THE EXCLUSION LIST, as the three other jobs that walk every
+            # space do — `maintenance_job.py:545`, `resync_all.py:238` and
+            # `backfill_server_properties_task.py:153`, which falls back to the
+            # maintenance list deliberately. This one did not, so a space
+            # declared off-limits for maintenance was still walked here, and on
+            # dev that meant multi-GB benchmark fixtures nobody queries
+            # (`issues/213`).
+            #
+            # An explicit ANALYTICS_EXCLUDE_SPACES wins, including an explicit
+            # EMPTY value meaning "compute everything" — the same contract the
+            # backfill task states for its own variable, so one setting can
+            # cover all four jobs or any one of them can opt out.
+            _raw = os.environ.get('ANALYTICS_EXCLUDE_SPACES')
+            if _raw is None:
+                _raw = os.environ.get('VG_MAINTENANCE_EXCLUDE_SPACES', '')
+            _excluded = {x.strip() for x in _raw.split(',') if x.strip()}
+            _skipped = sorted(_excluded & set(spaces))
+            if _skipped:
+                spaces = [sp for sp in spaces if sp not in _excluded]
+                logger.info("AnalyticsJob: skipping excluded space(s): %s",
+                            ", ".join(_skipped))
             logger.info("AnalyticsJob: computing analytics for %d space(s)", len(spaces))
             for space_id in spaces:
                 try:
@@ -613,7 +635,16 @@ class AnalyticsJob:
             t_quad,
         ) or 0
 
-        # Distinct predicate count (fast — index-only scan on predicate_uuid)
+        # Distinct predicate count. NOT free, whatever this comment used to
+        # claim: "fast — index-only scan on predicate_uuid" is true of the plan
+        # and false of the cost, because an index-only scan of 50M rows is still
+        # a scan of 50M rows. Measured 4.1 s on a 50.5M-quad space, to return 21
+        # (`issues/213`).
+        #
+        # It stays ABOVE the size guard deliberately — see the note beside the
+        # skip return, which wants a real number there. What made it expensive
+        # was running on benchmark fixtures at all, and the exclusion list in
+        # `run()` is what stops that.
         distinct_pred_count = await conn.fetchval(f"""
             SELECT COUNT(DISTINCT predicate_uuid) FROM {t_quad} q WHERE 1=1{gf}
         """) or 0
@@ -629,8 +660,11 @@ class AnalyticsJob:
             # nothing at all, silently, with no indication why. `skipped` is what
             # lets a caller tell the two apart.
             #
-            # distinct_predicate_count is REAL even here: it is an index-only
-            # scan and is computed above the guard, so it is not nulled.
+            # distinct_predicate_count is REAL even here: computed above the
+            # guard, so it is not nulled. That costs seconds on a very large
+            # space and is a deliberate trade — the UI has one honest number
+            # instead of a blank panel. It is a trade and not a free lunch,
+            # which is what the comment above the query now says.
             return {
                 "distinct_predicate_count": distinct_pred_count,
                 "top_predicates": [],

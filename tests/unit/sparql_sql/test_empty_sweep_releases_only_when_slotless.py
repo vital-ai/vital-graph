@@ -28,16 +28,24 @@ import pytest
 
 
 class _Conn:
-    def __init__(self, has_slots: bool, probe_raises: bool = False):
+    def __init__(self, has_slots: bool, probe_raises: bool = False,
+                 quad_slots: int = 0, table_rows: int = 0):
         self.has_slots = has_slots
         self.probe_raises = probe_raises
+        self.quad_slots = quad_slots
+        self.table_rows = table_rows
         self.released = False
 
-    async def fetchval(self, sql, *args):
+    async def fetchval(self, sql, *args, **kwargs):
         if self.probe_raises:
             raise RuntimeError("probe exploded")
-        assert "EXISTS" in sql and "_rdf_quad" in sql
-        return self.has_slots
+        if "EXISTS" in sql:                      # the slot-presence probe
+            return self.has_slots
+        if "count(*)" in sql and "_entity_slot_sort" in sql:
+            return self.table_rows
+        if "count(*)" in sql:                    # slot-typed quads
+            return self.quad_slots
+        raise AssertionError(f"unexpected query: {sql[:60]}")
 
     async def execute(self, *a, **k):
         self.released = True
@@ -64,12 +72,29 @@ async def test_empty_sweep_on_a_slotless_space_releases():
 
 
 @pytest.mark.asyncio
-async def test_empty_sweep_on_a_space_WITH_slots_holds():
-    """Could not measure — the original reasoning, still correct."""
-    conn = _Conn(has_slots=True)
+async def test_empty_sweep_with_slots_MISSING_rows_holds():
+    """Could not measure AND rows are missing — the real failure."""
+    conn = _Conn(has_slots=True, quad_slots=14, table_rows=9)
     assert await _release(conn, []) is False, (
-        "a space that HAS slots but measured no types is a failed probe, not "
-        "an empty space — releasing would hand the fast path an unverified table")
+        "5 slots have no row; releasing would hand the fast path a table known "
+        "to be short")
+
+
+@pytest.mark.asyncio
+async def test_empty_sweep_with_slots_but_NOTHING_missing_releases():
+    """An UNTYPED space: the sweep is type-driven and sees nothing.
+
+    `kg_crud_stress_test` — 160 slots, 160 rows, and zero entities carrying
+    `hasKGEntityType`, so `entity_slot_sort_all_types` returns nothing and the
+    block was held forever over a complete table. The fast path can serve those
+    rows: the read gate matches `entity_type_uuid IS NULL OR = $2`.
+
+    Shortfall is an upper bound on what is missing, which makes ZERO exact.
+    """
+    conn = _Conn(has_slots=True, quad_slots=160, table_rows=160)
+    assert await _release(conn, []) is True, (
+        "a table holding a row for every slot is complete, whether or not any "
+        "entity carries a type")
 
 
 @pytest.mark.asyncio

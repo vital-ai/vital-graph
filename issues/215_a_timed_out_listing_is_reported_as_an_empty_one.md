@@ -102,16 +102,32 @@ fixing one is how this comes back.
 `message`, empty results, `has_more=None`. 200 rather than 500 because that is
 the domain-outcome contract every other fault on these routes already uses.
 
-## Uneven, deliberately, and worth finishing
+## Where the contract applies, and where raising is right
 
-Only the entity listing catches `SparqlQueryFailed` and converts it to the
-200-with-error contract. `kgtypes_read_impl` and `sparql_sql_db_objects` raise
-into their existing handlers, which produce a 500.
+The entity listing was fixed first because it is the one that was OBSERVED
+failing. Finishing the job, 2026-09-18, produced a boundary worth stating
+rather than a blanket rule.
 
-That is strictly better than a confident empty answer and it is not the same
-contract. Those paths deserve the same treatment; the listing was fixed first
-because it is the one that was OBSERVED failing, and extending a contract to
-paths with no evidence of the fault is how a small fix becomes a large one.
+**LISTINGS get 200 with the failure stated.** They return a status-bearing
+envelope, so they can. Both are now done:
+
+    kgentities  _list_entities   -> QuadResponse(status=QUERY_FAILED, message)
+    kgtypes     _list_kgtypes    -> QuadResponse(status=QUERY_FAILED, message)
+
+The kgtypes one matters more than its size suggests. `issues/100` was six
+KGType searches returning nothing, and what made it take weeks was precisely
+that nothing distinguished "found none" from "failed" — this endpoint, that
+symptom.
+
+**WRITE paths raise, and should.** `get_existing_object_uris` and
+`count_objects` return a `List[str]` and an `int`; they have no envelope to put
+a status in, and their caller is the DELETE path
+(`impl_utils.get_existing_quads_for_uris`). A read that fails while resolving
+what to delete must abort loudly, not report success with an empty list — that
+is `issues/023`'s rule about a widened delete, arriving from the read side.
+
+So the unevenness is not laziness: a raise IS the contract where there is
+nothing to carry a status, and the endpoints that can carry one now do.
 
 ## What this does NOT need
 

@@ -37,6 +37,7 @@ from vitalgraph.model.kgtypes_model import (
 )
 from vitalgraph.model.result_status import OperationStatus
 from ..auth.role_dependencies import require_space_read, require_space_write, require_system_space_write
+from ..utils.db_retry import SparqlQueryFailed
 
 
 class KGTypesEndpoint:
@@ -407,7 +408,21 @@ class KGTypesEndpoint:
                 offset=offset,
                 results=quads,
             )
-        
+
+        except SparqlQueryFailed as e:
+            # 200 WITH THE FAILURE STATED, the same contract the entity listing
+            # uses (`issues/215`). A killed query arriving here as zero bindings
+            # would be returned as `EMPTY`, which is a SUCCESS status, and this
+            # endpoint's own history is the reason that matters: `issues/100`
+            # was six KGType searches returning nothing, and what made it take
+            # weeks was that nothing distinguished "found none" from "failed".
+            self.logger.error("LIST_KGTYPES query failed on %s: %s", space_id, e)
+            return QuadResponse(
+                status=OperationStatus.QUERY_FAILED,
+                total_count=0, page_size=page_size, offset=offset, results=[],
+                message=f"Query failed: {e.error or e}",
+            )
+
         except HTTPException:
             raise
         except Exception as e:

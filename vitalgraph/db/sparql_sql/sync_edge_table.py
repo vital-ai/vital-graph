@@ -484,6 +484,18 @@ async def edge_table_dangling_endpoints(conn, space_id: str,
     would report zero on a table with hundreds of genuine cases. Two anti-joins
     over indexed uuid columns; on 3.4M rows this is seconds, which is why it
     belongs on the maintenance cycle rather than in a request path.
+
+    SYNTHETIC EDGE-ONLY FIXTURES TRIP THIS LEGITIMATELY, and the shape tells you
+    so: an integration fixture that writes `hasEdgeSource`/`hasEdgeDestination`
+    and never creates the nodes reports EVERY edge dangling in BOTH directions.
+    Three spaces on the test stack do exactly that (10,500 / 30 / 30, source and
+    dest identical). Real residue looks nothing like it — production's was 298
+    of 3,466,543 with ZERO dangling destinations, because the asymmetry is what
+    a one-sided deletion leaves behind.
+
+    So read the two counts together before treating a number as a finding.
+    Equal counts covering the whole table is a fixture; a small asymmetric
+    figure is a graph that lost something.
     """
     t_edge = f"{space_id}_edge"
     t_quad = f"{space_id}_rdf_quad"

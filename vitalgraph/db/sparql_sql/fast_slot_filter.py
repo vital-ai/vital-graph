@@ -314,6 +314,27 @@ async def _space_has_no_slots(conn, space_id: str) -> bool:
         return False
 
 
+async def _slot_rows_account_for_every_slot(conn, space_id: str) -> bool:
+    """True when the table holds a row for every slot the quads declare.
+
+    The ONE case where an upper bound is conclusive. `row_shortfall` counts
+    `quad_slots - table_rows` and is documented as an upper bound on the gap,
+    because a legitimately-absent slot (valueless, unreachable, lane not split
+    on) inflates it. At ZERO there is nothing for those causes to explain:
+    nothing is missing.
+
+    It proves nothing is MISSING, not that nothing is EXTRA. Stale surplus rows
+    are drift and `entity_slot_sort_drift` is what sees those.
+    """
+    from .sync_entity_slot_sort import entity_slot_sort_row_shortfall
+    try:
+        sf = await entity_slot_sort_row_shortfall(conn, space_id)
+        return sf["shortfall"] == 0
+    except Exception as exc:
+        logger.debug("shortfall probe failed for %s: %s", space_id, exc)
+        return False
+
+
 async def release_whole_space_block_if_complete(conn, space_id: str,
                                                coverage_rows,
                                                slot_shortfall: int = 0) -> bool:
@@ -356,7 +377,22 @@ async def release_whole_space_block_if_complete(conn, space_id: str,
     """
     rows = list(coverage_rows or [])
     if not rows:
-        if await _space_has_no_slots(conn, space_id):
+        # Two ways an empty sweep still means COMPLETE, and one that does not.
+        #
+        #   no slots at all          -> nothing to cover, complete by vacuity
+        #   slots, and none missing  -> the sweep is TYPE-driven and this space
+        #                               has no typed entities, so it can see
+        #                               nothing; the row count can
+        #   slots, and some missing  -> hold, this is the real failure
+        #
+        # The middle case is `kg_crud_stress_test`: 160 slots, 160 rows, and
+        # ZERO entities carrying `hasKGEntityType`. `entity_slot_sort_all_types`
+        # groups by entity type, so it returns nothing and the block was held
+        # forever over a table that was complete the whole time. The fast path
+        # can serve those rows — `fast_slot_filter`'s gate matches
+        # `entity_type_uuid IS NULL OR = $2` — so the block cost a real path.
+        if (await _space_has_no_slots(conn, space_id)
+                or await _slot_rows_account_for_every_slot(conn, space_id)):
             try:
                 await release_slot_sort_block(conn, space_id, None)
             except Exception as exc:
