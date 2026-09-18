@@ -260,12 +260,47 @@ by a real read path the whole time. Nobody reported seeing them, so the
 practical impact was likely nil — but "unreachable" was an assertion about the
 read paths I had looked at, stated as though it were about all of them.
 
-### Not removed
+### The 28 edge-less slots, removed separately and NOT as debris
 
-The 28 edge-less orphan slots — slots carrying values with no `Edge_hasKGSlot`
-at all. A different shape from the frame subtree, outside the set enumerated
-here, and left deliberately rather than swept up in a deletion authorised for
-something else.
+Removed on a second authorisation, after the check below changed what they
+appeared to be. Recorded in full because the deletion was made with the
+disagreement on the record, not resolved by it.
+
+They were described here as orphans of the same family. They were not:
+
+    frames they named                              6
+    those frames reachable from an ENTITY       6 / 6
+    slots those frames already hold, edged         36
+    those frames present in entity_slot_sort    6 / 6
+
+So each was a slot object carrying a TEXT VALUE, naming a live,
+entity-reachable frame that is actively served, missing only the
+`Edge_hasKGSlot` joining it to that frame. That is a missing-edge anomaly on
+live data, not an unreachable subtree — the 800 above hung off frames whose
+parents did not exist, and nothing could ever reach them. These sat beside 36
+working siblings.
+
+The alternative remedy was to restore the six frames' missing edges, which
+would have made the values visible and put the slots into `entity_slot_sort`
+where their siblings already are. The decision was to delete; 196 quads went,
+with zero rows in `edge`, `frame_slot` or `entity_slot_sort` because they were
+in none. Backed up first to
+`/tmp/prod_orphan_slots_backup_20260918.csv.gz` — 196 rows, 28 subjects,
+validated by re-parsing.
+
+**The unanswered question survives the deletion**: why were those edges
+missing? If those slots were written without their edge, that is a write-path
+defect and it may still be live. Nothing here establishes which, and the data
+that would have shown it is now in a tmp file.
+
+### Final state
+
+    absent slots     927 -> 99, and all 99 are VALUELESS
+    dangling edges   298 -> 0, both directions
+
+99 valueless slots is the floor, not a remainder: a slot with a type and no
+value derives nothing by design, and `entity_slot_sort_row_shortfall` counts
+them because it is an upper bound. There is nothing left to remove.
 
 ## What this cost, as a lesson
 
