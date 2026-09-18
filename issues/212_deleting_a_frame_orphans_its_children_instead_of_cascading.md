@@ -128,9 +128,17 @@ on an entity URI: what `delete_entity_graph=false` does by definition.
 
 This does not change the production picture and it does change the status of
 the case above from "possible" to "observed". The maintenance probe added for
-this issue reports it: `{'dangling_source': 1, 'dangling_dest': 0}` on that
-space, which is also an independent check of the probe against a case nobody
+this issue reported it — `{'dangling_source': 1, 'dangling_dest': 0}` on that
+space — which was also an independent check of the probe against a case nobody
 constructed for it.
+
+**The instance itself was removed 2026-09-18**, so this description is now the
+only record of it: 14 quads deleted through the SPARQL path (not behind it), so
+the edge table synced and the probe went to `{0, 0}`. The quads are backed up
+at `/tmp/dupframe_probe_quads_20260918.tsv` — four columns, s/p/o/g — and that
+file is temporary. If this case ever needs reproducing, the shape above is the
+recipe: create an entity with a frame and an `Edge_hasEntityKGFrame`, then
+delete ONLY the entity's own quads.
 
 ## Detection ADDED 2026-09-17
 
