@@ -1378,18 +1378,49 @@ class KGQueriesEndpoint:
                         frame_uri=uri,
                         frame_type_uri=frame_types.get(uri, ""),
                         entity_refs=refs_by_frame.get(uri, []),
-                        frame_graph=None  # TODO: implement include_frame_graph
+                        # include_frame_graph is ACCEPTED and NOT implemented
+                        # (`issues/210`). Left None, and now SAID so in the
+                        # response below rather than returned as a silent null —
+                        # the request model documents this field as populating
+                        # `frame_graph`, and the official client sends it, so a
+                        # caller reading nulls has no way to tell "no graph" from
+                        # "this endpoint ignores your flag".
+                        frame_graph=None
                     ))
             
             self.logger.info(f"Frame query: {len(frame_results)} frames (total={total_count}), {(t_query - t0)*1000:.0f}ms")
             
+            # SAY that the flag did nothing. 200 with the outcome in the body
+            # is the house rule for a domain outcome, and the results ARE
+            # correct — only `frame_graph` is absent. Honest in one line and
+            # immediately actionable, where a null is neither (`issues/210`).
+            #
+            # NOT an error status: the query succeeded. `success` stays true
+            # because the caller's frames are all there.
+            # "" and not None: `message` is a non-Optional str on ResultStatus,
+            # so None fails validation and the endpoint 500s. Caught by the
+            # control cell asserting a request that did NOT ask gets no
+            # message — the cell that existed to stop an unconditional message
+            # found an unconditional crash instead.
+            _msg = ""
+            if getattr(query_request, "include_frame_graph", False):
+                _msg = ("include_frame_graph is accepted but NOT implemented on "
+                        "/kgqueries: frame_graph is null on every result. Use "
+                        "/kgframes, where the flag is implemented on the URI "
+                        "lookups, or slot_projection/property_projection to name "
+                        "the columns you need. See issues/210.")
+                self.logger.warning(
+                    "frame_query: include_frame_graph=True requested on %s and "
+                    "is not implemented; returning frame_graph=None with a "
+                    "message (issues/210)", space_id)
             return KGQueryResponse(
                 status=_read_status(frame_results),
                 query_type="frame_query",
                 frame_results=frame_results,
                 total_count=total_count,
                 page_size=query_request.page_size,
-                offset=query_request.offset
+                offset=query_request.offset,
+                message=_msg,
             )
             
         except Exception as e:

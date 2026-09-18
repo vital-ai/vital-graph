@@ -1,10 +1,8 @@
 # `include_frame_graph` Is Accepted On `/kgqueries` And Implemented Nowhere
 
-## Status: OPEN, reproduced 2026-09-16. `POST /kgqueries` accepts
-## `include_frame_graph`, the official client exposes it as a parameter, and
-## the server hardcodes `frame_graph=None`. True and False return byte-identical
-## results. Smaller than `issues/209` — nothing is wrong, something declared is
-## simply absent — but the caller cannot tell the difference from here.
+## Status: OPTION 2 DONE 2026-09-18 — the flag now SAYS it is not implemented,
+## in the response `message`, HTTP 200. Still OPEN for option 1: `frame_graph`
+## is null on every result and implementing it belongs with `issues/208`.
 
 **Related:** `issues/209` (the same silent-null symptom from the opposite
 cause — implemented, then bypassed), `issues/182` (why a frame query on a large
@@ -78,6 +76,21 @@ it. `/kgqueries` offers it and implements it nowhere.
 
 Option 2 now and option 1 with `issues/208` is what I would do. Doing nothing is
 the current state, and the current state is a documented parameter that lies.
+
+**Option 2 SHIPPED 2026-09-18.** A request that sets the flag comes back with a
+`message` naming it, pointing at `/kgframes` (where it IS implemented, on the
+URI lookups) and at `slot_projection` / `property_projection` for naming the
+columns wanted. `status` is unchanged and `success` stays true, because the
+query succeeded — only the flag was ignored.
+
+Three API cells pin it, and the pairing is the point: a cell asserting only
+that the message APPEARS would pass against an endpoint that returns it
+unconditionally, which is noise on every response that never asked. The control
+— a request with the flag FALSE gets no message — is what makes the first cell
+mean anything, and it earned its place immediately: it caught a 500. `message`
+is a non-Optional `str` on `ResultStatus`, so the `None` this first shipped
+with failed validation, and the cell written to stop an unconditional message
+found an unconditional crash instead.
 
 ## Not yet established
 

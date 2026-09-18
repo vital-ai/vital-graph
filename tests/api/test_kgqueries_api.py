@@ -238,3 +238,73 @@ class TestKGQueryFrame:
         assert resp.query_type == "frame"
         # Response should have frame_connections (possibly empty)
         assert resp.total_count >= 0
+
+
+# ---------------------------------------------------------------------------
+# include_frame_graph: accepted, not implemented, and now SAYS so (issues/210)
+# ---------------------------------------------------------------------------
+
+class TestIncludeFrameGraphIsHonest:
+    """`/kgqueries` offers `include_frame_graph` and implements it nowhere.
+
+    The request model documents it, the response model documents `frame_graph`
+    as populated by it, and the official client puts it in `query_frames`'s
+    signature and sends it. The server hardcoded `frame_graph=None`, so True and
+    False returned byte-identical results with `status=FOUND` and no error —
+    a documented parameter that lies.
+
+    Implementing it is the eventual fix and is deferred deliberately: hydrating
+    after the page measured 3.5-5.1 s for 25 entities on the entity side, so it
+    should land with `issues/208`'s projections rather than repeat that cost.
+    Until then the honest thing is to SAY the flag did nothing, which is what
+    these cells pin.
+
+    Both directions matter. Asserting only that the message appears would pass
+    against an endpoint that returns it unconditionally, which would be noise on
+    every response that never asked.
+    """
+
+    async def test_requesting_it_says_it_is_not_implemented(
+            self, vg_client, test_space, test_graph):
+        resp = await vg_client.kgqueries.query_frames(
+            space_id=test_space, graph_id=test_graph,
+            include_frame_graph=True, page_size=5,
+        )
+        assert resp.message, (
+            "asking for frame_graph must not return silent nulls — the caller "
+            "cannot tell 'no graph' from 'flag ignored'")
+        assert "include_frame_graph" in resp.message, (
+            f"the message must NAME the flag that did nothing: {resp.message!r}")
+        assert resp.success is not False, (
+            "the query itself succeeded; only the flag was ignored, so this is "
+            "not a failure status")
+
+    async def test_not_requesting_it_says_nothing(
+            self, vg_client, test_space, test_graph):
+        """The control: no message on a request that never asked."""
+        resp = await vg_client.kgqueries.query_frames(
+            space_id=test_space, graph_id=test_graph,
+            include_frame_graph=False, page_size=5,
+        )
+        assert not resp.message, (
+            f"a caller who did not ask must not be told about the flag: "
+            f"{resp.message!r}")
+
+    async def test_the_results_are_unaffected(
+            self, vg_client, test_space, test_graph):
+        """The flag changes the MESSAGE and nothing else — frame_graph stays None."""
+        on = await vg_client.kgqueries.query_frames(
+            space_id=test_space, graph_id=test_graph,
+            include_frame_graph=True, page_size=5)
+        off = await vg_client.kgqueries.query_frames(
+            space_id=test_space, graph_id=test_graph,
+            include_frame_graph=False, page_size=5)
+        assert on.total_count == off.total_count
+        # `results`, not `frame_results`: `query_frames` returns
+        # FrameQueryResponse, a different model from the KGQueryResponse the
+        # connection queries above use. Worth naming, because the two live in
+        # one module and only one of them carries `frame_results`.
+        for r in (on.results or []):
+            assert getattr(r, "frame_graph", None) is None, (
+                "frame_graph is still not implemented; if this fails the flag "
+                "now works and the message must be removed")
