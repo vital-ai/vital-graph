@@ -175,6 +175,42 @@ One query finds it, and it is cheap enough to run per cycle:
 
 On production that returns 298 of 3,466,543, and zero for the destination form.
 
+## The cause is NOT known, and cannot be recovered from the data
+
+Stated plainly so nobody spends a second afternoon on it. What is established:
+
+  * WHAT happened — 99 frames had their own quads deleted while their 298
+    outgoing edges, 298 child frames and 828 slots survived. That is a
+    delete-by-subject on frame URIs and nothing else produces that shape.
+  * WHAT did not do it — every live deletion path cascades correctly, both
+    frame paths since 2026-05-03, and the helper originally blamed is dead
+    code. Two mechanisms were named in this document and both were wrong.
+  * It is not a stale edge table: all 298 edge OBJECTS are still in the quads.
+
+What cannot be established is WHEN, and therefore WHICH caller. Checked
+2026-09-18:
+
+    rdf_quad columns          subject, predicate, object, context, quad, dataset
+    edge columns              edge, source, dest, context, edge_type
+    affected frames           carry no server properties (no modification time)
+    track_commit_timestamp    OFF in production
+
+No timestamp anywhere — not in the row, not in the data, not in the transaction
+log. The deleted rows themselves are long vacuumed. So it is not possible to
+say whether this predates the 2026-05-03 cascade fix (which would close it) or
+postdates it (which would mean a path still unfound), and no amount of querying
+will change that.
+
+**What would settle it is the next occurrence, not this one.** The
+dangling-endpoint probe added for this issue runs every maintenance cycle, so a
+new instance is dated by when the alarm first fires — which converts an
+undatable mystery into an ordinary bug report. That is the reason the probe was
+worth more than a repair.
+
+Turning on `track_commit_timestamp` would make this class of question
+answerable in future. It is not free and it is not proposed here; it is noted
+because this is the second time the absence has mattered.
+
 ## Why this was mistaken for a derivation bug
 
 This was found because a deploy check read the `entity_slot_sort` shortfall as
