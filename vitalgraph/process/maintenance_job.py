@@ -1762,7 +1762,7 @@ class MaintenanceJob:
             edge_table_drift, edge_table_orphan_rate,
             edge_table_untyped_rate, backfill_edge_table,
             cleanup_orphan_edges, edge_table_dangling_endpoints,
-            VITALTYPE_URI)
+            unreferenced_kg_objects, VITALTYPE_URI)
 
         # Spaces whose SPARQL UPDATEs deferred a delete the per-subject hooks
         # could not reach. This used to run INLINE in the update request, where
@@ -1856,11 +1856,38 @@ class MaintenanceJob:
                     # shortfall several inferences away (`issues/212`).
                     dangling = await edge_table_dangling_endpoints(
                         conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
+                    # And the shape that probe CANNOT see. It follows arrows,
+                    # so it needs one to follow; an edge OBJECT deleted whole
+                    # leaves nothing dangling and an unreachable subgraph in
+                    # silence. Measured on a dev space the dangling probe had
+                    # just called clean: 3 frames that nothing pointed at,
+                    # holding 5 slots with values.
+                    unref = await unreferenced_kg_objects(
+                        conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
             except asyncpg.UndefinedTableError:
                 continue  # space has no edge table (e.g. non-KG) — skip
             except Exception as exc:
                 log_probe_failure("edge_integrity", space_id, exc)
                 continue
+            if unref["frames"] or unref["slots"]:
+                # REPORTS, like its sibling, and for the same reason: what is
+                # unreachable is still DATA, and deleting it destroys the only
+                # evidence of how it got that way.
+                #
+                # An UNDER-COUNT by construction — a frame whose parent is
+                # itself unreachable still has an incoming edge — so a small
+                # number is a floor, not a measurement. Exact reachability is
+                # the O(graph) walk `issues/151` took out of this loop.
+                logger.warning(
+                    "UNREACHABLE OBJECTS: %s has %d frame(s) and %d slot(s) "
+                    "that NO edge points at. A frame is reached by "
+                    "Edge_hasEntityKGFrame or Edge_hasKGFrame and a slot by "
+                    "Edge_hasKGSlot, so these cannot be reached by any "
+                    "entity-led read. Either an edge object was deleted whole "
+                    "or they were written without one. This is a FLOOR: "
+                    "anything hanging below them is unreachable too and not "
+                    "counted. See issues/212.",
+                    space_id, unref["frames"], unref["slots"])
             if dangling["dangling_source"] or dangling["dangling_dest"]:
                 # REPORTS, does not repair and does not gate. Deleting a
                 # dangling row would destroy the only remaining evidence of

@@ -515,6 +515,66 @@ async def edge_table_dangling_endpoints(conn, space_id: str,
             "dangling_dest": int(row["dangling_dest"] or 0)}
 
 
+KGFRAME_URI = "http://vital.ai/ontology/haley-ai-kg#KGFrame"
+SLOT_TYPE_URI = "http://vital.ai/ontology/haley-ai-kg#hasKGSlotType"
+_KGFRAME_UUID = uuid.uuid5(_VITALGRAPH_NS, f"{KGFRAME_URI}\x00U")
+_SLOT_TYPE_UUID = uuid.uuid5(_VITALGRAPH_NS, f"{SLOT_TYPE_URI}\x00U")
+
+
+async def unreferenced_kg_objects(conn, space_id: str,
+                                  timeout: float | None = None) -> dict:
+    """Frames and slots that NO edge points at.
+
+    THE SHAPE `edge_table_dangling_endpoints` CANNOT SEE. That probe asks
+    whether the node at the end of an arrow still exists, so it needs an arrow
+    to follow. Delete an `Edge_hasEntityKGFrame` OBJECT outright — rather than
+    the entity at its tail — and nothing dangles: the edge is simply gone, and
+    what it held up becomes unreachable in silence.
+
+    Found on dev while explaining why a space stayed blocked: 5 slots with text
+    values and proper slot edges, on 5 intact frames, none reachable from an
+    entity. 3 of those frames had nothing pointing at them at all, and the
+    dangling probe reported the space CLEAN.
+
+    The rule each object breaks:
+
+      * a KGFrame is reached by `Edge_hasEntityKGFrame` from an entity or
+        `Edge_hasKGFrame` from a parent frame; one with NEITHER is unreachable
+        by construction, not by inference.
+      * a slot is reached by `Edge_hasKGSlot` from its frame; one with none was
+        written without it — the partial-write shape behind the seven schedule
+        groups whose parent frame was never created at all (`issues/212`).
+
+    EXACT for what it asks, an UNDER-COUNT of what you probably want to know. A
+    frame whose parent is itself unreachable still HAS an incoming edge and is
+    not counted here. Full reachability is the O(graph) walk `issues/151`
+    removed from this loop for costing 216-303 s, so this is deliberately the
+    cheap necessary condition: two anti-joins on an indexed column. Everything
+    it reports is genuinely unreachable; not everything unreachable is reported.
+
+    Zero is therefore meaningful and a small number is a floor.
+    """
+    t_quad = f"{space_id}_rdf_quad"
+    t_edge = f"{space_id}_edge"
+    row = await conn.fetchrow(
+        f"""
+        WITH frames AS (
+            SELECT DISTINCT subject_uuid AS u FROM {t_quad}
+             WHERE predicate_uuid = $1 AND object_uuid = $2),
+        slots AS (
+            SELECT DISTINCT subject_uuid AS u FROM {t_quad}
+             WHERE predicate_uuid = $3)
+        SELECT
+          (SELECT count(*) FROM frames f
+            WHERE NOT EXISTS (SELECT 1 FROM {t_edge} e
+                               WHERE e.dest_node_uuid = f.u)) AS frames,
+          (SELECT count(*) FROM slots s
+            WHERE NOT EXISTS (SELECT 1 FROM {t_edge} e
+                               WHERE e.dest_node_uuid = s.u)) AS slots
+        """, _VITALTYPE_UUID, _KGFRAME_UUID, _SLOT_TYPE_UUID, timeout=timeout)
+    return {"frames": int(row["frames"] or 0), "slots": int(row["slots"] or 0)}
+
+
 async def edge_table_orphan_rate(conn, space_id: str, sample: int = 200,
                                  timeout: float | None = None) -> float:
     """Fraction of sampled edge rows that no longer correspond to any quad.

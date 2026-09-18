@@ -144,6 +144,29 @@ file is temporary. If this case ever needs reproducing, the shape above is the
 recipe: create an entity with a frame and an `Edge_hasEntityKGFrame`, then
 delete ONLY the entity's own quads.
 
+## A SECOND detection gap, found by the first probe's blind spot
+
+`edge_table_dangling_endpoints` follows arrows, so it needs an arrow to follow.
+Delete an edge OBJECT whole — rather than the node at its tail — and nothing
+dangles: what it held up is simply unreachable, and the space reports clean.
+
+Found on dev while explaining a space that stayed blocked: 5 slots carrying text
+values on 5 intact frames, none reachable from an entity, 3 with nothing
+pointing at them at all — on a space the dangling probe had just called clean.
+
+`unreferenced_kg_objects` closes it, on the rule each object breaks: a KGFrame
+is reached by `Edge_hasEntityKGFrame` or `Edge_hasKGFrame` and a slot by
+`Edge_hasKGSlot`, so one with NEITHER is unreachable by construction. It also
+catches the partial-write shape above, where four schedule slots were written
+and their parent frame never was.
+
+EXACT for what it asks and an UNDER-COUNT of what you want to know — a frame
+whose parent is itself unreachable still has an incoming edge. Full reachability
+is the O(graph) walk `issues/151` removed from this loop for costing 216-303 s,
+so this is the cheap necessary condition: two anti-joins on an indexed column.
+Everything it reports is genuinely unreachable; not everything unreachable is
+reported.
+
 ## Detection ADDED 2026-09-17
 
 `edge_table_dangling_endpoints` (`sync_edge_table.py`) now runs per space in
