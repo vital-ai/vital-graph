@@ -33,7 +33,7 @@ dependencies = [
     #
     # A bound in an extra cannot constrain a transitive dependency of a core
     # one. If the bound is real it belongs here.
-    "datasketch>=1.9.0,<2.0",
+    "datasketch>=1.9.0,<3.0",
     "vital-ai-haley-kg>=0.1.24",
     "python-dotenv",
     "rdflib>=7.0.0",
