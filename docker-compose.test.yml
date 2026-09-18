@@ -110,14 +110,32 @@ services:
     # running stack and a freshly created one are configured the same way, which
     # is the property that matters: a benchmark is only comparable to one taken
     # on the same configuration.
+    # THE PLANNER INPUTS MIRROR PRODUCTION, measured against the live server
+    # rather than copied from a parameter-group document (`issues/191`): the
+    # doc describes a 64 GB tier and production runs the 32 GB one, so a table
+    # claiming "memory matches" was comparing against a server that does not
+    # exist. Five settings diverged; four of them are here.
+    #
+    # `shared_buffers` deliberately does NOT mirror production. The planner
+    # never reads it — it decides how fast a plan runs, not which plan is
+    # chosen — and 16 GB is what keeps a 120 GB fixture set workable, where
+    # production's 7.69 GB would not be.
+    #
+    # `default_statistics_target` is also deliberately absent: production runs
+    # 500 against this stack's 100, but the setting is inert until every fixture
+    # is re-ANALYZEd, which is its own step and its own re-promotion.
     command:
       - postgres
       - -c
       - shared_buffers=16GB
       - -c
-      - effective_cache_size=48GB
+      - effective_cache_size=23GB
       - -c
-      - work_mem=64MB
+      - work_mem=32MB
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - jit=off
       - -c
       - dynamic_shared_memory_type=sysv
     # No named volume here — but PGDATA is NOT in the container's writable
