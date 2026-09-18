@@ -60,6 +60,38 @@ _SORT_LANE = {"string": "value_text", "uri": "value_text",
               "dateTime": "value_dt", "integer": "value_num"}
 
 
+_frame_prop_sort_present: dict[str, bool] = {}
+
+
+def reset_frame_prop_sort_present_cache() -> None:
+    """Forget what is known about which spaces carry the table."""
+    _frame_prop_sort_present.clear()
+
+
+async def frame_prop_sort_table_present(conn, space_id: str) -> bool:
+    """Whether `{space}_frame_prop_sort` EXISTS. Absent means DECLINE, quietly.
+
+    The sibling of `fast_prop_sort.prop_sort_table_present`, for the same
+    reason and with the same evidence: without it the page query runs against a
+    table that is not there, raises `UndefinedTableError`, and the blanket
+    `except` below turns a routine decline into a WARNING with a full asyncpg
+    traceback on every request.
+
+    This table is absent far more often than its entity sibling — dev measured
+    0 of 41 spaces carrying one — so the noise is correspondingly worse.
+
+    Only the POSITIVE is memoised, so a space that gains the table by migration
+    is picked up without a restart.
+    """
+    if _frame_prop_sort_present.get(space_id):
+        return True
+    present = await conn.fetchval(
+        "SELECT to_regclass($1)", f"public.{space_id}_frame_prop_sort") is not None
+    if present:
+        _frame_prop_sort_present[space_id] = True
+    return present
+
+
 async def frame_prop_sort_blocked(conn, space_id: str,
                                   frame_type_uri: Optional[str] = None) -> bool:
     """Whether `{space}_frame_prop_sort` is known to be at risk.
@@ -289,6 +321,10 @@ async def fast_frame_prop_page(
     ty = _u(frame_type_uri) if frame_type_uri else None
     try:
         async with impl.db_impl.connection_pool.acquire() as conn:
+            if not await frame_prop_sort_table_present(conn, space_id):
+                logger.info("frame_prop_sort DECLINE(%s): no frame_prop_sort "
+                            "table", space_id)
+                return None
             if await frame_prop_sort_blocked(conn, space_id, frame_type_uri):
                 logger.info("frame_prop_sort DECLINE(%s): blocked (space or "
                             "type %s)", space_id, frame_type_uri)

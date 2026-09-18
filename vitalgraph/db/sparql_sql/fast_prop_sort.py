@@ -57,6 +57,52 @@ _SORT_LANE = {"string": "value_text", "uri": "value_text",
               "uri_list": "value_text", "dateTime": "value_dt"}
 
 
+_prop_sort_present: dict[str, bool] = {}
+
+
+def reset_prop_sort_present_cache() -> None:
+    """Forget what is known about which spaces carry the table."""
+    _prop_sort_present.clear()
+
+
+async def prop_sort_table_present(conn, space_id: str) -> bool:
+    """Whether `{space}_entity_prop_sort` EXISTS. Absent means DECLINE, quietly.
+
+    `prop_sort_blocked` is a different question — it asks whether a table that
+    exists is currently at risk. Neither it nor anything else asked whether the
+    table is there at all, so on a space without one the page query ran, raised
+    `UndefinedTableError`, and was caught by the blanket `except` at the bottom
+    of `fast_entity_prop_page`. That is a correct FALLBACK and a terrible
+    REPORT: every request logged a full asyncpg traceback at WARNING for a
+    condition that is entirely expected.
+
+    Observed on the dev instance, where `sp_lead_synth_100k` is deliberately
+    excluded from maintenance and so has no derived tables: one traceback per
+    listing request, none of them actionable, burying the real errors around
+    them.
+
+    A missing table is not an error here. The contract is the one
+    `migrate_frame_slot_table` states for its own table — an unmigrated space
+    keeps working, the fast path declines, and queries fall back to the quad
+    joins. This makes that true for reads as `_table_present` made it true for
+    writes (`sync_frame_slot_table.py:149`).
+
+    `to_regclass`, not `information_schema`: one catalogue lookup, and it must
+    not be a failed statement that gets caught.
+
+    Only the POSITIVE is memoised. A space that gains the table later — by
+    migration or resync — is picked up on the next call, whereas caching the
+    negative would keep declining until a restart.
+    """
+    if _prop_sort_present.get(space_id):
+        return True
+    present = await conn.fetchval(
+        "SELECT to_regclass($1)", f"public.{space_id}_entity_prop_sort") is not None
+    if present:
+        _prop_sort_present[space_id] = True
+    return present
+
+
 async def prop_sort_blocked(conn, space_id: str,
                             entity_type_uri: Optional[str] = None) -> bool:
     """Whether `{space}_entity_prop_sort` is KNOWN TO BE AT RISK right now.
@@ -358,6 +404,10 @@ async def fast_entity_prop_page(
     ty = _u(entity_type_uri) if entity_type_uri else None
     try:
         async with impl.db_impl.connection_pool.acquire() as conn:
+            if not await prop_sort_table_present(conn, space_id):
+                logger.info("prop_sort DECLINE(%s): no entity_prop_sort table",
+                            space_id)
+                return None
             if await prop_sort_blocked(conn, space_id, entity_type_uri):
                 logger.info("prop_sort DECLINE(%s): blocked (space or type %s)",
                             space_id, entity_type_uri)
@@ -472,6 +522,10 @@ async def fast_entity_prop_count(
     ty = _u(entity_type_uri) if entity_type_uri else None
     try:
         async with impl.db_impl.connection_pool.acquire() as conn:
+            if not await prop_sort_table_present(conn, space_id):
+                logger.info("prop_sort COUNT DECLINE(%s): no entity_prop_sort "
+                            "table", space_id)
+                return None
             if await prop_sort_blocked(conn, space_id, entity_type_uri):
                 logger.info("prop_sort COUNT DECLINE(%s): blocked", space_id)
                 return None
