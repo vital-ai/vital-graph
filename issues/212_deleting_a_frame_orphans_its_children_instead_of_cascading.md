@@ -108,9 +108,29 @@ that edge with a dangling source — the same shape, one level up.
 which is true of the entity NODE and does not address the edge OBJECT that
 points at it.
 
-**No evidence it has happened.** Every one of the 298 dangling sources on
-production is a FRAME; entity-sourced dangling edges measured ZERO. Recorded as
-a thing to check before relying on the default, not as a defect.
+**Production: no evidence.** Every one of the 298 dangling sources there is a
+FRAME; entity-sourced dangling edges measure ZERO.
+
+**DEV: CONFIRMED 2026-09-18.** The case is real and reachable, found while
+explaining an unrelated phantom grouping URI. One entity-sourced dangling edge
+on the dev copy of the main KG space:
+
+    <root>:edge:i  vitaltype             Edge_hasEntityKGFrame
+                   hasEdgeSource      -> <root>          (ZERO quads — deleted)
+                   hasEdgeDestination -> <root>:frame:nurture_info:0  (intact)
+
+The root was a probe fixture (`urn:<client>:probe:dupframe:<hex>`) written by a
+diagnostic script in the REST repo — a sibling of
+`test_scripts/_append_frames_behaviour_probe.py`, which builds exactly this
+shape and DOES create its root entity. So the entity existed and was removed
+while its frame and edge were not, which is the signature of a delete-by-subject
+on an entity URI: what `delete_entity_graph=false` does by definition.
+
+This does not change the production picture and it does change the status of
+the case above from "possible" to "observed". The maintenance probe added for
+this issue reports it: `{'dangling_source': 1, 'dangling_dest': 0}` on that
+space, which is also an independent check of the probe against a case nobody
+constructed for it.
 
 ## Detection ADDED 2026-09-17
 
