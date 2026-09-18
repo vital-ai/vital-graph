@@ -288,10 +288,38 @@ in none. Backed up first to
 `/tmp/prod_orphan_slots_backup_20260918.csv.gz` — 196 rows, 28 subjects,
 validated by re-parsing.
 
-**The unanswered question survives the deletion**: why were those edges
-missing? If those slots were written without their edge, that is a write-path
-defect and it may still be live. Nothing here establishes which, and the data
-that would have shown it is now in a tmp file.
+**Why the edges were missing: ANSWERED from the backup.** Not a deletion at
+all — a PARTIAL WRITE, which makes these the only finding today that is not in
+the delete family.
+
+The slots are named `<...>:frame:generated_message:N:frame:schedule:M:slot:<x>`,
+four per group — `ScheduleDays`, `ScheduleTimeStart`, `ScheduleTimeEnd`,
+`ScheduleTimezone` — across 7 groups. Their implied parent, the
+`:frame:schedule:M` sub-frame, has **no term row at all**.
+
+That is what rules a deletion out. Terms SURVIVE quad deletion: a frame whose
+quads were removed an hour earlier still has its term row, checked as a
+control. A URI with no term has never appeared in any quad, so it was never
+written and therefore never deleted.
+
+The model does create these frames normally — 438 schedule frames in the space
+are complete, each with quads, an incoming `Edge_hasKGFrame` and slots hanging
+off it. And the anomaly is confined: of 1,752 schedule slots that were written,
+**every one** has a parent that was written, now that these 28 are gone.
+
+So seven schedule groups had their four slots written while the parent frame
+and its two edges were not. A write that landed in pieces.
+
+`hasFrameGraphURI` is not the discriminator and was a red herring: working
+schedule slots point it at the `generated_message` frame too, because it names
+the grouping graph rather than the immediate parent.
+
+**No instances remain and none is reproducible from here.** The writer lives in
+the REST service, not this repository. What can be said is that the store
+accepted a partial graph without complaint, which is the part that belongs to
+this codebase — nothing rejected slots whose parent frame was absent, and
+nothing detected them afterwards except an upper-bound shortfall probe several
+inferences away.
 
 ### Final state
 
