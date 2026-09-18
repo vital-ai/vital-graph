@@ -1,6 +1,25 @@
 # Both Perf Baselines Are Stale, And Were Promoted From A Dirty Tree
 
-## Status: OPEN. Promoted 2026-08-22 from a dirty `1e78609`; 126 commits have
+## Status: OPEN, and it RECURRED 2026-09-18. The three defects listed under
+## "RESOLVED 2026-09-14" below are genuinely fixed; the condition in this
+## issue's TITLE is not, because it is not a one-time defect but a discipline
+## that has to hold at every promotion.
+##
+## Checked 2026-09-18:
+##
+##     query      56d06339  dirty=TRUE    <-- promoted from a dirty tree, again
+##     coverage   2a479ae2  dirty=false
+##     ingest     80a47d2c  dirty=false
+##     load       526aed0a  dirty=false
+##
+## The dirty one is MINE, promoted hours before this check while the compose
+## change and several issue edits were uncommitted. The runner printed the
+## warning it was built to print — "run was recorded from a DIRTY working tree
+## — the baseline commit will not reproduce it exactly" — and I read past it.
+## An alarm nobody acts on is the failure this issue is about, arriving one
+## level up.
+##
+## Originally promoted 2026-08-22 from a dirty `1e78609`; 126 commits have
 ## touched `vitalgraph/` since, including the paths the benches measure.
 
 **Related:** `issues/188` (re-promoting before it lands bakes in the holes),

@@ -1,6 +1,21 @@
 # The Production Entity-Query Shape Has No Workable Plan At 53M
 
-## Status: OPEN. Measured 2026-09-04 on `lead_nurture_100k` (53.4M quads).
+## Status: PARTLY FIXED — verified 2026-09-18, NOT open as this said.
+##
+## The shape itself was IMPLEMENTED 2026-09-04 (see that section below, with a
+## measured before/after table), and three of the four follow-on gaps have since
+## closed:
+##
+##   G1 `resync_all` not re-enabling  -> CLOSED, step 8 re-establishes the
+##                                       markers and cites this issue
+##   G3 the decline has no symptom    -> CLOSED, warn-once logging at
+##                                       `kgquery_endpoint.py:74`
+##   G4 nothing completes on demand   -> CLOSED, `scripts/backfill_slot_sort_coverage.py`
+##   G2 exclusion withholds silently  -> STILL OPEN, and documented in G2 itself
+##                                       as a trap rather than a production
+##                                       defect (the list is empty in prod)
+##
+## Originally measured 2026-09-04 on `lead_nurture_100k` (53.4M quads).
 
 ## Summary
 
