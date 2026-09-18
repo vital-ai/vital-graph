@@ -226,6 +226,47 @@ types. So the dating question this document could not answer from the data is
 answered by the code: the residue is older than the fix, and the fix is what
 stopped it.
 
+## RESIDUE REMOVED 2026-09-18
+
+Authorised and executed against production in one transaction, after proving
+the subtree self-contained: 2,196 objects (298 frames, 298 `Edge_hasKGFrame`,
+800 slot edges, 800 slots) with ZERO referencing subjects outside the set.
+
+    frame_prop_sort              596 rows
+    frame_slot                   800
+    edge                       1,098
+    rdf_quad                  15,074
+    entity_slot_sort               0   (the orphans were never in it)
+
+Verified after:
+
+    dangling edge sources       298 -> 0
+    absent slots                927 -> 127
+                                      99 valueless + 28 edge-less orphans
+
+Backed up first to `/tmp/prod_frame_residue_backup_20260918.csv.gz` — 15,074
+rows, CSV with proper quoting, validated by parsing it back and confirming
+exactly 2,196 distinct subjects. A TSV dump was taken first and DISCARDED: it
+reported 2,197 subjects because a slot value contains a newline, which split a
+row. Worth stating, because that file would have looked like a backup.
+
+### A claim in this document was wrong
+
+This issue said the residue "costs nothing today — every read path is
+entity-led and cannot reach an orphan". The inventory above disproves it: 596
+`frame_prop_sort` rows described these frames. That table serves FRAME listings
+sorted by property, which are not entity-scoped, so the orphans were reachable
+by a real read path the whole time. Nobody reported seeing them, so the
+practical impact was likely nil — but "unreachable" was an assertion about the
+read paths I had looked at, stated as though it were about all of them.
+
+### Not removed
+
+The 28 edge-less orphan slots — slots carrying values with no `Edge_hasKGSlot`
+at all. A different shape from the frame subtree, outside the set enumerated
+here, and left deliberately rather than swept up in a deletion authorised for
+something else.
+
 ## What this cost, as a lesson
 
 Three mechanisms were proposed in this document before the right one. The first
