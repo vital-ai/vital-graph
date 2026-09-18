@@ -1,7 +1,13 @@
 # `import_space` Leaves A Stale entity_slot_sort And A Marker Still Saying Complete
 
-## Status: OPEN, live wrong-answer path. Found by the `issues/167` audit, not by
-## a test.
+## Status: FIXED 2026-09-06 (`534a437c`, `4c690d7a`), pinned by
+## `tests/integration/test_import_space_rebuilds_every_derived_table.py`.
+##
+## THIS SAID "OPEN, live wrong-answer path" UNTIL 2026-09-18 — twelve days
+## after the fix landed, and the scariest label in the backlog. Found by
+## checking the code before starting work on it, which is the only reason the
+## afternoon did not go into a bug that no longer existed. Found by the
+## `issues/167` audit, not by a test.
 
 ## What it does
 
@@ -61,7 +67,22 @@ omission for a different derived artefact, in the same function.
 Two omissions of the same shape in one function is the argument for the fix
 below being structural rather than another line added to the list.
 
-## Fix
+## Fix — SHIPPED, though not the one proposed here
+
+`import_space` now rebuilds every derived table, empties `entity_slot_sort`,
+and clears `slot_sort_coverage`; `resync=False` clears the marker
+unconditionally. The docstring names this issue.
+
+It did NOT adopt the structural fix proposed below, and the reason is worth
+keeping: `resync_entity_slot_sort` takes MINUTES on a large space and this runs
+inside the caller's transaction holding ACCESS EXCLUSIVE on the core tables, so
+calling it there would block every application query behind a rebuild — the
+outage this work exists to remove. The long derivation is emptied and handed to
+`backfill_entity_slot_sort_batch` instead, which is a different answer to the
+same requirement: nothing is left describing the previous contents.
+
+The original proposal follows, unchanged, because the argument for it still
+stands for every SHORT derivation and the next table added.
 
 Call `resync_all_auxiliary_tables` instead of hand-picking resyncs. It rebuilds
 every derived table, registers graphs, and since `af1c717` clears and re-records
