@@ -529,9 +529,25 @@ def slot_equality_constraints(bgp, aliases, space_id: str) -> list:
 
         ess = f"{space_id}_entity_slot_sort"
         lit = str(value_text).replace("'", "''")
+        # COLLATE "C" IS NOT DECORATION — without it this narrowing is slower
+        # than not narrowing at all (`issues/162`).
+        #
+        # `idx_{space}_ess_text` indexes `value_text COLLATE "C"` while the
+        # database collation is `en_US.utf8`. An equality in the default
+        # collation cannot seek that column, so PostgreSQL uses the index for
+        # `slot_type_uuid` alone and applies the value as a FILTER. Measured on
+        # `lead_nurture_grouped` (4,064,500 slot-sort rows), same query, one row
+        # returned:
+        #
+        #     without COLLATE   Filter, 99,999 rows removed   92,139 buf  2,231 ms
+        #     with COLLATE      Index Cond on value_text           192 buf      8 ms
+        #
+        # 480x the buffers and 266x the time, for a clause whose absence changes
+        # nothing about the ANSWER — which is why two rounds of measurement in
+        # this issue recorded "roughly halved" and called the result unclear.
         sql = (f"{anchor[0]}.{anchor[1]} IN (SELECT slot_uuid FROM {ess} "
                f"WHERE slot_type_uuid = {type_token} "
-               f"AND value_text = '{lit}')")
+               f"AND value_text COLLATE \"C\" = '{lit}')")
         key = (anchor[0], sql)
         if key not in seen:
             seen.add(key)

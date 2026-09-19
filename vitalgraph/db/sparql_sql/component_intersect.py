@@ -204,7 +204,14 @@ def component_intersect_constraints(bgp, aliases, space_id: str,
                f"WHERE entity_type_uuid = {entity_type_token} "
                f"AND frame_type_path = ARRAY[{path}] "
                f"AND slot_type_uuid = {type_token} "
-               f"AND value_text = \'{value.replace(chr(39), chr(39) * 2)}\')")
+               # COLLATE "C" to match the index, or value_text is applied as
+               # a FILTER rather than a seek — see the note in
+               # `slot_sort_range`. Measured on this same shape, with
+               # entity_type AND slot_type already constrained: 99,999 rows
+               # removed by filter, 71,313 buffers (`issues/162`). Constraining
+               # the prefix is necessary and NOT sufficient.
+               f"AND value_text COLLATE \"C\" = "
+               f"\'{value.replace(chr(39), chr(39) * 2)}\')")
         entry = (anchor[0], sql)
         if entry not in out:
             out.append(entry)

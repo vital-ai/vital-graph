@@ -1,7 +1,13 @@
 # Equality Was Excluded From The Slot-Sort Narrowing On A Premise That No Longer Holds
 
-## Status: OPEN. Implementing the text lane; the exclusion's rationale needs
-## re-testing at the term semi-join level.
+## Status: PARTLY FIXED 2026-09-18. Item 1 was not a measurement, it was a
+## DEFECT — the narrowing was firing and costing more than it saved, and that is
+## fixed. Items 2 and 3 are untouched: whether the exclusion still holds for the
+## shapes the comment was written about, and numeric/datetime equality, which
+## nothing has measured.
+##
+## Written FIXED first, which is the error this file's own archiving rule
+## exists to catch: a header claiming more than the body supports.
 
 ## What is recorded today
 
@@ -52,13 +58,47 @@ the emitted SQL for `entity_slot_sort` settled it. The lesson is the check, not
 the bug: for an ADDITIVE optimisation, assert on the generated SQL, because a
 missing addition changes nothing observable except speed.
 
-## What remains to establish
+## 1. ESTABLISHED 2026-09-18 — the index was never being used for the value
 
-1. **The text lane's index.** `slot_sort_range` deliberately leaves the leading
-   index columns unconstrained and relies on PG18 skip-scan, measured for the
-   `value_num` PARTIAL index. The text index
-   `(context_uuid, entity_type_uuid, frame_type_path, slot_type_uuid,
-   value_text, entity_uuid)` is not partial and has not been measured that way.
+Measured on `lead_nurture_grouped` (4,064,500 slot-sort rows, PG 18.4), the
+exact shape this module emits, one row returned:
+
+    Index Cond: (slot_type_uuid = ...)
+    Filter:     (value_text = 'SYN000088727')
+    Rows Removed by Filter: 99999
+    Index Searches: 19
+    Buffers: 92,139        Execution Time: 2,231 ms
+
+Skip scan DOES engage — 19 index searches over the unconstrained leading
+columns, which answers the question as asked. The value is the problem:
+`value_text` arrives as a FILTER, not a seek.
+
+`idx_{space}_ess_text` indexes `value_text COLLATE "C"` and the database
+collation is `en_US.utf8`, so an equality in the default collation cannot use
+that index column. Adding the clause:
+
+    Index Cond: (slot_type_uuid = ... AND value_text = 'SYN000088727')
+    Buffers: 192           Execution Time: 8 ms
+
+**480x the buffers and 266x the time, for a clause whose absence changes
+nothing about the ANSWER.** That is why "Performance: NOT established" below
+recorded "roughly halved" and could not resolve it: the narrowing was firing
+and scanning 100,000 rows to do it.
+
+CONSTRAINING THE PREFIX IS NECESSARY AND NOT SUFFICIENT.
+`component_intersect` supplies `entity_type_uuid` AND `slot_type_uuid` and
+still filtered 99,999 rows at 71,313 buffers. Both emitters now collate.
+
+The schema comment beside the index already assumed this — "COLLATE \"C\"
+matches what the generator emits for a text ORDER BY". True of the sort path,
+and false of the equality narrowing from the day it was written.
+
+Pinned by `tests/unit/sparql_sql/test_slot_value_text_is_collated.py`, asserting
+on the GENERATED SQL for the reason this issue itself recorded: for an additive
+optimisation a missing clause changes nothing observable except speed, and speed
+on these fixtures varies by more than the effect.
+
+## What remains to establish
 2. **Whether the exclusion still holds elsewhere.** The comment's claim should
    be re-tested for the shapes it was written about, not just overridden because
    it is wrong for this one.
