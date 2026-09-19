@@ -26,10 +26,12 @@ import re
 
 import pytest
 
-MODULES = [
-    "vitalgraph.db.sparql_sql.slot_sort_range",
-    "vitalgraph.db.sparql_sql.component_intersect",
-]
+# `slot_sort_range` no longer emits a value_text equality: its narrowing was
+# deleted as superseded (`issues/162`). `component_intersect` still does, and
+# still needs the collation — it is disabled by default too, but a disabled
+# path that is silently 480x slower when enabled is not a thing to leave lying
+# around for whoever flips the flag.
+MODULES = ["vitalgraph.db.sparql_sql.component_intersect"]
 
 
 @pytest.mark.parametrize("mod", MODULES, ids=[m.rsplit(".", 1)[-1] for m in MODULES])

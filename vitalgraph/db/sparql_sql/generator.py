@@ -1724,42 +1724,17 @@ async def _generate_sql(
                 logger.warning("component intersect skipped: %s", exc,
                                exc_info=True)
 
-            # Stage 2a.2b: narrow each slot fixed to a CONSTANT value against
-            # `entity_slot_sort` — the equality twin of what `slot_sort_range`
-            # already does for ranges. It ADDS a constraint the surrounding
-            # chain already implies and removes nothing, so it cannot change an
-            # answer; see `slot_equality_constraints` for why anchoring on the
-            # SLOT needs no frame path and no constant translation.
+            # Stage 2a.2b WAS an equality narrowing against `entity_slot_sort`,
+            # the twin of what `slot_sort_range` does for ranges. DELETED 2026-09-18
+            # as SUPERSEDED (`issues/162`).
             #
-            # The shape it exists for timed out at 55s on a 53M-quad space,
-            # where the same answer driven from the slot set measured 519 ms
-            # (`issues/161`).
-            try:
-                from .slot_sort_range import slot_equality_constraints
-
-                _added = [0]
-
-                def _narrow_slots(node):
-                    if getattr(node, "tables", None):
-                        for extra in slot_equality_constraints(
-                                node, aliases, space_id):
-                            if extra not in node.tagged_constraints:
-                                node.tagged_constraints.append(extra)
-                                _added[0] += 1
-                    for ch in (getattr(node, "children", None) or []):
-                        _narrow_slots(ch)
-
-                _narrow_slots(plan)
-                if _added[0]:
-                    logger.info("slot-sort equality: narrowed %d slot(s) via "
-                                "entity_slot_sort", _added[0])
-            except Exception as exc:
-                # Additive and optional: losing it costs speed, never an answer.
-                # At WARNING, not debug: production runs at INFO, and an
-                # optimisation that silently stops applying is indistinguishable
-                # from one that was never deployed.
-                logger.warning("slot-sort equality narrowing skipped: %s", exc,
-                               exc_info=True)
+            # It was built for one shape — a slot-value equality that timed out at
+            # 55s on a 53M-quad space — and `fast_slot_filter` now serves that same
+            # shape at 46.9 ms, by default, gated on the coverage marker rather than
+            # an env var (`issues/161`). Everywhere else it was a large regression:
+            # same rows, whole-query buffers, 72.4x / 37.6x / 46.0x WORSE than
+            # leaving it out. It had been disabled by default since the day it
+            # landed, so removing it changes nothing that runs.
 
         # Stage 2a.2d: Distribute the join over a UNION, then merge each arm's
         # BGPs into one.

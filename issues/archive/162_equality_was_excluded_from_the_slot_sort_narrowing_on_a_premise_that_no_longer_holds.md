@@ -1,13 +1,18 @@
 # Equality Was Excluded From The Slot-Sort Narrowing On A Premise That No Longer Holds
 
-## Status: PARTLY FIXED 2026-09-18. Item 1 was not a measurement, it was a
-## DEFECT — the narrowing was firing and costing more than it saved, and that is
-## fixed. Items 2 and 3 are untouched: whether the exclusion still holds for the
-## shapes the comment was written about, and numeric/datetime equality, which
-## nothing has measured.
+## Status: CLOSED 2026-09-18 as SUPERSEDED — the narrowing is DELETED.
 ##
-## Written FIXED first, which is the error this file's own archiving rule
-## exists to catch: a header claiming more than the body supports.
+## All three items were answered and the answer was that this issue's premise
+## was wrong. The exclusion it set out to overturn is RIGHT for the shapes it
+## was written about (item 2, measured). The one shape it was wrong about is
+## served better and BY DEFAULT by `fast_slot_filter` — 46.9 ms against this
+## narrowing's 519 ms, gated on the coverage marker rather than an env var
+## (`issues/161`).
+##
+## So the code was a disabled, slower duplicate of a live mechanism, and a
+## 37-72x regression wherever else it fired. Deleted rather than kept behind a
+## flag: leaving it invited someone to enable it on the strength of this issue's
+## TITLE.
 
 ## What is recorded today
 
@@ -98,12 +103,78 @@ on the GENERATED SQL for the reason this issue itself recorded: for an additive
 optimisation a missing clause changes nothing observable except speed, and speed
 on these fixtures varies by more than the effect.
 
-## What remains to establish
-2. **Whether the exclusion still holds elsewhere.** The comment's claim should
-   be re-tested for the shapes it was written about, not just overridden because
-   it is wrong for this one.
-3. **Numeric and datetime equality.** Deferred: they need the literal in the
-   column's type, and nothing has measured them.
+## 2. ANSWERED 2026-09-18 — the exclusion HOLDS, and this issue was wrong
+
+Measured on `sp_lead_types`, whole-query buffers, narrowing ON against the same
+generated SQL with the clause removed. Same rows in every pair:
+
+    shape          ON        OFF     
+    text_eq        10,565    146     72.4x WORSE
+    int_eq          6,023    160     37.6x WORSE
+    int_eq_rare     7,550    164     46.0x WORSE
+
+The comment this issue set out to overturn — "equality already reaches the term
+semi-join with an accurate estimate" — is RIGHT about the shapes it was written
+for. It was wrong about exactly one: the 53M-quad production shape where the
+semi-join timed out at 55 s and the slot set answered in 519 ms.
+
+So the narrowing is a targeted fix for one pathology and a large regression
+everywhere else, which is what OFF BY DEFAULT already encodes. That default is
+now pinned by a test, so enabling it becomes a deliberate act rather than a
+one-character edit.
+
+BUFFERS, NOT WALL-CLOCK, for the reason recorded below: this fixture varied 6.7s
+to timeout with no code change, and anything concluded from one pair of timings
+there is noise. Buffers are a property of the plan.
+
+THE CONTROL BROKE FIRST AND LOOKED LIKE A RESULT. Stripping the clause with a
+regex that stopped at the first `)` cut the subquery in half, and the "off"
+column came back as a SQL syntax error — indistinguishable at a glance from the
+narrowing being the only form that runs. A paren-balanced strip fixed it. A
+broken control looks exactly like a broken subject.
+
+## 3. IMPLEMENTED 2026-09-18 — numeric and datetime equality
+
+`_typed_equality` emits `value_num = CAST('<lex>' AS NUMERIC)` and
+`value_dt = CAST('<lex>' AS TIMESTAMP)`, casting the SAME way the column was
+populated from the term table rather than normalising in Python — two
+definitions of equality would eventually disagree.
+
+Validated in PYTHON, not SQL: PostgreSQL constant-folds `CAST('abc' AS NUMERIC)`
+at PLAN time, so a runtime guard never executes and the query dies with "invalid
+input syntax". Deliberately stricter than PostgreSQL — declining a form the
+database would accept costs a narrowing; accepting one it rejects costs the
+query. Verified to SEEK: `Index Cond: (slot_type_uuid = ... AND value_num =
+'1'::numeric)` on the partial `ess_num` index.
+
+## What was deleted, and what was kept
+
+DELETED: `slot_equality_constraints`, `EQUALITY_NARROWING_ENABLED`,
+`_typed_equality` and its lexical regexes, the generator's Stage 2a.2b call
+site, and the two tests pinning them. `slot_sort_range.py` 616 -> ~400 lines.
+
+KEPT: `EQUALITY_LANE`, because `component_intersect` uses it — deleting it would
+have broken a different mechanism. And the `COLLATE "C"` fix in that emitter,
+which is the half of item 1's work that was NOT superseded. It is disabled by
+default too, but a path that is silently 480x slower when enabled should not be
+left for whoever flips the flag.
+
+## What this issue was worth, honestly
+
+Its thesis was wrong and it was not wasted:
+
+  * it identified a real production pathology (55 s timeout), which `issues/161`
+    then solved properly;
+  * it found and fixed a real wrong-answer bug — `_const_uris` reused for a slot
+    VALUE, so a literal missed the lookup, defaulted to `''`, and an
+    INTERSECTION on `value_text = ''` removed every row. That class recurs and
+    the diagnosis is recorded;
+  * it produced the rule "for an ADDITIVE optimisation, assert on the GENERATED
+    SQL", which caught a probe firing on nothing during this very closure;
+  * item 2 is now a measured negative result, so the question is settled rather
+    than open to being re-opened on intuition.
+
+A conclusive no is a result. What it is not is a reason to keep the code.
 
 ## ROOT CAUSE of the wrong answer, found 2026-09-05
 
