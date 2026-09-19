@@ -1,12 +1,8 @@
 # The Slot-Sort Backfill Calls An Unbuilt Edge Table A "Data Shape"
 
-## Status: OPEN — CONFIRMED STILL OPEN 2026-09-18 by checking the code, not by
-## trusting this line. `maintenance_job.py:2622` still logs "This is a DATA
-## shape, not a backfill failure" under a bare `if selected and not inserted`,
-## with no discriminator. The cheap check the Fix section asks for — is
-## `{space}_edge` empty while `{space}_rdf_quad` is not — was never added.
-##
-## Diagnostic defect, no data loss. Found 2026-09-04.
+## Status: FIXED 2026-09-18. `edge_table_unbuilt` discriminates before the
+## message asserts anything, and `maintenance_job` logs the precondition case at
+## INFO instead of claiming permanence at WARNING.
 
 ## Symptom
 
@@ -67,7 +63,40 @@ investigation after a phantom planner bug for some time: the honest reading of
 equivalent to the full walk, which would be a correctness bug in `issues/151`'s
 central claim. It is not — the seeding is fine.
 
-## Fix
+## Fix — SHIPPED 2026-09-18
+
+`edge_table_unbuilt(conn, space_id)` in `sync_edge_table.py`: empty edge table
+AND non-empty quads. Both halves are required and both are tested — an empty
+edge table on an EMPTY space is not a diagnosis, it is an empty space, and a
+populated one means the original DATA-shape message was right and must not be
+downgraded. Two EXISTS probes that short-circuit, reached only on the rare path
+where a batch derived nothing.
+
+The warning now states which case it is rather than leaving it implied: the
+precondition case at INFO naming the unbuilt edge table, the genuine case at
+WARNING saying the edge table IS built.
+
+**The in-flight-import test was NOT adopted.** This section proposed the process
+tracker as "a sharper test than the table heuristic". It would be sharper and it
+is narrower: it only sees imports that register there, and the edge table can be
+empty after a resync, a restore, or a migration that never touches the tracker.
+The table is the condition the walk actually depends on, so it is the thing to
+ask about.
+
+**Two bugs this codebase had already been burned by, re-attempted in one change
+and caught:**
+
+  * the probe first used `conn` from the enclosing scope, whose
+    `async with pool.acquire()` block had already closed — the released
+    connection bug pinned by `test_maintenance_edge_integrity_conn.py`, where
+    one `except` took out every remaining step of the cycle. It acquires its
+    own now.
+  * its failure path was `logger.debug`, which
+    `test_no_REPAIR_step_swallows_a_failure_silently` rejected: production runs
+    at INFO, so DEBUG is invisible, which is how `issues/144` hid a dead repair
+    path. It reports through `log_probe_failure` now.
+
+Original proposal follows.
 
 Cheap discriminator before asserting a data shape: if `{space}_edge` is empty
 while `{space}_rdf_quad` is not, the derived tables are not built yet. Log that

@@ -2615,13 +2615,60 @@ class MaintenanceJob:
         # outer SELECT are INNER). They stay absent, so the same batch is picked
         # again next cycle, forever. Say so once rather than spinning silently.
         if selected and not inserted:
-            logger.warning(
-                "entity_slot_sort: %s type %s — %d entities selected, 0 rows "
-                "derived. They have no frame/slot/value chain to walk, so they "
-                "will be re-selected every cycle and coverage can never reach "
-                "100%% for this type. This is a DATA shape, not a backfill "
-                "failure (issues/151)",
-                space_id, gap["entity_type"], selected)
+            # ASK BEFORE ASSERTING. This used to state three things as settled
+            # fact — no chain exists, it will repeat forever, and it is data
+            # rather than a failure — and two of them can be false at once
+            # (`issues/159`).
+            #
+            # The walk goes entity -> frame -> slot through `{space}_edge`, so
+            # an unbuilt edge table derives nothing from entities that are
+            # perfectly well formed. Measured on `lead_nurture_100k` during its
+            # bulk import: six cycles of "0 rows derived", then 100,000 of
+            # 100,000 entities and 4,064,500 rows once the import finished.
+            # "Can never" was wrong by 4 million rows, at WARNING, in the log
+            # someone reads to decide whether the backfill is broken.
+            # ITS OWN CONNECTION. The `conn` above left scope when the
+            # `async with pool.acquire()` block closed at the batch call, and
+            # reusing it here is precisely the released-connection bug this
+            # module already had once — "cannot call Connection.fetchval():
+            # connection has been released back to the pool", which took out
+            # every remaining step of the cycle behind one `except`. Pinned by
+            # `tests/unit/test_maintenance_edge_integrity_conn.py`.
+            from ..db.sparql_sql.sync_edge_table import edge_table_unbuilt
+            try:
+                async with self._pool.acquire() as probe_conn:
+                    _unbuilt = await edge_table_unbuilt(
+                        probe_conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
+            except Exception as exc:
+                # Cannot tell -> fall through to the original message rather
+                # than let a diagnostic probe break the backfill reporting it.
+                #
+                # REPORTED, not swallowed. This was `logger.debug` for one
+                # commit and `test_no_REPAIR_step_swallows_a_failure_silently`
+                # caught it: production runs at INFO, so DEBUG is invisible,
+                # which is exactly how `issues/144` hid a dead repair path
+                # behind a comment about a benign cause. Skipping quietly and
+                # skipping KNOWINGLY are different things.
+                log_probe_failure("edge_table_unbuilt", space_id, exc)
+                _unbuilt = False
+            if _unbuilt:
+                logger.info(
+                    "entity_slot_sort: %s type %s — %d entities selected, 0 "
+                    "rows derived, because the EDGE TABLE IS NOT BUILT YET "
+                    "(empty while the quads are not). The walk needs it, so "
+                    "this is a precondition and not a data shape: it resolves "
+                    "when the import or resync finishes. See issues/159.",
+                    space_id, gap["entity_type"], selected)
+            else:
+                logger.warning(
+                    "entity_slot_sort: %s type %s — %d entities selected, 0 "
+                    "rows derived. They have no frame/slot/value chain to "
+                    "walk, so they will be re-selected every cycle and "
+                    "coverage can never reach 100%% for this type. The edge "
+                    "table IS built, so this is a DATA shape rather than a "
+                    "backfill failure (issues/151, discriminated per "
+                    "issues/159)",
+                    space_id, gap["entity_type"], selected)
 
         logger.info(
             "entity_slot_sort backfill: %s type %s +%d rows from %d entities "

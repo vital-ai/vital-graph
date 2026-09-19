@@ -521,6 +521,49 @@ _KGFRAME_UUID = uuid.uuid5(_VITALGRAPH_NS, f"{KGFRAME_URI}\x00U")
 _SLOT_TYPE_UUID = uuid.uuid5(_VITALGRAPH_NS, f"{SLOT_TYPE_URI}\x00U")
 
 
+async def edge_table_unbuilt(conn, space_id: str,
+                             timeout: float | None = None) -> bool:
+    """True when the edge table is EMPTY while the quads are not.
+
+    The discriminator `issues/159` asks for. The slot-sort backfill walks
+    entity -> frame -> slot through `{space}_edge`, so an unbuilt edge table
+    derives nothing from entities that are perfectly well formed — and the
+    backfill then reported that as settled fact:
+
+        N entities selected, 0 rows derived. They have no frame/slot/value
+        chain to walk ... coverage can never reach 100% for this type. This is
+        a DATA shape, not a backfill failure
+
+    Two of those three claims can be false at once. Measured on
+    `lead_nurture_100k` during its bulk import: six cycles of "0 rows derived",
+    and coverage then reached 100,000 of 100,000 entities and 4,064,500 rows
+    once the import finished and the edge table existed. "Can never" was wrong
+    by 4 million rows.
+
+    Empty-and-quads-present is the honest signal for "not built yet". Both
+    halves are needed: an empty edge table on an empty space is not a
+    diagnosis, it is an empty space.
+
+    Two EXISTS probes that short-circuit on the first row, and only reached on
+    the rare path where a batch derived nothing, so the normal cycle pays
+    nothing for it.
+    """
+    try:
+        edge_has_rows = await conn.fetchval(
+            f"SELECT EXISTS (SELECT 1 FROM {space_id}_edge)", timeout=timeout)
+        if edge_has_rows:
+            return False
+        quads_exist = await conn.fetchval(
+            f"SELECT EXISTS (SELECT 1 FROM {space_id}_rdf_quad)", timeout=timeout)
+        return bool(quads_exist)
+    except Exception as exc:
+        # Cannot tell -> do NOT claim the derived tables are unbuilt. The
+        # caller falls back to the original message, which is wrong less often
+        # than a guess would be.
+        logger.debug("edge_table_unbuilt probe failed for %s: %s", space_id, exc)
+        return False
+
+
 async def unreferenced_kg_objects(conn, space_id: str,
                                   timeout: float | None = None) -> dict:
     """Frames and slots that NO edge points at.
