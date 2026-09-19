@@ -20,7 +20,22 @@
 > with a full repopulation of every pair under the cap, so it is correct in
 > isolation. Do not "fix" it without a repro.
 
-## Status: OPEN — MECHANISM ISOLATED 2026-09-02 by sampling. The prune removes
+## Status: FIXED — verified 2026-09-18, by the rewrite its own SUPERSEDED note
+## pointed at rather than by the flag fix proposed here.
+##
+## `sync_stats_tables.recompute_stats_tables` is now the ONLY writer and says so
+## by name: "The accumulator's write path decremented on delete and, for a
+## `pruned` predicate, refused to re-increment on insert — so under normal
+## update churn every pruned pair ratcheted monotonically to zero and was then
+## deleted. That is `issues/142`, and it is why `rdf_stats` kept 'mysteriously'
+## collapsing."
+##
+## `pruned` survives only in comments explaining why it is no longer needed:
+## recomputing gives absence ONE meaning, so there is no flag to get wrong and
+## no audit needed to detect when absence meant something else. The mechanism is
+## removed rather than repaired, which is what the note below asked for.
+##
+## Previously: OPEN — MECHANISM ISOLATED 2026-09-02 by sampling. The prune removes
 >
 > **SUPERSEDED IN PART.** This is a consequence of `rdf_stats` being an
 > incrementally-maintained accumulator that cannot validate itself. A

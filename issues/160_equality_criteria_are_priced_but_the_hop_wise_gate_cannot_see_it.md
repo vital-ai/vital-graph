@@ -1,6 +1,20 @@
 # Equality Criteria Are Priced, But The Hop-Wise Gate Cannot See It
 
-## Status: OPEN. Found 2026-09-04 on `lead_nurture_100k` (53.3M quads).
+## Status: FIXED 2026-09-05 — verified 2026-09-18. This document never recorded
+## it, which is the only reason it still read OPEN.
+##
+## `_equality_criterion` (`generator.py:1222`, called at `:2022`) folds a
+## FILTERING equality into the selectivity contest, exactly as the Fix section
+## below asks. Pinned by `tests/unit/sparql_sql/test_equality_is_a_measured_criterion.py`,
+## 8 cells, passing.
+##
+## The comment above it records the attempt that did NOT work, which is the part
+## worth keeping: feeding EVERY chain constraint in let a structural constant win
+## at "2% selectivity" and drive a nested loop — three of four shapes got worse,
+## including a 1-in-1,150,000 equality that went from 4 ms to a timeout. Rarity
+## was never the problem; WHICH constant drove the walk was.
+##
+## Originally found 2026-09-04 on `lead_nurture_100k` (53.3M quads).
 
 ## Symptom
 

@@ -1,6 +1,12 @@
 # The Slot-Sort Backfill Calls An Unbuilt Edge Table A "Data Shape"
 
-## Status: OPEN. Diagnostic defect, no data loss. Found 2026-09-04.
+## Status: OPEN — CONFIRMED STILL OPEN 2026-09-18 by checking the code, not by
+## trusting this line. `maintenance_job.py:2622` still logs "This is a DATA
+## shape, not a backfill failure" under a bare `if selected and not inserted`,
+## with no discriminator. The cheap check the Fix section asks for — is
+## `{space}_edge` empty while `{space}_rdf_quad` is not — was never added.
+##
+## Diagnostic defect, no data loss. Found 2026-09-04.
 
 ## Symptom
 
