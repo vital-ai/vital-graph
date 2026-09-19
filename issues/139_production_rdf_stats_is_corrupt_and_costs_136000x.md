@@ -1,6 +1,29 @@
 # Production `rdf_stats` Is Corrupt, And It Costs 136,000x On The Hottest Query
 
-## Status: REOPENED 2026-09-02 — the repair did NOT hold; see `issues/142`.
+## Status: RESOLVED 2026-09-18 — verified against production, and this time the
+## cause of the recurrence is GONE rather than repaired.
+##
+## Reopened 2026-09-02 because "the repair did NOT hold": a resync alone could
+## not survive the old prune, which deleted a pair without setting `pruned` so
+## the next write re-created a delta-only row and the table ratcheted back to a
+## fragment (`issues/142`). That accumulator has since been REPLACED by
+## `recompute_stats_tables`, now the only writer, and `pruned` no longer exists
+## as a concept — absence means "not in the top N" and nothing else. There is no
+## longer a mechanism for the repair to fail to hold under.
+##
+## Measured on production 2026-09-18:
+##
+##                        corrupt (2026-09-02)      now
+##     sum of row_counts  120,853  (0.27% of quads) 22,412,898  (45.6%)
+##     max row_count      344                       2,965,404
+##     (hasKGEntityType, NurtureAction)
+##                        13 vs 76,323 actual       83,608 vs 83,622  (99.98%)
+##
+## The five largest pairs all read 99.98% of their true counts, so this is
+## systematic accuracy and not one lucky pair. The issue's own estimate of a
+## true rebuild — "553,718 entries with a maximum of 2,712,885" — brackets what
+## is there.
+##
 ## Previously: RESOLVED on production 2026-09-02 — `main` deployed AND a MANUAL
 ## resync run. It did not self-heal (`issues/141`), and a resync alone does not
 ## hold under the old prune, so it needed both. Result: the dominant statement
