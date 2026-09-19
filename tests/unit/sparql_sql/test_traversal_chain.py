@@ -25,12 +25,39 @@ from vitalgraph.db.jena_sparql.jena_types import (
     ExprFunction, ExprValue, ExprVar, URINode)
 from vitalgraph.db.sparql_sql.ir import (
     PlanV2, TableRef, VarSlot, KIND_BGP, KIND_FILTER, KIND_JOIN)
+from vitalgraph.db.sparql_sql import traversal_chain
 from vitalgraph.db.sparql_sql.traversal_chain import find_chains
 
 pytestmark = pytest.mark.unit
 
-FE = ("frame_entity", "source_entity_uuid", "dest_entity_uuid")
 EDGE = ("edge", "source_node_uuid", "dest_node_uuid")
+
+# A SECOND one-row-per-hop kind, existing only for this module.
+#
+# `frame_entity` played this part until it was retired (`issues/183`) and its
+# entry was removed from `_TRAVERSAL_KINDS` (`issues/197` defect 1). Keeping it
+# here would have asserted that the detector still supports a shape production
+# cannot produce — the dead-entry problem, moved into the tests.
+#
+# Dropping the second shape instead would lose what the parametrisation is FOR.
+# `_TRAVERSAL_KINDS` is a LOOKUP TABLE, and with `edge` its only live entry a
+# suite that exercises only `edge` cannot tell a map-driven detector from one
+# that hardcodes the name — the detector would keep passing after someone
+# inlined `"edge"` into a branch, and the next real kind would find nothing.
+# That is the same failure the dead entry caused, in the other direction.
+#
+# So the second shape is SYNTHETIC: registered in the map by the fixture below
+# and named nowhere in `vitalgraph/`. It asserts exactly the property that is
+# still true — every kind in the map is handled the same way — and makes no
+# claim about any table existing.
+SYNTH = ("synth_hop", "source_synth_uuid", "dest_synth_uuid")
+
+
+@pytest.fixture(autouse=True)
+def _register_synth_kind(monkeypatch):
+    """Put `SYNTH` in the map for the duration of one test, and take it out."""
+    monkeypatch.setitem(
+        traversal_chain._TRAVERSAL_KINDS, SYNTH[0], (SYNTH[1], SYNTH[2]))
 
 
 def _chain_bgp(kind_cols, n_hops, prefix, pin_inline=False):
@@ -69,16 +96,16 @@ class TestBothShapes:
     """Frames and KG relations differ in table and column names and in nothing
     else that matters, so neither may be special-cased."""
 
-    @pytest.mark.parametrize("cols,prefix", [(FE, "femv"), (EDGE, "mv")],
-                             ids=["frame_entity", "edge"])
+    @pytest.mark.parametrize("cols,prefix", [(SYNTH, "femv"), (EDGE, "mv")],
+                             ids=["synth_hop", "edge"])
     def test_a_three_hop_chain_is_found_in_order(self, cols, prefix):
         chains = find_chains(_chain_bgp(cols, 3, prefix))
         assert len(chains) == 1
         assert chains[0].depth == 3
         assert [l.ref_id for l in chains[0].links] == [f"{prefix}{i}" for i in range(3)]
 
-    @pytest.mark.parametrize("cols,prefix", [(FE, "femv"), (EDGE, "mv")],
-                             ids=["frame_entity", "edge"])
+    @pytest.mark.parametrize("cols,prefix", [(SYNTH, "femv"), (EDGE, "mv")],
+                             ids=["synth_hop", "edge"])
     def test_the_kind_is_reported(self, cols, prefix):
         assert find_chains(_chain_bgp(cols, 2, prefix))[0].kind == cols[0]
 
@@ -90,7 +117,7 @@ class TestPinning:
         """Read from the PARSED QUERY. push_filters runs during emit, so at
         detection time the constraint text has the chain's joins and not the
         pin; matching on text alone reports every query unpinned."""
-        plan = _pinned_filter(_chain_bgp(FE, 3, "femv"))
+        plan = _pinned_filter(_chain_bgp(SYNTH, 3, "femv"))
         c = find_chains(plan)[0]
         assert c.pinned_head is True
         assert c.pinned_tail is False
@@ -98,15 +125,15 @@ class TestPinning:
     def test_an_inline_constant_pins_the_head_too(self):
         """A query written with the term in the triple rather than as a FILTER
         is the same question and must be detected the same way."""
-        c = find_chains(_chain_bgp(FE, 2, "femv", pin_inline=True))[0]
+        c = find_chains(_chain_bgp(SYNTH, 2, "femv", pin_inline=True))[0]
         assert c.pinned_head is True
 
     def test_no_pin_is_reported_as_none(self):
-        c = find_chains(_chain_bgp(FE, 2, "femv"))[0]
+        c = find_chains(_chain_bgp(SYNTH, 2, "femv"))[0]
         assert (c.pinned_head, c.pinned_tail) == (False, False)
 
     def test_a_filter_on_the_far_end_pins_the_tail(self):
-        plan = _pinned_filter(_chain_bgp(FE, 3, "femv"), var="e3")
+        plan = _pinned_filter(_chain_bgp(SYNTH, 3, "femv"), var="e3")
         c = find_chains(plan)[0]
         assert c.pinned_tail is True
         assert c.pinned_head is False
@@ -115,7 +142,7 @@ class TestPinning:
         """A reachability question. Recorded rather than collapsed to one flag,
         because the shorter side is the one worth driving from and that needs
         the depth."""
-        inner = _pinned_filter(_chain_bgp(FE, 3, "femv"), var="e0")
+        inner = _pinned_filter(_chain_bgp(SYNTH, 3, "femv"), var="e0")
         c = find_chains(_pinned_filter(inner, var="e3"))[0]
         assert c.pinned_head and c.pinned_tail
 
@@ -126,9 +153,9 @@ class TestWhatIsNotAChain:
         """Two references that share no variable are not a hop sequence.
         Pairing by position in the table list would invent a chain the query
         does not contain."""
-        bgp = _chain_bgp(FE, 1, "femv")
-        bgp.tables.append(TableRef(ref_id="femv9", kind="frame_entity",
-                                   table_name="sp_frame_entity", alias="femv9"))
+        bgp = _chain_bgp(SYNTH, 1, "femv")
+        bgp.tables.append(TableRef(ref_id="femv9", kind=SYNTH[0],
+                                   table_name="sp_synth_hop", alias="femv9"))
         chains = find_chains(bgp)
         assert all(c.depth == 1 for c in chains), [str(c) for c in chains]
         assert len(chains) == 2
@@ -142,18 +169,18 @@ class TestWhatIsNotAChain:
     def test_a_single_hop_is_a_chain_of_one(self):
         """The depth-1 frame case — the immediate one in production — is not a
         special case, it is the degenerate chain."""
-        c = find_chains(_chain_bgp(FE, 1, "femv"))[0]
+        c = find_chains(_chain_bgp(SYNTH, 1, "femv"))[0]
         assert c.depth == 1
 
 
 class TestTraversal:
 
     def test_chains_below_a_join_are_found(self):
-        left = _chain_bgp(FE, 2, "femv")
+        left = _chain_bgp(SYNTH, 2, "femv")
         right = _chain_bgp(EDGE, 3, "mv")
         chains = find_chains(PlanV2(kind=KIND_JOIN, children=[left, right]))
         assert [c.depth for c in chains] == [3, 2], "longest first"
-        assert {c.kind for c in chains} == {"frame_entity", "edge"}
+        assert {c.kind for c in chains} == {SYNTH[0], "edge"}
 
     def test_a_cycle_still_reports_its_links(self):
         """A chain that loops has no head, so the head-first walk never starts.
@@ -164,8 +191,8 @@ class TestTraversal:
         # predecessor and the head-first walk has nowhere to start. Appending a
         # constraint string instead would leave a plain 2-chain and the test
         # would pass without ever exercising this.
-        bgp = _chain_bgp(FE, 2, "femv")
-        bgp.var_slots["e0"].positions.append(("femv1", "dest_entity_uuid"))
+        bgp = _chain_bgp(SYNTH, 2, "femv")
+        bgp.var_slots["e0"].positions.append(("femv1", "dest_synth_uuid"))
         del bgp.var_slots["e2"]
         chains = find_chains(bgp)
         assert chains, "a cyclic chain reported nothing at all"

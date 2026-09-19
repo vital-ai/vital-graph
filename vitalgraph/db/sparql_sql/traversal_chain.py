@@ -64,9 +64,20 @@ from .ir import PlanV2, KIND_BGP
 logger = logging.getLogger(__name__)
 
 # Per table kind: the column a hop ARRIVES on, and the column it LEAVES by.
-# Adding a traversal shape means adding a line here, not a branch below.
+#
+# ONE ENTRY, AND THAT IS THE WHOLE MODEL. This map covers exactly the kinds that
+# put BOTH ends of a hop on ONE ROW. `edge` does. `frame_slot` does not — it
+# holds one row per (frame, slot) with the role as DATA (`issues/183`), so a hop
+# is a self-join of two arms and it is linked by `_orient_frame_slot` below, not
+# from here. Adding a `frame_slot` line with columns that do not exist would
+# find nothing while reading as coverage (`issues/197` defect 1).
+#
+# `frame_entity` used to be the second entry and was removed with this comment.
+# It was retired on 2026-09-10 in `b94484a9`, nothing has produced that kind
+# since, and `sparql_sql_schema._RETIRED_TABLE_SUFFIXES` drops the table — so
+# half of a two-line map was dead, and it was the half whose columns actually
+# expressed a hop. A dead entry in a lookup table reads as a supported case.
 _TRAVERSAL_KINDS: Dict[str, Tuple[str, str]] = {
-    "frame_entity": ("source_entity_uuid", "dest_entity_uuid"),
     "edge": ("source_node_uuid", "dest_node_uuid"),
 }
 
@@ -288,7 +299,17 @@ def _orient_frame_slot(hops, pinned_vars) -> Dict[str, ChainLink]:
             source_col=FRAME_SLOT_ENTITY_COL, dest_col=FRAME_SLOT_ENTITY_COL,
             dest_ref_id=dst_alias)
     if len(used) != len(hops):
-        return {}                         # branches: not a single walk
+        # Not one walk. Either the hops BRANCH, or the BGP holds two DISJOINT
+        # frame chains and this covered only the one containing `start`.
+        #
+        # Declining both is SAFE and not optimal: the flat path still answers
+        # the query correctly, it just does not get the dedup CTEs. Two
+        # disjoint chains could each be oriented and returned, and that is the
+        # obvious next case if a query shape turns up needing it (`issues/197`).
+        # Nothing measured has, which is why it is a comment and not code —
+        # returning a partial `out` here would be worse than returning nothing,
+        # because the uncovered hops would silently lose their join conditions.
+        return {}
     return out
 
 

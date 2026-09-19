@@ -1591,9 +1591,36 @@ async def _generate_sql(
                 with _decisions.stage("ensure_frame_slot_table"):
                     _fs_ready = await ensure_frame_slot_table(
                         space_id, conn=conn, conn_params=conn_params)
+                from .rewrite_frame_slot_table import (
+                    rewrite_frame_slot_table, FE)
                 if _fs_ready:
-                    from .rewrite_frame_slot_table import rewrite_frame_slot_table
                     plan = rewrite_frame_slot_table(plan, aliases, space_id)
+                else:
+                    # SAY SO. This exit was the only silent one the rewrite had
+                    # (`issues/197` defect 3): every precondition INSIDE
+                    # `rewrite_frame_slot_table` records a decline, and the gate
+                    # in front of it recorded nothing — so a plan that skipped
+                    # the collapse entirely looked identical to one where the
+                    # collapse had nothing to do.
+                    #
+                    # It cost a day. `issues/195` was an unfiltered depth-2 walk
+                    # planned at 19,282,929,239,712 that never returned, because
+                    # the perf fixtures had never been migrated to `frame_slot`.
+                    # Migrating them took the same plan to 47.77. The decision
+                    # record for the failing query named `frame_type_absorbable`
+                    # and `slot_type_tautology` and did not mention this rule at
+                    # all — "had it logged `declined: frame_slot table absent`,
+                    # issues/195 would have been a one-line diagnosis".
+                    #
+                    # A silent decline reads exactly like a satisfied check.
+                    # Third instance of that shape here, after `issues/081` (a
+                    # gate disabled by an absent value) and `issues/188` (a
+                    # metric with no rule).
+                    FE.decline(
+                        "frame_slot table absent or empty for this space, so "
+                        "the collapse cannot fire and the plan keeps the "
+                        "frame->slot edge joins",
+                        space_id=space_id)
 
             # Stage 2a.2a: a REQUIRED constant that resolves to no term makes
             # the whole query provably empty.
