@@ -1,8 +1,26 @@
 # The Traversal Chain Detector Cannot See The Shape It Was Built For
 
-## Status: OPEN, found 2026-09-12 during `issues/195`. The DATA problem there is
-## fixed and these three CODE defects are not — they are why a 4x10^11 plan
-## regression took a day to find instead of one line.
+## Status: RESOLVED 2026-09-18. Found 2026-09-12 during `issues/195`, where the
+## DATA problem was fixed and these CODE defects were not — they are why a
+## 4x10^11 plan regression took a day to find instead of one line.
+##
+## All five sections are closed. The two that were still open on 2026-09-18 are
+## the two the "Ordered fix" put first, and they are the two this issue argued
+## mattered most; the rest had been carried by other work and were verified
+## rather than trusted. Section by section:
+##
+##   1. `_TRAVERSAL_KINDS` names a retired table  — FIXED 2026-09-18 (below)
+##   2. the linking model cannot express the hop  — FIXED 2026-09-13 (below)
+##   3. the rewrite records neither fire nor decline — FIXED 2026-09-18 (below)
+##   4. the gate may no longer have a job         — ANSWERED by 2, see below
+##   5. five tests query a dropped table          — FIXED in `6e97d3c4`
+##
+## Suites at the close: unit exit 0; `test_general_traversal`,
+## `test_relation_traversal`, `test_nested_frame_traversal` and
+## `test_graph_traversal_fixture` 74 passed exit 0; `test_traversal_direction_gate`
+## and `test_traversal_bench` 35 passed exit 0, with no skip and no xfail added
+## to either — checked, because "the tests pass now" is the easiest way to
+## close an issue by gutting it.
 
 **Related:** `issues/195` (where these were found), `issues/183` (the
 `frame_entity` retirement), `issues/096` / `issues/181` (what the gate can see)
@@ -325,3 +343,72 @@ Two disjoint frame chains in one BGP decline: the orientation requires the hops
 to form ONE path and returns nothing when the walk does not cover all of them.
 That is safe — the flat path still answers — but it is not optimal, and it is
 the obvious next case if a query shape turns up needing it.
+
+
+## FIXED 2026-09-18 — sections 1 and 3, and what 4 turned out to be
+
+### 3 first, because the Ordered fix put it first and it is the one that cost
+
+`generator.py` gated the collapse on `if _fs_ready:` with no `else`. Every
+precondition INSIDE `rewrite_frame_slot_table` records a decline — six of them —
+and the gate in FRONT of the rewrite recorded nothing, so a query that skipped
+the collapse entirely produced a decision record identical to one where the
+collapse ran and had nothing to do. The `else` now declines through `FE`, the
+same rule the six preconditions use, so the skip appears in the record beside
+them rather than under a second name nobody would grep for.
+
+Note where the information already was: `ensure_frame_slot_table` has always
+logged "absent — the frame-slot collapse is disabled for this space" and even
+names the migration command to run. At `logger.debug`. So the sentence that
+would have ended `issues/195` in one line was being written and thrown away by
+every deployment running at INFO, which is all of them.
+
+### 1, and the dead entry that moved into the tests
+
+`frame_entity` removed from `_TRAVERSAL_KINDS`, leaving `edge` alone as the
+issue asked. Verified first rather than trusted: no code anywhere sets
+`kind="frame_entity"`, and `sparql_sql_schema._RETIRED_TABLE_SUFFIXES` drops the
+table outright. Five consumer filters still list the kind in membership tests
+(`emit_bgp`, `filter_pushdown`, `emit_traversal`); those are harmless and were
+left, and they are noted here so the next reader does not take them as evidence
+the kind is live.
+
+`test_traversal_chain.py` then failed, which is the interesting part. It
+parametrised eleven cells over `(frame_entity, edge)` to assert the detector
+special-cases NEITHER shape — a real property, tested through a dead kind.
+Deleting the parametrisation would have lost it: with `edge` the map's only
+live entry, a suite exercising only `edge` cannot tell a map-driven detector
+from one that hardcodes the name. So the second shape is now SYNTHETIC, a
+`synth_hop` kind registered into the map by an autouse fixture and named nowhere
+in `vitalgraph/`. It asserts the property that is still true and claims no table
+exists.
+
+Confirmed it is a guard and not decoration by hardcoding `"edge"` into
+`_traversal_tables` and re-running: 3 failures, restored, 14 pass. The same
+control was run on section 3 — else branch deleted, the structural cell fails
+naming the day it cost; restored, passes.
+
+### 4 needed no separate work: the model fix answered it
+
+Section 4 measured twelve tests asserting a mechanism that no longer ran, and
+framed the real question as "what the tests should become". They pass now,
+unmodified, because 2 is fixed: the 2026-09-13 two-alias hop change made the
+detector link frame walks again, so `decide` gets a chain instead of None and
+the direction assertions have something to assert against. The tests did not
+need rewriting to an outcome — the mechanism came back.
+
+That is worth stating plainly because section 4's own conclusion was the
+opposite: "extending the detector to see these shapes would be building
+machinery for a choice that no longer matters." It was written when the
+collapse had removed the chain, and it read a temporary bypass as a permanent
+one. The machinery did matter.
+
+### The one thing not done, moved into the code
+
+`_orient_frame_slot` declines when the BGP holds two DISJOINT frame chains,
+covering only the one containing `start`. Safe — the flat path still answers,
+it just does not get the dedup CTEs — and nothing measured has needed it. It
+was documented only here, so it is now a comment at the `return {}` that does
+it, including why a partial return would be worse than none. That is the whole
+reason this issue can be archived: the surviving knowledge is in the file it
+constrains, not in an issue.
