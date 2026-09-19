@@ -82,6 +82,42 @@ def test_every_indexed_issue_has_a_file():
     assert not missing, f"indexed but no such issue file: {missing}"
 
 
+def test_no_archived_issue_still_says_open():
+    """The archive is the claim that nothing remains to do. It must read that way.
+
+    Added 2026-09-18 after doing it. `git mv` stages the rename from the INDEX,
+    so moving a file whose edit was still unstaged archives the PRE-EDIT
+    content: `197` landed in the archive with its original "Status: OPEN"
+    header and none of the resolution, in the same commit that closed all five
+    of its defects.
+
+    That is the failure `test_no_row_says_open_for_a_resolved_issue` guards
+    against one directory up — an issue that reads OPEN when it is not sends
+    the next person to redo finished work — and nothing guarded the archive,
+    which is where a stale status is LEAST likely to be noticed because nobody
+    is watching that file any more.
+    """
+    archive = ISSUES / "archive"
+    if not archive.is_dir():
+        pytest.skip("no archive directory")
+    bad = []
+    for f in sorted(archive.glob("[0-9]*.md")):
+        m = re.search(r"^##\s*Status:\s*(.+)$", f.read_text(), re.M)
+        if m and m.group(1).strip().lower().startswith("open"):
+            bad.append(f"{f.name}: {m.group(1).strip()[:70]!r}")
+    assert not bad, (
+        "these are archived but their own Status line still says OPEN:\n  "
+        + "\n  ".join(bad))
+
+
+def test_the_archive_check_can_see_the_files():
+    """Guard the guard: a glob that matches nothing would pass forever."""
+    archive = ISSUES / "archive"
+    if not archive.is_dir():
+        pytest.skip("no archive directory")
+    assert len(list(archive.glob("[0-9]*.md"))) > 10
+
+
 def test_the_check_can_see_the_index():
     """Guard the guard: a regex that matches nothing would pass forever."""
     rows = _index_rows()
