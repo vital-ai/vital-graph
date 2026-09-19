@@ -45,6 +45,11 @@ OK, EMPTY, MISSING_STRING, WRONG_ID = "ok", "empty", "no-xsd-string", "wrong-id"
 # code that gets ignored.
 NOT_EXPOSED = "off-inert"
 
+# Every id present is CORRECT, but the tail of `STANDARD_DATATYPES` was never
+# seeded. Not wrong today and not counted as a failure; it is a trap that has
+# not sprung yet, and the repair script tops it up as a pure INSERT.
+INCOMPLETE = "incomplete"
+
 
 async def _has_positional_consumer(conn, space: str) -> bool:
     """Does this space have the generated columns that bake positional ids?
@@ -102,6 +107,35 @@ async def check_space(conn, space: str):
             f"{len(off)} id(s) differ, e.g. {uri} expected {exp} got {act}"
             + ("" if exposed else "; legacy schema, no generated columns, so "
                                   "nothing acts on these ids"))
+
+    # Correct so far, but is it COMPLETE? Everything above compares only the
+    # ids that are THERE, so a space holding positions 1..38 of a 40-entry list
+    # passes every check and is still a trap: the three write paths append an
+    # unknown datatype with the next serial id
+    # (`data_import_impl.py:85`, `emit_update.py:92`,
+    # `kg_server_properties.py:316`), and nothing seeds a space after creation.
+    # So whichever of the missing entries is stored FIRST takes the lowest free
+    # id, which is its canonical position only by luck of arrival order.
+    #
+    # Measured 2026-09-18: three production spaces are in exactly this state,
+    # missing positions 39 and 40 — the two geo datatypes, added to
+    # `STANDARD_DATATYPES` after those spaces were created. Load `geoLocation`
+    # before `wktLiteral` and they land transposed.
+    # Reported whether or not the space has the generated columns. The
+    # `exposed` downgrade above is about WRONGNESS, which only matters if
+    # something reads the ids. Incompleteness is about the table and its
+    # SEQUENCE, and the append-by-next-serial hazard is the same either way.
+    missing = sorted(expected[uri] for uri in expected if uri not in actual)
+    if missing:
+        contiguous_tail = missing == list(range(min(missing), len(expected) + 1))
+        return INCOMPLETE, (
+            f"{len(rows)} rows, ids intact, but position(s) {missing} were "
+            f"never seeded"
+            + (" (tail — nothing reads them positionally today, but the next "
+               "one stored takes the lowest free id by arrival order)"
+               if contiguous_tail else
+               " (GAP, not a tail — an append will land INSIDE the standard "
+               "range)"))
     return OK, f"{len(rows)} rows, standard ids intact"
 
 
@@ -132,8 +166,9 @@ async def main() -> int:
                 status, detail = await check_space(conn, space)
             except Exception as e:                     # missing table, permissions
                 status, detail = "error", str(e).split("\n")[0]
-            if status == NOT_EXPOSED:
-                # Printed, never counted. See `_has_positional_consumer`.
+            if status in (NOT_EXPOSED, INCOMPLETE):
+                # Printed, never counted: neither is wrong TODAY, and a gate
+                # that fails where there is no defect gets switched off.
                 print(f"  {status:14} {space}: {detail}")
             elif status != OK:
                 bad.append((space, status, detail))

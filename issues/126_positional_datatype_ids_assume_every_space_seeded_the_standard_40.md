@@ -151,11 +151,12 @@ positionally — the geo path matches by URI through
 `geo_datatype_uris TEXT[]` — and the numeric array stops at 21. So prod is
 correct and has no latent id collision in the range anything uses.
 
-One residue, NOT repaired because it is a production write and costs nothing
-today: those three spaces' sequences sit at 38, so whichever geo datatype is
-loaded first takes 39. If that is `geoLocation` the two end up transposed
-relative to `STANDARD_DATATYPES`, which no code would notice and the checker
-would then report as off. Seeding the two rows would close it.
+One residue, NOT repaired because it is a production write: those three
+spaces' sequences sit at 38, so whichever geo datatype is loaded first takes
+39. If that is `geoLocation` the two end up transposed relative to
+`STANDARD_DATATYPES`, which no code would notice and the checker would then
+report as off. See "incomplete is not the same as correct" below — nothing
+handles this, including the tooling above as first written.
 
 ### Step 3, the repair — deferred on a constraint that does not exist
 
@@ -223,3 +224,80 @@ id meant, which is how it was noticed.
     docker test stack (19)         0 off
     host sparql_sql_graph (40)     0 off   (3 repaired)
     host vitalgraphdb (6)          0 off   (6 inert, correctly not repaired)
+
+
+## 2026-09-19 — INCOMPLETE is not the same as CORRECT, and nothing handled it
+
+Asked whether the migration scripts cover the production residue above. They do
+not, and neither did the checker or the repair script as written the day
+before. Worth recording as its own finding, because the gap was invisible for
+the same reason the original bug was: everything present was correct.
+
+### Nothing seeds a space after it is created
+
+One seeding site exists, inside `create_space_tables`
+(`sparql_sql_schema.py:2062`), and it runs once at creation. Then:
+
+  * `migrate_space_schema.py` excludes this table BY NAME — line 85 lists
+    `rdf_quad, term, datatype` as "primary data; a change needs a real
+    backfill".
+  * `ensure_space_indexes.py` only WARNS, through the checker (step 2 above).
+  * the three write paths that meet an unknown datatype —
+    `data_import_impl.py:85`, `emit_update.py:92`,
+    `kg_server_properties.py:316` — all do
+    `INSERT (datatype_uri) VALUES ($1) ON CONFLICT DO NOTHING`, taking the next
+    serial id.
+
+So a space created before an entry was appended to `STANDARD_DATATYPES` never
+gets it, and the id it eventually takes is decided by ARRIVAL ORDER. For the
+three prod spaces that is `wktLiteral`/`geoLocation` at 39/40, transposed if
+`geoLocation` is stored first.
+
+### The tooling had the same blind spot
+
+`check_space` compared only the ids that were THERE, so 38 correct rows out of
+40 passed as `ok` — and because the repair script skips anything `ok`, running
+it against production did nothing at all. A space CORRECT BUT INCOMPLETE was
+invisible to both. Now reported as `incomplete`, distinguishing a missing TAIL
+from a GAP inside the standard range, which are different risks: an append
+lands in standard space only in the second case.
+
+Not counted toward the exit status. Neither `off-inert` nor `incomplete` is
+wrong today, and a gate that fails where there is no defect is a gate somebody
+switches off — at which point it is not watching the space that IS broken.
+
+Reported regardless of whether the space has `num_val`/`dt_val`: the
+`off-inert` downgrade is about WRONGNESS, which only matters if something reads
+the ids, while incompleteness is about the table and its SEQUENCE and the
+append hazard is the same either way.
+
+### The top-up had to be a second path, not a flag
+
+`plan_repair` renumbers non-standard URIs to sit immediately after the standard
+block. That is right when rewriting a table and wrong here, and reusing it
+would have been silently destructive: on the test stack `dawg_test` holds seven
+non-standard datatypes at 11302-11308, and `plan_repair` proposed relocating
+them to 41-47 — as an INSERT-only top-up, re-inserting all seven as duplicates.
+
+`plan_topup` adds only the missing STANDARD rows, touches no existing row, sets
+the sequence past every id present (standard or not, so 11308 rather than 40),
+and REFUSES when a missing position is occupied by a different URI, because
+seeding it would need a remap and a remap is the other path's job.
+
+Found by reproducing the production shape on the test stack and running against
+that, rather than against production.
+
+### The check immediately found two more
+
+Two host spaces nobody had looked at — `dawg_test` and `kgquery_perf` — were in
+the same state and had been passing as `ok`. Both topped up.
+
+### State
+
+    prod (6)                 3 incomplete — NOT applied, a production write
+    docker test stack (19)   0
+    host sparql_sql_graph    0  (3 repaired 09-18, 2 topped up 09-19)
+    host vitalgraphdb (6)    0  (inert)
+
+The prod top-up is two INSERTs and a `setval` per space, adds no row any term
+references, and is shown by `--all` without `--apply`. It has not been run.

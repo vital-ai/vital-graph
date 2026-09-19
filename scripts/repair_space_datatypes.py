@@ -56,7 +56,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from devtools.target import pg_kwargs  # noqa: E402
 
-from check_space_datatypes import NOT_EXPOSED, OK, check_space  # noqa: E402
+from check_space_datatypes import (  # noqa: E402
+    INCOMPLETE, NOT_EXPOSED, OK, check_space)
 
 
 async def plan_repair(conn, space: str):
@@ -102,6 +103,71 @@ async def plan_repair(conn, space: str):
         notes.append(f"preserving {len(extra)} non-standard uri(s) after "
                      f"{len(canonical)}")
     return remap, final, notes
+
+
+async def plan_topup(conn, space: str):
+    """The missing STANDARD rows, as (id, uri). Existing rows are not touched.
+
+    Deliberately NOT `plan_repair`. That function builds the canonical 40 and
+    then renumbers any non-standard URI to sit immediately after them, which is
+    right when the table is being rewritten anyway and wrong here: a space that
+    is merely incomplete has correct ids, and moving its extras would rewrite
+    rows to no purpose. Caught on the test stack, where `dawg_test` holds seven
+    non-standard datatypes at 11302-11308 — `plan_repair` proposed relocating
+    them to 41-47, which as an INSERT-only top-up would have re-inserted all
+    seven as duplicates.
+
+    Refuses if a missing standard position is already occupied by a
+    non-standard URI, because seeding it would then need a remap, and a remap
+    is `plan_repair`'s job with `plan_repair`'s safeguards.
+    """
+    from vitalgraph.db.sparql_sql.sparql_sql_schema import STANDARD_DATATYPES
+
+    canonical = [(i, uri) for i, (uri, _n) in enumerate(STANDARD_DATATYPES, 1)]
+    rows = await conn.fetch(
+        f"SELECT datatype_id, datatype_uri FROM {space}_datatype")
+    by_id = {r["datatype_id"]: r["datatype_uri"] for r in rows}
+    by_uri = {r["datatype_uri"] for r in rows}
+
+    add = [(i, uri) for i, uri in canonical if uri not in by_uri]
+    occupied = {i: by_id[i] for i, _u in add if i in by_id}
+    if occupied:
+        raise RuntimeError(
+            f"{space}: standard position(s) {sorted(occupied)} are held by a "
+            f"different uri ({', '.join(sorted(occupied.values()))}), so "
+            f"seeding needs a remap rather than a top-up. Use --space with "
+            f"the full repair once that is understood.")
+    return add, max([i for i, _u in canonical] + list(by_id))
+
+
+async def apply_topup(conn, space: str, final) -> None:
+    """Insert the standard rows this space is missing. Nothing else.
+
+    Separate from `apply_repair` because the spaces that need this are CORRECT
+    — every id they hold is at its canonical position — they are just short of
+    the full list. Rewriting a correct table to fix incompleteness would mean
+    DELETEing rows that 3.4M terms point at, inside a production database, to
+    change nothing about them. The risk and the benefit would not be in the
+    same order of magnitude.
+
+    So this is INSERT-only, and it asserts that before it runs: the rows it
+    adds are exactly the ids that are absent, and no existing row is touched.
+    """
+    add, seq_to = final
+    async with conn.transaction():
+        have = {r["datatype_id"] for r in await conn.fetch(
+            f"SELECT datatype_id FROM {space}_datatype")}
+        clash = [i for i, _u in add if i in have]
+        assert not clash, f"{space}: top-up would overwrite id(s) {clash}"
+
+        await conn.executemany(
+            f"INSERT INTO {space}_datatype (datatype_id, datatype_uri) "
+            f"VALUES ($1, $2)", add)
+        # Past every id now present, standard or not, so the next append
+        # cannot land on one of these.
+        await conn.execute(
+            f"SELECT setval('{space}_datatype_datatype_id_seq', $1, true)",
+            seq_to)
 
 
 async def apply_repair(conn, space: str, remap, final) -> None:
@@ -159,6 +225,30 @@ async def main() -> int:
         for space in spaces:
             status, detail = await check_space(conn, space)
             if status == OK:
+                continue
+            if status == INCOMPLETE:
+                print(f"  {space}: {status} — {detail}")
+                try:
+                    add, seq_to = await plan_topup(conn, space)
+                except RuntimeError as e:
+                    print(f"    REFUSED: {e}")
+                    failed += 1
+                    continue
+                for i, uri in add:
+                    print(f"    seed id {i} = {uri}")
+                print(f"    sequence -> {seq_to}; no existing row is touched")
+                final = (add, seq_to)
+                if not a.apply:
+                    print("    (dry run — pass --apply to seed the missing rows)")
+                    continue
+                await apply_topup(conn, space, final)
+                after, detail_after = await check_space(conn, space)
+                if after != OK:
+                    print(f"    STILL NOT OK after top-up: {detail_after}")
+                    failed += 1
+                else:
+                    print(f"    topped up — {detail_after}")
+                    repaired += 1
                 continue
             if status == NOT_EXPOSED:
                 # Off, but the space has no `num_val`/`dt_val` to act on it, so
