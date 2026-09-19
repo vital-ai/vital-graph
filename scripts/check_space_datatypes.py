@@ -40,6 +40,34 @@ _XSD_STRING = "http://www.w3.org/2001/XMLSchema#string"
 
 OK, EMPTY, MISSING_STRING, WRONG_ID = "ok", "empty", "no-xsd-string", "wrong-id"
 
+# Off, but nothing in the space can act on it. Reported and NOT counted as a
+# failure, because an exit code that fires where there is no defect is an exit
+# code that gets ignored.
+NOT_EXPOSED = "off-inert"
+
+
+async def _has_positional_consumer(conn, space: str) -> bool:
+    """Does this space have the generated columns that bake positional ids?
+
+    `num_val` and `dt_val` are `GENERATED ALWAYS AS (...) STORED` with the id
+    list written into the column definition, and they are the ONLY thing left
+    that reads a datatype id positionally — the query side resolves per space
+    through `ctx.dt_ids_for_uris` (`issues/126` category A). A space without
+    them can have every id shifted and nothing will act on it.
+
+    Measured 2026-09-18: six `vitalgraph2__` spaces on the host `vitalgraphdb`
+    report 29 differing ids each, and all six are a LEGACY schema — partitioned
+    term tables with no generated columns at all. Repairing them would have
+    remapped millions of rows to fix a value nothing reads. Without this check
+    the sweep exits 1 on a database where nothing is wrong.
+    """
+    return bool(await conn.fetchval(
+        "SELECT EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_class c "
+        "ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE n.nspname = 'public' AND c.relname = $1 "
+        "AND a.attgenerated <> '' AND a.attname IN ('num_val', 'dt_val'))",
+        f"{space}_term"))
+
 
 async def check_space(conn, space: str):
     """Return (status, detail) for one space's datatype table.
@@ -52,21 +80,28 @@ async def check_space(conn, space: str):
     expected = {uri: i for i, (uri, _n) in enumerate(STANDARD_DATATYPES, start=1)}
     rows = await conn.fetch(
         f"SELECT datatype_id, datatype_uri FROM {space}_datatype ORDER BY datatype_id")
+    exposed = await _has_positional_consumer(conn, space)
     if not rows:
-        return EMPTY, "0 rows — nothing was seeded"
+        return (EMPTY if exposed else NOT_EXPOSED), (
+            "0 rows — nothing was seeded"
+            + ("" if exposed else "; no num_val/dt_val here, so nothing reads "
+                                  "these ids positionally"))
 
     actual = {r["datatype_uri"]: r["datatype_id"] for r in rows}
     if _XSD_STRING not in actual:
         first = rows[0]
-        return MISSING_STRING, (f"no xsd:string row; id 1 is "
-                                f"{first['datatype_uri']}")
+        return (MISSING_STRING if exposed else NOT_EXPOSED), (
+            f"no xsd:string row; id 1 is {first['datatype_uri']}"
+            + ("" if exposed else "; legacy schema, no generated columns"))
 
     off = [(uri, expected[uri], actual[uri])
            for uri in expected if uri in actual and actual[uri] != expected[uri]]
     if off:
         uri, exp, act = off[0]
-        return WRONG_ID, (f"{len(off)} id(s) differ, e.g. {uri} "
-                          f"expected {exp} got {act}")
+        return (WRONG_ID if exposed else NOT_EXPOSED), (
+            f"{len(off)} id(s) differ, e.g. {uri} expected {exp} got {act}"
+            + ("" if exposed else "; legacy schema, no generated columns, so "
+                                  "nothing acts on these ids"))
     return OK, f"{len(rows)} rows, standard ids intact"
 
 
@@ -97,7 +132,10 @@ async def main() -> int:
                 status, detail = await check_space(conn, space)
             except Exception as e:                     # missing table, permissions
                 status, detail = "error", str(e).split("\n")[0]
-            if status != OK:
+            if status == NOT_EXPOSED:
+                # Printed, never counted. See `_has_positional_consumer`.
+                print(f"  {status:14} {space}: {detail}")
+            elif status != OK:
                 bad.append((space, status, detail))
                 print(f"  {status:14} {space}: {detail}")
             elif not a.quiet:

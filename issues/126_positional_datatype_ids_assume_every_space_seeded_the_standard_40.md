@@ -1,6 +1,11 @@
 # Positional datatype ids assume every space seeded the standard 40, and three did not
 
-## Status: OPEN — found 2026-08-23 while fixing `issues/121`
+## Status: RESOLVED 2026-09-18 — found 2026-08-23 while fixing `issues/121`
+
+    A. a query predicate              RESOLVED 2026-08-23
+    B. STORED generated columns       step 1 done, step 2 done,
+                                      step 3 (repair) done 2026-09-18
+    production exposure "unknown"     ANSWERED 2026-09-18: ZERO
 
 Four helpers in `sparql_sql_schema.py` derive `datatype_id` values by
 enumerating `STANDARD_DATATYPES` in order:
@@ -119,3 +124,102 @@ are wrong for it. A cluster-wide sweep is in this issue's history.
 Do not "fix" this by reordering `STANDARD_DATATYPES`: the ids are already
 persisted in `term.datatype_id` across 161 healthy spaces, and any reordering
 silently reinterprets all of them.
+
+
+## RESOLVED 2026-09-18 — production is clean, and the repair was small
+
+### The open question first: production exposure
+
+"**Production exposure is unknown** — no access from here" has been the header
+finding since 2026-08-23. It is now measured, and the answer is **zero**. All
+six prod spaces hold the standard ids:
+
+    lead_prod         40 rows   positions 1..40 intact
+    sp_kg_types       40 rows   positions 1..40 intact
+    wordnet_frames    40 rows   positions 1..40 intact
+    cardiff_kg        38 rows   positions 1..38 intact, 39/40 absent
+    lead_data         38 rows   positions 1..38 intact, 39/40 absent
+    testspace         38 rows   positions 1..38 intact, 39/40 absent
+
+Checked two ways — the checker, and an independent positional comparison
+written against `STANDARD_DATATYPES` directly — because "38 rows, not 40" is
+exactly the shape that could be either harmless or the worst case, and a count
+cannot tell them apart. It is TAIL truncation: the two missing entries are
+positions 39 and 40, `geosparql#wktLiteral` and `vital-core#geoLocation`,
+added to the list after those spaces were created. Nothing reads them
+positionally — the geo path matches by URI through
+`geo_datatype_uris TEXT[]` — and the numeric array stops at 21. So prod is
+correct and has no latent id collision in the range anything uses.
+
+One residue, NOT repaired because it is a production write and costs nothing
+today: those three spaces' sequences sit at 38, so whichever geo datatype is
+loaded first takes 39. If that is `geoLocation` the two end up transposed
+relative to `STANDARD_DATATYPES`, which no code would notice and the checker
+would then report as off. Seeding the two rows would close it.
+
+### Step 3, the repair — deferred on a constraint that does not exist
+
+The issue deferred this on:
+
+    Backfilling ids is not possible in place — they are referenced by
+    `term.datatype_id` — so a repair means rewriting the datatype table AND
+    remapping every term, or recreating the space.
+
+The second half is right. The first half is not: there is **no foreign key**
+from `{space}_term.datatype_id` to `{space}_datatype`. The remap is an UPDATE.
+And "every term" was three orders of magnitude off —
+
+    sp_dedup_test   140 terms,   0 carrying a datatype_id
+    sp_vgeo_e2e      15 terms,   0 carrying a datatype_id
+    sp_geo_test     187 terms,  45 carrying a datatype_id, all id 1
+
+— so two of the three needed no remap at all and the third needed 45 rows. The
+3m16s/10.4M-row figure that made this look expensive is the cost of ADDING a
+generated column (`sparql_sql_schema.py:136`). This adds none: the columns
+exist and their definitions are already right. The DATA under them was wrong.
+
+`scripts/repair_space_datatypes.py` does it: remap the ids terms actually use,
+rewrite the table to the canonical 40, `setval` the sequence past the block.
+All three repaired, and verified by resolving all 45 `sp_geo_test` terms
+through the join to their datatype URI before and after — byte-identical, so
+`geoLocation` moved from id 1 to its canonical 40 and every term moved with it.
+`num_val`/`dt_val` stayed 0/0 as they must, since geoLocation is in neither
+array.
+
+The sequence reset is the part that matters, and is why "leave it, they are
+test spaces" was the wrong call. `sp_geo_test` sat at 2, so the next datatype
+loaded there would have taken **id 3 — `xsd:decimal`, which IS in the numeric
+array** — and the next 19 after it. That is this issue's predicted failure, one
+ingest away. It is now at 41.
+
+### What the sweep found that this issue had not: inert spaces
+
+Running the checker across every local cluster turned up six more spaces off —
+`vitalgraph2__*` on the host `vitalgraphdb`, 29 differing ids each, one with
+3.4M terms. They are a LEGACY schema: partitioned term tables with **no
+`num_val`/`dt_val` at all**. Their ids are wrong and nothing reads them, because
+the generated columns are the only positional consumer left after category A.
+
+Repairing them would have rewritten millions of rows to correct a value no code
+reads. So the checker now measures exposure per space from
+`pg_attribute.attgenerated` and reports those as `off-inert` WITHOUT setting
+exit 1, and the repair script skips them. A gate that fails where there is no
+defect is a gate someone switches off, and then it is not watching the space
+that is actually broken.
+
+That check is measured per space rather than inferred from the schema version
+or the space name, so a space that gains the columns later is caught the next
+sweep.
+
+Also recorded, not acted on: 3,388,296 terms in `vitalgraph2__part_7271_` carry
+`datatype_id = 0`, an id with no row in that space's datatype table — that
+schema's sentinel for "no datatype" where the current one uses NULL. The repair
+script REFUSES a space in that state rather than guessing what an unrecoverable
+id meant, which is how it was noticed.
+
+### Final state
+
+    prod (6 spaces)                0 off
+    docker test stack (19)         0 off
+    host sparql_sql_graph (40)     0 off   (3 repaired)
+    host vitalgraphdb (6)          0 off   (6 inert, correctly not repaired)
