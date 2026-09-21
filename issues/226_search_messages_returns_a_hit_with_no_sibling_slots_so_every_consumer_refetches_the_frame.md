@@ -95,9 +95,12 @@ but it should be MEASURED against the unranked path, not just the ranked one —
 the two have different cost shapes and the unranked one is the recommendation.
 
 **One join, not one per requested slot type.** The obvious implementation adds
-a pattern per entry in `project_slots`; at 2-3 entries that is 2-3 more joins
+a pattern per entry in `slot_projection`; at 2-3 entries that is 2-3 more joins
 per hit. Prefer a single join over the frame's slots filtered by an `IN`, so
-cost is flat in the length of the list.
+cost is flat in the length of the list. Check first whether
+`db/sparql_sql/slot_projection.py` already resolves this — it serves the same
+shape on the entity surface, and the point of reusing it is not to re-decide
+this.
 
 ## Why it is worth doing rather than documenting
 
