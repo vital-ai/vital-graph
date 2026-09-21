@@ -186,3 +186,45 @@ class TestAConjunctionBindsEveryArm:
         c = _Crit([_Frame(slot_criteria=[
             _Slot(Z, DT, "urn:a"), _Slot("banana", NUM, "urn:b")])])
         assert not can_serve_filter(c)
+
+
+class TestTheSortPathBindsTheSameWay:
+    """`fast_slot_sort` applies these same criteria to the same table.
+
+    It calls `_eq_criteria` for its own EXISTS clauses, so it inherits the lane
+    conversion — and it used to emit a bare `= $n`, which put the DataError
+    straight back for a date. A filtered list and the SAME list with a sort on it
+    would then disagree about whether a dated criterion is servable, which is
+    `issues/172` all over again: two fast paths each declining the other's input.
+    """
+
+    def _exists(self, value, cls=DT):
+        from vitalgraph.db.sparql_sql.fast_slot_sort import _filter_exists
+        args = ["ctx", "ent"]
+        sql = _filter_exists(
+            "sp_t", _Crit([_Frame(slot_criteria=[_Slot(value, slot_class_uri=cls)])]),
+            args)
+        return sql, args[2:]
+
+    def test_the_sort_path_normalises_a_date_too(self):
+        sql, args = self._exists(Z)
+        assert "vitalgraph_iso_to_utc($5)" in sql, (
+            f"the sorted half of a filtered list still casts its bound:\n{sql}")
+        assert Z in args
+
+    def test_the_sort_path_carries_the_timezone_guard(self):
+        sql, _ = self._exists(Z)
+        assert "value_text ~" in sql and "IS true" in sql, (
+            f"both halves must agree on which rows match:\n{sql}")
+
+    def test_the_guard_is_qualified_by_the_alias_it_probes(self):
+        """The clause is a correlated EXISTS over an alias, not a bare table."""
+        sql, _ = self._exists(Z)
+        assert "(f4.value_text ~" in sql, (
+            f"an unqualified `value_text` here is ambiguous:\n{sql}")
+
+    def test_the_other_lanes_are_untouched(self):
+        sql, args = self._exists("v1", TEXT)
+        assert "value_text = $5" in sql and "iso_to_utc" not in sql
+        sql, args = self._exists(2, NUM)
+        assert "value_num = $5" in sql and Decimal(2) in args

@@ -237,7 +237,16 @@ def _filter_exists(t: str, criteria, args: list, inner_t: str = None) -> str:
     fcs = getattr(criteria, "frame_criteria", None)
     if not fcs:
         return ""
-    from .fast_slot_filter import _eq_criteria
+    # THE SAME VALUE SQL THE FILTER PATH EMITS, not a second copy. Both apply
+    # the same criteria to the same table, and both bind through
+    # `_eq_criteria` — so a date normalised there and cast here would leave the
+    # SORTED half of a filtered list declining every dated criterion while the
+    # unsorted half served it. That is what `issues/172` is about in the first
+    # place: two fast paths each declining the other's input.
+    #
+    # Imported inside the function because `fast_slot_filter` imports this
+    # module at load time; at module level this would be a cycle.
+    from .fast_slot_filter import _eq_criteria, _tz_guard, _value_sql
     parsed = _eq_criteria(fcs)
     if not parsed:
         return ""
@@ -261,7 +270,8 @@ def _filter_exists(t: str, criteria, args: list, inner_t: str = None) -> str:
             # Emitting the bare lane produced `f.text = $n` — a column that does
             # not exist, so the count errored and the page silently returned
             # nothing.
-            f"   AND f{p_slot}.{_LANE_SQL[lane][0]} = ${p_val}"
+            f"   AND f{p_slot}.{_LANE_SQL[lane][0]} = "
+            f"{_value_sql(lane, p_val)}{_tz_guard(lane, val, f'f{p_slot}')}"
             f"   AND f{p_slot}.entity_uuid = {t}.entity_uuid)")
     return "\n              ".join(out)
 

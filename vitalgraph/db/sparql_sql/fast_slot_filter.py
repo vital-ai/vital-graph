@@ -181,7 +181,8 @@ def filter_decline_reason(criteria) -> Optional[str]:
                 "declines too, the query falls to the general pipeline "
                 "(issues/172)")
     for attr in ("vector_criteria", "multi_vector_criteria", "geo_criteria",
-                 "entity_property_filters", "entity_uris", "search_string"):
+                 "entity_property_filters", "entity_uris", "slot_criteria",
+                 "search_string"):
         if getattr(criteria, attr, None):
             return (f"{attr} present — this table answers frame/slot equality "
                     f"only, and a partially applied query is a wrong answer")
@@ -213,14 +214,48 @@ def can_serve_filter(criteria) -> bool:
     # column this query never selected.
     if getattr(criteria, "sort_criteria", None):
         return False
+    # `slot_criteria` IS THE TOP-LEVEL ONE, not a frame's. `EntityQueryCriteria`
+    # carries entity -> frame -> slot criteria with no frame type named, which
+    # the builder emits as its own pattern (`kg_query_builder.py:809`) and this
+    # probe cannot express: `frame_type_path` is the index prefix and there is
+    # no path to supply. Read nowhere, they would simply not be applied, and an
+    # unapplied conjunct is a SUPERSET.
+    #
+    # Not reachable today — neither site that builds the criteria object this
+    # gate sees populates the field — so this is insurance, taken because the
+    # SORT path has checked it all along (`fast_slot_sort.can_serve`) and an
+    # asymmetry between two gates over one table is how the last four defects
+    # here happened.
     for attr in ("vector_criteria", "multi_vector_criteria", "geo_criteria",
-                 "entity_property_filters", "entity_uris", "search_string"):
+                 "entity_property_filters", "entity_uris", "slot_criteria",
+                 "search_string"):
         if getattr(criteria, attr, None):
             return False
     return _eq_criteria(fcs) is not None
 
 
-def _probe(t: str, idx: int, lane: str, tz_present: bool = False):
+def _value_sql(lane: str, n: int) -> str:
+    """The right-hand side of a comparison against this lane's column.
+
+    A date is normalised IN SQL rather than bound as a timestamp -- see `_probe`
+    for both reasons. Shared with `fast_slot_sort._filter_exists`, which applies
+    the same criteria to the same table for a sorted page: it binds through
+    `_eq_criteria` too, so a normalisation living only here would leave that path
+    declining every dated filter, which is exactly what it did.
+    """
+    return f"vitalgraph_iso_to_utc(${n})" if lane == "dt" else f"${n}"
+
+
+def _tz_guard(lane: str, val, alias: str = "") -> str:
+    """The timezone-agreement predicate for a date, or "" for other lanes."""
+    if lane != "dt":
+        return ""
+    col = f"{alias}.value_text" if alias else "value_text"
+    return (f" AND ({col} ~ '{_TZ_SQL_RE}') IS "
+            f"{'true' if _TZ_RE.search(str(val)) else 'false'}")
+
+
+def _probe(t: str, idx: int, lane: str, val=None):
     """One INTERSECT arm: an equality probe on the index's full leading prefix.
 
     THE DATE ARM IS NOT A PLAIN `= $n`, for two reasons.
@@ -243,18 +278,12 @@ def _probe(t: str, idx: int, lane: str, tz_present: bool = False):
     """
     col, _mn, _mx = _LANE_SQL[lane]
     b = idx * 3
-    if lane == "dt":
-        rhs = f"vitalgraph_iso_to_utc(${b + 5})"
-        guard = (f" AND (value_text ~ '{_TZ_SQL_RE}') IS "
-                 f"{'true' if tz_present else 'false'}")
-    else:
-        rhs, guard = f"${b + 5}", ""
     return f"""
         SELECT entity_uuid FROM {t}
          WHERE context_uuid = $1 AND entity_type_uuid = $2
            AND frame_type_path = ${b + 3}
            AND slot_type_uuid  = ${b + 4}
-           AND {col} = {rhs}{guard}
+           AND {col} = {_value_sql(lane, b + 5)}{_tz_guard(lane, val)}
     """
 
 
@@ -274,9 +303,7 @@ def _build(space_id: str, graph_uri: str, criteria):
         # a gate that says yes to a shape the builder then cannot bind is how a
         # fast path comes to raise instead of declining.
         args += [[_term_uuid(u) for u in path], _term_uuid(slot_type), val]
-        arms.append(_probe(t, i, lane,
-                           tz_present=bool(_TZ_RE.search(val))
-                           if lane == "dt" else False))
+        arms.append(_probe(t, i, lane, val))
     # INTERSECT, not a join: several criteria mean the entity satisfies ALL of
     # them, which is what the generated SPARQL conjunction means. It also lets
     # each arm be an independent index probe, so an arm matching NOTHING costs

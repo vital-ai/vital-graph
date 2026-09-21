@@ -158,3 +158,24 @@ def test_a_negated_NESTED_frame_criterion_refuses_too():
     outer.frame_criteria[0].negate = True
     assert _eq_criteria([outer]) is None
     assert not can_serve_filter(_Crit(frame_criteria=[outer]))
+
+
+def test_top_level_slot_criteria_refuse():
+    """`EntityQueryCriteria.slot_criteria`, not a frame's.
+
+    Entity -> frame -> slot with NO frame type named. The builder emits it as
+    its own pattern (`kg_query_builder.py:809`); this probe cannot express it,
+    because `frame_type_path` is the index prefix and there is no path to
+    supply. Read nowhere, those criteria would simply not be applied — and an
+    unapplied conjunct is a SUPERSET.
+
+    The SORT path has declined this all along (`fast_slot_sort.can_serve`); two
+    gates over one table disagreeing about a disqualifier is how several
+    defects here happened, so the asymmetry is closed even though no current
+    caller populates the field.
+    """
+    c = _Crit(frame_criteria=[_Frame(slot_criteria=[_Slot()])])
+    c.slot_criteria = [_Slot()]
+    assert not can_serve_filter(c)
+    from vitalgraph.db.sparql_sql.fast_slot_filter import filter_decline_reason
+    assert "slot_criteria" in (filter_decline_reason(c) or "")
