@@ -190,9 +190,14 @@ def build_frame_page_sql(space_id: str, terms: List[tuple], sort_by: Optional[st
             if dt != "dateTime":
                 return None
             cmp = ">=" if op == "gte" else "<="
+            # `vitalgraph_iso_to_utc($n)`, never `$n::timestamp` -- the twin in
+            # `fast_prop_sort.build_page_sql` records why. Briefly: the cast
+            # types the parameter as a timestamp, so asyncpg rejects the ISO
+            # STRING a listing holds and every dated page fell back; and the
+            # cast ignores the offset the column was normalised by.
             parts.append(f"SELECT frame_uuid FROM {t} WHERE context_uuid = $1 "
                          f"AND property_uuid = {pu} AND value_dt IS NOT NULL "
-                         f"AND value_dt {cmp} {p(str(value))}::timestamp")
+                         f"AND value_dt {cmp} vitalgraph_iso_to_utc({p(str(value))})")
         else:
             return None
 

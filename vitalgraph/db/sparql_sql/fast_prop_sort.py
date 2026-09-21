@@ -233,9 +233,31 @@ def build_page_sql(space_id: str, terms: List[tuple], sort_by: Optional[str],
             # the plan as the one place the two gates differ. Both dateTime
             # properties are single-valued in practice.
             cmp = ">=" if op == "gte" else "<="
+            # `vitalgraph_iso_to_utc($n)`, NEVER `$n::timestamp`. Two reasons,
+            # and each one alone is fatal.
+            #
+            # asyncpg reads the parameter's type from the statement PostgreSQL
+            # describes back, so `$n::timestamp` makes $n a timestamp and the
+            # driver then REFUSES the ISO string the listing actually holds:
+            #
+            #   asyncpg.exceptions.DataError: invalid input for query argument
+            #   $4: '2026-06-23T14:00:00.000Z' (expected a datetime.date or
+            #   datetime.datetime instance, got 'str')
+            #
+            # Every dated listing raised that, was caught by the blanket
+            # `except` below, and fell back -- so the fast path has never once
+            # served a date range, silently, in both the page and the count.
+            #
+            # And casting would be wrong even given a datetime: `value_dt` is
+            # `term.dt_val`, which is `vitalgraph_iso_to_utc(term_text)` --
+            # NORMALISED TO UTC. `::timestamp` IGNORES the offset, so a bound of
+            # 2026-06-23T14:00:00+05:00 would compare as 14:00 UTC against rows
+            # stored at 09:00 and quietly take in five hours of extra entities.
+            # Parsing it in Python would reproduce that decision in a second
+            # place; calling the same function cannot disagree with the column.
             parts.append(f"SELECT entity_uuid FROM {t} WHERE context_uuid = $1 "
                          f"AND property_uuid = {pu} AND value_dt IS NOT NULL "
-                         f"AND value_dt {cmp} {p(str(value))}::timestamp")
+                         f"AND value_dt {cmp} vitalgraph_iso_to_utc({p(str(value))})")
         else:
             return None
 
@@ -504,9 +526,13 @@ async def fast_entity_prop_count(
                     f"range filter on {prop} whose datatype is {dt}, not "
                     f"dateTime; only the dateTime lane carries a range")
             cmp = ">=" if op == "gte" else "<="
+            # Same normalisation as the page, for the same two reasons --
+            # `build_page_sql` carries them. The count must not merely avoid the
+            # crash the cast caused, it must read the bound the way the page
+            # does, or the two disagree about the size of the same list.
             parts.append(f"SELECT entity_uuid FROM {t} WHERE context_uuid = $1 "
                          f"AND property_uuid = {pu} AND value_dt IS NOT NULL "
-                         f"AND value_dt {cmp} {p(str(value))}::timestamp")
+                         f"AND value_dt {cmp} vitalgraph_iso_to_utc({p(str(value))})")
         else:
             return _decline(f"unsupported operator {op!r} on {prop}")
 
