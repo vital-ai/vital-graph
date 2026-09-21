@@ -1,7 +1,7 @@
 # Issues
 
 Numbered, append-only, one defect each. Resolved ones move to `archive/` —
-109 there, 111 live. An issue is archived only when nothing remains to do:
+112 there, 111 live. An issue is archived only when nothing remains to do:
 "FIXED in the converter, existing spaces need reloading" is not resolved, it is
 half-done, and it stays here.
 
