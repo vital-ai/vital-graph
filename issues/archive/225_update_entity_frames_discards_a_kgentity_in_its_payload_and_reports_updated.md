@@ -1,8 +1,53 @@
 # `update_entity_frames` Discards A `KGEntity` In Its Payload And Reports `updated`
 
-## Status: FIX 1 DONE 2026-09-21 — the payload no longer disappears silently.
-## STILL OPEN for fix 2: the `KGEntity` is still NOT written, it is now
-## REPORTED. Reproduced before fixing, and the fix landed in BOTH copies.
+## Status: FIXED 2026-09-21. Fix 1 shipped; **fix 2 REJECTED BY DESIGN** — see
+## below. Reproduced before fixing, and the fix landed in BOTH copies.
+
+### Fix 2 is not deferred, it is refused
+
+Updating a frame must not update the entity node. `update_entity_frames` is
+FRAME-SCOPED by definition, and honouring a `KGEntity` in its payload would
+make the blast radius of the call depend on what the caller happened to put in
+the list — the same call touching one subject or two, decided by payload
+contents rather than by which endpoint was called.
+
+That is worse than the silence this issue started as. So the entity node stays
+unwritten, and the fix is that the API now SAYS so instead of pretending.
+
+The message names the right door:
+
+    NOTE: KGEntity in the payload was NOT written -- update_entity_frames
+    writes frames, slots and edges only. Change entity properties with the
+    entity update endpoint
+
+**The reporter's underlying need is still real and is NOT met by this issue.**
+They want an entity property and a frame slot changed atomically, to keep a
+denormalised projection in step without a reconciler. That is a request for a
+write whose SCOPE IS BOTH, stated up front — not for a frame write that
+silently grows when handed an extra object. If it is wanted, it belongs in its
+own endpoint or an explicit flag, filed separately, and designed knowing what
+`execute_atomic_frame_update` already provides (below).
+
+### What the storage layer already does, recorded so nobody re-derives it
+
+Relevant if that separate request is ever taken up: the write is ALREADY
+subject-level and already transactional, and already locks the entity.
+
+    subject_uris = list({str(obj.URI) for obj in all_objects ...})
+    await backend_adapter.update_subjects_graph(
+        space_id, graph_id, subject_uris, insert_quads,
+        lock_uris=[entity_uri] if entity_uri else None)
+
+Subject-level delete + insert in one transaction, taking the ENTITY key as its
+lock (`issues/174`: entity upsert and entity-graph delete hold that key, so a
+frame write must take the same one). So the storage layer never needed changing
+for this — only the question of which subjects an endpoint is ALLOWED to touch,
+which is the scope question answered above.
+
+One trap for that future design: the delete is per subject, WHOLE subject. An
+endpoint accepting an entity node would replace all of its quads, so a caller
+sending a partial node would silently lose every property it omitted — this
+issue's own failure mode in a new place.
 
 ### What changed
 
