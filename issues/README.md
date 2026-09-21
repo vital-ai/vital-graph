@@ -1,7 +1,7 @@
 # Issues
 
 Numbered, append-only, one defect each. Resolved ones move to `archive/` —
-109 there, 105 live. An issue is archived only when nothing remains to do:
+109 there, 111 live. An issue is archived only when nothing remains to do:
 "FIXED in the converter, existing spaces need reloading" is not resolved, it is
 half-done, and it stays here.
 
@@ -173,6 +173,12 @@ baseline bakes both in.
 |---|---|---|
 | 042 | fixed in the converter | CSV import drops datatypes and diverges on term uuids; existing CSV-loaded spaces still need reloading |
 | 032 | deferred | `vitalgraph_service_impl` stranded by a sync interface |
+| 221 | FIXED 2026-09-21 | **Every `ExportEngine` format dropped literal DATATYPES**, so an export/import round trip turned `xsd:dateTime` into `xsd:string` — all four formats selected only text/type/lang and never joined the datatype table, while `bulk_export._nt_term_sql` next door did it correctly. Silent: `num_val`/`dt_val` are generated from `datatype_id`, so date sorting and numeric ranges stopped matching without erroring. Fixed and verified by round trip (1.48M quads, every datatype MATCH, 0 values lost). Spaces already restored from an old export are still wrong |
+| 220 | OPEN (hypothesis) | **The vector top-K guard may be backwards** — it materialises the CHILD (the expensive graph-pattern side) to stop a short page from an HNSW scan that measurably STREAMS (`actual rows=5`, not 9,200). Over-fetch-and-retry would not materialise it. **Unverified**: streaming is shown, "removing the guard is faster" is not. A/B must run both orders (`issues/218`) |
+| 219 | OPEN | **Vector auto-sync embeds "every literal property" instead of the configured mapping** — `build_search_text(props, None)` at `auto_sync.py:134`, the same defect `issues/217` fixed for FTS. Worse here: an embedding is opaque, so it reads as "the model is mediocre" rather than as a bug, and repair costs a provider call per row. Geo and fuzzy checked and OK. Also corrupts `vg:hybridSearch`, whose lexical half is now correct |
+| 218 | FIXED 2026-09-21 | **Message search took 50s where the work is 0.6s — and the first diagnosis in that file was WRONG, which is why it is kept.** Not the join order: `join_collapse_limit` is 8, PostgreSQL has 739 MCV lexemes on the tsv column, and left alone it drove from the FTS semi-join in 267 ms. The real causes were a STALE IMAGE (the push still kept its filter), a self-join through `URIProp` (84,291 loops to serve 4,320 rows), and `ORDER BY score` not being a total order (pages 1 and 2 shared 6 of 10 rows). Residual: cost scales with match count, not page size |
+| 217 | FIXED 2026-09-21 | **FTS auto-sync ignored the index's MAPPING and its SCOPE, and delete removed the entity but not its graph** — every write re-indexed a subject with "all literal properties" instead of the configured mapping, and inserted it into EVERY index in the space regardless of type, so a slot index narrowed 55.7x at populate drifted back toward everything; deleted entities left their slots' rows matching searches. All three fixed; bulk-delete path and the vector/geo/fuzzy equivalents still open |
+| 216 | FIXED 2026-09-21 | **`search text` read `tsv`/`search_text` from the VECTOR table, which the FTS decoupling emptied** — 3 of 37 vector tables still carry `tsv` and every new one carries neither, so the command could not return a row; a bare `except Exception: print` and no test is why it survived. Its `to_tsquery` + manual `" & ".join` also threw on `plaid!` and silently matched nothing for `AT&T`. Both fixed; now reads the FTS table and registry, honours the index's languages, and parses with `websearch_to_tsquery`, with a test |
 | 177 | fixed 2026-09-08 | The `issues/174` grouping-lock degradation could not degrade: a `lock_timeout` aborts the transaction server-side, so "proceeding UNSERIALISED" logged reassurance and then died on `InFailedSQLTransactionError`. Fixed with a savepoint. Read for the shape of the mistake — a fallback path that never ran, whose failure looked like success in the logs |
 
 ## Conventions worth keeping

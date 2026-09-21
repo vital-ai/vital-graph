@@ -401,3 +401,66 @@ class KGQueryStatsResponse(ResultStatus):
     total_frames: int = Field(..., description="Total frames in graph")
     relation_connections_count: int = Field(..., description="Count of relation-based connections")
     frame_connections_count: int = Field(..., description="Count of frame-based connections")
+
+
+# ---------------------------------------------------------------------------
+# Message / slot-text search
+# ---------------------------------------------------------------------------
+
+class MessageHit(BaseModel):
+    """One matching slot value, with the entity graph that owns it."""
+    entity_uri: Optional[str] = Field(
+        None, description="URI of the KG entity whose graph holds this slot")
+    slot_uri: str = Field(..., description="URI of the matching slot")
+    frame_uri: Optional[str] = Field(
+        None, description="URI of the frame holding the slot, when projected")
+    text: Optional[str] = Field(None, description="The matching slot value")
+    score: float = Field(
+        0.0,
+        description=(
+            "ts_rank_cd relevance. NOT comparable across queries — it is a "
+            "cover-density score whose scale depends on the query's term "
+            "count and the document length, so it orders results within one "
+            "query and means nothing between two."
+        ),
+    )
+
+
+class MessageSearchResponse(ResultStatus):
+    """Result of a slot-text search.
+
+    Carries the generated SPARQL deliberately. This search compiles to a
+    correlated scalar subquery per candidate row (`vg:textSearch`), so its cost
+    depends entirely on how well the rest of the pattern narrows the candidate
+    set — and that is invisible from the call site. Returning the query means a
+    caller who sees it run slowly can read and EXPLAIN what actually ran
+    instead of guessing.
+    """
+    status: OperationStatus = Field(
+        OperationStatus.OK, description="Outcome discriminator")
+    hits: List[MessageHit] = Field(
+        default_factory=list, description="Matches, best first")
+    sparql: Optional[str] = Field(
+        None, description="The SPARQL that was executed (see class docstring)")
+    index_name: Optional[str] = Field(
+        None, description="FTS index the search ran against")
+    ordered_by: str = Field(
+        "relevance",
+        description=(
+            "How these hits were ordered: 'relevance' (by ts_rank_cd) or "
+            "'slot' (by URI, unranked). Reported because the two are not "
+            "interchangeable and the caller cannot tell from the rows — an "
+            "unranked page looks exactly like a ranked one, and every score "
+            "on it is 0.0 because none was computed."
+        ),
+    )
+    next_after: Optional[tuple] = Field(
+        None,
+        description=(
+            "Keyset cursor for the NEXT page: (score, slot_uri) of this "
+            "page's last row. Pass it back as `after`. None when this is the "
+            "last page. Prefer this to `offset` — OFFSET materialises and "
+            "discards the skipped rows, so its cost grows with the page "
+            "number, while a keyset cursor's is flat."
+        ),
+    )

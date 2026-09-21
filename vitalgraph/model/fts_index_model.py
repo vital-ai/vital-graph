@@ -84,7 +84,17 @@ class PopulateFtsRequest(BaseModel):
     )
     type_uri: Optional[str] = Field(
         None,
-        description="Filter: specific KG Type URI",
+        description="Filter: specific KG Type URI (matched against rdf:type)",
+    )
+    slot_type_uri: Optional[str] = Field(
+        None,
+        description=(
+            "Filter: specific slot type URI (matched against "
+            "haley-ai-kg#hasKGSlotType). Use this to index ONE kind of slot. "
+            "type_uri cannot express it — every text-bearing slot shares the "
+            "rdf:type KGTextSlot, so type_uri alone indexes every text slot "
+            "in the graph. Combines with type_uri when both are given."
+        ),
     )
     batch_size: int = Field(100, ge=1, le=1000, description="Batch size")
 

@@ -429,7 +429,7 @@
   "baseline": {
     "name": "ingest",
     "promoted_from": "/Users/hadfield/Local/vital-git/vital-graph/tests/performance/results/run-20260916T142830Z-80a47d2c.json",
-    "reason": "",
+    "reason": "FIXTURE REMOVED 2026-09-21: `lead_nurture_grouped` (46 GB, 74.5M quads) was dropped from the test stack to free space. It is recreate-on-demand from internal_data/lead_nurture_grouped/ \u2014 the fast path is scripts/load_wordnet_csv.py with the pre-built quads.csv.gz + quads_terms.csv.gz (~11 min), or regenerate via scripts/generate_lead_dataset.py --entities 100000 --trim (seed 7, per manifest.json). The env block below is NOT edited: it records the machine these numbers were MEASURED on, where the fixture was resident at 49,077,829,632 bytes, and rewriting it would falsify that. Expect the next run to stamp a different `largest_gated_fixture` (sp_lead_synth_100k) and to report this space absent from SEED_ONLY_SPACES \u2014 that divergence is REAL and not drift to be explained away. Re-seed the fixture before re-promoting, or the new baseline measures a different stack.",
     "pg_stamped": true
   }
 }

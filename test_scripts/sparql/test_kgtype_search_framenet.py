@@ -13,7 +13,7 @@ Tests the KG Types search endpoint against the real FrameNet dataset
 
 This validates the full search pipeline:
   - Keyword: SPARQL CONTAINS → SQL LIKE
-  - FTS: vg:textSearch → {space}_fts_{idx} ts_rank_cd/plainto_tsquery
+  - FTS: vg:textSearch → {space}_fts_{idx} ts_rank_cd/websearch_to_tsquery
   - Vector: vg:vectorSimilarity → {space}_vec_{idx} HNSW cosine
   - Hybrid: vg:hybridSearch → FTS + vector JOIN fusion
   - Direct SPARQL: raw vg: function queries via /api/sparql endpoint

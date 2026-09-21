@@ -103,7 +103,8 @@ class KGEntityDeleteProcessor:
             self.logger.error(f"Error deleting entity {entity_uri}: {e}")
             return False
     
-    async def delete_entity_graph(self, backend, space_id: str, graph_id: str, entity_uri: str) -> int:
+    async def delete_entity_graph(self, backend, space_id: str, graph_id: str, entity_uri: str,
+                                  collected_uris: Optional[List[str]] = None) -> int:
         """
         Delete an entity graph (entity plus all related objects) from the backend.
         
@@ -116,6 +117,15 @@ class KGEntityDeleteProcessor:
             graph_id: Graph identifier (complete URI)
             entity_uri: URI of the primary entity whose graph should be deleted
             
+            collected_uris: Optional list; if given, every member subject URI
+                this deletes is appended to it. The caller needs them for
+                derived-data cleanup — an FTS/vector row is keyed on the
+                SUBJECT, so deleting an entity graph without telling those
+                stores which subjects went leaves rows that still match a
+                search and resolve to a deleted entity (issues/217).
+                This method already computes the list; it used to discard it
+                and return only a count.
+
         Returns:
             int: Number of objects deleted (0 if failed)
         """
@@ -156,6 +166,9 @@ class KGEntityDeleteProcessor:
                         if s_value:
                             subject_uris.append(s_value)
             
+            if collected_uris is not None:
+                collected_uris.extend(str(u) for u in subject_uris)
+
             if not subject_uris:
                 self.logger.warning(f"No objects found with kGGraphURI: {kg_graph_uri}")
                 return 0

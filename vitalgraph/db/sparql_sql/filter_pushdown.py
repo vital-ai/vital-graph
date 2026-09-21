@@ -31,6 +31,7 @@ are not applied again in the outer wrapper.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from typing import List, Optional, Tuple
 
@@ -254,6 +255,13 @@ def push_filters(plan: PlanV2, space_id: str, ctx=None) -> None:
         plan.filter_exprs = remaining if remaining else None
         logger.debug("Pushed %d filter(s) into %d BGP(s)",
                      n_pushed, len(pushed))
+
+    # Runs AFTER, and separately, because it does not consume its filter — the
+    # score is still needed by ORDER BY, so the FILTER stays and this only
+    # narrows what the correlated scorer is asked to probe. Reading
+    # `plan.filter_exprs` after the loop above is correct: a vg:textSearch
+    # score filter is never consumed there.
+    push_text_search(plan, space_id, ctx)
 
 
 # Backwards-compatible alias — this function used to handle text filters only.
@@ -1291,3 +1299,245 @@ def _try_in_filter(expr, bgp, term_table: str, quad_aliases: set, ctx):
 
     return (ref_id, f"{ref_id}.{col_name} {sql_op} "
                     f"{_term_set(ctx, term_table, ' OR '.join(conds))}")
+
+
+# ---------------------------------------------------------------------------
+# vg:textSearch push-down  (plan §7.1)
+# ---------------------------------------------------------------------------
+#
+# `vg:textSearch` emits a CORRELATED scalar subquery keyed on the searched
+# variable's uuid (`vg_functions.text_search_sql`). It SCORES a row the BGP has
+# already produced; it cannot drive from the GIN index. `emit_extend` wraps the
+# child as `SELECT *, (<subquery>) AS score FROM (<BGP>) e1`, and PostgreSQL
+# will not pull a scalar subquery in an inner derived table's select list up
+# into a driving scan. So the probe count tracks the CANDIDATE SET, and adding
+# more BGP patterns makes it worse rather than better.
+#
+# This is the same problem `CONTAINS` had, and it already has a fix here: push
+# the match into the BGP as a leaf constraint so `reorder_bgp.reorder_joins`
+# can pin it first. The only reason `vg:textSearch` never got it is a shape
+# difference — `push_filters` recognises filters over a variable bound by a
+# QUAD, and here the filter is over a variable bound by an EXTEND.
+#
+# THE CONSTRAINT IS ADDED, NOT SUBSTITUTED. The FILTER stays where it is and
+# the correlated subquery still computes the score, because ORDER BY needs it.
+# All this does is narrow what gets probed.
+
+# How many FTS matches may reach the scorer. 0 = no cap.
+#
+# Ranked top-N on GIN is inherently O(matches): `ts_rank_cd` reads the heap
+# tuple, not the index, so every match is scored before LIMIT applies. Measured
+# on a 321,276-row message index, page of 25:
+#
+#     matches      median
+#           0        9 ms
+#       4,320      146 ms
+#      80,705    4,880 ms
+#     118,702    7,491 ms
+#
+# A cap bounds that tail. It costs EXACTNESS — the top N of a bounded pool is
+# not necessarily the global top N — which is why it is off unless asked for.
+#
+# When it IS worth enabling: on this corpus the broad queries have almost no
+# ranking information to lose. `app` matched 118,702 messages and produced
+# THREE distinct scores; the phrase matching 80,705 produced ONE. A cap set
+# above the selective range therefore truncates only queries whose ordering is
+# already arbitrary. That is a property of short templated text and of
+# `ts_rank_cd` normalization, NOT of capping — measure
+# `count(DISTINCT ts_rank_cd(...))` before assuming it holds elsewhere.
+FTS_CANDIDATE_CAP = int(os.getenv("VG_FTS_CANDIDATE_CAP", "0"))
+
+
+def _fts_index_and_query(expr, ctx) -> Optional[Tuple[str, str]]:
+    """(fts_table, tsquery_sql) for a vg:textSearch call, or None."""
+    from .vg_functions import (
+        VG_TEXT_SEARCH, extract_text_search_args, _resolve_index_name,
+        _resolve_fts_languages, _build_tsquery_expr,
+    )
+    if not isinstance(expr, ExprFunction):
+        return None
+    from .vg_functions import VG_TEXT_MATCH
+    if getattr(expr, "function_iri", None) not in (VG_TEXT_SEARCH, VG_TEXT_MATCH):
+        return None
+    targs = extract_text_search_args(expr)
+    if targs is None or not targs.entity_var:
+        return None
+    idx = _resolve_index_name(targs.index_name, 'fts', ctx)
+    table = f"{ctx.space_id}_fts_{idx}"
+    languages = _resolve_fts_languages(idx, ctx)
+    # Same escaping and the same tsquery builder the scorer uses. If these ever
+    # diverge the push would narrow to a different set than the filter keeps.
+    safe_text = targs.search_text.replace("'", "''")
+    return table, _build_tsquery_expr(languages, safe_text)
+
+
+def _score_var_requiring_a_match(expr) -> Optional[str]:
+    """The variable this filter forces to be a MATCH, or None.
+
+    ONLY `FILTER(BOUND(?score))`, and the narrowness is measured rather than
+    cautious.
+
+    The push is worth doing only when it REPLACES the filter, because the win
+    comes from the scalar subquery in the SELECT list evaluating on the rows
+    that survive instead of on every candidate. Replacing is sound exactly
+    when the pushed set equals the set the filter keeps, and `BOUND` is the
+    only shape where that holds:
+
+        FILTER(BOUND(?score))   keeps exactly {rows where tsv @@ q}  -> equal
+        FILTER(?score > 0)      keeps a SUBSET of that               -> not equal
+
+    Measured 2026-09-21 on a 48.1M-quad space, 321,276-row FTS index, warm,
+    'saved application' matching 4,320 of 321,301 candidates:
+
+        correlated only (before this)              1,139 - 1,370 ms
+        pushed AND filter kept                            1,708 ms
+        pushed AND filter replaced                     56 -  77 ms
+
+    So keeping the filter alongside the push is NET NEGATIVE — both run, and
+    the semi-join is added work. `?score > N` can only be pushed that way, so
+    it is not pushed at all. An earlier revision accepted it; the first
+    measurement appeared to show a 4.3x win and was an artefact of whichever
+    query ran first warming the cache for the other.
+
+    The refusals still matter for correctness, not just cost:
+    `FILTER(!BOUND(?score))` asks for the NON-matches, and a BIND with no
+    filter wants every row with an unbound score. Pushing either would delete
+    rows the query asked for.
+    """
+    if not isinstance(expr, ExprFunction):
+        return None
+    name = (expr.name or "").lower()
+    args = expr.args or []
+    if name == "bound" and len(args) == 1 and isinstance(args[0], ExprVar):
+        return args[0].var
+    return None
+
+
+def _find_text_search_extend(node, var_name: str, depth: int = 0):
+    """The vg:textSearch expression bound to `var_name` by an EXTEND, or None."""
+    if node is None or depth > 8:
+        return None
+    if (node.kind == KIND_EXTEND and node.extend_var == var_name
+            and node.extend_expr is not None):
+        return node.extend_expr
+    for child in (node.children or []):
+        found = _find_text_search_extend(child, var_name, depth + 1)
+        if found is not None:
+            return found
+    return None
+
+
+def push_text_search(plan: PlanV2, space_id: str, ctx=None) -> int:
+    """Narrow the BGP by the FTS match behind a vg:textSearch score filter.
+
+    CONSUMES the filter it pushes. `FILTER(BOUND(?score))` and the pushed
+    `subject_uuid IN (SELECT ... WHERE tsv @@ q)` select the same rows, so
+    evaluating both is redundant — and measurably worse than evaluating
+    neither twice (see `_score_var_requiring_a_match`). The EXTEND stays: the
+    score is still computed for ORDER BY, but now only for rows that survive.
+
+    Returns the number of constraints pushed.
+    """
+    if ctx is None or plan.kind != KIND_FILTER or not plan.filter_exprs:
+        return 0
+    # Same refusal as the rest of this stage: an uncorrelated IN inside a
+    # correlated EXISTS body is re-executed per outer row.
+    if getattr(ctx, "in_correlated_subquery", False):
+        return 0
+
+    root = plan.children[0] if plan.children else None
+    if root is None:
+        return 0
+
+    added = 0
+    consumed = []
+    for expr in plan.filter_exprs:
+        # `vg:textMatch(?var, ...)` used DIRECTLY as a boolean filter. No
+        # EXTEND, no score, so there is no filter-on-a-bound-variable to
+        # recognise — the search expression IS the filter.
+        from .vg_functions import VG_TEXT_MATCH, extract_text_search_args
+        if (isinstance(expr, ExprFunction)
+                and getattr(expr, "function_iri", None) == VG_TEXT_MATCH):
+            targs = extract_text_search_args(expr)
+            if targs is None or not targs.entity_var:
+                continue
+            bgp = _find_bgp_binding(root, targs.entity_var)
+            if bgp is None:
+                continue
+            slot = bgp.var_slots.get(targs.entity_var)
+            if not slot or not slot.positions:
+                continue
+            resolved = _fts_index_and_query(expr, ctx)
+            if resolved is None:
+                continue
+            fts_table, tsquery = resolved
+            ref_id, col_name = slot.positions[0]
+            from .vg_functions import _context_clause
+            c_clause = _context_clause(ctx)
+            sql = (f"{ref_id}.{col_name} IN "
+                   f"(SELECT subject_uuid FROM {fts_table} "
+                   f"WHERE tsv @@ {tsquery}{c_clause})")
+            bgp.tagged_constraints.append((ref_id, sql))
+            bgp.constraints.append(sql)
+            consumed.append(expr)
+            added += 1
+            logger.debug("vg:textMatch pushdown: ?%s -> %s",
+                         targs.entity_var, sql[:90])
+            continue
+
+        score_var = _score_var_requiring_a_match(expr)
+        if score_var is None:
+            continue
+        search_expr = _find_text_search_extend(root, score_var)
+        if search_expr is None:
+            continue
+        from .vg_functions import extract_text_search_args
+        targs = extract_text_search_args(search_expr)
+        if targs is None:
+            continue
+        bgp = _find_bgp_binding(root, targs.entity_var)
+        if bgp is None:
+            continue
+        slot = bgp.var_slots.get(targs.entity_var)
+        if not slot or not slot.positions:
+            continue
+        resolved = _fts_index_and_query(search_expr, ctx)
+        if resolved is None:
+            continue
+        fts_table, tsquery = resolved
+
+        ref_id, col_name = slot.positions[0]
+        # NOT wrapped in a try/except. The FTS table is per-SPACE, not
+        # per-graph, so without this clause a graph-locked query would narrow
+        # to rows from another graph — a wrong answer, silently. If this ever
+        # raises, that is a bug to surface, not one to degrade past.
+        from .vg_functions import _context_clause
+        ctx_clause = _context_clause(ctx)
+
+        # Deliberately INLINE, not a MATERIALIZED CTE. `_term_set` above
+        # records the measurement: fencing the equivalent term set cost 41x,
+        # because the inline form early-terminates under two-phase paging and
+        # a CTE computes the whole set eagerly before the page starts.
+        # ORDER BY subject_uuid before LIMIT, never a bare LIMIT. An unordered
+        # LIMIT picks a different pool per execution, so two pages of the same
+        # search would be drawn from different candidate sets — the same
+        # instability that made OFFSET paging overlap (`issues/218` cause 3).
+        cap_clause = ""
+        if FTS_CANDIDATE_CAP > 0:
+            cap_clause = f" ORDER BY subject_uuid LIMIT {FTS_CANDIDATE_CAP}"
+        constraint_sql = (
+            f"{ref_id}.{col_name} IN "
+            f"(SELECT subject_uuid FROM {fts_table} "
+            f"WHERE tsv @@ {tsquery}{ctx_clause}{cap_clause})"
+        )
+        bgp.tagged_constraints.append((ref_id, constraint_sql))
+        bgp.constraints.append(constraint_sql)
+        consumed.append(expr)
+        added += 1
+        logger.debug("vg:textSearch pushdown: ?%s → %s",
+                     targs.entity_var, constraint_sql[:90])
+
+    if consumed:
+        remaining = [e for e in plan.filter_exprs if e not in consumed]
+        plan.filter_exprs = remaining if remaining else None
+    return added

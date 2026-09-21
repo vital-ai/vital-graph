@@ -142,7 +142,7 @@ six prod spaces hold the standard ids:
     lead_prod         40 rows   positions 1..40 intact
     sp_kg_types       40 rows   positions 1..40 intact
     wordnet_frames    40 rows   positions 1..40 intact
-    cardiff_kg        38 rows   positions 1..38 intact, 39/40 absent
+    prod_kg           38 rows   positions 1..38 intact, 39/40 absent
     lead_data         38 rows   positions 1..38 intact, 39/40 absent
     testspace         38 rows   positions 1..38 intact, 39/40 absent
 
@@ -309,7 +309,7 @@ references, and is shown by `--all` without `--apply`. It has not been run.
 
 ## 2026-09-21 — production topped up, and this issue is done
 
-Applied to `cardiff_kg`, `lead_data` and `testspace`: `39 = wktLiteral`,
+Applied to `prod_kg`, `lead_data` and `testspace`: `39 = wktLiteral`,
 `40 = geoLocation`, sequence 38 -> 40 on each.
 
 Verified against a full before-snapshot of all six prod datatype tables rather
@@ -320,7 +320,7 @@ each table are byte-identical.
 
 The insert could not have disturbed anything even had it been wrong: the
 highest `datatype_id` actually referenced by a term is **9** — across 1,665,314
-terms in `cardiff_kg` and 496,197 in `lead_data` — so ids 39 and 40 were dead
+terms in `prod_kg` and 496,197 in `lead_data` — so ids 39 and 40 were dead
 space. Both counts and that maximum are unchanged after the write.
 
 The sequences now sit at 40, which is the point. Before this they sat at 38,

@@ -687,31 +687,57 @@ class VitalGraphSearchUtilREPL:
             limit = 20
 
         try:
-            # If index specified, search that vec table's tsvector column
+            # FTS lives in {space}_fts_{index}, registered in {space}_fts_index.
+            #
+            # This read the VECTOR table and the VECTOR registry until
+            # issues/216. The FTS decoupling moved `search_text` and `tsv` out
+            # of the vector table, so the old query referenced two columns that
+            # no longer exist and could not return a row on any space created
+            # since. It survived because the `except` below prints and returns
+            # True, and nothing in tests/ covers this command.
             if index_name:
-                vec_table = f"{space}_vec_{index_name}"
+                fts_table = f"{space}_fts_{index_name}"
             else:
-                # Pick first available index
                 first = self._run(self.conn.fetchval(
-                    f"SELECT index_name FROM {space}_vector_index ORDER BY index_name LIMIT 1"
+                    f"SELECT index_name FROM {space}_fts_index ORDER BY index_name LIMIT 1"
                 ))
                 if not first:
-                    print("❌ No vector indexes found in space.")
+                    print("❌ No FTS indexes found in space.")
                     return True
-                vec_table = f"{space}_vec_{first}"
+                fts_table = f"{space}_fts_{first}"
                 index_name = first
 
-            tsquery = " & ".join(query_text.split())
+            # Match the stemmers the index was BUILT with, or a query can fail
+            # to match text the index does contain. `||` on tsquery is OR, so
+            # a hit through any configured language counts.
+            languages = self._run(self.conn.fetchval(
+                f"SELECT languages FROM {space}_fts_index WHERE index_name = $1",
+                index_name,
+            )) or ['english']
+            tsq = " || ".join(
+                f"websearch_to_tsquery('{lang}'::regconfig, $1)" for lang in languages
+            )
+
+            # websearch_to_tsquery, not to_tsquery. to_tsquery is the
+            # operator-syntax parser: it raises on ordinary input like
+            # `plaid!`, which the previous `" & ".join(split())` only papered
+            # over for the whitespace case. websearch_ never raises, and gives
+            # the user quoted phrases, `or` and `-exclusion` for free. Same
+            # parser as vg:textSearch (vg_functions.py::_build_tsquery_expr),
+            # so the CLI and the query path agree on what a query means.
             results = self._run(self.conn.fetch(f"""
                 SELECT subject_uuid,
-                       ts_rank(tsv, to_tsquery('english', $1)) AS rank,
+                       ts_rank_cd(tsv, {tsq}) AS rank,
                        LEFT(search_text, 80) AS text_preview
-                FROM {vec_table}
-                WHERE tsv @@ to_tsquery('english', $1)
+                FROM {fts_table}
+                WHERE tsv @@ ({tsq})
                 ORDER BY rank DESC
                 LIMIT $2
-            """, tsquery, limit))
+            """, query_text, limit))
 
+            if not results:
+                print(f"No matches in {fts_table} for {query_text!r}.")
+                return True
             data = [{'subject_uuid': str(r['subject_uuid']), 'rank': f"{r['rank']:.4f}",
                      'text_preview': r['text_preview'] or ''} for r in results]
             _print_table(data, ['subject_uuid', 'rank', 'text_preview'])

@@ -248,7 +248,13 @@ Examples:
         help="Path to input file (.nt, .nt.gz)")
     parser.add_argument(
         "--format", dest="file_format", default=None,
-        choices=["nt", "nq", "ttl", "jsonl"],
+        # `vital` belongs here: _run already dispatches it to
+        # import_vital_block_incremental, and it is what `vitalgraphexport
+        # --format vital` writes. Omitting it meant the format could only be
+        # reached by naming the file `.vital` and letting auto-detection find
+        # it — an explicit --format vital was rejected by argparse for a
+        # format the importer fully supports.
+        choices=["nt", "nq", "ttl", "jsonl", "vital"],
         help="File format (default: auto-detect from extension)")
     parser.add_argument(
         "--batch-size", "-b", type=int, default=50_000,

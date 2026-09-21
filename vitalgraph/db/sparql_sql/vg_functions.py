@@ -59,17 +59,24 @@ VG_WITHIN_BOUNDS = f"{VG_NS}withinBounds"
 VG_WITHIN_POLYGON = f"{VG_NS}withinPolygon"
 
 VG_TEXT_SEARCH = f"{VG_NS}textSearch"
+VG_TEXT_MATCH = f"{VG_NS}textMatch"
 VG_HYBRID_SEARCH = f"{VG_NS}hybridSearch"
 VG_FUZZY_MATCH = f"{VG_NS}fuzzyMatch"
 VG_TRIGRAM_SIMILARITY = f"{VG_NS}trigramSimilarity"
 
 VG_VECTOR_FUNCTIONS = frozenset({VG_VECTOR_SIMILARITY, VG_VECTOR_NEARBY})
 VG_TEXT_FUNCTIONS = frozenset({VG_TEXT_SEARCH, VG_HYBRID_SEARCH})
+# Boolean, no score. NOT in VG_TEXT_FUNCTIONS: that set marks the
+# SCORING functions, which the top-K optimizer and the type system treat
+# as producing xsd:double. textMatch produces a boolean and is never an
+# EXTEND.
+VG_TEXT_MATCH_FUNCTIONS = frozenset({VG_TEXT_MATCH})
 VG_MULTI_VECTOR_FUNCTIONS = frozenset({VG_MULTI_VECTOR_SIMILARITY, VG_MULTI_VECTOR_NEARBY})
 VG_GEO_FUNCTIONS = frozenset({VG_GEO_DISTANCE, VG_WITHIN_RADIUS, VG_WITHIN_BOUNDS, VG_WITHIN_POLYGON})
 VG_FUZZY_FUNCTIONS = frozenset({VG_FUZZY_MATCH})
 VG_TRIGRAM_FUNCTIONS = frozenset({VG_TRIGRAM_SIMILARITY})
 VG_ALL_FUNCTIONS = (VG_VECTOR_FUNCTIONS | VG_TEXT_FUNCTIONS
+                    | VG_TEXT_MATCH_FUNCTIONS
                     | VG_MULTI_VECTOR_FUNCTIONS | VG_GEO_FUNCTIONS
                     | VG_FUZZY_FUNCTIONS | VG_TRIGRAM_FUNCTIONS)
 
@@ -771,6 +778,139 @@ def vector_top_k_driving_sql(
     )
 
 
+def text_match_sql(expr: ExprFunction, ctx) -> Optional[str]:
+    """SQL for `vg:textMatch(?var, "text", "index")` — a boolean FILTER.
+
+    `vg:textSearch` returns a SCORE, and that is the whole cost: `ts_rank_cd`
+    reads the heap tuple, so ranked top-N on GIN must score EVERY match before
+    LIMIT applies. When the caller only needs "does this match", scoring is
+    pure waste — and on this data it is waste that buys nothing, because score
+    variance collapses exactly where the match set is large (a term matching
+    118,702 of 321,276 messages produced THREE distinct scores).
+
+    Measured, 118,702 matches, page of 25:
+
+        ranked (score every match, sort)        357 - 848 ms
+        unranked, ordered by subject_uuid           2.3 ms
+
+    Returning a boolean rather than a score is what makes that reachable: no
+    EXTEND, so nothing computes `ts_rank_cd` at all. Dropping the score from
+    the PROJECTION is not enough — `emit_extend` emits the companion columns
+    whether or not the outer SELECT reads them, which is why an earlier
+    attempt at an "unranked" mode measured no faster.
+
+    Emitted as EXISTS. `push_filters` rewrites it to an `IN (SELECT ...)` leaf
+    constraint when it can, which is better still; this is the fallback for
+    positions the push declines, such as inside an OPTIONAL.
+    """
+    targs = extract_text_search_args(expr)
+    if targs is None or not targs.entity_var:
+        return None
+    uuid_col = _resolve_uuid_col(targs.entity_var, ctx)
+    if uuid_col is None:
+        return None
+    resolved = _resolve_index_name(targs.index_name, 'fts', ctx)
+    fts_table = f"{ctx.space_id}_fts_{resolved}"
+    languages = _resolve_fts_languages(resolved, ctx)
+    safe_text = targs.search_text.replace("'", "''")
+    tsquery = _build_tsquery_expr(languages, safe_text)
+    ctx_clause = _context_clause(ctx)
+    return (f"EXISTS (SELECT 1 FROM {fts_table} "
+            f"WHERE subject_uuid = {uuid_col}{ctx_clause} "
+            f"AND tsv @@ {tsquery})")
+
+
+def text_top_k_driving_sql(
+    expr: ExprFunction,
+    ctx,
+    limit: int,
+    child_sql: Optional[str] = None,
+    child_uuid_col: Optional[str] = None,
+) -> Optional[VectorDrivingSQL]:
+    """Rank INSIDE the FTS table and return only the top K, for `vg:textSearch`.
+
+    The counterpart of `vector_top_k_driving_sql`, and it exists for the same
+    reason: `text_search_sql` emits a CORRELATED subquery, which scores every
+    candidate the BGP produced. With `ORDER BY score LIMIT 25` that means every
+    MATCH is scored, projected and sorted to return 25 rows — so cost tracks
+    the size of the match set rather than the page.
+
+    Measured 2026-09-21 on a 321,276-row index, phrase matching 80,705
+    messages, returning 25 (warm):
+
+        score every match, then sort     431 ms   (SQL core)
+        rank in the FTS table, LIMIT 25  197 ms
+
+    and the core understates it: under the correlated form the OUTER layers —
+    four term joins, the score projected twice, a sort over wide rows — also
+    run on 80,705 rows instead of 25, which is where the full query's 7.5 s
+    went.
+
+    THE CHILD RESTRICTION IS NOT OPTIONAL
+
+    `subject_uuid IN (SELECT DISTINCT <child uuid> FROM (child))` is what makes
+    the K rows returned here the SAME K that survive the downstream join. Take
+    the top 25 from the FTS table alone and any row that fails an outer join —
+    a slot whose entity is the wrong type, or sits in another graph — silently
+    shortens the page. That is the same failure class as an unstable sort
+    (`issues/218` cause 3): a plausible page, no error. The vector path carries
+    this guard for the identical reason.
+
+    It is NOT free — the child is materialised to evaluate it — so this is
+    worth it exactly when K is small relative to the match count, which is the
+    case the `vg_top_k` hint marks.
+    """
+    targs = extract_text_search_args(expr)
+    if targs is None or not targs.entity_var:
+        return None
+
+    resolved_fts_index = _resolve_index_name(targs.index_name, 'fts', ctx)
+    fts_table = f"{ctx.space_id}_fts_{resolved_fts_index}"
+    uuid_col = _resolve_uuid_col(targs.entity_var, ctx)
+    if uuid_col is None:
+        return None
+
+    languages = _resolve_fts_languages(resolved_fts_index, ctx)
+    safe_text = targs.search_text.replace("'", "''")
+    tsquery = _build_tsquery_expr(languages, safe_text)
+
+    where_parts = [f"tsv @@ {tsquery}"]
+    ctx_clause = _context_clause(ctx)
+    if ctx_clause:
+        # `_context_clause` returns a leading " AND ..."; this is a standalone
+        # WHERE, so strip it.
+        where_parts.append(ctx_clause.strip()[4:].strip())
+    if child_sql and child_uuid_col:
+        where_parts.append(
+            f"subject_uuid IN "
+            f"(SELECT DISTINCT {child_uuid_col} FROM ({child_sql}) AS __cs "
+            f"WHERE {child_uuid_col} IS NOT NULL)"
+        )
+    else:
+        # Without the child there is no guarantee the K rows survive the join.
+        return None
+
+    score_alias = "__vg_score"
+    rank = _rank_expr("tsv", tsquery,
+                      _resolve_fts_normalization(resolved_fts_index, ctx))
+    join_subquery = (
+        f"SELECT subject_uuid, {rank} AS {score_alias} "
+        f"FROM {fts_table} "
+        f"WHERE {' AND '.join(where_parts)} "
+        # subject_uuid breaks ties. ts_rank_cd ties heavily, and an unstable
+        # ORDER BY under LIMIT makes the page non-deterministic (issues/218).
+        f"ORDER BY {rank} DESC, subject_uuid "
+        f"LIMIT {limit}"
+    )
+
+    return VectorDrivingSQL(
+        join_subquery=join_subquery,
+        uuid_col=uuid_col,
+        score_alias=score_alias,
+        vec_request=None,
+    )
+
+
 def _resolve_fts_languages(index_name: str, ctx) -> List[str]:
     """Resolve the language list for an FTS index from pre-loaded metadata.
 
@@ -783,20 +923,85 @@ def _resolve_fts_languages(index_name: str, ctx) -> List[str]:
     return ['english']
 
 
+def _resolve_fts_normalization(index_name: str, ctx) -> int:
+    """`ts_rank_cd` normalization bitmask for an index, default 0.
+
+    0 is PostgreSQL's default and IGNORES document length. That is usually the
+    wrong choice on short text: measured on a 321,276-row message index, the
+    term `app` matched 118,702 documents and norm=0 gave them THREE distinct
+    scores — so "top 25 by relevance" was arbitrary. norm=1 (divide by
+    log(length)) gave 101.
+
+    Read from the index rather than hardcoded because it changes every score
+    the index produces, and because it is an editorial decision: dividing by
+    length favours short documents, so on a mixed SMS/email corpus it ranks
+    SMS above email at equal term density.
+    """
+    fts_meta = getattr(ctx, 'fts_index_meta', {}) or {}
+    meta = fts_meta.get(index_name) or {}
+    try:
+        return int(meta.get('rank_normalization') or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _rank_expr(tsv_col: str, tsquery: str, norm: int) -> str:
+    """`ts_rank_cd(...)`, with the normalization argument only when non-zero.
+
+    Omitted at 0 so the emitted SQL is unchanged for every index that has not
+    opted in — which keeps existing baselines and their recorded plans
+    comparable.
+    """
+    if norm:
+        return f"ts_rank_cd({tsv_col}, {tsquery}, {int(norm)})"
+    return f"ts_rank_cd({tsv_col}, {tsquery})"
+
+
 def _build_tsquery_expr(languages: List[str], safe_text: str) -> str:
-    """Build a multi-language plainto_tsquery expression.
+    """Build a multi-language websearch_to_tsquery expression.
 
     For a single language::
 
-        plainto_tsquery('english'::regconfig, 'search text')
+        websearch_to_tsquery('english'::regconfig, 'search text')
 
     For multiple languages::
 
-        (plainto_tsquery('english'::regconfig, 'search text')
-         || plainto_tsquery('spanish'::regconfig, 'search text'))
+        (websearch_to_tsquery('english'::regconfig, 'search text')
+         || websearch_to_tsquery('spanish'::regconfig, 'search text'))
+
+    `||` on `tsquery` is OR, so a multi-language index matches through any
+    configured stemmer.
+
+    WHY `websearch_to_tsquery` AND NOT `plainto_tsquery`
+
+    `plainto_tsquery` ANDs every term and offers nothing else — no quoted
+    phrase, no OR, no exclusion — so a user typing `"saved app" or plaid`
+    gets those quotes and that `or` treated as ordinary words. The search
+    text reaching this function comes from a caller's search box, and
+    `websearch_to_tsquery` is the parser built for exactly that::
+
+        websearch_to_tsquery('english', '"saved app" or plaid -declined')
+          -> 'save' <-> 'app' | 'plaid' & !'declin'
+
+    Bare terms still AND, so the previous behaviour is preserved for input
+    containing none of `"`, `or` or a leading `-`.
+
+    `to_tsquery` is the third option and is wrong here under any reading: it
+    is the operator-syntax parser and raises `syntax error in tsquery` on
+    ordinary input like `plaid!`. See `issues/216`, which is that mistake made
+    in `vitalgraphsearchutil_cmd.py`.
+
+    ON INPUT THAT YIELDS NO LEXEMES
+
+    Deliberately not guarded. `websearch_to_tsquery` never raises — garbage
+    and stop-word-only input both reduce to the empty tsquery, which `@@`
+    evaluates FALSE and `ts_rank_cd` scores 0. So a meaningless query returns
+    zero rows rather than erroring or, worse, matching everything. Verified
+    against PostgreSQL 18.4; asserted in
+    `test_scripts/search/test_tsquery_parser.py`.
     """
     parts = [
-        f"plainto_tsquery('{lang}'::regconfig, '{safe_text}')"
+        f"websearch_to_tsquery('{lang}'::regconfig, '{safe_text}')"
         for lang in languages
     ]
     if len(parts) == 1:
@@ -811,7 +1016,7 @@ def text_search_sql(
     """Generate SQL for vg:textSearch.
 
     Returns a correlated scalar subquery computing BM25 rank via
-    ``ts_rank_cd(tsv, plainto_tsquery(...))``.  Uses the GIN tsvector
+    ``ts_rank_cd(tsv, websearch_to_tsquery(...))``.  Uses the GIN tsvector
     index on ``{space}_fts_{index_name}``.
 
     When the FTS index is configured with multiple languages, generates
@@ -832,6 +1037,8 @@ def text_search_sql(
     safe_text = targs.search_text.replace("'", "''")
     languages = _resolve_fts_languages(resolved_fts_index, ctx)
     tsquery = _build_tsquery_expr(languages, safe_text)
+    rank = _rank_expr("tsv", tsquery,
+                      _resolve_fts_normalization(resolved_fts_index, ctx))
 
     # Read optimizer hints (set by vg_optimize pass)
     vg_hints = getattr(ctx, 'vg_hints', {})
@@ -840,22 +1047,22 @@ def text_search_sql(
 
     threshold_clause = ""
     if threshold is not None:
-        threshold_clause = f" AND ts_rank_cd(tsv, {tsquery}) > {threshold}"
+        threshold_clause = f" AND {rank} > {threshold}"
 
     if top_k:
         # Top-K optimization: ORDER BY rank inside subquery with LIMIT
         # This allows the GIN tsvector index to drive the search efficiently
         sql = (
-            f"(SELECT ts_rank_cd(tsv, {tsquery}) "
+            f"(SELECT {rank} "
             f"FROM {fts_table} "
             f"WHERE subject_uuid = {uuid_col}{ctx_clause} "
             f"AND tsv @@ {tsquery}{threshold_clause} "
-            f"ORDER BY ts_rank_cd(tsv, {tsquery}) DESC "
+            f"ORDER BY {rank} DESC "
             f"LIMIT 1)"
         )
     else:
         sql = (
-            f"(SELECT ts_rank_cd(tsv, {tsquery}) "
+            f"(SELECT {rank} "
             f"FROM {fts_table} "
             f"WHERE subject_uuid = {uuid_col}{ctx_clause} "
             f"AND tsv @@ {tsquery}{threshold_clause} "
@@ -911,7 +1118,25 @@ def hybrid_search_sql(
         space_id=ctx.space_id,
     )
 
-    bm25 = f"ts_rank_cd(f.tsv, {tsquery})"
+    # The lexical component is GATED on the match, not merely computed.
+    #
+    # `ts_rank_cd` ignores the `!` operator: measured on PG 18.4, the document
+    # "...app is saved... minutes..." scores 0.1 for `saved -minutes` — the
+    # same as for `saved` — while `tsv @@ q` is correctly false. An unsatisfied
+    # `&` does score 0, so this is specific to negation.
+    #
+    # That matters HERE and not in `text_search_sql`, because this candidate
+    # condition is an OR: a row excluded by the lexical query can still enter
+    # through the vector arm, and would then carry a positive BM25 weight for a
+    # term the user explicitly excluded with `-term`. The CASE makes the
+    # lexical component 0 for any row the lexical query does not match, which
+    # is what the fusion means. It is a no-op for every non-negated query.
+    #
+    # Only reachable since the parser became `websearch_to_tsquery`;
+    # `plainto_tsquery` had no negation to ignore.
+    bm25 = (f"CASE WHEN f.tsv @@ {tsquery} THEN "
+            f"{_rank_expr('f.tsv', tsquery, _resolve_fts_normalization(resolved_fts_index, ctx))} "
+            f"ELSE 0 END")
     cosine_sim = f"(1 - (v.embedding <=> {embedding_sql}))"
 
     sql = (

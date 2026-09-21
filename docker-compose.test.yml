@@ -121,13 +121,37 @@ services:
     # chosen — and 16 GB is what keeps a 120 GB fixture set workable, where
     # production's 7.69 GB would not be.
     #
+    # PARAMETERISED AND LOWERED TO 8GB, 2026-09-21. The paragraph above is
+    # still the reason it is not 7.69 GB, and it is also the reason lowering
+    # this does NOT change any measured PLAN — only how fast one runs. Do not
+    # "restore plan fidelity" by raising it; `effective_cache_size` below is
+    # the setting the planner actually reads, and that one still mirrors
+    # production.
+    #
+    # Why lower it at all: this VM is 31.5 GB and hosts ~23 containers, so a
+    # 16 GB pool is half the VM reserved for one of them. On 2026-09-21 a
+    # backend was OOM-killed inside the VM and PostgreSQL crashed twice, with
+    # the host at 0 B free, 0 B inactive, a 36.5 GB compressor pool and 50 of
+    # 51 GB of swap consumed. The host also runs a SECOND cluster with its own
+    # 16 GB pool.
+    #
+    # RAISE IT FOR A RUN THAT NEEDS IT — that is what the variable is for:
+    #
+    #   VG_TEST_SHARED_BUFFERS=16GB docker compose \
+    #     -f docker-compose.test.yml -f docker-compose.test.persist.yml up -d
+    #
+    # Worth raising for: a cold-vs-warm benchmark whose subject IS the buffer
+    # cache, or a fixture set large enough that 8 GB thrashes. Record the value
+    # with the result — `perf_record` stamps pg settings precisely because a
+    # number measured under different memory is not comparable (`issues/081`).
+    #
     # `default_statistics_target` is also deliberately absent: production runs
     # 500 against this stack's 100, but the setting is inert until every fixture
     # is re-ANALYZEd, which is its own step and its own re-promotion.
     command:
       - postgres
       - -c
-      - shared_buffers=16GB
+      - shared_buffers=${VG_TEST_SHARED_BUFFERS:-8GB}
       - -c
       - effective_cache_size=23GB
       - -c
@@ -212,6 +236,7 @@ services:
       # Found 2026-08-23: sp_lead_types and space_lead_dataset_test were stamped
       # but not excluded, so a maintenance ANALYZE of one of them produced a
       # spurious environment NOTE on a run whose actual fixtures had not moved.
+      - VG_FTS_CANDIDATE_CAP=${VG_FTS_CANDIDATE_CAP:-0}
       - VG_MAINTENANCE_EXCLUDE_SPACES=${VG_MAINTENANCE_EXCLUDE_SPACES:-sp_lead_synth_100k,sp_lead_synth_10k,sp_lead_dup,sp_sql_lead_dataset,wordnet_frames,sp_graph_synth_100k,sp_graph_synth_10k,sp_graph_skew_2k,sp_graph_forms_20k,sp_lead_types,space_lead_dataset_test,lead_nurture_grouped}
       # Storage
       - STORAGE_ENDPOINT=http://minio:9000

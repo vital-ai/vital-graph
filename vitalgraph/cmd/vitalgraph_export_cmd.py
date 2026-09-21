@@ -26,8 +26,39 @@ from ..db.connection_config import require
 # ---------------------------------------------------------------------------
 
 async def _create_pool(config):
-    """Create an asyncpg connection pool from VitalGraphConfig."""
+    """Create an asyncpg connection pool from VitalGraphConfig.
+
+    Statement timeouts are disabled for the session by default.
+
+    An export is long-running by definition — it reads a whole space through a
+    server-side cursor, and the block-format query sorts by grouping URI before
+    returning its first row. A server-side `statement_timeout` therefore kills
+    it, and does so LATE: the failure surfaces as
+    `QueryCanceledError: canceling statement due to statement timeout` partway
+    through, after the sort has already been paid for. Measured against a
+    production RDS instance whose parameter group sets both
+    `statement_timeout` and `idle_in_transaction_session_timeout` to 1 min —
+    a filtered block export could not get past the sort.
+
+    These are SESSION settings on this pool's connections only. They do not
+    touch the parameter group and affect no other session. Set
+    `VITALGRAPH_EXPORT_STATEMENT_TIMEOUT` to a PostgreSQL interval (e.g.
+    `10min`) to impose one instead.
+
+    THE IDLE TIMEOUT IS BOUNDED, NOT DISABLED — and that difference was paid
+    for. The cursor holds a transaction open across fetches, so a slow write
+    must not be read as an idle transaction; but setting it to 0 as well means
+    that if the export CLIENT dies — killed, crashed, disconnected — the
+    server keeps that transaction open forever, holding back vacuum on a
+    production database with nothing left to clean it up. That happened during
+    this change's own testing: a cancelled export left an `idle in transaction`
+    backend that had to be terminated by hand. A generous bound gives long
+    writes all the room they need and still collects an abandoned session.
+    """
     import asyncpg
+
+    stmt_timeout = os.getenv('VITALGRAPH_EXPORT_STATEMENT_TIMEOUT', '0')
+    idle_timeout = os.getenv('VITALGRAPH_EXPORT_IDLE_TIMEOUT', '10min')
 
     db_cfg = config.get_database_config()
     pool = await asyncpg.create_pool(
@@ -38,6 +69,10 @@ async def _create_pool(config):
         password=require(db_cfg, 'password'),
         min_size=2,
         max_size=6,
+        server_settings={
+            'statement_timeout': stmt_timeout,
+            'idle_in_transaction_session_timeout': idle_timeout,
+        },
     )
     return pool
 

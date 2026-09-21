@@ -99,8 +99,8 @@ def _scan_datatype_uris(file_path: str) -> set:
     """
     from pyoxigraph import parse as ox_parse
     out = set()
-    with open(file_path, "rb") as f:
-        for triple in ox_parse(f, "application/n-triples"):
+    with _open_rdf(file_path) as f:
+        for triple in ox_parse(f, _rdf_format(file_path)):
             o = triple.object
             if type(o).__name__ == "Literal" and not o.language:
                 dt = getattr(o, "datatype", None)
@@ -112,6 +112,58 @@ def _scan_datatype_uris(file_path: str) -> set:
 _XSD_STRING = "http://www.w3.org/2001/XMLSchema#string"
 
 _DATATYPE_IN_TEXT = re.compile(r'\^\^<([^>]+)>')
+
+
+# ---------------------------------------------------------------------------
+# Input handling: compression and quad-vs-triple
+# ---------------------------------------------------------------------------
+
+def _open_rdf(file_path: str):
+    """Open an RDF file for binary parsing, transparently decompressing .gz.
+
+    `vitalgraphexport` writes `.nt.gz` / `.nq.gz` and the import CLI's own help
+    advertises `.nt.gz`, but every read site here used a plain `open()`. A
+    gzipped file therefore reached the parser as compressed bytes and failed on
+    the first line. Exporting and re-importing a space — the round trip these
+    two commands exist to support — did not work for any compressed file.
+    """
+    if file_path.lower().endswith(".gz"):
+        import gzip
+        return gzip.open(file_path, "rb")
+    return open(file_path, "rb")
+
+
+def _open_rdf_text(file_path: str, errors: str = "strict"):
+    """Text-mode counterpart of `_open_rdf`, for the line/regex scanners.
+
+    CAVEAT for the resume path: callers that `seek(checkpoint_offset)` still
+    work on a gzip stream, but the seek is O(n) — it decompresses and discards
+    from the start — and an offset is only meaningful for the same stream kind
+    that produced it. A checkpoint taken against an uncompressed file must not
+    be replayed against its .gz twin.
+    """
+    if file_path.lower().endswith(".gz"):
+        import gzip
+        return gzip.open(file_path, "rt", encoding="utf-8", errors=errors)
+    return open(file_path, "r", encoding="utf-8", errors=errors)
+
+
+def _rdf_format(file_path: str) -> str:
+    """Parser format for a path: N-Quads for .nq/.nq.gz, else N-Triples.
+
+    The two are NOT interchangeable. pyoxigraph's N-Triples parser rejects a
+    quad outright — `Quads must be followed by a dot` — so an `.nq` file read
+    as N-Triples fails on line 1 rather than degrading quietly.
+
+    The parsed graph name is deliberately ignored by the callers: an import
+    targets ONE graph, named by the caller's `graph_uri`, and honouring a
+    per-quad graph would silently scatter rows across contexts the caller
+    never asked for.
+    """
+    lower = file_path.lower()
+    if lower.endswith(".nq") or lower.endswith(".nq.gz"):
+        return "application/n-quads"
+    return "application/n-triples"
 
 
 def _scan_datatype_uris_raw(file_path: str) -> set:
@@ -132,7 +184,7 @@ def _scan_datatype_uris_raw(file_path: str) -> set:
     # datatype_id=None here and with the real id on the bulk path, and the uuids
     # diverge for the most common term in any file.
     out = {_XSD_STRING}
-    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+    with _open_rdf_text(file_path, errors="replace") as f:
         for line in f:
             out.update(_DATATYPE_IN_TEXT.findall(line))
     return out
@@ -472,8 +524,8 @@ class ImportEngine:
         # Pre-register graph URI
         ensure(graph_uri, "U")
 
-        with open(file_path, "rb") as f:
-            for triple in ox_parse(f, "application/n-triples"):
+        with _open_rdf(file_path) as f:
+            for triple in ox_parse(f, _rdf_format(file_path)):
                 s_val, s_type, _, _ = _classify_node(triple.subject, bnode_scope)
                 ensure(s_val, s_type)
                 ensure(triple.predicate.value, "U")
@@ -636,8 +688,8 @@ class ImportEngine:
         # reference term uuids that pass 1 never inserted.
         bnode_scope = _bnode_scope_for(graph_uri, file_path)
 
-        with open(file_path, "rb") as f:
-            for triple in ox_parse(f, "application/n-triples"):
+        with _open_rdf(file_path) as f:
+            for triple in ox_parse(f, _rdf_format(file_path)):
                 s_val, s_type, _, _ = _classify_node(triple.subject, bnode_scope)
                 s_uuid = terms[(s_val, s_type, None, None)]
                 p_uuid = terms[(triple.predicate.value, "U", None, None)]
@@ -815,12 +867,12 @@ class ImportEngine:
             datatype_ids = await _resolve_datatype_ids(
                 conn, space_id, _scan_datatype_uris(file_path))
 
-        with open(file_path, "rb") as f:
+        with _open_rdf(file_path) as f:
             if checkpoint_offset > 0:
                 f.seek(checkpoint_offset)
                 logger.info("Resuming from checkpoint offset %d", checkpoint_offset)
 
-            for triple in ox_parse(f, "application/n-triples"):
+            for triple in ox_parse(f, _rdf_format(file_path)):
                 # Subject
                 s_val, s_type, _, _ = _classify_node(triple.subject, bnode_scope)
                 s_uuid = _term_uuid(s_val, s_type)
@@ -888,7 +940,7 @@ class ImportEngine:
         # Incremental aux table sync
         from vitalgraph.db.sparql_sql.sync_edge_table import resync_edge_table
         from vitalgraph.db.sparql_sql.sync_frame_slot_table import resync_frame_slot_table
-        from vitalgraph.db.sparql_sql.sync_entity_slot_sort import resync_entity_slot_sort
+        from vitalgraph.db.sparql_sql.sync_entity_slot_sort import rebuild_entity_slot_sort_batched
         from vitalgraph.db.sparql_sql.sync_entity_prop_sort import resync_entity_prop_sort
         from vitalgraph.db.sparql_sql.sync_frame_prop_sort import resync_frame_prop_sort
         from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
@@ -911,7 +963,12 @@ class ImportEngine:
             #
             # Full resyncs rather than incremental syncs because this is a bulk
             # load — the same choice the two lines above already make.
-            await resync_entity_slot_sort(conn, space_id)
+            # BATCHED, not the one-shot resync. The one-shot form holds ACCESS
+            # EXCLUSIVE on the table for its whole run and materialises the
+            # recursive walk in one backend's memory; measured on a 48.1M-quad
+            # space it ran 43 min without inserting a row and the backend was
+            # killed with the host out of memory. See the docstring.
+            await rebuild_entity_slot_sort_batched(conn, space_id)
             await resync_entity_prop_sort(conn, space_id)
             await resync_frame_prop_sort(conn, space_id)
             await recompute_stats_tables(conn, space_id)
@@ -1022,7 +1079,7 @@ class ImportEngine:
         # Ensure default graph term exists
         term_batch.append((default_graph_uuid, graph_uri, "U", None, None, "primary"))
 
-        with open(file_path, "r", encoding="utf-8") as f:
+        with _open_rdf_text(file_path) as f:
             if checkpoint_offset > 0:
                 f.seek(checkpoint_offset)
                 logger.info("Resuming from checkpoint offset %d", checkpoint_offset)
@@ -1113,7 +1170,7 @@ class ImportEngine:
         # Incremental aux table sync
         from vitalgraph.db.sparql_sql.sync_edge_table import resync_edge_table
         from vitalgraph.db.sparql_sql.sync_frame_slot_table import resync_frame_slot_table
-        from vitalgraph.db.sparql_sql.sync_entity_slot_sort import resync_entity_slot_sort
+        from vitalgraph.db.sparql_sql.sync_entity_slot_sort import rebuild_entity_slot_sort_batched
         from vitalgraph.db.sparql_sql.sync_entity_prop_sort import resync_entity_prop_sort
         from vitalgraph.db.sparql_sql.sync_frame_prop_sort import resync_frame_prop_sort
         from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
@@ -1136,7 +1193,12 @@ class ImportEngine:
             #
             # Full resyncs rather than incremental syncs because this is a bulk
             # load — the same choice the two lines above already make.
-            await resync_entity_slot_sort(conn, space_id)
+            # BATCHED, not the one-shot resync. The one-shot form holds ACCESS
+            # EXCLUSIVE on the table for its whole run and materialises the
+            # recursive walk in one backend's memory; measured on a 48.1M-quad
+            # space it ran 43 min without inserting a row and the backend was
+            # killed with the host out of memory. See the docstring.
+            await rebuild_entity_slot_sort_batched(conn, space_id)
             await resync_entity_prop_sort(conn, space_id)
             await resync_frame_prop_sort(conn, space_id)
             await recompute_stats_tables(conn, space_id)
@@ -1325,7 +1387,7 @@ class ImportEngine:
         # Incremental aux table sync
         from vitalgraph.db.sparql_sql.sync_edge_table import resync_edge_table
         from vitalgraph.db.sparql_sql.sync_frame_slot_table import resync_frame_slot_table
-        from vitalgraph.db.sparql_sql.sync_entity_slot_sort import resync_entity_slot_sort
+        from vitalgraph.db.sparql_sql.sync_entity_slot_sort import rebuild_entity_slot_sort_batched
         from vitalgraph.db.sparql_sql.sync_entity_prop_sort import resync_entity_prop_sort
         from vitalgraph.db.sparql_sql.sync_frame_prop_sort import resync_frame_prop_sort
         from vitalgraph.db.sparql_sql.sync_stats_tables import recompute_stats_tables
@@ -1348,7 +1410,12 @@ class ImportEngine:
             #
             # Full resyncs rather than incremental syncs because this is a bulk
             # load — the same choice the two lines above already make.
-            await resync_entity_slot_sort(conn, space_id)
+            # BATCHED, not the one-shot resync. The one-shot form holds ACCESS
+            # EXCLUSIVE on the table for its whole run and materialises the
+            # recursive walk in one backend's memory; measured on a 48.1M-quad
+            # space it ran 43 min without inserting a row and the backend was
+            # killed with the host out of memory. See the docstring.
+            await rebuild_entity_slot_sort_batched(conn, space_id)
             await resync_entity_prop_sort(conn, space_id)
             await resync_frame_prop_sort(conn, space_id)
             await recompute_stats_tables(conn, space_id)

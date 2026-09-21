@@ -1490,6 +1490,16 @@ class SparqlSQLSchema:
                 index_id        SERIAL PRIMARY KEY,
                 index_name      VARCHAR(255) NOT NULL UNIQUE,
                 languages       VARCHAR(64)[] NOT NULL DEFAULT '{{english}}',
+                -- ts_rank_cd normalization bitmask, per PostgreSQL docs.
+                -- 0 = the PostgreSQL default, which IGNORES document length.
+                -- On a short-text corpus that discards the main signal that
+                -- separates documents: measured on 118,702 matching messages,
+                -- norm=0 produced THREE distinct scores and norm=1 produced
+                -- 101. Stored per index rather than hardcoded because it is an
+                -- editorial choice — 1 divides by log(length) and so favours
+                -- short documents, which on a mixed SMS/email corpus means
+                -- ranking SMS above email at equal term density.
+                rank_normalization INTEGER NOT NULL DEFAULT 0,
                 created_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')

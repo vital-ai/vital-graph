@@ -260,6 +260,7 @@ class FtsIndexesEndpoint:
                 conn, space_id, index_name, context_uuid,
                 mapping_type=body.mapping_type,
                 type_uri=body.type_uri,
+                slot_type_uri=body.slot_type_uri,
                 batch_size=body.batch_size,
             )
             logger.info(

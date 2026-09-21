@@ -922,3 +922,73 @@ async def entity_slot_sort_all_types(conn, space_id: str,
          "of_type": int(r["of_type"])}
         for r in rows
     ]
+
+
+async def rebuild_entity_slot_sort_batched(
+        conn, space_id: str, batch_size: int = None,
+        max_batches_per_type: int = 100_000) -> int:
+    """Rebuild the slot-sort table in BOUNDED batches. For bulk loads.
+
+    Same result as `resync_entity_slot_sort`, reached without holding the
+    table exclusively or materialising the whole walk at once.
+
+    WHY THIS EXISTS RATHER THAN THE ONE-SHOT RESYNC
+
+    `resync_entity_slot_sort` is `TRUNCATE` + one `INSERT ... WITH RECURSIVE`
+    over the entire graph, inside one transaction. Three consequences, all of
+    which the import path was paying:
+
+      * it holds ACCESS EXCLUSIVE on the table for the whole run, so every
+        reader blocks — and a blocked reader makes later readers queue behind
+        IT;
+      * the recursive walk is materialised in one backend's private memory,
+        which grows with the graph rather than with any batch;
+      * a failure anywhere loses all of it.
+
+    Measured 2026-09-21 on a 48.1M-quad space (84,291 entity graphs, 3.4M
+    edges): the one-shot form ran **43 minutes without inserting a single
+    row**, CPU-bound with no buffer reads — still expanding the CTE — and the
+    backend was killed with the host out of memory and swap. That is ~10x the
+    216-303s `issues/150` measured for the full walk, and it never completed.
+
+    `backfill_entity_slot_sort_batch` already solved this for the maintenance
+    loop (`issues/151`) and is sized at 100 -> 53ms, 500 -> 30ms, 2000 ->
+    151ms. It was simply never wired into import. This walks every entity type
+    with it.
+
+    TRUNCATE FIRST, then batch. The batch primitive seeds on entities with NO
+    rows, so it adds what is missing and would otherwise leave stale rows from
+    a previous load behind. The TRUNCATE is its own transaction and returns
+    immediately; the exclusive lock is not held across the walk.
+
+    Returns total rows inserted.
+    """
+    t = f"{space_id}_entity_slot_sort"
+    await conn.execute(f"TRUNCATE {t}")
+
+    types = await entity_slot_sort_all_types(conn, space_id)
+    n = int(batch_size or ESS_BACKFILL_BATCH)
+    total = 0
+
+    for row in types:
+        type_uuid = row["entity_type_uuid"]
+        for _ in range(max_batches_per_type):
+            selected, inserted = await backfill_entity_slot_sort_batch(
+                conn, space_id, type_uuid, batch_size=n)
+            total += inserted
+            # The termination contract is the batch function's own, and both
+            # halves matter: `selected == 0` means this type is done, and
+            # `inserted == 0` with entities still selected means those entities
+            # derive nothing (no frames, or slots with no values). Treating the
+            # second as "keep going" spins on the same batch forever.
+            if selected == 0 or inserted == 0:
+                break
+        else:
+            logger.warning(
+                "rebuild_entity_slot_sort_batched(%s): type %s hit the batch "
+                "ceiling (%d x %d); stopping this type rather than looping",
+                space_id, row.get("entity_type"), max_batches_per_type, n)
+
+    logger.info("rebuild_entity_slot_sort_batched(%s): %d rows across %d types",
+                space_id, total, len(types))
+    return total

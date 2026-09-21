@@ -148,7 +148,15 @@ DERIVED = {
     # issues/096. A stale row here is a WRONG SORT ORDER, not a slow query —
     # the sort reads the value straight off this table — so it is a structural
     # mirror on the same terms as edge and frame_slot.
+    # `rebuild_entity_slot_sort_batched` ADDED 2026-09-21. It is the batched
+    # replacement for the one-shot `resync_entity_slot_sort` on the IMPORT
+    # paths, and it maintains this table by exactly the same derivation —
+    # TRUNCATE, then `backfill_entity_slot_sort_batch` per entity type — so
+    # accepting it is not a weakening. It needs naming explicitly because the
+    # marker matches `sync_entity_slot_sort\w*(`, which `resync_...` satisfies
+    # (the search finds it at offset 2) and `rebuild_...` does not.
     "entity_slot_sort": (("sync_entity_slot_sort",
+                          "rebuild_entity_slot_sort",
                           "delete_entity_slot_sort_for_context", _REBUILD),
                          "denormalised entity->frame->slot sort values; a slot "
                          "sort reads its ORDER from this table"),

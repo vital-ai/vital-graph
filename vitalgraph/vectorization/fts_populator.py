@@ -86,6 +86,53 @@ WHERE q.context_uuid = $1
   AND t_obj.term_text = $2
 """
 
+# Select by hasKGSlotType instead of rdf:type.
+#
+# WHY THIS EXISTS. `type_uri` filters on rdf:type, and every KG slot carrying
+# text has the SAME rdf:type — haley-ai-kg#KGTextSlot. So the narrowest index
+# reachable through `type_uri` is "every text slot in the graph", whatever the
+# slot actually means. Measured on a KG space: 180,554 KGTextSlot subjects to
+# reach 3,229 message slots, 56x. The surplus is not just size — company names
+# and lead statuses land in the same tsvector corpus and shift the IDF that
+# ranking depends on.
+#
+# The discriminator is hasKGSlotType, which is what the slot model uses to say
+# what a slot IS. Filtering on it is the difference between "index the messages"
+# and "index every text slot and hope".
+#
+# DISTINCT is load-bearing, not decoration: a space whose quad PK carries a
+# quad_uuid column can hold the same (s,p,o,c) more than once, and without it
+# such a subject is populated repeatedly.
+SLOT_TYPED_SUBJECTS_SQL = """
+SELECT DISTINCT q.subject_uuid
+FROM {rdf_quad} q
+JOIN {term} t_pred ON q.predicate_uuid = t_pred.term_uuid
+JOIN {term} t_obj  ON q.object_uuid    = t_obj.term_uuid
+WHERE q.context_uuid = $1
+  AND t_pred.term_text = 'http://vital.ai/ontology/haley-ai-kg#hasKGSlotType'
+  AND t_obj.term_text = $2
+"""
+
+# Both filters together: rdf:type AND hasKGSlotType. Narrower than either.
+SLOT_AND_TYPE_SUBJECTS_SQL = """
+SELECT DISTINCT q.subject_uuid
+FROM {rdf_quad} q
+JOIN {term} t_pred ON q.predicate_uuid = t_pred.term_uuid
+JOIN {term} t_obj  ON q.object_uuid    = t_obj.term_uuid
+WHERE q.context_uuid = $1
+  AND t_pred.term_text = 'http://vital.ai/ontology/haley-ai-kg#hasKGSlotType'
+  AND t_obj.term_text = $2
+  AND EXISTS (
+    SELECT 1 FROM {rdf_quad} qt
+    JOIN {term} tp ON qt.predicate_uuid = tp.term_uuid
+    JOIN {term} to_ ON qt.object_uuid = to_.term_uuid
+    WHERE qt.subject_uuid = q.subject_uuid
+      AND qt.context_uuid = q.context_uuid
+      AND tp.term_text = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
+      AND to_.term_text = $3
+  )
+"""
+
 
 async def populate_fts_index(
     conn,
@@ -94,6 +141,7 @@ async def populate_fts_index(
     context_uuid,
     *,
     type_uri: Optional[str] = None,
+    slot_type_uri: Optional[str] = None,
     mapping_rule: Optional[MappingRule] = None,
     mapping_type: Optional[str] = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
@@ -112,7 +160,11 @@ async def populate_fts_index(
         space_id: Space identifier.
         index_name: Name of the FTS index (must exist in fts_index table).
         context_uuid: Graph context UUID.
-        type_uri: Optional RDF type URI to filter subjects.
+        type_uri: Optional RDF type URI to filter subjects (rdf:type).
+        slot_type_uri: Optional haley:hasKGSlotType URI to filter subjects.
+            Combines with type_uri when both are given. Without this the
+            narrowest reachable slot index is "every KGTextSlot in the graph"
+            — see SLOT_TYPED_SUBJECTS_SQL for what that costs.
         mapping_rule: Pre-resolved mapping rule. If None, resolved from DB.
         mapping_type: Mapping type for DB resolution (e.g., 'kgentity').
         batch_size: Number of subjects to process per batch.
@@ -125,10 +177,23 @@ async def populate_fts_index(
     stats = FTSPopulationStats()
     t0 = time.monotonic()
 
-    # Resolve mapping rule from shared search_mapping tables
+    # Resolve mapping rule from shared search_mapping tables.
+    #
+    # `slot_type_uri` is used as the mapping key when no `type_uri` is given.
+    # A kgslot mapping says WHICH KIND OF SLOT it describes in `type_uri`, so
+    # resolving with `type_uri=None` matches only class-level rows and a
+    # mapping keyed on the slot type is invisible — populate then exits as
+    # "no mapping found" having indexed nothing, which reads like an empty
+    # graph rather than a lookup miss.
+    #
+    # It also makes populate agree with `_sync_fts_for_subjects`, which
+    # resolves the same mapping with the subject's slot type (issues/217). The
+    # two must key alike or the bulk load and the incremental writes use
+    # different rules for the same index.
     if mapping_rule is None and mapping_type is not None:
         mapping_rule = await resolve_search_mapping(
-            conn, space_id, index_name, mapping_type, type_uri,
+            conn, space_id, index_name, mapping_type,
+            type_uri if type_uri is not None else slot_type_uri,
         )
 
     if mapping_rule is None:
@@ -163,21 +228,38 @@ async def populate_fts_index(
 
     # Get subjects to index
     if subject_uuids is None:
-        if type_uri:
-            sql = TYPED_SUBJECTS_SQL.format(
-                rdf_quad=f"{space_id}_rdf_quad",
-                term=f"{space_id}_term",
+        tables = {"rdf_quad": f"{space_id}_rdf_quad", "term": f"{space_id}_term"}
+        if slot_type_uri and type_uri:
+            rows = await conn.fetch(
+                SLOT_AND_TYPE_SUBJECTS_SQL.format(**tables),
+                context_uuid, slot_type_uri, type_uri,
             )
-            rows = await conn.fetch(sql, context_uuid, type_uri)
+        elif slot_type_uri:
+            rows = await conn.fetch(
+                SLOT_TYPED_SUBJECTS_SQL.format(**tables),
+                context_uuid, slot_type_uri,
+            )
+        elif type_uri:
+            rows = await conn.fetch(
+                TYPED_SUBJECTS_SQL.format(**tables), context_uuid, type_uri,
+            )
         else:
             sql = ALL_SUBJECTS_SQL.format(rdf_quad=f"{space_id}_rdf_quad")
             rows = await conn.fetch(sql, context_uuid)
         subject_uuids = [r["subject_uuid"] for r in rows]
 
     logger.info(
-        "populate_fts_index: %s/%s — %d subjects, languages=%s, mode=%s",
+        "populate_fts_index: %s/%s — %d subjects, languages=%s, mode=%s, "
+        "filter=%s",
         space_id, index_name, len(subject_uuids), languages,
         "full" if is_full_population else "incremental",
+        # The selector is worth logging: "0 rows stored" reads identically
+        # whether the filter was too narrow or the mapping produced no text,
+        # and those have opposite fixes.
+        (f"slot_type={slot_type_uri}" if slot_type_uri else "")
+        + (" " if slot_type_uri and type_uri else "")
+        + (f"type={type_uri}" if type_uri else "")
+        or ("explicit subject list" if not is_full_population else "none"),
     )
 
     if not subject_uuids:
@@ -267,6 +349,7 @@ async def _process_fts_batch(
 
     # 3. Build search_text and upsert
     upsert_sql = UPSERT_FTS_SQL.format(fts_table=fts_table)
+    rows: List[Tuple] = []
     for subj_uuid in subject_uuids:
         stats.subjects_processed += 1
         props = props_map.get(subj_uuid, [])
@@ -291,8 +374,26 @@ async def _process_fts_batch(
         if not text.strip():
             stats.subjects_skipped += 1
             continue
-        await conn.execute(upsert_sql, subj_uuid, context_uuid, text)
-        stats.rows_stored += 1
+        rows.append((subj_uuid, context_uuid, text))
+
+    # ONE round trip for the batch, not one per subject.
+    #
+    # This loop already holds the whole batch, and used to `await
+    # conn.execute(...)` inside it — a network round trip per ROW. Measured
+    # 2026-09-21: 4.25 ms/round-trip from a host to a port-forwarded container
+    # against 0.21 ms container-to-container, so 141k message slots cost ~10
+    # minutes of pure latency from outside the VM and ~30 s from inside. The
+    # work was identical; only where it was driven from decided the runtime,
+    # which is the signature of a latency-bound loop rather than a slow query.
+    #
+    # `executemany` keeps the UPSERT and its ON CONFLICT exactly as they were —
+    # this changes how the rows are SENT, not what they mean. A COPY into a
+    # staging table would be faster still, but it cannot express ON CONFLICT
+    # without a second statement, and the gain over a pipelined executemany
+    # does not pay for that here.
+    if rows:
+        await conn.executemany(upsert_sql, rows)
+        stats.rows_stored += len(rows)
 
 
 async def delete_subject_fts(

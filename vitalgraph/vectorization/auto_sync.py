@@ -303,6 +303,7 @@ async def _sync_fts_for_subjects(
         update_subject_fts,
         delete_subject_fts,
     )
+    from vitalgraph.vectorization.search_text_builder import resolve_search_mapping
 
     # Quick check: does this space have any FTS indexes?
     try:
@@ -318,18 +319,112 @@ async def _sync_fts_for_subjects(
 
     index_names = [r["index_name"] for r in rows]
 
+    if operation == "delete":
+        for subj_uuid in subject_uuids:
+            for idx_name in index_names:
+                try:
+                    await delete_subject_fts(conn, space_id, idx_name,
+                                             subj_uuid, context_uuid)
+                except Exception as e:
+                    logger.warning("auto_sync fts delete %s/%s/%s failed: %s",
+                                   space_id, idx_name, subj_uuid, e)
+        return
+
+    # WHAT EACH SUBJECT IS, so the index's mapping can be resolved for it.
+    #
+    # This used to call `update_subject_fts` with NO mapping_rule, and that is
+    # two defects rather than one (issues/217):
+    #
+    #  1. `build_search_text(props, None)` falls back to "every literal
+    #     property". So a row written by the bulk populator (the configured
+    #     mapping — say `hasTextSlotValue` alone) was REPLACED on the next
+    #     write by one holding the slot type URI, the frame URI, the graph URI,
+    #     timestamps and the text. The two writers disagreed about what a row
+    #     means, and ranking moved the first time anything was touched.
+    #
+    #  2. Nothing checked whether the subject was in the index's SCOPE, so
+    #     every changed subject was upserted into EVERY index in the space. An
+    #     index populated for one slot type acquired entities, frames and every
+    #     other slot type as soon as they were written.
+    #
+    # Resolving the mapping fixes both, because NO MAPPING NOW MEANS SKIP. An
+    # index whose mapping does not cover a subject should not contain it —
+    # which is also what the bulk populator already does (`populate_fts_index`
+    # returns early when `resolve_search_mapping` finds nothing).
+    scope = await _subject_scopes(conn, space_id, subject_uuids, context_uuid)
+
     for subj_uuid in subject_uuids:
+        # str() on BOTH sides. asyncpg returns uuid.UUID keys; callers may hold
+        # either a UUID or its string form, and a type mismatch here does not
+        # raise — it misses, reads as "out of scope", and DELETES the subject
+        # from every index. Silent data loss is not an acceptable failure mode
+        # for a key lookup.
+        mapping_type, type_uri = scope.get(str(subj_uuid), (None, None))
         for idx_name in index_names:
             try:
-                if operation == "delete":
-                    await delete_subject_fts(conn, space_id, idx_name, subj_uuid, context_uuid)
-                else:
-                    await update_subject_fts(conn, space_id, idx_name, subj_uuid, context_uuid)
+                rule = None
+                if mapping_type:
+                    rule = await resolve_search_mapping(
+                        conn, space_id, idx_name, mapping_type, type_uri)
+                if rule is None or not rule.enabled:
+                    # Out of scope for this index. Remove any row a previous
+                    # (unscoped) sync left behind, so the fix also repairs
+                    # what the defect wrote.
+                    await delete_subject_fts(conn, space_id, idx_name,
+                                             subj_uuid, context_uuid)
+                    continue
+                await update_subject_fts(
+                    conn, space_id, idx_name, subj_uuid, context_uuid,
+                    mapping_rule=rule, mapping_type=mapping_type)
             except Exception as e:
                 logger.warning(
                     "auto_sync fts %s/%s/%s failed: %s",
                     space_id, idx_name, subj_uuid, e,
                 )
+
+
+# `hasKGSlotType` for a slot, else `hasKGEntityType`, else rdf:type — the three
+# ways a KG object says what it IS, in the order a mapping would key on them.
+_SCOPE_SQL = """
+SELECT q.subject_uuid,
+       max(CASE WHEN tp.term_text = $3 THEN tv.term_text END) AS slot_type,
+       max(CASE WHEN tp.term_text = $4 THEN tv.term_text END) AS entity_type,
+       max(CASE WHEN tp.term_text = $5 THEN tv.term_text END) AS rdf_type
+FROM {rdf_quad} q
+JOIN {term} tp ON tp.term_uuid = q.predicate_uuid
+JOIN {term} tv ON tv.term_uuid = q.object_uuid
+WHERE q.subject_uuid = ANY($1::uuid[])
+  AND q.context_uuid = $2
+  AND tp.term_text IN ($3, $4, $5)
+GROUP BY q.subject_uuid
+"""
+
+
+async def _subject_scopes(conn, space_id: str, subject_uuids, context_uuid):
+    """subject_uuid -> (mapping_type, type_uri) for mapping resolution.
+
+    One query for the whole batch, not one per subject: this runs on every
+    write, so a per-subject round trip would put three queries on the hot path
+    for a three-object entity graph.
+    """
+    HALEY = "http://vital.ai/ontology/haley-ai-kg#"
+    rows = await conn.fetch(
+        _SCOPE_SQL.format(rdf_quad=f"{space_id}_rdf_quad",
+                          term=f"{space_id}_term"),
+        list(subject_uuids), context_uuid,
+        f"{HALEY}hasKGSlotType", f"{HALEY}hasKGEntityType",
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+    )
+    out = {}
+    for r in rows:
+        key = str(r["subject_uuid"])   # see the lookup in the caller
+        if r["slot_type"]:
+            out[key] = ("kgslot", r["slot_type"])
+        elif r["entity_type"]:
+            out[key] = ("kgentity", r["entity_type"])
+        elif r["rdf_type"]:
+            out[key] = ("kgentity", r["rdf_type"])
+    return out
 
 
 async def _space_still_exists(conn, space_id: str) -> bool:

@@ -147,6 +147,7 @@ class FtsIndexesClientEndpoint(BaseEndpoint):
         graph_uri: str,
         mapping_type: Optional[str] = None,
         type_uri: Optional[str] = None,
+        slot_type_uri: Optional[str] = None,
         batch_size: int = 100,
     ) -> PopulateFtsResponse:
         """Populate FTS data table from entity properties.
@@ -156,17 +157,28 @@ class FtsIndexesClientEndpoint(BaseEndpoint):
             index_name: Index name
             graph_uri: Graph URI to populate from
             mapping_type: Filter: kgentity | kgdocument | kgframe | kgslot
-            type_uri: Filter: specific KG Type URI
+            type_uri: Filter: specific KG Type URI (matched against rdf:type)
+            slot_type_uri: Filter: specific slot type URI (matched against
+                haley-ai-kg#hasKGSlotType). Use this to index ONE kind of
+                slot — every text-bearing slot shares the rdf:type
+                KGTextSlot, so type_uri alone cannot narrow past "every text
+                slot in the graph". Combines with type_uri when both given.
             batch_size: Batch size for processing
 
         Returns:
             PopulateFtsResponse with population stats
+
+        Note:
+            Population runs as a background task server-side; this returns as
+            soon as it is scheduled, with rows_populated=0. Poll get_stats()
+            until the row count settles to know it finished.
         """
         self._check_connection()
         validate_required_params(space_id=space_id, index_name=index_name, graph_uri=graph_uri)
         request = PopulateFtsRequest(
             graph_uri=graph_uri, mapping_type=mapping_type,
-            type_uri=type_uri, batch_size=batch_size,
+            type_uri=type_uri, slot_type_uri=slot_type_uri,
+            batch_size=batch_size,
         )
         params = build_query_params(space_id=space_id, index_name=index_name)
         return await self._make_typed_request(

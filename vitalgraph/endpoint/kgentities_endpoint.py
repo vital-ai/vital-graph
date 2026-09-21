@@ -1260,10 +1260,18 @@ class KGEntitiesEndpoint:
                         deleted_uris=[]
                     )
             
+            # Every member subject the graph delete removes, so derived data
+            # keyed on the SUBJECT can be cleaned up too. Without this the FTS
+            # and vector rows for an entity's slots outlive the entity, keep
+            # matching searches, and resolve to something deleted
+            # (issues/217).
+            removed_uris: List[str] = []
             if delete_entity_graph:
                 # Delete entire entity graph using processor
                 self.logger.info(f"🔥 ENDPOINT: Calling delete_processor.delete_entity_graph() for {uri}")
-                deleted_count = await delete_processor.delete_entity_graph(backend_adapter, space_id, graph_id, uri)
+                deleted_count = await delete_processor.delete_entity_graph(
+                    backend_adapter, space_id, graph_id, uri,
+                    collected_uris=removed_uris)
                 self.logger.info(f"🔥 ENDPOINT: delete_entity_graph returned: {deleted_count}")
                 deletion_type = "entity graph (via kgGraphURI)"
                 success = deleted_count > 0
@@ -1283,7 +1291,11 @@ class KGEntitiesEndpoint:
             # Invalidate entity graph cache after successful deletion
             if success:
                 await self._invalidate_entity_cache(space_id, graph_id, uri, "deleted")
-                self._schedule_auto_sync(backend_impl, space_id, graph_id, [uri], "delete")
+                # The entity AND its members. dict.fromkeys keeps order and
+                # drops the duplicate when the entity is its own member.
+                _del_uris = list(dict.fromkeys([str(uri)] + removed_uris))
+                self._schedule_auto_sync(backend_impl, space_id, graph_id,
+                                         _del_uris, "delete")
             
             return EntityDeleteResponse(
                 status=OperationStatus.DELETED if success else OperationStatus.STORE_FAILED,

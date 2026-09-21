@@ -905,7 +905,7 @@ class TestTextSearchSQL:
         assert sql is not None
         assert "test_space_fts_kgtype_default" in sql
         assert "ts_rank_cd" in sql
-        assert "plainto_tsquery" in sql
+        assert "websearch_to_tsquery" in sql
         assert "renewable energy" in sql
         assert "tsv @@" in sql
         assert "v0__uuid" in sql
@@ -960,7 +960,7 @@ class TestHybridSearchSQL:
         assert "test_space_fts_entity_default" in sql
         assert "test_space_vec_entity_default" in sql
         assert "ts_rank_cd" in sql
-        assert "plainto_tsquery" in sql
+        assert "websearch_to_tsquery" in sql
         assert "embedding <=>" in sql
         assert "v0__uuid" in sql
         # Both BM25 and cosine terms present

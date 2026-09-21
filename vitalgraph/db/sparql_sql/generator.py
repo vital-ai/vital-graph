@@ -2078,10 +2078,13 @@ async def _generate_sql(
             try:
                 fi_table = f"{space_id}_fts_index"
                 rows = await conn.fetch(
-                    f"SELECT index_name, languages FROM {fi_table}")
+                    f"SELECT index_name, languages, "
+                    f"coalesce(rank_normalization, 0) AS rank_normalization "
+                    f"FROM {fi_table}")
                 fts_index_meta = {
                     r['index_name']: {
                         'languages': list(r['languages']),
+                        'rank_normalization': r['rank_normalization'],
                     }
                     for r in rows
                 }

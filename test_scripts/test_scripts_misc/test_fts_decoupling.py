@@ -338,15 +338,15 @@ class TestTextSearchSqlDecoupled:
         assert "_vec_" not in fts
 
     def test_build_tsquery_helper_single_lang(self):
-        """_build_tsquery_expr produces plainto_tsquery for single language."""
+        """_build_tsquery_expr produces websearch_to_tsquery for single language."""
         from vitalgraph.db.sparql_sql.vg_functions import _build_tsquery_expr
         expr = _build_tsquery_expr(["english"], "hello world")
-        assert "plainto_tsquery" in expr
+        assert "websearch_to_tsquery" in expr
         assert "english" in expr
         assert "hello world" in expr
 
     def test_build_tsquery_helper_multi_lang(self):
-        """Multi-language tsquery uses || to OR multiple plainto_tsquery calls."""
+        """Multi-language tsquery uses || to OR multiple websearch_to_tsquery calls."""
         from vitalgraph.db.sparql_sql.vg_functions import _build_tsquery_expr
         expr = _build_tsquery_expr(["english", "spanish"], "hola")
         assert "||" in expr
@@ -457,7 +457,14 @@ class TestPydanticModels:
         assert req.enabled is True
         assert req.separator == ". "
         assert req.include_pred_name is False
-        assert req.include_type_desc is True
+        # `include_type_desc` is GONE, not missing: it was a boolean that
+        # duplicated what `source_type` already says, and
+        # `migrate_drop_include_type_desc` drops the column after upgrading
+        # `include_type_desc=True AND source_type='default'` rows to
+        # `properties_type`. `type_description` and `properties_type` imply the
+        # lookup; `properties` and `default` do not. Asserting the default
+        # source_type is the same guarantee expressed once instead of twice.
+        assert req.source_type == "default"
 
     def test_search_mapping_out(self):
         """SearchMappingOut model serializes correctly."""
@@ -688,14 +695,19 @@ class TestSearchMappingManagerExtended:
             {"mapping_id": 1, "mapping_type": "kgentity", "type_uri": None,
              "index_name": "default", "enabled": True, "source_type": "default",
              "separator": ". ", "include_pred_name": False,
-             "include_type_desc": True, "created_time": None},
+             "created_time": None},
             {"mapping_id": 2, "mapping_type": "kgframe", "type_uri": "http://ex.org/Frame",
              "index_name": "default", "enabled": False, "source_type": "properties",
              "separator": " ", "include_pred_name": True,
-             "include_type_desc": False, "created_time": None},
+             "created_time": None},
         ]
-        # First fetch call returns mappings; subsequent calls return empty properties
-        mock_conn.fetch.side_effect = [mapping_rows, [], []]
+        # FIVE results, not three: one for the mappings, then TWO PER ROW.
+        # `_row_to_dto(include_properties=True)` calls `list_properties` AND
+        # `list_indexes` — the second was added with the mapping->index
+        # junction, after this test was written, and a short `side_effect`
+        # raises StopIteration from inside the mock rather than failing an
+        # assertion, which is why it read as a mock quirk.
+        mock_conn.fetch.side_effect = [mapping_rows, [], [], [], []]
 
         result = await mgr.list_mappings()
         assert len(result) == 2

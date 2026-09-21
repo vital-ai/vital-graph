@@ -30,6 +30,7 @@ from .vg_functions import (
     VG_MULTI_VECTOR_SIMILARITY, VG_MULTI_VECTOR_NEARBY,
     VG_MULTI_VECTOR_FUNCTIONS,
     VG_GEO_DISTANCE, VG_WITHIN_RADIUS, VG_WITHIN_BOUNDS, VG_WITHIN_POLYGON,
+    VG_TEXT_MATCH,
     VG_FUZZY_MATCH, VG_TRIGRAM_SIMILARITY,
     vector_similarity_sql, geo_distance_sql, within_radius_sql,
     within_bounds_sql, within_polygon_sql,
@@ -2285,6 +2286,9 @@ def _vg_function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
     if iri == VG_GEO_DISTANCE:
         return geo_distance_sql(expr, ctx)
 
+    if iri == VG_TEXT_MATCH:
+        from .vg_functions import text_match_sql
+        return text_match_sql(expr, ctx)
     if iri == VG_WITHIN_RADIUS:
         return within_radius_sql(expr, ctx)
 

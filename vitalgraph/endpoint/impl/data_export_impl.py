@@ -47,7 +47,38 @@ def _escape_ntriples(value: str) -> str:
             .replace("\t", "\\t"))
 
 
-def _format_term_nt(text: str, term_type: str, lang: Optional[str]) -> str:
+def _format_literal_suffix(lang: Optional[str],
+                           datatype_uri: Optional[str]) -> str:
+    """`@lang` or `^^<datatype>` for a literal — never both.
+
+    THE DATATYPE ARM WAS MISSING ENTIRELY UNTIL 2026-09-21 (`issues/221`), and
+    with it every export dropped every literal type. A production
+    `xsd:dateTime` came back from an export/import round trip as `xsd:string`,
+    which is silent: `num_val` and `dt_val` are GENERATED columns keyed on
+    `datatype_id`, so a restored space keeps the right text and quietly loses
+    every typed comparison — date sorts and numeric ranges match nothing and
+    raise nothing. It surfaced as `entity_prop_sort.value_dt` being NULL on all
+    421,456 rows of a restored space.
+
+    `@lang` wins when both are present: a language-tagged literal IS
+    `rdf:langString` by definition, and writing `"x"@en^^<...>` is not legal
+    N-Triples.
+
+    `xsd:string` is emitted explicitly rather than left implicit. RDF 1.1 makes
+    a plain literal an `xsd:string`, so both forms re-import identically — but
+    `bulk_export._nt_term_sql` already emits it, and the two exporters
+    disagreeing about the same quad is how this class of bug hides. Costs some
+    file size; buys that a file is a file.
+    """
+    if lang:
+        return f"@{lang}"
+    if datatype_uri:
+        return f"^^<{datatype_uri}>"
+    return ""
+
+
+def _format_term_nt(text: str, term_type: str, lang: Optional[str],
+                    datatype_uri: Optional[str] = None) -> str:
     """Format a term for N-Triples output."""
     if term_type == "U":
         return f"<{text}>"
@@ -55,14 +86,13 @@ def _format_term_nt(text: str, term_type: str, lang: Optional[str]) -> str:
         return f"_:{text}"
     elif term_type == "L":
         escaped = _escape_ntriples(text)
-        if lang:
-            return f'"{escaped}"@{lang}'
-        return f'"{escaped}"'
+        return f'"{escaped}"{_format_literal_suffix(lang, datatype_uri)}'
     else:
         return f"<{text}>"
 
 
-def _format_term_nquads(text: str, term_type: str, lang: Optional[str]) -> str:
+def _format_term_nquads(text: str, term_type: str, lang: Optional[str],
+                        datatype_uri: Optional[str] = None) -> str:
     """Format a term for N-Quads / JSONL output (same encoding as _format_term_nt)."""
     if term_type == "U":
         return f"<{text}>"
@@ -70,9 +100,7 @@ def _format_term_nquads(text: str, term_type: str, lang: Optional[str]) -> str:
         return f"_:{text}"
     elif term_type == "L":
         escaped = _escape_ntriples(text)
-        if lang:
-            return f'"{escaped}"@{lang}'
-        return f'"{escaped}"'
+        return f'"{escaped}"{_format_literal_suffix(lang, datatype_uri)}'
     else:
         return f"<{text}>"
 
@@ -153,6 +181,9 @@ class ExportEngine:
         """
         t = self._get_table_names(space_id)
         term_tbl = t['term']
+        # Only the OBJECT can be a literal, so only it needs the datatype
+        # join. LEFT, because a URI/bnode object has no datatype_id.
+        dt_tbl = t['datatype']
         quad_tbl = t['rdf_quad']
 
         async with self._pool.acquire() as conn:
@@ -182,11 +213,13 @@ class ExportEngine:
                 st.term_text AS s_text, st.term_type AS s_type, st.lang AS s_lang,
                 pt.term_text AS p_text,
                 ot.term_text AS o_text, ot.term_type AS o_type, ot.lang AS o_lang,
+                od.datatype_uri AS o_datatype,
                 ct.term_text AS c_text
             FROM {quad_tbl} q
             JOIN {term_tbl} st ON st.term_uuid = q.subject_uuid
             JOIN {term_tbl} pt ON pt.term_uuid = q.predicate_uuid
             JOIN {term_tbl} ot ON ot.term_uuid = q.object_uuid
+            LEFT JOIN {dt_tbl} od ON od.datatype_id = ot.datatype_id
             JOIN {term_tbl} ct ON ct.term_uuid = q.context_uuid
         """
         params: List[Any] = []
@@ -272,7 +305,8 @@ class ExportEngine:
                     for row in rows:
                         s = _format_term_nt(row['s_text'], row['s_type'], row['s_lang'])
                         p = f"<{row['p_text']}>"
-                        o = _format_term_nt(row['o_text'], row['o_type'], row['o_lang'])
+                        o = _format_term_nt(row['o_text'], row['o_type'], row['o_lang'],
+                                            row['o_datatype'])
                         lines.append(f"{s} {p} {o} .\n")
 
                     chunk = "".join(lines)
@@ -320,6 +354,9 @@ class ExportEngine:
         """
         t = self._get_table_names(space_id)
         term_tbl = t['term']
+        # Only the OBJECT can be a literal, so only it needs the datatype
+        # join. LEFT, because a URI/bnode object has no datatype_id.
+        dt_tbl = t['datatype']
         quad_tbl = t['rdf_quad']
 
         async with self._pool.acquire() as conn:
@@ -345,11 +382,13 @@ class ExportEngine:
                 st.term_text AS s_text, st.term_type AS s_type, st.lang AS s_lang,
                 pt.term_text AS p_text,
                 ot.term_text AS o_text, ot.term_type AS o_type, ot.lang AS o_lang,
+                od.datatype_uri AS o_datatype,
                 ct.term_text AS c_text
             FROM {quad_tbl} q
             JOIN {term_tbl} st ON st.term_uuid = q.subject_uuid
             JOIN {term_tbl} pt ON pt.term_uuid = q.predicate_uuid
             JOIN {term_tbl} ot ON ot.term_uuid = q.object_uuid
+            LEFT JOIN {dt_tbl} od ON od.datatype_id = ot.datatype_id
             JOIN {term_tbl} ct ON ct.term_uuid = q.context_uuid
         """
         params: List[Any] = []
@@ -382,7 +421,8 @@ class ExportEngine:
                         for row in rows:
                             s = _format_term_nt(row['s_text'], row['s_type'], row['s_lang'])
                             p = f"<{row['p_text']}>"
-                            o = _format_term_nt(row['o_text'], row['o_type'], row['o_lang'])
+                            o = _format_term_nt(row['o_text'], row['o_type'], row['o_lang'],
+                                            row['o_datatype'])
                             g = f"<{row['c_text']}>"
                             lines.append(f"{s} {p} {o} {g} .\n")
 
@@ -451,6 +491,9 @@ class ExportEngine:
 
         t = self._get_table_names(space_id)
         term_tbl = t['term']
+        # Only the OBJECT can be a literal, so only it needs the datatype
+        # join. LEFT, because a URI/bnode object has no datatype_id.
+        dt_tbl = t['datatype']
         quad_tbl = t['rdf_quad']
 
         async with self._pool.acquire() as conn:
@@ -476,11 +519,13 @@ class ExportEngine:
                 st.term_text AS s_text, st.term_type AS s_type, st.lang AS s_lang,
                 pt.term_text AS p_text,
                 ot.term_text AS o_text, ot.term_type AS o_type, ot.lang AS o_lang,
+                od.datatype_uri AS o_datatype,
                 ct.term_text AS c_text
             FROM {quad_tbl} q
             JOIN {term_tbl} st ON st.term_uuid = q.subject_uuid
             JOIN {term_tbl} pt ON pt.term_uuid = q.predicate_uuid
             JOIN {term_tbl} ot ON ot.term_uuid = q.object_uuid
+            LEFT JOIN {dt_tbl} od ON od.datatype_id = ot.datatype_id
             JOIN {term_tbl} ct ON ct.term_uuid = q.context_uuid
         """
         params: List[Any] = []
@@ -513,7 +558,8 @@ class ExportEngine:
                         for row in rows:
                             s = _format_term_nquads(row['s_text'], row['s_type'], row['s_lang'])
                             p = f"<{row['p_text']}>"
-                            o = _format_term_nquads(row['o_text'], row['o_type'], row['o_lang'])
+                            o = _format_term_nquads(row['o_text'], row['o_type'], row['o_lang'],
+                                                row['o_datatype'])
                             g = f"<{row['c_text']}>"
                             line = _json.dumps({"s": s, "p": p, "o": o, "g": g},
                                                ensure_ascii=False, separators=(',', ':'))
@@ -606,6 +652,9 @@ class ExportEngine:
 
         t = self._get_table_names(space_id)
         term_tbl = t['term']
+        # Only the OBJECT can be a literal, so only it needs the datatype
+        # join. LEFT, because a URI/bnode object has no datatype_id.
+        dt_tbl = t['datatype']
         quad_tbl = t['rdf_quad']
 
         async with self._pool.acquire() as conn:
@@ -662,12 +711,14 @@ class ExportEngine:
                 st.term_text AS s_text, st.term_type AS s_type, st.lang AS s_lang,
                 pt.term_text AS p_text,
                 ot.term_text AS o_text, ot.term_type AS o_type, ot.lang AS o_lang,
+                od.datatype_uri AS o_datatype,
                 ct.term_text AS c_text,
                 grp_t.term_text AS grouping_uri
             FROM {quad_tbl} q
             JOIN {term_tbl} st ON st.term_uuid = q.subject_uuid
             JOIN {term_tbl} pt ON pt.term_uuid = q.predicate_uuid
             JOIN {term_tbl} ot ON ot.term_uuid = q.object_uuid
+            LEFT JOIN {dt_tbl} od ON od.datatype_id = ot.datatype_id
             JOIN {term_tbl} ct ON ct.term_uuid = q.context_uuid
             JOIN {quad_tbl} gq
                 ON gq.subject_uuid = q.subject_uuid
@@ -712,7 +763,8 @@ class ExportEngine:
                         current_grouping = grouping
 
                         p_nq = f"<{row['p_text']}>"
-                        o_nq = _format_term_nquads(row['o_text'], row['o_type'], row['o_lang'])
+                        o_nq = _format_term_nquads(row['o_text'], row['o_type'], row['o_lang'],
+                                                row['o_datatype'])
                         g_nq = f"<{row['c_text']}>"
                         group_quads.append(Quad(s=s_nq, p=p_nq, o=o_nq, g=g_nq))
 
