@@ -36,8 +36,23 @@ Two decisions, recorded here because both are easy to get wrong later:
   disagreeing about the same quad is precisely how this bug hid.
 
 STILL TO DO: every space previously restored from an `ExportEngine` file
-carries string-typed literals where it should have typed ones.
-`nurture_msg_prod` on the test stack is one, and is the reproduction.
+carries string-typed literals where it should have typed ones. A sweep
+comparing `datatype_id` distributions against a known-good source would find
+them.
+
+The reproduction that FOUND this — `nurture_msg_prod` — was re-exported with
+the fix, re-imported as `nurture_typed`, and dropped on 2026-09-21. The
+corrected space is the evidence the fix holds at production scale:
+
+    nurture_msg_prod (broken)      nurture_typed (re-exported)
+    dt_val              0          dt_val            581,237   of 581,237 terms
+    entity_prop_sort.value_dt  0   value_dt          174,220
+    entity_slot_sort.value_dt  0   value_dt          415,426
+
+`value_dt` is the line that matters, for the same reason `num_val` mattered in
+the round trip above: it is `GENERATED ALWAYS AS (...) STORED` keyed on
+`datatype_id`, so it is non-zero only if the datatype survived export, import,
+AND the derived-table rebuild.
 
 **Related:** `issues/042` (CSV import drops datatypes — the same failure, a
 different door); `issues/126` (what positional datatype ids assume)
@@ -128,5 +143,15 @@ the N-Triples grammar, and `rdf:langString` must serialise as the lang form.
 Every space previously restored from an `ExportEngine` file has string-typed
 literals where it should have typed ones, and nothing flags it. A sweep
 comparing `datatype_id` distributions against a known-good source would find
-them. `nurture_msg_prod` on the test stack is one such space and is the
-reproduction.
+them.
+
+`nurture_msg_prod` was one such space; it has been replaced by a corrected
+re-import (`nurture_typed`) and dropped. See the Status section for the
+before/after figures.
+
+One thing the repair exposed that this issue did not predict: a space restored
+before the fix is not repaired by re-importing alone. The derived tables carry
+the NULL `value_dt` forward until they are rebuilt, and on a 49.7M-quad space
+that rebuild is a 36-minute `resync_all_auxiliary_tables`, not an incremental
+catch-up — the periodic backfill moves ~17k rows per 5-minute cycle and cannot
+converge. Budget for that when sweeping other affected spaces.

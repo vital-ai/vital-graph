@@ -85,8 +85,21 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
     ess_count = 0
     try:
         async with conn.transaction():
-            from .sync_entity_slot_sort import resync_entity_slot_sort
-            ess_count = await resync_entity_slot_sort(conn, space_id)
+            # BATCHED, not the one-shot resync. Same result, reached without
+            # holding the table exclusively or materialising the whole
+            # recursive walk in one backend's memory. Measured on a 48.1M-quad
+            # space, the one-shot form ran 43 MINUTES WITHOUT INSERTING A ROW
+            # -- CPU-bound with no buffer reads, still expanding the CTE --
+            # and the backend was then OOM-killed with the host out of memory.
+            #
+            # `issues/151` had already taken that walk off the maintenance
+            # loop for the same reason; the IMPORT paths kept it. This is the
+            # last of them: `data_import_impl`'s three incremental paths were
+            # converted first, and `import_ntriples_bulk` reaches the walk
+            # through HERE, so converting only those three left the bulk path
+            # -- the one a restore actually uses -- still on the unbounded form.
+            from .sync_entity_slot_sort import rebuild_entity_slot_sort_batched
+            ess_count = await rebuild_entity_slot_sort_batched(conn, space_id)
     except Exception as exc:
         logger.warning("resync_all(%s): entity_slot_sort skipped (%s)",
                        space_id, exc)
