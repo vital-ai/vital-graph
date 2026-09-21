@@ -127,3 +127,34 @@ def test_a_numeric_slot_keeps_its_lane():
                                                        value=65)])])
     assert parsed[0][2] == "num"
     assert parsed[0][3] == 65
+
+
+def test_a_negated_frame_criterion_refuses():
+    """`negate` means FILTER NOT EXISTS, and nothing here read the flag.
+
+    `FrameCriteria.negate` asks for the entities that do NOT have the frame
+    pattern — the builder wraps the whole pattern in `FILTER NOT EXISTS`
+    (`kg_query_builder.py:803`). Served as an equality probe, this path returned
+    exactly the entities the caller asked to EXCLUDE: not a subset, the
+    COMPLEMENT, with a plausible count and no error.
+
+    Declined rather than emitted as an EXCEPT: absence of a row in
+    `entity_slot_sort` means "no such slot in the TABLE", which an incomplete
+    table produces as readily as the data does, and completeness here is the
+    caller's job. Negation is the one direction that turns staleness into extra
+    rows.
+    """
+    c = _Crit(frame_criteria=[_Frame(slot_criteria=[_Slot()])])
+    c.frame_criteria[0].negate = True
+    assert _eq_criteria(c.frame_criteria) is None
+    assert not can_serve_filter(c)
+
+
+def test_a_negated_NESTED_frame_criterion_refuses_too():
+    """The flag is read at every level the walk visits, not just the top one."""
+    outer = _Frame(frame_type="urn:outer",
+                   frame_criteria=[_Frame(frame_type="urn:inner",
+                                          slot_criteria=[_Slot()])])
+    outer.frame_criteria[0].negate = True
+    assert _eq_criteria([outer]) is None
+    assert not can_serve_filter(_Crit(frame_criteria=[outer]))

@@ -47,11 +47,58 @@ from __future__ import annotations
 
 import logging
 import uuid
+from decimal import Decimal, InvalidOperation
 from typing import List, Optional
 
 from .fast_slot_sort import _LANE, _LANE_SQL, _term_uuid
+# The ISO and timezone tests the GENERAL PIPELINE uses for the same comparison,
+# imported rather than restated. A second copy of either is a second definition
+# of which values this store considers dates, and the two paths must agree about
+# that or the fast one is not answering the same question.
+from .filter_pushdown import _ISO_RE, _TZ_RE, _TZ_SQL_RE
 
 logger = logging.getLogger(__name__)
+
+
+def _lane_arg(lane: str, val):
+    """The driver argument for `val` in `lane`, or None if it is not in that lane.
+
+    THE VALUE ARRIVES AS JSON. `SlotCriteria.value` is `Optional[Any]`, so a
+    KGQuery criterion carries whatever the client sent -- a str for a date, an
+    int or float for a number -- while `value_num` is NUMERIC and `value_dt` is
+    TIMESTAMP. asyncpg types each parameter from the column it is compared
+    against and refuses anything else:
+
+        asyncpg.exceptions.DataError: invalid input for query argument $5:
+            '2026-06-23T14:00:00.000Z' (expected a datetime.date or
+            datetime.datetime instance, got 'str')
+
+    Caught at DEBUG by both callers, so every dated slot equality -- and every
+    float-valued numeric one -- has silently fallen to the ~300x slower BGP join
+    for as long as this path has existed. The answers were right; the fast path
+    was simply never reached from the API that feeds it.
+
+    A value that does not belong to its lane returns None, which declines the
+    WHOLE query in `_eq_criteria` rather than dropping that conjunct.
+
+    DATES STAY STRINGS. They are normalised in SQL by `vitalgraph_iso_to_utc`,
+    the function `value_dt` itself was derived with, so the comparison cannot
+    drift from the column. Parsing here would put that UTC decision in a second
+    place; `_ISO_RE` only decides whether the value IS a date, which is what the
+    general pipeline uses it for too.
+    """
+    if lane == "text":
+        return str(val)
+    if lane == "num":
+        try:
+            d = Decimal(str(val))
+        except (InvalidOperation, ValueError):
+            return None
+        # NaN and the infinities are valid Decimals and match nothing; a
+        # criterion that cannot match is better declined than served as empty.
+        return d if d.is_finite() else None
+    s = str(val).strip()
+    return s if _ISO_RE.match(s) else None
 
 
 def _eq_criteria(frame_criteria):
@@ -67,6 +114,21 @@ def _eq_criteria(frame_criteria):
     out = []
 
     def walk(fc, prefix):
+        # A NEGATED CRITERION IS THE COMPLEMENT OF WHAT THIS PROBES, and nothing
+        # here read the flag. `FrameCriteria.negate` means "match entities that
+        # do NOT have this frame pattern" -- the builder emits
+        # `FILTER NOT EXISTS { ... }` for it (`kg_query_builder.py:803`) -- so
+        # served as an equality probe it returned precisely the entities the
+        # caller asked to EXCLUDE. Not a subset, the complement, with a
+        # plausible count and no error.
+        #
+        # Declined outright rather than emitted as an EXCEPT: `frame_type_path`
+        # is an ordered path and the absence of a row means "no such slot in the
+        # table", which a stale or incomplete table produces as readily as the
+        # data does. Negation over a table whose completeness is the caller's
+        # job is exactly the direction that turns staleness into extra rows.
+        if getattr(fc, "negate", False):
+            return False
         ft = getattr(fc, "frame_type", None)
         if not ft:
             return False
@@ -81,7 +143,10 @@ def _eq_criteria(frame_criteria):
             val = getattr(sc, "value", None)
             if val is None:
                 return False
-            out.append((path, slot_type, lane, val))
+            arg = _lane_arg(lane, val)
+            if arg is None:
+                return False
+            out.append((path, slot_type, lane, arg))
         for nested in (getattr(fc, "frame_criteria", None) or []):
             if not walk(nested, path):
                 return False
@@ -122,10 +187,12 @@ def filter_decline_reason(criteria) -> Optional[str]:
                     f"only, and a partially applied query is a wrong answer")
     parsed = _eq_criteria(getattr(criteria, "frame_criteria", None))
     if parsed is None:
-        return ("a criterion is outside what the index answers — a comparator "
-                "that is not `eq`, an unmapped slot_class_uri, a missing "
-                "slot_type, or a null value. A conjunction is served only when "
-                "EVERY conjunct is")
+        return ("a criterion is outside what the index answers — a NEGATED "
+                "frame criterion, a comparator that is not `eq`, an unmapped "
+                "slot_class_uri, a missing slot_type, a null value, or a value "
+                "outside its lane (a non-numeric value on a numeric slot, a "
+                "non-ISO value on a dateTime slot). A conjunction is served "
+                "only when EVERY conjunct is")
     return None
 
 
@@ -153,16 +220,41 @@ def can_serve_filter(criteria) -> bool:
     return _eq_criteria(fcs) is not None
 
 
-def _probe(t: str, idx: int, lane: str):
-    """One INTERSECT arm: an equality probe on the index's full leading prefix."""
+def _probe(t: str, idx: int, lane: str, tz_present: bool = False):
+    """One INTERSECT arm: an equality probe on the index's full leading prefix.
+
+    THE DATE ARM IS NOT A PLAIN `= $n`, for two reasons.
+
+    It is normalised: `value_dt` is `term.dt_val`, i.e.
+    `vitalgraph_iso_to_utc(term_text)`, so the bound is read by the same
+    function and one instant matches however it was written -- `...Z`,
+    `...+00:00` and `2019-12-31T23:00:00-01:00` are one moment. A cast would
+    instead type the parameter and make asyncpg reject the string the criterion
+    holds.
+
+    And it carries the TIMEZONE-AGREEMENT GUARD, copied from the general
+    pipeline's `_eq_cond` because both must answer the same question.
+    `vitalgraph_iso_to_utc` reads an untimezoned value AS IF UTC; XSD says a
+    timezoned and an untimezoned dateTime are INCOMPARABLE, since the answer
+    depends on an offset nobody supplied. Without the guard, normalising would
+    declare them equal -- a wrong match rather than a missing one. The lexical
+    form is right here in `value_text`, which holds `term_text` for every row
+    whatever its lane, so the guard costs no join.
+    """
     col, _mn, _mx = _LANE_SQL[lane]
     b = idx * 3
+    if lane == "dt":
+        rhs = f"vitalgraph_iso_to_utc(${b + 5})"
+        guard = (f" AND (value_text ~ '{_TZ_SQL_RE}') IS "
+                 f"{'true' if tz_present else 'false'}")
+    else:
+        rhs, guard = f"${b + 5}", ""
     return f"""
         SELECT entity_uuid FROM {t}
          WHERE context_uuid = $1 AND entity_type_uuid = $2
            AND frame_type_path = ${b + 3}
            AND slot_type_uuid  = ${b + 4}
-           AND {col} = ${b + 5}
+           AND {col} = {rhs}{guard}
     """
 
 
@@ -175,13 +267,16 @@ def _build(space_id: str, graph_uri: str, criteria):
     t = f"{space_id}_entity_slot_sort"
     arms = []
     for i, (path, slot_type, lane, val) in enumerate(parsed):
-        col, _mn, _mx = _LANE_SQL[lane]
-        # `value_num`/`value_dt` are typed columns; asyncpg needs the Python type
-        # to match, and a caller may hand us a string for either. Only `text` is
-        # safe to stringify, which is also the only lane a URI or text slot uses.
-        v = val if lane != "text" else str(val)
-        args += [[_term_uuid(u) for u in path], _term_uuid(slot_type), v]
-        arms.append(_probe(t, i, lane))
+        # `val` is already the driver argument: `_eq_criteria` puts every value
+        # through `_lane_arg`, which is where a value outside its lane declines
+        # the query. Doing it there and not here keeps `can_serve_filter`,
+        # `filter_decline_reason` and this builder answering the same question —
+        # a gate that says yes to a shape the builder then cannot bind is how a
+        # fast path comes to raise instead of declining.
+        args += [[_term_uuid(u) for u in path], _term_uuid(slot_type), val]
+        arms.append(_probe(t, i, lane,
+                           tz_present=bool(_TZ_RE.search(val))
+                           if lane == "dt" else False))
     # INTERSECT, not a join: several criteria mean the entity satisfies ALL of
     # them, which is what the generated SPARQL conjunction means. It also lets
     # each arm be an independent index probe, so an arm matching NOTHING costs
@@ -200,8 +295,18 @@ async def fast_slot_filter_count(
         return None
     body, args = built
     try:
+        # DISTINCT, because the table holds a row per SLOT and the question is
+        # how many ENTITIES match. One entity with two frames of the same type,
+        # both carrying the value -- two Campaign frames on a lead, both ACTIVE
+        # -- produces two rows, and `count(*)` counted it twice. A single
+        # criterion is a single arm, so there was no INTERSECT to deduplicate
+        # it; the bug appears exactly when the filter is simplest.
+        #
+        # `count(*)` over a DISTINCT subquery rather than `count(DISTINCT ...)`:
+        # the same answer from a HashAggregate instead of a sort per group.
         return await conn.fetchval(
-            f"SELECT count(*) FROM ({body}) x", *args)
+            f"SELECT count(*) FROM (SELECT DISTINCT entity_uuid "
+            f"                        FROM ({body}) x) y", *args)
     except Exception as exc:
         # A space predating the table, or one where it was never populated.
         logger.debug("fast_slot_filter_count(%s) declined: %s", space_id, exc)
@@ -217,6 +322,11 @@ async def fast_slot_filter_page(
     Ordered by `entity_uuid` so paging is STABLE. The caller asked for no sort —
     `can_serve_filter` refuses when it did — but a page without a total order is
     a page that can repeat or skip rows across offsets.
+
+    DISTINCT for the reason the count carries: a row per slot means an entity
+    matching twice was RETURNED twice, taking two of the page's fifty slots and
+    shifting every later offset. Ordering made it look deliberate — the repeats
+    sit adjacent, so it reads as data rather than as a duplicate.
     """
     if not can_serve_filter(criteria):
         return None
@@ -230,7 +340,7 @@ async def fast_slot_filter_page(
         rows = await conn.fetch(f"""
             SELECT tm.term_text
             FROM (
-                SELECT entity_uuid FROM ({body}) x
+                SELECT DISTINCT entity_uuid FROM ({body}) x
                 ORDER BY entity_uuid
                 LIMIT ${n + 1} OFFSET ${n + 2}
             ) p
