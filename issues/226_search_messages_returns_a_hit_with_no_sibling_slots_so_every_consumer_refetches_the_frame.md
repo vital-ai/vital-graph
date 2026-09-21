@@ -18,17 +18,65 @@ same per-page frame fetch after the search returns.
 That is N round trips per page, duplicated in every consumer, to assemble data
 the search already had a join away.
 
-## Proposal
+## The unit is the FRAME, not a bigger slot — and both names already exist
 
-A `project_slots=[<slot type uri>, …]` parameter on `search_messages`, filled
-where the hit is already assembled.
+**CORRECTION to this issue as first written.** It proposed inventing a
+`project_slots=[…]` parameter. That reinvents two things that already exist, and
+the right fix is to reuse them rather than add a third vocabulary.
 
-The shape is already there. `_build_message_search_sparql` emits
-`?slot <haley:hasKGSlotType> <slot_type>` to narrow the search, and the frame is
-already bound — `?slot <haley:hasFrameGraphURI> ?frame` is projected
-unconditionally, because the FTS push-down needs it (see the comment at that
-site: every indexed slot carries both, zero missing). So sibling slots of the
-same `frameGraphURI` are one more join from what the query already binds.
+First, what is NOT the answer: returning "the whole slot object". The matching
+slot carries exactly seven quads —
+
+    hasKGSlotType      …:slot:MsgContent
+    hasTextSlotValue   "I just finished the application …"
+    hasFrameGraphURI   urn:…:nurture:00QUg00
+    hasKGGraphURI      urn:…:nurture:00QUg00
+    rdf:type / URIProp / vitaltype
+
+— and **no timestamp, no channel**. Those are separate SLOTS under the same
+frame. `MessageHit` already IS the whole slot object: `text` is
+`hasTextSlotValue`, `frame_uri` is `hasFrameGraphURI`, `entity_uri` is
+`hasKGGraphURI`. Everything else on the node is a type constant. Widening the
+slot yields nothing; the containing FRAME is the unit that holds all six values
+together.
+
+Two existing mechanisms already say this:
+
+* **`slot_projection`** (`kgqueries_model.py:191`, `List[SlotProjection]`) —
+  IMPLEMENTED on the entity query surface (`kgquery_endpoint.py:447`, backed by
+  `db/sparql_sql/slot_projection.py`). Its docstring states the intent exactly:
+  "a list view gets one row per entity whichever" — naming the columns wanted
+  instead of fetching a subtree. This is the primitive a message list wants.
+* **`include_frame_graph`** — IMPLEMENTED on `/kgframes`, but only on the URI
+  LOOKUPS `_get_frame_by_uri` / `_get_frames_by_uris`
+  (`kgframes_endpoint.py:1347`), NOT on any paged listing. On `/kgqueries` it is
+  a documented parameter that does nothing — `issues/210`, where option 2
+  shipped so the flag at least now SAYS so, and option 1 is still open.
+
+So `search_messages` should expose `slot_projection` with the same shape and
+semantics as the entity query, rather than a new parameter spelled differently.
+`_get_frames_by_uris` is the ready-made path for the whole-frame variant, and
+search already has its exact input: every hit carries `frame_uri`, bound
+unconditionally because the FTS push-down needs it.
+
+## Why `slot_projection` rather than defaulting to the whole frame graph
+
+Because hydration is not cheap, and this search is fast. `issues/209` measured
+graph hydration after the page at **3.5-5.1 s for 25 entities** on the entity
+side. An unranked message page is **17-25 ms**. If frame-graph hydration lands
+anywhere near that entity figure, returning full frame graphs by default would
+cost two orders of magnitude more than the search it decorates.
+
+That is `issues/208`'s argument in one line: a caller naming what it wants
+should not pay a whole-graph fan-out for it. A message row needs two slots, not
+a subtree.
+
+Offer both, default to neither:
+
+    slot_projection=[MsgTimestamp, MsgChannel]   the list view — cheap, named
+    include_frame_graph=True                      the detail view — whole frame
+
+Measure the second before offering it, against the unranked path specifically.
 
 ## What to be careful about, since this touches the measured path
 
