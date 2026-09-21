@@ -1,7 +1,7 @@
 # Issues
 
 Numbered, append-only, one defect each. Resolved ones move to `archive/` —
-112 there, 111 live. An issue is archived only when nothing remains to do:
+112 there, 113 live. An issue is archived only when nothing remains to do:
 "FIXED in the converter, existing spaces need reloading" is not resolved, it is
 half-done, and it stays here.
 
@@ -173,6 +173,8 @@ baseline bakes both in.
 |---|---|---|
 | 042 | fixed in the converter | CSV import drops datatypes and diverges on term uuids; existing CSV-loaded spaces still need reloading |
 | 032 | deferred | `vitalgraph_service_impl` stranded by a sync interface |
+| 226 | OPEN (feature) | **`search_messages` projects no sibling slots**, so every consumer refetches the frame for `MsgTimestamp`/`MsgChannel` — N round trips per page, reimplemented per consumer. A `project_slots=[…]` parameter would fill them where the hit is already assembled; `?frame` is already bound. Cost, not correctness; the reporter asked that it NOT queue ahead of 225. Must attach AFTER narrowing — `vg:textSearch` cost tracks the candidate set, which `slot_type` cuts 55.7x |
+| 225 | OPEN | **`update_entity_frames` discards a `KGEntity` in its payload and reports `updated`** — validation passes non-frames through deliberately (slots, edges need it), then `_categorize_objects` classifies into exactly three branches with NO `else`, so an entity node joins no list and ceases to exist. It is mutated (`kGGraphURI` set) before being dropped. Silent: the caller must read back and compare. Blocks writing an entity property and a frame slot in one atomic write |
 | 221 | FIXED 2026-09-21 | **Every `ExportEngine` format dropped literal DATATYPES**, so an export/import round trip turned `xsd:dateTime` into `xsd:string` — all four formats selected only text/type/lang and never joined the datatype table, while `bulk_export._nt_term_sql` next door did it correctly. Silent: `num_val`/`dt_val` are generated from `datatype_id`, so date sorting and numeric ranges stopped matching without erroring. Fixed and verified by round trip (1.48M quads, every datatype MATCH, 0 values lost). Spaces already restored from an old export are still wrong |
 | 220 | OPEN (hypothesis) | **The vector top-K guard may be backwards** — it materialises the CHILD (the expensive graph-pattern side) to stop a short page from an HNSW scan that measurably STREAMS (`actual rows=5`, not 9,200). Over-fetch-and-retry would not materialise it. **Unverified**: streaming is shown, "removing the guard is faster" is not. A/B must run both orders (`issues/218`) |
 | 219 | OPEN | **Vector auto-sync embeds "every literal property" instead of the configured mapping** — `build_search_text(props, None)` at `auto_sync.py:134`, the same defect `issues/217` fixed for FTS. Worse here: an embedding is opaque, so it reads as "the model is mediocre" rather than as a bug, and repair costs a provider call per row. Geo and fuzzy checked and OK. Also corrupts `vg:hybridSearch`, whose lexical half is now correct |
