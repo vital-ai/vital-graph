@@ -1,11 +1,16 @@
 # Positional datatype ids assume every space seeded the standard 40, and three did not
 
-## Status: RESOLVED 2026-09-18 — found 2026-08-23 while fixing `issues/121`
+## Status: RESOLVED 2026-09-21 — found 2026-08-23 while fixing `issues/121`
 
     A. a query predicate              RESOLVED 2026-08-23
     B. STORED generated columns       step 1 done, step 2 done,
                                       step 3 (repair) done 2026-09-18
     production exposure "unknown"     ANSWERED 2026-09-18: ZERO
+    incomplete-but-correct spaces     FOUND and FIXED 2026-09-19..21,
+                                      including the three in production
+
+Every environment sweeps clean: prod 6/6, docker test stack 19/19, host
+`sparql_sql_graph` 40/40, host `vitalgraphdb` 6/6 (inert). Nothing remains.
 
 Four helpers in `sparql_sql_schema.py` derive `datatype_id` values by
 enumerating `STANDARD_DATATYPES` in order:
@@ -301,3 +306,30 @@ the same state and had been passing as `ok`. Both topped up.
 
 The prod top-up is two INSERTs and a `setval` per space, adds no row any term
 references, and is shown by `--all` without `--apply`. It has not been run.
+
+## 2026-09-21 — production topped up, and this issue is done
+
+Applied to `cardiff_kg`, `lead_data` and `testspace`: `39 = wktLiteral`,
+`40 = geoLocation`, sequence 38 -> 40 on each.
+
+Verified against a full before-snapshot of all six prod datatype tables rather
+than on the script's own report, since "no existing row is touched" is the
+claim doing the work here. Diffing before against after across every space:
+**six lines added, zero removed, zero changed.** The pre-existing 38 rows in
+each table are byte-identical.
+
+The insert could not have disturbed anything even had it been wrong: the
+highest `datatype_id` actually referenced by a term is **9** — across 1,665,314
+terms in `cardiff_kg` and 496,197 in `lead_data` — so ids 39 and 40 were dead
+space. Both counts and that maximum are unchanged after the write.
+
+The sequences now sit at 40, which is the point. Before this they sat at 38,
+so the next geo datatype stored in any of those three spaces would have taken
+39 by arrival order, and `geoLocation` arriving first would have transposed the
+pair against `STANDARD_DATATYPES` — silently, since nothing reads those two
+positionally today. That was the last thing in this issue that could still go
+wrong on its own.
+
+Final sweep, all four environments: prod 6/6 clean, docker test stack 19/19,
+host `sparql_sql_graph` 40/40, host `vitalgraphdb` 6/6 inert. Zero off, zero
+incomplete. Archived.
