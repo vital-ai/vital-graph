@@ -1,7 +1,53 @@
 # `update_entity_frames` Discards A `KGEntity` In Its Payload And Reports `updated`
 
-## Status: OPEN — reported by a downstream consumer 2026-09-21, VERIFIED
-## against HEAD by reading the drop point rather than reproducing the write
+## Status: FIX 1 DONE 2026-09-21 — the payload no longer disappears silently.
+## STILL OPEN for fix 2: the `KGEntity` is still NOT written, it is now
+## REPORTED. Reproduced before fixing, and the fix landed in BOTH copies.
+
+### What changed
+
+`categorize_frame_objects` now has an `else` arm collecting anything that is
+not a frame, slot or edge into `FrameObjectCategories.unhandled`. That is
+carried to `CreateFrameResult.unhandled_types` and named in the message the
+caller reads:
+
+    Successfully updated 1 frame graphs. NOTE: KGEntity in the payload was NOT
+    written -- update_entity_frames writes frames, slots and edges only. Change
+    entity properties with the entity update endpoint
+
+Plus a WARNING log naming the types. Collected rather than raised: the defect
+is the SILENCE, and rejecting outright would break any caller that has been
+passing extra objects harmlessly.
+
+### THERE WERE TWO COPIES, and fixing one would have been the same mistake
+
+`kgframe_create_impl.py` defines its OWN `FrameObjectCategories`,
+`CreateFrameResult` and `categorize_frame_objects` — duplicates of the ones in
+`kgentity_frame_create_impl.py`, with the identical three branches and the
+identical missing `else`. It is reachable from `/kgframes`
+(`kgframes_endpoint.py:2340`).
+
+Fixing only the `/kgqueries` copy would have left one surface reporting the
+discard and the other silent — the asymmetry `can_serve_filter`'s own comment
+warns about ("an asymmetry between two gates over one table is how the last
+four defects here happened"), and the same mistake made earlier the same day in
+`resync_all.py`, where three of four import paths were converted and the one a
+restore actually uses was not. Both copies are fixed; the test covers both.
+
+### Reproduced first, not reasoned about
+
+    payload in : 4 objects -> ['KGEntity', 'KGFrame', 'Edge_hasKGSlot', 'KGTextSlot']
+    payload out: 3 objects -> ['KGFrame', 'KGTextSlot', 'Edge_hasKGSlot']
+    DROPPED: ['KGEntity']
+
+`tests/unit/test_frame_update_does_not_discard_a_payload_silently.py`, 9 cells,
+failing before and passing after. It pins the SILENCE, not the discarding — and
+asserts the entity is still not written, so implementing fix 2 has to come here
+and change that line deliberately rather than silently inverting what the test
+claims. The control cell (an ordinary payload reports NOTHING unhandled) is what
+stops the first cell passing against an implementation that flags everything.
+
+### Original report
 
 **Related:** `issues/223` (the other half of the same report, already FIXED in
 `0dd38a48` before it was received — see "What this is not" below)

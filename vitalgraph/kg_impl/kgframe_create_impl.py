@@ -17,7 +17,7 @@ Based on: kgentity_frame_create_impl.py (stripped of entity concepts)
 import asyncio
 import logging
 from typing import List, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # VitalSigns imports
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
@@ -66,10 +66,19 @@ def _sparql_binding_to_rdflib(binding):
 
 @dataclass
 class FrameObjectCategories:
-    """Categorization of frame objects by type."""
+    """Categorization of frame objects by type.
+
+    `unhandled` carries what matched NONE of the three types, so an object this
+    writer does not handle cannot vanish without trace -- `issues/225`. This is
+    the SECOND copy of this dataclass and of `categorize_frame_objects`; the
+    other is in `kgentity_frame_create_impl`. Both carried the same missing
+    `else`, and fixing one would have left the /kgframes surface silent while
+    /kgqueries reported.
+    """
     frame_objects: List[GraphObject]
     slot_objects: List[GraphObject]
     edge_objects: List[GraphObject]
+    unhandled: List[GraphObject] = field(default_factory=list)
 
 
 @dataclass
@@ -80,6 +89,8 @@ class CreateFrameResult:
     message: str
     frame_count: int
     fuseki_success: Optional[bool] = None
+    # Type names present in the payload that were NOT written (`issues/225`).
+    unhandled_types: List[str] = field(default_factory=list)
 
 
 class KGFrameCreateProcessor:
@@ -167,12 +178,18 @@ class KGFrameCreateProcessor:
 
             if success:
                 created_uris = [str(obj.URI) for obj in all_objects if hasattr(obj, 'URI')]
+                _unhandled = sorted({type(o).__name__ for o in categories.unhandled})
+                _msg = f"Successfully processed {len(categories.frame_objects)} frames"
+                if _unhandled:
+                    _msg += (f"; {len(categories.unhandled)} object(s) NOT written "
+                             f"({', '.join(_unhandled)})")
                 return CreateFrameResult(
                     success=True,
                     created_uris=created_uris,
-                    message=f"Successfully processed {len(categories.frame_objects)} frames",
+                    message=_msg,
                     frame_count=len(categories.frame_objects),
-                    fuseki_success=fuseki_success
+                    fuseki_success=fuseki_success,
+                    unhandled_types=_unhandled
                 )
             else:
                 return CreateFrameResult(
@@ -198,6 +215,7 @@ class KGFrameCreateProcessor:
         frame_objects = []
         slot_objects = []
         edge_objects = []
+        unhandled = []
 
         for obj in graph_objects:
             if isinstance(obj, VITAL_Edge):
@@ -206,15 +224,29 @@ class KGFrameCreateProcessor:
                 frame_objects.append(obj)
             elif isinstance(obj, KGSlot):
                 slot_objects.append(obj)
+            else:
+                # Not written, and must not vanish quietly -- `issues/225`.
+                # Collected rather than raised: the defect is the SILENCE, and
+                # rejecting outright would break a caller that has been passing
+                # extra objects harmlessly.
+                unhandled.append(obj)
+
+        if unhandled:
+            self.logger.warning(
+                "⚠️ %d object(s) in the payload are not frames, slots or edges "
+                "and will NOT be written: %s. See issues/225.",
+                len(unhandled),
+                ", ".join(sorted({type(o).__name__ for o in unhandled})))
 
         self.logger.debug(
-            f"Categorized: {len(frame_objects)} frames, {len(slot_objects)} slots, {len(edge_objects)} edges"
+            f"Categorized: {len(frame_objects)} frames, {len(slot_objects)} slots, {len(edge_objects)} edges, {len(unhandled)} unhandled"
         )
 
         return FrameObjectCategories(
             frame_objects=frame_objects,
             slot_objects=slot_objects,
-            edge_objects=edge_objects
+            edge_objects=edge_objects,
+            unhandled=unhandled
         )
 
     def assign_frame_grouping_uris(self, objects: List[GraphObject]) -> List[GraphObject]:

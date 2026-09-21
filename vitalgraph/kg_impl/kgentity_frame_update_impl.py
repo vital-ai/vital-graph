@@ -165,10 +165,26 @@ class KGEntityFrameUpdateProcessor:
             
             if create_result.success:
                 message = f"Successfully updated {len(validated_frame_uris)} frame graphs"
-                
+
                 if invalid_frames:
                     message += f", {len(invalid_frames)} frames skipped (ownership validation failed)"
-                
+
+                # A payload can be PARTLY discarded and still succeed: anything
+                # that is not a frame, slot or edge is not written. Say so here,
+                # because "updated" is otherwise the only signal the caller gets
+                # and it cannot distinguish "applied everything" from "applied
+                # the part I recognised" (`issues/225`).
+                #
+                # The live case is a `KGEntity` passed alongside its frames to
+                # change an entity property and a frame slot in one write. That
+                # is still NOT supported -- this only stops it being silent.
+                if getattr(create_result, "unhandled_types", None):
+                    message += (
+                        f". NOTE: {', '.join(create_result.unhandled_types)} "
+                        "in the payload was NOT written -- update_entity_frames "
+                        "writes frames, slots and edges only. Change entity "
+                        "properties with the entity update endpoint")
+
                 return UpdateFrameResult(
                     success=True,
                     updated_frame_uris=validated_frame_uris,

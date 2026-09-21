@@ -11,7 +11,7 @@ REFACTORING SOURCE: Extracted from KGEntitiesEndpoint._create_or_update_frames()
 import asyncio
 import logging
 from typing import List, Dict, Any, Optional, Tuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # VitalSigns imports
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
@@ -71,10 +71,22 @@ def _sparql_binding_to_rdflib(binding) -> Any:
 
 @dataclass
 class FrameObjectCategories:
-    """Categorization of frame objects by type."""
+    """Categorization of frame objects by type.
+
+    `unhandled` carries what matched NONE of the three types. It exists because
+    this classification had no `else` and so lost such objects silently: a
+    caller passing the `KGEntity` alongside its frames — the natural way to
+    change an entity property and a frame slot in one write — had the entity
+    node dropped here and still got `status: "updated"` (`issues/225`).
+
+    Kept as a list rather than a count so the caller can name the types in its
+    message. Nothing writes these; the point is to stop them disappearing
+    without trace, not to make them work.
+    """
     frame_objects: List[GraphObject]
     slot_objects: List[GraphObject]
     edge_objects: List[GraphObject]
+    unhandled: List[GraphObject] = field(default_factory=list)
 
 
 @dataclass
@@ -85,6 +97,10 @@ class CreateFrameResult:
     message: str
     frame_count: int
     fuseki_success: Optional[bool] = None
+    # Type names present in the payload that were NOT written. Carried so the
+    # caller's message can say so: reporting plain success for a payload that
+    # was partly discarded is `issues/225`.
+    unhandled_types: List[str] = field(default_factory=list)
 
 
 class KGEntityFrameCreateProcessor:
@@ -212,12 +228,22 @@ class KGEntityFrameCreateProcessor:
                 created_uris = [str(obj.URI) for obj in all_objects if hasattr(obj, 'URI')]
                 self.logger.debug(f"Successfully created/updated {len(created_uris)} frame objects")
                 
+                _unhandled = sorted({type(o).__name__ for o in categories.unhandled})
+                _msg = f"Successfully created {len(categories.frame_objects)} frames"
+                if _unhandled:
+                    # Say it in the MESSAGE, not only the log. The caller sees
+                    # this string; it is the only place a discarded object can
+                    # still be noticed (`issues/225`).
+                    _msg += (f"; {len(categories.unhandled)} object(s) NOT written "
+                             f"({', '.join(_unhandled)})")
+
                 return CreateFrameResult(
                     success=True,
                     created_uris=created_uris,
-                    message=f"Successfully created {len(categories.frame_objects)} frames",
+                    message=_msg,
                     frame_count=len(categories.frame_objects),
-                    fuseki_success=fuseki_success
+                    fuseki_success=fuseki_success,
+                    unhandled_types=_unhandled
                 )
             else:
                 return CreateFrameResult(
@@ -280,6 +306,8 @@ class KGEntityFrameCreateProcessor:
         slot_objects = []
         edge_objects = []
         
+        unhandled = []
+
         # First pass: categorize objects by type (extracted from lines 980-993)
         for obj in graph_objects:
             if isinstance(obj, VITAL_Edge):
@@ -288,13 +316,39 @@ class KGEntityFrameCreateProcessor:
                 frame_objects.append(obj)
             elif isinstance(obj, KGSlot):
                 slot_objects.append(obj)
-        
-        self.logger.debug(f"📦 Categorized objects: {len(frame_objects)} frames, {len(slot_objects)} slots, {len(edge_objects)} edges")
-        
+            else:
+                # ANYTHING ELSE IS NOT WRITTEN, AND MUST NOT VANISH QUIETLY.
+                #
+                # This branch did not exist, so an object of any other type
+                # joined no list and ceased to exist here. The caller still got
+                # success and `status: "updated"`, because the frames it DID
+                # recognise were written -- `issues/225`.
+                #
+                # The live case is a `KGEntity`: passing it alongside its frames
+                # is the natural way to change an entity property and a frame
+                # slot in one write, and it is validated, has its grouping URI
+                # assigned, and is then dropped right here.
+                #
+                # Collected rather than raised. Rejecting outright would break
+                # any caller that has been passing extra objects harmlessly, and
+                # the defect is the SILENCE, not the discarding. The caller
+                # decides what to say about it.
+                unhandled.append(obj)
+
+        if unhandled:
+            self.logger.warning(
+                "⚠️ %d object(s) in the payload are not frames, slots or edges "
+                "and will NOT be written: %s. See issues/225.",
+                len(unhandled),
+                ", ".join(sorted({type(o).__name__ for o in unhandled})))
+
+        self.logger.debug(f"📦 Categorized objects: {len(frame_objects)} frames, {len(slot_objects)} slots, {len(edge_objects)} edges, {len(unhandled)} unhandled")
+
         return FrameObjectCategories(
             frame_objects=frame_objects,
             slot_objects=slot_objects,
-            edge_objects=edge_objects
+            edge_objects=edge_objects,
+            unhandled=unhandled
         )
     
     async def assign_grouping_uris(self, frame_objects: List[GraphObject], 
