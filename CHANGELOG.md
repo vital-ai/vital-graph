@@ -16,6 +16,13 @@ Server-side only; the 0.0.41 client already understands both statuses used here.
 
 ### Fixed
 
+- **An unsorted FTS frame page is one row per frame, not per matching slot.**
+  It was built without `DISTINCT` and de-duplicated afterwards, so a frame
+  matching in two slots would have spent two of the page's rows and returned a
+  short page with every later offset shifted. No such frame exists in any
+  corpus checked, so no caller saw a wrong page; this closes the hole rather
+  than repairing damage. The sorted, entity and fast paths were already
+  `DISTINCT`.
 - **An FTS criterion the space cannot answer is reported, not answered.** A
   nonexistent index returned HTTP 500 with the raw SQL error; a target slot type
   with no enabled search mapping returned a confident empty page,

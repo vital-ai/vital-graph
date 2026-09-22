@@ -164,11 +164,34 @@ def test_single_target_fts_uses_direct_constants() -> None:
     query = builder.build_frame_query_sparql(criteria, "urn:acme_kg", 25, 0)
 
     assert "VALUES (?fts_slot_type" not in query
-    assert "SELECT ?frame WHERE" in query
-    assert "SELECT DISTINCT ?frame" not in query
+    assert "SELECT DISTINCT ?frame" in query
     assert f"?fts_slot haley:hasKGSlotType <{MESSAGE_SLOT}>" in query
     assert f"?frame haley:hasKGFrameType <{MESSAGE_FRAME}>" in query
     assert "?frame haley:hasKGGraphURI ?entity" not in query
+
+
+def test_an_unsorted_fts_page_is_one_row_per_frame_not_per_slot() -> None:
+    """A page of frames must be DISTINCT on the frame in SQL, not de-duplicated
+    in Python afterwards.
+
+    Without DISTINCT the rows are per matching SLOT. A frame whose text matches
+    in two slots spent two of the 25 rows, the endpoint collapsed them after the
+    page, and the caller received 24 — with every later offset shifted, so some
+    frames were never reachable. Both targets here are broad enough for that to
+    be the common case, not the corner.
+    """
+    builder = KGQueryCriteriaBuilder()
+    for criteria in (
+        FrameQueryCriteria(fts_criteria=builder_fts()),
+        FrameQueryCriteria(fts_criteria=builder_fts(), entity_type=ENTITY_TYPE),
+    ):
+        query = builder.build_frame_query_sparql(criteria, "urn:acme_kg", 25, 0)
+        assert "SELECT DISTINCT ?frame WHERE" in query, query
+        # ...and still no ORDER BY: the SQL layer synthesizes the paging order,
+        # by the frame uuid that IS the DISTINCT key. A builder-written
+        # `ORDER BY ?frame` is indistinguishable from one the caller asked for,
+        # which costs 117x because it sorts on term text (entity path, D1).
+        assert "ORDER BY" not in query, query
 
 
 def test_match_metadata_query_is_bounded_to_page_frames() -> None:

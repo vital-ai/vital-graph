@@ -1348,7 +1348,15 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.searc
         select_extra = ""
         order_by = "" if criteria.fts_criteria else "ORDER BY ?frame"
         group_by = ""
-        use_distinct = not (criteria.fts_criteria and not criteria.sort_criteria)
+        # DISTINCT even for an unsorted FTS page. Dropping it made the page's
+        # rows per matching SLOT while the caller pages frames: a frame whose
+        # text matches in two slots consumed two of the 25 rows, the endpoint
+        # de-duplicated AFTER the page, and the caller got a SHORT page whose
+        # successors were all shifted — `issues/223`'s shape, one layer up.
+        # The unsorted order is still left to the SQL layer to synthesize (it
+        # pages by frame uuid, which is the DISTINCT key), as the entity path
+        # above does and as the fast path does.
+        use_distinct = True
         if criteria.sort_criteria:
             sort_patterns, sort_vars, order_by_clause, requires_group_by = self._build_sort_bindings(
                 criteria.sort_criteria, anchor_var="frame",
