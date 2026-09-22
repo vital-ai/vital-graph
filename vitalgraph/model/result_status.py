@@ -81,12 +81,16 @@ class ResultStatus(BaseModel):
     natural success value (created / updated / deleted / found).
     """
 
-    success: bool = Field(True, description="Did the expected operation happen? (derived from status)")
+    success: bool = Field(
+        default=True,
+        description="Did the expected operation happen? (derived from status)",
+    )
     status: OperationStatus = Field(
-        OperationStatus.OK,
+        default=OperationStatus.OK,
         description="Machine-readable outcome discriminator (see OperationStatus)",
     )
-    message: str = Field("", description="Human-readable status text (log/UI only)")
+    message: str = Field(
+        default="", description="Human-readable status text (log/UI only)")
 
     @model_validator(mode="after")
     def _derive_success(self) -> "ResultStatus":

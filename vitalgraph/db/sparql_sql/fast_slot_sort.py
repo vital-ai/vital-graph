@@ -206,7 +206,7 @@ def can_serve(criteria) -> bool:
     if getattr(criteria, "entity_uris", None):
         return False
     for attr in ("vector_criteria", "multi_vector_criteria", "geo_criteria",
-                 "slot_criteria", "search_string"):
+                 "fts_criteria", "slot_criteria", "search_string"):
         if getattr(criteria, attr, None):
             return False
     if not getattr(criteria, "entity_type", None):
@@ -217,7 +217,9 @@ def can_serve(criteria) -> bool:
 
 
 
-def _filter_exists(t: str, criteria, args: list, inner_t: str = None) -> str:
+def _filter_exists(
+    t: str, criteria, args: list, inner_t: Optional[str] = None,
+) -> str:
     """EXISTS clauses restricting the sorted population to the filter's matches.
 
     `inner_t` is the table the CRITERIA live in; `t` is the one being correlated
@@ -309,9 +311,12 @@ def entity_prop_filters(criteria):
         val = getattr(f, "value", None)
         if not isinstance(val, str):
             return None
-        if _FILTERABLE_ENTITY_PROPERTIES.get(getattr(f, "property_uri", None)) != "uri":
+        property_uri = getattr(f, "property_uri", None)
+        if not isinstance(property_uri, str):
             return None
-        out.append((f.property_uri, val))
+        if _FILTERABLE_ENTITY_PROPERTIES.get(property_uri) != "uri":
+            return None
+        out.append((property_uri, val))
     return out
 
 

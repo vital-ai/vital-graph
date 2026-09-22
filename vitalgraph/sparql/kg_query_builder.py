@@ -295,6 +295,21 @@ class EntityPropertyFilter:
 
 
 @dataclass
+class FTSTarget:
+    slot_type: str
+    frame_type: Optional[str] = None
+    kind: Optional[str] = None
+
+
+@dataclass
+class FTSCriteria:
+    text: str
+    index_name: str
+    targets: List[FTSTarget] = field(default_factory=list)
+    include_match_text: bool = True
+
+
+@dataclass
 class EntityQueryCriteria:
     """Criteria for entity queries."""
     search_string: Optional[str] = None  # Search in entity name
@@ -321,6 +336,7 @@ class EntityQueryCriteria:
     vector_criteria: Optional[VectorCriteria] = None  # Vector similarity search
     multi_vector_criteria: Optional[MultiVectorCriteria] = None  # Multi-vector weighted fusion
     geo_criteria: Optional[GeoCriteria] = None  # Geographic proximity search
+    fts_criteria: Optional[FTSCriteria] = None
 
 
 @dataclass
@@ -333,6 +349,8 @@ class FrameQueryCriteria:
     sort_criteria: Optional[List[SortCriteria]] = None  # Multi-level sorting
     vector_criteria: Optional[VectorCriteria] = None  # Vector similarity search
     geo_criteria: Optional[GeoCriteria] = None  # Geographic proximity search
+    entity_property_filters: Optional[List[EntityPropertyFilter]] = None
+    fts_criteria: Optional[FTSCriteria] = None
 
 
 @dataclass
@@ -570,6 +588,162 @@ class KGQueryCriteriaBuilder:
         PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
         """
     
+    def _build_fts_pattern(
+        self,
+        criteria: FTSCriteria,
+        result_var: str,
+        include_metadata: bool = False,
+    ) -> str:
+        if result_var not in {"entity", "frame"}:
+            raise ValueError("result_var must be 'entity' or 'frame'")
+        single_target = len(criteria.targets) == 1
+        if single_target:
+            target = criteria.targets[0]
+            clauses = [
+                f"?fts_slot haley:hasKGSlotType "
+                f"<{escape_sparql_iri(target.slot_type)}> ."
+            ]
+            if include_metadata and target.kind:
+                clauses.append(
+                    f'BIND("{escape_sparql_string(target.kind)}" AS ?target_kind)')
+        else:
+            rows = []
+            for target in criteria.targets:
+                frame = (f"<{escape_sparql_iri(target.frame_type)}>"
+                         if target.frame_type else "UNDEF")
+                kind = (f'"{escape_sparql_string(target.kind)}"'
+                        if target.kind else "UNDEF")
+                rows.append(
+                    f"(<{escape_sparql_iri(target.slot_type)}> {frame} {kind})")
+            clauses = [
+                "VALUES (?fts_slot_type ?fts_frame_type ?target_kind) { "
+                + " ".join(rows) + " }",
+                "?fts_slot haley:hasKGSlotType ?fts_slot_type .",
+            ]
+        if result_var == "frame":
+            clauses.extend([
+                "?fts_slot haley:hasFrameGraphURI ?frame .",
+                "?fts_slot haley:hasKGGraphURI ?entity .",
+            ])
+            frame_var = "frame"
+        else:
+            clauses.extend([
+                "?fts_slot haley:hasKGGraphURI ?entity .",
+                "?fts_slot haley:hasFrameGraphURI ?fts_frame .",
+            ])
+            frame_var = "fts_frame"
+        if include_metadata:
+            clauses.append("BIND(?entity AS ?owner_entity)")
+        if single_target:
+            target = criteria.targets[0]
+            if target.frame_type:
+                clauses.append(
+                    f"?{frame_var} haley:hasKGFrameType "
+                    f"<{escape_sparql_iri(target.frame_type)}> .")
+        elif all(target.frame_type for target in criteria.targets):
+            clauses.append(
+                f"?{frame_var} haley:hasKGFrameType ?fts_frame_type .")
+        else:
+            clauses.append(
+                f"FILTER(!BOUND(?fts_frame_type) || EXISTS {{ ?{frame_var} "
+                f"haley:hasKGFrameType ?fts_frame_type . }})")
+        if include_metadata and criteria.include_match_text:
+            clauses.append("?fts_slot haley:hasTextSlotValue ?match_text .")
+        text = escape_sparql_string(criteria.text)
+        index_name = escape_sparql_string(criteria.index_name)
+        clauses.append(
+            f'FILTER(<http://vital.ai/ontology/vitalgraph#textMatch>('
+            f'?fts_slot, "{text}", "{index_name}"))')
+        return " ".join(clauses)
+
+    def build_fts_matches_sparql(
+        self,
+        criteria: FTSCriteria,
+        result_uris: List[str],
+        result_var: str,
+        graph_id: Optional[str],
+    ) -> str:
+        values = " ".join(f"<{escape_sparql_iri(uri)}>" for uri in result_uris)
+        select = f"?{result_var} ?fts_slot ?owner_entity ?target_kind"
+        if result_var == "entity":
+            select += " ?fts_frame"
+        if criteria.include_match_text:
+            select += " ?match_text"
+        body = self._build_fts_pattern(
+            criteria, result_var=result_var, include_metadata=True)
+        graph = (f"GRAPH <{escape_sparql_iri(graph_id)}> {{ {body} }}"
+                 if graph_id is not None else body)
+        return (
+            f"{self.prefixes}\nSELECT DISTINCT {select} WHERE {{ "
+            f"VALUES ?{result_var} {{ {values} }} {graph} }}"
+        ).strip()
+
+    def _build_entity_property_patterns(
+        self,
+        filters: Optional[List[EntityPropertyFilter]],
+        entity_var: str = "entity",
+        prefix: str = "epf",
+    ) -> List[str]:
+        patterns = []
+        for i, epf in enumerate(filters or []):
+            var = f"{prefix}_{i}"
+            prop = escape_sparql_iri(epf.property_uri)
+            datatype = _FILTERABLE_ENTITY_PROPERTIES.get(epf.property_uri, "string")
+            value = epf.value
+            if epf.operator in {"eq", "has"}:
+                if datatype in {"uri", "uri_list"}:
+                    patterns.append(
+                        f"?{entity_var} <{prop}> <{escape_sparql_iri(value)}> .")
+                elif datatype == "dateTime":
+                    patterns.append(
+                        f'?{entity_var} <{prop}> "{escape_sparql_string(value)}"^^xsd:dateTime .')
+                else:
+                    patterns.append(
+                        f'?{entity_var} <{prop}> "{escape_sparql_string(value)}" .')
+            elif epf.operator in {"ne", "gt", "lt", "gte", "lte", "contains"}:
+                patterns.append(f"?{entity_var} <{prop}> ?{var} .")
+                if epf.operator == "contains":
+                    patterns.append(
+                        f'FILTER(CONTAINS(LCASE(STR(?{var})), '
+                        f'LCASE("{escape_sparql_string(value)}")))')
+                else:
+                    op = {"ne": "!=", "gt": ">", "lt": "<", "gte": ">=", "lte": "<="}[epf.operator]
+                    if datatype == "uri":
+                        rhs = f"<{escape_sparql_iri(value)}>"
+                    elif datatype == "dateTime":
+                        rhs = f'"{escape_sparql_string(value)}"^^xsd:dateTime'
+                    else:
+                        rhs = f'"{escape_sparql_string(value)}"'
+                    patterns.append(f"FILTER(?{var} {op} {rhs})")
+            elif epf.operator in {"in", "not_in", "has_any", "not_has_any"}:
+                items = value if isinstance(value, list) else []
+                vals = ", ".join(
+                    f"<{escape_sparql_iri(item)}>" if datatype in {"uri", "uri_list"}
+                    else f'"{escape_sparql_string(item)}"'
+                    for item in items)
+                if epf.operator in {"not_has_any"}:
+                    patterns.append(
+                        f"FILTER NOT EXISTS {{ ?{entity_var} <{prop}> ?{var} . "
+                        f"FILTER(?{var} IN ({vals})) }}")
+                else:
+                    patterns.append(f"?{entity_var} <{prop}> ?{var} .")
+                    keyword = "NOT IN" if epf.operator == "not_in" else "IN"
+                    patterns.append(f"FILTER(?{var} {keyword} ({vals}))")
+            elif epf.operator == "has_all":
+                for item in value if isinstance(value, list) else []:
+                    patterns.append(
+                        f"?{entity_var} <{prop}> <{escape_sparql_iri(item)}> .")
+            elif epf.operator == "not_has":
+                patterns.append(
+                    f"FILTER NOT EXISTS {{ ?{entity_var} <{prop}> "
+                    f"<{escape_sparql_iri(value)}> . }}")
+            elif epf.operator == "exists":
+                patterns.append(f"?{entity_var} <{prop}> ?{var} .")
+            elif epf.operator == "not_exists":
+                patterns.append(
+                    f"FILTER NOT EXISTS {{ ?{entity_var} <{prop}> ?{var} . }}")
+        return patterns
+
     def _build_entity_where_clause(self, criteria: EntityQueryCriteria) -> str:
         """Build the full WHERE clause body for entity queries.
         
@@ -850,6 +1024,10 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.searc
                         pass
                     
                     where_clauses.append(" ".join(slot_clauses))
+
+        if criteria.fts_criteria:
+            where_clauses.append(self._build_fts_pattern(
+                criteria.fts_criteria, result_var="entity"))
         
         # Build complete WHERE clause
         where_clause = " ".join(where_clauses)
@@ -936,7 +1114,7 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.searc
             query = f"""
             {self.prefixes}
             {select_keyword} ?entity{select_extra} WHERE {{
-                GRAPH <{graph_id}> {{
+                GRAPH <{escape_sparql_iri(graph_id)}> {{
                     {where_clause}{sort_extra_where}
                 }}
             }}
@@ -1017,7 +1195,7 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.searc
 
             SELECT (COUNT(*) AS ?count) WHERE {{
                 {{ SELECT DISTINCT ?entity WHERE {{
-                    GRAPH <{graph_id}> {{
+                    GRAPH <{escape_sparql_iri(graph_id)}> {{
                         {where_clause}{sort_extra_where}
                     }}
                 }} {order_clause} {limit_clause} }}
@@ -1040,24 +1218,50 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.searc
             SPARQL query string
         """
         # Build WHERE clauses based on criteria
-        where_clauses = ["?frame rdf:type haley:KGFrame ."]
+        where_clauses = (
+            [] if criteria.fts_criteria else ["?frame rdf:type haley:KGFrame ."]
+        )
         
         # Filter by specific frame type if provided
         if criteria.frame_type:
-            where_clauses.append(f"?frame haley:hasKGFrameType <{criteria.frame_type}> .")
+            where_clauses.append(
+                f"?frame haley:hasKGFrameType <{escape_sparql_iri(criteria.frame_type)}> .")
         
         # Add search string filter (search in hasName only)
         if criteria.search_string:
             where_clauses.append(f"""?frame vital-core:hasName ?search_name .
 FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.search_string)}")))""")
 
-        
-        # Add entity type filter
+        needs_owner = bool(
+            criteria.fts_criteria
+            or criteria.entity_type
+            or criteria.entity_property_filters
+            or any(sc.sort_type == "entity_property" for sc in (criteria.sort_criteria or []))
+        )
+        if needs_owner and not criteria.fts_criteria:
+            where_clauses.append("?frame haley:hasKGGraphURI ?entity .")
+
         if criteria.entity_type:
-            where_clauses.append(f"""
-            ?entity haley:hasFrame ?frame .
-            ?entity vital-core:vitaltype <{criteria.entity_type}> .
-            """)
+            where_clauses.append(
+                f"?entity haley:hasKGEntityType "
+                f"<{escape_sparql_iri(criteria.entity_type)}> .")
+
+        where_clauses.extend(self._build_entity_property_patterns(
+            criteria.entity_property_filters, entity_var="entity", prefix="frame_epf"))
+
+        if criteria.fts_criteria:
+            # FIRST, not after the owner patterns. Written after them, a
+            # multi-target VALUES splits the group into
+            # BGP(entity type) JOIN VALUES JOIN BGP(slots), and the join
+            # between the entity side and the rest is emitted with null-tolerant
+            # guards that cannot use an index: measured, 84,476 entities x 14
+            # matches, 788,438 rows removed by join filter, 1.8 s for 14 rows.
+            # First, every triple lands in ONE BGP joined to VALUES. Group
+            # semantics are order-free (join commutes, FILTER scopes to the
+            # group), so only the algebra shape changes. It is also the
+            # prototype's rule: "put the narrowing patterns FIRST".
+            where_clauses.insert(0, self._build_fts_pattern(
+                criteria.fts_criteria, result_var="frame"))
         
         # Add slot criteria filters
         if criteria.slot_criteria:
@@ -1097,9 +1301,9 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.searc
         # Build sort bindings if sort_criteria provided
         sort_extra_where = ""
         select_extra = ""
-        order_by = "ORDER BY ?frame"
+        order_by = "" if criteria.fts_criteria else "ORDER BY ?frame"
         group_by = ""
-        use_distinct = True
+        use_distinct = not (criteria.fts_criteria and not criteria.sort_criteria)
         if criteria.sort_criteria:
             sort_patterns, sort_vars, order_by_clause, requires_group_by = self._build_sort_bindings(
                 criteria.sort_criteria, anchor_var="frame",
@@ -1132,7 +1336,7 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.searc
             query = f"""
             {self.prefixes}
             {select_keyword} ?frame{select_extra} WHERE {{
-                GRAPH <{graph_id}> {{
+                GRAPH <{escape_sparql_iri(graph_id)}> {{
                     {where_clause}{sort_extra_where}
                 }}
             }}
@@ -1438,7 +1642,10 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.searc
         """
         if sc.sort_type == "entity_property":
             # One triple on the anchor, unless the property is list-valued.
-            return _FILTERABLE_ENTITY_PROPERTIES.get(sc.property_uri) == "uri_list"
+            return (
+                sc.property_uri is not None
+                and _FILTERABLE_ENTITY_PROPERTIES.get(sc.property_uri) == "uri_list"
+            )
         # Every other sort_type walks an edge to a frame and/or a slot. Both
         # attachments are to-many.
         return True
@@ -1520,7 +1727,10 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.searc
             if sc.sort_type == "entity_property":
                 if not sc.property_uri:
                     raise ValueError("property_uri is required for entity_property sort_type")
-                patterns.append(f"?{anchor_var} <{sc.property_uri}> ?{value_var} .")
+                property_anchor = (
+                    "entity" if anchor_var == "frame" else anchor_var)
+                patterns.append(
+                    f"?{property_anchor} <{escape_sparql_iri(sc.property_uri)}> ?{value_var} .")
                 continue
 
             frame_path = sc.frame_path or []
@@ -2206,7 +2416,7 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.searc
             query = f"""
             {self.prefixes}
             {select_keyword} ?entity{select_extra} WHERE {{
-                GRAPH <{graph_id}> {{
+                GRAPH <{escape_sparql_iri(graph_id)}> {{
                     {where_clause}{sort_extra_where}
                 }}
             }}
@@ -2269,7 +2479,7 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.searc
             query = f"""
             {self.prefixes}
             SELECT {select_clause} WHERE {{
-                GRAPH <{graph_id}> {{
+                GRAPH <{escape_sparql_iri(graph_id)}> {{
                     {full_where}
                 }}
             }}
@@ -2308,7 +2518,7 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{escape_sparql_string(criteria.searc
             {self.prefixes}
 
             SELECT ({count_expr} AS ?count) WHERE {{
-                GRAPH <{graph_id}> {{
+                GRAPH <{escape_sparql_iri(graph_id)}> {{
                     {where_clause}
                 }}
             }}

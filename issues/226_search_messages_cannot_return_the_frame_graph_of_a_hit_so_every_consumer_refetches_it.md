@@ -1,4 +1,4 @@
-# `search_messages` Cannot Return The Frame Graph Of A Hit, So Every Consumer Refetches It
+# KGQuery FTS Cannot Return The Frame Graph Of A Hit, So Every Consumer Refetches It
 
 ## Status: OPEN — feature request from a downstream consumer 2026-09-21.
 ## COST, NOT CORRECTNESS. The reporter explicitly ranked it below `issues/225`
@@ -15,10 +15,11 @@ fan-out), `issues/209` (what hydration after the page actually costs),
 A search matches a SLOT. A message is a FRAME. There is no way to ask for the
 second.
 
-`MessageHit` is `{entity_uri, slot_uri, frame_uri, text, score}`. That is the
-matching slot and nothing else, so every consumer rendering a message row goes
-back to the database for the rest of the frame — N round trips per page,
-reimplemented in every consumer.
+`FrameQueryResult.fts_matches` returns `FTSMatch(subject_uri, frame_uri,
+owner_entity_uri, target_kind, text)`. That is the matching slot metadata and
+nothing else, so every consumer rendering a message row goes back to the
+database for the rest of the frame — N round trips per page, reimplemented in
+every consumer.
 
     MsgContent      <- what matched, and all the search returns
     MsgChannel         sms
@@ -42,9 +43,9 @@ exactly seven quads:
     rdf:type / URIProp / vitaltype
 
 **No timestamp, no channel.** Those are separate SLOTS of the same frame, not
-properties of this one. `MessageHit` already IS the whole slot object — `text`
-is `hasTextSlotValue`, `frame_uri` is `hasFrameGraphURI`, `entity_uri` is
-`hasKGGraphURI`, and the remainder are type constants.
+properties of this one. `FTSMatch` already carries the useful matching-slot
+metadata — `text` is `hasTextSlotValue`, `frame_uri` is `hasFrameGraphURI`,
+`owner_entity_uri` is `hasKGGraphURI`, and the remainder are type constants.
 
 A bigger slot is not the answer. A different unit is.
 
@@ -54,8 +55,8 @@ A bigger slot is not the answer. A different unit is.
   LOOKUPS `_get_frame_by_uri` / `_get_frames_by_uris`
   (`kgframes_endpoint.py:1347`), never on a paged listing. On `/kgqueries` it is
   a documented parameter that does nothing (`issues/210`; option 2 shipped so
-  the flag now SAYS so, option 1 is still open). Not offered on
-  `search_messages` at all.
+  the flag now SAYS so, option 1 is still open). It remains a no-op on
+  FTS-selected `frame_query` results.
 * **`slot_projection`** (`kgqueries_model.py:191`, `List[SlotProjection]`) —
   IMPLEMENTED on the entity query surface (`kgquery_endpoint.py:447`, backed by
   `db/sparql_sql/slot_projection.py`). Its docstring is the intent exactly:
@@ -64,11 +65,10 @@ A bigger slot is not the answer. A different unit is.
 So this is not a missing idea. It is a capability that exists on neighbouring
 surfaces and was never extended to this one.
 
-**`search_messages` already holds the input.** `_get_frames_by_uris` takes a
-list of frame URIs, and every hit carries `frame_uri` — bound unconditionally,
-because the FTS push-down requires it (see the comment at
-`_build_message_search_sparql`: every indexed slot carries both
-`hasKGGraphURI` and `hasFrameGraphURI`, zero missing). The builder's input is
+**KGQuery already holds the input.** `_get_frames_by_uris` takes a list of frame
+URIs, and every FTS-selected `FrameQueryResult` carries `frame_uri`; every
+`FTSMatch` is attached only after the result page is chosen. The indexed slot
+carries both `hasKGGraphURI` and `hasFrameGraphURI`, so the builder's input is
 sitting in the result already.
 
 ## Offer both, default to neither

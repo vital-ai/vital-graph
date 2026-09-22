@@ -193,7 +193,7 @@ def _try_vector_driving_extend(plan: PlanV2, ctx: EmitContext, child_sql: str) -
         if (top_k.get('direction') or 'DESC').upper() != 'DESC':
             return None
         # No threshold arm: a tsvector match is boolean, and `ts_rank_cd`
-        # thresholds are not comparable across queries (see MessageHit.score).
+        # thresholds are not comparable across queries.
         driving = text_top_k_driving_sql(
             expr, ctx, limit=top_k['limit'],
             child_sql=child_sql, child_uuid_col=child_uuid_col,

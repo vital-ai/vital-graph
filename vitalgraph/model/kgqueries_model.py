@@ -13,6 +13,63 @@ from .api_model import BasePaginatedResponse
 from .result_status import ResultStatus, OperationStatus
 
 
+class FTSTarget(BaseModel):
+    """One slot/frame population searched by an FTS criterion."""
+
+    slot_type: str = Field(..., min_length=1, description="Slot type URI indexed for full-text matching")
+    frame_type: Optional[str] = Field(None, min_length=1, description="Containing frame type URI")
+    kind: Optional[str] = Field(None, min_length=1, description="Caller-defined population label returned with matches")
+
+    @field_validator('slot_type', 'frame_type')
+    @classmethod
+    def validate_uri(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
+        if not validate_rfc3986(value, rule='URI'):
+            raise ValueError(f"invalid RFC3986 URI: {value}")
+        return value
+
+
+class FTSCriteria(BaseModel):
+    """Unscored boolean full-text criterion composed with a KG query."""
+
+    text: str = Field(..., min_length=1, description="Text parsed with websearch_to_tsquery")
+    index_name: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        pattern=r"^[a-z][a-z0-9_]*$",
+        description="Explicit FTS index name",
+    )
+    targets: List[FTSTarget] = Field(..., min_length=1, max_length=20)
+    include_match_text: bool = Field(default=True, description="Include each matching slot's text in FTS metadata")
+
+    @model_validator(mode='after')
+    def validate_targets(self) -> 'FTSCriteria':
+        for index, target in enumerate(self.targets):
+            for other in self.targets[:index]:
+                overlaps = (
+                    target.slot_type == other.slot_type
+                    and (
+                        target.frame_type == other.frame_type
+                        or target.frame_type is None
+                        or other.frame_type is None
+                    )
+                )
+                if overlaps:
+                    raise ValueError("fts slot/frame targets must not overlap")
+        if len(self.targets) > 1:
+            kinds = [target.kind for target in self.targets]
+            if any(kind is None for kind in kinds):
+                raise ValueError("kind is required when multiple fts targets are used")
+            if len(kinds) != len(set(kinds)):
+                raise ValueError("fts target kinds must be unique")
+        if not self.text.strip():
+            raise ValueError("fts text cannot be blank")
+        return self
+
+
 class KGQueryCriteria(BaseModel):
     """Criteria for KG entity-to-entity queries."""
     
@@ -20,51 +77,61 @@ class KGQueryCriteria(BaseModel):
     query_type: str = Field(..., description="Query type: 'relation', 'frame', 'entity', 'frame_query', or 'document'")
     
     # Document-specific criteria (only used when query_type="document")
-    document_criteria: Optional[DocumentSearchCriteria] = Field(None, description="Document-specific criteria for query_type='document'")
+    document_criteria: Optional[DocumentSearchCriteria] = Field(default=None, description="Document-specific criteria for query_type='document'")
     
     # Query mode specification (for frame queries)
-    query_mode: str = Field("edge", description="Query mode: 'edge' (use Edge_hasEntityKGFrame) or 'direct' (use vg-direct:hasEntityFrame)")
+    query_mode: str = Field(default="edge", description="Query mode: 'edge' (use Edge_hasEntityKGFrame) or 'direct' (use vg-direct:hasEntityFrame)")
     
     # Source entity specification
-    source_entity_criteria: Optional[EntityQueryCriteria] = Field(None, description="Criteria for source entities")
-    source_entity_uris: Optional[List[str]] = Field(None, description="Specific source entity URIs")
+    source_entity_criteria: Optional[EntityQueryCriteria] = Field(default=None, description="Criteria for source entities")
+    source_entity_uris: Optional[List[str]] = Field(default=None, description="Specific source entity URIs")
     
     # Destination entity specification  
-    destination_entity_criteria: Optional[EntityQueryCriteria] = Field(None, description="Criteria for destination entities")
-    destination_entity_uris: Optional[List[str]] = Field(None, description="Specific destination entity URIs")
+    destination_entity_criteria: Optional[EntityQueryCriteria] = Field(default=None, description="Criteria for destination entities")
+    destination_entity_uris: Optional[List[str]] = Field(default=None, description="Specific destination entity URIs")
     
     # Relation-specific criteria (only used when query_type="relation")
-    relation_type_uris: Optional[List[str]] = Field(None, description="Relation type URNs to match")
-    direction: str = Field("outgoing", description="Direction: outgoing, incoming, bidirectional")
+    relation_type_uris: Optional[List[str]] = Field(default=None, description="Relation type URNs to match")
+    direction: str = Field(default="outgoing", description="Direction: outgoing, incoming, bidirectional")
     
     # Frame/slot filtering for relation participants (only used when query_type="relation")
-    source_frame_criteria: Optional[List[FrameCriteria]] = Field(None, description="Frame/slot criteria for source entities in relation queries")
-    destination_frame_criteria: Optional[List[FrameCriteria]] = Field(None, description="Frame/slot criteria for destination entities in relation queries")
+    source_frame_criteria: Optional[List[FrameCriteria]] = Field(default=None, description="Frame/slot criteria for source entities in relation queries")
+    destination_frame_criteria: Optional[List[FrameCriteria]] = Field(default=None, description="Frame/slot criteria for destination entities in relation queries")
     
     # Frame-specific criteria (only used when query_type="frame")
-    frame_criteria: Optional[List[FrameCriteria]] = Field(None, description="Frame criteria with nested slot criteria (entity->frame->slot paths)")
+    shared_frame_types: Optional[List[str]] = Field(default=None, description="Frame type URIs shared by connected entities")
+    frame_slot_criteria: Optional[List[SlotCriteria]] = Field(default=None, description="Slot criteria on shared frames")
+    frame_criteria: Optional[List[FrameCriteria]] = Field(default=None, description="Frame criteria with nested slot criteria (entity->frame->slot paths)")
     
     # Sorting
-    sort_criteria: Optional[List[SortCriteria]] = Field(None, description="Multi-level sorting criteria (sort by slot values)")
+    sort_criteria: Optional[List[SortCriteria]] = Field(default=None, description="Multi-level sorting criteria (sort by slot values)")
     
     # Direct entity property filters
-    entity_property_filters: Optional[List[EntityPropertyFilter]] = Field(None, description="Direct entity property filters (datatype-aware)")
+    entity_property_filters: Optional[List[EntityPropertyFilter]] = Field(default=None, description="Direct entity property filters (datatype-aware)")
     
     # Vector/geo search criteria
-    vector_criteria: Optional[VectorSearchCriteria] = Field(None, description="Vector similarity search criteria")
-    multi_vector_criteria: Optional[MultiVectorSearchCriteria] = Field(None, description="Multi-vector weighted fusion search criteria")
-    geo_criteria: Optional[GeoSearchCriteria] = Field(None, description="Geographic proximity search criteria")
+    vector_criteria: Optional[VectorSearchCriteria] = Field(default=None, description="Vector similarity search criteria")
+    multi_vector_criteria: Optional[MultiVectorSearchCriteria] = Field(default=None, description="Multi-vector weighted fusion search criteria")
+    geo_criteria: Optional[GeoSearchCriteria] = Field(default=None, description="Geographic proximity search criteria")
+    fts_criteria: Optional[FTSCriteria] = Field(default=None, description="Unscored boolean full-text criterion")
     
     # Query constraints
-    exclude_self_connections: bool = Field(True, description="Exclude connections from entity to itself")
+    exclude_self_connections: bool = Field(default=True, description="Exclude connections from entity to itself")
+
+    @model_validator(mode='after')
+    def validate_fts_query_type(self) -> 'KGQueryCriteria':
+        if self.fts_criteria and self.query_type not in {"entity", "frame_query"}:
+            raise ValueError("fts_criteria is supported only for entity and frame_query queries")
+        return self
 
 
 class TotalCountMode(str, Enum):
     """How much effort to spend computing total_count.
 
-    The count is `COUNT(DISTINCT ?entity)` over the whole match set. It cannot
-    be paged, so it costs O(matches) however cheap the page is — measured on a
-    100,000-entity space: page 325ms, uncapped count 41.7s. That is a real
+    The count is over the selected query grain (for example distinct entities
+    or distinct frames) across the whole match set. It cannot be paged, so it
+    costs O(matches) however cheap the page is — measured on a 100,000-entity
+    space: page 325ms, uncapped count 41.7s. That is a real
     trade-off rather than a bug, so it is the caller's to make.
     """
 
@@ -185,9 +252,9 @@ class KGQueryRequest(BaseModel):
     criteria: KGQueryCriteria = Field(..., description="Query criteria")
     page_size: int = Field(10, description="Number of results per page", ge=1, le=100)
     offset: int = Field(0, description="Offset for pagination", ge=0)
-    include_frame_graph: bool = Field(False, description="When True, include structured frame graph data in frame_query results")
-    include_entity_graph: bool = Field(False, description="When True, include structured entity graph data in entity query results")
-    count_only: bool = Field(False, description="When True, execute only the count query and return total_count with empty result lists")
+    include_frame_graph: bool = Field(default=False, description="When True, include structured frame graph data in frame_query results")
+    include_entity_graph: bool = Field(default=False, description="When True, include structured entity graph data in entity query results")
+    count_only: bool = Field(default=False, description="When True, execute only the count query and return total_count with empty result lists")
     slot_projection: Optional[List[SlotProjection]] = Field(
         None,
         description=(
@@ -223,7 +290,7 @@ class KGQueryRequest(BaseModel):
             seen.add(p.alias)
         return self
     include_total_count: TotalCountMode = Field(
-        TotalCountMode.NO,
+        default=TotalCountMode.NO,
         description=(
             "Whether to compute total_count: 'no' (default), 'yes' (bounded — "
             "stops at the cap and reports a lower bound, with "
@@ -254,12 +321,23 @@ class EntitySlotRef(BaseModel):
     entity_uri: str = Field(..., description="Entity URI referenced by the slot")
 
 
+class FTSMatch(BaseModel):
+    """One indexed slot that satisfied a KG query's boolean FTS criterion."""
+
+    subject_uri: str = Field(..., description="URI of the matching indexed slot")
+    frame_uri: Optional[str] = Field(default=None, description="URI of the containing frame")
+    owner_entity_uri: Optional[str] = Field(default=None, description="URI of the owning entity graph")
+    target_kind: Optional[str] = Field(default=None, description="Caller-defined label from the matching FTS target")
+    text: Optional[str] = Field(default=None, description="Matching slot text when requested")
+
+
 class FrameQueryResult(BaseModel):
     """A single frame result from a frame_query, with connected entity references."""
     frame_uri: str = Field(..., description="URI of the matching frame")
     frame_type_uri: str = Field(..., description="Frame type URI")
     entity_refs: List[EntitySlotRef] = Field(default_factory=list, description="Entities connected via entity slots, with their slot roles")
-    frame_graph: Optional[Any] = Field(None, description="Structured frame graph data (when include_frame_graph=True)")
+    frame_graph: Optional[Any] = Field(default=None, description="Structured frame graph data (when include_frame_graph=True)")
+    fts_matches: List[FTSMatch] = Field(default_factory=list, description="Indexed slots that matched the FTS criterion")
 
 
 class KGQueryResponse(BasePaginatedResponse):
@@ -268,18 +346,34 @@ class KGQueryResponse(BasePaginatedResponse):
     # total_count_capped — so a UI must render "1,000+" rather than an exact
     # figure when that flag is set.
     """Response model for KG queries."""
-    query_type: str = Field(..., description="Query type that was executed: 'relation', 'frame', 'entity', or 'frame_query'")
+    total_count: int = Field(default=0, description="Total results when requested")
+    page_size: int = Field(default=0, description="Number of items requested per page")
+    offset: int = Field(default=0, description="Pagination offset")
+    query_type: str = Field(default="", description="Query type that was executed")
+    fts_applied: bool = Field(
+        default=False,
+        description="True when the server applied the requested fts_criteria",
+    )
     total_count_capped: bool = Field(
-        False,
+        default=False,
         description=("True when total_count hit the cap and is a lower bound "
                      "rather than an exact figure — render as '1,000+'."))
     # Case 1 (frame_query)
-    frame_results: Optional[List[FrameQueryResult]] = Field(None, description="Frame query results with entity refs (when query_type='frame_query')")
+    frame_results: Optional[List[FrameQueryResult]] = Field(
+        default=None,
+        description="Frame query results with entity refs (when query_type='frame_query')",
+    )
     # Case 2 (entity)
-    entity_uris: Optional[List[str]] = Field(None, description="Matching entity URIs (when query_type='entity')")
-    entity_graphs: Optional[Dict[str, List[Dict[str, Any]]]] = Field(None, description="Entity graphs as JSON quads ({s,p,o,g}) keyed by entity URI (when include_entity_graph=True)")
+    entity_uris: Optional[List[str]] = Field(
+        default=None, description="Matching entity URIs (when query_type='entity')")
+    entity_fts_matches: Optional[Dict[str, List[FTSMatch]]] = Field(
+        default=None, description="FTS matches keyed by entity URI")
+    entity_graphs: Optional[Dict[str, List[Dict[str, Any]]]] = Field(
+        default=None,
+        description="Entity graphs as JSON quads ({s,p,o,g}) keyed by entity URI (when include_entity_graph=True)",
+    )
     entity_values: Optional[Dict[str, Dict[str, List[Any]]]] = Field(
-        None,
+        default=None,
         description=(
             "Projected column values (when slot_projection or "
             "property_projection is set): entity URI -> alias -> LIST of "
@@ -293,12 +387,22 @@ class KGQueryResponse(BasePaginatedResponse):
             "other value on this API does — SPARQL JSON results are strings "
             "too — and is lossless where a float would not be."))
     # Case 3 (relation)
-    relation_connections: Optional[List[RelationConnection]] = Field(None, description="Relation connections (when query_type='relation')")
+    relation_connections: Optional[List[RelationConnection]] = Field(
+        default=None,
+        description="Relation connections (when query_type='relation')",
+    )
     # Case 4 (document)
-    document_uris: Optional[List[str]] = Field(None, description="Matching document/segment URIs (when query_type='document')")
-    document_results: Optional[List['DocumentResult']] = Field(None, description="Enriched document results with parent context (when query_type='document' with include_parent_context=True)")
+    document_uris: Optional[List[str]] = Field(
+        default=None,
+        description="Matching document/segment URIs (when query_type='document')",
+    )
+    document_results: Optional[List['DocumentResult']] = Field(
+        default=None,
+        description="Enriched document results with parent context (when query_type='document' with include_parent_context=True)",
+    )
     # Legacy (query_type='frame' — unchanged)
-    frame_connections: Optional[List[FrameConnection]] = Field(None, description="Frame connections (when query_type='frame')")
+    frame_connections: Optional[List[FrameConnection]] = Field(
+        default=None, description="Frame connections (when query_type='frame')")
 
 
 
@@ -309,14 +413,19 @@ class KGQueryResponse(BasePaginatedResponse):
 class FrameQueryResponse(BasePaginatedResponse):
     """Typed response from query_frames() — Case 1 (frame as top-most object)."""
     results: List[FrameQueryResult] = Field(default_factory=list, description="Frame results with entity refs")
+    fts_applied: bool = Field(default=False, description="True when the server applied fts_criteria")
+    total_count_capped: bool = Field(default=False, description="True when total_count is a capped lower bound")
 
     @classmethod
     def from_raw(cls, raw: 'KGQueryResponse') -> 'FrameQueryResponse':
         return cls(
+            success=raw.success,
             status=raw.status,
             message=raw.message,
             results=raw.frame_results or [],
+            fts_applied=raw.fts_applied,
             total_count=raw.total_count,
+            total_count_capped=raw.total_count_capped,
             page_size=raw.page_size,
             offset=raw.offset,
         )
@@ -328,16 +437,24 @@ class KGEntityQueryResponse(BasePaginatedResponse):
     Named KGEntityQueryResponse to avoid collision with kgentities_model.EntityQueryResponse.
     """
     entity_uris: List[str] = Field(default_factory=list, description="Matching entity URIs")
-    entity_graphs: Optional[Dict[str, List[Dict[str, Any]]]] = Field(None, description="Entity graphs as JSON quads ({s,p,o,g}) keyed by URI (when include_entity_graph=True)")
+    fts_matches: Optional[Dict[str, List[FTSMatch]]] = Field(default=None, description="FTS matches keyed by entity URI")
+    fts_applied: bool = Field(default=False, description="True when the server applied fts_criteria")
+    total_count_capped: bool = Field(default=False, description="True when total_count is a capped lower bound")
+    entity_graphs: Optional[Dict[str, List[Dict[str, Any]]]] = Field(default=None, description="Entity graphs as JSON quads ({s,p,o,g}) keyed by URI (when include_entity_graph=True)")
     entity_graph_objects: Optional[Dict[str, List[Any]]] = Field(None, exclude=True, description="Hydrated GraphObjects keyed by URI (populated client-side only)")
-    entity_values: Optional[Dict[str, Dict[str, List[Any]]]] = Field(None, description="Projected column values keyed by entity URI, then alias (when a projection was requested)")
+    entity_values: Optional[Dict[str, Dict[str, List[Any]]]] = Field(default=None, description="Projected column values keyed by entity URI, then alias (when a projection was requested)")
 
     @classmethod
     def from_raw(cls, raw: 'KGQueryResponse') -> 'KGEntityQueryResponse':
         return cls(
+            success=raw.success,
             status=raw.status,
             message=raw.message,
             entity_uris=raw.entity_uris or [],
+            fts_matches=raw.entity_fts_matches,
+            entity_graph_objects=None,
+            fts_applied=raw.fts_applied,
+            total_count_capped=raw.total_count_capped,
             entity_graphs=raw.entity_graphs,
             entity_values=raw.entity_values,
             total_count=raw.total_count,
@@ -365,12 +482,12 @@ class RelationQueryResponse(BasePaginatedResponse):
 class DocumentResult(BaseModel):
     """A single document result with optional parent/original context."""
     document_uri: str = Field(..., description="Document or segment URI")
-    score: Optional[float] = Field(None, description="Vector similarity or hybrid score (when vector_criteria used)")
-    segment_text: Optional[str] = Field(None, description="Segment chunk text (when include_segment_text=True)")
-    segment_headline: Optional[str] = Field(None, description="Segment heading (when include_segment_text=True)")
-    parent_document_uri: Optional[str] = Field(None, description="Parent copy URI (when include_parent_context=True)")
-    parent_document_name: Optional[str] = Field(None, description="Parent copy name (when include_parent_context=True)")
-    original_document_uri: Optional[str] = Field(None, description="Original document URI (when include_original_uri=True)")
+    score: Optional[float] = Field(default=None, description="Vector similarity or hybrid score (when vector_criteria used)")
+    segment_text: Optional[str] = Field(default=None, description="Segment chunk text (when include_segment_text=True)")
+    segment_headline: Optional[str] = Field(default=None, description="Segment heading (when include_segment_text=True)")
+    parent_document_uri: Optional[str] = Field(default=None, description="Parent copy URI (when include_parent_context=True)")
+    parent_document_name: Optional[str] = Field(default=None, description="Parent copy name (when include_parent_context=True)")
+    original_document_uri: Optional[str] = Field(default=None, description="Original document URI (when include_original_uri=True)")
 
 
 class DocumentQueryResponse(BasePaginatedResponse):
@@ -401,66 +518,3 @@ class KGQueryStatsResponse(ResultStatus):
     total_frames: int = Field(..., description="Total frames in graph")
     relation_connections_count: int = Field(..., description="Count of relation-based connections")
     frame_connections_count: int = Field(..., description="Count of frame-based connections")
-
-
-# ---------------------------------------------------------------------------
-# Message / slot-text search
-# ---------------------------------------------------------------------------
-
-class MessageHit(BaseModel):
-    """One matching slot value, with the entity graph that owns it."""
-    entity_uri: Optional[str] = Field(
-        None, description="URI of the KG entity whose graph holds this slot")
-    slot_uri: str = Field(..., description="URI of the matching slot")
-    frame_uri: Optional[str] = Field(
-        None, description="URI of the frame holding the slot, when projected")
-    text: Optional[str] = Field(None, description="The matching slot value")
-    score: float = Field(
-        0.0,
-        description=(
-            "ts_rank_cd relevance. NOT comparable across queries — it is a "
-            "cover-density score whose scale depends on the query's term "
-            "count and the document length, so it orders results within one "
-            "query and means nothing between two."
-        ),
-    )
-
-
-class MessageSearchResponse(ResultStatus):
-    """Result of a slot-text search.
-
-    Carries the generated SPARQL deliberately. This search compiles to a
-    correlated scalar subquery per candidate row (`vg:textSearch`), so its cost
-    depends entirely on how well the rest of the pattern narrows the candidate
-    set — and that is invisible from the call site. Returning the query means a
-    caller who sees it run slowly can read and EXPLAIN what actually ran
-    instead of guessing.
-    """
-    status: OperationStatus = Field(
-        OperationStatus.OK, description="Outcome discriminator")
-    hits: List[MessageHit] = Field(
-        default_factory=list, description="Matches, best first")
-    sparql: Optional[str] = Field(
-        None, description="The SPARQL that was executed (see class docstring)")
-    index_name: Optional[str] = Field(
-        None, description="FTS index the search ran against")
-    ordered_by: str = Field(
-        "relevance",
-        description=(
-            "How these hits were ordered: 'relevance' (by ts_rank_cd) or "
-            "'slot' (by URI, unranked). Reported because the two are not "
-            "interchangeable and the caller cannot tell from the rows — an "
-            "unranked page looks exactly like a ranked one, and every score "
-            "on it is 0.0 because none was computed."
-        ),
-    )
-    next_after: Optional[tuple] = Field(
-        None,
-        description=(
-            "Keyset cursor for the NEXT page: (score, slot_uri) of this "
-            "page's last row. Pass it back as `after`. None when this is the "
-            "last page. Prefer this to `offset` — OFFSET materialises and "
-            "discards the skipped rows, so its cost grows with the page "
-            "number, while a keyset cursor's is flat."
-        ),
-    )

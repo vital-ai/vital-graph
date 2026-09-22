@@ -22,6 +22,7 @@ from ..model.kgqueries_model import (
     FrameConnection,
     EntitySlotRef,
     FrameQueryResult,
+    FTSMatch,
     DocumentResult,
 )
 from ..cache.entity_graph_cache import _entity_graph_cache
@@ -734,6 +735,8 @@ class KGQueriesEndpoint:
             from ..sparql.kg_query_builder import SlotCriteria as BuilderSlotCriteria
             from ..sparql.kg_query_builder import SortCriteria as BuilderSortCriteria
             from ..sparql.kg_query_builder import EntityPropertyFilter as BuilderEntityPropertyFilter
+            from ..sparql.kg_query_builder import FTSCriteria as BuilderFTSCriteria
+            from ..sparql.kg_query_builder import FTSTarget as BuilderFTSTarget
             
             criteria = query_request.criteria
             
@@ -848,6 +851,21 @@ class KGQueriesEndpoint:
                     geo_target=getattr(pydantic_gc, 'geo_target', None),
                 )
             
+            builder_fts_criteria = None
+            if criteria.fts_criteria:
+                builder_fts_criteria = BuilderFTSCriteria(
+                    text=criteria.fts_criteria.text,
+                    index_name=criteria.fts_criteria.index_name,
+                    targets=[
+                        BuilderFTSTarget(
+                            slot_type=target.slot_type,
+                            frame_type=target.frame_type,
+                            kind=target.kind,
+                        ) for target in criteria.fts_criteria.targets
+                    ],
+                    include_match_text=criteria.fts_criteria.include_match_text,
+                )
+
             entity_criteria = BuilderEntityQueryCriteria(
                 entity_type=criteria.source_entity_criteria.entity_type if criteria.source_entity_criteria else None,
                 entity_uris=criteria.source_entity_uris,
@@ -858,6 +876,7 @@ class KGQueriesEndpoint:
                 vector_criteria=builder_vector_criteria,
                 multi_vector_criteria=builder_multi_vector_criteria,
                 geo_criteria=builder_geo_criteria,
+                fts_criteria=builder_fts_criteria,
             )
             
             # Build multi-vector config for SQL generation (fusion strategy, oversample)
@@ -891,65 +910,60 @@ class KGQueriesEndpoint:
             if fast is not None:
                 return fast
 
-            # Build paginated query + count query
             sparql_query = self.query_builder.build_entity_query_sparql(
                 entity_criteria, graph_id,
                 query_request.page_size, query_request.offset
             )
-            count_query = self.query_builder.build_entity_count_query_sparql(
-                entity_criteria, graph_id
+            from ..model.kgqueries_model import TotalCountMode
+            count_mode = query_request.include_total_count
+            if query_request.count_only and count_mode == TotalCountMode.NO:
+                count_mode = TotalCountMode.YES
+            want_count = count_mode != TotalCountMode.NO
+            cap = None if count_mode == TotalCountMode.EXACT else TOTAL_COUNT_CAP
+            count_query = (
+                self.query_builder.build_entity_count_query_sparql(
+                    entity_criteria, graph_id, cap=cap)
+                if want_count else None
             )
             
             self.logger.info(f"Generated entity SPARQL query:\n{sparql_query}")
-            
-            # count_only short-circuit: run only the count query
             t0 = _time.monotonic()
-            if query_request.count_only:
+            total_count = 0
+            total_count_capped = False
+
+            async def get_count() -> tuple[int, bool]:
+                if count_query is None:
+                    raise RuntimeError("count query requested while count mode is disabled")
                 _qh = _count_cache.query_hash(count_query)
-                _cached = _count_cache.get(space_id, graph_id, _qh)
-                if _cached is not None:
-                    total_count = _cached
+                cached = _count_cache.get(space_id, graph_id, _qh)
+                if cached is None:
+                    count_results = await _checked_query(
+                        backend, space_id, count_query)
+                    raw_count = self._extract_total_count(count_results)
+                    _count_cache.put(space_id, graph_id, _qh, raw_count)
                 else:
-                    count_results = await _checked_query(backend, space_id, count_query)
-                    total_count = self._extract_total_count(count_results)
-                    _count_cache.put(space_id, graph_id, _qh, total_count)
+                    raw_count = cached
+                if cap is not None and raw_count > cap:
+                    return cap, True
+                return raw_count, False
+
+            if query_request.count_only:
+                total_count, total_count_capped = await get_count()
                 self.logger.info(f"Entity count_only: {total_count}, {(_time.monotonic() - t0)*1000:.0f}ms")
                 return KGQueryResponse(
                     status=OperationStatus.EMPTY,
                     query_type="entity",
+                    fts_applied=builder_fts_criteria is not None,
                     entity_uris=[],
                     total_count=total_count,
+                    total_count_capped=total_count_capped,
                     page_size=0,
                     offset=0,
                 )
-            
-            # THE COUNT IS THE EXPENSIVE HALF, and it was the only one not cached.
-            # `count_only` above already reads `_count_cache`; the PAGED path issued
-            # the same count query on every request and discarded the answer.
-            # Measured on lead_nurture_grouped, a 25-entity page: page ~50 ms, count
-            # ~340 ms -- so the count was ~85% of the request.
-            #
-            # It cannot be made cheap by paging. As the note on TOTAL_COUNT_CAP says,
-            # a count is COUNT(DISTINCT ?entity) over the whole match set and costs
-            # O(matches) however cheap the page is. So the lever is not computing it
-            # again -- and the cache is already trusted for this exact query: keyed on
-            # the count SPARQL's hash, and invalidated by ANY write to (space, graph)
-            # rather than merely aged out.
-            _qh = _count_cache.query_hash(count_query)
-            _cached_total = _count_cache.get(space_id, graph_id, _qh)
 
-            # Count-first short-circuit: when offset > 0 run the cheap count
-            # query first so we can skip the expensive paginated query if the
-            # caller has already paged past the end of the result set.
-            if query_request.offset > 0:
-                if _cached_total is not None:
-                    total_count = _cached_total
-                else:
-                    count_results = await _checked_query(
-                        backend, space_id, count_query)
-                    total_count = self._extract_total_count(count_results)
-                    _count_cache.put(space_id, graph_id, _qh, total_count)
-                if query_request.offset >= total_count:
+            if want_count and query_request.offset > 0:
+                total_count, total_count_capped = await get_count()
+                if not total_count_capped and query_request.offset >= total_count:
                     t_query = _time.monotonic()
                     self.logger.info(
                         f"Entity query short-circuit: offset {query_request.offset} >= total {total_count}, "
@@ -957,33 +971,27 @@ class KGQueriesEndpoint:
                     return KGQueryResponse(
                         status=OperationStatus.EMPTY,
                         query_type="entity",
+                        fts_applied=builder_fts_criteria is not None,
                         entity_uris=[],
                         total_count=total_count,
+                        total_count_capped=total_count_capped,
                         page_size=query_request.page_size,
                         offset=query_request.offset
                     )
-                # Offset is valid — now run the paginated query
                 results = await _checked_query(
                     backend, space_id, sparql_query,
                     multi_vector_config=_mv_config)
-            elif _cached_total is not None:
-                # The count is known, so the page is the only work left. Running it
-                # alone rather than as the pair below IS the saving:
-                # `_gather_cancelling` is concurrent, but the request still waits for
-                # the SLOWER of the two, and that is the count.
-                total_count = _cached_total
-                results = await _checked_query(
-                    backend, space_id, sparql_query,
-                    multi_vector_config=_mv_config)
-            else:
-                # First page: run both in parallel for lowest latency
-                results, count_results = await _gather_cancelling(
+            elif want_count:
+                results, count_pair = await _gather_cancelling(
                     _checked_query(backend, space_id, sparql_query,
                                    multi_vector_config=_mv_config),
-                    _checked_query(backend, space_id, count_query),
+                    get_count(),
                 )
-                total_count = self._extract_total_count(count_results)
-                _count_cache.put(space_id, graph_id, _qh, total_count)
+                total_count, total_count_capped = count_pair
+            else:
+                results = await _checked_query(
+                    backend, space_id, sparql_query,
+                    multi_vector_config=_mv_config)
             t_query = _time.monotonic()
             
             # Extract entity URIs
@@ -1012,13 +1020,39 @@ class KGQueriesEndpoint:
                 backend, space_id, graph_id, entity_uris, query_request,
                 getattr(entity_criteria, "entity_type", None))
 
+            entity_fts_matches = None
+            if builder_fts_criteria and entity_uris:
+                entity_fts_matches = {uri: [] for uri in entity_uris}
+                matches_query = self.query_builder.build_fts_matches_sparql(
+                    builder_fts_criteria, entity_uris, "entity", graph_id)
+                matches_results = await _checked_query(
+                    backend, space_id, matches_query)
+                bindings = ((matches_results or {}).get("results") or {}).get(
+                    "bindings") or []
+                for binding in bindings:
+                    entity_uri = binding.get("entity", {}).get("value", "")
+                    slot_uri = binding.get("fts_slot", {}).get("value", "")
+                    if entity_uri not in entity_fts_matches or not slot_uri:
+                        continue
+                    entity_fts_matches[entity_uri].append(FTSMatch(
+                        subject_uri=slot_uri,
+                        frame_uri=binding.get("fts_frame", {}).get("value"),
+                        owner_entity_uri=entity_uri,
+                        target_kind=binding.get(
+                            "target_kind", {}).get("value"),
+                        text=binding.get("match_text", {}).get("value"),
+                    ))
+
             return KGQueryResponse(
                 status=_read_status(entity_uris),
                 query_type="entity",
+                fts_applied=builder_fts_criteria is not None,
                 entity_uris=entity_uris,
+                entity_fts_matches=entity_fts_matches,
                 entity_graphs=entity_graphs,
                 entity_values=slot_values,
                 total_count=total_count,
+                total_count_capped=total_count_capped,
                 page_size=query_request.page_size,
                 offset=query_request.offset
             )
@@ -1130,8 +1164,8 @@ class KGQueriesEndpoint:
                     count_results = await _checked_query(backend, space_id, count_query)
                     total_count = self._extract_total_count(count_results)
                     _count_cache.put(space_id, graph_id, _qh, total_count)
-                total_count_capped = cap is not None and total_count > cap
-                if total_count_capped:
+                if cap is not None and total_count > cap:
+                    total_count_capped = True
                     total_count = cap
                 self.logger.info(
                     f"Frame count_only: {total_count}"
@@ -1154,8 +1188,8 @@ class KGQueriesEndpoint:
             if query_request.offset > 0 and want_count:
                 count_results = await _checked_query(backend, space_id, count_query)
                 total_count = self._extract_total_count(count_results)
-                total_count_capped = cap is not None and total_count > cap
-                if total_count_capped:
+                if cap is not None and total_count > cap:
+                    total_count_capped = True
                     total_count = cap
                 # Only short-circuit on an exact count: a capped total is a
                 # lower bound, so an offset beyond it may still have rows.
@@ -1180,8 +1214,8 @@ class KGQueriesEndpoint:
                     _checked_query(backend, space_id, count_query),
                 )
                 total_count = self._extract_total_count(count_results)
-                total_count_capped = cap is not None and total_count > cap
-                if total_count_capped:
+                if cap is not None and total_count > cap:
+                    total_count_capped = True
                     total_count = cap
             else:
                 results = await _checked_query(backend, space_id, sparql_query)
@@ -1234,6 +1268,9 @@ class KGQueriesEndpoint:
             from ..sparql.kg_query_builder import FrameQueryCriteria as BuilderFrameQueryCriteria
             from ..sparql.kg_query_builder import SlotCriteria as BuilderSlotCriteria
             from ..sparql.kg_query_builder import SortCriteria as BuilderSortCriteria
+            from ..sparql.kg_query_builder import EntityPropertyFilter as BuilderEntityPropertyFilter
+            from ..sparql.kg_query_builder import FTSCriteria as BuilderFTSCriteria
+            from ..sparql.kg_query_builder import FTSTarget as BuilderFTSTarget
             
             criteria = query_request.criteria
             
@@ -1271,12 +1308,42 @@ class KGQueriesEndpoint:
                     ) for sc in criteria.sort_criteria
                 ]
             
+            builder_entity_property_filters = None
+            pydantic_epf = criteria.entity_property_filters
+            if not pydantic_epf and criteria.source_entity_criteria:
+                pydantic_epf = criteria.source_entity_criteria.entity_property_filters
+            if pydantic_epf:
+                builder_entity_property_filters = [
+                    BuilderEntityPropertyFilter(
+                        property_uri=epf.property_uri,
+                        operator=epf.operator,
+                        value=epf.value,
+                    ) for epf in pydantic_epf
+                ]
+
+            builder_fts_criteria = None
+            if criteria.fts_criteria:
+                builder_fts_criteria = BuilderFTSCriteria(
+                    text=criteria.fts_criteria.text,
+                    index_name=criteria.fts_criteria.index_name,
+                    targets=[
+                        BuilderFTSTarget(
+                            slot_type=target.slot_type,
+                            frame_type=target.frame_type,
+                            kind=target.kind,
+                        ) for target in criteria.fts_criteria.targets
+                    ],
+                    include_match_text=criteria.fts_criteria.include_match_text,
+                )
+
             # Build frame query criteria
             frame_query_criteria = BuilderFrameQueryCriteria(
                 frame_type=frame_type,
                 entity_type=criteria.source_entity_criteria.entity_type if criteria.source_entity_criteria else None,
                 slot_criteria=builder_slot_criteria,
-                sort_criteria=builder_sort_criteria
+                sort_criteria=builder_sort_criteria,
+                entity_property_filters=builder_entity_property_filters,
+                fts_criteria=builder_fts_criteria,
             )
             
             # Build paginated SPARQL query for frames
@@ -1285,41 +1352,56 @@ class KGQueriesEndpoint:
                 query_request.page_size, query_request.offset
             )
             
-            # Build count query for frames
-            count_query = self._build_frame_count_query(
-                frame_query_criteria, graph_id
+            from ..model.kgqueries_model import TotalCountMode
+            count_mode = query_request.include_total_count
+            if query_request.count_only and count_mode == TotalCountMode.NO:
+                count_mode = TotalCountMode.YES
+            want_count = count_mode != TotalCountMode.NO
+            cap = None if count_mode == TotalCountMode.EXACT else TOTAL_COUNT_CAP
+            count_query = (
+                self._build_frame_count_query(
+                    frame_query_criteria, graph_id, cap=cap)
+                if want_count else None
             )
             
             self.logger.info(f"Generated frame_query SPARQL:\n{sparql_query}")
-            
-            # count_only short-circuit: run only the count query
             t0 = _time.monotonic()
-            if query_request.count_only:
+            total_count = 0
+            total_count_capped = False
+
+            async def get_count() -> tuple[int, bool]:
+                if count_query is None:
+                    raise RuntimeError("count query requested while count mode is disabled")
                 _qh = _count_cache.query_hash(count_query)
-                _cached = _count_cache.get(space_id, graph_id, _qh)
-                if _cached is not None:
-                    total_count = _cached
+                cached = _count_cache.get(space_id, graph_id, _qh)
+                if cached is None:
+                    count_results = await _checked_query(
+                        backend, space_id, count_query)
+                    raw_count = self._extract_total_count(count_results)
+                    _count_cache.put(space_id, graph_id, _qh, raw_count)
                 else:
-                    count_results = await _checked_query(backend, space_id, count_query)
-                    total_count = self._extract_total_count(count_results)
-                    _count_cache.put(space_id, graph_id, _qh, total_count)
+                    raw_count = cached
+                if cap is not None and raw_count > cap:
+                    return cap, True
+                return raw_count, False
+
+            if query_request.count_only:
+                total_count, total_count_capped = await get_count()
                 self.logger.info(f"Frame_query count_only: {total_count}, {(_time.monotonic() - t0)*1000:.0f}ms")
                 return KGQueryResponse(
                     status=OperationStatus.EMPTY,
                     query_type="frame_query",
+                    fts_applied=builder_fts_criteria is not None,
                     frame_results=[],
                     total_count=total_count,
+                    total_count_capped=total_count_capped,
                     page_size=0,
                     offset=0,
                 )
-            
-            # Count-first short-circuit: when offset > 0 run the cheap count
-            # query first so we can skip the expensive paginated query if the
-            # caller has already paged past the end of the result set.
-            if query_request.offset > 0:
-                count_results = await _checked_query(backend, space_id, count_query)
-                total_count = self._extract_total_count(count_results)
-                if query_request.offset >= total_count:
+
+            if want_count and query_request.offset > 0:
+                total_count, total_count_capped = await get_count()
+                if not total_count_capped and query_request.offset >= total_count:
                     t_query = _time.monotonic()
                     self.logger.info(
                         f"Frame_query short-circuit: offset {query_request.offset} >= total {total_count}, "
@@ -1327,40 +1409,86 @@ class KGQueriesEndpoint:
                     return KGQueryResponse(
                         status=OperationStatus.EMPTY,
                         query_type="frame_query",
+                        fts_applied=builder_fts_criteria is not None,
                         frame_results=[],
                         total_count=total_count,
+                        total_count_capped=total_count_capped,
                         page_size=query_request.page_size,
                         offset=query_request.offset
                     )
                 results = await _checked_query(backend, space_id, sparql_query)
-            else:
-                results, count_results = await _gather_cancelling(
+            elif want_count:
+                results, count_pair = await _gather_cancelling(
                     _checked_query(backend, space_id, sparql_query),
-                    _checked_query(backend, space_id, count_query),
+                    get_count(),
                 )
-                total_count = self._extract_total_count(count_results)
+                total_count, total_count_capped = count_pair
+            else:
+                results = await _checked_query(backend, space_id, sparql_query)
             t_query = _time.monotonic()
             
             # Extract frame URIs
             frame_uris = []
+            seen_frame_uris = set()
             if results and results.get("results") and results["results"].get("bindings"):
                 for binding in results["results"]["bindings"]:
                     uri = binding.get('frame', {}).get('value', '')
-                    if uri:
+                    if uri and uri not in seen_frame_uris:
+                        seen_frame_uris.add(uri)
                         frame_uris.append(uri)
             
-            # For each frame, fetch entity slot refs (includes frame_type)
             frame_results = []
             if frame_uris:
-                entity_refs_query = self._build_entity_slot_refs_query(frame_uris, graph_id)
-                self.logger.info(f"Fetching entity slot refs for {len(frame_uris)} frames")
-                refs_results = await _checked_query(backend, space_id, entity_refs_query)
-                
-                # Group entity refs and frame types by frame URI
-                refs_by_frame: Dict[str, List[EntitySlotRef]] = {uri: [] for uri in frame_uris}
+                refs_by_frame: Dict[str, List[EntitySlotRef]] = {
+                    uri: [] for uri in frame_uris}
                 frame_types: Dict[str, str] = {}
-                if refs_results and refs_results.get("results") and refs_results["results"].get("bindings"):
-                    for binding in refs_results["results"]["bindings"]:
+                fts_matches_by_frame: Dict[str, List[FTSMatch]] = {
+                    uri: [] for uri in frame_uris}
+
+                if builder_fts_criteria:
+                    target_types = {
+                        target.kind: target.frame_type
+                        for target in builder_fts_criteria.targets
+                        if target.kind and target.frame_type
+                    }
+                    default_frame_type = (
+                        builder_fts_criteria.targets[0].frame_type
+                        if len(builder_fts_criteria.targets) == 1 else None)
+                    matches_query = self.query_builder.build_fts_matches_sparql(
+                        builder_fts_criteria, frame_uris, "frame", graph_id)
+                    matches_results = await _checked_query(
+                        backend, space_id, matches_query)
+                    bindings = ((matches_results or {}).get("results") or {}).get(
+                        "bindings") or []
+                    for binding in bindings:
+                        f_uri = binding.get("frame", {}).get("value", "")
+                        slot_uri = binding.get("fts_slot", {}).get("value", "")
+                        if f_uri not in fts_matches_by_frame or not slot_uri:
+                            continue
+                        target_kind = binding.get(
+                            "target_kind", {}).get("value")
+                        frame_type = target_types.get(
+                            target_kind) or default_frame_type
+                        if frame_type:
+                            frame_types[f_uri] = frame_type
+                        fts_matches_by_frame[f_uri].append(FTSMatch(
+                            subject_uri=slot_uri,
+                            frame_uri=f_uri,
+                            owner_entity_uri=binding.get(
+                                "owner_entity", {}).get("value"),
+                            target_kind=target_kind,
+                            text=binding.get("match_text", {}).get("value"),
+                        ))
+                else:
+                    entity_refs_query = self._build_entity_slot_refs_query(
+                        frame_uris, graph_id)
+                    self.logger.info(
+                        f"Fetching entity slot refs for {len(frame_uris)} frames")
+                    refs_results = await _checked_query(
+                        backend, space_id, entity_refs_query)
+                    bindings = ((refs_results or {}).get("results") or {}).get(
+                        "bindings") or []
+                    for binding in bindings:
                         f_uri = binding.get('frame', {}).get('value', '')
                         slot_type = binding.get('slot_type', {}).get('value', '')
                         entity_uri = binding.get('entity_ref', {}).get('value', '')
@@ -1372,12 +1500,13 @@ class KGQueriesEndpoint:
                                 slot_type_uri=slot_type,
                                 entity_uri=entity_uri
                             ))
-                
+
                 for uri in frame_uris:
                     frame_results.append(FrameQueryResult(
                         frame_uri=uri,
                         frame_type_uri=frame_types.get(uri, ""),
                         entity_refs=refs_by_frame.get(uri, []),
+                        fts_matches=fts_matches_by_frame.get(uri, []),
                         # include_frame_graph is ACCEPTED and NOT implemented
                         # (`issues/210`). Left None, and now SAID so in the
                         # response below rather than returned as a silent null —
@@ -1416,8 +1545,10 @@ class KGQueriesEndpoint:
             return KGQueryResponse(
                 status=_read_status(frame_results),
                 query_type="frame_query",
+                fts_applied=builder_fts_criteria is not None,
                 frame_results=frame_results,
                 total_count=total_count,
+                total_count_capped=total_count_capped,
                 page_size=query_request.page_size,
                 offset=query_request.offset,
                 message=_msg,
@@ -1430,10 +1561,16 @@ class KGQueriesEndpoint:
                 detail=f"Failed to execute frame query: {str(e)}"
             )
     
-    def _build_frame_count_query(self, criteria, graph_id: str) -> str:
+    def _build_frame_count_query(
+        self, criteria, graph_id: str, cap: Optional[int] = None,
+    ) -> str:
         """Build a COUNT query for frames matching criteria (mirrors build_frame_query_sparql WHERE clause)."""
+        from ..sparql.kg_query_builder import escape_sparql_iri
+
         # Build the same WHERE clauses as build_frame_query_sparql but wrap in COUNT
-        where_clauses = ["?frame rdf:type haley:KGFrame ."]
+        where_clauses = (
+            [] if criteria.fts_criteria else ["?frame rdf:type haley:KGFrame ."]
+        )
         
         if criteria.frame_type:
             where_clauses.append(f"?frame haley:hasKGFrameType <{criteria.frame_type}> .")
@@ -1444,11 +1581,28 @@ class KGQueriesEndpoint:
             FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))
             """)
         
+        needs_owner = bool(
+            criteria.fts_criteria
+            or criteria.entity_type
+            or criteria.entity_property_filters
+            or any(sc.sort_type == "entity_property" for sc in (criteria.sort_criteria or []))
+        )
+        if needs_owner and not criteria.fts_criteria:
+            where_clauses.append("?frame haley:hasKGGraphURI ?entity .")
+
         if criteria.entity_type:
-            where_clauses.append(f"""
-            ?entity haley:hasFrame ?frame .
-            ?entity vital-core:vitaltype <{criteria.entity_type}> .
-            """)
+            where_clauses.append(
+                f"?entity haley:hasKGEntityType "
+                f"<{escape_sparql_iri(criteria.entity_type)}> .")
+
+        where_clauses.extend(self.query_builder._build_entity_property_patterns(
+            criteria.entity_property_filters, entity_var="entity", prefix="frame_epf"))
+
+        if criteria.fts_criteria:
+            # First, for the same reason as build_frame_query_sparql: the count
+            # must have the page's algebra shape, not a split one.
+            where_clauses.insert(0, self.query_builder._build_fts_pattern(
+                criteria.fts_criteria, result_var="frame"))
         
         if criteria.slot_criteria:
             for i, slot_criterion in enumerate(criteria.slot_criteria):
@@ -1469,25 +1623,33 @@ class KGQueriesEndpoint:
                         )
                         slot_clauses.append(value_clause)
                     where_clauses.append(" ".join(slot_clauses))
+
+        if criteria.sort_criteria:
+            sort_patterns, _, _, _ = self.query_builder._build_sort_bindings(
+                criteria.sort_criteria, anchor_var="frame", use_edge_pattern=True)
+            where_clauses.extend(sort_patterns)
         
         where_clause = " ".join(where_clauses)
         
-        if graph_id is None:
+        graph_body = where_clause
+        if graph_id is not None:
+            graph_body = (
+                f"GRAPH <{escape_sparql_iri(graph_id)}> {{ {where_clause} }}")
+        if cap is not None:
             return f"""
             {self.query_builder.prefixes}
-            SELECT (COUNT(DISTINCT ?frame) AS ?count) WHERE {{
-                {where_clause}
+            SELECT (COUNT(*) AS ?count) WHERE {{
+                {{ SELECT DISTINCT ?frame WHERE {{
+                    {graph_body}
+                }} LIMIT {int(cap) + 1} }}
             }}
             """.strip()
-        else:
-            return f"""
-            {self.query_builder.prefixes}
-            SELECT (COUNT(DISTINCT ?frame) AS ?count) WHERE {{
-                GRAPH <{graph_id}> {{
-                    {where_clause}
-                }}
-            }}
-            """.strip()
+        return f"""
+        {self.query_builder.prefixes}
+        SELECT (COUNT(DISTINCT ?frame) AS ?count) WHERE {{
+            {graph_body}
+        }}
+        """.strip()
     
     async def _fetch_entity_graphs(
         self, backend, space_id: str, graph_id: str, entity_uris: List[str]
@@ -1501,6 +1663,8 @@ class KGQueriesEndpoint:
         cache misses.  Freshly fetched results are written back to the
         quad cache for subsequent requests.
         """
+        from ..sparql.kg_query_builder import escape_sparql_iri
+
         _effective_graph = graph_id or "default"
         g_encoded = f"<{graph_id}>" if graph_id else None
         result: Dict[str, List[Dict[str, Any]]] = {}
@@ -1528,7 +1692,7 @@ class KGQueriesEndpoint:
             PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
             
             SELECT ?entity_uri ?s ?p ?o WHERE {{
-                GRAPH <{graph_id}> {{
+                GRAPH <{escape_sparql_iri(graph_id)}> {{
                     VALUES ?entity_uri {{ {values_clause} }}
                     {{
                         ?entity_uri ?p ?o .
@@ -1877,7 +2041,10 @@ class KGQueriesEndpoint:
     
     def _build_entity_slot_refs_query(self, frame_uris: List[str], graph_id: str) -> str:
         """Build SPARQL to fetch entity slot refs for a list of frames."""
-        values_clause = " ".join(f"<{uri}>" for uri in frame_uris)
+        from ..sparql.kg_query_builder import escape_sparql_iri
+
+        values_clause = " ".join(
+            f"<{escape_sparql_iri(uri)}>" for uri in frame_uris)
         
         slot_to_frame = """
                 ?slot_edge vital-core:hasEdgeSource ?frame .
@@ -1905,7 +2072,7 @@ class KGQueriesEndpoint:
             return f"""
             {self.query_builder.prefixes}
             SELECT ?frame ?frame_type ?slot_type ?entity_ref WHERE {{
-                GRAPH <{graph_id}> {{
+                GRAPH <{escape_sparql_iri(graph_id)}> {{
                     VALUES ?frame {{ {values_clause} }}
                     OPTIONAL {{ ?frame haley:hasKGFrameType ?frame_type . }}
                     OPTIONAL {{

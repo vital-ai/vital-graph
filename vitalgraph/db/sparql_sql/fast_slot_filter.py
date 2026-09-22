@@ -181,8 +181,8 @@ def filter_decline_reason(criteria) -> Optional[str]:
                 "declines too, the query falls to the general pipeline "
                 "(issues/172)")
     for attr in ("vector_criteria", "multi_vector_criteria", "geo_criteria",
-                 "entity_property_filters", "entity_uris", "slot_criteria",
-                 "search_string"):
+                 "fts_criteria", "entity_property_filters", "entity_uris",
+                 "slot_criteria", "search_string"):
         if getattr(criteria, attr, None):
             return (f"{attr} present — this table answers frame/slot equality "
                     f"only, and a partially applied query is a wrong answer")
@@ -227,8 +227,8 @@ def can_serve_filter(criteria) -> bool:
     # asymmetry between two gates over one table is how the last four defects
     # here happened.
     for attr in ("vector_criteria", "multi_vector_criteria", "geo_criteria",
-                 "entity_property_filters", "entity_uris", "slot_criteria",
-                 "search_string"):
+                 "fts_criteria", "entity_property_filters", "entity_uris",
+                 "slot_criteria", "search_string"):
         if getattr(criteria, attr, None):
             return False
     return _eq_criteria(fcs) is not None
