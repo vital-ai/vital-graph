@@ -28,6 +28,27 @@ silently grows when handed an extra object. If it is wanted, it belongs in its
 own endpoint or an explicit flag, filed separately, and designed knowing what
 `execute_atomic_frame_update` already provides (below).
 
+### `PUT /objects` is NOT the answer — recorded because it looks like it is
+
+`objects_endpoint._update_objects` → `objects_impl.update_objects_batch` is
+type-agnostic (it never inspects whether an object is a `KGEntity`) and is
+genuinely atomic — one transaction, `remove_rdf_quads_batch` +
+`add_rdf_quads_batch` across all subjects. So it WOULD write an entity node and
+a frame slot together, and it is the first thing anyone solving this will find.
+
+**Do not route KG writes through it.** Caching and the surrounding KG
+functionality are built around the `kgentity` endpoints; a write that goes via
+`/objects` sits outside them. That is a deliberate boundary, not an oversight,
+and it is the reason this is a design question rather than a one-line answer.
+
+Two further properties, relevant if the boundary is ever revisited:
+
+* It takes **no entity lock** — no `lock_uris`, no `update_subjects_graph` — so
+  it is one of the paths `issues/174` is about, and it is NOT currently named
+  there.
+* Its delete-then-insert is per subject, WHOLE subject, so a caller sending a
+  partial entity node silently loses every property it omitted.
+
 ### What the storage layer already does, recorded so nobody re-derives it
 
 Relevant if that separate request is ever taken up: the write is ALREADY
