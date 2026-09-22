@@ -618,6 +618,49 @@ it means either rewriting the touch as direct SQL in a locked transaction
 (straightforward — it is a single triple with a known subject, predicate and
 graph) or giving the SPARQL update path a way to run on a caller's connection.
 
+### 6. NEW 2026-09-21 — `PUT /objects` is atomic and unlocked, and was missing from this list
+
+Found while answering `issues/225`, not by auditing: someone looking for a way
+to write an entity node and a frame slot together finds this endpoint
+immediately, because it does exactly that.
+
+`objects_endpoint._update_objects` → `objects_impl.update_objects_batch` is
+type-agnostic — it never inspects whether an object is a `KGEntity`, a
+`KGFrame` or a `KGSlot` — and its mutation IS one transaction:
+
+```python
+async def update_operation(transaction):
+    removed = await ...remove_rdf_quads_batch(..., transaction=transaction)
+    added   = await ...add_rdf_quads_batch(..., transaction=transaction)
+result = await execute_with_transaction(self.space_manager, space_id, update_operation)
+```
+
+So it has item 2's shape exactly: **atomic, and taking no entity lock.** No
+`lock_uris`, no `update_subjects_graph`, no `lock_entities`. It can therefore
+rewrite subjects of an entity graph while a locked path — entity upsert, entity
+delete, or a frame write, all of which hold the entity key — believes it has
+exclusive access to that entity.
+
+**Contention is plausible rather than theoretical**, because the endpoint
+accepts ANY subject. A caller rewriting an entity node through `/objects` while
+`delete_entity_graph_bulk` is resolving membership is item 1's demonstrated race
+with a different writer on the other side.
+
+**It is also the LOWEST priority of the six, for a reason that is not about
+risk.** Caching and the surrounding KG functionality are built around the
+`kgentity` endpoints, and KG writes are deliberately not routed through
+`/objects` (`issues/225`). A path nothing is supposed to contend for is exactly
+the case this issue's own preamble says not to lock speculatively.
+
+So: **recorded, not scheduled.** The reason to write it down is that the
+endpoint's atomicity makes it LOOK like the safe way to do a multi-subject KG
+write, and it is the unlocked one. If the boundary around `/objects` ever
+changes, this moves up the list rather than being discovered again.
+
+One further property, not a locking matter but adjacent: its delete-then-insert
+is per subject, WHOLE subject, so a caller sending a partial object silently
+loses every property it omitted.
+
 ## Scoping the fix for item 4 — two options, measured
 
 ### Option A — give `execute_sparql_update` a caller-supplied connection
@@ -701,6 +744,7 @@ expensive part, and only phase 2 of the frame work needs it:
 | frame create/update/delete — phase 1 | ~7 lines; the write is already one transaction |
 | frame create/update — phase 2 | blocked on the write scope (issues/175 class 2) |
 | raw SPARQL update | subject→grouping resolution, plus a lock; WHERE-bound subjects cannot be covered at all |
+| `PUT /objects` (item 6) | cheap — one transaction already — but **subject→entity resolution is the work**, and it is deliberately off the KG write path, so the honest answer to "is it concurrent in production" is *it should not be carrying KG writes at all* |
 | segmentation enqueue | a partial unique index, so a migration script |
 | `touch_entity_modification_time` | ~30–40 lines, direct SQL (Option B above) |
 
