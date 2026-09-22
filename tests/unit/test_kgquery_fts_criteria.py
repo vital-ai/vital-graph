@@ -177,11 +177,18 @@ def test_match_metadata_query_is_bounded_to_page_frames() -> None:
         builder_fts(), ["urn:frame:1", "urn:frame:2"], "frame", "urn:acme_kg"
     )
 
-    assert "VALUES ?frame { <urn:frame:1> <urn:frame:2> }" in query
+    # Bounded to the page by a FILTER INSIDE the group, and with NO target
+    # VALUES: joined to the BGP that table cannot be merged, its join carries
+    # null-tolerant guards, and the plan drove from every frame in the space —
+    # 429 BILLION estimated rows, a 60 s timeout for 2 frames on the test stack,
+    # 2.2 s on production for a 14-row phrase. The slot type is projected and
+    # the endpoint maps it back to the target's `kind`.
+    assert "FILTER(?frame IN (<urn:frame:1>, <urn:frame:2>))" in query
+    assert "VALUES" not in query
     assert "?fts_slot haley:hasFrameGraphURI ?frame" in query
     assert "?fts_slot haley:hasKGGraphURI ?entity" in query
-    assert f'(<{MESSAGE_SLOT}> <{MESSAGE_FRAME}> "sent")' in query
-    assert f'(<{DRAFT_SLOT}> <{DRAFT_FRAME}> "draft")' in query
+    assert "?fts_slot_type" in query
+    assert f"FILTER(?fts_slot_type IN (<{MESSAGE_SLOT}>, <{DRAFT_SLOT}>))" in query
     assert "UNION" not in query
     assert "?fts_slot haley:hasTextSlotValue ?match_text" in query
     assert "textMatch>" in query
@@ -208,7 +215,7 @@ class FakeBackend:
     async def execute_sparql_query(self, space_id: str, query: str, **kwargs):
         if "COUNT(DISTINCT ?frame)" in query:
             return {"results": {"bindings": [{"count": {"value": "1"}}]}}
-        if "VALUES ?frame" in query and "?fts_slot" in query:
+        if "FILTER(?frame IN" in query and "?fts_slot" in query:
             return {
                 "results": {
                     "bindings": [
@@ -216,7 +223,7 @@ class FakeBackend:
                             "frame": {"value": "urn:frame:1"},
                             "fts_slot": {"value": "urn:slot:1"},
                             "owner_entity": {"value": "urn:entity:1"},
-                            "target_kind": {"value": "sent"},
+                            "fts_slot_type": {"value": MESSAGE_SLOT},
                             "match_text": {"value": "saved application"},
                         }
                     ]
@@ -295,7 +302,7 @@ class EntityBackend:
     async def execute_sparql_query(self, space_id: str, query: str, **kwargs):
         if "COUNT(DISTINCT ?entity)" in query:
             return {"results": {"bindings": [{"count": {"value": "1"}}]}}
-        if "VALUES ?entity" in query and "?fts_slot" in query:
+        if "FILTER(?entity IN" in query and "?fts_slot" in query:
             return {
                 "results": {
                     "bindings": [
@@ -304,7 +311,7 @@ class EntityBackend:
                             "fts_frame": {"value": "urn:frame:1"},
                             "fts_slot": {"value": "urn:slot:1"},
                             "owner_entity": {"value": "urn:entity:1"},
-                            "target_kind": {"value": "sent"},
+                            "fts_slot_type": {"value": MESSAGE_SLOT},
                             "match_text": {"value": "saved application"},
                         }
                     ]

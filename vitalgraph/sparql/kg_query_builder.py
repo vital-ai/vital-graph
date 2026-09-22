@@ -663,19 +663,64 @@ class KGQueryCriteriaBuilder:
         result_var: str,
         graph_id: Optional[str],
     ) -> str:
-        values = " ".join(f"<{escape_sparql_iri(uri)}>" for uri in result_uris)
-        select = f"?{result_var} ?fts_slot ?owner_entity ?target_kind"
+        # NO TARGET `VALUES` HERE when the slot types identify the targets.
+        #
+        # The page already enforced each target's (slot type, frame type)
+        # pairing, and this query only decorates URIs that page returned. Joined
+        # to the BGP, the target table is a separate relation the planner cannot
+        # merge (`merge_bgp` declines: "children are not both BGPs"), its join
+        # carries null-tolerant guards, and neither the handful of known URIs
+        # nor the FTS match set can drive: measured for 2 frames, 8.5 ms with
+        # ONE target against a 60 s timeout with two, plan estimate 429 BILLION
+        # rows, and 2.2 s on production for 2 frames of a 14-row phrase.
+        #
+        # Projecting the slot type and constraining it to the targets' slot
+        # types returns the same rows with no join; the caller maps slot type
+        # back to `kind`. Falls back to the VALUES form when two targets share a
+        # slot type, where the slot type alone cannot say which target matched.
+        slot_types = [t.slot_type for t in criteria.targets]
+        by_slot_type = len(set(slot_types)) == len(slot_types)
+        select = f"?{result_var} ?fts_slot ?owner_entity"
+        select += " ?fts_slot_type" if by_slot_type else " ?target_kind"
         if result_var == "entity":
             select += " ?fts_frame"
         if criteria.include_match_text:
             select += " ?match_text"
-        body = self._build_fts_pattern(
-            criteria, result_var=result_var, include_metadata=True)
+        if by_slot_type:
+            frame_var = "frame" if result_var == "frame" else "fts_frame"
+            clauses = [
+                "?fts_slot haley:hasKGSlotType ?fts_slot_type .",
+                f"?fts_slot haley:hasFrameGraphURI ?{frame_var} .",
+                "?fts_slot haley:hasKGGraphURI ?entity .",
+                "BIND(?entity AS ?owner_entity)",
+                "FILTER(?fts_slot_type IN ("
+                + ", ".join(f"<{escape_sparql_iri(t)}>" for t in slot_types) + "))",
+            ]
+            if criteria.include_match_text:
+                clauses.append("?fts_slot haley:hasTextSlotValue ?match_text .")
+            text = escape_sparql_string(criteria.text)
+            index_name = escape_sparql_string(criteria.index_name)
+            clauses.append(
+                f'FILTER(<http://vital.ai/ontology/vitalgraph#textMatch>('
+                f'?fts_slot, "{text}", "{index_name}"))')
+            body = " ".join(clauses)
+        else:
+            body = self._build_fts_pattern(
+                criteria, result_var=result_var, include_metadata=True)
+        # The page's URIs bind with a FILTER INSIDE the group, not a VALUES
+        # outside it. Outside, a multi-target query has TWO VALUES either side
+        # of the BGP, the join between them carries null-tolerant guards, and
+        # the plan cannot drive from the handful of known URIs: measured on the
+        # test stack for 2 frames, 8.5 ms with one target and a 60 s TIMEOUT
+        # with two, and 2.2 s on production for 2 frames of a 14-row phrase.
+        # As a filter it is one BGP the push-down and join order can enter from
+        # either end.
+        uris = ", ".join(f"<{escape_sparql_iri(uri)}>" for uri in result_uris)
+        body = f"{body} FILTER(?{result_var} IN ({uris}))"
         graph = (f"GRAPH <{escape_sparql_iri(graph_id)}> {{ {body} }}"
                  if graph_id is not None else body)
         return (
-            f"{self.prefixes}\nSELECT DISTINCT {select} WHERE {{ "
-            f"VALUES ?{result_var} {{ {values} }} {graph} }}"
+            f"{self.prefixes}\nSELECT DISTINCT {select} WHERE {{ {graph} }}"
         ).strip()
 
     def _build_entity_property_patterns(

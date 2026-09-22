@@ -1149,6 +1149,11 @@ class KGQueriesEndpoint:
             entity_fts_matches = None
             if builder_fts_criteria and entity_uris:
                 entity_fts_matches = {uri: [] for uri in entity_uris}
+                # The metadata query projects the SLOT TYPE rather than joining a
+                # target table (see build_fts_matches_sparql); map it back here.
+                kind_by_slot_type = {
+                    t.slot_type: t.kind for t in builder_fts_criteria.targets
+                    if t.kind}
                 matches_query = self.query_builder.build_fts_matches_sparql(
                     builder_fts_criteria, entity_uris, "entity", graph_id)
                 matches_results = await _checked_query(
@@ -1164,8 +1169,9 @@ class KGQueriesEndpoint:
                         subject_uri=slot_uri,
                         frame_uri=binding.get("fts_frame", {}).get("value"),
                         owner_entity_uri=entity_uri,
-                        target_kind=binding.get(
-                            "target_kind", {}).get("value"),
+                        target_kind=(binding.get("target_kind", {}).get("value")
+                                     or kind_by_slot_type.get(binding.get(
+                                         "fts_slot_type", {}).get("value"))),
                         text=binding.get("match_text", {}).get("value"),
                     ))
 
@@ -1583,6 +1589,11 @@ class KGQueriesEndpoint:
                         for target in builder_fts_criteria.targets
                         if target.kind and target.frame_type
                     }
+                    # Same mapping as the entity path: the metadata query
+                    # projects the slot type instead of joining a target table.
+                    kind_by_slot_type = {
+                        t.slot_type: t.kind
+                        for t in builder_fts_criteria.targets if t.kind}
                     default_frame_type = (
                         builder_fts_criteria.targets[0].frame_type
                         if len(builder_fts_criteria.targets) == 1 else None)
@@ -1597,8 +1608,9 @@ class KGQueriesEndpoint:
                         slot_uri = binding.get("fts_slot", {}).get("value", "")
                         if f_uri not in fts_matches_by_frame or not slot_uri:
                             continue
-                        target_kind = binding.get(
-                            "target_kind", {}).get("value")
+                        target_kind = (binding.get("target_kind", {}).get("value")
+                                       or kind_by_slot_type.get(binding.get(
+                                           "fts_slot_type", {}).get("value")))
                         frame_type = target_types.get(
                             target_kind) or default_frame_type
                         if frame_type:
