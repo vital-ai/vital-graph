@@ -74,9 +74,48 @@ AGREEMENT_TIMEOUT_MS = 250
 COUNT_MEMO_TTL_S = 30.0
 _COUNT_MEMO: dict = {}
 
+# How long a verdict of UNKNOWN is believed, ignoring the row count entirely.
+#
+# The cache above keys a verdict on the table's row count so a changed table
+# re-derives it. For an unknown verdict that is exactly wrong. Measured on
+# production 2026-09-22: the frame check needs **122,488 ms** — it scans
+# 3,007,724 mirror rows against 7,143,296 type quads, 10.2 MILLION buffers —
+# against a 250 ms budget. It can never succeed here. But the row count of a
+# space taking writes changes constantly, so every change re-derived the same
+# unknown: `plan_decisions` on production carried `"type": null` on every single
+# generation, each having paid the full 250 ms budget to learn nothing, plus
+# ~236 ms for the count that invalidated it. Together that was the largest
+# single cost in SQL generation — a 512 ms median on EVERY query, 101 s of
+# wall-clock in a 42-minute window — spent re-answering "I don't know".
+#
+# A check that cannot finish in 250 ms will not finish in 250 ms because three
+# rows were inserted. Believing the unknown is also SAFE IN ONE DIRECTION ONLY,
+# which is the safe one: unknown means DO NOT ABSORB, so a stale unknown costs
+# an optimisation and can never produce a wrong row. A stale TRUE could, and
+# that is still keyed on the count.
+#
+# This does not make the verdict obtainable — the answer on production is
+# actually "they agree", worth 6.8x on the edge constraint, and nothing here can
+# prove it in time. The durable fix is still to compute it in the maintenance
+# job and read it from a stats table, as the note above says. This only stops
+# the query path from buying the same failure over and over.
+UNKNOWN_TTL_S = 900.0
+_UNKNOWN: dict = {}
+
 
 def clear_cache() -> None:
     _CACHE.clear()
+    _COUNT_MEMO.clear()
+    _UNKNOWN.clear()
+
+
+def _unknown_is_fresh(key) -> bool:
+    at = _UNKNOWN.get(key)
+    return at is not None and (_time.monotonic() - at) < UNKNOWN_TTL_S
+
+
+def _remember_unknown(key) -> None:
+    _UNKNOWN[key] = _time.monotonic()
 
 
 async def frame_type_absorbable(space_id: str, type_predicate: str,
@@ -101,6 +140,11 @@ async def frame_type_absorbable(space_id: str, type_predicate: str,
 
     t_fs = f"{space_id}_frame_slot"
     key = (space_id, "frame", type_predicate)
+
+    # Before the count: the count exists only to key a verdict this cannot
+    # reach, so paying for it first would be paying for the answer twice.
+    if _unknown_is_fresh(key):
+        return None
 
     # THE COUNT IS THE EXPENSIVE PART, not the verdict it guards.
     #
@@ -189,7 +233,11 @@ async def frame_type_absorbable(space_id: str, type_predicate: str,
         agrees = row is None
     except Exception as exc:
         logger.debug("frame-type agreement: gave up (%s)", type(exc).__name__)
-        _CACHE[key] = (rows, None)
+        # `_UNKNOWN` is the SOLE owner of an unknown verdict. Writing it into
+        # `_CACHE` too would pin it to this row count, and the count-keyed
+        # entry would keep answering None after the TTL expired — so the retry
+        # would depend on the table changing rather than on time passing.
+        _remember_unknown(key)
         return None
     finally:
         try:
@@ -218,6 +266,8 @@ async def edge_type_absorbable(space_id: str, type_predicate: str,
         return None
 
     t_edge = f"{space_id}_edge"
+    if _unknown_is_fresh((space_id, type_predicate)):
+        return None
     try:
         async with bounded_lock_wait(conn):
             edge_rows = await conn.fetchval(f"SELECT count(*) FROM {t_edge}")
@@ -250,7 +300,7 @@ async def edge_type_absorbable(space_id: str, type_predicate: str,
         agrees = row is None
     except Exception as exc:
         logger.debug("edge-type agreement: gave up (%s)", type(exc).__name__)
-        _CACHE[(space_id, type_predicate)] = (edge_rows, None)
+        _remember_unknown((space_id, type_predicate))
         return None
     finally:
         try:

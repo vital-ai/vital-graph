@@ -122,3 +122,67 @@ class TestTheLeafIsPriced:
         # the chain OUTRIGHT, so an FTS leaf outside that set could never win
         # against one however few rows it matched.
         assert "q1" in out["__range_aliases__"]
+
+
+class TestThePairOfGenerationsShareOneCount:
+    """One request generates SQL TWICE — the page and the count — and each
+    measured the same leaf. Production shows the pair as near-identical timings
+    in the same second (3,534 ms and 3,531 ms; 2,500 ms and 2,498 ms), against a
+    201 ms mean and a 3,676 ms max for the statement.
+
+    The capped count is memoised; the INLINED ID SET never is. The count is an
+    optimiser input, already a lower bound at its cap, and a stale one can only
+    mis-order a join. The id set becomes `= ANY(ARRAY[...])` — the rows the
+    caller receives — so a stale one would silently drop messages indexed since
+    it was taken.
+    """
+
+    @staticmethod
+    def _run(monkeypatch, n_rows, calls):
+        import asyncio
+        from vitalgraph.db.sparql_sql import db_provider, generator as gen
+
+        async def fake_execute_query(sql, **kw):
+            calls.append(sql)
+            if sql.lstrip().startswith("SELECT subject_uuid"):
+                return [{"u": U1}] * n_rows
+            return [{"n": n_rows}]
+
+        # `_measure_fts_leaves` imports db_provider inside the function.
+        monkeypatch.setattr(db_provider, "execute_query", fake_execute_query)
+        expr = _match("app")
+        plan, _bgp = _plan(expr)
+        ctx = _Ctx()
+        asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+            gen._measure_fts_leaves(plan, ctx, conn=object()))
+        return ctx
+
+    def test_a_broad_count_is_reused_by_the_second_generation(self, monkeypatch):
+        from vitalgraph.db.sparql_sql import generator as gen
+        gen._FTS_COUNT_MEMO.clear()
+        calls: list = []
+        # Above FTS_INLINE_MAX, so the id fetch overflows and the separate
+        # capped COUNT runs — the expensive statement.
+        big = gen.FTS_INLINE_MAX + 1
+        self._run(monkeypatch, big, calls)
+        first = [c for c in calls if "count(*)" in c]
+        self._run(monkeypatch, big, calls)
+        second = [c for c in calls if "count(*)" in c]
+        assert len(first) == 1, "the first generation must measure"
+        assert len(second) == 1, "the second must reuse it, not re-measure"
+        gen._FTS_COUNT_MEMO.clear()
+
+    def test_the_inlined_id_set_is_never_reused(self, monkeypatch):
+        """A memoised id set would return a page missing anything indexed since.
+        The ids are also the cheap half, sharing their round trip with the
+        count they replace, so there is nothing to win by caching them."""
+        from vitalgraph.db.sparql_sql import generator as gen
+        gen._FTS_COUNT_MEMO.clear()
+        calls: list = []
+        small = 2
+        ctx1 = self._run(monkeypatch, small, calls)
+        ctx2 = self._run(monkeypatch, small, calls)
+        fetches = [c for c in calls if c.lstrip().startswith("SELECT subject_uuid")]
+        assert len(fetches) == 2, "every generation re-reads the ids it will inline"
+        assert ctx1.aliases.fts_leaf_ids and ctx2.aliases.fts_leaf_ids
+        gen._FTS_COUNT_MEMO.clear()

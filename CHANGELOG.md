@@ -16,6 +16,22 @@ Server-side only; the 0.0.41 client already understands both statuses used here.
 
 ### Fixed
 
+- **SQL generation stops re-buying a type-agreement verdict it cannot reach.**
+  Whether `rdf:type` agrees with the derived type column is checked under a
+  250 ms budget and cached against the table's row count. On a large space the
+  check needs *two minutes*, so it always timed out — and because the row count
+  of a space taking writes changes constantly, the same failure was recomputed
+  for almost every query, behind a `count(*)` over millions of rows that cost
+  ~236 ms by itself. It was the largest single cost in generation: a 512 ms
+  median on **every** query, and 11.4 hours of cumulative database time across
+  all spaces. An unreachable verdict is now remembered for 15 minutes, skipping
+  both the check and the count. Unknown means "do not absorb", so this can only
+  cost an optimisation, never change a result.
+- **One KGQuery measures its full-text leaf once, not twice.** The page and the
+  count generate SQL separately and each ran the same bounded count (201 ms
+  mean, 3,676 ms max). The count is now memoised for 5 seconds. The *inlined id
+  set* is deliberately not cached — it is the answer rather than an estimate,
+  and reusing a stale one would drop rows indexed in between.
 - **A filtered or sorted FTS frame query is served from the derived tables at
   any match-set size.** It used to fall back to the general pipeline whenever
   the match set was small enough for that pipeline to inline, on a measurement

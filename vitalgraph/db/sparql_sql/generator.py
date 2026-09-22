@@ -868,6 +868,26 @@ FTS_LEAF_COUNT_CAP = int(os.getenv("VG_FTS_LEAF_COUNT_CAP", "10000"))
 # 14-row phrase at 27,316. 0 disables inlining; counting still happens.
 FTS_INLINE_MAX = int(os.getenv("VG_FTS_INLINE_MAX", "1000"))
 
+# How long a CAPPED COUNT may be reused. One KGQuery request generates SQL
+# twice — once for the page, once for the count — and each measured the same
+# leaf independently. Production logs show the pair as near-identical timings in
+# the same second: 3,534 ms and 3,531 ms, 2,500 ms and 2,498 ms. The measured
+# cost is a 201 ms mean and a 3,676 ms max, so the pair costs that twice.
+#
+# ONLY THE COUNT IS MEMOISED, NEVER THE INLINED ID SET, and the difference is
+# not an optimisation detail. The count is an optimiser INPUT: it is already
+# capped at FTS_LEAF_COUNT_CAP, already a lower bound at the cap, and a stale
+# one can only mis-order a join. The id set is the ANSWER — it is emitted as
+# `= ANY(ARRAY[...])` and becomes the rows the caller receives — so reusing a
+# stale one would silently drop messages indexed since it was taken. The id
+# fetch is also the cheap half (33 ms mean), sharing a round trip with the
+# count it replaces, so there is nothing to win there anyway.
+#
+# Seconds, not minutes: long enough to span one request's page and count, short
+# enough that a leaf's price tracks a space taking continuous FTS writes.
+FTS_COUNT_MEMO_TTL_S = float(os.getenv("VG_FTS_COUNT_MEMO_TTL_S", "5"))
+_FTS_COUNT_MEMO: dict = {}
+
 
 def _fts_filter_exprs(plan, depth: int = 0):
     """Yield (filter_node, search_expr) for every FTS predicate push_text_search
@@ -963,13 +983,19 @@ async def _measure_fts_leaves(plan, ctx, conn=None, conn_params=None) -> None:
                     id_sets[key] = [r["u"] for r in rows]
                     n = len(rows)
             if n is None:
-                rows = await db.execute_query(
-                    f"SELECT count(*) AS n FROM (SELECT 1 FROM {table} "
-                    f"WHERE tsv @@ {tsquery}{ctx_clause} "
-                    f"LIMIT {FTS_LEAF_COUNT_CAP + 1}) x",
-                    conn_params=conn_params, conn=conn,
-                    lock_timeout_ms=STATS_LOCK_TIMEOUT_MS)
-                n = int(rows[0]["n"]) if rows else None
+                memo = _FTS_COUNT_MEMO.get(key)
+                if memo is not None and (time.monotonic() - memo[0]) < FTS_COUNT_MEMO_TTL_S:
+                    n = memo[1]
+                else:
+                    rows = await db.execute_query(
+                        f"SELECT count(*) AS n FROM (SELECT 1 FROM {table} "
+                        f"WHERE tsv @@ {tsquery}{ctx_clause} "
+                        f"LIMIT {FTS_LEAF_COUNT_CAP + 1}) x",
+                        conn_params=conn_params, conn=conn,
+                        lock_timeout_ms=STATS_LOCK_TIMEOUT_MS)
+                    n = int(rows[0]["n"]) if rows else None
+                    if n is not None:
+                        _FTS_COUNT_MEMO[key] = (time.monotonic(), n)
             stats[key] = n
         except Exception as e:
             logger.info("fts leaf measurement failed for %s: %s — leaf left "
