@@ -2,6 +2,113 @@
 
 Notable changes per release. Dates are the release date, not the first commit.
 
+## 0.0.41 — 2026-09-22
+
+243 commits since 0.0.40 (2026-09-08). Full-text search becomes an ordinary
+KGQuery criterion; `frame_slot` replaces `frame_entity`; and a run of
+correctness fixes in the derived-table fast paths, several of which returned
+wrong answers rather than slow ones.
+
+### Breaking
+
+- **Entity and `frame_query` KGQueries now honour `include_total_count`, which
+  defaults to `NO`.** In 0.0.40 those two paths ran the count unconditionally
+  and ignored the field; only the connection-style frame path honoured it. Once
+  a server is upgraded, a caller that reads `total_count` without setting
+  `include_total_count` receives **0**. Pass `TotalCountMode.YES` (bounded at
+  the server cap, with `total_count_capped` set when truncated) or
+  `TotalCountMode.EXACT` (full count, full cost).
+- **A failed read is reported as a failure.** It returns `success: False` with
+  the new status `query_failed`, where it used to return a successful empty
+  result indistinguishable from a genuinely empty space. `query_failed` is a
+  new `OperationStatus` value, so a 0.0.40 client that receives it fails to
+  deserialize the response: **upgrade clients before servers.**
+- **`{space}_frame_entity` is dropped and replaced by `{space}_frame_slot`**
+  (server). One row per slot with its role as data, rather than two role URIs
+  baked into column names. Requires migration before the server upgrade; see
+  Upgrading.
+
+### Added
+
+- **Full-text search as KGQuery criteria.** `KGQueryCriteria.fts_criteria =
+  FTSCriteria(text, index_name, targets=[FTSTarget(slot_type, frame_type,
+  kind)], include_match_text)` composes with entity type, owner-entity property
+  filters and ordinary sort criteria, through the existing
+  `POST /api/graphs/kgqueries`. Boolean only — no score, threshold or relevance
+  order. Several targets form one page. Results carry `FTSMatch` on
+  `FrameQueryResult.fts_matches`, or `entity_fts_matches` for entity queries.
+  Query text is parsed with `websearch_to_tsquery`: quoted phrases, `or`, and
+  `-exclusion`. The client refuses a response whose server did not acknowledge
+  the criterion (`fts_applied`), so an older server cannot return an unfiltered
+  page.
+- **KGQuery projections:** `slot_projection` (served from `entity_slot_sort`)
+  and `property_projection` (direct entity properties).
+- Export writes literal datatypes (`^^<datatype>`) in every format; import reads
+  gzip-compressed files and N-Quads.
+- Maintenance detects edges whose endpoint no longer exists and objects nothing
+  points at.
+- Per-index `rank_normalization` for scored `vg:textSearch` (server, migration
+  below).
+
+### Fixed
+
+- **Export dropped every literal datatype** — dates and numbers round-tripped
+  as strings, silently disabling date and numeric filters and sorts on any
+  space restored from an export. Spaces restored from an older export must be
+  re-exported and re-imported, then have their derived tables rebuilt with
+  `resync_all_auxiliary_tables`.
+- **A negated frame criterion was served as its complement** by the slot-filter
+  fast path, returning exactly the entities the caller asked to exclude.
+- **An entity matching a criterion through two frames was counted and returned
+  twice**, inflating `total_count` and shifting pagination.
+- Dated and float-valued slot criteria could never bind against a typed column,
+  and date bounds on `entity_prop_sort` were never served; both fell back to
+  the slow path. Offset-bearing date bounds now compare in UTC.
+- `update_entity_frames` silently discarded a non-frame object in its payload
+  (for example a `KGEntity`) and still reported `updated`; the discard is now
+  named in the response. Frame updates deliberately do not write the entity
+  node.
+- Full-text search: selective searches with date filters or sorts no longer
+  walk every owner entity (seconds to milliseconds); FTS auto-sync respects the
+  index mapping instead of indexing every literal; the `search text` CLI reads
+  the FTS table and no longer raises on punctuation.
+- Bulk import rebuilds `entity_slot_sort` in bounded batches instead of one
+  unbounded statement that could exhaust server memory.
+- SPARQL: `MINUS` correlation, path alternation as a multiset union, stacked
+  `OPTIONAL` planning, and an untranslatable operator now refused rather than
+  answering nothing.
+- A fast-served entity page dropped `include_entity_graph`;
+  `include_frame_graph` on KGQueries now says that it is not implemented.
+
+### Deprecated
+
+- `AdminResyncResponse.frame_entity_rows` — use `frame_slot_rows`. The old field
+  stays populated with the same value.
+
+### Removed
+
+- Nothing a 0.0.40 client could call. The standalone `search_messages` method
+  and its response models existed only between releases and never shipped; use
+  `fts_criteria`.
+
+### Upgrading
+
+In this order:
+
+1. **Migrations**, against each deployment's database:
+   `scripts/migrate_frame_slot_table.py` then
+   `scripts/migrate_drop_frame_entity.py` (and
+   `scripts/migrate_drop_retired_tables.py` for any remaining retired tables);
+   `scripts/migrate_shorten_index_names.py`;
+   `python -m vitalgraph.db.migrations.migrate_fts_rank_normalization`.
+2. **Clients to 0.0.41**, because of the new `query_failed` status.
+3. **Servers.** Then audit callers that read `total_count` and set
+   `include_total_count` where they need it.
+
+Before enabling FTS on a space, create and populate its index with a mapping
+for every slot type a query will target. An FTS target whose slot type the
+mapping does not cover currently returns an empty page rather than an error.
+
 ## 0.0.40 — 2026-09-08
 
 608 commits since 0.0.39 (2026-08-12). The theme is derived tables: sorting
