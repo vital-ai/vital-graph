@@ -43,6 +43,54 @@ HALEY = "http://vital.ai/ontology/haley-ai-kg#"
 HAS_TEXT_SLOT_VALUE = HALEY + "hasTextSlotValue"
 
 
+async def _align_ownership(conn, space: str, index: str) -> list:
+    """Give the FTS objects this script created to the space's owning role.
+
+    Run with admin credentials — the RDS master user, as a production build
+    must be — `ensure_fts_index` creates `{space}_fts_{index}`, its indexes and
+    its tsv trigger function OWNED BY THAT ADMIN ROLE, while the server connects
+    as the application role. The server then cannot read the table: on
+    2026-09-22 every production FTS query failed `permission denied for table
+    <space>_fts_message_content`, and the server's FTS auto-sync silently
+    failed to index new messages, until ownership was transferred by hand.
+
+    The target role is read, not assumed: the owner of `{space}_fts_index`,
+    which the schema creates together with the space, i.e. whoever owns the
+    space's tables. Nothing changes when the owners already agree (the test
+    stack, or a run as the application role).
+
+    Returns the changes made, as strings. Raises if a change is needed and
+    cannot be made — a table the server cannot read must not be reported as a
+    successful build.
+    """
+    owner = await conn.fetchval(
+        "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE relname = $1",
+        f"{space}_fts_index")
+    if owner is None:
+        owner = await conn.fetchval(
+            "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE relname = $1",
+            f"{space}_rdf_quad")
+    if owner is None:
+        raise RuntimeError(f"cannot determine the owning role of space {space!r}")
+
+    table = f"{space}_fts_{index}"
+    changes = []
+    current = await conn.fetchval(
+        "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE relname = $1", table)
+    if current is not None and current != owner:
+        # Moves the table's indexes with it.
+        await conn.execute(f'ALTER TABLE public.{table} OWNER TO "{owner}"')
+        changes.append(f"table {table}: {current} -> {owner}")
+    for fn, fn_owner in await conn.fetch(
+            "SELECT p.oid::regprocedure::text, pg_get_userbyid(p.proowner) "
+            "FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid "
+            "WHERE t.tgrelid = to_regclass($1) AND NOT t.tgisinternal", table):
+        if fn_owner != owner:
+            await conn.execute(f'ALTER FUNCTION {fn} OWNER TO "{owner}"')
+            changes.append(f"function {fn}: {fn_owner} -> {owner}")
+    return changes
+
+
 def _context_uuid(graph_uri: str):
     """Same derivation the populate endpoint uses (uuid5 over the graph URI)."""
     ns = _uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
@@ -90,6 +138,18 @@ async def main() -> int:
         print(f"1. fts index           {'ok' if ok else 'FAILED'}")
         if not ok:
             return 1
+        # Straight after creation, so a populate that fails part-way cannot
+        # leave objects the server is unable to read.
+        try:
+            changes = await _align_ownership(conn, a.space, a.index)
+        except Exception as e:
+            print(f"   OWNERSHIP NOT ALIGNED: {e}\n"
+                  f"   The server will not be able to read {a.space}_fts_{a.index}. "
+                  f"Transfer it (and its tsv trigger function) to the role that owns "
+                  f"{a.space}_fts_index before relying on this index.")
+            return 1
+        for c in changes:
+            print(f"   owner aligned       {c}")
 
         # 2 + 3 ----------------------------------------------------------
         mgr = SearchMappingManager(conn, a.space)
