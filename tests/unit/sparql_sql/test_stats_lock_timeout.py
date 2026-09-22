@@ -145,8 +145,13 @@ def test_every_stats_read_bounds_its_lock_wait():
     src = inspect.getsource(G)
     reads = src.count("_rdf_stats ") + src.count("_rdf_pred_stats")
     bounded = src.count("lock_timeout_ms=STATS_LOCK_TIMEOUT_MS")
-    assert bounded == 4, (
-        f"generator.py has {bounded} bounded stats reads, expected 4 "
+    # 6 = the four stats reads + the two FTS-leaf measurements added by
+    # `_measure_fts_leaves` (id fetch, bounded count). Those read the FTS table,
+    # not a stats table, but they are the same kind of read — an optimisation
+    # input on the request path, whose failure only leaves a leaf unpriced — so
+    # they take the same bounded lock wait rather than parking behind a writer.
+    assert bounded == 6, (
+        f"generator.py has {bounded} bounded stats reads, expected 6 "
         f"(saw {reads} references to the stats tables)")
 
     from vitalgraph.db.sparql_sql import slot_type_tautology as T
