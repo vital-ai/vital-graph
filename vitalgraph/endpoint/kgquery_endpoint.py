@@ -1504,6 +1504,33 @@ class KGQueriesEndpoint:
             
             self.logger.info(f"Generated frame_query SPARQL:\n{sparql_query}")
             t0 = _time.monotonic()
+            # A large FTS match set is served from `entity_slot_sort`, not by
+            # walking quads: measured on this space, 19.4 s -> 1.1 s for a broad
+            # page and 132 s -> 0.68 s for broad + filter + sort. The path
+            # DECLINES (returns None) for match sets the pipeline inlines, where
+            # the pipeline is the faster of the two — the gate costs one bounded
+            # count, ~25-50 ms. Any failure here falls back rather than failing
+            # the query.
+            fast_uris = None
+            fast_count = None
+            _fast_pool = getattr(getattr(backend, 'db_impl', None),
+                                 'connection_pool', None)
+            if builder_fts_criteria is not None and _fast_pool is not None:
+                try:
+                    from ..db.sparql_sql.fast_fts_frame import (
+                        fast_fts_frame_count, fast_fts_frame_page)
+                    async with _fast_pool.acquire() as _fc:
+                        fast_uris = await fast_fts_frame_page(
+                            _fc, space_id, graph_id, frame_query_criteria,
+                            query_request.page_size, query_request.offset)
+                        if fast_uris is not None and want_count:
+                            fast_count = await fast_fts_frame_count(
+                                _fc, space_id, graph_id, frame_query_criteria, cap)
+                except Exception as e:
+                    self.logger.warning(
+                        "fts frame fast path failed, using the pipeline: %s", e)
+                    fast_uris, fast_count = None, None
+
             total_count = 0
             total_count_capped = False
 
@@ -1537,7 +1564,13 @@ class KGQueriesEndpoint:
                     offset=0,
                 )
 
-            if want_count and query_request.offset > 0:
+            if fast_uris is not None:
+                results = {"results": {"bindings": [
+                    {"frame": {"value": u}} for u in fast_uris]}}
+                if fast_count is not None:
+                    total_count_capped = cap is not None and fast_count > cap
+                    total_count = cap if total_count_capped else fast_count
+            elif want_count and query_request.offset > 0:
                 total_count, total_count_capped = await get_count()
                 if not total_count_capped and query_request.offset >= total_count:
                     t_query = _time.monotonic()
