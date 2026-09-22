@@ -657,6 +657,45 @@ endpoint's atomicity makes it LOOK like the safe way to do a multi-subject KG
 write, and it is the unlocked one. If the boundary around `/objects` ever
 changes, this moves up the list rather than being discovered again.
 
+#### Making it safe means adding the entity lock to this endpoint
+
+Stated plainly, because "recorded, not scheduled" must not be read as "safe as
+it is". It is not. **`/objects` cannot carry a KG write safely until it takes
+the entity lock**, and that is the PREREQUISITE for any proposal to route one
+through it — including the `issues/225` use case, which is how this was found.
+
+The lock is the same one every other path takes,
+`lock_entities(conn, entity_uris)` from `entity_lock.py`, acquired as the first
+statement inside the transaction `update_objects_batch` already opens. The
+ordering requirement is the same too — lock, then read, then write — so the
+write cannot act on a membership snapshot another committer has invalidated.
+
+**The work is not the lock, it is knowing WHAT to lock.** Every other path is
+handed the entity URI: `update_subjects_graph` takes `lock_uris=[entity_uri]`
+because its caller knows which entity it is writing. `/objects` does not — it
+is given a bag of subjects and no grouping, so it must resolve
+subject → entity by reading each subject's `hasKGGraphURI`, then lock the
+distinct set.
+
+Three consequences of that resolution, each needing a decision rather than an
+assumption:
+
+* **The resolve is a READ that precedes the lock**, so it is itself
+  unserialised — item 1's read-then-act shape again. A subject's grouping can
+  change between resolve and lock. Re-reading under the lock and comparing is
+  the standard answer and is not free.
+* **A subject with no grouping cannot be locked at all**, and `/objects` accepts
+  exactly that, being a general object endpoint rather than a KG one. Either
+  those subjects bypass the lock — leaving a narrower version of this gap — or
+  the endpoint refuses them, which breaks non-KG callers using it correctly
+  today.
+* **A batch spanning several entities needs several locks**, taken in a
+  deterministic order, or two concurrent multi-entity batches deadlock against
+  each other. Every currently locked path takes exactly one.
+
+That is why this is a design item rather than the "~7 lines" of item 2 phase 1:
+cheap to lock, not cheap to know what to lock.
+
 One further property, not a locking matter but adjacent: its delete-then-insert
 is per subject, WHOLE subject, so a caller sending a partial object silently
 loses every property it omitted.
@@ -744,7 +783,7 @@ expensive part, and only phase 2 of the frame work needs it:
 | frame create/update/delete — phase 1 | ~7 lines; the write is already one transaction |
 | frame create/update — phase 2 | blocked on the write scope (issues/175 class 2) |
 | raw SPARQL update | subject→grouping resolution, plus a lock; WHERE-bound subjects cannot be covered at all |
-| `PUT /objects` (item 6) | cheap — one transaction already — but **subject→entity resolution is the work**, and it is deliberately off the KG write path, so the honest answer to "is it concurrent in production" is *it should not be carrying KG writes at all* |
+| `PUT /objects` (item 6) | the lock is one line into an existing transaction; **subject→entity resolution is the work**, plus multi-entity lock ordering and what to do with ungrouped subjects. **Required before this endpoint may carry any KG write** — today it cannot do so safely |
 | segmentation enqueue | a partial unique index, so a migration script |
 | `touch_entity_modification_time` | ~30–40 lines, direct SQL (Option B above) |
 

@@ -43,9 +43,12 @@ and it is the reason this is a design question rather than a one-line answer.
 
 Two further properties, relevant if the boundary is ever revisited:
 
-* It takes **no entity lock** — no `lock_uris`, no `update_subjects_graph` — so
-  it is one of the paths `issues/174` is about, and it is NOT currently named
-  there.
+* It takes **no entity lock** — no `lock_uris`, no `update_subjects_graph`. Now
+  filed as `issues/174` item 6, with the prerequisite stated there: **the entity
+  lock must be added to `/objects` before it may carry any KG write.** The lock
+  itself is one line into a transaction it already opens; the work is
+  subject→entity resolution, since unlike every other path it is handed a bag of
+  subjects and no grouping.
 * Its delete-then-insert is per subject, WHOLE subject, so a caller sending a
   partial entity node silently loses every property it omitted.
 
