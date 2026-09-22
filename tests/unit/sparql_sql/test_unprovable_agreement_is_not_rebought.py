@@ -36,6 +36,11 @@ class _Conn:
         self.agreements = 0
 
     async def fetchval(self, sql, *args):
+        if "FROM type_agreement" in sql:
+            # This double models an UNMIGRATED database, so the legacy in-query
+            # check is what runs. The stored-verdict path has its own below.
+            import asyncpg
+            raise asyncpg.UndefinedTableError("no such table")
         if sql.startswith("SELECT count(*)"):
             self.counts += 1
             return self.count_value
@@ -51,6 +56,7 @@ class _Conn:
         if self.blow_up_on_agreement:
             raise TimeoutError("canceling statement due to statement timeout")
         return None
+
 
     async def execute(self, sql):
         return None
@@ -113,3 +119,69 @@ async def test_vitaltype_never_asked_the_database_and_still_does_not():
     conn = _Conn()
     assert await eta.frame_type_absorbable("sp", VITALTYPE, conn) is True
     assert (conn.counts, conn.agreements) == (0, 0)
+
+
+class _StoredConn(_Conn):
+    """A database that HAS `type_agreement`, so the stored verdict rules."""
+
+    def __init__(self, agrees=True, token="100:5", live_token="100:5", **kw):
+        super().__init__(**kw)
+        self.agrees = agrees
+        self.token = token
+        self.live_token = live_token
+        self.reads = 0
+
+    async def fetchval(self, sql, *args):
+        if "FROM type_agreement" in sql:
+            # The real query compares the token IN SQL and returns a row only
+            # when it still matches, so the double does the same.
+            self.reads += 1
+            if self.agrees is _MISSING or self.token != self.live_token:
+                return None
+            return self.agrees
+        return await super().fetchval(sql, *args)
+
+
+_MISSING = object()
+
+
+@pytest.mark.asyncio
+async def test_a_stored_verdict_answers_without_touching_the_source_tables():
+    """The point of the whole exercise: no count, no two-minute scan."""
+    conn = _StoredConn(agrees=True)
+    assert await eta.frame_type_absorbable("sp", RDF_TYPE, conn) is True
+    assert (conn.counts, conn.agreements) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_verdict_whose_table_moved_is_not_used():
+    """A stale TRUE is the one direction that returns wrong rows."""
+    conn = _StoredConn(agrees=True, token="100:5", live_token="101:5")
+    assert await eta.frame_type_absorbable("sp", RDF_TYPE, conn) is None
+    assert (conn.counts, conn.agreements) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_truncated_table_is_not_used_either():
+    """TRUNCATE keeps the churn counters but moves relfilenode — the vacuous
+    agreement `issues/182` hit, caught by the other half of the token."""
+    conn = _StoredConn(agrees=True, token="100:5", live_token="100:9")
+    assert await eta.frame_type_absorbable("sp", RDF_TYPE, conn) is None
+
+
+@pytest.mark.asyncio
+async def test_no_row_yet_means_do_not_absorb_and_do_not_ask():
+    """Absent means the job has not looked. It must NOT fall through to the
+    question the query path cannot answer."""
+    conn = _StoredConn(agrees=_MISSING)
+    assert await eta.frame_type_absorbable("sp", RDF_TYPE, conn) is None
+    assert (conn.counts, conn.agreements) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_an_unmigrated_database_keeps_its_old_behaviour():
+    """No `type_agreement` table: the in-query check still runs, so a
+    deployment that has not migrated is not silently de-optimised."""
+    conn = _Conn(blow_up_on_agreement=False)   # `_Conn` has no type_agreement
+    assert await eta.frame_type_absorbable("sp", RDF_TYPE, conn) is True
+    assert conn.counts == 1 and conn.agreements == 1

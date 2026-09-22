@@ -496,6 +496,47 @@ class SparqlSQLSchema:
                 PRIMARY KEY (space_id, graph_uri)
             )
         '''),
+        # Whether an `rdf:type` constraint can be answered by the derived type
+        # column, decided OFF the query path.
+        #
+        # `edge_type_agreement` asks this per query under a 250 ms budget. On a
+        # large space the question costs two MINUTES to answer — measured on
+        # production at 122,488 ms for the frame form, scanning 3,007,724 mirror
+        # rows against 7,143,296 type quads — so it always timed out and the
+        # optimisation never fired, while every query paid the budget plus a
+        # `count(*)` over millions of rows to re-derive the same "I don't know".
+        #
+        # It is a per-SPACE data property that changes only on write, so it
+        # belongs here: computed by the maintenance job, which can afford two
+        # minutes, and read for free.
+        #
+        # `change_token` is what makes a stored TRUE safe to use. It is a cheap
+        # catalog+statistics reading of the source table (tuple churn plus
+        # relfilenode), taken at compute time; a reader compares it against the
+        # table's CURRENT token and treats any difference as unknown. That keeps
+        # the dangerous direction — absorbing when the types have since stopped
+        # agreeing — impossible without paying for a scan, because the token
+        # costs a catalog read rather than a count. A statistics reset or a
+        # TRUNCATE moves the token too, and both resolve to "unknown", which is
+        # the conservative answer.
+        #
+        # `agrees` is nullable and NULL means KNOWN-UNKNOWN: the job ran and
+        # could not decide. That is distinct from an absent row, which means the
+        # job has not looked yet. Both are read as "do not absorb"; they differ
+        # only in what they tell an operator.
+        ("type_agreement", '''
+            CREATE TABLE IF NOT EXISTS type_agreement (
+                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
+                kind VARCHAR(16) NOT NULL,
+                predicate_uri TEXT NOT NULL,
+                agrees BOOLEAN,
+                change_token TEXT NOT NULL,
+                source_rows BIGINT,
+                computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                compute_ms INTEGER,
+                PRIMARY KEY (space_id, kind, predicate_uri)
+            )
+        '''),
         # Whether {space}_entity_slot_sort is COMPLETE for an entity type.
         #
         # `fast_slot_filter` needs this and cannot compute it inline: measured on

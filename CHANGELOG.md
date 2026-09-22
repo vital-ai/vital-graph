@@ -14,6 +14,20 @@ Server-side only; the 0.0.41 client already understands both statuses used here.
   receives a response with `success: False` and must check it. A server-level
   fault — an unreachable query engine, a lost connection — is still HTTP 500.
 
+### Added
+
+- **`type_agreement`**, a global admin table holding whether `rdf:type` can be
+  answered from the derived frame/edge type columns, decided by the maintenance
+  job instead of per query. The question costs about two minutes on a large
+  space and the query path could only spare 250 ms, so it was never answered
+  and the optimisation it guards — measured at 6.8x of one reference query's
+  cost for edges, 1.5x for frames — never fired. A stored verdict is used only
+  while a cheap catalog token says its source table has not changed, so a
+  verdict that stops describing the data declines rather than misleads. Created
+  by the existing admin-table migration (`scripts/migrate_slot_sort_blocks.py`),
+  which also grants it to the application role; a database without it keeps the
+  previous behaviour exactly.
+
 ### Fixed
 
 - **SQL generation stops re-buying a type-agreement verdict it cannot reach.**

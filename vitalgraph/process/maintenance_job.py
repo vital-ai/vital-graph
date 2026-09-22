@@ -632,6 +632,13 @@ class MaintenanceJob:
             if fanout_result:
                 summary["edge_fanout_refresh"] = fanout_result
 
+            # --- Type agreement: answer off the query path what it cannot ---
+            # 122 s to decide on a large space, against the 250 ms a query
+            # could spare. Deciding it here is what lets a query read it free.
+            agree_result = await self._run_type_agreement_refresh(list(stats.keys()))
+            if agree_result:
+                summary["type_agreement"] = agree_result
+
             # --- Stats: ONE recompute, replacing integrity + prune + rebuild ---
             stats_result = await self._run_stats_recompute(list(stats.keys()))
             if stats_result:
@@ -735,6 +742,10 @@ class MaintenanceJob:
                 # per-space schedule (see `_run_stats_recompute`).
                 ("stats_recompute",
                  lambda ids: self._run_stats_recompute(ids, force=True)),
+                # Forced: the change gate would decline an unchanged space, and
+                # an operator naming a space expects it to be re-measured.
+                ("type_agreement",
+                 lambda ids: self._run_type_agreement_refresh(ids, force=True)),
             ):
                 try:
                     result = await phase(one)
@@ -1510,6 +1521,72 @@ class MaintenanceJob:
         if failed:
             out["failed"] = failed
         return out
+
+    async def _run_type_agreement_refresh(self, space_ids: List[str],
+                                          force: bool = False) -> Optional[Dict]:
+        """Decide whether `rdf:type` can be read off the derived type columns.
+
+        THE QUESTION IS EXPENSIVE AND THE ANSWER IS CHEAP TO KEEP, which is the
+        whole reason it belongs here. `edge_type_agreement` used to ask it on
+        the query path under a 250 ms budget; measured on production the frame
+        form needs **122,488 ms**, scanning 3,007,724 mirror rows against
+        7,143,296 type quads. So it always timed out, the optimisation never
+        fired, and every query paid the budget plus a `count(*)` over millions
+        of rows to re-derive the same "I don't know" — a 512 ms median on every
+        query, and 11.4 hours of cumulative database time across all spaces.
+
+        Here there is no user waiting, so the question is simply answered. What
+        it is worth: `issues/182` measured the edge type constraint at 6.8x of
+        the reference CONSTRUCT's cost, and the frame one at 1.5x.
+
+        CHANGE-GATED on the same token the readers use, so a space whose tables
+        have not moved since its last verdict is skipped without a scan. That
+        makes the steady state free rather than merely affordable.
+        """
+        if not self._pool:
+            return None
+        from vitalgraph.db.sparql_sql.edge_type_agreement import (
+            change_token, refresh_type_agreement, _SOURCES)
+
+        refreshed: List[Dict] = []
+        skipped = 0
+        for sid in space_ids:
+            try:
+                async with self._pool.acquire() as conn:
+                    if not force and not await self._type_agreement_moved(
+                            conn, sid, change_token, _SOURCES):
+                        skipped += 1
+                        continue
+                    refreshed.extend(await refresh_type_agreement(conn, sid))
+            except Exception as exc:
+                # One space must not stop the rest; its verdict simply ages out
+                # by token, which reads as "do not absorb".
+                logger.warning("Type agreement refresh failed for %s: %s", sid, exc)
+        if not refreshed:
+            return None
+        return {"refreshed": refreshed, "skipped_unchanged": skipped}
+
+    @staticmethod
+    async def _type_agreement_moved(conn, space_id: str, change_token,
+                                    sources) -> bool:
+        """True when any source table has changed since its stored verdict.
+
+        The readers decline on a token mismatch, so an unrefreshed verdict is
+        never WRONG — it just stops being used. This gate only decides whether
+        there is work to do.
+        """
+        try:
+            stored = {
+                r["kind"]: r["change_token"] for r in await conn.fetch(
+                    "SELECT kind, change_token FROM type_agreement "
+                    "WHERE space_id = $1", space_id)}
+        except Exception:
+            return True          # cannot tell (or not migrated) -- let it try
+        for kind, (suffix, _col) in sources.items():
+            token = await change_token(conn, f"{space_id}_{suffix}")
+            if token is not None and stored.get(kind) != token:
+                return True
+        return False
 
     async def _run_stats_recompute(self, space_ids: List[str],
                                    force: bool = False) -> Optional[Dict]:

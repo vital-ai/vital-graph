@@ -33,6 +33,7 @@ None means DO NOT ABSORB. Every failure path returns it.
 from __future__ import annotations
 
 import logging
+import os as _os
 import time as _time
 from typing import Optional
 
@@ -109,6 +110,77 @@ def clear_cache() -> None:
     _UNKNOWN.clear()
 
 
+#: Returned by `_stored_verdict` when the space has no `type_agreement` table,
+#: i.e. the migration has not run. Distinct from None, which is a real verdict
+#: of "unknown" from a table that does exist.
+NOT_MIGRATED = object()
+
+#: (kind, source table suffix, the column the type is read from).
+_SOURCES = {"frame": ("frame_slot", "frame_type_uuid"),
+            "edge": ("edge", "edge_type_uuid")}
+
+
+async def change_token(conn, table: str) -> Optional[str]:
+    """A cheap reading of "has this table changed since", or None.
+
+    Tuple churn plus `relfilenode`, both from the catalog and the statistics
+    collector, so it costs a catalog read rather than the `count(*)` over
+    millions of rows this replaces. It does not need to be a hash of the data:
+    it only has to CHANGE when the table does. A statistics reset moves it, and
+    so does a TRUNCATE (new relfilenode); both then read as "unknown", which is
+    the conservative answer rather than a wrong one.
+    """
+    try:
+        row = await conn.fetchrow(
+            "SELECT s.n_tup_ins + s.n_tup_upd + s.n_tup_del AS churn, "
+            "       c.relfilenode "
+            "FROM pg_stat_all_tables s JOIN pg_class c ON c.oid = s.relid "
+            "WHERE s.relid = to_regclass($1)", table)
+    except Exception as exc:
+        logger.debug("type agreement: change token failed for %s: %s", table, exc)
+        return None
+    if row is None or row["relfilenode"] is None:
+        return None
+    return f"{row['churn']}:{row['relfilenode']}"
+
+
+async def _stored_verdict(conn, space_id: str, kind: str, predicate_uri: str):
+    """The maintenance job's verdict, if it still describes the table.
+
+    Returns True/False, None for unknown, or NOT_MIGRATED when there is no
+    table to read — which is what keeps a deployment that has not run the
+    migration on exactly its old behaviour.
+    """
+    import asyncpg
+    suffix, _col = _SOURCES[kind]
+    # ONE round trip, and the token is compared IN the query. Read separately
+    # this cost two round trips on every query, and left a window in which the
+    # verdict and the token it was checked against came from different moments.
+    # A row comes back only when a verdict exists AND still describes the table;
+    # "no verdict", "unsure" and "the table moved" are all absence, and all mean
+    # do not absorb.
+    try:
+        agrees = await conn.fetchval(
+            "SELECT ta.agrees FROM type_agreement ta, LATERAL ("
+            "  SELECT s.n_tup_ins + s.n_tup_upd + s.n_tup_del AS churn,"
+            "         c.relfilenode"
+            "  FROM pg_stat_all_tables s JOIN pg_class c ON c.oid = s.relid"
+            "  WHERE s.relid = to_regclass($4)) t "
+            "WHERE ta.space_id = $1 AND ta.kind = $2 AND ta.predicate_uri = $3 "
+            "  AND ta.agrees IS NOT NULL "
+            "  AND ta.change_token = t.churn || ':' || t.relfilenode",
+            space_id, kind, predicate_uri, f"{space_id}_{suffix}")
+    except asyncpg.UndefinedTableError:
+        return NOT_MIGRATED
+    except Exception as exc:
+        # Reachable table, unreadable row. Unknown, not "fall back to the
+        # two-minute question on the query path".
+        logger.debug("type agreement: read failed for %s/%s: %s",
+                     space_id, kind, exc)
+        return None
+    return None if agrees is None else bool(agrees)
+
+
 def _unknown_is_fresh(key) -> bool:
     at = _UNKNOWN.get(key)
     return at is not None and (_time.monotonic() - at) < UNKNOWN_TTL_S
@@ -140,6 +212,16 @@ async def frame_type_absorbable(space_id: str, type_predicate: str,
 
     t_fs = f"{space_id}_frame_slot"
     key = (space_id, "frame", type_predicate)
+
+    # THE MIGRATED PATH, and the only one that can actually answer TRUE on a
+    # large space. The maintenance job decides this without a budget and stores
+    # it; here it costs one indexed row plus a catalog read. Once the table
+    # exists it is AUTHORITATIVE — an absent row means "not looked at yet" and
+    # reads as do-not-absorb, rather than falling through to a question this
+    # path has already been measured unable to answer.
+    stored = await _stored_verdict(conn, space_id, "frame", type_predicate)
+    if stored is not NOT_MIGRATED:
+        return stored
 
     # Before the count: the count exists only to key a verdict this cannot
     # reach, so paying for it first would be paying for the answer twice.
@@ -266,6 +348,9 @@ async def edge_type_absorbable(space_id: str, type_predicate: str,
         return None
 
     t_edge = f"{space_id}_edge"
+    stored = await _stored_verdict(conn, space_id, "edge", type_predicate)
+    if stored is not NOT_MIGRATED:
+        return stored
     if _unknown_is_fresh((space_id, type_predicate)):
         return None
     try:
@@ -312,3 +397,113 @@ async def edge_type_absorbable(space_id: str, type_predicate: str,
     logger.info("edge-type agreement: %s rdf:type vs edge_type_uuid -> %s",
                 space_id, "ABSORBABLE" if agrees else "differs, keeping the join")
     return agrees
+
+
+#: The maintenance job's budget. Generous because it is not on anyone's query:
+#: the frame form measured 122,488 ms on production, and a verdict obtained in
+#: three minutes once an hour is worth more than one never obtained at all.
+REFRESH_TIMEOUT_MS = int(_os.getenv("VG_TYPE_AGREEMENT_REFRESH_TIMEOUT_MS",
+                                    "300000"))
+
+
+async def refresh_type_agreement(conn, space_id: str) -> list:
+    """Decide frame and edge type agreement for *space_id* and store it.
+
+    For the MAINTENANCE JOB, not the query path. This is the durable half of
+    the fix the module header asks for: the question is a per-space data
+    property that changes only on write, so it is answered off to the side and
+    read for free.
+
+    THE TOKEN IS TAKEN BEFORE THE SCAN, deliberately. If the table is written
+    while the scan runs, the stored token is the pre-scan one and no longer
+    matches, so every reader treats the verdict as unknown until the next
+    refresh re-derives it. Taking it afterwards would stamp a verdict computed
+    over older data with a token that says it is current — the one direction
+    that returns wrong rows.
+
+    Returns one dict per kind for the caller to log. Never raises: a space that
+    cannot be measured keeps whatever verdict it had, which ages out by token.
+    """
+    import asyncpg
+    out = []
+    for kind, (suffix, col) in _SOURCES.items():
+        table = f"{space_id}_{suffix}"
+        record = {"space_id": space_id, "kind": kind, "agrees": None}
+        try:
+            token = await change_token(conn, table)
+            if token is None:
+                record["skipped"] = "no such table"
+                out.append(record)
+                continue
+            rows = await conn.fetchval(f"SELECT count(*) FROM {table}")
+            if not rows:
+                # Vacuous, not agreement: an empty table produces no
+                # counterexample, so it would answer TRUE against nothing.
+                record["skipped"] = "empty"
+                out.append(record)
+                continue
+            pred_uuid = await conn.fetchval(
+                f"SELECT term_uuid FROM {space_id}_term WHERE term_text = $1",
+                RDF_TYPE_URI)
+            started = _time.monotonic()
+            if pred_uuid is None:
+                # Nothing in the space carries the predicate, so nothing can
+                # disagree. A real agreement, not a vacuous one.
+                agrees = True
+            else:
+                if kind == "frame":
+                    sql = f"""
+                        SELECT 1 FROM (SELECT DISTINCT frame_uuid, context_uuid,
+                                              {col}
+                                       FROM {table}) f
+                        LEFT JOIN {space_id}_rdf_quad rt
+                               ON rt.subject_uuid = f.frame_uuid
+                              AND rt.context_uuid = f.context_uuid
+                              AND rt.predicate_uuid = $1
+                        WHERE rt.object_uuid IS DISTINCT FROM f.{col}
+                        LIMIT 1"""
+                else:
+                    sql = f"""
+                        SELECT 1 FROM {table} e
+                        LEFT JOIN {space_id}_rdf_quad rt
+                               ON rt.subject_uuid = e.edge_uuid
+                              AND rt.predicate_uuid = $1
+                        WHERE rt.object_uuid IS DISTINCT FROM e.{col}
+                        LIMIT 1"""
+                prev = await conn.fetchval("SHOW statement_timeout")
+                await conn.execute(
+                    f"SET statement_timeout = '{int(REFRESH_TIMEOUT_MS)}ms'")
+                try:
+                    agrees = await conn.fetchval(sql, pred_uuid) is None
+                finally:
+                    try:
+                        await conn.execute(f"SET statement_timeout = '{prev}'")
+                    except Exception:  # pragma: no cover - abort path
+                        pass
+            ms = int((_time.monotonic() - started) * 1000)
+            await conn.execute(
+                "INSERT INTO type_agreement (space_id, kind, predicate_uri, "
+                "  agrees, change_token, source_rows, computed_at, compute_ms) "
+                "VALUES ($1,$2,$3,$4,$5,$6,NOW(),$7) "
+                "ON CONFLICT (space_id, kind, predicate_uri) DO UPDATE SET "
+                "  agrees = EXCLUDED.agrees, "
+                "  change_token = EXCLUDED.change_token, "
+                "  source_rows = EXCLUDED.source_rows, "
+                "  computed_at = EXCLUDED.computed_at, "
+                "  compute_ms = EXCLUDED.compute_ms",
+                space_id, kind, RDF_TYPE_URI, agrees, token, rows, ms)
+            record.update(agrees=agrees, rows=rows, compute_ms=ms)
+            logger.info(
+                "type agreement: %s %s rdf:type vs %s -> %s (%d rows, %d ms)",
+                space_id, kind, col,
+                "ABSORBABLE" if agrees else "differs, keeping the join", rows, ms)
+        except asyncpg.UndefinedTableError as exc:
+            record["skipped"] = f"missing table ({exc.__class__.__name__})"
+        except Exception as exc:
+            # A space that cannot be measured keeps whatever it had. The stored
+            # token ages it out on its own as the table changes.
+            record["error"] = f"{type(exc).__name__}: {exc}"
+            logger.warning("type agreement: %s %s refresh failed: %s",
+                           space_id, kind, exc)
+        out.append(record)
+    return out
