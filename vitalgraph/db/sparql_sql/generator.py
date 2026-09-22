@@ -887,6 +887,10 @@ FTS_INLINE_MAX = int(os.getenv("VG_FTS_INLINE_MAX", "1000"))
 # enough that a leaf's price tracks a space taking continuous FTS writes.
 FTS_COUNT_MEMO_TTL_S = float(os.getenv("VG_FTS_COUNT_MEMO_TTL_S", "5"))
 _FTS_COUNT_MEMO: dict = {}
+#: key -> Future, for a count being measured right now. See `_fts_capped_count`:
+#: the page and the count generate CONCURRENTLY, so without this the memo above
+#: never hits on the path it was written for.
+_FTS_COUNT_INFLIGHT: dict = {}
 
 
 def _fts_filter_exprs(plan, depth: int = 0):
@@ -912,6 +916,67 @@ def _fts_filter_exprs(plan, depth: int = 0):
                     yield plan, search
     for child in plan.children or []:
         yield from _fts_filter_exprs(child, depth + 1)
+
+
+async def _fts_capped_count(key, sql, *, conn=None, conn_params=None):
+    """The bounded count for one leaf, measured once per key.
+
+    A COMPLETED count is reused for `FTS_COUNT_MEMO_TTL_S`, and an IN-FLIGHT one
+    is awaited rather than duplicated. The second half is the one that matters:
+    a KGQuery asking for a total generates SQL twice CONCURRENTLY —
+    `_gather_cancelling(page, count)` — so both measurements start before either
+    finishes and a plain memo never hits. Production logs show the pair
+    completing 1 ms apart, 3,531 ms and 3,534 ms, having run side by side.
+
+    What this saves is DATABASE LOAD, not latency: the two overlap, so the
+    request waits for the slower, not for the sum. Worth doing anyway — the same
+    logs show pool `acquire` reaching 2.9 s under this traffic — but it does not
+    shorten the request that triggers it. The plain memo still pays off where
+    the two are genuinely sequential (`offset > 0` awaits the count, then the
+    page) and for a repeated identical search.
+    """
+    import asyncio
+    from . import db_provider as db
+    memo = _FTS_COUNT_MEMO.get(key)
+    if memo is not None and (time.monotonic() - memo[0]) < FTS_COUNT_MEMO_TTL_S:
+        return memo[1]
+    inflight = _FTS_COUNT_INFLIGHT.get(key)
+    if inflight is not None:
+        try:
+            # Shielded: if WE are cancelled, the measurement the other generation
+            # is waiting on must survive.
+            return await asyncio.shield(inflight)
+        except asyncio.CancelledError:
+            if not inflight.cancelled():
+                raise          # our own cancellation, not the measurement's
+        except Exception:
+            pass               # the owner failed; measure it ourselves
+    loop = asyncio.get_running_loop()
+    fut = loop.create_future()
+    # Nobody may be waiting when this resolves, and an unretrieved exception on
+    # a future is logged as an error at GC time.
+    fut.add_done_callback(
+        lambda f: f.cancelled() or f.exception())
+    _FTS_COUNT_INFLIGHT[key] = fut
+    try:
+        rows = await db.execute_query(sql, conn_params=conn_params, conn=conn,
+                                      lock_timeout_ms=STATS_LOCK_TIMEOUT_MS)
+        n = int(rows[0]["n"]) if rows else None
+    except asyncio.CancelledError:
+        if not fut.done():
+            fut.cancel()
+        raise
+    except Exception as exc:
+        if not fut.done():
+            fut.set_exception(exc)
+        raise
+    finally:
+        _FTS_COUNT_INFLIGHT.pop(key, None)
+    if n is not None:
+        _FTS_COUNT_MEMO[key] = (time.monotonic(), n)
+    if not fut.done():
+        fut.set_result(n)
+    return n
 
 
 async def _measure_fts_leaves(plan, ctx, conn=None, conn_params=None) -> None:
@@ -983,19 +1048,12 @@ async def _measure_fts_leaves(plan, ctx, conn=None, conn_params=None) -> None:
                     id_sets[key] = [r["u"] for r in rows]
                     n = len(rows)
             if n is None:
-                memo = _FTS_COUNT_MEMO.get(key)
-                if memo is not None and (time.monotonic() - memo[0]) < FTS_COUNT_MEMO_TTL_S:
-                    n = memo[1]
-                else:
-                    rows = await db.execute_query(
-                        f"SELECT count(*) AS n FROM (SELECT 1 FROM {table} "
-                        f"WHERE tsv @@ {tsquery}{ctx_clause} "
-                        f"LIMIT {FTS_LEAF_COUNT_CAP + 1}) x",
-                        conn_params=conn_params, conn=conn,
-                        lock_timeout_ms=STATS_LOCK_TIMEOUT_MS)
-                    n = int(rows[0]["n"]) if rows else None
-                    if n is not None:
-                        _FTS_COUNT_MEMO[key] = (time.monotonic(), n)
+                n = await _fts_capped_count(
+                    key,
+                    f"SELECT count(*) AS n FROM (SELECT 1 FROM {table} "
+                    f"WHERE tsv @@ {tsquery}{ctx_clause} "
+                    f"LIMIT {FTS_LEAF_COUNT_CAP + 1}) x",
+                    conn=conn, conn_params=conn_params)
             stats[key] = n
         except Exception as e:
             logger.info("fts leaf measurement failed for %s: %s — leaf left "

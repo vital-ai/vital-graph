@@ -21,6 +21,8 @@ never re-price the leaf, or a broad term would displace a narrow range.
 """
 from __future__ import annotations
 
+import pytest
+
 from types import SimpleNamespace
 
 from vitalgraph.db.jena_sparql.jena_types import (
@@ -156,6 +158,68 @@ class TestThePairOfGenerationsShareOneCount:
         asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
             gen._measure_fts_leaves(plan, ctx, conn=object()))
         return ctx
+
+    @pytest.mark.asyncio
+    async def test_concurrent_generations_share_one_measurement(self, monkeypatch):
+        """THE case this exists for, and the one a plain memo does not cover.
+
+        `_gather_cancelling(page, count)` starts both generations at once, so
+        both miss a completed-only memo. Production logs show the pair finishing
+        1 ms apart having taken 3,531 ms and 3,534 ms — side by side, not one
+        after the other.
+        """
+        import asyncio
+        from vitalgraph.db.sparql_sql import db_provider, generator as gen
+        gen._FTS_COUNT_MEMO.clear(); gen._FTS_COUNT_INFLIGHT.clear()
+        calls: list = []
+        started = asyncio.Event()
+
+        async def slow_query(sql, **kw):
+            calls.append(sql)
+            if sql.lstrip().startswith("SELECT subject_uuid"):
+                return [{"u": U1}] * (gen.FTS_INLINE_MAX + 1)
+            started.set()
+            await asyncio.sleep(0.05)       # the other generation starts here
+            return [{"n": 4600}]
+
+        monkeypatch.setattr(db_provider, "execute_query", slow_query)
+        expr = _match("app")
+        plan_a, _ = _plan(expr)
+        plan_b, _ = _plan(expr)
+        ctx_a, ctx_b = _Ctx(), _Ctx()
+        await asyncio.gather(
+            gen._measure_fts_leaves(plan_a, ctx_a, conn=object()),
+            gen._measure_fts_leaves(plan_b, ctx_b, conn=object()))
+        counts = [c for c in calls if "count(*)" in c]
+        assert len(counts) == 1, f"both generations measured: {len(counts)} counts"
+        assert list(ctx_a.aliases.fts_leaf_stats.values()) == [4600]
+        assert list(ctx_b.aliases.fts_leaf_stats.values()) == [4600]
+        gen._FTS_COUNT_MEMO.clear()
+
+    @pytest.mark.asyncio
+    async def test_a_waiter_measures_for_itself_when_the_owner_fails(self):
+        """A shared failure must not become two callers with no price."""
+        import asyncio
+        from vitalgraph.db.sparql_sql import generator as gen
+        gen._FTS_COUNT_MEMO.clear(); gen._FTS_COUNT_INFLIGHT.clear()
+        key = ("t", "q", "")
+        loop = asyncio.get_running_loop()
+        doomed = loop.create_future()
+        doomed.add_done_callback(lambda f: f.cancelled() or f.exception())
+        gen._FTS_COUNT_INFLIGHT[key] = doomed
+        doomed.set_exception(RuntimeError("owner lost its connection"))
+
+        async def ok(sql, **kw):
+            return [{"n": 7}]
+
+        from vitalgraph.db.sparql_sql import db_provider
+        orig = db_provider.execute_query
+        db_provider.execute_query = ok
+        try:
+            assert await gen._fts_capped_count(key, "SELECT 1", conn=object()) == 7
+        finally:
+            db_provider.execute_query = orig
+            gen._FTS_COUNT_MEMO.clear(); gen._FTS_COUNT_INFLIGHT.clear()
 
     def test_a_broad_count_is_reused_by_the_second_generation(self, monkeypatch):
         from vitalgraph.db.sparql_sql import generator as gen
