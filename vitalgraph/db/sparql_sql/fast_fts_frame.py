@@ -248,6 +248,25 @@ async def _match_set_is_small(conn, fts_table: str, cfg: str, criteria) -> bool:
     query is still worth taking (118,935 matches: 17.8 s against 991 ms). It is
     PROVISIONAL — two measured points either side, not a curve — and tunable
     with VG_FTS_FASTPATH_MIN_PLAIN.
+
+    A FILTER OR SORT NEVER DECLINES, AT ANY SIZE. The 115 ms-against-4,858 ms
+    inversion above was measured on the TEST STACK, and it does not reproduce on
+    a space whose mirror tables are populated and analysed. Both paths, same
+    criteria, same production space, warm, page of 50 — `pipeline` is the whole
+    generated statement, `fast` is page + capped count:
+
+        matches                 filter+sort              sort only
+             72   pipeline   285 ms | fast  44 ms    155 ms | fast  47 ms
+             89   pipeline   263 ms | fast  31 ms    148 ms | fast  30 ms
+          4,600   pipeline 17,979 ms | fast 312 ms 16,002 ms | fast 222 ms
+         22,600   pipeline 13,155 ms | fast 1,301 ms 17,531 ms | fast 343 ms
+        119,255   pipeline 13,446 ms | fast 2,998 ms 23,438 ms | fast 162 ms
+
+    The pipeline does not win anywhere on the measured range, and the small end
+    is where the portal's type-ahead lives — a query per keystroke, each paying
+    a few hundred milliseconds it does not have to. Declining also costs the
+    bounded count below (50-70 ms) to reach the wrong answer, so the branch
+    returns before running it.
     """
     import os
     from .generator import FTS_INLINE_MAX
@@ -255,8 +274,10 @@ async def _match_set_is_small(conn, fts_table: str, cfg: str, criteria) -> bool:
         return False
     has_owner_work = bool(getattr(criteria, "entity_property_filters", None)
                           or getattr(criteria, "sort_criteria", None))
-    floor = FTS_INLINE_MAX if has_owner_work else max(
-        FTS_INLINE_MAX, int(os.getenv("VG_FTS_FASTPATH_MIN_PLAIN", "20000")))
+    if has_owner_work:
+        return False
+    floor = max(FTS_INLINE_MAX,
+                int(os.getenv("VG_FTS_FASTPATH_MIN_PLAIN", "20000")))
     n = await conn.fetchval(
         f"SELECT count(*) FROM (SELECT 1 FROM {fts_table} "
         f"WHERE tsv @@ websearch_to_tsquery('{cfg}'::regconfig, $1) "

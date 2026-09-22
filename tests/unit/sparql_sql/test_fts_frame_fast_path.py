@@ -8,9 +8,12 @@ Measured on a 49.7M-quad space, 321,995-row message index (page of 25):
                                              (13.7 MINUTES, ordered rows and
                                               count identical either way)
 
-The reverse is also true, which is why the gate is two-sided: for a match set
-the pipeline INLINES, the pipeline wins (a 14-row phrase sorted by date: 115 ms
-there against 4,858 ms here), so those DECLINE.
+The gate USED to be two-sided, declining a match set small enough for the
+pipeline to inline (a 14-row phrase sorted by date: 115 ms there against
+4,858 ms here). That inversion was a property of the test stack, not of the
+data: re-measured on production, a filtered or sorted query is faster here at
+every size, down to 72 matches (285 ms there against 44 ms here). So owner work
+no longer declines at all; only PLAIN queries still have a size floor.
 
 These tests pin the gate and the SQL contract. Equivalence itself is measured
 against the pipeline on real data, not asserted here — a fast path that returns
@@ -21,8 +24,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
+import pytest
+
 from vitalgraph.db.sparql_sql.fast_fts_frame import (
-    _build, can_serve_fts_frame, fts_frame_decline_reason)
+    _build, _match_set_is_small, can_serve_fts_frame, fts_frame_decline_reason)
 
 CREATED = "http://vital.ai/ontology/vital-aimp#hasObjectCreationTime"
 NAME = "http://vital.ai/ontology/vital-core#hasName"
@@ -118,6 +123,35 @@ class TestTheGate:
         assert fts_frame_decline_reason(two_sorts) == "more than one sort"
         slot_sort = _Criteria(sort_criteria=[_Sort(sort_type="slot_value")])
         assert "not served here" in fts_frame_decline_reason(slot_sort)
+
+
+class TestTheSizeGate:
+    """A filter or sort is served here at ANY match-set size.
+
+    The size gate exists because a match set the pipeline INLINES is faster
+    there. Measured on production that is not true once the query carries owner
+    work: at 72 matches the pipeline is 285 ms against 44 ms here, and it only
+    gets worse with size (4,600 matches: 17,979 ms against 312 ms). The portal's
+    type-ahead is exactly the small end, one query per keystroke.
+    """
+
+    class _ExplodingConn:
+        """The gate must not reach the database to answer this."""
+
+        async def fetchval(self, *a, **k):  # pragma: no cover - must not run
+            raise AssertionError("the size probe ran for a filter/sort shape")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("criteria", [
+        _Criteria(sort_criteria=[_Sort()]),
+        _Criteria(entity_property_filters=[_Filter(CREATED, "gte", "2026-08-01T00:00:00Z")]),
+        _Criteria(sort_criteria=[_Sort()],
+                  entity_property_filters=[_Filter(CREATED, "gte", "2026-08-01T00:00:00Z")]),
+    ], ids=["sort", "filter", "both"])
+    async def test_owner_work_never_declines_and_never_probes(self, criteria):
+        small = await _match_set_is_small(
+            self._ExplodingConn(), "sp_fts_message_content", "english", criteria)
+        assert small is False
 
 
 class TestTheSql:

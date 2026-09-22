@@ -16,6 +16,13 @@ Server-side only; the 0.0.41 client already understands both statuses used here.
 
 ### Fixed
 
+- **A filtered or sorted FTS frame query is served from the derived tables at
+  any match-set size.** It used to fall back to the general pipeline whenever
+  the match set was small enough for that pipeline to inline, on a measurement
+  taken against an unpopulated test space. On a real space the fallback is
+  slower at every size measured: for a 72-match term — the size a type-ahead
+  search produces — 285 ms against 44 ms, and for a 4,600-match term 18.0 s
+  against 0.3 s. Plain (unfiltered, unsorted) searches are unchanged.
 - **An unsorted FTS frame page is one row per frame, not per matching slot.**
   It was built without `DISTINCT` and de-duplicated afterwards, so a frame
   matching in two slots would have spent two of the page's rows and returned a
