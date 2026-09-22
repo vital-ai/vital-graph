@@ -16,6 +16,7 @@ This module is the v2 equivalent of v1's jena_sql_generator.py.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -852,6 +853,127 @@ def _estimate_from_histogram(vstats, p_uuid: str, op: str, literal):
     except (TypeError, ValueError):
         return None
     return estimate_range(vstats, p_uuid, NUM, op, value)
+
+
+# Bounded, because this runs before EVERY query carrying a text match. Measured
+# on a 321,995-row message index: <= 14 ms at 10,000 for every shape tried,
+# including a term matching 118,935 rows (49 ms at 100,000). A count at the cap
+# is a LOWER bound and is not used to re-price anything. 0 disables.
+FTS_LEAF_COUNT_CAP = int(os.getenv("VG_FTS_LEAF_COUNT_CAP", "10000"))
+
+# At or below this, the match set is FETCHED rather than only counted, and the
+# pushdown emits it as a literal `= ANY(ARRAY[...])` (see push_text_search).
+# PostgreSQL estimates an array at exactly its length; it estimates the
+# `tsv @@ q` subquery from lexeme statistics, and on the measured space put a
+# 14-row phrase at 27,316. 0 disables inlining; counting still happens.
+FTS_INLINE_MAX = int(os.getenv("VG_FTS_INLINE_MAX", "1000"))
+
+
+def _fts_filter_exprs(plan, depth: int = 0):
+    """Yield (filter_node, search_expr) for every FTS predicate push_text_search
+    will act on: a bare vg:textMatch, or the vg:textSearch behind BOUND(?score).
+    """
+    if plan is None or depth > 64:
+        return
+    from .ir import KIND_FILTER
+    if plan.kind == KIND_FILTER and plan.filter_exprs:
+        from .filter_pushdown import (
+            _score_var_requiring_a_match, _find_text_search_extend)
+        from .vg_functions import VG_TEXT_MATCH
+        root = plan.children[0] if plan.children else None
+        for expr in plan.filter_exprs:
+            if getattr(expr, "function_iri", None) == VG_TEXT_MATCH:
+                yield plan, expr
+                continue
+            score_var = _score_var_requiring_a_match(expr)
+            if score_var and root is not None:
+                search = _find_text_search_extend(root, score_var)
+                if search is not None:
+                    yield plan, search
+    for child in plan.children or []:
+        yield from _fts_filter_exprs(child, depth + 1)
+
+
+async def _measure_fts_leaves(plan, ctx, conn=None, conn_params=None) -> None:
+    """Count, exactly and cheaply, how many rows each pushed FTS predicate pins.
+
+    `push_text_search` turns a text match into `alias.subject_uuid IN (SELECT
+    ... WHERE tsv @@ q)`, and until this existed nothing priced that leaf. Join
+    ordering saw only its (hasKGSlotType, MsgContent) pair — every message slot
+    in the space — so the entity-type leaf rooted the chain and the FTS set was
+    probed LAST, once per candidate slot. Measured on a 49.7M-quad space, a
+    phrase matching 14 slots:
+
+        sorted by modification date     34.0 s   2,301,990 rows/worker walked
+        with a 30-day date filter       20.2 s   (the range leaf rooted it)
+
+    PostgreSQL cannot rescue it on its own: it estimates that phrase at 27,316
+    rows (14 actual), and past `join_collapse_limit` it follows the order the
+    generator wrote.
+
+    Keyed exactly as `push_text_search` builds its constraint — (table, tsquery,
+    context clause) — so the count and the pushed set cannot describe different
+    rows. Best-effort: a failure leaves the leaf unpriced, which is the old
+    behaviour, never a wrong answer.
+    """
+    # On ALIASES, not ctx: nested emission (the paging wrapper, a count's
+    # sub-SELECT) runs push_text_search under ctx.child(), which copies a fixed
+    # field list. Aliases are shared by every child, as range_stats is.
+    stats = ctx.aliases.fts_leaf_stats = {}
+    id_sets = ctx.aliases.fts_leaf_ids = {}
+    if FTS_LEAF_COUNT_CAP <= 0 or (conn is None and conn_params is None):
+        return
+    from .filter_pushdown import _fts_index_and_query
+    from .vg_functions import _context_clause
+    from . import db_provider as db
+    wanted = {}
+    try:
+        for _node, expr in _fts_filter_exprs(plan):
+            resolved = _fts_index_and_query(expr, ctx)
+            if resolved is not None:
+                table, tsquery = resolved
+                wanted[(table, tsquery, _context_clause(ctx))] = None
+    except Exception as e:  # resolution is the pushdown's job; never fail here
+        logger.debug("fts leaf measurement: resolution failed: %s", e)
+        return
+    for key in wanted:
+        table, tsquery, ctx_clause = key
+        try:
+            n = None
+            if FTS_INLINE_MAX > 0:
+                # One round trip answers both questions for a narrow term: the
+                # ids AND, by their number, the exact count.
+                #
+                # NO ORDER BY, and no sort anywhere. The set is used for
+                # `= ANY(array)` membership, where element order cannot change a
+                # result, and it is inlined only when this fetch returned the
+                # WHOLE match (<= FTS_INLINE_MAX), so which rows a bare LIMIT
+                # yields never matters. An ORDER BY added "for deterministic SQL"
+                # — which nothing consumes; generated SQL is not cached — made
+                # PostgreSQL walk the subject index testing every row: 223 ms,
+                # 323,566 rows removed by filter, against 38 ms via the GIN
+                # bitmap for a 14-row phrase.
+                rows = await db.execute_query(
+                    f"SELECT subject_uuid::text AS u FROM {table} "
+                    f"WHERE tsv @@ {tsquery}{ctx_clause} "
+                    f"LIMIT {FTS_INLINE_MAX + 1}",
+                    conn_params=conn_params, conn=conn,
+                    lock_timeout_ms=STATS_LOCK_TIMEOUT_MS)
+                if len(rows) <= FTS_INLINE_MAX:
+                    id_sets[key] = [r["u"] for r in rows]
+                    n = len(rows)
+            if n is None:
+                rows = await db.execute_query(
+                    f"SELECT count(*) AS n FROM (SELECT 1 FROM {table} "
+                    f"WHERE tsv @@ {tsquery}{ctx_clause} "
+                    f"LIMIT {FTS_LEAF_COUNT_CAP + 1}) x",
+                    conn_params=conn_params, conn=conn,
+                    lock_timeout_ms=STATS_LOCK_TIMEOUT_MS)
+                n = int(rows[0]["n"]) if rows else None
+            stats[key] = n
+        except Exception as e:
+            logger.info("fts leaf measurement failed for %s: %s — leaf left "
+                        "unpriced", table, e)
 
 
 async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
@@ -2138,6 +2260,11 @@ async def _generate_sql(
         # See issues 027 / 028.
         from .var_scope import all_named_vars
         ctx.query_all_vars = frozenset(all_named_vars(plan))
+        # Needs the emit context (index + language resolution) and must finish
+        # before emit, where push_text_search and reorder_joins read it.
+        with _decisions.stage("measure_fts_leaves"):
+            await _measure_fts_leaves(plan, ctx, conn=conn,
+                                      conn_params=conn_params)
         with _decisions.stage("emit"):
             sql_str = emit(plan, ctx)
 

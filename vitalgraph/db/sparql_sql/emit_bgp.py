@@ -483,7 +483,23 @@ def _leaf_cardinality(plan, ctx) -> dict:
             if n is not None:
                 out[alias] = n
 
-    # Hand the range aliases up: root choice needs to know WHICH leaves are
+    # FTS-PINNED LEAVES are index-backed anchors too, and they are the reason
+    # this block exists. `push_text_search` narrows a leaf to
+    # `subject_uuid IN (SELECT ... WHERE tsv @@ q)`, a GIN lookup, and records
+    # the EXACT match count when it is under the measurement cap. Without it the
+    # leaf is priced as its whole (predicate, object) pair — every message slot
+    # — so on a 49.7M-quad space a 14-row phrase was probed LAST: 34 s sorted,
+    # 20 s under a date filter, where the range leaf rooted the chain outright.
+    #
+    # Entered into the same contest as range leaves, not ahead of them: both are
+    # cheap to enter, so the one matching FEWEST rows roots. A broad term is
+    # never tagged (its count hit the cap), so it cannot displace a narrow range.
+    fts_rows = getattr(plan, "fts_leaf_rows", None) or {}
+    for alias, n in fts_rows.items():
+        out[alias] = min(out.get(alias, n), n)
+        range_aliases.add(alias)
+
+    # Hand the anchor aliases up: root choice needs to know WHICH leaves are
     # index-backed, not just how many rows they match. See reorder_joins.
     out["__range_aliases__"] = range_aliases
 

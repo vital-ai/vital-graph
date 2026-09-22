@@ -205,6 +205,14 @@ class PlanV2:
     # most.
     range_leaves: Dict[Tuple[str, str], Tuple[str, str]] = field(
         default_factory=dict)
+    # quad_alias -> EXACT number of FTS matches pinned to that leaf by a pushed
+    # vg:textMatch / vg:textSearch. The twin of `range_leaves`: an FTS pin binds
+    # no constant object either, so without this the leaf is priced as its whole
+    # (predicate, object) pair — every message slot — and some other leaf roots
+    # the chain. Set at emit by `push_text_search`, from counts measured before
+    # emit; absent when the count hit its cap, because a lower bound would
+    # understate a broad term and re-root plans that should not move.
+    fts_leaf_rows: Dict[str, int] = field(default_factory=dict)
 
     # --- Children ---
     # Relation kinds: join/left_join/union/minus have 2 children.

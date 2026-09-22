@@ -1427,6 +1427,49 @@ def _find_text_search_extend(node, var_name: str, depth: int = 0):
     return None
 
 
+def _inlined_fts_constraint(ctx, ref_id, col_name, fts_table, tsquery,
+                            ctx_clause):
+    """`ref.col = ANY(ARRAY[...])` for a small, already-fetched match set, or None.
+
+    Same rows as `IN (SELECT subject_uuid FROM fts WHERE tsv @@ q ...)` — the ids
+    were read from that exact predicate before emit — but PostgreSQL estimates
+    an array at its length, where it estimates the subquery from lexeme
+    statistics. On a 49.7M-quad space it put a 14-row phrase at 27,316 and, with
+    the entity-rooted path underestimated ~1,000x, drove from the entity type:
+    34 s sorted. Only the NUMBER changes here, never the set.
+
+    Safe to bake in because generated SQL is not cached — only the sidecar's
+    algebra is — so the list is exactly as fresh as the query that carries it.
+    """
+    ids = (getattr(getattr(ctx, "aliases", None), "fts_leaf_ids", None) or {}).get(
+        (fts_table, tsquery, ctx_clause))
+    if ids is None:
+        return None
+    if not ids:
+        return "FALSE"
+    arr = ",".join(ids)
+    return f"{ref_id}.{col_name} = ANY('{{{arr}}}'::uuid[])"
+
+
+def _record_fts_leaf_rows(bgp, ctx, ref_id, fts_table, tsquery, ctx_clause):
+    """Tag the pinned alias with its measured match count, when it is EXACT.
+
+    `_measure_fts_leaves` counted it before emit under the same key this
+    constraint was built from. A count at the cap is a lower bound and is
+    dropped: understating a broad term would re-root a plan that should stay
+    where it is, and `_leaf_cardinality` treats a tagged alias as an anchor.
+    """
+    stats = getattr(getattr(ctx, "aliases", None), "fts_leaf_stats", None) or {}
+    n = stats.get((fts_table, tsquery, ctx_clause))
+    if n is None:
+        return
+    from .generator import FTS_LEAF_COUNT_CAP
+    if n > FTS_LEAF_COUNT_CAP:
+        return
+    prev = bgp.fts_leaf_rows.get(ref_id)
+    bgp.fts_leaf_rows[ref_id] = n if prev is None else min(prev, n)
+
+
 def push_text_search(plan: PlanV2, space_id: str, ctx=None) -> int:
     """Narrow the BGP by the FTS match behind a vg:textSearch score filter.
 
@@ -1474,11 +1517,14 @@ def push_text_search(plan: PlanV2, space_id: str, ctx=None) -> int:
             ref_id, col_name = slot.positions[0]
             from .vg_functions import _context_clause
             c_clause = _context_clause(ctx)
-            sql = (f"{ref_id}.{col_name} IN "
+            sql = _inlined_fts_constraint(
+                ctx, ref_id, col_name, fts_table, tsquery, c_clause) or (
+                   f"{ref_id}.{col_name} IN "
                    f"(SELECT subject_uuid FROM {fts_table} "
                    f"WHERE tsv @@ {tsquery}{c_clause})")
             bgp.tagged_constraints.append((ref_id, sql))
             bgp.constraints.append(sql)
+            _record_fts_leaf_rows(bgp, ctx, ref_id, fts_table, tsquery, c_clause)
             consumed.append(expr)
             added += 1
             logger.debug("vg:textMatch pushdown: ?%s -> %s",
@@ -1530,8 +1576,20 @@ def push_text_search(plan: PlanV2, space_id: str, ctx=None) -> int:
             f"(SELECT subject_uuid FROM {fts_table} "
             f"WHERE tsv @@ {tsquery}{ctx_clause}{cap_clause})"
         )
+        # Inline only when the candidate cap cannot bite: the fetched ids are
+        # the UNCAPPED match, so under a biting cap they would be a different
+        # set from the one this constraint describes.
+        _ids = (getattr(getattr(ctx, "aliases", None), "fts_leaf_ids", None) or {}).get(
+            (fts_table, tsquery, ctx_clause))
+        if _ids is not None and (FTS_CANDIDATE_CAP <= 0
+                                 or len(_ids) <= FTS_CANDIDATE_CAP):
+            constraint_sql = _inlined_fts_constraint(
+                ctx, ref_id, col_name, fts_table, tsquery, ctx_clause)
         bgp.tagged_constraints.append((ref_id, constraint_sql))
         bgp.constraints.append(constraint_sql)
+        # The cap clause only ever SHRINKS the pushed set, so an exact count of
+        # the uncapped match is still an upper bound on what this leaf yields.
+        _record_fts_leaf_rows(bgp, ctx, ref_id, fts_table, tsquery, ctx_clause)
         consumed.append(expr)
         added += 1
         logger.debug("vg:textSearch pushdown: ?%s → %s",
