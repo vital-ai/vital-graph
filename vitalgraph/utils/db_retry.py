@@ -82,6 +82,37 @@ class SparqlQueryFailed(Exception):
             f"{error or 'no error text reported'}")
 
 
+def is_query_timeout(exc: BaseException) -> bool:
+    """Did this read run out of TIME, as opposed to being unable to run at all?
+
+    The split that decides a KGQuery's HTTP status. A query that ran and
+    exceeded its budget is a domain outcome — the request was answerable in
+    principle, it was too expensive — so it is reported as HTTP 200 with
+    `status=query_failed`, as the entity and type endpoints already do. An
+    unreachable sidecar or a lost connection is a server-level fault and stays
+    an HTTP 500 (`issues/082`).
+
+    Two sources count as a timeout:
+
+    * PostgreSQL's `statement_timeout` — SQLSTATE 57014 with the server's own
+      message "canceling statement due to statement timeout". 57014 is also an
+      administrator's cancel ("due to user request"), which is NOT a timeout,
+      so the message is what separates them; it is emitted by PostgreSQL
+      itself, not composed here.
+    * the driver's `command_timeout`, surfaced as `asyncio.TimeoutError`.
+    """
+    import asyncio
+    try:
+        import asyncpg
+    except ImportError:  # pragma: no cover - client-only installs
+        asyncpg = None
+    if isinstance(exc, asyncio.TimeoutError):
+        return True
+    if asyncpg is not None and isinstance(exc, asyncpg.QueryCanceledError):
+        return "statement timeout" in str(exc)
+    return False
+
+
 class DatabaseUnavailableError(Exception):
     """Raised when the database is unreachable after all retry attempts.
 

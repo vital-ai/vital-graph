@@ -91,7 +91,14 @@ class BackendQueryError(RuntimeError):
     `bindings` makes that indistinguishable from a genuinely empty match set, so
     an outage was reported as a successful empty page — HTTP 200, status FOUND,
     total_count 0 (`issues/082`). This carries the failure instead.
+
+    `timed_out` says whether the query ran out of time rather than could not run;
+    it decides between HTTP 200 `query_failed` and HTTP 500.
     """
+
+    def __init__(self, message: str = "", timed_out: bool = False):
+        super().__init__(message)
+        self.timed_out = timed_out
 
 
 async def _checked_query(backend, space_id: str, sparql: str, **kwargs) -> dict:
@@ -103,7 +110,8 @@ async def _checked_query(backend, space_id: str, sparql: str, **kwargs) -> dict:
     """
     result = await backend.execute_sparql_query(space_id, sparql, **kwargs)
     if isinstance(result, dict) and result.get("success") is False:
-        raise BackendQueryError(result.get("error") or "backend reported failure")
+        raise BackendQueryError(result.get("error") or "backend reported failure",
+                                timed_out=bool(result.get("timed_out")))
     return result
 
 
@@ -252,7 +260,24 @@ class KGQueriesEndpoint:
             backend = space_impl.get_db_space_impl()
             if not backend:
                 raise HTTPException(status_code=500, detail="Backend implementation not available")
-            
+
+            # An FTS criterion the space cannot answer is a REQUEST the caller can
+            # fix, not an empty result and not a server fault. Before this, an
+            # unmapped target returned a confident empty page and a missing
+            # index an HTTP 500 carrying the raw SQL error.
+            fts = getattr(query_request.criteria, "fts_criteria", None)
+            if fts is not None:
+                problem = await self._fts_configuration_problem(backend, space_id, fts)
+                if problem:
+                    return KGQueryResponse(
+                        status=OperationStatus.INVALID_REQUEST,
+                        message=problem,
+                        query_type=str(query_type),
+                        total_count=0,
+                        page_size=query_request.page_size,
+                        offset=query_request.offset,
+                    )
+
             # Execute appropriate query type
             if query_type == "relation":
                 return await self._execute_relation_query(backend, space_id, graph_id, query_request)
@@ -268,12 +293,110 @@ class KGQueriesEndpoint:
         except HTTPException:
             raise
         except Exception as e:
+            timed_out = self._timeout_response(query_request, "KG", e)
+            if timed_out is not None:
+                return timed_out
             self.logger.error(f"Error executing {query_request.criteria.query_type} query: {e}")
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to execute KG query: {str(e)}"
             )
     
+    def _timeout_response(self, query_request, kind: str, exc: Exception):
+        """HTTP 200 `query_failed` for a query that ran out of time, else None.
+
+        The split: a query that exceeded its budget is a domain outcome — the
+        caller can narrow it, page it, or retry — so it is reported in the body,
+        as the entity and type endpoints already report it. Anything else (an
+        unreachable sidecar, a lost connection) is a server-level fault and the
+        caller re-raises it as HTTP 500, as `issues/082` decided. Before this,
+        every KGQuery timeout was an HTTP 500 while the same failure elsewhere
+        was a 200.
+        """
+        from ..utils.db_retry import is_query_timeout
+        if not (getattr(exc, "timed_out", False) or is_query_timeout(exc)):
+            return None
+        self.logger.error(f"{kind} query timed out: {exc}")
+        return KGQueryResponse(
+            status=OperationStatus.QUERY_FAILED,
+            message=(f"{kind} query exceeded its time budget and was cancelled: {exc}. "
+                     f"Narrow the criteria, or request a smaller page or no count."),
+            query_type=str(getattr(query_request.criteria, "query_type", kind)),
+            total_count=0,
+            page_size=query_request.page_size,
+            offset=query_request.offset,
+        )
+
+    async def _fts_configuration_problem(self, backend, space_id: str, fts) -> Optional[str]:
+        """Why this space cannot answer `fts`, or None if it can.
+
+        Resolves the index name the SAME way the pushdown does
+        (`vg_functions._resolve_index_name`): a name that is a search-mapping
+        alias resolves through `{space}_search_mapping_index` to the real FTS
+        index, else it is the index name itself. Then:
+
+          * the index must be registered and its table must exist;
+          * every target slot type must be covered by an ENABLED mapping for
+            that index. An uncovered target is never populated, so it would
+            return an empty page indistinguishable from "no matches" — measured
+            2026-09-22 with a draft slot type absent from the mapping.
+
+        Population progress is NOT checked: there is no population registry to
+        read (readiness plan P1.4). Returns None when the database cannot be
+        reached from here, rather than blocking a query on an unverifiable check.
+        """
+        pool = getattr(getattr(backend, 'db_impl', None), 'connection_pool', None)
+        if pool is None:
+            return None
+        requested = fts.index_name
+        targets = sorted({t.slot_type for t in (fts.targets or [])})
+        sm, smi, reg = (f"{space_id}_search_mapping", f"{space_id}_search_mapping_index",
+                        f"{space_id}_fts_index")
+        import asyncpg
+        try:
+            async with pool.acquire() as conn:
+                real = requested
+                try:
+                    alias = await conn.fetchval(
+                        f"SELECT smi.index_name FROM {sm} sm JOIN {smi} smi "
+                        f"ON smi.mapping_id = sm.mapping_id "
+                        f"WHERE sm.index_name = $1 AND smi.index_type = 'fts' LIMIT 1",
+                        requested)
+                    real = alias or requested
+                except asyncpg.UndefinedTableError:
+                    pass
+                try:
+                    registered = await conn.fetchval(
+                        f"SELECT 1 FROM {reg} WHERE index_name = $1", real)
+                except asyncpg.UndefinedTableError:
+                    return (f"FTS is not configured in space '{space_id}': it has no "
+                            f"FTS index registry, so index '{requested}' cannot exist.")
+                table_ok = await conn.fetchval(
+                    "SELECT to_regclass($1) IS NOT NULL", f"{space_id}_fts_{real}")
+                if not registered or not table_ok:
+                    return (f"FTS index '{requested}' does not exist in space "
+                            f"'{space_id}'. Create and populate it before searching.")
+                try:
+                    covered = {r["type_uri"] for r in await conn.fetch(
+                        f"SELECT DISTINCT sm.type_uri FROM {sm} sm "
+                        f"WHERE sm.enabled AND sm.type_uri = ANY($1::text[]) "
+                        f"AND (sm.index_name = $2 OR sm.index_name = $3 OR EXISTS ("
+                        f"SELECT 1 FROM {smi} smi WHERE smi.mapping_id = sm.mapping_id "
+                        f"AND smi.index_type = 'fts' AND smi.index_name = $3))",
+                        targets, requested, real)}
+                except asyncpg.UndefinedTableError:
+                    covered = set()
+        except Exception as e:  # the check must never be what fails a query
+            self.logger.warning(f"FTS configuration check skipped for {space_id}: {e}")
+            return None
+        missing = [t for t in targets if t not in covered]
+        if missing:
+            return (f"FTS index '{requested}' has no enabled search mapping for slot "
+                    f"type(s) {', '.join(missing)}, so they are never indexed and a "
+                    f"search over them would return nothing. Add a mapping and "
+                    f"populate the index for these types.")
+        return None
+
     @staticmethod
     def _extract_total_count(count_results: dict) -> int:
         """Extract integer total from a COUNT SPARQL result."""
@@ -413,6 +536,9 @@ class KGQueriesEndpoint:
             )
             
         except Exception as e:
+            timed_out = self._timeout_response(query_request, "relation", e)
+            if timed_out is not None:
+                return timed_out
             self.logger.error(f"Error executing relation query: {e}")
             raise HTTPException(
                 status_code=500,
@@ -1058,6 +1184,9 @@ class KGQueriesEndpoint:
             )
             
         except Exception as e:
+            timed_out = self._timeout_response(query_request, "entity", e)
+            if timed_out is not None:
+                return timed_out
             self.logger.error(f"Error executing entity query: {e}")
             raise HTTPException(
                 status_code=500,
@@ -1255,6 +1384,9 @@ class KGQueriesEndpoint:
             )
             
         except Exception as e:
+            timed_out = self._timeout_response(query_request, "frame", e)
+            if timed_out is not None:
+                return timed_out
             self.logger.error(f"Error executing frame query: {e}")
             raise HTTPException(
                 status_code=500,
@@ -1555,6 +1687,9 @@ class KGQueriesEndpoint:
             )
             
         except Exception as e:
+            timed_out = self._timeout_response(query_request, "frame_query", e)
+            if timed_out is not None:
+                return timed_out
             self.logger.error(f"Error executing frame_query: {e}")
             raise HTTPException(
                 status_code=500,
@@ -2033,6 +2168,9 @@ class KGQueriesEndpoint:
             )
             
         except Exception as e:
+            timed_out = self._timeout_response(query_request, "document", e)
+            if timed_out is not None:
+                return timed_out
             self.logger.error(f"Error executing document query: {e}")
             raise HTTPException(
                 status_code=500,

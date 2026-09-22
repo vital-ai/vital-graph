@@ -2,6 +2,27 @@
 
 Notable changes per release. Dates are the release date, not the first commit.
 
+## Unreleased
+
+Server-side only; the 0.0.41 client already understands both statuses used here.
+
+### Changed
+
+- **A KGQuery that times out returns HTTP 200 with `status: query_failed`**
+  instead of HTTP 500, matching the entity and type endpoints. A caller that
+  relied on the client raising `VitalGraphClientError` for a timeout now
+  receives a response with `success: False` and must check it. A server-level
+  fault — an unreachable query engine, a lost connection — is still HTTP 500.
+
+### Fixed
+
+- **An FTS criterion the space cannot answer is reported, not answered.** A
+  nonexistent index returned HTTP 500 with the raw SQL error; a target slot type
+  with no enabled search mapping returned a confident empty page,
+  indistinguishable from no matches. Both now return HTTP 200 with
+  `status: invalid_request` and a message naming the missing index or the
+  uncovered slot types.
+
 ## 0.0.41 — 2026-09-22
 
 243 commits since 0.0.40 (2026-09-08). Full-text search becomes an ordinary

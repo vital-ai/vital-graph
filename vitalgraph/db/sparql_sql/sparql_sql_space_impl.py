@@ -2299,7 +2299,11 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
         except Exception as e:
             logger.error("execute_sparql_query(%s) failed: %s", space_id, e)
-            return {'results': {'bindings': []}, 'success': False, 'error': str(e)}
+            # `timed_out` survives the flattening to a string. Callers decide the
+            # HTTP status from it: a timeout is a domain outcome, an outage is not.
+            from ...utils.db_retry import is_query_timeout
+            return {'results': {'bindings': []}, 'success': False, 'error': str(e),
+                    'timed_out': is_query_timeout(e)}
 
     async def _describe_triples(self, space_id: str,
                                 targets: List[str]) -> List[Dict[str, Any]]:
