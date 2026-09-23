@@ -153,6 +153,52 @@ class TestTheCountReadsOneLane:
             return int(await conn.fetchval(stripped, *holder["args"]) or 0)
 
 
+class TestTheDiscardedPredicateIsNotFetched:
+    """`URIProp` is thrown away by `_bindings_to_graph_objects` on arrival, so
+    fetching it costs a row, a term resolution and a transfer for nothing --
+    2,051 of 14,407 rows on a real 25-entity page, 333 ms against 84 ms.
+
+    Excluding it must not change a single returned object, which is the whole
+    basis for excluding it: the deserialiser already ignores the field.
+    """
+
+    async def test_excluding_it_returns_the_same_objects(
+            self, test_space, space_impl, backend_adapter):
+        await space_impl.add_rdf_quads_batch(test_space, _quads())
+        from vitalgraph.kg_impl.kg_graph_retrieval_utils import (
+            GraphObjectRetriever, DiscardedOnDeserialise)
+
+        uris = [f"{EX}{n}" for n, *_ in ROWS]
+        retriever = GraphObjectRetriever(backend_adapter)
+        with_filter = await retriever.get_entity_graphs_as_objects(
+            test_space, GRAPH, uris)
+
+        # Same call with the exclusion neutralised.
+        original = DiscardedOnDeserialise.PREDICATES
+        try:
+            DiscardedOnDeserialise.PREDICATES = frozenset(
+                ["urn:never:matches:anything"])
+            without = await retriever.get_entity_graphs_as_objects(
+                test_space, GRAPH, uris)
+        finally:
+            DiscardedOnDeserialise.PREDICATES = original
+
+        assert set(with_filter) == set(without), (
+            "excluding URIProp changed WHICH entities came back")
+        for uri in without:
+            a = sorted(str(o.URI) for o in with_filter.get(uri, []))
+            b = sorted(str(o.URI) for o in without.get(uri, []))
+            assert a == b, f"excluding URIProp changed the objects for {uri}"
+
+    async def test_rdf_type_is_deliberately_not_excluded(self):
+        """Both type predicates assign the same field, so one is redundant --
+        but an object carrying only `rdf:type` would lose its type_uri and be
+        dropped from the response entirely. 4 ms is not worth that."""
+        from vitalgraph.kg_impl.kg_graph_retrieval_utils import DiscardedOnDeserialise
+        assert not any("rdf-syntax-ns#type" in p
+                       for p in DiscardedOnDeserialise.PREDICATES)
+
+
 class TestTheGraphListingPageMatches:
     """`include_entity_graph=true` takes the fast path's page of URIs. It has to
     be the SAME page, in the same order, as the SPARQL query it replaced."""

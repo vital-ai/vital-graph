@@ -42,6 +42,14 @@ Server-side only; the 0.0.41 client already understands both statuses used here.
 
 ### Fixed
 
+- **A batched entity-graph read stops fetching a predicate it discards.**
+  `URIProp` restates the subject URI and the deserialiser drops it unread, so
+  every one of those rows was read from disk, term-resolved and transferred for
+  nothing. Measured on a 49.7M-quad space, one 25-entity page with graphs:
+  14,407 rows and 83,516 buffers becomes 12,356 and 75,308. Responses are
+  unchanged — the quads are regenerated from the objects. `rdf:type` is
+  deliberately left alone: it is redundant with `vitaltype`, but an object
+  carrying only `rdf:type` would lose its type and be dropped from the response.
 - **An entity listing that asks for entity graphs no longer gives up its fast
   path.** `include_entity_graph=true` took the page of URIs from SPARQL instead
   of `entity_prop_sort`, even though that path needs exactly the ordered page of

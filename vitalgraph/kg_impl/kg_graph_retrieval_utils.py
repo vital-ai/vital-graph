@@ -180,6 +180,42 @@ class MaterializedPredicateConstants:
         return f"FILTER({' &&\n           '.join(filters)})"
 
 
+class DiscardedOnDeserialise:
+    """Predicates `_bindings_to_graph_objects` throws away on arrival.
+
+    Not a filtering policy -- a statement about the deserialiser. `URIProp`
+    restates the subject URI, and the reader hits `if p == _URI_PROP: continue`
+    before doing anything with it, so every one of these rows is fetched from
+    disk, term-resolved, serialised, transferred and then dropped.
+
+    Measured on a 49.7M-quad space, one 25-entity page with its graphs:
+
+        as-is            14,407 rows   83,516 buffers   333 ms
+        minus URIProp    12,356 rows   75,308 buffers    84 ms
+
+    ONLY FOR READS THAT DESERIALISE. A caller reading quads in order to DELETE
+    them needs every one, including these -- filtering there would leave the
+    URIProp quads behind. That is why this is separate from
+    `MaterializedPredicateConstants` and applied per call site rather than
+    folded into the shared `include_materialized_edges` switch.
+
+    `rdf:type` is deliberately NOT here even though it is redundant with
+    `vitaltype` -- both assign the same `type_uri` field, so one of the two is
+    wasted, but an object carrying only `rdf:type` would end up with no
+    `type_uri` at all and the next line drops such objects from the response
+    entirely. Worth 4 ms on the measurement above; not worth a silent hole.
+    """
+
+    PREDICATES = frozenset([
+        'http://vital.ai/ontology/vital-core#URIProp',
+    ])
+
+    @classmethod
+    def get_filter_clause(cls, predicate_var: str = "?p") -> str:
+        filters = [f"{predicate_var} != <{pred}>" for pred in cls.PREDICATES]
+        return f"FILTER({' && '.join(filters)})"
+
+
 class GraphObjectRetriever:
     """
     Centralized utility for retrieving graph objects with configurable filtering.
@@ -768,6 +804,9 @@ class GraphObjectRetriever:
             return {}
 
         filter_clause = "" if include_materialized_edges else MaterializedPredicateConstants.get_filter_clause()
+        # Every row this returns is deserialised by `_bindings_to_graph_objects`,
+        # which discards URIProp unread. See `DiscardedOnDeserialise`.
+        filter_clause += "\n                    " + DiscardedOnDeserialise.get_filter_clause()
         in_list = ", ".join(f"<{u}>" for u in entity_uris)
 
         # ONE branch, because the entity is a member of its own graph: it
