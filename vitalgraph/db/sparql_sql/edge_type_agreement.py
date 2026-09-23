@@ -405,6 +405,25 @@ async def edge_type_absorbable(space_id: str, type_predicate: str,
 REFRESH_TIMEOUT_MS = int(_os.getenv("VG_TYPE_AGREEMENT_REFRESH_TIMEOUT_MS",
                                     "300000"))
 
+#: The CLIENT-side bound, and it is not optional. TWO fences guard a long read
+#: here and raising only one does nothing:
+#:
+#:   * the server's `statement_timeout`, which production's RDS parameter group
+#:     pins at 1min and `SET` above overrides;
+#:   * asyncpg's `command_timeout=60` on the pool, which fires in the DRIVER,
+#:     independently of the server, and raises a bare `TimeoutError`.
+#:
+#: Shipped without the second one, this failed on production at 00:49 and 00:50
+#: on 2026-09-23 — three refreshes, each dying at almost exactly 60 s with an
+#: EMPTY error message, which is what `str(asyncio.TimeoutError())` is. The
+#: small space (13.3 s) succeeded and the two that need ~120 s never could, so
+#: the fix worked precisely where it was not needed. `sync_entity_slot_sort`
+#: documents the same trap costing `issues/149` a probe that had never once run.
+#:
+#: Kept ABOVE the server fence so the server cancels first: a PostgreSQL
+#: cancellation says what was cancelled, a driver timeout says nothing.
+REFRESH_CLIENT_TIMEOUT_S = REFRESH_TIMEOUT_MS / 1000.0 + 30.0
+
 
 async def refresh_type_agreement(conn, space_id: str) -> list:
     """Decide frame and edge type agreement for *space_id* and store it.
@@ -435,7 +454,8 @@ async def refresh_type_agreement(conn, space_id: str) -> list:
                 record["skipped"] = "no such table"
                 out.append(record)
                 continue
-            rows = await conn.fetchval(f"SELECT count(*) FROM {table}")
+            rows = await conn.fetchval(f"SELECT count(*) FROM {table}",
+                                       timeout=REFRESH_CLIENT_TIMEOUT_S)
             if not rows:
                 # Vacuous, not agreement: an empty table produces no
                 # counterexample, so it would answer TRUE against nothing.
@@ -474,7 +494,9 @@ async def refresh_type_agreement(conn, space_id: str) -> list:
                 await conn.execute(
                     f"SET statement_timeout = '{int(REFRESH_TIMEOUT_MS)}ms'")
                 try:
-                    agrees = await conn.fetchval(sql, pred_uuid) is None
+                    agrees = await conn.fetchval(
+                        sql, pred_uuid,
+                        timeout=REFRESH_CLIENT_TIMEOUT_S) is None
                 finally:
                     try:
                         await conn.execute(f"SET statement_timeout = '{prev}'")

@@ -185,3 +185,46 @@ async def test_an_unmigrated_database_keeps_its_old_behaviour():
     conn = _Conn(blow_up_on_agreement=False)   # `_Conn` has no type_agreement
     assert await eta.frame_type_absorbable("sp", RDF_TYPE, conn) is True
     assert conn.counts == 1 and conn.agreements == 1
+
+
+class TestTheRefreshRaisesBOTHFences:
+    """A long read on this pool is bounded twice, and raising one does nothing.
+
+    Shipped with only the server fence raised, the production refresh died at
+    almost exactly 60 s on 2026-09-23 with an EMPTY error message — which is
+    what `str(asyncio.TimeoutError())` is. asyncpg's `command_timeout=60` fires
+    in the DRIVER, so `SET statement_timeout` cannot reach it. The small space
+    (13.3 s) succeeded and the two needing ~120 s never could: it worked exactly
+    where it was not needed, which is why no local test caught it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_every_long_read_passes_a_client_timeout(self):
+        seen = []
+
+        class _Conn:
+            async def fetchval(self, sql, *args, timeout=None):
+                if sql.startswith("SELECT count(*)") or "IS DISTINCT FROM" in sql:
+                    seen.append((sql.split()[1], timeout))
+                    return 5 if sql.startswith("SELECT count(*)") else None
+                if sql == "SHOW statement_timeout":
+                    return "60s"
+                return "pred-uuid"
+
+            async def fetchrow(self, sql, *args):
+                return {"churn": 1, "relfilenode": 2}
+
+            async def execute(self, sql, *a):
+                return None
+
+        await eta.refresh_type_agreement(_Conn(), "sp")
+        assert seen, "no long read was issued"
+        for what, timeout in seen:
+            assert timeout == eta.REFRESH_CLIENT_TIMEOUT_S, (
+                f"{what} was issued without the client bound; asyncpg's "
+                f"command_timeout=60 would kill it regardless of the server")
+
+    def test_the_client_bound_sits_above_the_server_one(self):
+        """So PostgreSQL cancels first and says what it cancelled. A driver
+        timeout arrives as a bare TimeoutError with no message at all."""
+        assert eta.REFRESH_CLIENT_TIMEOUT_S > eta.REFRESH_TIMEOUT_MS / 1000.0
