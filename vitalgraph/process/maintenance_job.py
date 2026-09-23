@@ -632,10 +632,13 @@ class MaintenanceJob:
             if fanout_result:
                 summary["edge_fanout_refresh"] = fanout_result
 
-            # --- Type agreement: NOT run automatically. See
-            # `_run_type_agreement_refresh` for the measurements that took it
-            # off the cycle; it stays available through `trigger_maintenance`
-            # for an operator who wants a verdict for a specific space.
+            # --- Type agreement: decide off the query path what it cannot ---
+            # Self-gating: a space whose verdict still matches its token is
+            # skipped for a catalog read, and one that proved unable to hold a
+            # verdict is backed off. See `refresh_type_agreement`.
+            agree_result = await self._run_type_agreement_refresh(list(stats.keys()))
+            if agree_result:
+                summary["type_agreement"] = agree_result
 
             # --- Stats: ONE recompute, replacing integrity + prune + rebuild ---
             stats_result = await self._run_stats_recompute(list(stats.keys()))
@@ -1530,18 +1533,18 @@ class MaintenanceJob:
         form needs **122,488 ms**, scanning 3,007,724 mirror rows against
         7,143,296 type quads. So it always timed out, the optimisation never
         fired, and every query paid the budget plus a `count(*)` over millions
-        of rows to re-derive the same "I don't know" — a 512 ms median on every
-        query, and 11.4 hours of cumulative database time across all spaces.
+        of rows to re-derive the same "I don't know" — 111 s of generation
+        time in a 43-minute window, and 11.4 hours of cumulative database time
+        across all spaces.
 
         Here there is no user waiting, so the question is simply answered. What
         it is worth: `issues/182` measured the edge type constraint at 6.8x of
         the reference CONSTRUCT's cost, and the frame one at 1.5x.
 
-        NOT ON THE AUTOMATIC CYCLE, and that is a measurement rather than a
-        preference. Run every cycle on production it cost **462 seconds of
-        scanning per hour** (the two largest spaces contributed frame scans of
-        192 s and 89 s and edge scans of 81 s and 59 s; the small ones the
-        rest), and about 420 s of that bought nothing at all:
+        SELF-GATING, and that gate is the whole design. Run ungated on
+        production this cost **462 seconds of scanning per hour** (the two
+        largest spaces contributed frame scans of 192 s and 89 s and edge scans
+        of 81 s and 59 s), and about 420 s of that bought nothing at all:
 
         the change token is captured BEFORE the scan, so on a space taking
         writes the verdict is STALE BEFORE IT IS STORED. The largest space's
@@ -1552,9 +1555,19 @@ class MaintenanceJob:
         only two spaces whose verdicts were usable were the two quiet ones, and
         they carried 4 of 1,431 generations: **0.3% of the traffic**.
 
-        So it is wired to `trigger_maintenance` only. An operator who wants a
-        verdict for a quiet space can ask for one and will get it; nothing asks
-        for one on a space that cannot keep it.
+        So a space that proves it cannot hold a verdict is BACKED OFF rather
+        than rescanned, and one whose verdict still matches its token is
+        skipped for a catalog read. Both decisions live in
+        `refresh_type_agreement`; this phase just calls it.
+
+        Removing the phase outright was the first attempt, and it was an
+        over-correction: the change gate already skipped the static spaces for
+        two catalog reads, so the cost was entirely the busy ones. Taking it
+        off the cycle meant the first write to a quiet space killed its
+        absorption silently and permanently, with nothing to restore it but a
+        manual trigger. The backoff keeps the cheap case working and stops only
+        the hopeless one, and it expires, so a space that goes quiet recovers
+        on its own.
 
         Making this work on a busy space needs the invariant MAINTAINED rather
         than inferred — a `type_agrees` flag set where `frame_type_uuid` is
@@ -1565,47 +1578,23 @@ class MaintenanceJob:
         if not self._pool:
             return None
         from vitalgraph.db.sparql_sql.edge_type_agreement import (
-            change_token, refresh_type_agreement, _SOURCES)
+            refresh_type_agreement)
 
-        refreshed: List[Dict] = []
-        skipped = 0
+        results: List[Dict] = []
         for sid in space_ids:
             try:
                 async with self._pool.acquire() as conn:
-                    if not force and not await self._type_agreement_moved(
-                            conn, sid, change_token, _SOURCES):
-                        skipped += 1
-                        continue
-                    refreshed.extend(await refresh_type_agreement(conn, sid))
+                    results.extend(await refresh_type_agreement(
+                        conn, sid, force=force))
             except Exception as exc:
                 # One space must not stop the rest; its verdict simply ages out
                 # by token, which reads as "do not absorb".
                 logger.warning("Type agreement refresh failed for %s: %s", sid, exc)
-        if not refreshed:
+        scanned = [r for r in results if "skipped" not in r]
+        if not scanned:
             return None
-        return {"refreshed": refreshed, "skipped_unchanged": skipped}
-
-    @staticmethod
-    async def _type_agreement_moved(conn, space_id: str, change_token,
-                                    sources) -> bool:
-        """True when any source table has changed since its stored verdict.
-
-        The readers decline on a token mismatch, so an unrefreshed verdict is
-        never WRONG — it just stops being used. This gate only decides whether
-        there is work to do.
-        """
-        try:
-            stored = {
-                r["kind"]: r["change_token"] for r in await conn.fetch(
-                    "SELECT kind, change_token FROM type_agreement "
-                    "WHERE space_id = $1", space_id)}
-        except Exception:
-            return True          # cannot tell (or not migrated) -- let it try
-        for kind, (suffix, _col) in sources.items():
-            token = await change_token(conn, f"{space_id}_{suffix}")
-            if token is not None and stored.get(kind) != token:
-                return True
-        return False
+        return {"scanned": scanned,
+                "skipped": len(results) - len(scanned)}
 
     async def _run_stats_recompute(self, space_ids: List[str],
                                    force: bool = False) -> Optional[Dict]:

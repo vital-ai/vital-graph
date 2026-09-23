@@ -86,8 +86,11 @@ _COUNT_MEMO: dict = {}
 # unknown: `plan_decisions` on production carried `"type": null` on every single
 # generation, each having paid the full 250 ms budget to learn nothing, plus
 # ~236 ms for the count that invalidated it. Together that was the largest
-# single cost in SQL generation — a 512 ms median on EVERY query, 101 s of
-# wall-clock in a 42-minute window — spent re-answering "I don't know".
+# single cost in SQL generation — 111 s of wall-clock in a 43-minute window —
+# spent re-answering "I don't know". (Cheap on a typical query, 1.8 ms median,
+# and occasionally very expensive, up to 1.9 s. An earlier note here said
+# "512 ms median on every query"; that was the median among the generations
+# slow enough to be LOGGED as slow, not among all of them.)
 #
 # A check that cannot finish in 250 ms will not finish in 250 ms because three
 # rows were inserted. Believing the unknown is also SAFE IN ONE DIRECTION ONLY,
@@ -461,7 +464,48 @@ REFRESH_TIMEOUT_MS = int(_os.getenv("VG_TYPE_AGREEMENT_REFRESH_TIMEOUT_MS",
 REFRESH_CLIENT_TIMEOUT_S = REFRESH_TIMEOUT_MS / 1000.0 + 30.0
 
 
-async def refresh_type_agreement(conn, space_id: str) -> list:
+#: How long a space that proved unable to hold a verdict is left alone.
+#: Long, because the thing being waited for is the write rate dropping, not a
+#: transient. It expires on its own so a space that goes quiet recovers with no
+#: intervention -- which is the difference between this and deleting the phase.
+BORN_STALE_BACKOFF_S = float(
+    _os.getenv("VG_TYPE_AGREEMENT_BORN_STALE_BACKOFF_S", "3600"))
+
+
+async def _refresh_not_needed(conn, space_id: str, kind: str,
+                              table: str) -> Optional[str]:
+    """Why this kind should not be scanned now, or None to scan it.
+
+    Two reasons, both one indexed row plus one catalog read -- against a scan
+    measured in MINUTES, so the check is free by comparison:
+
+      * the stored verdict still matches its token, so it is current;
+      * the last attempt was born stale and the backoff has not expired.
+    """
+    try:
+        row = await conn.fetchrow(
+            "SELECT agrees, change_token, "
+            "       EXTRACT(epoch FROM NOW() - computed_at) AS age_s "
+            "FROM type_agreement "
+            "WHERE space_id = $1 AND kind = $2 AND predicate_uri = $3",
+            space_id, kind, RDF_TYPE_URI)
+    except Exception:
+        return None                      # cannot tell -- scan rather than skip
+    if row is None:
+        return None
+    if row["agrees"] is None:
+        age = float(row["age_s"] or 0)
+        if age < BORN_STALE_BACKOFF_S:
+            return (f"cannot hold a verdict at this write rate; retried in "
+                    f"{int(BORN_STALE_BACKOFF_S - age)}s")
+        return None
+    token = await change_token(conn, table)
+    if token is not None and token == row["change_token"]:
+        return "verdict still current"
+    return None
+
+
+async def refresh_type_agreement(conn, space_id: str, force: bool = False) -> list:
     """Decide frame and edge type agreement for *space_id* and store it.
 
     For the MAINTENANCE JOB, not the query path. This is the durable half of
@@ -469,15 +513,30 @@ async def refresh_type_agreement(conn, space_id: str) -> list:
     property that changes only on write, so it is answered off to the side and
     read for free.
 
-    THE TOKEN IS TAKEN BEFORE THE SCAN, deliberately. If the table is written
-    while the scan runs, the stored token is the pre-scan one and no longer
-    matches, so every reader treats the verdict as unknown until the next
-    refresh re-derives it. Taking it afterwards would stamp a verdict computed
-    over older data with a token that says it is current — the one direction
-    that returns wrong rows.
+    THE TOKEN IS TAKEN BEFORE THE SCAN, deliberately. Taking it afterwards
+    would stamp a verdict computed over older data with a token saying it is
+    current — the one direction that returns wrong rows.
 
-    Returns one dict per kind for the caller to log. Never raises: a space that
-    cannot be measured keeps whatever verdict it had, which ages out by token.
+    WHICH MEANS A BUSY SPACE CANNOT HOLD ONE, and that is detected rather than
+    rediscovered every cycle. The token is read again AFTER the scan; if it
+    moved, the verdict was stale before it could be stored, so a row is written
+    with `agrees = NULL` and this space is left alone for
+    `BORN_STALE_BACKOFF_S`. Measured on production: the largest space's
+    `frame_slot` moves ~15 tuples/minute against a 192 s scan, so the row was
+    born unusable, every reader declined it, and the change gate — seeing that
+    same moved token — rescheduled the identical scan. 462 seconds of scanning
+    per hour, indefinitely, for nothing.
+
+    The backoff is stored rather than held in memory so it survives a restart
+    and an operator can see it: `SELECT * FROM type_agreement WHERE agrees IS
+    NULL` is exactly the list of spaces that cannot keep a verdict. It expires
+    on its own, so a space that goes quiet starts working again with no
+    intervention.
+
+    Skips a kind whose stored verdict still matches its token — that is the
+    common case for a static space and costs one catalog read.
+
+    Returns one dict per kind for the caller to log. Never raises.
     """
     import asyncpg
     out = []
@@ -485,6 +544,12 @@ async def refresh_type_agreement(conn, space_id: str) -> list:
         table = f"{space_id}_{suffix}"
         record = {"space_id": space_id, "kind": kind, "agrees": None}
         try:
+            if not force:
+                skip = await _refresh_not_needed(conn, space_id, kind, table)
+                if skip:
+                    record["skipped"] = skip
+                    out.append(record)
+                    continue
             token = await change_token(conn, table)
             if token is None:
                 record["skipped"] = "no such table"
@@ -539,6 +604,20 @@ async def refresh_type_agreement(conn, space_id: str) -> list:
                     except Exception:  # pragma: no cover - abort path
                         pass
             ms = int((_time.monotonic() - started) * 1000)
+            # Did the table move UNDER the scan? If so the verdict describes
+            # data that no longer exists and every reader would decline it, so
+            # it is stored as unknown and this space is left alone rather than
+            # rescanned next cycle to produce the same unusable row.
+            after = await change_token(conn, table)
+            if after is not None and after != token:
+                logger.info(
+                    "type agreement: %s %s BORN STALE -- the table moved during "
+                    "its own %d ms scan, so the verdict could never be used. "
+                    "Backing off for %ds; it needs the invariant maintained at "
+                    "write time, not a scan that cannot outrun the writes.",
+                    space_id, kind, ms, int(BORN_STALE_BACKOFF_S))
+                agrees, token = None, after
+                record["born_stale"] = True
             await conn.execute(
                 "INSERT INTO type_agreement (space_id, kind, predicate_uri, "
                 "  agrees, change_token, source_rows, computed_at, compute_ms) "

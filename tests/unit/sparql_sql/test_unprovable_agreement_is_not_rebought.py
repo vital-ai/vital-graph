@@ -8,9 +8,9 @@ budget, so it always times out. The row count of a space taking writes changes
 constantly, so every change re-derived the same unknown: `plan_decisions`
 carried `"type": null` on every single generation, each having paid the full
 budget to learn nothing, plus ~236 ms for the `count(*)` that invalidated it.
-Together, the largest single cost in SQL generation — a 512 ms median on EVERY
-query. Across both checks and all spaces, 11.4 hours of cumulative database time
-on the counts alone.
+Together, the largest single cost in SQL generation — 111 s of generation time
+in a 43-minute window. Across both checks and all spaces, 11.4 hours of
+cumulative database time on the counts alone.
 
 Believing an unknown is safe in the one direction that matters: unknown means DO
 NOT ABSORB, so a stale one costs an optimisation and can never produce a wrong
@@ -212,6 +212,8 @@ class TestTheRefreshRaisesBOTHFences:
                 return "pred-uuid"
 
             async def fetchrow(self, sql, *args):
+                if "FROM type_agreement" in sql:
+                    return None          # nothing stored yet: scan it
                 return {"churn": 1, "relfilenode": 2}
 
             async def execute(self, sql, *a):
@@ -263,3 +265,82 @@ class TestTheReadDoesNotPayPerQuery:
         assert await eta.frame_type_absorbable("sp", RDF_TYPE, conn) is None
         eta._NO_VERDICT["sp", "frame", RDF_TYPE] -= eta.NO_VERDICT_TTL_S + 1
         assert await eta.frame_type_absorbable("sp", RDF_TYPE, conn) is True
+
+
+class TestABusySpaceIsBackedOffNotRescanned:
+    """A verdict stamped with a token taken before its own scan is stale before
+    it can be stored, if the table moves during the scan.
+
+    Production: the largest space's `frame_slot` moves ~15 tuples/min against a
+    192 s scan, so the row was born unusable, every reader declined it, and the
+    change gate rescheduled the identical scan — 462 s of scanning per hour,
+    indefinitely, for nothing.
+    """
+
+    class _Conn:
+        """A table that moves while it is being scanned."""
+
+        def __init__(self, stored=None, moves=True):
+            self.stored = stored
+            self.moves = moves
+            self.churn = 1000
+            self.scans = 0
+            self.written = []
+
+        async def fetchrow(self, sql, *args):
+            if "FROM type_agreement" in sql:
+                return self.stored
+            return {"churn": self.churn, "relfilenode": 7}
+
+        async def fetchval(self, sql, *args, timeout=None):
+            if sql.startswith("SELECT count(*)"):
+                return 3_000_000
+            if sql.strip().startswith("SELECT term_uuid"):
+                return "pred"
+            if sql == "SHOW statement_timeout":
+                return "60s"
+            self.scans += 1
+            if self.moves:
+                self.churn += 48        # writes landed during the scan
+            return None                 # no counterexample: they agree
+
+        async def execute(self, sql, *a):
+            if sql.lstrip().upper().startswith("INSERT"):
+                self.written.append(a)
+            return None
+
+    @pytest.mark.asyncio
+    async def test_a_verdict_born_stale_is_stored_as_unknown(self):
+        conn = self._Conn()
+        out = await eta.refresh_type_agreement(conn, "sp")
+        assert conn.scans == 2, "both kinds should have been scanned once"
+        assert all(r.get("born_stale") for r in out), out
+        # agrees is the 4th INSERT parameter; NULL, not the true it computed.
+        assert all(a[3] is None for a in conn.written), conn.written
+
+    @pytest.mark.asyncio
+    async def test_the_backoff_stops_the_rescan(self):
+        stored = {"agrees": None, "change_token": "x", "age_s": 5.0}
+        conn = self._Conn(stored=stored)
+        out = await eta.refresh_type_agreement(conn, "sp")
+        assert conn.scans == 0, "a space known unable to hold a verdict was rescanned"
+        assert all("cannot hold a verdict" in r["skipped"] for r in out), out
+
+    @pytest.mark.asyncio
+    async def test_the_backoff_expires_so_a_quietened_space_recovers(self):
+        stored = {"agrees": None, "change_token": "x",
+                  "age_s": eta.BORN_STALE_BACKOFF_S + 1}
+        conn = self._Conn(moves=False)          # it has gone quiet
+        conn.stored = stored
+        out = await eta.refresh_type_agreement(conn, "sp")
+        assert conn.scans == 2
+        assert all(r["agrees"] is True for r in out), out
+
+    @pytest.mark.asyncio
+    async def test_a_current_verdict_is_not_rescanned(self):
+        """The static-space case: one catalog read, no scan."""
+        conn = self._Conn(moves=False)
+        conn.stored = {"agrees": True, "change_token": "1000:7", "age_s": 9e9}
+        out = await eta.refresh_type_agreement(conn, "sp")
+        assert conn.scans == 0
+        assert all(r["skipped"] == "verdict still current" for r in out), out

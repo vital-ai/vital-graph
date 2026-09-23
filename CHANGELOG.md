@@ -28,16 +28,17 @@ Server-side only; the 0.0.41 client already understands both statuses used here.
   which also grants it to the application role; a database without it keeps the
   previous behaviour exactly.
 
-  **The refresh is not on the automatic maintenance cycle**, and that is a
-  measurement rather than a default. Run every cycle on a production database
-  it cost 462 seconds of scanning per hour, and roughly 420 s of that bought
-  nothing: the verdict is stamped with a change token taken before its own
-  scan, so on a space taking writes it is stale before it is stored, declined
-  by every reader, and rescheduled immediately. The two spaces whose verdicts
-  were usable carried 0.3% of the queries. It is wired to the explicit
-  maintenance trigger instead, so an operator can obtain a verdict for a space
-  that can hold one. Making it work on a busy space needs the invariant
-  maintained at write time rather than inferred afterwards.
+  **The refresh gates itself**, which it has to: the verdict carries a change
+  token taken before its own scan, so on a space written to during that scan it
+  is stale before it can be stored. Ungated on a production database that cost
+  462 seconds of scanning per hour, of which roughly 420 s bought nothing — the
+  row was born unusable, every reader declined it, and the gate rescheduled the
+  same scan. A space that proves this is now recorded with a NULL verdict and
+  left alone for an hour; one whose verdict still matches its token is skipped
+  for a catalog read. The backoff expires, so a space that goes quiet recovers
+  without intervention. Making it work on a continuously written space needs
+  the invariant maintained at write time rather than inferred by a scan that
+  cannot outrun the writes.
 
 ### Fixed
 
@@ -47,9 +48,10 @@ Server-side only; the 0.0.41 client already understands both statuses used here.
   check needs *two minutes*, so it always timed out — and because the row count
   of a space taking writes changes constantly, the same failure was recomputed
   for almost every query, behind a `count(*)` over millions of rows that cost
-  ~236 ms by itself. It was the largest single cost in generation: a 512 ms
-  median on **every** query, and 11.4 hours of cumulative database time across
-  all spaces. An unreachable verdict is now remembered for 15 minutes, skipping
+  ~236 ms by itself — 11.4 hours of cumulative database time across all spaces,
+  and 111 seconds of generation time in a 43-minute window. (It was cheap on a
+  typical query — 1.8 ms median — and occasionally very expensive, up to
+  1.9 s.) An unreachable verdict is now remembered for 15 minutes, skipping
   both the check and the count. Unknown means "do not absorb", so this can only
   cost an optimisation, never change a result.
 - **One KGQuery measures its full-text leaf once, not twice.** The page and the
