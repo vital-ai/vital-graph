@@ -509,11 +509,16 @@ async def fast_entity_prop_count(
         return None
 
     parts: List[str] = []
+    #: Placeholder of the property lane the FIRST filter uses, so the outer
+    #: scan can be pinned to it. See the note on `base` below.
+    pin_pu = None
     for prop, op, value in terms:
         dt = _DATATYPES.get(prop)
         if dt is None:
             return _decline(f"no datatype known for filter property {prop}")
         pu = p(_u(prop))
+        if pin_pu is None:
+            pin_pu = pu
         if op in ("eq", "has"):
             parts.append(f"SELECT entity_uuid FROM {t} WHERE context_uuid = $1 "
                          f"AND property_uuid = {pu} AND value_all @> ARRAY[{p(str(value))}]::text[]")
@@ -541,6 +546,24 @@ async def fast_entity_prop_count(
                 f"WHERE s.context_uuid = $1 AND s.entity_type_uuid = $2")
         if parts:
             base += " AND s.entity_uuid IN (" + " INTERSECT ".join(parts) + ")"
+            if pin_pu is not None:
+                # PIN THE OUTER SCAN TO ONE LANE. Without this, `s` matches
+                # EVERY property row of every qualifying entity -- five or six
+                # lanes each -- and the aggregate de-duplicates them afterwards,
+                # while the PAGE query reads only the lane it sorts on.
+                #
+                # Measured on production, a 30-day window of one entity type:
+                # 81,135 rows and 83,800 buffers against 16,227 and 16,441, the
+                # same answer (16,227) from both, 64 ms against 19 ms warm. The
+                # ROW WORK is what governs the cold tail, which showed as a
+                # 1,585 ms mean and a 15 s maximum in pg_stat_statements.
+                #
+                # Equivalent, not an approximation: the subquery already
+                # restricts to entities holding a row in THIS lane, and
+                # (entity_uuid, context_uuid, property_uuid) is the primary key,
+                # so exactly one such row exists per entity. The DISTINCT is
+                # then collapsing nothing.
+                base += f" AND s.property_uuid = {pin_pu}"
     else:
         base = (f"SELECT count(*) FROM (" + " INTERSECT ".join(parts) + ") f")
 

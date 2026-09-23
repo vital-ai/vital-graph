@@ -42,6 +42,22 @@ Server-side only; the 0.0.41 client already understands both statuses used here.
 
 ### Fixed
 
+- **An entity listing that asks for entity graphs no longer gives up its fast
+  path.** `include_entity_graph=true` took the page of URIs from SPARQL instead
+  of `entity_prop_sort`, even though that path needs exactly the ordered page of
+  URIs the fast path returns and hydrates the graphs itself. Measured on a
+  25-entity page of one type sorted by creation time: the query looped once per
+  entity of that type in the space — 84,941 times — resolving two term rows
+  each, to return 25 rows. 27,935 ms and 1,430,060 buffers, against 71 ms for
+  the same page through the fast path. Declining still falls back to the old
+  query, so searched listings are unaffected.
+- **A filtered entity count reads one property lane, not all of them.** The
+  count matched every property row of every qualifying entity — five or six
+  lanes each — and de-duplicated afterwards, while the page it accompanies read
+  only the lane it sorts on. Pinning it to the lane the filter already
+  restricts to is equivalent, because that subquery guarantees the row and the
+  table's primary key makes it unique: measured, 81,135 rows and 83,800 buffers
+  against 16,227 and 16,441, same answer both ways.
 - **SQL generation stops re-buying a type-agreement verdict it cannot reach.**
   Whether `rdf:type` agrees with the derived type column is checked under a
   250 ms budget and cached against the table's row count. On a large space the

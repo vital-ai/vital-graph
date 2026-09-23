@@ -275,28 +275,60 @@ class KGEntityListProcessor:
                                         sort_by=None, sort_order="asc",
                                         prop_filters: str = "",
                                         filters: Optional[dict] = None) -> ListEntitiesResult:
-        """Get entity URIs, then fetch full entity graphs in parallel."""
+        """Get entity URIs, then fetch full entity graphs in one query.
+
+        THE PAGE OF URIS COMES FROM THE SAME FAST PATH THE NO-GRAPH LISTING
+        USES. It did not, and that was an oversight rather than a constraint:
+        this path needs exactly what `fast_entity_page` returns — an ordered
+        page of entity URIs — and then hydrates them itself. Asking for the
+        graphs was silently also asking for the URI page to be resolved in
+        SPARQL.
+
+        Measured on production 2026-09-23, a 25-entity page of one type sorted
+        by creation time, `include_entity_graph=true`:
+
+            gen 14 ms, exec 27,935 ms, 1,430,060 buffers for 25 rows
+
+        The plan looped **84,941 times** — once per entity of that type in the
+        space — resolving two `term` rows each, to sort the whole set and take
+        25. `plan_shape` flagged it `disproportionate`, ratio 3,397 loops per
+        returned row. The same page through the fast path is 71 ms, and the
+        graph hydration for 25 entities measures 32-62 ms per entity through
+        the single-URI route, so the parts were never the problem.
+        """
         from .kgentity_get_impl import KGEntityGetProcessor
 
-        # Build URI query (with subclass UNIONs + pagination)
-        uri_sparql = self._build_entity_uris_query(
-            graph_id, page_size, offset, entity_type_uri, search,
-            sort_by=sort_by, sort_order=sort_order,
-            prop_filters=prop_filters,
-        )
         count_sparql = self._build_count_query(graph_id, entity_type_uri, search, sort_by=sort_by, prop_filters=prop_filters)
 
-        # Run URI + count concurrently (count via cache → fast SQL → SPARQL)
-        uri_task = asyncio.ensure_future(
-            backend_adapter.execute_sparql_query(space_id, uri_sparql))
         count_task = asyncio.ensure_future(self._resolve_total_count(
             space_id, graph_id, backend_adapter, count_sparql,
             entity_type_uri, search, prop_filters, sort_by, filters=filters))
-        uri_result, total_count = await asyncio.gather(uri_task, count_task)
 
-        # Parse URIs
-        uri_bindings = _extract_bindings(uri_result)
-        entity_uris = [b['entity']['value'] for b in uri_bindings if 'entity' in b]
+        fast_page_fn = getattr(backend_adapter, 'fast_entity_page', None)
+        entity_uris = None
+        if fast_page_fn is not None:
+            # Structured `filters`, never the generated `prop_filters` SPARQL —
+            # a fast path that re-parses the slow path's text is how the two
+            # come to disagree.
+            entity_uris = await fast_page_fn(
+                space_id, graph_id, page_size, offset,
+                entity_type_uri, search, prop_filters, sort_by,
+                filters=filters, sort_order=sort_order)
+
+        if entity_uris is None:
+            # Declined (search, an unregistered property, no prop-sort table).
+            # The SPARQL URI query is the fallback, as before.
+            uri_sparql = self._build_entity_uris_query(
+                graph_id, page_size, offset, entity_type_uri, search,
+                sort_by=sort_by, sort_order=sort_order,
+                prop_filters=prop_filters,
+            )
+            uri_result = await backend_adapter.execute_sparql_query(
+                space_id, uri_sparql)
+            uri_bindings = _extract_bindings(uri_result)
+            entity_uris = [b['entity']['value'] for b in uri_bindings if 'entity' in b]
+
+        total_count = await count_task
 
         if not entity_uris:
             return ListEntitiesResult(entities=[], total_count=total_count)
