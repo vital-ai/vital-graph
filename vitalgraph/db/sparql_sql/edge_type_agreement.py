@@ -103,11 +103,19 @@ _COUNT_MEMO: dict = {}
 UNKNOWN_TTL_S = 900.0
 _UNKNOWN: dict = {}
 
+#: How long "this space has no usable stored verdict" is believed without
+#: re-asking. Seconds, so a verdict written by an explicit refresh starts being
+#: used promptly, but a busy space stops paying a round trip per query to be
+#: told the same thing. See `_stored_verdict`.
+NO_VERDICT_TTL_S = float(_os.getenv("VG_TYPE_AGREEMENT_MISS_TTL_S", "30"))
+_NO_VERDICT: dict = {}
+
 
 def clear_cache() -> None:
     _CACHE.clear()
     _COUNT_MEMO.clear()
     _UNKNOWN.clear()
+    _NO_VERDICT.clear()
 
 
 #: Returned by `_stored_verdict` when the space has no `type_agreement` table,
@@ -153,6 +161,25 @@ async def _stored_verdict(conn, space_id: str, kind: str, predicate_uri: str):
     """
     import asyncpg
     suffix, _col = _SOURCES[kind]
+    # NO ROUND TRIP for the common answer.
+    #
+    # The SQL costs 0.11 ms server-side; the 20.9 ms this showed in production
+    # `timings_ms` is the round trip and the pool, not the query, so making the
+    # query faster barely moves it. What moves it is not asking.
+    #
+    # Only the NEGATIVE is cached, and only that direction is safe: "no usable
+    # verdict" means DO NOT ABSORB, so a stale negative costs an optimisation
+    # for a few seconds and can never produce a wrong row. A cached POSITIVE
+    # would be exactly the stale TRUE the change token exists to prevent, so a
+    # positive is re-validated on every query.
+    #
+    # This is now the common path by design: the refresh is off the automatic
+    # cycle, so most spaces have no usable verdict and this returns without
+    # touching the database at all.
+    ckey = (space_id, kind, predicate_uri)
+    miss = _NO_VERDICT.get(ckey)
+    if miss is not None and (_time.monotonic() - miss) < NO_VERDICT_TTL_S:
+        return None
     # ONE round trip, and the token is compared IN the query. Read separately
     # this cost two round trips on every query, and left a window in which the
     # verdict and the token it was checked against came from different moments.
@@ -161,11 +188,16 @@ async def _stored_verdict(conn, space_id: str, kind: str, predicate_uri: str):
     # do not absorb.
     try:
         agrees = await conn.fetchval(
+            # The stat functions are called on ONE oid rather than filtering
+            # `pg_stat_all_tables`, which is a view that evaluates every table
+            # in the database before the filter applies. Measured server-side
+            # on production: 0.31 ms for the view form, 0.11 ms for this one.
             "SELECT ta.agrees FROM type_agreement ta, LATERAL ("
-            "  SELECT s.n_tup_ins + s.n_tup_upd + s.n_tup_del AS churn,"
+            "  SELECT pg_stat_get_tuples_inserted(c.oid)"
+            "       + pg_stat_get_tuples_updated(c.oid)"
+            "       + pg_stat_get_tuples_deleted(c.oid) AS churn,"
             "         c.relfilenode"
-            "  FROM pg_stat_all_tables s JOIN pg_class c ON c.oid = s.relid"
-            "  WHERE s.relid = to_regclass($4)) t "
+            "  FROM pg_class c WHERE c.oid = to_regclass($4)) t "
             "WHERE ta.space_id = $1 AND ta.kind = $2 AND ta.predicate_uri = $3 "
             "  AND ta.agrees IS NOT NULL "
             "  AND ta.change_token = t.churn || ':' || t.relfilenode",
@@ -178,7 +210,11 @@ async def _stored_verdict(conn, space_id: str, kind: str, predicate_uri: str):
         logger.debug("type agreement: read failed for %s/%s: %s",
                      space_id, kind, exc)
         return None
-    return None if agrees is None else bool(agrees)
+    if agrees is None:
+        _NO_VERDICT[ckey] = _time.monotonic()
+        return None
+    _NO_VERDICT.pop(ckey, None)
+    return bool(agrees)
 
 
 def _unknown_is_fresh(key) -> bool:

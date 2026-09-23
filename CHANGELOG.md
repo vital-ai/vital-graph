@@ -28,6 +28,17 @@ Server-side only; the 0.0.41 client already understands both statuses used here.
   which also grants it to the application role; a database without it keeps the
   previous behaviour exactly.
 
+  **The refresh is not on the automatic maintenance cycle**, and that is a
+  measurement rather than a default. Run every cycle on a production database
+  it cost 462 seconds of scanning per hour, and roughly 420 s of that bought
+  nothing: the verdict is stamped with a change token taken before its own
+  scan, so on a space taking writes it is stale before it is stored, declined
+  by every reader, and rescheduled immediately. The two spaces whose verdicts
+  were usable carried 0.3% of the queries. It is wired to the explicit
+  maintenance trigger instead, so an operator can obtain a verdict for a space
+  that can hold one. Making it work on a busy space needs the invariant
+  maintained at write time rather than inferred afterwards.
+
 ### Fixed
 
 - **SQL generation stops re-buying a type-agreement verdict it cannot reach.**

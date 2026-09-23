@@ -632,12 +632,10 @@ class MaintenanceJob:
             if fanout_result:
                 summary["edge_fanout_refresh"] = fanout_result
 
-            # --- Type agreement: answer off the query path what it cannot ---
-            # 122 s to decide on a large space, against the 250 ms a query
-            # could spare. Deciding it here is what lets a query read it free.
-            agree_result = await self._run_type_agreement_refresh(list(stats.keys()))
-            if agree_result:
-                summary["type_agreement"] = agree_result
+            # --- Type agreement: NOT run automatically. See
+            # `_run_type_agreement_refresh` for the measurements that took it
+            # off the cycle; it stays available through `trigger_maintenance`
+            # for an operator who wants a verdict for a specific space.
 
             # --- Stats: ONE recompute, replacing integrity + prune + rebuild ---
             stats_result = await self._run_stats_recompute(list(stats.keys()))
@@ -1539,9 +1537,30 @@ class MaintenanceJob:
         it is worth: `issues/182` measured the edge type constraint at 6.8x of
         the reference CONSTRUCT's cost, and the frame one at 1.5x.
 
-        CHANGE-GATED on the same token the readers use, so a space whose tables
-        have not moved since its last verdict is skipped without a scan. That
-        makes the steady state free rather than merely affordable.
+        NOT ON THE AUTOMATIC CYCLE, and that is a measurement rather than a
+        preference. Run every cycle on production it cost **462 seconds of
+        scanning per hour** (the two largest spaces contributed frame scans of
+        192 s and 89 s and edge scans of 81 s and 59 s; the small ones the
+        rest), and about 420 s of that bought nothing at all:
+
+        the change token is captured BEFORE the scan, so on a space taking
+        writes the verdict is STALE BEFORE IT IS STORED. The largest space's
+        `frame_slot` moves ~15 tuples/minute and its scan takes 192 s, so
+        roughly 48 tuples land during it; the row is written already unusable,
+        the readers decline it, and the change gate — seeing the moved token —
+        schedules the same scan again next cycle. Measured over 30 minutes, the
+        only two spaces whose verdicts were usable were the two quiet ones, and
+        they carried 4 of 1,431 generations: **0.3% of the traffic**.
+
+        So it is wired to `trigger_maintenance` only. An operator who wants a
+        verdict for a quiet space can ask for one and will get it; nothing asks
+        for one on a space that cannot keep it.
+
+        Making this work on a busy space needs the invariant MAINTAINED rather
+        than inferred — a `type_agrees` flag set where `frame_type_uuid` is
+        derived, with a partial index, so the answer is exact and current by
+        construction. That is a write-path change and a backfill, and it buys
+        the general pipeline only: the FTS fast path never consults this.
         """
         if not self._pool:
             return None

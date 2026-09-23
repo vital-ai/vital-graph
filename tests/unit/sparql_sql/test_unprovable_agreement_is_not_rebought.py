@@ -228,3 +228,38 @@ class TestTheRefreshRaisesBOTHFences:
         """So PostgreSQL cancels first and says what it cancelled. A driver
         timeout arrives as a bare TimeoutError with no message at all."""
         assert eta.REFRESH_CLIENT_TIMEOUT_S > eta.REFRESH_TIMEOUT_MS / 1000.0
+
+
+class TestTheReadDoesNotPayPerQuery:
+    """`_stored_verdict`'s cost is the ROUND TRIP, not the SQL.
+
+    Measured server-side on production the query is 0.11 ms; it showed 20.9 ms
+    in `timings_ms`. So the saving is in not asking. Only the negative is
+    cached: "no usable verdict" means do not absorb, so a stale one costs an
+    optimisation for seconds. A cached POSITIVE would be the stale TRUE the
+    change token exists to prevent.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_miss_is_not_re_asked_every_query(self):
+        conn = _StoredConn(agrees=_MISSING)
+        for _ in range(5):
+            assert await eta.frame_type_absorbable("sp", RDF_TYPE, conn) is None
+        assert conn.reads == 1, f"asked the database {conn.reads} times for one miss"
+
+    @pytest.mark.asyncio
+    async def test_a_positive_is_revalidated_every_query(self):
+        """Never cached: this is the direction that returns wrong rows."""
+        conn = _StoredConn(agrees=True)
+        for _ in range(5):
+            assert await eta.frame_type_absorbable("sp", RDF_TYPE, conn) is True
+        assert conn.reads == 5
+
+    @pytest.mark.asyncio
+    async def test_a_written_verdict_is_picked_up_when_the_miss_expires(self):
+        conn = _StoredConn(agrees=_MISSING)
+        assert await eta.frame_type_absorbable("sp", RDF_TYPE, conn) is None
+        conn.agrees = True                      # an explicit refresh ran
+        assert await eta.frame_type_absorbable("sp", RDF_TYPE, conn) is None
+        eta._NO_VERDICT["sp", "frame", RDF_TYPE] -= eta.NO_VERDICT_TTL_S + 1
+        assert await eta.frame_type_absorbable("sp", RDF_TYPE, conn) is True
