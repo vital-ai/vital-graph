@@ -102,17 +102,87 @@ writes on the same instance — the archive copy's entity-graph reads were a
 large fraction of the load that preceded the first incident. A read replica
 would remove that interference entirely, for migrations and for analytics.
 
+## The model this should move to
+
+Today there is ONE asyncpg pool (`self.connection_pool`), shared by every
+caller, and NO read/write distinction at acquire time — the single `readonly`
+in the tree is a transaction property in `bulk_export`, not a pool. Everything
+below is a description of what does not exist yet.
+
+Three classes of work reach PostgreSQL, and they want different guarantees:
+
+    QUERY      read-only, request-driven, latency-sensitive. The thing users
+               notice. Must never be starved.
+    MUTATION   request-driven writes. Bursty, holds locks, triggers derived-
+               table maintenance.
+    INTERNAL   background: ANALYZE, VACUUM, backfill, segmentation, auto-sync.
+               Can always be deferred. Nothing waits on it interactively.
+
+**Each class gets its own pool.** A class that misbehaves then exhausts only its
+own share. That is precisely what was missing on 2026-09-24: ANALYZE (INTERNAL)
+consumed the connections QUERY needed, and a bulk copy (MUTATION) did it again
+an hour later. With separate pools neither incident reaches a reader.
+
+**Requests stay async end to end.** A request awaiting a connection must never
+occupy a worker; N concurrent requests is a number the service chooses, not a
+number the pool imposes by blocking.
+
+**Queue in the application, not in PostgreSQL.** This is the point of the whole
+exercise. Work queued in the app is cheap, observable, cancellable and
+sheddable. Work queued inside PostgreSQL holds a connection, may hold locks,
+and is invisible until someone samples `pg_stat_activity`. Admission control
+belongs at the edge — bound the in-flight count per class and reject or defer
+beyond it — so saturation shows up as a 503 on one class rather than as a
+database-wide stall.
+
+**Reads get a reserved floor that the other classes cannot borrow.** A shared
+pool with priorities degrades to starvation under sustained write load, because
+writes hold connections longer. The floor has to be a partition, not a hint.
+
+**INTERNAL skips rather than queues.** Already true of ANALYZE after
+`issues/230`; it should be the rule for every background job. A deferred
+ANALYZE costs stale statistics. A queued one costs a connection.
+
+### Two things that make this harder than it looks
+
+**Sizing is GLOBAL, not per task.** The database sees the sum across every task
+and every class. Three tasks with 8+4+2 each is 42 connections against a box
+whose useful concurrency is ~8-10 — partitioning by class fixes isolation and
+does nothing for total load unless the per-task numbers come down as the number
+of classes goes up. Per-task pools multiply; the limit does not.
+
+**Classification must be EXPLICIT, never inferred from the HTTP verb.** A
+SPARQL update arrives as a POST, and so does a read-only SPARQL query
+(`/api/graphs/sparql/query` accepts POST). Routing on method would put updates
+in the QUERY pool and destroy the guarantee it exists to provide. The route, or
+the parsed operation, has to say.
+
+**And a request can become INTERNAL work after it returns.** There are 56
+`create_task`/`to_thread` sites across `endpoint/`, `vectorization/` and
+`document/` — auto-sync, segmentation, analyze. Each is a request spawning
+background database work, and today every one of them lands in the request
+pool. That is the leak that turned a copy into an outage: the write finished,
+returned 200, and its consequences kept running on connections readers needed.
+Those spawns must take an INTERNAL connection, or the separation is cosmetic.
+
 ## Order of work, most value first
 
-1. **A dedicated maintenance pool** of 2-3 connections for ANALYZE, VACUUM and
-   backfill. Smallest change, directly prevents the outage mode, and does not
-   require agreeing on pool sizing first.
+1. **Split INTERNAL off first** — a dedicated pool of 2-3 connections for
+   ANALYZE, VACUUM, backfill, segmentation and auto-sync, and route the 56
+   `create_task`/`to_thread` spawn sites at it. Smallest change, prevents the
+   outage mode outright, and does not require agreeing on sizing or on how
+   QUERY and MUTATION should divide what is left.
 2. **Bound the database fan-out** — a semaphore per request, sized well under
    the pool, on the `gather` sites above.
-3. **Reduce `max_pool_size` to 10-15 and measure.** Expected to be
-   counter-intuitive: smaller pools usually raise throughput under contention.
-   Must be measured, not assumed.
-4. **A read replica** for migrations and analytics.
+3. **Then split QUERY from MUTATION**, with a reserved floor for QUERY that
+   MUTATION cannot borrow, and explicit classification per route rather than by
+   HTTP verb.
+4. **Reduce the GLOBAL connection budget to ~10-15 across all tasks and classes,
+   and measure.** Expected to be counter-intuitive: smaller pools usually raise
+   throughput under contention. Must be measured, not assumed — and it is the
+   sum that matters, not the per-pool number.
+5. **A read replica** for migrations and analytics, which also gives QUERY
+   somewhere to go that MUTATION cannot reach at all.
 
 ## Not established
 
@@ -127,6 +197,13 @@ would remove that interference entirely, for migrations and for analytics.
   * Whether `command_timeout=60` on the pool and `statement_timeout=60` on the
     server interact badly — two 60s limits on the same statement, from
     different layers.
+  * How many of the 56 background spawn sites actually touch the database.
+    They were counted, not read. The number bounds the work of routing them
+    at an INTERNAL pool; it does not describe it.
+  * Whether a reserved QUERY floor is achievable with separate asyncpg pools
+    or needs a shared limiter above them. Separate pools give isolation but
+    partition the budget statically; a limiter can lend capacity back when a
+    class is idle. Which is right here is not established.
 
 ## Reproduce
 
