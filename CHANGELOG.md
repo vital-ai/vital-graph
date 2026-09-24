@@ -2,9 +2,39 @@
 
 Notable changes per release. Dates are the release date, not the first commit.
 
-## Unreleased
+## 0.0.42 — 2026-09-24
 
-Server-side only; the 0.0.41 client already understands both statuses used here.
+21 commits since 0.0.41 (2026-09-22). THE CLIENT CHANGES in this release, which
+0.0.41 did not: a paginated response can now say it is SHORT of what was asked
+for, and the entity create call can be told to keep the timestamps it was given.
+Both are additive — an older client against a newer server, or the reverse,
+behaves exactly as before.
+
+### Added — client
+
+- **`incomplete` and `missing_uris` on paginated responses**, forwarded by the
+  Python client and typed in the TypeScript one. `missing_uris` names what was
+  requested and did not come back; `incomplete` says whether the shortfall was a
+  FAILURE and therefore retryable — three-valued, where `None` means the route
+  cannot say and is NOT the same as `False`, exactly as `has_more` already
+  works. A caller reading `None` as "complete" reintroduces the defect these
+  exist to expose.
+
+  Both had to be added in two places to reach anyone:
+  `extract_pagination_from_json_quads` WHITELISTS what it forwards, and the
+  response models are pydantic with the default `extra='ignore'`, so a field the
+  server grows is discarded twice over until each is told about it.
+
+- **`preserve_object_properties` on `create_kgentities`** (and on
+  `POST /api/graphs/kgentities`). Default `False`, which is what every existing
+  caller wants — a client minting a NEW entity should not be choosing its
+  creation date. Set it when COPYING entities between spaces: without it the
+  server stamps `objectCreationTime = now` on every entity, so an archive copy
+  dates the whole archive to the day it ran, and if the originals are then
+  deleted the real dates exist nowhere. A property the request omits is stamped
+  as before, so enabling it never leaves a timestamp unset. Omitted from the
+  query string entirely when false, so requests to a server that predates it are
+  byte-identical.
 
 ### Changed
 
@@ -41,6 +71,36 @@ Server-side only; the 0.0.41 client already understands both statuses used here.
   cannot outrun the writes.
 
 ### Fixed
+
+- **A saturated connection pool made an entity-graph read return FEWER entities
+  with HTTP 200 and no error** (`issues/229`). Four layers each turned a failure
+  into an absence: `execute_sparql_query` reports failure in its return value,
+  the batched retriever read `bindings` and ignored `success` — the same defect
+  `issues/215` fixed in the other reader — so a killed query became an empty
+  page; `{}` rather than `None` meant the per-entity fallback never ran; and two
+  bare `if objs:` loops dropped the rest without a word. Measured: a 500-entity
+  bulk copy reported complete success and 387 arrived, with 113 `pool acquire
+  timed out` failures matching the 113 missing exactly. The retriever now
+  raises, the skips are recorded, and the response says so. Whether a
+  30-connection pool is simply too small for this route is not settled.
+
+- **FTS rows now go with a bulk entity-graph delete** (`issues/217`, bulk path).
+  They are keyed on the SUBJECT — an entity's frames and slots — while the
+  delete endpoint hands auto-sync the ENTITY uris, which carry no FTS row, so
+  every slot row outlived its data and still matched searches. Deleting 1,387
+  entities left a space at 0 quads and 5,409 orphaned rows, repairable only by
+  dropping the index. Cleanup now runs in the same transaction as the quad
+  delete, across every index in the space. The vector, geo and fuzzy
+  equivalents remain open.
+
+- **A `type_agreement` probe no longer aborts its caller's transaction.** The
+  probe treats a missing table as "not migrated", which is supported — but a
+  failed statement aborts the transaction block server-side and catching the
+  exception does not undo that. Harmless while every query ran on its own
+  autocommit connection; once `execute_sparql_query` accepted a CALLER'S
+  connection the swallowed error poisoned everything after it, including the
+  caller's own read, which came back empty and read as an answer. Now inside a
+  savepoint.
 
 - **A batched entity-graph read stops fetching a predicate it discards.**
   `URIProp` restates the subject URI and the deserialiser drops it unread, so
