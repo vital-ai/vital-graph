@@ -165,6 +165,55 @@ pool. That is the leak that turned a copy into an outage: the write finished,
 returned 200, and its consequences kept running on connections readers needed.
 Those spawns must take an INTERNAL connection, or the separation is cosmetic.
 
+## Decided: separate pools, and the measurement that would overturn it
+
+SEPARATE POOLS PER CLASS, not a shared limiter. Decided 2026-09-24 on
+manageability: a pool per class is a static, legible thing — its size is a
+number in config, its exhaustion is attributable to one class, and it cannot
+lend a reader's connection to a bulk writer by accident. A limiter that lends
+capacity back is strictly more capable and strictly harder to reason about
+under exactly the conditions where reasoning matters.
+
+The cost of that choice is real and known: the budget is partitioned
+statically, so QUERY can wait while MUTATION and INTERNAL sit idle. That is
+the trade being accepted, not overlooked.
+
+**The decision is revisitable, and the metric that would revisit it is one
+number**: how much of QUERY's wait time happened while the other classes had
+free connections. If QUERY only ever waits when the whole database is busy, a
+limiter would have had nothing to lend and static partitioning costs nothing.
+If QUERY waits while INTERNAL sits on idle connections, the partition is the
+problem and the limiter earns its complexity.
+
+So the logging has to capture the classes TOGETHER, at the same instant.
+Per-pool metrics gathered independently cannot answer it — knowing QUERY waited
+12s and, separately, that INTERNAL averaged 30% utilisation, says nothing about
+whether they overlapped.
+
+### What to log
+
+On every acquire that WAITS (not on every acquire — the fast path must stay
+free), one record:
+
+    ts, class, waited_ms, this_pool_in_use, this_pool_size,
+    other_classes_idle   -- sum of (size - in_use) across the OTHER pools,
+                         -- sampled at the moment the wait began
+
+and periodically, one sample of all pools at once for a utilisation baseline.
+
+`other_classes_idle` is the whole point. It is the capacity a limiter could
+have lent, and it is only meaningful if read at the instant of the wait.
+
+### What the analysis answers
+
+    share of QUERY wait-time with other_classes_idle > 0     -> limiter upside
+    p99 QUERY waited_ms                                      -> is it hurting
+    count of waits with other_classes_idle == 0              -> genuinely full
+
+Near-zero upside means keep the pools and close this. A large share means the
+sizes are wrong first — retune them, and only then consider the limiter, since
+a badly partitioned budget looks exactly like a missing limiter.
+
 ## Order of work, most value first
 
 1. **Split INTERNAL off first** — a dedicated pool of 2-3 connections for
@@ -176,7 +225,9 @@ Those spawns must take an INTERNAL connection, or the separation is cosmetic.
    the pool, on the `gather` sites above.
 3. **Then split QUERY from MUTATION**, with a reserved floor for QUERY that
    MUTATION cannot borrow, and explicit classification per route rather than by
-   HTTP verb.
+   HTTP verb. Separate pools, per the decision above — and land the wait
+   logging WITH them, not after, or the data needed to revisit the decision is
+   never collected.
 4. **Reduce the GLOBAL connection budget to ~10-15 across all tasks and classes,
    and measure.** Expected to be counter-intuitive: smaller pools usually raise
    throughput under contention. Must be measured, not assumed — and it is the
@@ -200,10 +251,6 @@ Those spawns must take an INTERNAL connection, or the separation is cosmetic.
   * How many of the 56 background spawn sites actually touch the database.
     They were counted, not read. The number bounds the work of routing them
     at an INTERNAL pool; it does not describe it.
-  * Whether a reserved QUERY floor is achievable with separate asyncpg pools
-    or needs a shared limiter above them. Separate pools give isolation but
-    partition the budget statically; a limiter can lend capacity back when a
-    class is idle. Which is right here is not established.
 
 ## Reproduce
 
