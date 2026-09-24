@@ -18,7 +18,7 @@ import pytest_asyncio
 from ai_haley_kg_domain.model.KGEntity import KGEntity
 from ai_haley_kg_domain.model.Edge_hasKGRelation import Edge_hasKGRelation
 
-from vitalgraph.model.kgqueries_model import KGQueryCriteria
+from vitalgraph.model.kgqueries_model import KGQueryCriteria, TotalCountMode
 from vitalgraph.model.kgentities_model import EntityQueryCriteria, FrameCriteria
 
 pytestmark = [
@@ -157,9 +157,16 @@ class TestKGQueryEntity:
             query_type="entity",
             source_entity_uris=[str(self.ent_x.URI)],
         )
+        # ASK FOR THE COUNT, or it is not computed. `include_total_count`
+        # defaults to NO because the count is O(matches) and cannot be paged —
+        # 325ms for a page against 41.7s for an uncapped count on a
+        # 100,000-entity space, which the model documents as the caller's
+        # trade-off to make. Asserting on `total_count` without requesting it
+        # was asserting on a field the server was told not to fill in.
         resp = await vg_client.kgqueries.query_connections(
             space_id=test_space, graph_id=test_graph,
-            criteria=criteria, page_size=10
+            criteria=criteria, page_size=10,
+            include_total_count=TotalCountMode.YES,
         )
         assert resp.query_type == "entity"
         assert resp.total_count >= 1
@@ -190,7 +197,8 @@ class TestKGQueryEntity:
         )
         resp = await vg_client.kgqueries.query_connections(
             space_id=test_space, graph_id=test_graph,
-            criteria=criteria, page_size=10
+            criteria=criteria, page_size=10,
+            include_total_count=TotalCountMode.YES,
         )
         assert resp.query_type == "entity"
         # Should find our test entities (all are KGEntity type)

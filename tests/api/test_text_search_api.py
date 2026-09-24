@@ -22,8 +22,20 @@ pytestmark = [
 FTS_INDEX = f"fts_test_{uuid.uuid4().hex[:8]}"
 FTS_INDEX_MULTI = f"fts_ml_{uuid.uuid4().hex[:8]}"
 FUZZY_INDEX = f"fuzzy_test_{uuid.uuid4().hex[:8]}"
-PROP_URI = "http://schema.org/name"
-PROP_URI_2 = "http://schema.org/description"
+# THE PROPERTIES THE TEST ENTITIES ACTUALLY CARRY.
+#
+# These were `http://schema.org/name` and `.../description`, which the entities
+# built below do not have — `KGEntity.name` serialises to `vital-core#hasName`
+# and `kGraphDescription` to `haley-ai-kg#hasKGraphDescription`. The mapping
+# therefore selected no properties, `build_search_text` returned empty, and
+# populate reported "5 subjects, 0 stored, 5 skipped".
+#
+# It passed until 2026-09-21 because FTS indexing IGNORED the mapping and
+# indexed every literal property, so a mapping that matched nothing still
+# produced rows. `issues/217` made the mapping authoritative; these tests were
+# asserting against the bug rather than the behaviour.
+PROP_URI = "http://vital.ai/ontology/vital-core#hasName"
+PROP_URI_2 = "http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription"
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")

@@ -254,6 +254,33 @@ async def wiki_env(vg_client, test_space, test_graph):
         print(f"[wiki_env]   {filename}: {seg_resp.count} segments")
     print(f"[wiki_env] total segments: {total_segs}")
 
+    # ── 7b. Populate the FTS index from the segments ───────────────────
+    #
+    # NOT automatic, and the vector half above is why it looks as though it
+    # should be. The segmentation worker vectorises inline, so vectors appear
+    # without asking; FTS rows do not, because nothing on that path indexes
+    # them. The text-search suite populates explicitly for the same reason.
+    #
+    # Without this the FTS index stays empty and `test_query_with_text_search`
+    # searches nothing and finds nothing — a fixture gap that reads as a search
+    # defect.
+    await vg_client.fts_indexes.populate(
+        space_id=test_space,
+        index_name=INDEX_NAME,
+        graph_uri=test_graph,
+        mapping_type="kgdocument_segment",
+    )
+    fts_rows = 0
+    for attempt in range(30):
+        await asyncio.sleep(1.0)
+        fts_stats = await vg_client.fts_indexes.get_stats(test_space, INDEX_NAME)
+        fts_rows = fts_stats.row_count
+        if fts_rows >= 1:
+            print(f"[wiki_env] ✓ FTS populated: {fts_rows} rows after ~{attempt}s")
+            break
+    else:
+        print(f"[wiki_env] ✗ FTS index still empty after 30s ({fts_rows} rows)")
+
     # ── 8. Wait for inline vectorization (done by segmentation worker) ─
     # The segmentation worker vectorizes segments inline via auto_sync,
     # so no explicit reindex is needed.  Just poll until vectors appear.
