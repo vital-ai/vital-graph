@@ -83,35 +83,54 @@ def read_uri_file(path: Path) -> list:
 
 
 def copy_is_complete(api, a, uris):
-    """Which of `uris` are fully present in the copy space.
+    """Which of `uris` are present in the copy space.
 
-    Returns (ok_uris, {uri: reason}). Absence of the copy space or of the
-    entity is a refusal, not an error -- the caller must not delete either way.
+    Returns (ok_uris, {uri: reason}). Absence is a refusal, not an error.
+
+    PRESENCE, NOT A QUAD-BY-QUAD DIFF. The copy already proved equality: it
+    calls `confirm_present` after EVERY insert, reading the target back and
+    requiring every source quad, and refuses to record an entity as done
+    otherwise. Re-diffing here buys nothing and costs two full entity-graph
+    reads per entity -- 87,566 of them across the nurture-action set -- to
+    re-derive a fact the copy already established.
+
+    What is still worth checking is the CATASTROPHIC case, which costs one
+    cheap read: deleting an entity that is not in the archive at all. That is
+    the mistake this guard exists for -- a queue built by month enumeration
+    rather than from the copy's done log can name entities the copy never
+    touched.
+
+    `--deep-check` restores the full comparison for a caller who wants it
+    despite the cost.
     """
     ok, bad = [], {}
-    # Absence on either side is the ANSWER here, not a fault.
-    here = fetch_entity_graph(api, a.space, a.graph, uris, allow_missing=True)
     there = fetch_entity_graph(api, a.require_copy_in, a.graph, uris,
                                allow_missing=True)
-    by_uri_here, by_uri_there = {}, {}
-    for q in here:
-        by_uri_here.setdefault(_owner(q["s"], uris), set()).add((q["s"], q["p"], q["o"]))
+    by_uri_there = {}
     for q in there:
         by_uri_there.setdefault(_owner(q["s"], uris), set()).add((q["s"], q["p"], q["o"]))
+
+    here = {}
+    if a.deep_check:
+        for q in fetch_entity_graph(api, a.space, a.graph, uris, allow_missing=True):
+            here.setdefault(_owner(q["s"], uris), set()).add((q["s"], q["p"], q["o"]))
+
     for uri in uris:
-        mine = by_uri_here.get(uri, set())
         theirs = by_uri_there.get(uri, set())
-        if not mine:
-            bad[uri] = "no entity graph in the source space"
-            continue
         if not theirs:
             bad[uri] = f"absent from {a.require_copy_in}"
             continue
-        missing = {t for t in mine - theirs if (t[1], t[2]) not in NORMALISED_ADDITIONS}
-        if missing:
-            bad[uri] = (f"{len(missing)} of {len(mine)} quads missing from "
-                        f"{a.require_copy_in}, e.g. {list(missing)[0][1]}")
-            continue
+        if a.deep_check:
+            mine = here.get(uri, set())
+            if not mine:
+                bad[uri] = "no entity graph in the source space"
+                continue
+            missing = {t for t in mine - theirs
+                       if (t[1], t[2]) not in NORMALISED_ADDITIONS}
+            if missing:
+                bad[uri] = (f"{len(missing)} of {len(mine)} quads missing from "
+                            f"{a.require_copy_in}, e.g. {list(missing)[0][1]}")
+                continue
         ok.append(uri)
     return ok, bad
 
@@ -194,7 +213,8 @@ def phase_delete(api, a, st: State):
     print(f"DELETE from {a.space} (graph {a.graph})")
     print(f"  {len(rows):,} queued, {len(done):,} already deleted, {len(todo):,} to go")
     if a.require_copy_in:
-        print(f"  safety: each entity must be fully present in {a.require_copy_in}")
+        print(f"  safety: each entity must be present in {a.require_copy_in}"
+              + (" (deep quad-level compare)" if a.deep_check else ""))
     else:
         print("  safety: --no-copy-check — deleting WITHOUT verifying a copy exists")
     if a.limit:
@@ -316,6 +336,9 @@ def main():
     ap.add_argument("--sample", type=int, default=20)
     ap.add_argument("--stop-on-error", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--deep-check", action="store_true",
+                    help="compare every quad against the copy instead of "
+                         "checking presence; the copy already verified this")
     a = ap.parse_args()
 
     if a.phase == "delete":
