@@ -337,3 +337,9 @@ test_scripts_internal
 # the tree whenever anyone builds the sidecar locally.
 vitalgraph-jena-sidecar/dependency-reduced-pom.xml
 
+# Migration run state written by scripts/{archive,delete}_kg_entities.py.
+# These queues hold REAL entity URIs from whichever deployment they were run
+# against — tens of thousands of them, carrying identifiers that must not enter
+# the repository. They are run artefacts, never source.
+.archive_state/
+.delete_state/

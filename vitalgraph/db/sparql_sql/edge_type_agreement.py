@@ -190,21 +190,36 @@ async def _stored_verdict(conn, space_id: str, kind: str, predicate_uri: str):
     # "no verdict", "unsure" and "the table moved" are all absence, and all mean
     # do not absorb.
     try:
-        agrees = await conn.fetchval(
-            # The stat functions are called on ONE oid rather than filtering
-            # `pg_stat_all_tables`, which is a view that evaluates every table
-            # in the database before the filter applies. Measured server-side
-            # on production: 0.31 ms for the view form, 0.11 ms for this one.
-            "SELECT ta.agrees FROM type_agreement ta, LATERAL ("
-            "  SELECT pg_stat_get_tuples_inserted(c.oid)"
-            "       + pg_stat_get_tuples_updated(c.oid)"
-            "       + pg_stat_get_tuples_deleted(c.oid) AS churn,"
-            "         c.relfilenode"
-            "  FROM pg_class c WHERE c.oid = to_regclass($4)) t "
-            "WHERE ta.space_id = $1 AND ta.kind = $2 AND ta.predicate_uri = $3 "
-            "  AND ta.agrees IS NOT NULL "
-            "  AND ta.change_token = t.churn || ':' || t.relfilenode",
-            space_id, kind, predicate_uri, f"{space_id}_{suffix}")
+        # INSIDE A SAVEPOINT, because this probe is allowed to fail and the
+        # caller's transaction is not. A failed statement aborts the whole
+        # transaction block server-side; catching the exception in Python does
+        # not undo that. On the normal path every statement is its own
+        # transaction so the `UndefinedTableError` below was harmless — but
+        # `execute_sparql_query` now accepts a CALLER'S connection
+        # (`issues/175`), and there the swallowed failure poisoned everything
+        # the caller ran afterwards with "current transaction is aborted".
+        #
+        # Same shape as `issues/177`: a fallback that logged reassurance and
+        # then died, because the abort is server-side state, not an exception
+        # you can decline. Nested on an open transaction, asyncpg's
+        # `transaction()` is a SAVEPOINT, so only the probe rolls back.
+        async with conn.transaction():
+            agrees = await conn.fetchval(
+                # The stat functions are called on ONE oid rather than
+                # filtering `pg_stat_all_tables`, which is a view that
+                # evaluates every table in the database before the filter
+                # applies. Measured server-side on production: 0.31 ms for the
+                # view form, 0.11 ms for this one.
+                "SELECT ta.agrees FROM type_agreement ta, LATERAL ("
+                "  SELECT pg_stat_get_tuples_inserted(c.oid)"
+                "       + pg_stat_get_tuples_updated(c.oid)"
+                "       + pg_stat_get_tuples_deleted(c.oid) AS churn,"
+                "         c.relfilenode"
+                "  FROM pg_class c WHERE c.oid = to_regclass($4)) t "
+                "WHERE ta.space_id = $1 AND ta.kind = $2 AND ta.predicate_uri = $3 "
+                "  AND ta.agrees IS NOT NULL "
+                "  AND ta.change_token = t.churn || ':' || t.relfilenode",
+                space_id, kind, predicate_uri, f"{space_id}_{suffix}")
     except asyncpg.UndefinedTableError:
         return NOT_MIGRATED
     except Exception as exc:
