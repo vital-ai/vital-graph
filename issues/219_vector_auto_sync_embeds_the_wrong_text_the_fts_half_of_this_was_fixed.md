@@ -1,6 +1,19 @@
 # Vector Auto-Sync Embeds "Every Literal Property" Instead Of The Configured Mapping
 
-## Status: OPEN — found 2026-09-21 while fixing the FTS half (`issues/217`)
+## Status: FIXED 2026-09-24 — `_sync_vectors_for_subjects` now resolves the
+## index's mapping per subject and SKIPS what it does not cover, exactly as the
+## FTS half does. Found 2026-09-21 while fixing that half (`issues/217`).
+##
+## What it cost before the fix: copying nurture actions into an archive whose
+## only vector index is for DOCUMENT SEGMENTS wrote 291,089 embeddings for
+## subjects that index was never meant to hold — paid for at the provider — and
+## the write volume drove an autovacuum storm that took production query
+## latency from 0.22s to over 50s (`issues/230`). An out-of-scope subject is now
+## DELETED from the index rather than embedded, so the fix repairs what the
+## defect wrote instead of only stopping it.
+##
+## Regression tests: `tests/unit/test_vector_sync_honours_the_mapping.py`,
+## falsified against the unfixed call. geo and fuzzy are NOT audited.
 
 **Related:** `issues/217` (the same defect in the FTS path, FIXED — read it
 first; this is defect 1 of that issue, in the sibling subsystem)

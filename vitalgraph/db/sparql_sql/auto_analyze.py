@@ -135,19 +135,64 @@ async def maybe_analyze(
         f"{space_id}_rdf_stats",
         f"{space_id}_datatype",
     ]
+    # NON-BLOCKING EXCLUSION, AND SKIP RATHER THAN QUEUE (`issues/230`).
+    #
+    # ANALYZE takes a ShareUpdateExclusiveLock, which CONFLICTS WITH ITSELF, so
+    # concurrent ANALYZE on one table is strictly serial. The threshold above
+    # was the only guard this function had, and `_change_counts` was reset only
+    # when the ANALYZE COMPLETED -- so every writer in a burst read the same
+    # over-threshold count, every one started an ANALYZE, and they queued one at
+    # a time while each held a pooled connection.
+    #
+    # Measured in production: six `ANALYZE "{space}_term"` stacked on each
+    # other, the connection pool exhausted behind them, ordinary queries going
+    # from 0.22s to over 50s. Sampling `pg_locks` through it showed 1,599
+    # ungranted ShareUpdateExclusiveLock and nothing else.
+    #
+    # WAITING IS STRICTLY WORSE THAN NOT ANALYSING: the statistics a waiter
+    # would produce are the ones the holder is already producing.
+    #
+    # Same key as `ProcessLockManager`'s ('analyze', space_id), deliberately, so
+    # this and `_maybe_analyze_aux_tables` -- which already had this tier --
+    # exclude EACH OTHER rather than each holding a private lock.
+    from ...process.process_lock_manager import process_lock_key
+    lock_key = process_lock_key("analyze", space_id)
+    try:
+        got = await conn.fetchval("SELECT pg_try_advisory_lock($1)", lock_key)
+    except Exception as e:
+        # The guard's own failure must not block the write path.
+        logger.debug("auto_analyze(%s): lock probe failed: %s", space_id, e)
+        got = True
+    if not got:
+        logger.debug("auto_analyze(%s): skipped, another ANALYZE holds the lock",
+                     space_id)
+        return False
+
+    # RESET BEFORE, NOT AFTER. Leaving the counter over threshold for the whole
+    # run is what let the next caller through to queue behind this one.
+    _change_counts[space_id] = 0
+
     try:
         if pg_config:
             await asyncio.to_thread(_sync_analyze, tables, pg_config)
         else:
             for tbl in tables:
                 await conn.execute(f"ANALYZE {tbl}")
-        _change_counts[space_id] = 0
         _last_analyze_time[space_id] = time.monotonic()
         logger.debug("auto_analyze(%s): ANALYZE %d tables after %d row changes", space_id, len(tables), count)
         return True
     except Exception as e:
         logger.warning("auto_analyze(%s): ANALYZE failed: %s", space_id, e)
         return False
+    finally:
+        # ALWAYS, and on this connection. A session-scoped advisory lock left
+        # held on a pooled connection outlives the request and blocks every
+        # later ANALYZE for that space until the connection is recycled.
+        try:
+            await conn.fetchval("SELECT pg_advisory_unlock($1)", lock_key)
+        except Exception as e:
+            logger.warning("auto_analyze(%s): advisory unlock failed: %s",
+                           space_id, e)
 
 
 def reset_counter(space_id: str) -> None:

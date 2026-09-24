@@ -75,6 +75,7 @@ async def _sync_vectors_for_subjects(
     from vitalgraph.vectorization.search_text_builder import (
         build_search_text,
         fetch_literal_properties_batch,
+        resolve_search_mapping,
     )
     from vitalgraph.vectorization.registry import get_provider
 
@@ -112,6 +113,24 @@ async def _sync_vectors_for_subjects(
         conn, space_id, subject_uuids, context_uuid,
     )
 
+    # WHAT EACH SUBJECT IS, so the index's mapping can be resolved for it.
+    #
+    # `issues/219`, and the same two defects `issues/217` fixed for FTS —
+    # `build_search_text(props, None)` means "every literal property", and
+    # nothing checked whether the subject was in the index's SCOPE, so every
+    # changed subject was embedded into EVERY vector index in the space.
+    #
+    # WORSE HERE THAN FOR FTS, because an embedding is opaque: a wrong one
+    # reads as a mediocre model rather than a bug, and repairing it costs a
+    # provider call per row. Copying 43,783 nurture actions into an archive
+    # whose only vector index is for DOCUMENT SEGMENTS put 291,089 embeddings
+    # into it before anyone noticed — paid for, and for subjects the index was
+    # never meant to hold. The write volume then drove an autovacuum storm that
+    # took production query latency from 0.22s to 50s+.
+    #
+    # NO MAPPING NOW MEANS SKIP, exactly as on the FTS path.
+    scope = await _subject_scopes(conn, space_id, subject_uuids, context_uuid)
+
     # Process each index
     for row in rows:
         idx_name = row["index_name"]
@@ -127,11 +146,26 @@ async def _sync_vectors_for_subjects(
         to_delete: List[uuid.UUID] = []
 
         for subj_uuid in subject_uuids:
+            # str() on BOTH sides — asyncpg returns uuid.UUID keys and callers
+            # may hold either form. A type mismatch here does not raise, it
+            # misses, reads as "out of scope", and deletes the subject's
+            # vectors. Same trap the FTS path documents.
+            mapping_type, type_uri = scope.get(str(subj_uuid), (None, None))
+            rule = None
+            if mapping_type:
+                rule = await resolve_search_mapping(
+                    conn, space_id, idx_name, mapping_type, type_uri)
+            if rule is None or not rule.enabled:
+                # Out of scope for this index. Removing any row a previous
+                # unscoped sync left behind makes the fix repair what the
+                # defect wrote, rather than only stopping new damage.
+                to_delete.append(subj_uuid)
+                continue
             props = props_by_subject.get(subj_uuid)
             if not props:
                 to_delete.append(subj_uuid)
                 continue
-            text = build_search_text(props, None)
+            text = build_search_text(props, rule)
             if not text.strip():
                 to_delete.append(subj_uuid)
                 continue

@@ -1,8 +1,19 @@
 # Concurrent Writes Queue On ANALYZE Because Its Guard Is Read-Then-Act
 
-## Status: OPEN — root cause established by measurement, no fix attempted. The
-## store path already has the mutual exclusion this needs; the other callers of
-## `auto_analyze.maybe_analyze` do not use it.
+## Status: FIXED 2026-09-24 — `maybe_analyze` now takes the SAME non-blocking
+## advisory lock the store path already used (`('analyze', space_id)`), so the
+## two paths exclude each other, and a caller that cannot get it SKIPS rather
+## than queues. The counter is also reset BEFORE the run, not after.
+##
+## It bit twice before the fix landed — the second time during the cleanup of
+## the first, half an hour after this issue was written. Six
+## `ANALYZE "{space}_term"` stacked on each other exhausted the app's
+## connection pool and production stopped answering. Killing the client did NOT
+## stop it: `auto_analyze` runs ANALYZE on separate background connections, so
+## the queued work outlived the process and had to be `pg_cancel_backend`ed.
+##
+## Regression tests: `tests/unit/sparql_sql/test_analyze_skips_rather_than_queues.py`.
+## NOT fixed: whether the 50,000-change threshold is right for bulk paths.
 
 ## Summary
 
