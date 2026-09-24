@@ -117,6 +117,25 @@ export interface PaginationFields {
   page_size: number;
   offset: number;
   has_more?: boolean | null;
+  /**
+   * Whether the answer is SHORT of what was asked for.
+   *
+   * THREE-STATE, and the type says so, for the same reason `has_more` is:
+   * `false` is a claim that everything requested came back, `undefined`/`null`
+   * is the absence of a claim from a server that does not report it. Writing
+   * `if (!resp.incomplete)` treats "nobody checked" as "it is fine", which is
+   * the bug this field exists to expose — a saturated connection pool once
+   * removed 113 of 500 entity graphs from an HTTP 200 and nothing in the
+   * response said so.
+   *
+   * `true` means retryable: the read failed, the entities are not gone.
+   */
+  incomplete?: boolean | null;
+  /**
+   * URIs that were requested and whose data did not come back. Retryable when
+   * `incomplete` is true; when it is false they simply do not exist.
+   */
+  missing_uris?: string[];
 }
 
 export interface PaginatedGraphObjectResponse extends GraphObjectResponse, PaginationFields {

@@ -248,6 +248,16 @@ class KGEntitiesEndpoint:
             graph_id: Optional[str] = Query(None, description="Graph ID"),
             operation_mode: OperationMode = Query(OperationMode.CREATE, description="Operation mode: create, update, or upsert"),
             parent_uri: Optional[str] = Query(None, description="Parent entity URI for hierarchical relationships"),
+            preserve_object_properties: bool = Query(
+                False,
+                description=(
+                    "Keep server-managed object properties the request supplies "
+                    "(hasObjectCreationTime, hasObjectModificationDateTime) instead "
+                    "of stamping them with the current time. A property the request "
+                    "omits is stamped as usual. Use when copying entities between "
+                    "spaces, where restamping would date every entity to the copy."
+                ),
+            ),
             body: QuadRequest = Body(..., description="GraphObjects serialized as JSON Quads"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
@@ -255,7 +265,8 @@ class KGEntitiesEndpoint:
             require_space_write(current_user, space_id)
             quads = body.quads
             return await self._create_or_update_entities(
-                space_id, graph_id, quads, operation_mode, parent_uri, current_user
+                space_id, graph_id, quads, operation_mode, parent_uri, current_user,
+                preserve_object_properties=preserve_object_properties,
             )
         
         
@@ -537,6 +548,12 @@ class KGEntitiesEndpoint:
                 page_size=page_size,
                 offset=offset,
                 has_more=has_more,
+                # Pass the shortfall THROUGH. The processor is the only layer
+                # that knows which requested graphs failed to load, and a caller
+                # cannot reconstruct it from `results` without knowing what it
+                # asked for. Silence here is what made `issues/229` invisible.
+                incomplete=getattr(result, "incomplete", None),
+                missing_uris=list(getattr(result, "missing_uris", []) or []),
             )
             t_resp = _time.monotonic()
             n_ent = len(result.entities) if result.entities else 0
@@ -822,7 +839,7 @@ class KGEntitiesEndpoint:
                     if include_entity_graph and _uri:
                         cached = _entity_graph_cache.get(space_id, _effective_graph, _uri)
                         if cached is not None:
-                            return cached, len(cached)
+                            return cached, len(cached), False
                     
                     objs = await get_processor.get_entity(
                         space_id=space_id,
@@ -838,24 +855,52 @@ class KGEntitiesEndpoint:
                     if include_entity_graph and _uri and q:
                         _entity_graph_cache.put(space_id, _effective_graph, _uri, q)
                     
-                    return q, len(objs) if objs else 0
+                    return q, len(objs) if objs else 0, False
                 except Exception as e:
-                    self.logger.warning(f"Failed to get entity {identifier}: {e}")
-                    return [], 0
+                    # ERROR, and REPORTED. This drops an entity the caller
+                    # explicitly asked for by URI out of a response that still
+                    # says 200. Swallowing it here is what let a saturated pool
+                    # remove 113 of 500 entities from a bulk copy while every
+                    # request reported success (`issues/229`).
+                    self.logger.error("Failed to get entity %s: %s", identifier, e)
+                    return [], 0, True
             
             results = await asyncio.gather(*[_fetch_quads(ident) for ident in identifiers])
             
             all_quads = []
             total_obj_count = 0
-            for q, count in results:
+            missing: List[str] = []
+            any_failed = False
+            for ident, (q, count, failed) in zip(identifiers, results):
                 all_quads.extend(q)
                 total_obj_count += count
+                any_failed = any_failed or failed
+                if not count:
+                    missing.append(ident)
+            
+            if missing:
+                self.logger.error(
+                    "get-by-uris: %d of %d requested entities returned nothing "
+                    "(failures=%s, first=%s)",
+                    len(missing), len(identifiers), any_failed, missing[0])
             
             return QuadResponse(
                 results=all_quads,
                 total_count=total_obj_count,
                 page_size=len(identifiers),
                 offset=0,
+                # TWO DIFFERENT QUESTIONS, answered separately.
+                #
+                # `missing_uris` is what you asked for and did not get, for any
+                # reason — it may simply not exist.
+                #
+                # `incomplete` is whether the shortfall came from a FAILURE, and
+                # is therefore retryable. A URI that does not exist is a
+                # truthful empty answer and leaves this False; a pool timeout
+                # sets it True. Collapsing the two would make "not found"
+                # indistinguishable from "we could not look".
+                incomplete=any_failed,
+                missing_uris=missing,
             )
 
         except HTTPException:
@@ -869,6 +914,7 @@ class KGEntitiesEndpoint:
         quads: List[Quad],
         operation_mode: OperationMode, parent_uri: Optional[str],
         current_user: Dict,
+        preserve_object_properties: bool = False,
     ) -> Union[EntityCreateResponse, EntityUpdateResponse]:
         """Create or update entities from quads."""
         import time as _time
@@ -926,7 +972,10 @@ class KGEntitiesEndpoint:
             from ..kg_impl.kg_server_properties import stamp_entity_server_properties
             _now = datetime.now(timezone.utc)
             for _ent in entity_objects:
-                stamp_entity_server_properties(_ent, _now, is_create=True)
+                stamp_entity_server_properties(
+                    _ent, _now, is_create=True,
+                    preserve_supplied=preserve_object_properties,
+                )
 
             processor = KGEntityCreateProcessor(backend_adapter)
             _result = await processor.create_or_update_entities(
@@ -935,6 +984,7 @@ class KGEntitiesEndpoint:
                 vitalsigns_objects=vitalsigns_objects,
                 operation_mode=impl_operation_mode,
                 parent_uri=parent_uri,
+                preserve_object_properties=preserve_object_properties,
             )
             _t_endpoint_end = _time.monotonic()
             self.logger.info(f"⏱️  ENDPOINT total: {_t_endpoint_end - _t_endpoint_start:.3f}s")

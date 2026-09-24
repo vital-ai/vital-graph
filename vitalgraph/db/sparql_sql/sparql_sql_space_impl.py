@@ -1715,6 +1715,15 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 edge_deleted = await sync_edge_table_before_delete(
                     conn, space_id, subject_uuids, context_uuid=g_uuid)
 
+                # FTS rows are keyed on the SUBJECT, and the subjects here are
+                # the entity's frames and slots. Nothing upstream cleans them:
+                # the endpoint's auto-sync is handed ENTITY uris, which carry no
+                # FTS row, so every slot row outlived its data (`issues/217`,
+                # bulk path). Same transaction as the delete on purpose.
+                from .sync_fts_delete import sync_fts_before_delete
+                await sync_fts_before_delete(
+                    conn, space_id, subject_uuids, context_uuid=g_uuid)
+
                 # Step 3 (fused): DELETE ... RETURNING, then decrement stats
                 # from the rows actually deleted — avoids the separate
                 # read-before-delete scan of the same rows (100x mitigation #10;

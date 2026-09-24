@@ -8,7 +8,7 @@ pagination, and search capabilities, working exclusively with GraphObjects.
 import asyncio
 import logging
 from typing import List, Optional, Dict, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # VitalSigns imports for proper integration
 import vital_ai_vitalsigns as vitalsigns
@@ -74,6 +74,13 @@ class ListEntitiesResult:
     """Result container for list operations."""
     entities: List[GraphObject]
     total_count: int
+    # URIs whose entity graph was ASKED FOR and could not be returned.
+    # Non-empty means the answer is SHORT -- not that those entities are gone.
+    missing_uris: List[str] = field(default_factory=list)
+    # True  = known short (see missing_uris)
+    # False = every requested graph was returned
+    # None  = nobody checked, which is NOT the same as False
+    incomplete: Optional[bool] = None
 
 
 class KGEntityListProcessor:
@@ -361,6 +368,16 @@ class KGEntityListProcessor:
                 "Batched entity-graph fetch failed (%s) — falling back to "
                 "per-entity retrieval for this page", e)
 
+        # A URI ASKED FOR AND NOT RETURNED IS RECORDED, NOT SKIPPED.
+        #
+        # Both loops below used to be a bare `if objs:` with no else. A page
+        # whose graphs failed to load came back as a short list inside an
+        # HTTP 200, and the caller had no way to tell it from a page whose
+        # entities genuinely have no graph. In production that dropped 113 of
+        # 500 entities out of a bulk copy that reported complete success
+        # (`issues/229`).
+        missing: List[str] = []
+
         if graphs is not None:
             # Emit in the ORDER THE PAGING QUERY ESTABLISHED. Iterating the
             # result dict instead would return rows grouped however the batched
@@ -370,6 +387,8 @@ class KGEntityListProcessor:
                 objs = graphs.get(uri)
                 if objs:
                     entities.extend(objs)
+                else:
+                    missing.append(uri)
         else:
             get_processor = KGEntityGetProcessor(logger=self.logger)
 
@@ -381,16 +400,27 @@ class KGEntityListProcessor:
                         backend_adapter=backend_adapter,
                     )
                 except Exception as e:
-                    self.logger.warning("Error retrieving entity graph %s: %s", uri, e)
+                    # ERROR, not WARNING: this drops an entity the caller asked
+                    # for out of a response that will still say 200.
+                    self.logger.error("Error retrieving entity graph %s: %s", uri, e)
                     return None
 
             results = await asyncio.gather(*[_fetch(uri) for uri in entity_uris])
             for uri, objs in zip(entity_uris, results):
                 if objs:
                     entities.extend(objs)
+                else:
+                    missing.append(uri)
+
+        if missing:
+            self.logger.error(
+                "list_entities_with_graph: %d of %d requested entity graphs "
+                "could not be returned (first: %s)",
+                len(missing), len(entity_uris), missing[0])
 
         self.logger.debug("list_entities_with_graph: %d objects, total=%d", len(entities), total_count)
-        return ListEntitiesResult(entities=entities, total_count=total_count)
+        return ListEntitiesResult(entities=entities, total_count=total_count,
+                                  missing_uris=missing, incomplete=bool(missing))
 
     # ------------------------------------------------------------------
     # Total-count resolution: cache → fast direct-SQL → SPARQL

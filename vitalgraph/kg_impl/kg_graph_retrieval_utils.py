@@ -13,6 +13,7 @@ import asyncio
 from typing import List, Dict, Any, Optional, Tuple
 from collections import defaultdict
 import logging
+from ..utils.db_retry import SparqlQueryFailed
 
 logger = logging.getLogger(__name__)
 
@@ -837,7 +838,22 @@ class GraphObjectRetriever:
         self.logger.debug("Retrieving %d entity graphs in one query", len(entity_uris))
         results = await self.backend.execute_sparql_query(space_id, query)
 
+        # A FAILED QUERY IS NOT AN EMPTY ONE (`issues/215`, fixed there for
+        # `_extract_bindings` and missed here). `execute_sparql_query` reports
+        # failure by returning `{'results': {'bindings': []}, 'success': False}`,
+        # so reading `bindings` alone turns a pool timeout into "this page has
+        # no entity graphs" -- and the caller, seeing a dict rather than None,
+        # skips its per-entity fallback and returns HTTP 200 with the entities
+        # silently missing.
+        #
+        # Measured in production 2026-09-24: 113 `acquire timed out` failures on
+        # a saturated pool (size=30 idle=0) dropped exactly 113 of 500 entities
+        # out of a copy that reported complete success. Raising lets the
+        # caller's fallback do what it was written for.
         if isinstance(results, dict):
+            if results.get('success') is False:
+                raise SparqlQueryFailed(str(results.get('error') or
+                                            'entity-graph query failed'))
             results = results.get('results', {}).get('bindings', [])
         if not results:
             return {}

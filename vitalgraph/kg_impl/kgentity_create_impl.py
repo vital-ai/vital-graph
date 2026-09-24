@@ -50,17 +50,22 @@ class KGEntityCreateProcessor:
     
     async def create_or_update_entities(self, space_id: str, graph_id: str, 
                                       vitalsigns_objects: List[GraphObject], operation_mode: OperationMode,
-                                      parent_uri: Optional[str] = None) -> Union[EntityCreateResponse, EntityUpdateResponse]:
+                                      parent_uri: Optional[str] = None,
+                                      preserve_object_properties: bool = False) -> Union[EntityCreateResponse, EntityUpdateResponse]:
         """
         Create or update KG entities using backend abstraction.
-        
+
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
             vitalsigns_objects: List of VitalSigns GraphObjects to create/update
             operation_mode: CREATE, UPDATE, or UPSERT
             parent_uri: Optional parent entity URI
-            
+            preserve_object_properties: Keep supplied creation/modification
+                timestamps rather than stamping them. Must be threaded here as
+                well as at the endpoint: the defence-in-depth stamp below would
+                otherwise overwrite what the endpoint just chose to preserve.
+
         Returns:
             EntityCreateResponse or EntityUpdateResponse based on operation mode
         """
@@ -90,7 +95,10 @@ class KGEntityCreateProcessor:
             _now = datetime.now(_tz.utc)
             _is_create = (operation_mode == OperationMode.CREATE)
             for _ent in entities:
-                stamp_entity_server_properties(_ent, _now, is_create=_is_create)
+                stamp_entity_server_properties(
+                    _ent, _now, is_create=_is_create,
+                    preserve_supplied=preserve_object_properties,
+                )
 
             # Step 3: Validate entity structure
             self.logger.debug(f"🔍 Step 3: Validating entity structure...")
@@ -164,7 +172,9 @@ class KGEntityCreateProcessor:
             elif operation_mode == OperationMode.UPDATE:
                 return await self._handle_update_mode(space_id, graph_id, entities, enhanced_objects)
             elif operation_mode == OperationMode.UPSERT:
-                return await self._handle_upsert_mode(space_id, graph_id, entities, enhanced_objects)
+                return await self._handle_upsert_mode(
+                    space_id, graph_id, entities, enhanced_objects,
+                    preserve_object_properties=preserve_object_properties)
             else:
                 return self._create_error_response(operation_mode, f"Invalid operation_mode: {operation_mode}")
                 
@@ -306,7 +316,8 @@ class KGEntityCreateProcessor:
         return None
 
     async def _handle_upsert_mode(self, space_id: str, graph_id: str,
-                                entities: List[KGEntity], objects: List[GraphObject]) -> EntityUpdateResponse:
+                                entities: List[KGEntity], objects: List[GraphObject],
+                                preserve_object_properties: bool = False) -> EntityUpdateResponse:
         """Handle UPSERT mode: create if not exists, update if exists."""
         try:
             # Check which entities exist
@@ -328,7 +339,16 @@ class KGEntityCreateProcessor:
             # latest write (`issues/173`). Read the stored value and put it
             # back; if it cannot be read, leave the fresh stamp rather than
             # guessing, and say so.
+            #
+            # `preserve_object_properties` turns this off, and only for entities
+            # that ARRIVED with a creation time. The caller is asserting the
+            # value -- that is the whole point of the flag -- so reading the
+            # stored one back would discard exactly what it asked to keep. An
+            # entity that arrived WITHOUT one still gets the stored value, since
+            # there is nothing supplied to defer to.
             for entity in existing_entities:
+                if preserve_object_properties and entity.objectCreationTime:
+                    continue
                 try:
                     prior = await self._existing_creation_time(
                         space_id, graph_id, str(entity.URI))

@@ -179,6 +179,20 @@ def extract_pagination_from_json_quads(response_data: dict) -> dict:
         "offset": offset if offset is not None else 0,
         # Passed through, never computed. Absent stays None.
         "has_more": response_data.get("has_more"),
+        # WHETHER THE ANSWER IS SHORT. `incomplete` is True when the server
+        # could not return some of what was asked for and it is retryable,
+        # False when it verified the answer is whole, None when the route
+        # cannot say -- the same three states as `has_more`, and for the same
+        # reason: a bool here would report "complete" for a server that never
+        # checked. `missing_uris` names what did not come back.
+        #
+        # These are whitelisted like everything else in this function, which is
+        # why they had to be added by hand: the server grew them for
+        # `issues/229` -- where 113 of 500 entity graphs vanished inside an
+        # HTTP 200 -- and a client that drops them leaves its callers exactly
+        # as blind as before the server was fixed.
+        "incomplete": response_data.get("incomplete"),
+        "missing_uris": response_data.get("missing_uris") or [],
     }
 
 

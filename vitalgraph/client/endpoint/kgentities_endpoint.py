@@ -550,7 +550,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
         space_id: str, 
         graph_id: str, 
         objects: List,
-        parent_uri: Optional[str] = None
+        parent_uri: Optional[str] = None,
+        preserve_object_properties: bool = False
     ) -> CreateEntityResponse:
         """
         Create KGEntities from GraphObjects.
@@ -560,6 +561,18 @@ class KGEntitiesEndpoint(BaseEndpoint):
             graph_id: Graph identifier
             objects: List of GraphObject instances to create
             parent_uri: Optional parent URI for relationships
+            preserve_object_properties: Keep the creation/modification
+                timestamps carried by `objects` instead of stamping them with
+                the current time. Default False, which is what every existing
+                caller wants: a client minting a NEW entity should not be
+                choosing its creation date.
+
+                Set it when COPYING entities between spaces. Without it the
+                server sets `objectCreationTime = now` unconditionally, so an
+                archive copy dates every entity to the day it was copied — and
+                if the originals are then deleted, the real dates exist
+                nowhere. A property the objects do not carry is stamped as
+                usual, so turning this on never leaves a timestamp unset.
             
         Returns:
             EntityResponse containing created entities
@@ -577,7 +590,12 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 space_id=space_id,
                 graph_id=graph_id,
                 operation_mode="create",
-                parent_uri=parent_uri
+                parent_uri=parent_uri,
+                # Omitted entirely when False so the request is byte-identical
+                # to what this client sent before the parameter existed, and a
+                # server that predates it is unaffected.
+                preserve_object_properties=(
+                    "true" if preserve_object_properties else None),
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)

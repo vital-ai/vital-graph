@@ -60,6 +60,28 @@ class QuadResponse(QuadResultsResponse):
             "real result-set size, not the length of the page it is returning."
         ),
     )
+    incomplete: Optional[bool] = Field(
+        None,
+        description=(
+            "Whether this response is SHORT of what was asked for. True means "
+            "some requested entity graphs could not be returned and their URIs "
+            "are in `missing_uris`; the entities are not gone, the read for "
+            "them failed. False means every requested graph was returned. None "
+            "means the route has not been taught to answer — NOT that the "
+            "answer is False, exactly as `has_more` above. A caller that "
+            "treats None as 'complete' reintroduces `issues/229`, where 113 of "
+            "500 entity graphs went missing inside an HTTP 200 and nothing in "
+            "the response said so."
+        ),
+    )
+    missing_uris: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Entity URIs that were requested and whose graph could not be "
+            "returned. Retryable: a pool timeout or a killed query, not a "
+            "statement that the entity does not exist."
+        ),
+    )
     slot_counts: Optional[Dict[str, int]] = Field(
         None,
         description=(

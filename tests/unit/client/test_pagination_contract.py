@@ -96,7 +96,23 @@ class TestExtractorPassesThroughAndNeverDerives:
 
     def test_missing_fields_do_not_raise(self):
         out = extract_pagination_from_json_quads({})
-        assert out == {"total_count": 0, "page_size": 0, "offset": 0, "has_more": None}
+        assert out == {
+            "total_count": 0, "page_size": 0, "offset": 0, "has_more": None,
+            # Added for `issues/229`. Counts default to 0 because a count has a
+            # sensible zero; these do NOT default to False, because False is a
+            # claim that the answer is whole and an absent field is the absence
+            # of any claim. Same rule as `has_more` directly above.
+            "incomplete": None, "missing_uris": [],
+        }
+
+    def test_the_shortfall_fields_are_passed_through_too(self):
+        """Whatever this function forwards is all the client will ever see:
+        the response models drop undeclared keys, so a field missing here is a
+        field the caller cannot act on."""
+        out = extract_pagination_from_json_quads(
+            {"incomplete": True, "missing_uris": ["urn:e:1"]})
+        assert out["incomplete"] is True
+        assert out["missing_uris"] == ["urn:e:1"]
 
 
 class TestOnlyOneExtractorImplementation:

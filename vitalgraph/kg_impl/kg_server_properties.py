@@ -61,6 +61,7 @@ def stamp_entity_server_properties(
     existing_status: Optional[str] = None,
     existing_entity_type: Optional[str] = None,
     is_create: bool = False,
+    preserve_supplied: bool = False,
 ) -> None:
     """Stamp server-managed properties on a KGEntity in place.
 
@@ -71,13 +72,28 @@ def stamp_entity_server_properties(
         existing_status: Status URI from the DB (updates only).
         existing_entity_type: Entity type URI from the DB (updates only).
         is_create: True for entity creation, False for update.
+        preserve_supplied: Keep a timestamp the REQUEST carried instead of
+            overwriting it. A property the request omitted is stamped exactly
+            as it would be without this flag, so turning it on never leaves a
+            timestamp unset.
+
+            This exists for copying entities between spaces with their history
+            intact. Without it, `objectCreationTime = now` unconditionally, so
+            an archive copy dates every entity to the day of the copy — and if
+            the originals are then deleted, the real dates are gone. An unset
+            VitalSigns property reads as None, so "did the request supply one"
+            is the truthiness of the attribute.
     """
-    # Timestamps — always server-set
-    if is_create:
+    # Timestamps — server-set unless the caller asked to keep what it sent
+    if preserve_supplied and entity.objectCreationTime:
+        pass
+    elif is_create:
         entity.objectCreationTime = now
     else:
         entity.objectCreationTime = existing_creation_time or now
-    entity.objectModificationDateTime = now
+
+    if not (preserve_supplied and entity.objectModificationDateTime):
+        entity.objectModificationDateTime = now
 
     # Status — default on create, preserve on update if client omits
     if is_create:

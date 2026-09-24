@@ -108,6 +108,23 @@ class PaginatedGraphObjectResponse(GraphObjectResponse):
         description="Whether more pages exist; None when the server did not say "
                     "and it could not be derived",
     )
+    # Three-valued for the same reason as `has_more`: False is a CLAIM that the
+    # answer is whole, None is the absence of one. A caller reading None as
+    # False is back to `issues/229`, where a saturated pool removed 113 of 500
+    # entity graphs from a 200 response and nothing said so.
+    incomplete: Optional[bool] = Field(
+        default=None,
+        description="True when the server could not return part of what was "
+                    "asked for (retryable, see missing_uris); False when it "
+                    "verified the answer is whole; None when the route cannot "
+                    "say — NOT the same as False",
+    )
+    missing_uris: List[str] = Field(
+        default_factory=list,
+        description="URIs requested whose data did not come back. Retryable "
+                    "when `incomplete` is True; when it is False they simply "
+                    "do not exist",
+    )
     
     entity_type_uri: Optional[str] = Field(default=None, description="Entity type URI filter from request")
     search: Optional[str] = Field(default=None, description="Search term from request")
@@ -218,6 +235,19 @@ class MultiEntityGraphResponse(VitalGraphResponse):
         default=None,
         description="Whether more pages exist; None when it could not be determined",
     )
+    # Three-valued like `has_more` above: False is a CLAIM that the answer is
+    # whole, None is the absence of one. See PaginatedGraphObjectResponse.
+    incomplete: Optional[bool] = Field(
+        default=None,
+        description="True when the server could not return part of what was "
+                    "asked for (retryable, see missing_uris); False when it "
+                    "verified the answer is whole; None when the route cannot "
+                    "say — NOT the same as False",
+    )
+    missing_uris: List[str] = Field(
+        default_factory=list,
+        description="URIs requested whose data did not come back",
+    )
 
     space_id: Optional[str] = Field(default=None, description="Space ID from request")
     graph_id: Optional[str] = Field(default=None, description="Graph ID from request")
@@ -241,6 +271,19 @@ class MultiFrameGraphResponse(VitalGraphResponse):
     has_more: Optional[bool] = Field(
         default=None,
         description="Whether more pages exist; None when it could not be determined",
+    )
+    # Three-valued like `has_more` above: False is a CLAIM that the answer is
+    # whole, None is the absence of one. See PaginatedGraphObjectResponse.
+    incomplete: Optional[bool] = Field(
+        default=None,
+        description="True when the server could not return part of what was "
+                    "asked for (retryable, see missing_uris); False when it "
+                    "verified the answer is whole; None when the route cannot "
+                    "say — NOT the same as False",
+    )
+    missing_uris: List[str] = Field(
+        default_factory=list,
+        description="URIs requested whose data did not come back",
     )
 
     space_id: Optional[str] = Field(default=None, description="Space ID from request")
