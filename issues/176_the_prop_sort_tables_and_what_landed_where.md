@@ -1,6 +1,7 @@
 # 176 — The prop-sort tables: what they are, and what commit 9756865e actually contains
 
-**Status:** closed (record)
+## Status: CLOSED — record, not a defect
+
 **Raised:** 2026-09-08
 **Related:** issues/149 (a coverage probe that could not see its own shortfall),
 issues/161 (marker lifecycle), issues/167 (the gate inverted to a block-list),

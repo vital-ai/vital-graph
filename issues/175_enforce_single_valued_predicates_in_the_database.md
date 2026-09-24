@@ -1,6 +1,7 @@
 # 175 — Enforce single-valued predicates in the database, not per write path
 
-**Status:** open
+## Status: OPEN
+
 **Raised:** 2026-09-07
 **Related:** issues/173 (the upsert race), issues/174 (the remaining unlocked
 paths), `scripts/repair_duplicate_single_valued.py`

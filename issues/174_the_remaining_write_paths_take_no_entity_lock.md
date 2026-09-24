@@ -1,6 +1,7 @@
 # 174 — The remaining write paths take no entity lock
 
-**Status:** open
+## Status: OPEN
+
 **Raised:** 2026-09-07, from the cleanup in issues/173
 **Related:** issues/173 (the race that corrupted 243 subjects and the lock that
 fixes it), `vitalgraph/db/sparql_sql/entity_lock.py`

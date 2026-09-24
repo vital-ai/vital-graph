@@ -1,6 +1,7 @@
 # 177 — The "proceeding UNSERIALISED" fallback could not proceed
 
-**Status:** fixed 2026-09-08, pinned by test
+## Status: FIXED 2026-09-08 — pinned by test
+
 **Raised:** 2026-09-08, from the v0.0.60 production rollout
 **Related:** issues/174 (the grouping locks this degrades), issues/173 (the race
 they exist to prevent), `vitalgraph/db/sparql_sql/sparql_sql_space_impl.py`,
