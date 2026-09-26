@@ -1788,5 +1788,17 @@ def create_backend_adapter(backend_impl) -> KGBackendInterface:
     elif 'FusekiPostgreSQL' in backend_type:
         return FusekiPostgreSQLBackendAdapter(backend_impl)
     else:
-        # Default to Fuseki+PostgreSQL adapter
-        return FusekiPostgreSQLBackendAdapter(backend_impl)
+        # Default to sparql_sql — the only live backend (`issues/241`).
+        #
+        # This branch returned the FUSEKI adapter, so an unrecognised backend
+        # silently got the RETIRED one. Two ways that bites: today it adapts a
+        # backend it was never written for, and once Fuseki is archived the name
+        # would not resolve at all, turning a silent mis-adaptation into a
+        # NameError on a path whose whole purpose is to be a fallback.
+        #
+        # Defaulting to sparql_sql matches `config_loader.py:147`, which resolves
+        # BACKEND_TYPE to 'sparql_sql' when nothing says otherwise. The dispatch
+        # above is on a substring of the class NAME, which is its own fragility
+        # (`issues/241`) — but a wrong guess here now lands on the live backend
+        # rather than the retired one.
+        return SparqlSQLBackendAdapter(backend_impl)

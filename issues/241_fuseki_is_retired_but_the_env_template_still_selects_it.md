@@ -11,6 +11,10 @@
 ##
 ## One item is a live defect rather than stale material: `.env.example` selects
 ## `fuseki_postgresql` and that value WINS over the correct `sparql_sql` default.
+##
+## ONE THING FIXED 2026-09-26: `create_backend_adapter`'s `else` no longer falls
+## back to the retired adapter — it defaults to `sparql_sql`, pinned by test and
+## verified by falsification. Everything else here is unstarted.
 
 **Related:** `issues/240` (found this — a Fuseki test script was cited as evidence
 about live callers, which is the failure mode this material creates),
@@ -268,6 +272,11 @@ should be repointed at the archive path in the same change.
 
 ## Order of work
 
+0. ~~**Stop the adapter factory defaulting to Fuseki**~~ **DONE 2026-09-26** —
+   `create_backend_adapter` defaults to `SparqlSQLBackendAdapter`, so archiving
+   can no longer turn a silent mis-adaptation into a `NameError` on the fallback
+   path. Numbered 0 because it was not in the original plan and is independent of
+   everything below.
 1. **Move `postgresql_signal_manager.py` out** of `fuseki_postgresql/` to a
    neutral home and repoint all three factory arms. Nothing else can proceed
    safely before this.
@@ -310,9 +319,30 @@ else:
 
 Any backend whose class name does not contain `SparqlSQL` silently gets the
 Fuseki adapter. So the fallback for "I do not recognise this backend" is the one
-that is retired — the same shape as `.env.example:55`, one layer up, and it will
-raise `NameError` rather than fall back once the class is archived. The `else`
-should be the refusal, not the retired path.
+that is retired — the same shape as `.env.example:55`, one layer up, and it would
+raise `NameError` rather than fall back once the class is archived.
+
+**FIXED 2026-09-26: the default is now `SparqlSQLBackendAdapter`.** This file first
+proposed making the `else` a REFUSAL; the decision was to default to the live
+backend instead, which is the more consistent answer — `config_loader.py:147`
+already resolves `BACKEND_TYPE` to `sparql_sql` when nothing says otherwise, so a
+refusal here would have been the one place in the resolution chain that declined
+to assume the only backend that exists.
+
+Pinned by `tests/unit/test_backend_adapter_dispatch.py`, and VERIFIED BY
+FALSIFICATION: with the old default restored, the two unrecognised-backend cells
+fail and the rest pass, so the guard is testing the branch it claims to. Asserted
+as `not FusekiPostgreSQLBackendAdapter` as well as `is SparqlSQLBackendAdapter`,
+because the defect would survive a change to some third adapter. `OxigraphSpaceImpl`
+is one of the two parametrised cases and is not hypothetical —
+`BackendType.OXIGRAPH` is in the enum with no arm in this dispatch.
+
+The explicit Fuseki arm is LEFT IN PLACE, because the package is still here: the
+cell covering it pins that Fuseki's real route is the explicit arm, which is what
+makes the `else` genuinely the unrecognised case. That cell goes with the package
+at step 5. **The substring-on-class-name dispatch is still fragile** and is not
+fixed — but a wrong guess now lands on the live backend rather than the retired
+one, which is the part that mattered.
 
 `FusekiPostgreSQLBackendAdapter` itself (`:210`) is a full `KGBackendInterface`
 implementation living in a live module, so it moves or goes with the rest.
