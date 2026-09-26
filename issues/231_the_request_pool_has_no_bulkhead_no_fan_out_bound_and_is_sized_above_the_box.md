@@ -1,9 +1,8 @@
 # The Request Pool Has No Bulkhead, No Fan-Out Bound, And Is Sized Above The Box
 
-## Status: OPEN — three structural gaps behind `issues/229` and `issues/230`,
-## each measured, none fixed. Those two issues fixed the symptoms they surfaced
-## as; this is the substrate they both stand on, and it will produce the next
-## one in a different disguise.
+## Status: IN PROGRESS — steps 1 and 2 landed 2026-09-24 with tests; steps 3-5
+## open. The bulkhead now exists and the outage path (ANALYZE on request
+## connections) is closed; sizing and the QUERY/MUTATION split are not.
 
 ## Why this exists
 
@@ -214,15 +213,142 @@ Near-zero upside means keep the pools and close this. A large share means the
 sizes are wrong first — retune them, and only then consider the limiter, since
 a badly partitioned budget looks exactly like a missing limiter.
 
+## Landed 2026-09-24
+
+**Step 1 — INTERNAL split. DONE.** A dedicated pool (`internal_pool`, max 3,
+`internal_pool_size`) created, registered and closed alongside the request pool.
+Routed at it so far: the three `maybe_analyze` sites in
+`add_rdf_quads_batch_bulk` / `remove_rdf_quads_batch_bulk` /
+`delete_entity_graph_bulk` — THE EXACT STATEMENTS THAT STACKED SIX DEEP ON
+2026-09-24 — plus `_maybe_analyze_aux_tables` (both its catalog probe and its
+ANALYZE fallback) and `auto_sync._run_sync`. `db_impl._internal_pool` is the
+accessor; it falls back to the request pool when absent, so an impl without the
+split degrades to today's behaviour rather than failing the write path.
+
+**The wait record. DONE.** `pool_wait` is emitted on acquires that WAIT only —
+never on the fast path — carrying `class`, `waited_ms`, `in_use`, `size` and
+`other_classes_idle`, the last read BEFORE the wait begins. Read afterwards it
+would describe the world at the moment the wait ENDED, by which time the
+sibling capacity that would have answered the question has usually been handed
+over; that ordering is pinned by a test.
+
+**The mixed pool is `REQUEST`, not `QUERY`.** It still serves reads and writes.
+Labelling it QUERY would file every mutation's wait as a reader's wait and the
+analysis would report reader starvation that is really writers queueing behind
+each other — the wrong fix, from data that looks authoritative. It becomes
+QUERY when step 3 genuinely splits it.
+
+**Step 2 — fan-out bound. DONE.** `vitalgraph/utils/bounded_gather.py`,
+default 8, applied to five sites:
+
+    kgentities_endpoint   _fetch_quads over `identifiers`   caller list
+    kgentities_endpoint   _delete_one  over `uris`          caller list
+    kgframes_endpoint     _fetch_frame over `frame_uris`    caller list
+    kgentity_list_impl    _fetch       over a page          caller page_size
+    kgentity_list_impl    _fetch_entity_graph over a page   caller page_size
+
+The last two were nearly missed. They fan out over QUERY RESULTS rather than a
+caller-supplied list, which reads as safe — but `page_size` is a request
+parameter and goes straight into the `LIMIT`, so the width is caller-controlled
+after all, just one step removed. "Bounded by the page size" is not a bound
+when the caller picks the page size.
+
+`bounded_gather` takes FACTORIES rather than coroutines, so nothing is
+constructed until a slot is free — `gather(*[f(x) for x in xs])` has already
+created every coroutine before any semaphore is consulted.
+
+### Tests
+
+    tests/unit/test_pool_classes_and_wait_record.py        the accounting
+    tests/unit/test_background_work_uses_the_internal_pool.py   the routing
+    tests/unit/test_bounded_gather.py                      the ceiling
+    tests/load/test_query_is_not_starved_by_internal.py    the behaviour
+
+The load test is the one that matters, and it carries a CONTROL: it first
+proves it can starve a SHARED pool, because a harness that cannot reproduce the
+failure cannot demonstrate its absence. Measured locally, 5 runs, min/med/max
+across runs:
+
+    shared pool, one reader waited          1354 / 1360 / 1374 ms
+    separate pools, INTERNAL saturated:
+      per-run median read latency              1.1 /  1.1 /  2.3 ms
+      per-run worst read                       6.0 / 10.8 / 19.4 ms
+    separate pools, INTERNAL + MUTATION both saturated:
+      per-run worst read                       4.0 /  5.9 / 11.6 ms
+
+Roughly a 600x difference in the worst case and 1000x at the median, and the
+spread across runs is small enough that it is the partition doing it rather
+than scheduling luck.
+
+It also asserts that QUERY's OWN exhaustion is still logged — isolation must
+not be bought by making saturation invisible, which is how `issues/229`
+produced a quiet wrong answer.
+
+## Measured 2026-09-25: the bulkhead is INSURANCE, not a speed-up
+
+Run end to end against the local test stack (`test_scripts/perf/pool_bulkhead_ab.sh`),
+same image both arms, `DB_INTERNAL_POOL_SIZE=0` as the control:
+
+    CAPACITY-MATCHED, total 7 connections, 10 concurrent writers
+                              p50 (min/med/max)     p99 (min/med/max)
+    control    pool 7 + 0      43 / 46 /  70 ms     432 /  434 /  699 ms
+    treatment  pool 5 + 2      47 / 48 /  98 ms     467 /  766 / 1848 ms
+
+**No benefit at equal capacity.** An earlier UNMATCHED comparison (pool 5 + 0
+against pool 5 + 2) showed the treatment winning every run — p50 136 ms down to
+42 ms at the median — and that was entirely the two EXTRA connections the
+internal pool adds, not isolation. Capacity-matching removes the effect
+completely. Anyone re-running this must match the total, or the internal pool
+will look like a latency fix.
+
+**`pool_wait` was 0 in every arm**, at a 0.05 s threshold, with a 5-connection
+pool and twice that many concurrent writers. That is not missing
+instrumentation — the threshold was verified inside the container. Connections
+were never the scarce resource: `docker stats` through the load shows PostgreSQL
+at up to 300% CPU while the app stays under 100%. Entity writes release their
+connection quickly and saturate PG cores instead.
+
+So this workload cannot exercise the bulkhead at all, and partitioning a
+resource nobody queues for cannot help. **The failure mode the bulkhead exists
+for is work that HOLDS a connection** — the six stacked `ANALYZE` of
+`issues/230`, each holding one for the duration — and `create_kgentities` does
+not produce that shape however much of it you run.
+
+What this changes:
+
+  * The bulkhead's justification is preventing a specific outage mode, NOT
+    throughput or latency. It should not be sold as a performance change.
+  * Its cost is real and now measured as the only detectable effect: it ADDS to
+    the global budget. That cuts directly against step 4 below, and it means
+    `internal_pool_size` should be paid for out of `max_pool_size` rather than
+    added on top.
+  * The isolation proof is `tests/load/test_query_is_not_starved_by_internal.py`,
+    which saturates connections deliberately with `pg_sleep` and carries a
+    control proving it can starve a shared pool. That result stands: 1354-1374 ms
+    shared against 1.1-2.3 ms median separated.
+  * `tests/api/test_query_latency_under_write_load.py` is a REGRESSION GUARD —
+    real write load, reads staying correct and interactive — not a bulkhead
+    proof. Described that way to stop it being cited as one.
+
+Two harness lessons worth keeping, because both produced confident wrong
+results before they were found:
+
+  * **`up -d --wait` is not readiness.** The healthcheck goes green before a
+    5.5 s startup warm-up over 141 spaces; a login inside that window fails with
+    a bare `ReadError`.
+  * **The first run after recreating the container is cold** and is not
+    comparable to anything. Identical configuration, back to back: `n=5
+    p99=15114 ms` cold against `n=149 p99=454 ms` warm, a 33x spread. The script
+    now discards a warm-up run per arm.
+
 ## Order of work, most value first
 
-1. **Split INTERNAL off first** — a dedicated pool of 2-3 connections for
+1. ~~**Split INTERNAL off first**~~ — a dedicated pool of 2-3 connections for
    ANALYZE, VACUUM, backfill, segmentation and auto-sync, and route the 56
    `create_task`/`to_thread` spawn sites at it. Smallest change, prevents the
    outage mode outright, and does not require agreeing on sizing or on how
    QUERY and MUTATION should divide what is left.
-2. **Bound the database fan-out** — a semaphore per request, sized well under
-   the pool, on the `gather` sites above.
+2. ~~**Bound the database fan-out**~~ — DONE, see above.
 3. **Then split QUERY from MUTATION**, with a reserved floor for QUERY that
    MUTATION cannot borrow, and explicit classification per route rather than by
    HTTP verb. Separate pools, per the decision above — and land the wait
@@ -243,14 +369,23 @@ a badly partitioned budget looks exactly like a missing limiter.
   * Whether the three ECS tasks ever run hot simultaneously. 90 connections is
     the ceiling, not an observation — the steady-state sample during a quiet
     period showed 17 idle and 1 active.
-  * Whether any fan-out site other than the three named above is reachable with
-    a caller-controlled list length. 19 sites were counted; three were read.
+  * Whether any fan-out site other than the three now bounded is reachable with
+    a caller-controlled list length. The page-driven ones
+    (`kgentity_list_impl`, `kg_sparql_query`) fan out over query results, but
+    the page SIZE is caller-supplied, so a large `limit` reaches them. Not yet
+    bounded; wants the limit checked against what the endpoints actually cap.
   * Whether `command_timeout=60` on the pool and `statement_timeout=60` on the
     server interact badly — two 60s limits on the same statement, from
     different layers.
   * How many of the 56 background spawn sites actually touch the database.
-    They were counted, not read. The number bounds the work of routing them
-    at an INTERNAL pool; it does not describe it.
+    They were counted, not read. Three ANALYZE paths and auto-sync are now
+    routed at INTERNAL; the rest are unexamined, and any one of them that
+    takes a request connection reopens the same hole.
+  * Whether `internal_pool_size: 3` is right. It is a guess chosen to be small
+    enough that INTERNAL cannot matter and large enough that ANALYZE, VACUUM
+    and auto-sync do not serialise behind each other. It also ADDS to the
+    global budget — every task now opens up to 3 more — which cuts against
+    step 4 and has not been measured.
 
 ## Reproduce
 

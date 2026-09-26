@@ -9,6 +9,10 @@ and disproved before the log line that mattered was found by accident.
 
 A slow success and a timeout are the same starvation. Only one was logged.
 
+The message is now the structured `pool_wait` record from `issues/231` rather
+than free text, so these assert on its FIELDS. The wording is allowed to move;
+the fields are the contract, because the wait analysis parses them.
+
 Asserted against a stub context rather than a live pool: the behaviour under
 test is "did it time the wait and report it", which needs no database.
 """
@@ -64,11 +68,11 @@ async def test_a_slow_acquire_is_reported(caplog, monkeypatch):
             assert conn == "conn"
 
     msgs = [r.getMessage() for r in caplog.records]
-    assert any("acquire WAITED" in m for m in msgs), (
+    assert any("pool_wait" in m for m in msgs), (
         f"a 0.12s wait that SUCCEEDED was not reported; that silence is why a "
         f"39.97s production request could not be attributed. records={msgs}")
-    assert any("idle=0" in m for m in msgs), (
-        f"pool occupancy is not in the message, so the log cannot show WHY it "
+    assert any("'in_use': 30" in m for m in msgs), (
+        f"pool occupancy is not in the record, so the log cannot show WHY it "
         f"waited: {msgs}")
 
 
@@ -82,7 +86,7 @@ async def test_a_fast_acquire_stays_quiet(caplog, monkeypatch):
         async with _ctx(0.0):
             pass
 
-    assert not [r for r in caplog.records if "acquire WAITED" in r.getMessage()], (
+    assert not [r for r in caplog.records if "pool_wait" in r.getMessage()], (
         "a fast acquire logged; this path runs on every single query")
 
 
@@ -96,7 +100,7 @@ async def test_the_bare_await_form_is_covered_too(caplog, monkeypatch):
         conn = await _ctx(0.12)
         assert conn == "conn"
 
-    assert any("acquire WAITED" in r.getMessage() for r in caplog.records), (
+    assert any("pool_wait" in r.getMessage() for r in caplog.records), (
         "the `await pool.acquire()` form does not report a slow wait")
 
 

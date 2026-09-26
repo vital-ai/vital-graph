@@ -18,8 +18,11 @@ operation that genuinely should wait, e.g. long-running maintenance).
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 import logging
+import weakref
+from enum import Enum
 from typing import Optional
 
 import asyncpg
@@ -47,7 +50,81 @@ _UNSET: object = object()
 #
 # A slow success and a timeout are the same starvation; only one of them was
 # visible.
-SLOW_ACQUIRE_SECONDS = 1.0
+#
+# OVERRIDABLE because 1.0s is an alerting threshold, not a measuring
+# instrument. A local bulkhead run at a 5-connection pool produced p99 read
+# latency of 1152ms with ZERO `pool_wait` records: the queueing was real and
+# every individual acquire came in under a second, so the counter said "no
+# contention" about a run that was visibly contended. Set
+# VG_SLOW_ACQUIRE_SECONDS low (e.g. 0.05) to see the distribution rather than
+# the tail.
+SLOW_ACQUIRE_SECONDS = float(os.environ.get("VG_SLOW_ACQUIRE_SECONDS", "1.0"))
+
+
+# ---------------------------------------------------------------------------
+# Workload classes (`issues/231`)
+# ---------------------------------------------------------------------------
+#
+# Three kinds of work reach PostgreSQL and they want different guarantees:
+#
+#   QUERY     read-only, request-driven, latency-sensitive. Must never starve.
+#   MUTATION  request-driven writes. Bursty, holds locks.
+#   INTERNAL  background: ANALYZE, VACUUM, backfill, segmentation, auto-sync.
+#             Always deferrable; nothing waits on it interactively.
+#
+# SEPARATE POOLS, NOT A SHARED LIMITER (decided 2026-09-24). A pool per class is
+# legible: its size is a number in config, its exhaustion is attributable to one
+# class, and it cannot lend a reader's connection to a bulk writer by accident.
+# The accepted cost is a static partition — QUERY can wait while INTERNAL sits
+# idle — and `_WaitRecord` below exists to measure exactly that cost, so the
+# decision can be revisited on evidence rather than taste.
+
+
+class PoolClass(str, Enum):
+    QUERY = "query"
+    MUTATION = "mutation"
+    INTERNAL = "internal"
+
+    # The shared request pool, BEFORE query and mutation are split apart
+    # (`issues/231` step 3, not yet done). It is its own class rather than
+    # being labelled QUERY because labelling it QUERY would file every
+    # mutation's wait as a query wait — and the whole reason this record
+    # exists is to decide, from the data, whether readers are being starved.
+    # Mislabelling the mixed pool would answer that question wrongly and
+    # invisibly. When the split lands, this disappears.
+    REQUEST = "request"
+
+
+# Every live classed pool, so a waiter can ask what the OTHER classes were
+# doing at the instant it began waiting. Weak refs: a closed pool must not be
+# kept alive by this, and a stale entry would corrupt the one number this whole
+# mechanism exists to produce.
+_REGISTRY: "weakref.WeakValueDictionary[str, TimeoutPool]" = weakref.WeakValueDictionary()
+
+
+def register_pool(pool: "TimeoutPool", pool_class: PoolClass) -> None:
+    pool.pool_class = pool_class
+    _REGISTRY[pool_class.value] = pool
+
+
+def other_classes_idle(exclude: Optional[PoolClass]) -> int:
+    """Free connections across every class EXCEPT `exclude`, right now.
+
+    THE POINT OF THE WHOLE RECORD. This is the capacity a shared limiter could
+    have lent to a waiter, and it is only meaningful read at the instant of the
+    wait. Per-pool metrics gathered independently cannot answer the question —
+    "QUERY waited 12s" and "INTERNAL averaged 30% utilisation" say nothing
+    about whether the two overlapped.
+    """
+    total = 0
+    for name, pool in list(_REGISTRY.items()):
+        if exclude is not None and name == exclude.value:
+            continue
+        try:
+            total += max(0, pool.get_max_size() - (pool.get_size() - pool.get_idle_size()))
+        except Exception:
+            continue    # diagnostics must never mask the real path
+    return total
 
 
 class _LoggingAcquireContext:
@@ -65,41 +142,70 @@ class _LoggingAcquireContext:
         self._pool = pool
         self._ctx = ctx
 
-    def _report_slow(self, waited: float) -> None:
-        """A slow-but-successful acquire is starvation that nothing else logs."""
+    def _report_slow(self, waited: float, other_idle: Optional[int] = None) -> None:
+        """A slow-but-successful acquire is starvation that nothing else logs.
+
+        ON WAITS ONLY. The fast path must not pay for this: an acquire that
+        does not queue writes nothing, computes nothing, and touches no sibling
+        pool.
+        """
         if waited < SLOW_ACQUIRE_SECONDS:
             return
+        cls = getattr(self._pool, "pool_class", None)
         try:
+            in_use = self._pool.get_size() - self._pool.get_idle_size()
+            # `pool_wait` is the structured record `issues/231` specifies. One
+            # line per WAIT, carrying what the other classes had free at the
+            # moment this wait began — the number that decides whether the
+            # static partition is costing anything.
             logger.warning(
-                "pool acquire WAITED %.2fs (size=%s idle=%s min=%s max=%s) — the "
-                "query that follows is not the slow part; the request queued for "
-                "a connection",
-                waited, self._pool.get_size(), self._pool.get_idle_size(),
-                self._pool.get_min_size(), self._pool.get_max_size())
+                "pool_wait %s",
+                {
+                    "class": cls.value if cls else "unclassed",
+                    "waited_ms": round(waited * 1000),
+                    "in_use": in_use,
+                    "size": self._pool.get_max_size(),
+                    "other_classes_idle": other_idle,
+                },
+            )
         except Exception:   # diagnostics must never mask the real path
             logger.warning("pool acquire WAITED %.2fs (state unavailable)", waited)
 
     async def __aenter__(self):
         t0 = time.monotonic()
+        # Read the siblings BEFORE waiting. Read afterwards it describes the
+        # world at the moment the wait ENDED — by which time the capacity that
+        # would have answered the question has usually been handed over.
+        other_idle = self._sibling_idle()
         try:
             conn = await self._ctx.__aenter__()
         except asyncio.TimeoutError:
             log_pool_state(self._pool, "acquire timed out")
             raise
-        self._report_slow(time.monotonic() - t0)
+        self._report_slow(time.monotonic() - t0, other_idle)
         return conn
+
+    def _sibling_idle(self):
+        cls = getattr(self._pool, "pool_class", None)
+        if cls is None:
+            return None
+        try:
+            return other_classes_idle(cls)
+        except Exception:
+            return None
 
     async def __aexit__(self, *exc_info):
         return await self._ctx.__aexit__(*exc_info)
 
     def __await__(self):
         t0 = time.monotonic()
+        other_idle = self._sibling_idle()
         try:
             conn = yield from self._ctx.__await__()
         except asyncio.TimeoutError:
             log_pool_state(self._pool, "acquire timed out")
             raise
-        self._report_slow(time.monotonic() - t0)
+        self._report_slow(time.monotonic() - t0, other_idle)
         return conn
 
 

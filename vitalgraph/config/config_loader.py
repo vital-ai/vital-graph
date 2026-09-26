@@ -189,6 +189,14 @@ class VitalGraphConfig:
                     'password': self._get_profile_env('DB_PASSWORD', ''),
                     'min_pool_size': int(self._get_profile_env('DB_POOL_SIZE', '10')),
                     'max_pool_size': int(self._get_profile_env('DB_MAX_POOL_SIZE', '30')),
+                    # Separate pool for deferrable background work — ANALYZE,
+                    # VACUUM, backfill, auto-sync (`issues/231`). Small on
+                    # purpose: it exists so INTERNAL CANNOT take the connections
+                    # request serving needs, not to make background work fast.
+                    # Note it ADDS to the global budget — every task opens up to
+                    # this many more — which is why it is tunable rather than
+                    # hardcoded.
+                    'internal_pool_size': int(self._get_profile_env('DB_INTERNAL_POOL_SIZE', '3')),
                     'acquire_timeout': float(self._get_profile_env('DB_ACQUIRE_TIMEOUT', '15'))
                 },
                 'sidecar': {

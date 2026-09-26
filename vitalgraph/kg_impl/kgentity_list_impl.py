@@ -30,6 +30,8 @@ from vitalgraph.sparql.kg_query_builder import escape_sparql_string
 # Count cache — shared with the /kgentities/count endpoint; invalidated on writes.
 from vitalgraph.cache.count_cache import _count_cache
 from ..utils.db_retry import SparqlQueryFailed
+from functools import partial
+from ..utils.bounded_gather import bounded_gather
 
 # ---------------------------------------------------------------------------
 # KGEntity subclass type clause — matches KGEntity and all known subclasses.
@@ -405,7 +407,11 @@ class KGEntityListProcessor:
                     self.logger.error("Error retrieving entity graph %s: %s", uri, e)
                     return None
 
-            results = await asyncio.gather(*[_fetch(uri) for uri in entity_uris])
+            # BOUNDED (`issues/231`): `entity_uris` is one page, but `page_size`
+            # is caller-supplied and flows straight into the LIMIT, so this
+            # fans out as wide as the caller asks.
+            results = await bounded_gather(
+                [partial(_fetch, uri) for uri in entity_uris])
             for uri, objs in zip(entity_uris, results):
                 if objs:
                     entities.extend(objs)
@@ -878,7 +884,9 @@ class KGEntityListProcessor:
                         self.logger.warning(f"Error retrieving entity graph {uri}: {e}")
                         return None
                 
-                results = await asyncio.gather(*[_fetch_entity_graph(uri) for uri in entity_uris])
+                # BOUNDED (`issues/231`): page_size is caller-supplied.
+                results = await bounded_gather(
+                    [partial(_fetch_entity_graph, uri) for uri in entity_uris])
                 
                 entities = []
                 for uri, entity_objects in zip(entity_uris, results):

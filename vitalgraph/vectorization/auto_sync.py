@@ -488,9 +488,19 @@ async def _run_sync(
     if not subject_uris:
         return
 
-    pool = getattr(db_impl, 'connection_pool', None)
+    # THE INTERNAL POOL, NOT THE REQUEST POOL (`issues/231`).
+    #
+    # This runs AFTER the write it belongs to has returned 200. On the request
+    # pool its cost lands on readers: a bulk copy returned success 43,783 times
+    # while its consequences kept embedding and analysing on connections the
+    # readers needed, and production stopped answering twice in one day.
+    #
+    # Falls back to the request pool when no INTERNAL pool exists, so a
+    # db_impl that predates the split behaves exactly as before rather than
+    # silently skipping every sync.
+    pool = getattr(db_impl, 'internal_pool', None) or getattr(db_impl, 'connection_pool', None)
     if pool is None:
-        logger.debug("auto_sync: no connection_pool on db_impl, skipping")
+        logger.debug("auto_sync: no pool on db_impl, skipping")
         return
 
     context_uuid = _generate_term_uuid(graph_uri)

@@ -55,6 +55,8 @@ from ai_haley_kg_domain.model.KGEntity import KGEntity
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.Edge_hasKGFrame import Edge_hasKGFrame
 from ..utils.db_retry import SparqlQueryFailed
+from functools import partial
+from ..utils.bounded_gather import bounded_gather
 
 
 class OperationMode(str, Enum):
@@ -865,7 +867,10 @@ class KGEntitiesEndpoint:
                     self.logger.error("Failed to get entity %s: %s", identifier, e)
                     return [], 0, True
             
-            results = await asyncio.gather(*[_fetch_quads(ident) for ident in identifiers])
+            # BOUNDED (`issues/231`): `identifiers` is caller-supplied, so an
+            # unbounded gather let one request open one transaction per URI.
+            results = await bounded_gather(
+                [partial(_fetch_quads, ident) for ident in identifiers])
             
             all_quads = []
             total_obj_count = 0
@@ -1412,8 +1417,10 @@ class KGEntitiesEndpoint:
                     self.logger.error(f"Error deleting entity {entity_uri}: {e}")
                     return False
             
-            import asyncio
-            results = await asyncio.gather(*[_delete_one(u) for u in uris])
+            # BOUNDED (`issues/231`): this is the site where the archive
+            # script's `--batch 10` became 100 concurrent server-side deletes.
+            results = await bounded_gather(
+                [partial(_delete_one, u) for u in uris])
             
             deleted_uris_list = [str(u) for u, ok in zip(uris, results) if ok]
             deleted_count = len(deleted_uris_list)

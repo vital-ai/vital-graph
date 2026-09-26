@@ -954,7 +954,14 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         representative = t['edge']
 
         # Tier 1 — shared clock.
-        pool = getattr(self.backend.db_impl, 'connection_pool', None)
+        # INTERNAL pool (`issues/231`): both the catalog probe below and the
+        # ANALYZE fallback further down are deferrable maintenance, and on the
+        # request pool they compete with the readers this is supposed to be
+        # speeding up. Falls back to the request pool so an impl without the
+        # split keeps working.
+        _db = self.backend.db_impl
+        pool = (getattr(_db, 'internal_pool', None)
+                or getattr(_db, 'connection_pool', None))
         if pool is not None:
             async with pool.acquire() as conn:
                 age = await fetch_last_analyze_age(conn, representative)

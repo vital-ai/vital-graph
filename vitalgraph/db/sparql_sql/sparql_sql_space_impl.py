@@ -1595,7 +1595,10 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             from .auto_analyze import record_changes, maybe_analyze
             record_changes(space_id, count)
             self._invalidate_counts_for_quads(space_id, quads)
-            async with self._db._pool.acquire() as conn:
+            # INTERNAL pool, not the request pool (`issues/231`). ANALYZE is
+            # deferrable and self-serialising; on the request pool a burst of
+            # writers stacks ANALYZE on connections readers need.
+            async with self._db._internal_pool.acquire() as conn:
                 await maybe_analyze(conn, space_id, pg_config=self.postgresql_config)
             return count
 
@@ -1817,7 +1820,10 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 _count_cache.invalidate_graph(space_id, str(graph_id))
             except Exception as _e:      # pragma: no cover - defensive
                 logger.debug("count cache invalidation skipped: %s", _e)
-            async with self._db._pool.acquire() as conn:
+            # INTERNAL pool, not the request pool (`issues/231`). ANALYZE is
+            # deferrable and self-serialising; on the request pool a burst of
+            # writers stacks ANALYZE on connections readers need.
+            async with self._db._internal_pool.acquire() as conn:
                 await maybe_analyze(conn, space_id, pg_config=self.postgresql_config)
             return deleted
         except Exception as e:
@@ -1940,7 +1946,10 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             from .auto_analyze import record_changes, maybe_analyze
             record_changes(space_id, count)
             self._invalidate_counts_for_quads(space_id, quads)
-            async with self._db._pool.acquire() as conn:
+            # INTERNAL pool, not the request pool (`issues/231`). ANALYZE is
+            # deferrable and self-serialising; on the request pool a burst of
+            # writers stacks ANALYZE on connections readers need.
+            async with self._db._internal_pool.acquire() as conn:
                 await maybe_analyze(conn, space_id, pg_config=self.postgresql_config)
             return count
         except Exception as e:

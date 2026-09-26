@@ -88,6 +88,9 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
     def __init__(self, postgresql_config: dict):
         self.config = postgresql_config
         self.connection_pool: Optional[asyncpg.Pool] = None
+        # Separate INTERNAL pool (`issues/231`). None until connect();
+        # callers must tolerate that and fall back to the request pool.
+        self.internal_pool: Optional[asyncpg.Pool] = None
         self.connected = False
         self._signal_manager = None
 
@@ -99,6 +102,23 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
         if self.connection_pool is None:
             raise RuntimeError("SparqlSQLDbImpl not connected — call connect() first")
         return self.connection_pool
+
+    @property
+    def _internal_pool(self) -> asyncpg.Pool:
+        """The pool for DEFERRABLE background work — ANALYZE, VACUUM, backfill,
+        auto-sync (`issues/231`).
+
+        Every background job must acquire here rather than on `_pool`, or the
+        separation is cosmetic. On 2026-09-24 six stacked `ANALYZE` held six
+        request connections and production stopped answering; the statements
+        were legitimate, the pool they took was not.
+
+        FALLS BACK to the request pool when `internal_pool` is absent, so a
+        partially-initialised impl (and every test double that predates the
+        split) still works — background work running on the wrong pool is the
+        status quo, while raising here would take down the write path.
+        """
+        return getattr(self, 'internal_pool', None) or self._pool
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -121,11 +141,44 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
                     schema='pg_catalog',
                 )
 
-            from vitalgraph.db.pool import create_pool, DEFAULT_ACQUIRE_TIMEOUT
+            from vitalgraph.db.pool import (
+                create_pool, register_pool, PoolClass, DEFAULT_ACQUIRE_TIMEOUT,
+            )
 
             min_size = self.config.get('min_pool_size', 10)
             max_size = self.config.get('max_pool_size', 30)
             acquire_timeout = self.config.get('acquire_timeout', DEFAULT_ACQUIRE_TIMEOUT)
+            # CLAMP, do not fail. `min_pool_size` is a warm-connection floor and
+            # `max_pool_size` is a hard ceiling; lowering only the ceiling is an
+            # unambiguous request for a smaller pool, and asyncpg answers it with
+            # "min_size is greater than max_size" at connect() time.
+            #
+            # That error then arrives as `'NoneType' object has no attribute
+            # 'execute_update'` from startup, because the backend is left unset —
+            # the real cause is one line earlier in the log and the visible
+            # failure names neither pool nor size. Reducing the global budget is
+            # step 4 of `issues/231`, so operators WILL lower max_size, and they
+            # should not have to know to lower min_size with it.
+            if min_size > max_size:
+                logger.warning(
+                    "min_pool_size=%s exceeds max_pool_size=%s; clamping min to %s",
+                    min_size, max_size, max_size,
+                )
+                min_size = max_size
+            # INTERNAL gets its own small pool (`issues/231`). Background work —
+            # ANALYZE, VACUUM, backfill, segmentation, auto-sync — is always
+            # deferrable and nothing waits on it interactively, so it is capped
+            # low and, critically, CANNOT consume the connections request
+            # serving needs. On 2026-09-24 six stacked ANALYZE held six of
+            # thirty request connections and production stopped answering.
+            #
+            # SET IT TO 0 TO DISABLE the split: background work then runs on the
+            # request pool, exactly as it did before this existed. That is a
+            # rollback switch — this changes where every background job gets its
+            # connection, and a change that broad needs one — and it is also the
+            # CONTROL arm for measuring the bulkhead, since a test cannot show
+            # isolation without the un-isolated run to compare against.
+            internal_max = self.config.get('internal_pool_size', 3)
 
             self.connection_pool = await create_pool(
                 host=require(self.config, 'host'),
@@ -140,10 +193,47 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
                 acquire_timeout=acquire_timeout,
                 init=_init_conn,
             )
+            # REQUEST, not QUERY: this pool still serves reads AND writes.
+            # Calling it QUERY would file every mutation wait as a query wait,
+            # and "are readers being starved" is exactly the question the wait
+            # records exist to answer. Becomes QUERY when step 3 splits them.
+            register_pool(self.connection_pool, PoolClass.REQUEST)
             logger.info(
                 "asyncpg pool created: min_size=%s max_size=%s acquire_timeout=%ss",
                 min_size, max_size, acquire_timeout,
             )
+
+            if internal_max > 0:
+                # Separate pool, not a share of the first one. A share would still
+                # let INTERNAL exhaust what QUERY needs, which is the whole defect.
+                self.internal_pool = await create_pool(
+                    host=require(self.config, 'host'),
+                    port=require(self.config, 'port'),
+                    database=require(self.config, 'database'),
+                    user=require(self.config, 'username'),
+                    password=require(self.config, 'password'),
+                    min_size=1,
+                    max_size=internal_max,
+                    max_inactive_connection_lifetime=120.0,
+                    command_timeout=self.config.get('command_timeout', 60),
+                    acquire_timeout=acquire_timeout,
+                    init=_init_conn,
+                )
+                register_pool(self.internal_pool, PoolClass.INTERNAL)
+                logger.info("asyncpg INTERNAL pool created: max_size=%s", internal_max)
+            else:
+                # Left as None deliberately. `_internal_pool` and the background
+                # call sites fall back to the request pool, so this is the
+                # pre-split behaviour rather than a broken half-state. Logged at
+                # WARNING because it is not a configuration anyone should be in
+                # without having chosen it.
+                self.internal_pool = None
+                logger.warning(
+                    "INTERNAL pool DISABLED (internal_pool_size=0) — background "
+                    "work will run on the request pool, which is the behaviour "
+                    "that caused the 2026-09-24 outage. Intended only for "
+                    "rollback or for the control arm of a bulkhead measurement."
+                )
 
             # Per-process pool-occupancy monitor. Quiet (DEBUG) at steady state,
             # WARNING near capacity. Not routed through ProcessScheduler: that
@@ -203,6 +293,18 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
                     self.connection_pool.terminate()
 
                 self.connection_pool = None
+
+            # Closed the same way and just as unconditionally. An INTERNAL pool
+            # left open holds connections that no longer belong to anyone, and
+            # the leak is invisible because nothing serves traffic from it.
+            internal = getattr(self, 'internal_pool', None)
+            if internal is not None:
+                try:
+                    await asyncio.wait_for(internal.close(), timeout=3.0)
+                except asyncio.TimeoutError:
+                    logger.warning("INTERNAL pool close timed out, terminating...")
+                    internal.terminate()
+                self.internal_pool = None
 
             self.connected = False
             return True

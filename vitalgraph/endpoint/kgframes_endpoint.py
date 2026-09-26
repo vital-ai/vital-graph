@@ -65,6 +65,8 @@ from ..kg_impl.kgframe_query_impl import KGFrameQueryProcessor
 from ..kg_impl.kg_backend_utils import create_backend_adapter
 from ..cache.count_cache import _count_cache
 from ..auth.role_dependencies import require_space_read, require_space_write
+from functools import partial
+from ..utils.bounded_gather import bounded_gather
 
 
 
@@ -1358,7 +1360,9 @@ class KGFramesEndpoint:
                     self.logger.warning(f"Failed to retrieve frame {frame_uri}: {e}")
                     return None
             
-            results = await asyncio.gather(*[_fetch_frame(uri) for uri in frame_uris])
+            # BOUNDED (`issues/231`): `frame_uris` is caller-supplied.
+            results = await bounded_gather(
+                [partial(_fetch_frame, uri) for uri in frame_uris])
             
             all_objects = []
             for result in results:

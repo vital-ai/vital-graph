@@ -75,6 +75,13 @@ server = [
     "SQLAlchemy[asyncio]>=2.0.23",
     "psycopg[binary,pool]>=3.1.13",
     "asyncpg>=0.29.0",
+    # MODULE-LEVEL import in utils/resource_manager.py, which
+    # db/sparql_sql/sparql_sql_db_impl.py imports for `track_pool`. Without it
+    # the ENTIRE sparql_sql backend fails to load — the server starts, answers
+    # /health, and every space operation returns "Space Manager not
+    # configured". It was satisfied transitively for a long time, so a fresh
+    # dependency resolve is what surfaces it, not a code change.
+    "aiohttp>=3.9.0",
     "alembic>=1.12.0",
     "pgvector>=0.2.4",
     "aiofiles>=23.0.0",

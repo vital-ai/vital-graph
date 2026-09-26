@@ -212,6 +212,25 @@ services:
       - DB_USERNAME=postgres
       - DB_PASSWORD=testpass
       - SIDECAR_URL=http://sparql-compiler:7070
+      # Connection pools (`issues/231`). Overridable so the bulkhead can be
+      # exercised locally: contention is only reachable at a SMALL request
+      # pool, and DB_INTERNAL_POOL_SIZE=0 disables the internal pool entirely,
+      # which is both a rollback switch and the CONTROL arm of the A/B — with
+      # it off, background work runs on the request pool exactly as it did
+      # before the split.
+      #
+      #   DB_MAX_POOL_SIZE=5 DB_INTERNAL_POOL_SIZE=0 docker compose \
+      #     -f docker-compose.test.yml up -d --wait   # control
+      #   DB_MAX_POOL_SIZE=5 DB_INTERNAL_POOL_SIZE=2 docker compose \
+      #     -f docker-compose.test.yml up -d --wait   # treatment
+      - DB_POOL_SIZE=${DB_POOL_SIZE:-10}
+      - DB_MAX_POOL_SIZE=${DB_MAX_POOL_SIZE:-30}
+      - DB_INTERNAL_POOL_SIZE=${DB_INTERNAL_POOL_SIZE:-3}
+      # `pool_wait` fires above this many seconds. 1.0 is the production
+      # alerting threshold and is BLIND to sub-second queueing: a local run
+      # at a 5-connection pool showed p99 reads of 1152ms with zero records.
+      # Lower it (0.05) when measuring, not when serving.
+      - VG_SLOW_ACQUIRE_SECONDS=${VG_SLOW_ACQUIRE_SECONDS:-1.0}
       # Auth
       - SECRET_KEY=test-secret-key
       - JWT_SECRET_KEY=test-jwt-secret
