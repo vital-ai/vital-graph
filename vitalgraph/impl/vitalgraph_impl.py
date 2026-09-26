@@ -8,24 +8,6 @@ from vitalgraph.signal.signal_manager import SignalManager
 
 logger = logging.getLogger(__name__)
 
-# Backend names that were once valid in configuration and are not any more.
-#
-# These are STRINGS, deliberately, and this map is the reason `BackendType` no
-# longer carries a member for any of them (`issues/241`). A configured value has
-# to be recognised to be diagnosed, but recognising it is a property of the
-# CONFIG READER, not of the backend registry — and conflating the two is what let
-# `BackendType.POSTGRESQL` outlive `db/postgresql/` by months, doing nothing but
-# holding an error message.
-#
-# Entries stay as long as a `.env` in the wild might still say them, which is
-# longer than the code takes to delete. Removing one turns a clear "retired" error
-# back into "unsupported backend type", so it costs a reader the answer.
-RETIRED_BACKENDS = {
-    'postgresql': "the V1 PostgreSQL backend, archived well before 2026-09",
-    'fuseki': "the Fuseki backend, archived 2026-09",
-    'fuseki_postgresql': "the Fuseki/PostgreSQL hybrid backend, archived 2026-09",
-}
-
 
 class VitalGraphImpl:
     def __init__(self, config=None):
@@ -71,19 +53,13 @@ class VitalGraphImpl:
                     logger.info("Initialized sparql_sql backend (sidecar=%s)",
                                 sparql_sql_config.get('sidecar', {}).get('url', 'http://localhost:7070'))
 
-                elif backend_type in RETIRED_BACKENDS:
-                    # THIS is where a retired name is recognised — as a string,
-                    # not as a `BackendType` member (`issues/241`). Keeping a live
-                    # enum member just to carry an error message is how one came to
-                    # outlive its implementation entirely.
-                    raise ValueError(
-                        f"Backend type '{backend_type}' is retired and has been "
-                        f"archived: {RETIRED_BACKENDS[backend_type]}. "
-                        f"Use 'sparql_sql'. If this came from a .env file, it is "
-                        f"the LOCAL_BACKEND_TYPE / BACKEND_TYPE setting."
-                    )
-
                 else:
+                    # A backend that does not exist is not a special case
+                    # (`issues/241`). There is no list of names this used to
+                    # accept: carrying one means the code still knows about
+                    # something that is gone, which is the state this issue
+                    # existed to end. The value and the valid set are what a
+                    # reader needs, and both are here.
                     raise ValueError(
                         f"Unsupported backend type: '{backend_type}'. "
                         f"Supported: {', '.join(b.value for b in BackendType)}."

@@ -1,13 +1,23 @@
 # 241 — Fuseki is retired, but the env template still selects it and the factory still builds it
 
-## Status: STEPS 0-8 DONE 2026-09-26 (`c7aeb29b`). **`vitalgraph/` names a retired
-## backend in exactly ONE place** — `RETIRED_BACKENDS` in `impl/vitalgraph_impl.py`,
-## which is the map that lets an old `.env` be DIAGNOSED rather than merely
-## rejected — and a guard test fails if a second appears.
+## Status: STEPS 0-8 DONE 2026-09-26. **`vitalgraph/` does not name a retired
+## backend anywhere — zero, no allow-list**, and a guard test fails if one
+## reappears (falsified). 80 files archived to `archive/archive_vitalgraph_old/`
+## with history preserved; `BackendType` is `SPARQL_SQL` + `OXIGRAPH`.
+## tests/unit 4903 passed, 0 failures.
 ##
-## 80 files archived to `archive/archive_vitalgraph_old/`, history preserved.
-## `BackendType` is down to `SPARQL_SQL` and `OXIGRAPH`. tests/unit 4904 passed,
-## 0 failures.
+## THE `RETIRED_BACKENDS` MAP IS GONE TOO, and this file argued for it twice
+## before that was settled. First it proposed keeping dead ENUM MEMBERS to carry a
+## "that was retired" message; then, when the rule "remove backends that do not
+## exist" killed that, it moved the same idea into a string map in
+## `impl/vitalgraph_impl.py` and called that the right home for the diagnostic.
+## Both versions kept the code knowing about something that had been removed,
+## which is the state this issue existed to end. A stale `.env` now gets
+##
+##     Unsupported backend type: 'fuseki_postgresql'. Supported: sparql_sql, oxigraph.
+##
+## — the bad value and the valid set, which is what a reader needs. The "better
+## diagnostic" the map was defended with was never worth the memory it required.
 ##
 ## WHAT REMAINS, and it is not `vitalgraph/`:
 ##   * **45 files under `test_scripts/`** still name Fuseki. One
@@ -15,17 +25,16 @@
 ##     MOVED packages, so it is broken now — it is a Fuseki backend test and
 ##     should be archived, not repaired.
 ##   * `deploy/deploy_docs/ECS_DEPLOYMENT_GUIDE.md`, `.gitignore`,
-##     `test_scripts/auth/.env.example`, and
+##     `test_scripts/auth/.env.example`,
 ##     `vitalgraph_sparql_sql_dev/scripts/benchmark_fuseki_vs_sql.py`.
-##   * The guard covers `vitalgraph/` ONLY. Widening it to `test_scripts/` is the
-##     obvious next step and is deliberately not done — 45 files is a sweep, and
-##     a guard that fails on 45 pre-existing hits gets disabled rather than fixed
-##     (`issues/188`).
+##   * The guard covers `vitalgraph/` ONLY. Widen it when those are archived, not
+##     before: a guard that fails on 45 pre-existing hits gets disabled rather
+##     than fixed (`issues/188`).
 ##
 ## One behaviour question RAISED, not decided: a failed batch delete in
-## `kgentity_frame_delete_impl` used to report `success=True` with
-## `fuseki_success=False`. The signal now goes in `message`; folding it into
-## `success` is a behaviour change and wants a decision.
+## `kgentity_frame_delete_impl` used to report `success=True` with a false
+## second-store flag. The signal now goes in `message`; folding it into `success`
+## is a behaviour change and wants a decision.
 
 **Related:** `issues/240` (found this — a Fuseki test script was cited as evidence
 about live callers, which is the failure mode this material creates),
