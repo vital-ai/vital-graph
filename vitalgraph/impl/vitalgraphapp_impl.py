@@ -523,10 +523,12 @@ class VitalGraphAppImpl:
                         # ANALYZE/VACUUM path that exhausted the request pool on
                         # 2026-09-24.
                         #
-                        # Falls back to the request pool when the split is absent
-                        # or disabled (internal_pool_size=0): that is the
-                        # pre-split behaviour, not a broken half-state.
-                        bg_pool = getattr(self.db_impl, 'internal_pool', None) or pool
+                        # `internal_pool_for` returns the request pool quietly when
+                        # the split is DISABLED on purpose, and reports at ERROR
+                        # when it is merely absent — so a missing bulkhead cannot
+                        # look like a working one.
+                        from vitalgraph.db.pool import internal_pool_for
+                        bg_pool = internal_pool_for(self.db_impl) or pool
                         if pool:
                             from vitalgraph.process.process_tracker import ProcessTracker
                             from vitalgraph.process.process_scheduler import ProcessScheduler

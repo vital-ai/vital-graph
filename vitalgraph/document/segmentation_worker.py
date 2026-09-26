@@ -464,58 +464,42 @@ class SegmentationWorker:
         return []
 
     async def _get_pool(self, space_id: str):
-        """The pool this worker should poll on — INTERNAL first (`issues/231`).
+        """The pool segmentation polling must use — INTERNAL, or nothing.
 
-        Segmentation polling is deferrable background work: nothing waits on it
-        interactively, it runs on a loop, and it is named explicitly in
-        `issues/231` as one of the spawn sites that must NOT take a request
-        connection. Every tier below therefore prefers `internal_pool` and falls
-        back to the request pool, so a backend without the split behaves exactly
-        as before rather than failing to poll at all.
+        `issues/231` names segmentation as one of the spawn sites that must not
+        take a request connection. This used to walk four tiers looking for ANY
+        pool and returned the request one at every tier.
+
+        Now it resolves the space's db_impl and asks `internal_pool_for`, which
+        returns the request pool ONLY when the split is disabled on purpose and
+        reports at ERROR when it is absent by accident. Polling is a loop, so
+        returning None here costs one cycle's delay and the next tick retries —
+        which is the right price. Segmentation is deferrable; competing with
+        readers is not.
         """
-        def _prefer_internal(obj):
-            """INTERNAL if this object has one, else its request pool."""
-            if obj is None:
-                return None
-            internal = getattr(obj, 'internal_pool', None)
-            if internal is not None:
-                return internal
-            return None
-
         try:
             space_record = await self._space_manager.get_space_or_load(space_id)
             if not space_record:
                 return None
-            space_impl = space_record.space_impl
-            backend_impl = space_impl.get_db_space_impl()
+            backend_impl = space_record.space_impl.get_db_space_impl()
             if not backend_impl:
                 return None
-            # Direct connection_pool on backend (SparqlSQLDbImpl)
-            if hasattr(backend_impl, 'connection_pool') and backend_impl.connection_pool:
-                return _prefer_internal(backend_impl) or backend_impl.connection_pool
-            # SparqlSQLSpaceImpl has db_impl -> connection_pool
-            db_impl = getattr(backend_impl, 'db_impl', None)
-            if db_impl:
-                pool = _prefer_internal(db_impl) or getattr(db_impl, 'connection_pool', None)
-                if pool:
-                    return pool
-            # _pool property (may raise RuntimeError if not connected)
-            if hasattr(backend_impl, '_pool'):
-                try:
-                    return _prefer_internal(backend_impl) or backend_impl._pool
-                except RuntimeError:
-                    pass
-            # _db._pool (SparqlSQLSpaceImpl._db._pool pattern)
-            _db = getattr(backend_impl, '_db', None)
-            if _db:
-                pool = (_prefer_internal(_db)
-                        or getattr(_db, 'connection_pool', None)
-                        or getattr(_db, '_pool', None))
-                if pool:
-                    return pool
+
+            # The db_impl that OWNS the pools. `backend_impl` is either it or
+            # holds it; both shapes exist in the tree.
+            db_impl = getattr(backend_impl, 'db_impl', None) or getattr(
+                backend_impl, '_db', None) or backend_impl
+
+            from ..db.pool import internal_pool_for
+            pool = internal_pool_for(db_impl)
+            if pool is None:
+                logger.warning(
+                    "segmentation: no pool for space %s — skipping this cycle",
+                    space_id)
+            return pool
         except Exception as e:
             logger.error(f"Error getting pool for space {space_id}: {e}")
-        return None
+            return None
 
     async def _get_connection(self, space_id: str):
         """Get a DB connection for a space (caller must release)."""

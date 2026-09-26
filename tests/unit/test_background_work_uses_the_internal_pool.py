@@ -45,15 +45,56 @@ def test_background_work_gets_the_internal_pool():
     assert _impl(req, internal)._internal_pool is internal
 
 
-def test_it_falls_back_to_the_request_pool_when_there_is_no_internal_one():
-    """Degrade to the status quo, never raise.
+def test_disabled_on_purpose_returns_the_request_pool_QUIETLY(caplog):
+    """`internal_pool_size=0` means the operator chose the pre-split behaviour.
 
-    An impl that predates the split, or one caught mid-initialisation, still
-    has to be able to ANALYZE. Running maintenance on the wrong pool is what
-    every version before this did; refusing to run it is a new failure.
+    That choice is already logged at WARNING when the pool is not created, so
+    this path must not log again on every background job.
     """
+    import logging
     req = _Pool("request")
-    assert _impl(req, None)._internal_pool is req
+    obj = _impl(req, None)
+    obj.internal_pool_disabled = True
+    with caplog.at_level(logging.ERROR):
+        assert obj._internal_pool is req
+    assert "NOT disabled" not in caplog.text
+
+
+def test_missing_by_accident_is_reported_at_ERROR(caplog):
+    """THE DISTINCTION THAT MAKES THE FALLBACK SAFE.
+
+    `getattr(x, 'internal_pool', None) or pool` treated "disabled by the
+    operator" and "missing because something went wrong" identically, and
+    silently. The second case puts ANALYZE, VACUUM and auto-sync back on the
+    connections readers need — the 2026-09-24 outage configuration — and nothing
+    distinguished it from a working bulkhead.
+
+    It still returns the request pool rather than raising: a connect() path that
+    raised here would take down the write path to protect the read path.
+    """
+    import logging
+    from vitalgraph.db import pool as poolmod
+    poolmod._internal_fallback_reported = False      # one report per process
+
+    req = _Pool("request")
+    obj = _impl(req, None)                            # not disabled, just absent
+    with caplog.at_level(logging.ERROR):
+        assert obj._internal_pool is req
+    assert "NOT disabled" in caplog.text
+    assert "2026-09-24" in caplog.text, "the record must name what this causes"
+
+
+def test_the_accident_is_reported_once_not_per_acquire(caplog):
+    """A misconfiguration repeated on every background job buries the log."""
+    import logging
+    from vitalgraph.db import pool as poolmod
+    poolmod._internal_fallback_reported = False
+
+    obj = _impl(_Pool("request"), None)
+    with caplog.at_level(logging.ERROR):
+        for _ in range(5):
+            obj._internal_pool
+    assert caplog.text.count("NOT disabled") == 1
 
 
 def test_an_unconnected_impl_still_raises():
@@ -118,9 +159,14 @@ def test_the_scheduled_background_jobs_are_routed():
 
     src = inspect.getsource(vitalgraphapp_impl)
 
-    # The INTERNAL handle must exist and must prefer the internal pool.
-    assert "bg_pool = getattr(self.db_impl, 'internal_pool', None) or pool" in src, (
-        "no INTERNAL handle for the scheduled jobs")
+    # The INTERNAL handle must come from the shared helper, which is what makes
+    # "disabled on purpose" distinguishable from "missing by accident". A bare
+    # `getattr(..., 'internal_pool', None) or pool` here would silently put the
+    # scheduled jobs back on request connections.
+    assert "internal_pool_for(self.db_impl)" in src, (
+        "the scheduled jobs do not resolve their pool through internal_pool_for")
+    assert "getattr(self.db_impl, 'internal_pool', None) or pool" not in src, (
+        "a bare `or` fallback is back; that hides a missing bulkhead")
 
     for ctor in ("ProcessTracker(bg_pool)",
                  "MaintenanceJob(bg_pool",
@@ -149,7 +195,10 @@ def test_segmentation_polling_prefers_the_internal_pool():
     from vitalgraph.document import segmentation_worker
 
     src = inspect.getsource(segmentation_worker.SegmentationWorker._get_pool)
-    assert "_prefer_internal" in src, (
+    assert "internal_pool_for" in src, (
         "segmentation polling still takes whatever pool it finds first")
-    # The fallback must survive: a backend without the split has to keep polling.
-    assert "or backend_impl.connection_pool" in src or "or getattr(db_impl, 'connection_pool', None)" in src
+    # It must NOT reach past the helper to grab a request pool itself — that is
+    # the four-tier walk this replaced, and it returned the request pool at
+    # every tier.
+    assert "connection_pool" not in src, (
+        "segmentation is still able to select a request pool directly")

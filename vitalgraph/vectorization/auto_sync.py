@@ -495,10 +495,11 @@ async def _run_sync(
     # while its consequences kept embedding and analysing on connections the
     # readers needed, and production stopped answering twice in one day.
     #
-    # Falls back to the request pool when no INTERNAL pool exists, so a
-    # db_impl that predates the split behaves exactly as before rather than
-    # silently skipping every sync.
-    pool = getattr(db_impl, 'internal_pool', None) or getattr(db_impl, 'connection_pool', None)
+    # `internal_pool_for` distinguishes "disabled on purpose" from "missing by
+    # accident" and reports the second at ERROR; a bare `or` made the bulkhead's
+    # absence invisible.
+    from ..db.pool import internal_pool_for
+    pool = internal_pool_for(db_impl)
     if pool is None:
         logger.debug("auto_sync: no pool on db_impl, skipping")
         return

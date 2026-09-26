@@ -88,9 +88,14 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
     def __init__(self, postgresql_config: dict):
         self.config = postgresql_config
         self.connection_pool: Optional[asyncpg.Pool] = None
-        # Separate INTERNAL pool (`issues/231`). None until connect();
-        # callers must tolerate that and fall back to the request pool.
+        # Separate INTERNAL pool (`issues/231`). None until connect().
         self.internal_pool: Optional[asyncpg.Pool] = None
+        # Whether `internal_pool` is None ON PURPOSE (internal_pool_size=0).
+        # Without this flag, "disabled by the operator" and "missing because
+        # something went wrong" are indistinguishable, and background work
+        # silently returns to the request pool in both cases — see
+        # `pool.internal_pool_for`.
+        self.internal_pool_disabled: bool = False
         self.connected = False
         self._signal_manager = None
 
@@ -113,12 +118,14 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
         request connections and production stopped answering; the statements
         were legitimate, the pool they took was not.
 
-        FALLS BACK to the request pool when `internal_pool` is absent, so a
-        partially-initialised impl (and every test double that predates the
-        split) still works — background work running on the wrong pool is the
-        status quo, while raising here would take down the write path.
+        Delegates to `pool.internal_pool_for`, which distinguishes a pool that
+        is absent ON PURPOSE (`internal_pool_size=0`) from one that is missing
+        because something went wrong. The second case is reported at ERROR
+        rather than papered over: silently running background work on the
+        request pool is the 2026-09-24 outage configuration.
         """
-        return getattr(self, 'internal_pool', None) or self._pool
+        from vitalgraph.db.pool import internal_pool_for
+        return internal_pool_for(self) or self._pool
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -271,6 +278,7 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
                 # WARNING because it is not a configuration anyone should be in
                 # without having chosen it.
                 self.internal_pool = None
+                self.internal_pool_disabled = True
                 logger.warning(
                     "INTERNAL pool DISABLED (internal_pool_size=0) — background "
                     "work will run on the request pool, which is the behaviour "

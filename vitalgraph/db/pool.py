@@ -127,6 +127,54 @@ def other_classes_idle(exclude: Optional[PoolClass]) -> int:
     return total
 
 
+# Whether the INTERNAL/REQUEST conflation has already been reported. One line per
+# process, not per acquire: this is a misconfiguration, and repeating it on every
+# background job would bury the rest of the log.
+_internal_fallback_reported = False
+
+
+def internal_pool_for(db_impl):
+    """The pool DEFERRABLE background work must use, and nothing else.
+
+    WHY THIS IS A FUNCTION AND NOT `getattr(db_impl, 'internal_pool', None) or
+    pool`. That expression conflates two situations that need opposite
+    treatment, and the conflation is silent:
+
+      * **Deliberately disabled** (`internal_pool_size=0`). Running background
+        work on the request pool is exactly what the operator asked for. The
+        choice is already logged at WARNING when the pool is not created.
+      * **Missing when it should exist.** A programming error — and papering over
+        it puts ANALYZE, VACUUM and auto-sync back on the connections readers
+        need, which is the 2026-09-24 outage configuration. Reached silently,
+        nothing distinguishes it from a working bulkhead.
+
+    So the deliberate case returns the request pool quietly, and the accidental
+    case says so at ERROR. It still RETURNS the request pool rather than raising:
+    background work that cannot run is a stale-statistics problem, but a
+    `connect()` path that raises here would take down the write path to protect
+    the read path, which is the wrong trade at startup.
+    """
+    global _internal_fallback_reported
+    internal = getattr(db_impl, 'internal_pool', None)
+    if internal is not None:
+        return internal
+
+    request = getattr(db_impl, 'connection_pool', None)
+    if getattr(db_impl, 'internal_pool_disabled', False):
+        return request        # the operator's choice, already warned about
+
+    if not _internal_fallback_reported:
+        _internal_fallback_reported = True
+        logger.error(
+            "INTERNAL pool is absent but was NOT disabled — background work is "
+            "falling back to the REQUEST pool. That is the configuration that "
+            "exhausted the pool on 2026-09-24 (`issues/231`); ANALYZE, VACUUM, "
+            "auto-sync and the scheduled jobs are now competing with request "
+            "serving. Check that connect() created the internal pool."
+        )
+    return request
+
+
 class _LoggingAcquireContext:
     """Wraps asyncpg's PoolAcquireContext to log pool state on timeout.
 

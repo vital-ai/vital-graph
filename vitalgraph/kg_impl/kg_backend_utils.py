@@ -379,9 +379,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         # request pool they compete with the readers this is supposed to be
         # speeding up. Falls back to the request pool so an impl without the
         # split keeps working.
-        _db = self.backend.db_impl
-        pool = (getattr(_db, 'internal_pool', None)
-                or getattr(_db, 'connection_pool', None))
+        from ..db.pool import internal_pool_for
+        pool = internal_pool_for(self.backend.db_impl)
         if pool is not None:
             async with pool.acquire() as conn:
                 age = await fetch_last_analyze_age(conn, representative)
