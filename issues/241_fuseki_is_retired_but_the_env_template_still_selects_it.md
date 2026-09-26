@@ -1,31 +1,31 @@
 # 241 — Fuseki is retired, but the env template still selects it and the factory still builds it
 
-## Status: OPEN — the DECISION is made (2026-09-25: Fuseki is RETIRED, not merely
-## unused), which is what this issue was blocked on. Nothing moved yet.
+## Status: STEPS 0-8 DONE 2026-09-26 (`c7aeb29b`). **`vitalgraph/` names a retired
+## backend in exactly ONE place** — `RETIRED_BACKENDS` in `impl/vitalgraph_impl.py`,
+## which is the map that lets an old `.env` be DIAGNOSED rather than merely
+## rejected — and a guard test fails if a second appears.
 ##
-## THE GOAL IS TO ARCHIVE THE CODE, not delete it — `git mv` into
-## `archive/archive_vitalgraph_old/`, where the V1 postgresql backend already
-## sits, tracked. 81 tracked files. **One blocker, and it is specific:**
-## `postgresql_signal_manager.py` lives in `fuseki_postgresql/` and is imported by
-## the LIVE `SPARQL_SQL` backend, so it must move OUT before the package moves in.
+## 80 files archived to `archive/archive_vitalgraph_old/`, history preserved.
+## `BackendType` is down to `SPARQL_SQL` and `OXIGRAPH`. tests/unit 4904 passed,
+## 0 failures.
 ##
-## One item is a live defect rather than stale material: `.env.example` selects
-## `fuseki_postgresql` and that value WINS over the correct `sparql_sql` default.
+## WHAT REMAINS, and it is not `vitalgraph/`:
+##   * **45 files under `test_scripts/`** still name Fuseki. One
+##     (`test_script_kg_impl/backend/case_backend_initialization.py`) imports the
+##     MOVED packages, so it is broken now — it is a Fuseki backend test and
+##     should be archived, not repaired.
+##   * `deploy/deploy_docs/ECS_DEPLOYMENT_GUIDE.md`, `.gitignore`,
+##     `test_scripts/auth/.env.example`, and
+##     `vitalgraph_sparql_sql_dev/scripts/benchmark_fuseki_vs_sql.py`.
+##   * The guard covers `vitalgraph/` ONLY. Widening it to `test_scripts/` is the
+##     obvious next step and is deliberately not done — 45 files is a sweep, and
+##     a guard that fails on 45 pre-existing hits gets disabled rather than fixed
+##     (`issues/188`).
 ##
-## ONE THING FIXED 2026-09-26: `create_backend_adapter`'s `else` no longer falls
-## back to the retired adapter — it defaults to `sparql_sql`, pinned by test and
-## verified by falsification. Everything else here is unstarted.
-##
-## THE PLAN DOES NOT REACH ZERO on its own: after the `git mv`, 31 files and 201
-## `fuseki` lines remain under `vitalgraph/` — 19 files / 79 lines of them in no
-## step at all, including `config_loader.py`, which still reads `FUSEKI_*` env vars
-## and exposes `get_fuseki_config()`. Step 8 sweeps that and GATES it; see "Does
-## the plan reach ...".
-##
-## DECIDED 2026-09-26: **remove backends that do not exist** from `BackendType`.
-## That takes `FUSEKI`/`FUSEKI_POSTGRESQL` AND `POSTGRESQL` (whose package is
-## already gone), replaces step 3's planned refusal with deletion, and leaves the
-## `db/sparql_sql/` contrast comments as the ONLY deliberate residue in the tree.
+## One behaviour question RAISED, not decided: a failed batch delete in
+## `kgentity_frame_delete_impl` used to report `success=True` with
+## `fuseki_success=False`. The signal now goes in `message`; folding it into
+## `success` is a behaviour change and wants a decision.
 
 **Related:** `issues/240` (found this — a Fuseki test script was cited as evidence
 about live callers, which is the failure mode this material creates),
