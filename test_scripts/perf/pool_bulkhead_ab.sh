@@ -14,6 +14,10 @@
 #                                        2026-09-24 outage
 #   TREATMENT  DB_INTERNAL_POOL_SIZE=2  — background work isolated
 #
+# Both arms spend the SAME total, because the internal pool is carved out of
+# `max_pool_size` rather than added to it. Without that, the treatment wins on
+# extra capacity and the result says nothing about isolation.
+#
 # and a SMALL request pool in both arms, because contention is only reachable
 # there. At max_size=30 on a laptop the database is never the constraint.
 #
@@ -46,7 +50,7 @@ run_arm() {
 
   echo ""
   echo "=================================================================="
-  echo " $label — request pool $pool, internal $internal (total $((pool + internal))), writers $VG_LOAD_WRITERS"
+  echo " $label — budget $pool, internal $internal (request $((pool - internal))), writers $VG_LOAD_WRITERS"
   echo "=================================================================="
 
   # DB_POOL_SIZE (the min) must come down with the max. asyncpg refuses a pool
@@ -138,26 +142,19 @@ run_arm() {
 
 }
 
-# CAPACITY-MATCHED BY DEFAULT. The internal pool ADDS connections, so the naive
-# arms are 5 vs 5+2 — and a 40% capacity increase explains a latency improvement
-# on its own, with no isolation involved. Measured that way the treatment won
-# every run (p50 136ms -> 42ms median) while `pool_wait` stayed 0 in BOTH arms,
-# which is the signature of more capacity rather than better partitioning.
+# CAPACITY-MATCHED BY CONSTRUCTION, since 2026-09-25: `internal_pool_size` is
+# carved OUT of `max_pool_size` rather than added to it, so both arms run on the
+# same total budget and the only difference is whether it is partitioned.
 #
-# So the control gets the treatment's TOTAL, and the only remaining difference is
-# whether that budget is partitioned by class.
+#   control    budget N, internal 0  ->  request N,     total N
+#   treatment  budget N, internal 2  ->  request N - 2, total N
 #
-#   TOTAL=7:  control = pool 7 + internal 0
-#             treatment = pool 5 + internal 2
-#
-# Set AB_MATCH=0 for the unmatched arms (useful only to show the confound).
+# This matters because the earlier, additive behaviour made the treatment look
+# 3x better on p50 purely by spending two extra connections; matching the totals
+# by hand removed the effect entirely. Now it cannot reappear.
 INTERNAL=2
-if [ "${AB_MATCH:-1}" = "1" ]; then
-  run_arm "CONTROL   (pre-split, capacity-matched)" 0 "$((POOL + INTERNAL))"
-else
-  run_arm "CONTROL   (pre-split, UNMATCHED capacity)" 0 "$POOL"
-fi
-run_arm "TREATMENT (bulkhead)" "$INTERNAL" "$POOL"
+run_arm "CONTROL   (pre-split behaviour)" 0          "$POOL"
+run_arm "TREATMENT (bulkhead)"            "$INTERNAL" "$POOL"
 
 echo ""
 echo "Restoring the stack to its normal configuration."

@@ -148,6 +148,41 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
             min_size = self.config.get('min_pool_size', 10)
             max_size = self.config.get('max_pool_size', 30)
             acquire_timeout = self.config.get('acquire_timeout', DEFAULT_ACQUIRE_TIMEOUT)
+
+            # `max_pool_size` IS THE WHOLE BUDGET for this task, across both
+            # classes (decided 2026-09-25). The internal pool is CARVED OUT of
+            # it, not added to it:
+            #
+            #     request pool = max_pool_size - internal_pool_size
+            #     internal pool = internal_pool_size
+            #     total         = max_pool_size
+            #
+            # Measured 2026-09-25: adding the internal pool on top was the only
+            # effect of the bulkhead this workload could detect. At equal TOTAL
+            # capacity the split made no latency difference; unmatched, it looked
+            # like a 3x win that was purely the extra connections. So charging
+            # them to the budget both removes a false win and keeps the one
+            # number that matters — the sum the database actually sees —
+            # honest. The database sees the sum across every task and class, and
+            # per-task pools multiply while the server's useful concurrency does
+            # not (`issues/231` step 4).
+            internal_max = self.config.get('internal_pool_size', 3)
+            if internal_max > 0:
+                if internal_max >= max_size:
+                    # Leave at least one connection for serving requests. An
+                    # internal pool that consumes the entire budget is not a
+                    # bulkhead, it is an outage with extra steps.
+                    logger.warning(
+                        "internal_pool_size=%s does not fit inside "
+                        "max_pool_size=%s; reducing internal to %s so request "
+                        "serving keeps at least one connection",
+                        internal_max, max_size, max(0, max_size - 1),
+                    )
+                    internal_max = max(0, max_size - 1)
+                request_max = max_size - internal_max
+            else:
+                request_max = max_size
+
             # CLAMP, do not fail. `min_pool_size` is a warm-connection floor and
             # `max_pool_size` is a hard ceiling; lowering only the ceiling is an
             # unambiguous request for a smaller pool, and asyncpg answers it with
@@ -159,12 +194,17 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
             # failure names neither pool nor size. Reducing the global budget is
             # step 4 of `issues/231`, so operators WILL lower max_size, and they
             # should not have to know to lower min_size with it.
-            if min_size > max_size:
+            #
+            # Compared against `request_max`, NOT `max_size`: the carve-out above
+            # means the request pool is smaller than the budget, so a min that
+            # fits the budget can still exceed the pool it is applied to.
+            if min_size > request_max:
                 logger.warning(
-                    "min_pool_size=%s exceeds max_pool_size=%s; clamping min to %s",
-                    min_size, max_size, max_size,
+                    "min_pool_size=%s exceeds the request pool (%s of a %s "
+                    "budget, %s reserved for internal); clamping min to %s",
+                    min_size, request_max, max_size, internal_max, request_max,
                 )
-                min_size = max_size
+                min_size = request_max
             # INTERNAL gets its own small pool (`issues/231`). Background work —
             # ANALYZE, VACUUM, backfill, segmentation, auto-sync — is always
             # deferrable and nothing waits on it interactively, so it is capped
@@ -187,7 +227,7 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
                 user=require(self.config, 'username'),
                 password=require(self.config, 'password'),
                 min_size=min_size,
-                max_size=max_size,
+                max_size=request_max,
                 max_inactive_connection_lifetime=120.0,
                 command_timeout=self.config.get('command_timeout', 60),
                 acquire_timeout=acquire_timeout,
@@ -199,8 +239,9 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
             # records exist to answer. Becomes QUERY when step 3 splits them.
             register_pool(self.connection_pool, PoolClass.REQUEST)
             logger.info(
-                "asyncpg pool created: min_size=%s max_size=%s acquire_timeout=%ss",
-                min_size, max_size, acquire_timeout,
+                "asyncpg REQUEST pool created: min_size=%s max_size=%s "
+                "(of a %s budget, %s carved out for INTERNAL) acquire_timeout=%ss",
+                min_size, request_max, max_size, internal_max, acquire_timeout,
             )
 
             if internal_max > 0:
@@ -220,7 +261,9 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
                     init=_init_conn,
                 )
                 register_pool(self.internal_pool, PoolClass.INTERNAL)
-                logger.info("asyncpg INTERNAL pool created: max_size=%s", internal_max)
+                logger.info(
+                "asyncpg INTERNAL pool created: max_size=%s "
+                "(total across both pools: %s)", internal_max, max_size)
             else:
                 # Left as None deliberately. `_internal_pool` and the background
                 # call sites fall back to the request pool, so this is the

@@ -132,7 +132,11 @@ def test_a_min_above_max_is_clamped_not_fatal():
     from vitalgraph.db.sparql_sql import sparql_sql_db_impl
 
     src = inspect.getsource(sparql_sql_db_impl.SparqlSQLDbImpl.connect)
-    assert "if min_size > max_size:" in src, (
+    # Compared against the REQUEST pool, not the budget: since 2026-09-25 the
+    # internal pool is carved out of `max_pool_size`, so the pool the min is
+    # applied to is smaller than the budget and a min that fits the budget can
+    # still exceed its pool. See test_internal_pool_budget_carve_out.py.
+    assert "if min_size > request_max:" in src, (
         "no clamp: lowering max_pool_size below min_pool_size fails at startup "
         "with an error that names neither")
-    assert "min_size = max_size" in src
+    assert "min_size = request_max" in src

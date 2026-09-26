@@ -318,10 +318,13 @@ What this changes:
 
   * The bulkhead's justification is preventing a specific outage mode, NOT
     throughput or latency. It should not be sold as a performance change.
-  * Its cost is real and now measured as the only detectable effect: it ADDS to
-    the global budget. That cuts directly against step 4 below, and it means
-    `internal_pool_size` should be paid for out of `max_pool_size` rather than
-    added on top.
+  * **DECIDED AND IMPLEMENTED 2026-09-25: `internal_pool_size` is CARVED OUT of
+    `max_pool_size`, not added to it.** `max_pool_size` is now the whole budget
+    for a task across both classes — request = max - internal, total = max — so
+    turning the bulkhead on no longer quietly raises the number the database
+    sees. It also makes the A/B capacity-matched by construction, so the false
+    win cannot reappear: `tests/unit/test_internal_pool_budget_carve_out.py`
+    pins the arithmetic, the clamp and the log.
   * The isolation proof is `tests/load/test_query_is_not_starved_by_internal.py`,
     which saturates connections deliberately with `pg_sleep` and carries a
     control proving it can starve a shared pool. That result stands: 1354-1374 ms
@@ -383,9 +386,10 @@ results before they were found:
     takes a request connection reopens the same hole.
   * Whether `internal_pool_size: 3` is right. It is a guess chosen to be small
     enough that INTERNAL cannot matter and large enough that ANALYZE, VACUUM
-    and auto-sync do not serialise behind each other. It also ADDS to the
-    global budget — every task now opens up to 3 more — which cuts against
-    step 4 and has not been measured.
+    and auto-sync do not serialise behind each other. It no longer adds to the
+    global budget (carved out, above), so the open question is narrower: 3 of 30
+    is 10% of request capacity permanently reserved for work that is by
+    definition deferrable, and whether that is the right price is unmeasured.
 
 ## Reproduce
 

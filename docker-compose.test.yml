@@ -223,6 +223,9 @@ services:
       #     -f docker-compose.test.yml up -d --wait   # control
       #   DB_MAX_POOL_SIZE=5 DB_INTERNAL_POOL_SIZE=2 docker compose \
       #     -f docker-compose.test.yml up -d --wait   # treatment
+      # DB_MAX_POOL_SIZE is the WHOLE budget for the task; the internal pool is
+      # carved out of it, so request = max - internal and the total the database
+      # sees is max. Raising DB_INTERNAL_POOL_SIZE shrinks request serving.
       - DB_POOL_SIZE=${DB_POOL_SIZE:-10}
       - DB_MAX_POOL_SIZE=${DB_MAX_POOL_SIZE:-30}
       - DB_INTERNAL_POOL_SIZE=${DB_INTERNAL_POOL_SIZE:-3}
