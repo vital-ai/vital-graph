@@ -419,17 +419,24 @@ async def _sync_fts_for_subjects(
 
 # `hasKGSlotType` for a slot, else `hasKGEntityType`, else rdf:type — the three
 # ways a KG object says what it IS, in the order a mapping would key on them.
+# `$6` (`hasKGDocumentSegmentIndex`) and `$7` (`hasKGDocumentType`) exist because
+# this query used to return only slot/entity/rdf_type, so a DOCUMENT SEGMENT fell
+# through to the `kgentity` fallback and could never match a `kgdocument_segment`
+# mapping — every segment was treated as out of scope and had its vector row
+# DELETED (`issues/245`).
 _SCOPE_SQL = """
 SELECT q.subject_uuid,
        max(CASE WHEN tp.term_text = $3 THEN tv.term_text END) AS slot_type,
        max(CASE WHEN tp.term_text = $4 THEN tv.term_text END) AS entity_type,
-       max(CASE WHEN tp.term_text = $5 THEN tv.term_text END) AS rdf_type
+       max(CASE WHEN tp.term_text = $5 THEN tv.term_text END) AS rdf_type,
+       max(CASE WHEN tp.term_text = $6 THEN tv.term_text END) AS segment_index,
+       max(CASE WHEN tp.term_text = $7 THEN tv.term_text END) AS document_type
 FROM {rdf_quad} q
 JOIN {term} tp ON tp.term_uuid = q.predicate_uuid
 JOIN {term} tv ON tv.term_uuid = q.object_uuid
 WHERE q.subject_uuid = ANY($1::uuid[])
   AND q.context_uuid = $2
-  AND tp.term_text IN ($3, $4, $5)
+  AND tp.term_text IN ($3, $4, $5, $6, $7)
 GROUP BY q.subject_uuid
 """
 
@@ -448,7 +455,9 @@ async def _subject_scopes(conn, space_id: str, subject_uuids, context_uuid):
         list(subject_uuids), context_uuid,
         f"{HALEY}hasKGSlotType", f"{HALEY}hasKGEntityType",
         "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+        f"{HALEY}hasKGDocumentSegmentIndex", f"{HALEY}hasKGDocumentType",
     )
+    KGDOC = f"{HALEY}KGDocument"
     out = {}
     for r in rows:
         key = str(r["subject_uuid"])   # see the lookup in the caller
@@ -456,7 +465,19 @@ async def _subject_scopes(conn, space_id: str, subject_uuids, context_uuid):
             out[key] = ("kgslot", r["slot_type"])
         elif r["entity_type"]:
             out[key] = ("kgentity", r["entity_type"])
+        elif r["segment_index"] is not None:
+            # A SEGMENT before a document: both are `rdf:type KGDocument`, and the
+            # segment index is what tells them apart (the same discriminator the
+            # segment listing queries use). Ordered above `document_type` because a
+            # segment carries the parent's document type too, so testing that first
+            # would classify every segment as a whole document.
+            out[key] = ("kgdocument_segment", r["document_type"] or KGDOC)
+        elif r["document_type"]:
+            out[key] = ("kgdocument", r["document_type"])
         elif r["rdf_type"]:
+            # The fallback stays `kgentity`, which is what it always was — but it
+            # is now reached only by subjects that are none of the above, rather
+            # than by every document and segment in the space.
             out[key] = ("kgentity", r["rdf_type"])
     return out
 
