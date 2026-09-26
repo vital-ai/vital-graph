@@ -3,6 +3,13 @@
 ## Status: OPTION 2 DONE 2026-09-18 — the flag now SAYS it is not implemented,
 ## in the response `message`, HTTP 200. Still OPEN for option 1: `frame_graph`
 ## is null on every result and implementing it belongs with `issues/208`.
+##
+## CARRIES A RETRACTION, 2026-09-25. This file's claim that "`/kgframes`
+## implements it where it offers it" is FALSE for the `uris=` form —
+## `_get_frames_by_uris` takes the flag and drops it (`issues/240`), which also
+## invalidates the route OPTION 1 recommends. Option 1 is now PRICED and is much
+## cheaper than this file assumed: ~11,924 buffers for a 25-frame page, not
+## anything near `issues/209`'s 3.5-5.1 s. See the two sections at the end.
 
 **Related:** `issues/209` (the same silent-null symptom from the opposite
 cause — implemented, then bypassed), `issues/182` (why a frame query on a large
@@ -106,3 +113,83 @@ found an unconditional crash instead.
     grep -n "include_frame_graph" vitalgraph/endpoint/kgquery_endpoint.py
 
 One hit: the `TODO` at line 1287.
+
+## RETRACTION 2026-09-25 — "`/kgframes` implements it where it offers it" is FALSE for the `uris=` form
+
+The section above headed "`/kgframes` does NOT have the `issues/209` hole" ends:
+
+> So: two routes, two different states. `/kgframes` implements it where it
+> offers it. `/kgqueries` offers it and implements it nowhere.
+
+The first of those sentences is wrong. `_get_frames_by_uris`
+(`kgframes_endpoint.py:1349`) takes `include_frame_graph` in its signature and
+the flag appears NOWHERE in the body — so `GET /kgframes?uris=a,b,c&include_frame_graph=true`
+returns the frames without their graphs, HTTP 200, `status=FOUND`, no message.
+The single-URI form at `:1097`/`:1113` does implement it. Filed as `issues/240`.
+
+**How this file got it wrong is the reusable part.** The check that produced that
+section read the two call sites at `:634`/`:639` and established that both are
+URI LOOKUPS rather than paged listings — which is true, and is the right answer
+to the question `issues/209` had asked (can a fast path bypass the flag?). It is
+not the same question as "is the flag honoured once the lookup runs", and only
+one of the two functions was read through to its body. A dispatch table is
+evidence about which code runs, not about what that code does.
+
+The same gap is in the test suite: `tests/api/test_kgframes_api.py:503` is the
+only `/kgframes` cell for this flag and its docstring names the form — `?uri=`.
+The `uris=` form has no cell with the flag set. The control-pair discipline this
+file used for option 2 on `/kgqueries` would have caught it on either form.
+
+## This changes OPTION 1, which recommended building on that function
+
+Option 1 above says:
+
+> `_get_frames_by_uris` already produces frame graphs for a list of frame URIs,
+> and the frame_query path has exactly that list at `:1281`.
+
+It does not produce frame graphs. Wiring `frame_query` into it as written ships a
+SECOND no-op whose symptom — `frame_graph` null on every result — is identical to
+the one option 2 exists to explain, so it would read as the fix not having
+deployed. `issues/226` repeats this claim from here and is corrected there too.
+
+Option 1 is still the right end state; its first step is now `issues/240`.
+
+## And option 1 is CHEAPER than this file assumed — measured 2026-09-25
+
+This file says option 1 "should be built knowing that number", the number being
+`issues/209`'s 3.5-5.1 s for 25 entities. Measured on `nurture_typed` (2,995,193
+slot-sort rows, 509,203 frames), for a scattered 25-frame page:
+
+| for one 25-frame page | buffers | warm exec ms (min/med/max, 5 reps) |
+|---|---:|---|
+| 2 named columns from `entity_slot_sort`, frame-keyed | **31** | 0.33 / 1.03 / 1.61 |
+| the same 2 values walked from the quads | 2,295 | 8.96 / 13.16 / 22.55 |
+| whole frame graph, term-resolved — THIS FILE'S OPTION 1 | 11,924 | 53.6 / 85.7 / 341.8 |
+
+**2,567 quads, not ~18,000.** The frame graph is ~7x less data than the entity
+graph, and the timings track that ratio — so option 1 is roughly 12k buffers, not
+a multi-second hydration. Buffers were byte-identical across three repetitions;
+the ms spread is contention (`nurture_typed` is not maintenance-excluded).
+
+Two corrections to how `issues/209`'s figure should be read, both from the code
+rather than from the number:
+
+  * **`_fetch_entity_graphs` is batched and cache-fronted**
+    (`kgquery_endpoint.py:1834`). 3.5-5.1 s is ONE query resolving ~18,000 quads,
+    not N round trips. Term resolution is where it goes — adding the three term
+    joins to the frame-graph query took 2,122 buffers to 11,924, 5.6x, for the
+    same quads.
+  * **`_get_frames_by_uris` is per-URI** (`get_object` per frame under
+    `bounded_gather`), so implementing option 1 through it would inherit 25 round
+    trips instead of the one batched query the entity side already uses. Fixing
+    `issues/240` by honouring the flag per frame is correct but is NOT option 1;
+    batching is the separate half.
+
+So the decision this file deferred is now priceable. Option 1 costs ~385x a
+named-column projection over the same page, which is why it should be offered
+rather than defaulted — the same conclusion `issues/226` reached, on a number an
+order of magnitude smaller than the one it feared. What it does NOT settle is
+this file's own open question of what a `frame_graph` should CONTAIN; the 2,567
+quads above are `?s haley:hasFrameGraphURI <frame>` plus the frame, i.e. the
+shape `_build_get_frame_query` already answers, not a decision that the query
+surface should answer it the same way.
