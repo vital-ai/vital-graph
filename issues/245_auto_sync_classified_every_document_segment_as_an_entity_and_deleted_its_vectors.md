@@ -109,6 +109,38 @@ What is established:
 materialises the wrong side — and this is a concrete failing case to test it
 against, which 220 says it lacks. NOT pursued further here.
 
+## Hypotheses RULED OUT while chasing the remaining failure
+
+Recorded because each looked right and cost time, and the next person should not
+re-spend it. All four were tested, not reasoned away:
+
+  * **A missing `hasKGDocumentContent` term.** `issues/093`'s shape — a term absent
+    from the space makes a required pattern unmatchable and can empty a query. But
+    segments DO carry the predicate: a persistent probe space
+    (`test_scripts/debug/_segment_content_predicates.py`) shows
+    `hasKGDocumentContent` with 4 quads, and `kGDocumentContent` round-trips to it
+    correctly on a `KGDocument`.
+  * **The score threshold.** `min_score=0.0` emits
+    `1 - (embedding <=> v) > 0.0`, which looked capable of excluding everything.
+    Measured on a real 1,099-row vector table: **1,054 rows pass**, similarity
+    ranging -0.159 to 1.0. It removes 4%, not 100%.
+  * **A failed embedding substitution.** `resolve_vector_requests` falls back to
+    `'[]'::vector` on a missing index row or a provider error — a zero vector that
+    scores 0 for everything, which would produce exactly this symptom. Both
+    branches log at ERROR and NEITHER appears in the run's log.
+  * **The vector SQL running and returning nothing.** It never ran: with
+    `log_min_duration_statement = 0` on the test database for one failing run
+    (reverted afterwards), the captured statements contain **zero** occurrences of
+    `<=>` or `__vg_score`. So the page produced no vector scan at all, which is why
+    it is 14-15 ms rather than the 168 ms a scan costs.
+
+The probe space also showed the managed-segment filter working as designed:
+segments from the markdown method are `urn:segtype:markdown_section`, which the
+`FILTER NOT EXISTS` excludes, so that probe returns `total=0` for BOTH the count
+and the page — count and page AGREE there. The wikipedia space is the case where
+they disagree (66 against 0), and reproducing that specific disagreement is where
+this stands.
+
 ## Not established
 
   * **Why the enriched page returns zero.** The interaction between the top-K
