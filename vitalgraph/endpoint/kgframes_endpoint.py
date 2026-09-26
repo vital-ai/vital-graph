@@ -1518,10 +1518,36 @@ class KGFramesEndpoint:
             if deleted_uris:
                 self._schedule_auto_sync(backend_impl, space_id, graph_id, deleted_uris, "delete")
 
+            # `status` FOLLOWS THE OUTCOME. `issues/243`.
+            #
+            # `deleted_uris` is honest here — a frame is appended only when
+            # `_delete_frame_from_backend` returned True — but `status` was a
+            # hardcoded `DELETED`, so a request where every delete failed came back
+            # `status=deleted` with "Successfully deleted 0 frame(s)". Same defect
+            # the entity paths had, on the frame endpoint.
+            #
+            # `_delete_frames_by_uris` also swallows a per-frame exception with
+            # `continue`, so a frame can drop out of this list on a logged WARNING
+            # alone — which is exactly the case that used to report success.
+            requested = len(uris_to_delete)
+            deleted = len(deleted_uris)
+            if deleted == requested:
+                status = OperationStatus.DELETED
+                message = f"Successfully deleted {deleted} frame(s)"
+            elif deleted > 0:
+                status = OperationStatus.PARTIAL
+                message = (f"Deleted {deleted} of {requested} frame(s); "
+                           f"{requested - deleted} were not deleted")
+            else:
+                status = OperationStatus.STORE_FAILED
+                message = (f"None of the {requested} requested frame(s) were "
+                           f"deleted (they may be absent, or the deletes may "
+                           f"have failed)")
+
             return FrameDeleteResponse(
-                status=OperationStatus.DELETED,
-                message=f"Successfully deleted {len(deleted_uris)} frame(s)",
-                deleted_count=len(deleted_uris),
+                status=status,
+                message=message,
+                deleted_count=deleted,
                 deleted_uris=deleted_uris
             )
 
@@ -1604,10 +1630,36 @@ class KGFramesEndpoint:
             if deleted_uris:
                 self._schedule_auto_sync(backend_impl, space_id, graph_id, deleted_uris, "delete")
 
+            # `status` FOLLOWS THE OUTCOME. `issues/243`.
+            #
+            # `deleted_uris` is honest here — a frame is appended only when
+            # `_delete_frame_from_backend` returned True — but `status` was a
+            # hardcoded `DELETED`, so a request where every delete failed came back
+            # `status=deleted` with "Successfully deleted 0 frame(s)". Same defect
+            # the entity paths had, on the frame endpoint.
+            #
+            # `_delete_frames_by_uris` also swallows a per-frame exception with
+            # `continue`, so a frame can drop out of this list on a logged WARNING
+            # alone — which is exactly the case that used to report success.
+            requested = len(uris)
+            deleted = len(deleted_uris)
+            if deleted == requested:
+                status = OperationStatus.DELETED
+                message = f"Successfully deleted {deleted} frame(s)"
+            elif deleted > 0:
+                status = OperationStatus.PARTIAL
+                message = (f"Deleted {deleted} of {requested} frame(s); "
+                           f"{requested - deleted} were not deleted")
+            else:
+                status = OperationStatus.STORE_FAILED
+                message = (f"None of the {requested} requested frame(s) were "
+                           f"deleted (they may be absent, or the deletes may "
+                           f"have failed)")
+
             return FrameDeleteResponse(
-                status=OperationStatus.DELETED,
-                message=f"Successfully deleted {len(deleted_uris)} frame(s)",
-                deleted_count=len(deleted_uris),
+                status=status,
+                message=message,
+                deleted_count=deleted,
                 deleted_uris=deleted_uris
             )
 

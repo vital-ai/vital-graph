@@ -33,6 +33,22 @@ class _NotABackend:
     """Matches nothing. The case the old `else` decided and this one refuses."""
 
 
+def test_an_already_built_adapter_passes_through_unchanged():
+    """IDEMPOTENCE, and it is not a nicety — it is a live requirement.
+
+    Several endpoint methods take a `backend` parameter that is already an adapter
+    and hand it straight back into this function; `_get_specific_frame_graphs` is
+    one. The old name-substring dispatch matched `SparqlSQLBackendAdapter` as well
+    and wrapped an adapter in an adapter, which worked by delegation. Rejecting it
+    instead broke frame-graph retrieval in the API suite (`issues/243`) — so this
+    cell exists because the stricter version shipped without it and the failure
+    only showed up against a running server.
+    """
+    adapter = SparqlSQLBackendAdapter.__new__(SparqlSQLBackendAdapter)
+    assert create_backend_adapter(adapter) is adapter, (
+        "an already-built adapter must pass through, not be re-wrapped or refused")
+
+
 class SparqlSQLSpaceImplLookalike:
     """The reason NAME matching had to go.
 

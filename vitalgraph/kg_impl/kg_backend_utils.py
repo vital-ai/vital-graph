@@ -1213,9 +1213,19 @@ def create_backend_adapter(backend_impl) -> KGBackendInterface:
     """
     from ..db.sparql_sql.sparql_sql_space_impl import SparqlSQLSpaceImpl
 
+    # IDEMPOTENT. Several callers take a `backend` parameter that is ALREADY an
+    # adapter and hand it straight back in — `_get_specific_frame_graphs` is one.
+    # The old name-substring dispatch matched `SparqlSQLBackendAdapter` too and
+    # silently wrapped an adapter in an adapter, which happened to work because
+    # the adapter delegates through `self.backend`. Rejecting it instead broke
+    # those callers (`issues/243`), so this returns it unchanged: correct for
+    # them, and strictly better than the double wrap it replaces.
+    if isinstance(backend_impl, KGBackendInterface):
+        return backend_impl
+
     if isinstance(backend_impl, SparqlSQLSpaceImpl):
         return SparqlSQLBackendAdapter(backend_impl)
 
     raise TypeError(
         f"No KG backend adapter for {type(backend_impl).__name__}. "
-        f"Supported: SparqlSQLSpaceImpl.")
+        f"Supported: SparqlSQLSpaceImpl, or an already-built adapter.")

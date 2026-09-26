@@ -4,6 +4,18 @@
 ## they turned out to be different defects, not two copies of the same one: the
 ## entity batch delete is LIVE and its status was hardcoded, and the frame path was
 ## UNREACHABLE and could never have succeeded. Falsified both fixes.
+##
+## THE SAME DEFECT WAS IN `kgframes_endpoint` TOO — both delete handlers, found by
+## being asked about that endpoint specifically. Fixed and verified against a
+## running server (a failed batch now returns `store_failed`, not `deleted`).
+##
+## ALSO CARRIES A REGRESSION I SHIPPED IN `issues/241` AND FOUND HERE: the
+## `isinstance` dispatch in `create_backend_adapter` refused an ALREADY-BUILT
+## adapter, which several endpoint methods pass in, so frame-graph GET returned
+## `objects=[]` and a frame update read back `None`. Two API tests caught it; the
+## 4894-cell unit suite did not. Fixed by making the dispatch idempotent. Verified
+## against a REBUILT test stack, which is the check that would have caught it
+## three commits earlier.
 
 **Related:** `issues/242` (the defect that named these two and declined to clear
 them), `issues/184` (the precedent for DELETING a path that has never executed
@@ -99,6 +111,81 @@ capability cannot be lost by a later cleanup reading this issue as "frame delete
 was removed".
 
 tests/unit: 4887 passed, 9 skipped, 0 failures.
+
+## 3. `kgframes_endpoint` had the SAME defect, in both delete handlers
+
+Asked directly: "what about kgframes endpoint including deletes?" — a fair
+question, because sections 1 and 2 are both `kgentities`. It did.
+
+`_delete_frame_by_uri` and `_delete_frames_by_uris` each build an HONEST
+`deleted_uris` (a frame is appended only when `_delete_frame_from_backend`
+returned True) and then returned:
+
+    status=OperationStatus.DELETED
+    message=f"Successfully deleted {len(deleted_uris)} frame(s)"
+
+So a request where every delete failed came back `status=deleted` /
+"Successfully deleted 0 frame(s)" — the same defect as the entity batch, on the
+endpoint whose name is on the operation. `_delete_frames_by_uris` is the worse of
+the two: it wraps each frame in `try/except ... continue`, so a frame drops out of
+the list on a logged WARNING alone, and that was precisely the case reporting
+success.
+
+Both now DELETED / PARTIAL / STORE_FAILED against the requested count.
+
+**VERIFIED AGAINST A RUNNING SERVER**, not just by unit test — deleting two
+non-existent frames through `DELETE /api/graphs/kgframes`:
+
+    {"success": false, "status": "store_failed",
+     "message": "None of the 2 requested frame(s) were deleted (they may be
+                 absent, or the deletes may have failed)",
+     "deleted_count": 0, "deleted_uris": []}
+
+`success` is derived from `status` via `_SUCCESS_STATUSES`, so before this the same
+request returned `success: true`.
+
+**One bug caught by checking rather than by testing:** the first version of this
+fix used `len(uris_to_delete)` in both handlers. That variable exists only in
+`_delete_frame_by_uri`; `_delete_frames_by_uris` calls its parameter `uris`, so it
+would have raised `NameError` on every batch frame delete. Found by verifying each
+handler defines what it references before rebuilding — which is the check the
+`issues/241` regression below argues for, applied one step earlier.
+
+## A REGRESSION I SHIPPED IN `241` AND CAUGHT HERE — read this one
+
+Verifying "did I break an endpoint or only delete dead code" found that I HAD
+broken one, three commits earlier, and no unit test saw it.
+
+`issues/241` replaced `create_backend_adapter`'s class-NAME substring dispatch
+with `isinstance`. The old form matched `SparqlSQLBackendAdapter` as well as
+`SparqlSQLSpaceImpl`, so when a caller handed it an ALREADY-BUILT adapter it
+wrapped an adapter in an adapter — which worked, because the adapter delegates
+through `self.backend`. `isinstance` correctly refused that, and refusing it broke
+the callers that rely on it:
+
+    kgentities_endpoint._get_specific_frame_graphs - ERROR -
+      No KG backend adapter for SparqlSQLBackendAdapter.
+      Supported: SparqlSQLSpaceImpl.
+
+Symptom: `GET` of a frame by URI returned `FrameGraph(objects=[])` and an entity
+frame update read back `None` instead of its slot value. **Two API tests failed;
+the 4894-cell unit suite was entirely green**, because the double-adaptation only
+happens through an endpoint method that takes `backend` as a parameter.
+
+Fixed by making `create_backend_adapter` IDEMPOTENT — an object that is already a
+`KGBackendInterface` is returned unchanged. That is better than both predecessors:
+the old code re-wrapped (worked, wasteful, and hid the pattern), the interim code
+refused (broke it), and this states the invariant. Unknown types still raise.
+Pinned by a new cell in `test_backend_adapter_dispatch.py` whose docstring says it
+exists because the stricter version shipped without it.
+
+**The lesson is about the verification, not the dispatch.** Every check I ran on
+`241` was static or unit-level: imports resolve, 4894 cells green, no dangling
+references. None of them exercised a request. The failure needed a running server
+and the API suite, and I only ran that when asked to confirm nothing was broken.
+A rebuilt stack plus `tests/api` is the cheap check that `issues/108` already
+argues for, and skipping it is what let a silent-empty-result regression sit in
+three commits.
 
 ## What this says about the original `242` note
 

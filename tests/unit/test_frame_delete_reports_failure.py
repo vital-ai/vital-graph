@@ -187,3 +187,34 @@ def test_the_unreachable_frame_delete_is_gone_not_repaired():
     # and the live one is still there, so the capability was not lost with it
     from vitalgraph.endpoint.kgframes_endpoint import KGFramesEndpoint
     assert hasattr(KGFramesEndpoint, "_delete_frame_by_uri")
+
+
+def test_the_kgframes_delete_handlers_also_follow_the_outcome():
+    """`issues/243`: the frame ENDPOINT had the same defect as the entity one.
+
+    `_delete_frame_by_uri` and `_delete_frames_by_uris` in `kgframes_endpoint` both
+    built an honest `deleted_uris` (appended only when the backend delete returned
+    True) and then returned a hardcoded `status=DELETED` with "Successfully deleted
+    N frame(s)". A request where every delete failed came back as a success with
+    N=0. Verified fixed against a running server: two non-existent frames now
+    return `success=false`, `status=store_failed`, `deleted_count=0`.
+
+    Structural for the same reason as the cells above, and scoped to the two
+    handlers rather than the whole file so an unrelated `DELETED` elsewhere cannot
+    make it pass.
+    """
+    from vitalgraph.endpoint import kgframes_endpoint as mod
+    lines = open(mod.__file__).read().split("\n")
+
+    for name in ("_delete_frame_by_uri", "_delete_frames_by_uris"):
+        start = next(i for i, l in enumerate(lines) if f"async def {name}(" in l)
+        end = next(i for i in range(start + 1, len(lines))
+                   if lines[i].startswith("    async def ") or lines[i].startswith("    def "))
+        body = "\n".join(lines[start:end])
+        assert "OperationStatus.PARTIAL" in body, (
+            f"{name} cannot report a partial delete — some-failed reads as "
+            f"success (`issues/243`)")
+        assert "OperationStatus.STORE_FAILED" in body, (
+            f"{name} cannot report an all-failed delete (`issues/243`)")
+        assert "status=status" in body, (
+            f"{name} returns a literal status again rather than the computed one")
