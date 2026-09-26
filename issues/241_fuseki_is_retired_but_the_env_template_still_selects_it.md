@@ -288,3 +288,103 @@ should be repointed at the archive path in the same change.
 
 Steps 2 and 3 are the ones that stop the bleeding; 1 is the one that makes 5
 possible; 5 is the goal.
+
+## Wider than the 81 files: `kg_impl/` carries Fuseki SEMANTICS, not just imports
+
+Found while copying knowledge out of the code before it is archived. These are
+not imports of the Fuseki packages, so they do not appear in the move list above
+and a `git mv` will not touch them — but they encode the retired backend's model
+of the world and have to be dealt with in the same pass.
+
+**1. The adapter factory's DEFAULT is the retired backend.**
+`kg_impl/kg_backend_utils.py:1782` dispatches on a substring of the class NAME:
+
+```python
+backend_type = type(backend_impl).__name__
+if 'SparqlSQL' in backend_type:       return SparqlSQLBackendAdapter(backend_impl)
+elif 'FusekiPostgreSQL' in backend_type: return FusekiPostgreSQLBackendAdapter(backend_impl)
+else:
+    # Default to Fuseki+PostgreSQL adapter
+    return FusekiPostgreSQLBackendAdapter(backend_impl)
+```
+
+Any backend whose class name does not contain `SparqlSQL` silently gets the
+Fuseki adapter. So the fallback for "I do not recognise this backend" is the one
+that is retired — the same shape as `.env.example:55`, one layer up, and it will
+raise `NameError` rather than fall back once the class is archived. The `else`
+should be the refusal, not the retired path.
+
+`FusekiPostgreSQLBackendAdapter` itself (`:210`) is a full `KGBackendInterface`
+implementation living in a live module, so it moves or goes with the rest.
+
+**2. `fuseki_success` is a result field on four write paths.** 33 lines across
+`kgentity_frame_delete_impl.py` (13), `kgentity_frame_create_impl.py` (9),
+`kgframe_create_impl.py` (6), `kgentity_frame_update_impl.py` (4) — a tri-state
+`Optional[bool]` recording whether the Fuseki half of a dual write succeeded,
+plus a `FUSEKI_SYNC_FAILURE` error log at
+`kgentity_frame_delete_impl.py:486`. On a single-store backend the concept has no
+referent: there is no second store to be out of sync with.
+
+**It is NOT a public surface**, which is the one piece of good news here —
+`fuseki_success` appears nowhere in `vitalgraph/model/` or
+`vitalgraph/endpoint/`, so removing it is an internal refactor and not an API
+change. Checked rather than assumed, because a tri-state success flag on a
+response model would have made this a versioning problem.
+
+**3. Interface docstrings name Fuseki as a live example** —
+`db/space_backend_interface.py:5` and `:444` ("Fuseki: HTTP webhooks or
+polling"), `db/db_inf.py:10`, `db/db_admin_inf.py:4`, `space/space_impl.py:14`,
+`space/space_manager.py:79`. Documentation only, but it is what a reader uses to
+decide what the interface is FOR, and it currently says the answer is a backend
+that no longer exists.
+
+## Knowledge copied out of the Fuseki code before archiving, 2026-09-25
+
+The parity references in `sparql_sql_space_impl.py` are no longer pointers into
+code that is about to move. Each now states the fact instead:
+
+  * **`_generate_term_uuid`** carries the wire format in full — namespace,
+    component order, the `\x00` separator, and which fields are omitted rather
+    than empty — because it is a compatibility contract and every stored
+    `term_uuid` is its output. Three things recorded that were only discoverable
+    from the archived code:
+    **(a)** the namespace is `uuid.NAMESPACE_DNS`, the standard RFC 4122
+    constant, not a VitalGraph-specific one — the archived comment called it "a
+    consistent namespace UUID for VitalGraph terms", which invites someone to
+    "fix" it and reassign every term uuid in every space;
+    **(b)** `datatype_id` is a per-space `BIGSERIAL`, so a typed literal's
+    identity depends on a LOCAL id, stable across spaces only because
+    `STANDARD_DATATYPES` is seeded in list order — reordering that list changes
+    every typed-literal uuid in every space created afterwards
+    (`filter_pushdown.py:890` leans on the same invariant);
+    **(c)** the archived batch write path hardcoded `datatype_id = None` for
+    every term under a standing TODO, so typed literals it wrote were hashed with
+    the datatype OMITTED. Their uuids are not what this function produces for the
+    same triple — which is a mechanism behind the datatype-loss family
+    (`issues/157`, `221`, `234`) and part of why those end "existing spaces still
+    need reloading".
+    The stated format is asserted against the implementation, five cases
+    including the blank-node divergence, so the docstring cannot drift silently.
+  * **`_SparqlSQLCoreAdapter`** states the transaction contract callers rely on,
+    and records TWO things the archived version did that it does not: it called
+    `track_connection()` (`utils/resource_manager.py:212` — still live, and used
+    by `sparql_sql_db_impl.py`, just not on this path), and it RELEASED THE
+    CONNECTION IF STARTING THE TRANSACTION RAISED. Here, a failure in
+    `tr.start()` after a successful `acquire()` leaks the connection for the life
+    of the process. **Recorded, deliberately not fixed** — it is pool behaviour
+    and belongs with `issues/231`; on a 30-connection pool with no bulkhead it is
+    1/30th of the box per occurrence, and `issues/229` is what exhaustion looks
+    like from outside (fewer results, HTTP 200, no error).
+  * **Graph auto-registration** states the rule — inserting a quad into a graph
+    URI implicitly creates that graph's catalog row — rather than citing
+    `DualWriteCoordinator` for it, with `issues/116` for what happens when only
+    some write paths honour it.
+  * **`_VITALGRAPH_NS`** and **`_SparqlSQLDbOpsAdapter`** no longer describe
+    themselves by reference to the archived names.
+
+Three references were left pointing at the archived code deliberately, because
+they are about the ARCHIVED behaviour rather than this backend's:
+`sparql_sql_db_impl.py:8`, `sparql_sql_db_objects.py:5`/`:74`, and
+`sparql_sql_schema.py:11`/`:1623` ("unlike fuseki_postgresql, which relies on
+Fuseki for query execution"). Those should be repointed at the archive path in
+step 5 rather than rewritten.

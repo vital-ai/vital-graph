@@ -52,7 +52,11 @@ def _lexical_form(value: Any, datatype: Optional[str]) -> str:
 # depends only on SPARQL structure, not on which space is queried).
 _compile_cache = SparqlCompileCache(maxsize=512)
 
-# Deterministic UUID namespace (same as fuseki_postgresql for compatibility)
+# Deterministic UUID namespace for term identity. This is `uuid.NAMESPACE_DNS`,
+# the standard RFC 4122 constant — NOT a VitalGraph-specific namespace, despite
+# the name. Spelled as a literal so the value is visible at the point of use.
+# Changing it reassigns every term uuid in every space; see `_generate_term_uuid`
+# for the full wire format and the two known divergences.
 _VITALGRAPH_NS = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
 
 # Read-path fence, enforced by PostgreSQL rather than by the client.
@@ -117,7 +121,58 @@ def _generate_term_uuid(
     term_text: str, term_type: str,
     lang: Optional[str] = None, datatype_id: Optional[int] = None,
 ) -> uuid.UUID:
-    """Deterministic UUID v5 for an RDF term — matches fuseki_postgresql."""
+    """Deterministic UUID v5 for an RDF term.
+
+    THE WIRE FORMAT, stated in full because it is a compatibility contract and
+    the other implementation of it is being archived (`issues/241`). Every stored
+    `term_uuid` in every space is this function's output, so a change here is a
+    change to the identity of every term already written:
+
+        uuid5(NAMESPACE_DNS, "\\x00".join(parts))
+
+        parts = [term_text, term_type]
+                + [f"lang:{lang}"]              iff lang is not None
+                + [f"datatype:{datatype_id}"]   iff datatype_id is not None
+
+    Four details, each of which changes the uuid if got wrong:
+
+      * **The namespace is `uuid.NAMESPACE_DNS`** (`6ba7b810-9dad-11d1-80b4-
+        00c04fd430c8`), the standard RFC 4122 constant. It is spelled as a
+        literal in `_VITALGRAPH_NS` and the archived code called it "a consistent
+        namespace UUID for VitalGraph terms", which reads as if it were bespoke.
+        It is not. Do not "fix" it to a project-specific namespace — that
+        reassigns every term uuid in every space.
+      * **Absent fields are OMITTED, not empty.** A plain literal is
+        `text\\x00L`, not `text\\x00L\\x00lang:\\x00datatype:`.
+      * **The separator is `\\x00`**, chosen because it cannot occur in term
+        text, so no value can forge a different field split.
+      * **`datatype_id` is a per-space `BIGSERIAL`** (`sparql_sql_schema.py:943`),
+        so the identity of a typed literal depends on a LOCAL insertion-order id.
+        It agrees across spaces only because `STANDARD_DATATYPES` is seeded in
+        list order at space creation — reordering that list changes every
+        typed-literal uuid in every space created afterwards.
+        `filter_pushdown.py:890` leans on the same invariant.
+
+    TWO DIVERGENCES FROM THE ARCHIVED IMPLEMENTATION, so "the uuids match" is not
+    a safe assumption about data written by it:
+
+      1. This normalises `term_text` FIRST; the archived
+         `FusekiPostgreSQLSpaceTerms.generate_term_uuid` did not. A blank node
+         spelled `_:b1` therefore hashes there to a different term than `b1`
+         does here (`issues/065`, and `term_normalize.py` for why that is a
+         wrong-answer bug rather than a cosmetic one).
+      2. The archived batch write path hardcoded `datatype_id = None` for every
+         term — a standing TODO, commented "doesn't have space_impl" — so typed
+         literals it wrote were hashed with the datatype OMITTED and stored with
+         a NULL `datatype_id`. Their uuids are not what this function produces
+         for the same triple. That is the mechanism behind the datatype-loss
+         family (`issues/157`, `221`, `234`) and part of why those issues end
+         "existing spaces still need reloading" rather than "fixed".
+
+    The algorithm is otherwise identical, which is what makes a space written by
+    one readable by the other AT ALL — the divergences are in the INPUTS, not the
+    derivation.
+    """
     # Normalised first, so the two spellings of a blank node cannot hash to
     # two different terms however the caller spelled it (issues/065).
     from .term_normalize import normalize_term_text
@@ -399,7 +454,30 @@ class _SparqlSQLTransaction:
 
 class _SparqlSQLCoreAdapter:
     """Provides ``create_transaction()`` so endpoint impl_utils can open
-    transactions on the sparql_sql backend identically to fuseki_postgresql."""
+    transactions on this backend.
+
+    THE CONTRACT the callers rely on, recorded here because the implementation it
+    was written against is being archived (`issues/241`): acquire a connection
+    from the pool, start a transaction on it, and hand back an object carrying
+    ``(connection, transaction, pool)`` that commits or rolls back once and
+    releases the connection on the way out. ``space_impl`` is accepted and
+    ignored — the archived signature took it, and callers still pass it.
+
+    TWO THINGS THE ARCHIVED VERSION DID THAT THIS DOES NOT. Both are recorded as
+    differences rather than fixed here, because they are pool behaviour and
+    belong with `issues/231`:
+
+      * **It called ``track_connection()``** (`utils/resource_manager.py:212`) on
+        the acquired connection. That helper is still live and this backend uses
+        it in `sparql_sql_db_impl.py` — just not on this path, so a transaction
+        opened here is invisible to whatever that tracking is for.
+      * **It released the connection if starting the transaction raised.** Here,
+        if ``tr.start()`` fails after ``acquire()`` succeeded, the connection is
+        never released — it leaks for the life of the process. On a 30-connection
+        pool with no bulkhead that is 1/30th of the box per occurrence, and
+        `issues/229` is what pool exhaustion looks like from the outside: fewer
+        results, HTTP 200, no error.
+    """
 
     def __init__(self, space_impl: 'SparqlSQLSpaceImpl'):
         self._impl = space_impl
@@ -413,9 +491,16 @@ class _SparqlSQLCoreAdapter:
 
 
 class _SparqlSQLDbOpsAdapter:
-    """Mirrors ``FusekiPostgreSQLDbOps`` — delegates to methods already on
+    """A transaction-aware quad-operations layer reached as
+    ``db_space_impl.db_ops`` — delegates to methods already on
     ``SparqlSQLSpaceImpl`` so that ``ObjectsImpl`` (and friends) can call
-    ``db_space_impl.db_ops.add_rdf_quads_batch()`` etc."""
+    ``db_space_impl.db_ops.add_rdf_quads_batch()`` etc.
+
+    The shape is inherited: it mirrors the archived ``FusekiPostgreSQLDbOps``
+    (`issues/241`), which existed for the same reason — callers want quad ops that
+    take an optional caller transaction, and the space impl's own methods are the
+    implementation. Named here rather than by reference to the archived class, so
+    the reason this indirection exists survives the archive."""
 
     def __init__(self, space_impl: 'SparqlSQLSpaceImpl'):
         self._impl = space_impl
@@ -751,7 +836,12 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             return False
 
     # ==================================================================
-    # Graph auto-registration (mirrors fuseki_postgresql DualWriteCoordinator)
+    # Graph auto-registration. THE RULE, stated here because the backend it was
+    # copied from (`DualWriteCoordinator`) is being archived (`issues/241`):
+    # inserting a quad into a graph URI implicitly creates that graph's catalog
+    # row. Callers depend on never having to create a graph first, and
+    # `issues/116` is what happens when only SOME write paths honour it —
+    # quads in a graph the `graph` table has never heard of.
     # ==================================================================
 
     def _extract_graph_uris_from_quads(
@@ -771,9 +861,9 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         self, space_id: str, quads: list,
     ) -> None:
         """Auto-register every graph URI found in *quads* that is not yet
-        in the ``graph`` table.  This replicates the side-effect that the
-        fuseki_postgresql backend has: inserting data into a graph URI
-        implicitly creates the graph record."""
+        in the ``graph`` table — inserting data into a graph URI implicitly
+        creates the graph record. Inherited behaviour, now this backend's own
+        contract rather than a replication of the archived one."""
         graph_uris = self._extract_graph_uris_from_quads(quads)
         # The context backing the DEFAULT graph is storage, not a graph a user
         # created, so it never earns a catalog row (`named_graph_semantics`
