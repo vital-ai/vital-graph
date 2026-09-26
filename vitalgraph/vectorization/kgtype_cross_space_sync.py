@@ -55,12 +55,19 @@ async def _find_affected_subjects(
 
     # Build parameterised IN clause
     placeholders = ", ".join(f"${i+2}" for i in range(len(obj_uuids)))
+    # FIVE WRONG COLUMN NAMES, every one of them (`issues/244`). This read
+    # `q.subject`, `q.predicate`, `q.object`, `t_subj.id` and `t_subj.text`; the
+    # schema is `subject_uuid` / `predicate_uuid` / `object_uuid` and
+    # `term_uuid` / `term_text`. So the query raised `UndefinedColumnError` on
+    # every call, the `except` below logged a WARNING and returned `[]`, and the
+    # cross-space sync therefore found NO affected subjects, ever — a no-op that
+    # reported itself as a successful scan.
     sql = f"""
-        SELECT DISTINCT t_subj.text AS subject_uri
+        SELECT DISTINCT t_subj.term_text AS subject_uri
         FROM {space_id}_rdf_quad q
-        JOIN {space_id}_term t_subj ON q.subject = t_subj.id
-        WHERE q.predicate = $1
-          AND q.object IN ({placeholders})
+        JOIN {space_id}_term t_subj ON q.subject_uuid = t_subj.term_uuid
+        WHERE q.predicate_uuid = $1
+          AND q.object_uuid IN ({placeholders})
     """
     params = [pred_uuid, *obj_uuids]
 

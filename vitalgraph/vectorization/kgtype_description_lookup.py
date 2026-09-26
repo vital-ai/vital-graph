@@ -13,7 +13,7 @@ from typing import Dict, List, Optional
 from vitalgraph.constants import (
     SP_KG_TYPES,
     SP_KG_TYPES_GRAPH,
-    TYPE_DESCRIPTION_PROPERTIES,
+    TYPE_GRAPH_DESCRIPTION_PROPERTY,
     TYPE_URI_PROPERTIES,
 )
 
@@ -42,7 +42,13 @@ class KGTypeDescriptionLookup:
         """
         self.mapping_type = mapping_type
         self.type_uri_property = TYPE_URI_PROPERTIES.get(mapping_type)
-        self.desc_property = TYPE_DESCRIPTION_PROPERTIES.get(mapping_type)
+        # One property for every type kind: the ontology puts the description on
+        # `KGType`, which `KGEntityType`/`KGFrameType`/... all extend. This used to
+        # index `TYPE_DESCRIPTION_PROPERTIES` by `mapping_type`, which returns the
+        # INSTANCE-side `has<X>TypeDescription` — a property a type object in
+        # `sp_kg_types` never carries — so the lookup always came back empty and
+        # every subject was skipped (`issues/244`).
+        self.desc_property = TYPE_GRAPH_DESCRIPTION_PROPERTY
 
     async def get_description(self, conn, type_uri: str) -> Optional[str]:
         """Fetch the type-specific description for a single type URI.

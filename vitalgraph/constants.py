@@ -53,6 +53,27 @@ TYPE_URI_PROPERTIES = {
     "kgslot": "http://vital.ai/ontology/haley-ai-kg#hasKGSlotType",
 }
 
+# The description property a TYPE OBJECT carries, in `sp_kg_types`.
+#
+# `KGEntityType`, `KGFrameType` etc. are all `KGType` subclasses, and the ontology
+# puts the description on `KGType` — one property for every type kind, not one per
+# kind. `KGEntityType().kGraphDescription = "..."` serialises to exactly this.
+#
+# THIS IS NOT `TYPE_DESCRIPTION_PROPERTIES` BELOW, and conflating the two meant the
+# type-description vector populator looked for a property a type object can never
+# carry, found nothing, and skipped every subject — 0 vectors from a successful
+# reindex (`issues/244`).
+TYPE_GRAPH_DESCRIPTION_PROPERTY = "http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription"
+
+# The description properties an INSTANCE carries — a denormalised copy of its
+# type's description, written onto the KGEntity/KGFrame itself so it can be sorted
+# and filtered without a cross-space lookup (`fast_frame_prop_sort`,
+# `sync_frame_prop_sort`, `kgtype_index_setup`).
+#
+# Do NOT use these to read a description OUT of `sp_kg_types`: the ontology gives
+# `hasKGEntityTypeDescription` the domain `KGEntity`/`KGEntityMention`, not
+# `KGEntityType`, and `hasKGDocumentTypeDescription` is not declared in the
+# ontology at all. Use `TYPE_GRAPH_DESCRIPTION_PROPERTY` for a type object.
 TYPE_DESCRIPTION_PROPERTIES = {
     "kgentity": "http://vital.ai/ontology/haley-ai-kg#hasKGEntityTypeDescription",
     "kgframe": "http://vital.ai/ontology/haley-ai-kg#hasKGFrameTypeDescription",
