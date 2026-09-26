@@ -1,8 +1,15 @@
 # 241 — Fuseki is retired, but the env template still selects it and the factory still builds it
 
 ## Status: OPEN — the DECISION is made (2026-09-25: Fuseki is RETIRED, not merely
-## unused), which is what this issue was blocked on. Nothing removed yet. One
-## item is a live defect rather than stale material: `.env.example` selects
+## unused), which is what this issue was blocked on. Nothing moved yet.
+##
+## THE GOAL IS TO ARCHIVE THE CODE, not delete it — `git mv` into
+## `archive/archive_vitalgraph_old/`, where the V1 postgresql backend already
+## sits, tracked. 81 tracked files. **One blocker, and it is specific:**
+## `postgresql_signal_manager.py` lives in `fuseki_postgresql/` and is imported by
+## the LIVE `SPARQL_SQL` backend, so it must move OUT before the package moves in.
+##
+## One item is a live defect rather than stale material: `.env.example` selects
 ## `fuseki_postgresql` and that value WINS over the correct `sparql_sql` default.
 
 **Related:** `issues/240` (found this — a Fuseki test script was cited as evidence
@@ -121,10 +128,13 @@ nothing.
   4. `tests/unit/test_connection_settings_are_required.py` — drop both exemptions,
      AFTER 5.
 
-**Stale, not dangerous — a sweep, and a separate decision on scope:**
+**Stale rather than dangerous — and the scope IS decided: these are ARCHIVED, not
+deleted. See "The goal" below for the file counts, the blocker and the ordering.**
 
   5. `vitalgraph/db/fuseki/` + `vitalgraph/db/fuseki_postgresql/` — 25 modules,
-     reachable only through the factory arms in 2.
+     reachable only through the factory arms in 2, EXCEPT
+     `postgresql_signal_manager.py`, which the live `SPARQL_SQL` backend imports
+     and which therefore has to move out first.
   6. 75 files under `test_scripts/` (incl. `kg_endpoint_fuseki/`, 5), 20 under
      `deploy/fuseki_deploy_test/`, 4 in `vitalgraph_sparql_sql_dev/`, 1 in
      `apps/fuseki/`.
@@ -172,3 +182,109 @@ Both are Apache Jena projects and the names are one word apart. Grep for
 
 The template's active value is `fuseki_postgresql`; the code's default is
 `sparql_sql`; the resolution order means the template wins.
+
+## The goal: ARCHIVE the code, the way the V1 backend was archived
+
+Not delete. The precedent already exists in this repo and the retirement message
+in `backend_config.py` names it — *"The 'postgresql' (V1) backend has been
+archived"* — and the code is still there and still readable:
+
+    archive/archive_vitalgraph_old/db_postgresql/    34 tracked files
+
+`archive/` is TRACKED (121 files; only `archive/frontend-archive/` and
+`archive/frontend-old/` are gitignored), so this is `git mv`, history preserved,
+not a deletion. That distinction is load-bearing for this particular backend —
+see "why it must stay readable" below.
+
+**What moves, 81 tracked files:**
+
+| path | tracked files |
+|---|---:|
+| `vitalgraph/db/fuseki/` | 6 |
+| `vitalgraph/db/fuseki_postgresql/` | 19 |
+| `apps/fuseki/` | 1 |
+| `deploy/fuseki_deploy_test/` | 20 |
+| `test_scripts/fuseki_postgresql/` | 29 |
+| `test_scripts/kg_endpoint_fuseki/` | 6 |
+
+## THE BLOCKER — the live backend's signal manager lives inside the retired package
+
+`vitalgraph/db/fuseki_postgresql/postgresql_signal_manager.py` cannot move with
+its package, because **`BackendType.SPARQL_SQL` imports it**:
+
+    backend_config.py:188   POSTGRESQL (V1, archived)  -> .fuseki_postgresql.postgresql_signal_manager
+    backend_config.py:202   FUSEKI_POSTGRESQL          -> .fuseki_postgresql.postgresql_signal_manager
+    backend_config.py:209   SPARQL_SQL  (LIVE)         -> .fuseki_postgresql.postgresql_signal_manager
+
+Archive the package as-is and the live backend loses its signal manager at
+startup. It must move OUT to a neutral home FIRST — `vitalgraph/db/` or beside
+`sparql_sql/` — and then the package can go.
+
+**Its docstring makes the mislabelling explicit**, and is worth reading as the
+statement of the problem rather than a nitpick:
+
+    """PostgreSQL-based signal implementation for FUSEKI_POSTGRESQL backend."""
+
+A module that serves the live backend, named after the retired one, documented as
+belonging to the retired one.
+
+**This trap is already one iteration old.** `backend_config.py:186` carries the
+comment *"V1 postgresql backend archived — use the shared signal manager"* — so
+when V1 was archived, its signal manager was NOT archived with it; it was left in
+(or moved into) `fuseki_postgresql` and shared. Archiving Fuseki without moving
+that module out repeats the same move one layer on, and the next retirement
+inherits it again. The fix is to stop the shared module living in any retired
+backend's package, not to pick a better one to park it in.
+
+## The other live call sites, and which are already gated
+
+  * **`fuseki_admin.FusekiPostgreSQLAdmin`** — imported at
+    `admin_cmd/vitalgraphdb_admin_cmd.py:282` and `impl/vitalgraphapp_impl.py:219`.
+    NOT gated at either site from what was read. These have to go or be gated
+    before the move.
+  * **`postgresql_schema.FusekiPostgreSQLSchema`** — imported at
+    `admin_cmd/vitalgraphdb_admin_cmd.py:2140`, which sits inside
+    `elif backend_type == 'fuseki_postgresql':`. Already gated, so it goes with
+    the backend arm and needs no separate work.
+  * **`tests/unit/test_space_graph_filter.py`** imports
+    `vitalgraph.db.fuseki.fuseki_space_impl` directly — it must be deleted (or
+    moved) as part of the same change, or the move breaks collection.
+
+## Why it must stay READABLE and not be deleted
+
+The live backend documents its own behaviour by reference to this code:
+
+    sparql_sql_space_impl.py:120   "Deterministic UUID v5 for an RDF term —
+                                    matches fuseki_postgresql ..."
+    sparql_sql_space_impl.py:402   "... transactions on the sparql_sql backend
+                                    identically to fuseki_postgresql ..."
+
+Term uuids are a hash over `(text, type, lang, datatype)` and a disagreement
+produces a DIFFERENT TERM rather than a cosmetic difference (`issues/135`). So
+`fuseki_postgresql` is the parity reference for two invariants the live backend
+claims to hold. Deleting it removes the thing those comments point at; archiving
+it keeps the claim checkable. If the reference is to stay useful, the comments
+should be repointed at the archive path in the same change.
+
+## Order of work
+
+1. **Move `postgresql_signal_manager.py` out** of `fuseki_postgresql/` to a
+   neutral home and repoint all three factory arms. Nothing else can proceed
+   safely before this.
+2. **Fix `.env.example:55`** — the one item that can misconfigure someone today,
+   and independent of the move.
+3. **Refuse `FUSEKI` / `FUSEKI_POSTGRESQL`** in both factories the way
+   `POSTGRESQL` is refused, and correct the V1 message that recommends
+   `FUSEKI_POSTGRESQL`. After this the import arms are dead and the move cannot
+   break a running backend.
+4. **Remove or gate** the two `fuseki_admin` call sites; delete
+   `tests/unit/test_space_graph_filter.py`.
+5. **`git mv` the 81 files** into `archive/archive_vitalgraph_old/`, and repoint
+   the two parity comments in `sparql_sql_space_impl.py` at the new path.
+6. **Drop both Fuseki exemptions** from
+   `tests/unit/test_connection_settings_are_required.py` — last, because they can
+   only become no-ops once the code is gone, and dropping them earlier makes the
+   guard fail on `vitalgraph_impl.py`.
+
+Steps 2 and 3 are the ones that stop the bleeding; 1 is the one that makes 5
+possible; 5 is the goal.
