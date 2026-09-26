@@ -20,7 +20,12 @@
 ## `fuseki` lines remain under `vitalgraph/` — 19 files / 79 lines of them in no
 ## step at all, including `config_loader.py`, which still reads `FUSEKI_*` env vars
 ## and exposes `get_fuseki_config()`. Step 8 sweeps that and GATES it; see "Does
-## the plan reach ...". Two residues are deliberate and named there.
+## the plan reach ...".
+##
+## DECIDED 2026-09-26: **remove backends that do not exist** from `BackendType`.
+## That takes `FUSEKI`/`FUSEKI_POSTGRESQL` AND `POSTGRESQL` (whose package is
+## already gone), replaces step 3's planned refusal with deletion, and leaves the
+## `db/sparql_sql/` contrast comments as the ONLY deliberate residue in the tree.
 
 **Related:** `issues/240` (found this — a Fuseki test script was cited as evidence
 about live callers, which is the failure mode this material creates),
@@ -156,6 +161,56 @@ without deleting anything from disk.
 `issues/` keeps its 8, and `issues/archive/` its 3. Those are history and are
 correctly kept — this file is not an argument for scrubbing the record.
 
+## The enum: remove backends that do not exist — DECIDED 2026-09-26
+
+The open question above is settled, and settling it made the scope bigger rather
+than smaller. `BackendType` (`backend_config.py:19`) has five members; only two
+name something a caller could use:
+
+| member | package | |
+|---|---|---|
+| `POSTGRESQL` | **`vitalgraph/db/postgresql/` DOES NOT EXIST** | remove |
+| `FUSEKI` | `db/fuseki/`, 6 modules — retired | remove |
+| `FUSEKI_POSTGRESQL` | `db/fuseki_postgresql/`, 19 modules — retired | remove |
+| `SPARQL_SQL` | `db/sparql_sql/`, 93 modules | keep |
+| `OXIGRAPH` | `db/oxigraph/`, 5 modules | see below |
+
+**`POSTGRESQL` is the case the decision reaches immediately**, and it is not part
+of the Fuseki work: its package is already gone, so the enum has been advertising
+a backend with NO implementation since V1 was archived. The refusal arm at
+`backend_config.py:65` exists only because the member was kept. Under this rule
+both go — which also removes the message that recommends `FUSEKI_POSTGRESQL`, so
+step 3's "correct the V1 message" becomes "delete the V1 arm" instead.
+
+**`OXIGRAPH` stays by the letter of the rule** — the package exists and it has a
+factory arm — but it has NO arm in `create_backend_adapter`, so it cannot be used
+through the KG path at all. Whether that makes it a backend that "exists" is a
+separate question and is NOT decided here; flagged so nobody reads this table as
+having blessed it.
+
+**Removing members cannot break a parse.** `BackendType(<string>)` is never called
+anywhere in the tree — the enum is only ever referenced by member, and the
+string-to-backend dispatch is the `if/elif` chain in `impl/vitalgraph_impl.py:35`.
+So the helpful diagnostic does not need a live enum member to carry it: it belongs
+in that chain's `else`, naming the retired values explicitly ("'fuseki_postgresql'
+was retired; use 'sparql_sql'"). That is strictly better than the status quo, where
+the message exists only as a side effect of keeping a dead member.
+
+**Two sites found while settling this, both in `impl/vitalgraph_impl.py`:**
+
+  * **`:94` — the unknown-backend error recommends a retired backend.** *"Use
+    'sparql_sql' or 'fuseki_postgresql' instead."* That is the SECOND instance of
+    retirement guidance pointing at Fuseki, alongside `backend_config.py`'s V1
+    message. Both must change together or one contradicts the other.
+  * **`:30` — the default backend is the one with no package.**
+    `backend_config.get('type', 'postgresql')`. **LATENT, not live**, and the
+    distinction matters: `config_loader.py:147` always supplies `'type'`, so this
+    fires only if the whole `backend` section is absent, and it then fails CLOSED
+    with the ValueError at `:94` rather than selecting anything. So it is a wrong
+    default that cannot currently mis-route a request — but it is a second,
+    contradictory default in the same chain (`sparql_sql` at one end,
+    `postgresql` at the other) and should be `sparql_sql`.
+
 ## DO NOT sweep the Jena sidecar — it is not Fuseki and it is load-bearing
 
 The single most likely way to break the system while acting on this issue.
@@ -288,10 +343,16 @@ should be repointed at the archive path in the same change.
    safely before this.
 2. **Fix `.env.example:55`** — the one item that can misconfigure someone today,
    and independent of the move.
-3. **Refuse `FUSEKI` / `FUSEKI_POSTGRESQL`** in both factories the way
-   `POSTGRESQL` is refused, and correct the V1 message that recommends
-   `FUSEKI_POSTGRESQL`. After this the import arms are dead and the move cannot
-   break a running backend.
+3. **Delete the `FUSEKI` / `FUSEKI_POSTGRESQL` arms** from both factories, and
+   **delete the `POSTGRESQL` arm and enum member with them** — its package is
+   already gone, so it is the same defect one retirement earlier ("The enum",
+   decided 2026-09-26: remove backends that do not exist). This replaces the
+   earlier plan of ADDING a refusal in the `POSTGRESQL` style.
+   Then put the diagnostic where it survives the members: the `else` in
+   `impl/vitalgraph_impl.py:94`, naming the retired strings explicitly — and fix
+   that message, which currently recommends `'fuseki_postgresql'`, plus the
+   `'postgresql'` default at `:30`. After this nothing can construct a retired
+   backend and the move cannot break a running one.
 4. **Remove or gate** the two `fuseki_admin` call sites; delete
    `tests/unit/test_space_graph_filter.py`.
 5. **Strip the Fuseki semantics out of `kg_impl/`** — the "wider than the 81
@@ -346,14 +407,14 @@ intentional:
     `sparql_sql_schema.py` (2). Step 6 repoints these AT the archive path; they
     describe the archived behaviour by contrast ("unlike fuseki_postgresql, which
     relies on Fuseki for query execution") and rewriting them loses the contrast.
-  * `db/backend_config.py` — the refusal added in step 3. The `POSTGRESQL`
-    precedent keeps the enum member and a message naming the replacement, which is
-    what turns an old `.env` into a clear error instead of a `ValueError` on an
-    unknown enum name. **OPEN DECISION:** whether `BackendType.FUSEKI` /
-    `FUSEKI_POSTGRESQL` stay for that, or go entirely. Keeping them is the
-    precedent and the better error; removing them is the only way the enum stops
-    advertising backends that do not exist. Currently 37 lines, most of which the
-    refusal replaces.
+  * `db/backend_config.py` — **nothing, as it turns out.** This row originally
+    reserved the step-3 refusal as deliberate residue. The decision to REMOVE
+    backends that do not exist (see "The enum") deletes the arms and the members
+    instead of adding a refusal, and moves the diagnostic to
+    `impl/vitalgraph_impl.py`'s `else` — which names retired backends in a STRING,
+    not as enum members. So `backend_config.py` should reach zero `fuseki` lines,
+    and the only deliberate residue left in the whole tree is the
+    `db/sparql_sql/` contrast comments above.
 
 **Partially covered — the step handles the CODE but not the prose:**
 
