@@ -288,22 +288,40 @@ should be repointed at the archive path in the same change.
    break a running backend.
 4. **Remove or gate** the two `fuseki_admin` call sites; delete
    `tests/unit/test_space_graph_filter.py`.
-5. **`git mv` the 81 files** into `archive/archive_vitalgraph_old/`, and repoint
-   the two parity comments in `sparql_sql_space_impl.py` at the new path.
-6. **Drop both Fuseki exemptions** from
+5. **Strip the Fuseki semantics out of `kg_impl/`** — the "wider than the 81
+   files" items below, which a `git mv` will NOT touch because `kg_impl/` is not
+   among the 81. Delete `FusekiPostgreSQLBackendAdapter`
+   (`kg_backend_utils.py:210`) and its dispatch arm, drop the `fuseki_success`
+   field and the `FUSEKI_SYNC_FAILURE` log from the four write paths (33 lines),
+   and remove the Fuseki cell from
+   `tests/unit/test_backend_adapter_dispatch.py`. Safe only after 3: while the
+   backend can still be CONSTRUCTED, deleting its adapter leaves a live backend
+   with nothing to adapt it.
+   **While that function is open, replace the class-NAME substring dispatch** with
+   something explicit — it is the mechanism that made the bad default reachable,
+   and with one arm left "substring of a class name" has no remaining excuse.
+   Independent of the archive, so it can slip without blocking 6.
+6. **`git mv` the 81 files** into `archive/archive_vitalgraph_old/`, and repoint
+   the parity comments in `sparql_sql_space_impl.py`, `sparql_sql_db_impl.py`,
+   `sparql_sql_db_objects.py` and `sparql_sql_schema.py` at the new path.
+7. **Drop both Fuseki exemptions** from
    `tests/unit/test_connection_settings_are_required.py` — last, because they can
    only become no-ops once the code is gone, and dropping them earlier makes the
    guard fail on `vitalgraph_impl.py`.
 
-Steps 2 and 3 are the ones that stop the bleeding; 1 is the one that makes 5
-possible; 5 is the goal.
+Steps 2 and 3 are the ones that stop the bleeding; 1 is the one that makes 6
+possible; 6 is the goal. 5 is the step that is easiest to forget, because nothing
+in `kg_impl/` imports the Fuseki packages — so no import error, no failing test
+and no `git mv` will remind anyone it is outstanding.
 
 ## Wider than the 81 files: `kg_impl/` carries Fuseki SEMANTICS, not just imports
 
 Found while copying knowledge out of the code before it is archived. These are
 not imports of the Fuseki packages, so they do not appear in the move list above
 and a `git mv` will not touch them — but they encode the retired backend's model
-of the world and have to be dealt with in the same pass.
+of the world. **Scheduled as step 5 of the order of work**, which exists because
+"dealt with in the same pass" is not a plan: nothing here imports the Fuseki
+packages, so no import error and no failing test would ever surface it.
 
 **1. The adapter factory's DEFAULT is the retired backend.**
 `kg_impl/kg_backend_utils.py:1782` dispatches on a substring of the class NAME:
@@ -337,15 +355,17 @@ because the defect would survive a change to some third adapter. `OxigraphSpaceI
 is one of the two parametrised cases and is not hypothetical —
 `BackendType.OXIGRAPH` is in the enum with no arm in this dispatch.
 
-The explicit Fuseki arm is LEFT IN PLACE, because the package is still here: the
-cell covering it pins that Fuseki's real route is the explicit arm, which is what
-makes the `else` genuinely the unrecognised case. That cell goes with the package
-at step 5. **The substring-on-class-name dispatch is still fragile** and is not
-fixed — but a wrong guess now lands on the live backend rather than the retired
-one, which is the part that mattered.
+The explicit Fuseki arm is LEFT IN PLACE for now, because the package is still
+here: the cell covering it pins that Fuseki's real route is the explicit arm,
+which is what makes the `else` genuinely the unrecognised case. **Both the arm and
+that cell are STEP 5**, not loose ends — and so is the
+**substring-on-class-name dispatch**, which is still fragile and still unfixed,
+but a wrong guess now lands on the live backend rather than the retired one, which
+is the part that could not wait.
 
 `FusekiPostgreSQLBackendAdapter` itself (`:210`) is a full `KGBackendInterface`
-implementation living in a live module, so it moves or goes with the rest.
+implementation living in a LIVE module, which is exactly why it needs its own step:
+`kg_impl/` is not among the 81 files, so the `git mv` in step 6 will not carry it.
 
 **2. `fuseki_success` is a result field on four write paths.** 33 lines across
 `kgentity_frame_delete_impl.py` (13), `kgentity_frame_create_impl.py` (9),
@@ -417,4 +437,4 @@ they are about the ARCHIVED behaviour rather than this backend's:
 `sparql_sql_db_impl.py:8`, `sparql_sql_db_objects.py:5`/`:74`, and
 `sparql_sql_schema.py:11`/`:1623` ("unlike fuseki_postgresql, which relies on
 Fuseki for query execution"). Those should be repointed at the archive path in
-step 5 rather than rewritten.
+step 6 rather than rewritten.
