@@ -113,3 +113,77 @@ def test_the_endpoint_does_not_hardcode_deleted_for_this_path():
             f"{mod.__file__}:{i + 1} reports deleted_count from the DISCOVERED "
             f"uri list with no STORE_FAILED guard above it — a failed delete "
             f"would be reported as deleted (`issues/242`)")
+
+
+# ---------------------------------------------------------------------------
+# `issues/243` — the sibling delete paths 242 explicitly did NOT clear.
+# ---------------------------------------------------------------------------
+
+def test_the_entity_batch_delete_status_follows_the_outcome():
+    """`DELETE /kgentities?uri_list=a,b,c` must not report `deleted` when nothing
+    was deleted.
+
+    Unlike `issues/242`, `deleted_count` here was already honest — it counts URIs
+    whose delete returned ok — so only `status` lied, and it lied in the direction
+    that matters: a batch where every delete failed came back `status=deleted` with
+    "Successfully deleted 0 KG entities".
+
+    Structural, for the same reason as the frame-delete cell above: the three
+    branches need a backend to exercise, and the regression to guard against is
+    someone collapsing them back into one unconditional response.
+    """
+    from vitalgraph.endpoint import kgentities_endpoint as mod
+    text = open(mod.__file__).read()
+
+    marker = "deleted_uris=deleted_uris_list"
+    assert marker in text, "the entity batch-delete response is gone — fix regressed?"
+
+    # The response must be reached through a status decision, not a literal.
+    head = text.split(marker)[0]
+    window = head[-2600:]
+    for needed in ("OperationStatus.PARTIAL",
+                   "OperationStatus.STORE_FAILED",
+                   "OperationStatus.DELETED"):
+        assert needed in window, (
+            f"{needed} is not part of the entity batch-delete status decision — "
+            f"a failed or partial batch can be reported as a success (`issues/243`)")
+    assert "status=status" in window, (
+        "the response takes a literal status again rather than the computed one")
+
+
+def test_partial_is_used_somewhere_now():
+    """`OperationStatus.PARTIAL` existed and was dead.
+
+    Asserted on its own because "the enum has a member for this" is what made the
+    old behaviour indefensible rather than merely imprecise — the vocabulary was
+    there and unused, exactly like `STORE_FAILED` in `issues/242`.
+    """
+    from vitalgraph.endpoint import kgentities_endpoint as mod
+    assert "OperationStatus.PARTIAL" in open(mod.__file__).read()
+
+
+def test_the_unreachable_frame_delete_is_gone_not_repaired():
+    """`issues/243`/`issues/184`: a path that has never executed has no behaviour
+    to preserve.
+
+    `kgentities_endpoint._delete_frame_by_uri` was called by nothing and was the
+    only caller of `KGSparqlQueryProcessor.delete_frame`, which raised `TypeError`
+    on every invocation. Both are deleted. This asserts they stay deleted, because
+    the tempting repair — add the missing argument — would resurrect a function
+    carrying the `242` defect twice over.
+    """
+    from vitalgraph.endpoint import kgentities_endpoint as ep
+    from vitalgraph.kg_impl import kg_sparql_query as q
+    from vitalgraph.endpoint.kgentities_endpoint import KGEntitiesEndpoint
+    from vitalgraph.kg_impl.kg_sparql_query import KGSparqlQueryProcessor
+
+    assert not hasattr(KGEntitiesEndpoint, "_delete_frame_by_uri"), (
+        "the unreachable frame-delete is back on KGEntitiesEndpoint; the LIVE one "
+        "is KGFramesEndpoint._delete_frame_by_uri (`issues/243`)")
+    assert not hasattr(KGSparqlQueryProcessor, "delete_frame"), (
+        "KGSparqlQueryProcessor.delete_frame is back — it could never succeed and "
+        "carried the issues/242 defect twice (`issues/243`)")
+
+    # and the live one is still there, so the capability was not lost with it
+    from vitalgraph.endpoint.kgframes_endpoint import KGFramesEndpoint
+    assert hasattr(KGFramesEndpoint, "_delete_frame_by_uri")

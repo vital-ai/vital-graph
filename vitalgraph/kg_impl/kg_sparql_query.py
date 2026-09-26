@@ -324,44 +324,19 @@ class KGSparqlQueryProcessor:
             self.logger.error(f"Error getting individual frame: {e}")
             raise
     
-    async def delete_frame(self, space_id: str, graph_id: str, frame_uri: str) -> Dict[str, Any]:
-        """
-        Delete frame and its complete graph using SPARQL.
-        
-        Args:
-            space_id: Space identifier
-            graph_id: Graph identifier
-            frame_uri: Frame URI to delete
-            
-        Returns:
-            Dict containing deletion results and metadata
-        """
-        try:
-            self.logger.info(f"Deleting frame {frame_uri} in space {space_id}, graph {graph_id}")
-            
-            # Get count of objects that will be deleted
-            count_query = self.query_builder.build_frame_deletion_count_query(graph_id, frame_uri)
-            count_results = await self.backend.execute_sparql_query(space_id, count_query)
-            deleted_count = self.utils.extract_count_from_results(count_results)
-            
-            # Build and execute deletion query
-            delete_query = self.query_builder.build_frame_deletion_query(graph_id, frame_uri)
-            await self.backend.execute_sparql_update(delete_query)
-            
-            self.logger.info(f"Successfully deleted frame {frame_uri} and {deleted_count} related objects")
-            
-            return {
-                'frame_uri': frame_uri,
-                'deleted_count': deleted_count,
-                'count_query': count_query,
-                'delete_query': delete_query,
-                'success': True
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Error deleting frame: {e}")
-            raise
-    
+    # `delete_frame` was DELETED here 2026-09-26 (`issues/243`), not repaired.
+    # It could never have succeeded: it called
+    # `execute_sparql_update(delete_query)` with ONE argument against a
+    # two-argument `(space_id, update_query)`, so every invocation raised
+    # `TypeError` and the `except` re-raised it. Its only caller was an
+    # unreachable method in `kgentities_endpoint`, deleted in the same pass.
+    #
+    # It also carried the `issues/242` defect twice over, which is why it is
+    # recorded rather than quietly dropped: `deleted_count` came from a COUNT
+    # query run BEFORE the delete, the update's return value was discarded
+    # (that adapter returns False on failure), and the result dict hardcoded
+    # `'success': True`. Anyone reviving this shape should read 242 first.
+
     async def validate_entity_frame_relationships(self, space_id: str, graph_id: str, 
                                                 entity_uri: str) -> bool:
         """

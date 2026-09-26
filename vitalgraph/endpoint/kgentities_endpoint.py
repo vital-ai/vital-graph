@@ -1435,9 +1435,41 @@ class KGEntitiesEndpoint:
 
             self.logger.debug(f"Successfully deleted {deleted_count} KG entities")
             
+            # `status` FOLLOWS THE OUTCOME. `issues/243`.
+            #
+            # `deleted_count` here is honest — it counts the URIs whose delete
+            # returned ok — but `status` was a hardcoded `DELETED`, so a batch where
+            # EVERY delete failed came back as `status=deleted` with the message
+            # "Successfully deleted 0 KG entities". `PARTIAL` exists for the mixed
+            # case and was never used.
+            #
+            # The zero case is reported as STORE_FAILED rather than NOT_FOUND, and
+            # that is a KNOWN IMPRECISION rather than a choice: `_delete_one`
+            # returns False both for an exception AND for a legitimately absent
+            # entity (`count > 0` is False when there was nothing to delete), so
+            # failure and absence are indistinguishable at this point. Separating
+            # them means changing what `_delete_one` returns; until then the
+            # stricter of the two is the safer report, because a caller retrying a
+            # STORE_FAILED loses nothing while one trusting a NO_OP stops looking.
+            requested = len(uris)
+            if deleted_count == requested:
+                status = OperationStatus.DELETED
+                message = (f"Successfully deleted {deleted_count} KG entities from "
+                           f"graph '{graph_id}' in space '{space_id}'")
+            elif deleted_count > 0:
+                status = OperationStatus.PARTIAL
+                message = (f"Deleted {deleted_count} of {requested} KG entities from "
+                           f"graph '{graph_id}' in space '{space_id}'; "
+                           f"{requested - deleted_count} were not deleted")
+            else:
+                status = OperationStatus.STORE_FAILED
+                message = (f"None of the {requested} requested KG entities were "
+                           f"deleted from graph '{graph_id}' in space '{space_id}' "
+                           f"(they may be absent, or the deletes may have failed)")
+
             return EntityDeleteResponse(
-                status=OperationStatus.DELETED,
-                message=f"Successfully deleted {deleted_count} KG entities from graph '{graph_id}' in space '{space_id}'",
+                status=status,
+                message=message,
                 deleted_count=deleted_count,
                 deleted_uris=deleted_uris_list
             )
@@ -1682,83 +1714,16 @@ class KGEntitiesEndpoint:
             self.logger.error(f"Error creating/updating frames: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to create/update frames: {str(e)}")
     
-    async def _delete_frame_by_uri(self, space_id: str, graph_id: str, uri: str, current_user: Dict = None):
-        """Delete a frame by URI using SPARQL query processor."""
-        try:
-            self.logger.debug(f"Deleting frame {uri} from space {space_id}, graph {graph_id}")
-            
-            # Get backend implementation
-            space_record = await self.space_manager.get_space_or_load(space_id)
-            if not space_record:
-                from ..model.kgframes_model import FrameDeleteResponse
-                return FrameDeleteResponse(
-                    status=OperationStatus.NOT_FOUND,
-                    message=f"Space {space_id} not found",
-                    deleted_count=0,
-                    deleted_uris=[]
-                )
-
-            space_impl = space_record.space_impl
-            backend = space_impl.get_db_space_impl()
-            if not backend:
-                raise HTTPException(status_code=503, detail="Backend implementation not available")
-
-            # Create backend adapter and SPARQL processor
-            from ..kg_impl.kg_backend_utils import create_backend_adapter
-            from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
-
-            backend_adapter = create_backend_adapter(backend)
-            sparql_processor = KGSparqlQueryProcessor(backend_adapter, self.logger)
-
-            # Look up the owning entity via kGGraphURI, for cache invalidation
-            # below. This used to sit inside `if entity_lock_manager:`, and
-            # `entity_uri` was bound ONLY there — so on a backend without that
-            # attribute (which is every backend there is)
-            # the lookup never ran and the read at the invalidation site raised
-            # NameError. That surfaced as HTTP 500 from a delete that had
-            # already succeeded, and left the entity graph cache stale.
-            # Initialised unconditionally now, so the name is always bound.
-            entity_uri = ''
-            try:
-                haley_prefix = "http://vital.ai/ontology/haley-ai-kg#"
-                owner_query = f"""SELECT ?entity WHERE {{
-                    GRAPH <{graph_id}> {{
-                        <{uri}> <{haley_prefix}hasKGGraphURI> ?entity .
-                    }}
-                }} LIMIT 1"""
-                owner_results = await backend_adapter.execute_sparql_query(space_id, owner_query)
-                bindings = owner_results.get('results', {}).get('bindings', []) if isinstance(owner_results, dict) else []
-                if bindings:
-                    entity_uri = bindings[0].get('entity', {}).get('value', '') or ''
-            except Exception as _oe:
-                # Not fatal: a missed cache invalidation is staleness, whereas
-                # failing here would fail a delete that is about to succeed.
-                self.logger.warning(
-                    "Could not resolve the owning entity for frame %s (%s) — "
-                    "its entity graph cache will not be invalidated", uri, _oe)
-            
-            # Use processor to delete frame
-            delete_result = await sparql_processor.delete_frame(space_id, graph_id, uri)
-            
-            self.logger.debug(f"Successfully deleted frame {uri} and {delete_result['deleted_count']} related objects")
-            
-            # Invalidate entity graph cache if we identified the owning entity
-            if delete_result.get('deleted_count', 0) > 0 and entity_uri:
-                await self._invalidate_entity_cache(space_id, graph_id, entity_uri)
-            
-            # Return response in expected format
-            from ..model.kgframes_model import FrameDeleteResponse
-            return FrameDeleteResponse(
-                status=OperationStatus.DELETED,
-                deleted_count=delete_result['deleted_count'],
-                message="Successfully deleted frame",
-            )
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            self.logger.error(f"Error deleting frame: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to delete frame: {str(e)}")
+    # `_delete_frame_by_uri` was DELETED here 2026-09-26 (`issues/243`), not
+    # repaired. It was called by NOTHING — the live single-frame delete is
+    # `KGFramesEndpoint._delete_frame_by_uri`, a different class with no
+    # inheritance between them — and it was the only caller of
+    # `KGSparqlQueryProcessor.delete_frame`, which raised `TypeError` on every
+    # invocation (it passed one argument to a two-argument
+    # `execute_sparql_update`) and re-raised. So it had never executed, which is
+    # `issues/184`'s precedent for deleting rather than fixing: there is no
+    # behaviour to preserve. The live path handles NOT_FOUND, INVALID_REQUEST and
+    # a real success check, so nothing is lost.
     
     async def _create_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, 
                                    quads: List[Quad], operation_mode: OperationMode, current_user: Dict, 
