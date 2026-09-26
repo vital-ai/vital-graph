@@ -294,9 +294,15 @@ should be repointed at the archive path in the same change.
    (`kg_backend_utils.py:210`) and its dispatch arm, drop the `fuseki_success`
    field and the `FUSEKI_SYNC_FAILURE` log from the four write paths (33 lines),
    and remove the Fuseki cell from
-   `tests/unit/test_backend_adapter_dispatch.py`. Safe only after 3: while the
-   backend can still be CONSTRUCTED, deleting its adapter leaves a live backend
-   with nothing to adapt it.
+   `tests/unit/test_backend_adapter_dispatch.py`. **Ordered after 3, and the
+   reason is not what it first looks like:** deleting the arm while the backend can
+   still be CONSTRUCTED does not leave it unadapted — the `else` hands it
+   `SparqlSQLBackendAdapter`, silently. That is step 0's defect in mirror image,
+   reappearing for the one backend whose name still matches. Verified by
+   simulating it. Once 3 refuses construction the arm is unreachable, and from
+   then on the order stops mattering — so this is a constraint on the WINDOW, not
+   a permanent dependency, and the window is real only because `.env.example`
+   selects Fuseki until 2 and an already-copied `.env` is not fixed by 2 either.
    **While that function is open, replace the class-NAME substring dispatch** with
    something explicit — it is the mechanism that made the bad default reachable,
    and with one arm left "substring of a class name" has no remaining excuse.
