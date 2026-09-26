@@ -514,6 +514,19 @@ class VitalGraphAppImpl:
                     # Initialize Process Scheduler for periodic maintenance
                     try:
                         pool = getattr(self.db_impl, 'connection_pool', None)
+                        # EVERY JOB BELOW IS INTERNAL-CLASS (`issues/231` step 1):
+                        # maintenance (ANALYZE/VACUUM), analytics, metrics rollup,
+                        # the metrics flush loop, and the process tracker's
+                        # heartbeats. All are deferrable and nothing waits on any
+                        # of them interactively, so they must not hold connections
+                        # request serving needs — `MaintenanceJob` IS the
+                        # ANALYZE/VACUUM path that exhausted the request pool on
+                        # 2026-09-24.
+                        #
+                        # Falls back to the request pool when the split is absent
+                        # or disabled (internal_pool_size=0): that is the
+                        # pre-split behaviour, not a broken half-state.
+                        bg_pool = getattr(self.db_impl, 'internal_pool', None) or pool
                         if pool:
                             from vitalgraph.process.process_tracker import ProcessTracker
                             from vitalgraph.process.process_scheduler import ProcessScheduler
@@ -527,15 +540,15 @@ class VitalGraphAppImpl:
                             # getter, which no longer exists (`issues/241`).
                             pg_config = self.config.get_sparql_sql_config().get('database', {})
                             
-                            tracker = ProcessTracker(pool)
-                            maintenance_job = MaintenanceJob(pool, process_tracker=tracker, postgresql_config=pg_config)
+                            tracker = ProcessTracker(bg_pool)
+                            maintenance_job = MaintenanceJob(bg_pool, process_tracker=tracker, postgresql_config=pg_config)
                             
                             # Get maintenance config
                             maintenance_config = self.config.config_data.get('maintenance', {})
                             interval = maintenance_config.get('interval_seconds', 300)
                             enabled = maintenance_config.get('enabled', True)
                             
-                            self.process_scheduler = ProcessScheduler(pool, pg_config, enabled=enabled)
+                            self.process_scheduler = ProcessScheduler(bg_pool, pg_config, enabled=enabled)
                             self.process_scheduler.register_job(
                                 name="db_maintenance",
                                 interval_seconds=interval,
@@ -546,7 +559,7 @@ class VitalGraphAppImpl:
                             # Register analytics job (default: once per day)
                             analytics_config = self.config.config_data.get('analytics', {})
                             analytics_interval = analytics_config.get('interval_seconds', 86400)
-                            analytics_job = AnalyticsJob(pool)
+                            analytics_job = AnalyticsJob(bg_pool)
                             self.process_scheduler.register_job(
                                 name="space_analytics",
                                 interval_seconds=analytics_interval,
@@ -557,14 +570,14 @@ class VitalGraphAppImpl:
                             # Initialize PostgreSQL-based metrics collector and rollup job
                             try:
                                 from vitalgraph.metrics.postgres_metrics_collector import PostgresMetricsCollector
-                                metrics_collector = PostgresMetricsCollector(pool)
+                                metrics_collector = PostgresMetricsCollector(bg_pool)
                                 await metrics_collector.start()
                                 # Store on app.state for middleware access
                                 self.app.state.metrics_collector = metrics_collector
                                 # Store on API for endpoint access
                                 self.api._metrics_collector = metrics_collector
                                 # Register rollup job (hourly) — aggregates minute→hour, purges old data
-                                metrics_rollup = MetricsRollupJob(pool)
+                                metrics_rollup = MetricsRollupJob(bg_pool)
                                 self.process_scheduler.register_job(
                                     name="metrics_rollup",
                                     interval_seconds=3600,

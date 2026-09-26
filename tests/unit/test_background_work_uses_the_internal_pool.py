@@ -94,3 +94,62 @@ def test_the_analyze_sites_in_the_write_path_are_routed():
     stale = src.count("self._db._pool.acquire() as conn:\n"
                       "                await maybe_analyze(")
     assert stale == 0, f"{stale} ANALYZE site(s) still on the request pool"
+
+
+# --------------------------------------------------------------------------
+# The scheduled jobs (`issues/231` step 1, completed 2026-09-26)
+# --------------------------------------------------------------------------
+
+def test_the_scheduled_background_jobs_are_routed():
+    """SIX consumers were constructed with the REQUEST pool.
+
+    `MaintenanceJob` is the ANALYZE/VACUUM path that exhausted the request pool
+    on 2026-09-24, and it was handed `connection_pool` directly — so the pool
+    split existed while the single largest INTERNAL workload still ran on the
+    connections readers needed. That is the "cosmetic separation" this issue
+    warns about, in the one place it mattered most.
+
+    Pinned against source because constructing these requires a live pool, a
+    scheduler and a process table; the property under test is which pool each
+    receives, which is textual.
+    """
+    import inspect
+    from vitalgraph.impl import vitalgraphapp_impl
+
+    src = inspect.getsource(vitalgraphapp_impl)
+
+    # The INTERNAL handle must exist and must prefer the internal pool.
+    assert "bg_pool = getattr(self.db_impl, 'internal_pool', None) or pool" in src, (
+        "no INTERNAL handle for the scheduled jobs")
+
+    for ctor in ("ProcessTracker(bg_pool)",
+                 "MaintenanceJob(bg_pool",
+                 "ProcessScheduler(bg_pool",
+                 "AnalyticsJob(bg_pool)",
+                 "PostgresMetricsCollector(bg_pool)",
+                 "MetricsRollupJob(bg_pool)"):
+        assert ctor in src, f"{ctor} is not routed at the internal pool"
+
+    # And none left on the request pool. Checked per-constructor rather than by
+    # counting, because two routed and one missed still leaks the heaviest
+    # background job onto readers while looking fixed.
+    for stale in ("ProcessTracker(pool)",
+                  "MaintenanceJob(pool,",
+                  "ProcessScheduler(pool,",
+                  "AnalyticsJob(pool)",
+                  "PostgresMetricsCollector(pool)",
+                  "MetricsRollupJob(pool)"):
+        assert stale not in src, f"{stale} still takes a request connection"
+
+
+def test_segmentation_polling_prefers_the_internal_pool():
+    """`issues/231` names segmentation explicitly. Its `_get_pool` walks four
+    fallback tiers to find a pool, and every tier returned the request one."""
+    import inspect
+    from vitalgraph.document import segmentation_worker
+
+    src = inspect.getsource(segmentation_worker.SegmentationWorker._get_pool)
+    assert "_prefer_internal" in src, (
+        "segmentation polling still takes whatever pool it finds first")
+    # The fallback must survive: a backend without the split has to keep polling.
+    assert "or backend_impl.connection_pool" in src or "or getattr(db_impl, 'connection_pool', None)" in src

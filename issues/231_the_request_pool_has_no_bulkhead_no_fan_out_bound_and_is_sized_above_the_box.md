@@ -215,7 +215,35 @@ a badly partitioned budget looks exactly like a missing limiter.
 
 ## Landed 2026-09-24
 
-**Step 1 — INTERNAL split. DONE.** A dedicated pool (`internal_pool`, max 3,
+**Step 1 — INTERNAL split. COMPLETED 2026-09-26.** The routing below is now the
+whole known set, not a sample. What it found on the second pass matters more than
+what the first pass did: **`MaintenanceJob` — the ANALYZE/VACUUM path that
+exhausted the request pool on 2026-09-24 — was still being constructed with
+`connection_pool`.** So the bulkhead existed while the single largest INTERNAL
+workload continued to run on the connections readers needed. That is exactly the
+cosmetic separation this issue warns about, in the one place it mattered most,
+and it survived the first pass because the first pass routed the ANALYZE CALL
+SITES and never looked at who CONSTRUCTS the jobs.
+
+Six consumers were handed the request pool in one block of
+`vitalgraphapp_impl.py`: `ProcessTracker`, `MaintenanceJob`, `ProcessScheduler`,
+`AnalyticsJob`, `PostgresMetricsCollector`, `MetricsRollupJob`. All six now take
+`bg_pool`, which prefers `internal_pool` and falls back to the request pool.
+Segmentation polling (`segmentation_worker._get_pool`) walked four fallback tiers
+and returned the request pool at every one; each tier now prefers INTERNAL.
+
+**Eleven consumers now share three connections.** Checked before accepting it:
+`ProcessTracker` has no heartbeat or staleness mechanism — it is
+create/mark_running/mark_completed, and mutual exclusion is by advisory lock, not
+liveness — so contention here delays a status write rather than causing a job to
+be wrongly declared dead. That makes it deferral, which is the design intent
+("INTERNAL skips rather than queues"). It is NOT obviously the right size though:
+`VACUUM` can hold a connection for minutes (`issues/136`: prod VACUUMs are killed
+at the 60s `statement_timeout`), so one long VACUUM plus one long ANALYZE leaves
+one connection for everything else. Wants measuring under a real maintenance
+cycle before the default moves.
+
+**Step 1 — first pass, 2026-09-24.** A dedicated pool (`internal_pool`, max 3,
 `internal_pool_size`) created, registered and closed alongside the request pool.
 Routed at it so far: the three `maybe_analyze` sites in
 `add_rdf_quads_batch_bulk` / `remove_rdf_quads_batch_bulk` /

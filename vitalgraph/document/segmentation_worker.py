@@ -464,7 +464,24 @@ class SegmentationWorker:
         return []
 
     async def _get_pool(self, space_id: str):
-        """Get the asyncpg pool for a space."""
+        """The pool this worker should poll on — INTERNAL first (`issues/231`).
+
+        Segmentation polling is deferrable background work: nothing waits on it
+        interactively, it runs on a loop, and it is named explicitly in
+        `issues/231` as one of the spawn sites that must NOT take a request
+        connection. Every tier below therefore prefers `internal_pool` and falls
+        back to the request pool, so a backend without the split behaves exactly
+        as before rather than failing to poll at all.
+        """
+        def _prefer_internal(obj):
+            """INTERNAL if this object has one, else its request pool."""
+            if obj is None:
+                return None
+            internal = getattr(obj, 'internal_pool', None)
+            if internal is not None:
+                return internal
+            return None
+
         try:
             space_record = await self._space_manager.get_space_or_load(space_id)
             if not space_record:
@@ -475,23 +492,25 @@ class SegmentationWorker:
                 return None
             # Direct connection_pool on backend (SparqlSQLDbImpl)
             if hasattr(backend_impl, 'connection_pool') and backend_impl.connection_pool:
-                return backend_impl.connection_pool
+                return _prefer_internal(backend_impl) or backend_impl.connection_pool
             # SparqlSQLSpaceImpl has db_impl -> connection_pool
             db_impl = getattr(backend_impl, 'db_impl', None)
             if db_impl:
-                pool = getattr(db_impl, 'connection_pool', None)
+                pool = _prefer_internal(db_impl) or getattr(db_impl, 'connection_pool', None)
                 if pool:
                     return pool
             # _pool property (may raise RuntimeError if not connected)
             if hasattr(backend_impl, '_pool'):
                 try:
-                    return backend_impl._pool
+                    return _prefer_internal(backend_impl) or backend_impl._pool
                 except RuntimeError:
                     pass
             # _db._pool (SparqlSQLSpaceImpl._db._pool pattern)
             _db = getattr(backend_impl, '_db', None)
             if _db:
-                pool = getattr(_db, 'connection_pool', None) or getattr(_db, '_pool', None)
+                pool = (_prefer_internal(_db)
+                        or getattr(_db, 'connection_pool', None)
+                        or getattr(_db, '_pool', None))
                 if pool:
                     return pool
         except Exception as e:
