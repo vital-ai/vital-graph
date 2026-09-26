@@ -344,6 +344,161 @@ results before they were found:
     p99=15114 ms` cold against `n=149 p99=454 ms` warm, a 33x spread. The script
     now discards a warm-up run per arm.
 
+## A connection leak on the transaction path — recorded 2026-09-26, NOT fixed
+
+`_SparqlSQLCoreAdapter.create_transaction` (`sparql_sql_space_impl.py:485`) is
+five lines with no error handling:
+
+    pool = self._impl._db._pool
+    conn = await pool.acquire()
+    tr = conn.transaction()
+    await tr.start()                  # <-- raises here and `conn` is gone
+    return _SparqlSQLTransaction(conn, tr, pool)
+
+**If `tr.start()` fails after `acquire()` succeeded, the connection is never
+released.** It leaks for the life of the process — 1/30th of the budget per
+occurrence, permanently, and there is no bulkhead to contain it. `issues/229` is
+what the resulting exhaustion looks like from outside: fewer results, HTTP 200,
+no error. That is the whole reason this belongs here and not in a general
+tidy-up: the leak is silent, cumulative, and its symptom is a WRONG ANSWER
+rather than a failure.
+
+`SparqlSQLDbImpl.begin_transaction` (`sparql_sql_db_impl.py:435`) already does
+it correctly, in the same file tree, and is the model:
+
+    except Exception as e:
+        logger.error(...)
+        if connection is not None:
+            await self._pool.release(connection)
+        raise
+
+It also calls `track_connection()` (`utils/resource_manager.py:212`), which the
+adapter path does not. That helper IS still live and this backend DOES use it —
+at `sparql_sql_db_impl.py:445`, just not on this path — so a transaction opened
+through the adapter is invisible to whatever that tracking serves. Two gaps, one
+cause: the adapter was written from the archived shape without its error
+handling.
+
+Left unfixed deliberately, and sequenced with this issue rather than ahead of
+it, because it is pool behaviour and the fix should land with the class split
+rather than as a drive-by — `create_transaction` is a MUTATION-class acquire and
+which pool it should use is decided by step 3, not now. The difference is also
+recorded at the call site in the adapter's own docstring, so it cannot be lost if
+this issue is read selectively.
+
+Cheap to fix when its turn comes: wrap in try/except, release on failure, add
+`track_connection`. The reason to wait is sequencing, not difficulty.
+
+## TO BE INVESTIGATED AND RESOLVED: what the stalled reads are actually waiting on
+
+**Open. This is the question that decides how much of this issue is worth
+doing, and it is not answered.**
+
+### The retraction
+
+Four multi-second stalls were observed on a LIVE space during a bulk delete on
+2026-09-26 — 26s, 47s, 10s, 34s, with ordinary reads at 0.05-0.50s in between.
+They were attributed, in the moment, to the `ANALYZE` threshold tripping.
+
+**That attribution is wrong and is withdrawn.** `ANALYZE` takes
+`ShareUpdateExclusiveLock`, which does NOT conflict with the `ACCESS SHARE` lock
+a plain `SELECT` takes. `ANALYZE` does not block readers. It explains the
+2026-09-24 OUTAGE — six `ANALYZE` stacked on each OTHER, each holding a pooled
+connection, readers unable to acquire one — but it does not explain a single
+read stalling for 47 seconds while connections are available.
+
+So the mechanism behind these stalls is currently UNKNOWN, and part of the case
+for the remaining work here rested on it.
+
+### What a pool split can and cannot fix
+
+This is the distinction the investigation has to resolve against, because three
+different causes produce the same symptom and only one of them is addressed by
+anything in this issue.
+
+**Separate pools fix exactly one thing: background work occupying the
+connections readers need.** Measured in the outage: six of thirty. A bulkhead
+makes that impossible, and that alone justifies step 1.
+
+**They fix none of these:**
+
+  * **Lock conflicts.** Pools allocate connections, not locks. A reader waiting
+    on a lock waits exactly as long from a private pool.
+  * **PostgreSQL CPU/IO saturation.** If the server is the bottleneck, handing
+    the reader a connection sooner just moves its queueing from the application
+    into PostgreSQL, where it is more expensive and less visible.
+  * **Expensive work per operation.** `issues/238` — the slot-sort delete path
+    scans the whole table to remove a handful of rows. 6,810 deletes is 6,810
+    full scans, and no pool arrangement makes that cheap.
+
+    **THIS IS THE LEADING HYPOTHESIS, and it is nearly free to test.**
+    `issues/238` was FIXED 2026-09-25 but is NOT DEPLOYED to production, so the
+    seq scan was live during the 2026-09-26 delete that produced these stalls.
+    It was found by production measurement at **59.6 hours across 647,255
+    calls, on the write path, inside the entity lock** — which is exactly the
+    shape that would stall an unrelated reader through IO and CPU rather than
+    through locks or connections. Before instrumenting anything here, deploy it
+    and re-run the same bulk delete: if the stalls disappear, this issue's
+    remaining scope shrinks to the outage mode alone.
+
+### The evidence so far points AWAY from connections
+
+From the local A/B (`test_scripts/perf/pool_bulkhead_ab.sh`):
+
+    pool_wait records, 0.05s threshold, 5-connection pool, 2x writers:  0
+    docker stats through the load: PostgreSQL up to 300% CPU, app under 100%
+
+Connections were not scarce; server capacity was. Sub-second queueing is
+excluded as an explanation because the threshold was lowered to 0.05s and
+verified inside the container. **If production behaves the same way, the split
+will not touch these stalls** — it will still close the outage mode, which is a
+different and real failure, but it should not be sold as the fix for what was
+observed on 2026-09-26.
+
+### The measurement that settles it
+
+One sample of `pg_stat_activity` taken DURING a stall, not after:
+
+    SELECT pid, state, wait_event_type, wait_event, now() - query_start AS age,
+           left(query, 120)
+      FROM pg_stat_activity
+     WHERE datname = current_database() AND state <> 'idle'
+     ORDER BY age DESC;
+
+and, at the same instant, the application's pool occupancy (`pool_wait` records,
+or `log_pool_state`). Three outcomes, three different conclusions:
+
+    wait_event_type = 'Lock'        -> the bulkhead is IRRELEVANT here; find the
+                                       lock holder and the conflicting mode
+    wait_event_type = 'IO' / CPU    -> capacity problem; `issues/238` (already
+                                       fixed, awaiting deploy) and a read
+                                       replica are the levers, not pools
+    waiting on acquire(), pool full -> the bulkhead fixes it directly, and step 3
+                                       gets its strongest evidence
+
+Catching it in flight is the hard part: stalls were intermittent and irregular —
+two of them 20 minutes apart, then 26 minutes with none, so there is no reliable
+period to sample against. A watchdog that samples `pg_stat_activity` on
+detecting a slow read, rather than on a timer, is the way to get it; the latency
+probe that found these stalls already exists and would only need the sample
+bolted onto its breach path.
+
+Note also that the space this was observed against is now empty, so reproducing
+it means running a bulk operation deliberately rather than waiting for one.
+
+### Why this blocks sequencing rather than just being interesting
+
+Step 3 (the QUERY/MUTATION split) is the largest remaining piece of work in this
+issue. If the stalls are lock- or capacity-bound, step 3 buys isolation against
+a failure mode that has been measured ONCE (2026-09-24) and nothing against the
+one seen most recently — which would argue for DEPLOYING `issues/238` and doing
+step 5 first. Resolve this before committing to that order.
+
+The cheapest possible next action, which costs no new code: deploy `issues/238`,
+re-run the bulk delete, and see whether the stalls survive. That is a better
+first experiment than any instrumentation, because a negative result removes the
+question entirely.
+
 ## Order of work, most value first
 
 1. ~~**Split INTERNAL off first**~~ — a dedicated pool of 2-3 connections for
