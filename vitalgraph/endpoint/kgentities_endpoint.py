@@ -2211,6 +2211,25 @@ class KGEntitiesEndpoint:
             # Convert to response model
             from ..model.kgframes_model import FrameDeleteResponse
             
+            # `status` FOLLOWS THE RESULT. `issues/242`: this was a hardcoded
+            # `DELETED`, so the processor's `success` was never read and a failed
+            # delete came back as `status=deleted`, `deleted_count=3` and a message
+            # beginning "Successfully deleted". `STORE_FAILED` exists for exactly
+            # this ("write failed for a describable data reason", success=False,
+            # HTTP 200) — and its sibling `QUERY_FAILED` was added because a killed
+            # READ was being reported as EMPTY, a success status (`issues/215`).
+            # Same mistake, write side. `:1356` in this file already does it right.
+            #
+            # `deleted_count` is 0 on failure: `deleted_frame_uris` is the ATTEMPTED
+            # set, and reporting it as deleted is what made the old response wrong
+            # in four fields at once.
+            if not result.success:
+                return FrameDeleteResponse(
+                    status=OperationStatus.STORE_FAILED,
+                    message=result.message,
+                    deleted_count=0,
+                    deleted_uris=[],
+                )
             return FrameDeleteResponse(
                 status=OperationStatus.DELETED,
                 message=result.message,
@@ -2933,6 +2952,25 @@ class KGEntitiesEndpoint:
             # Convert result to FrameDeleteResponse format
             from ..model.kgframes_model import FrameDeleteResponse
             
+            # `status` FOLLOWS THE RESULT. `issues/242`: this was a hardcoded
+            # `DELETED`, so the processor's `success` was never read and a failed
+            # delete came back as `status=deleted`, `deleted_count=3` and a message
+            # beginning "Successfully deleted". `STORE_FAILED` exists for exactly
+            # this ("write failed for a describable data reason", success=False,
+            # HTTP 200) — and its sibling `QUERY_FAILED` was added because a killed
+            # READ was being reported as EMPTY, a success status (`issues/215`).
+            # Same mistake, write side. `:1356` in this file already does it right.
+            #
+            # `deleted_count` is 0 on failure: `deleted_frame_uris` is the ATTEMPTED
+            # set, and reporting it as deleted is what made the old response wrong
+            # in four fields at once.
+            if not result.success:
+                return FrameDeleteResponse(
+                    status=OperationStatus.STORE_FAILED,
+                    message=result.message,
+                    deleted_count=0,
+                    deleted_uris=[],
+                )
             return FrameDeleteResponse(
                 status=OperationStatus.DELETED,
                 message=result.message,

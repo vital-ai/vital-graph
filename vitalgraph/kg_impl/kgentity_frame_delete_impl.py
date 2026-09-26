@@ -131,27 +131,42 @@ class KGEntityFrameDeleteProcessor:
                 "invalid_frame_uris": list(invalid_frames)
             }
             
-            success = len(deleted_frame_uris) > 0
-            message = f"Successfully deleted {len(deleted_frame_uris)} frame graphs ({total_deleted_components} components)"
-            
+            # `success` REQUIRES THE DELETE TO HAVE HAPPENED. `issues/242`.
+            #
+            # This was `len(deleted_frame_uris) > 0`, and that list is appended in
+            # Phase 2 — DISCOVERY — before Phase 3 runs the batch delete. So it
+            # said "we found something to delete", and a failed delete returned
+            # `success=True` with a message beginning "Successfully deleted".
+            # `deleted_frame_uris` names what was ATTEMPTED; only the batch
+            # delete's own result says whether it happened.
+            deleted_ok = not batch_delete_failed
+            success = len(deleted_frame_uris) > 0 and deleted_ok
+
+            if success:
+                message = (f"Successfully deleted {len(deleted_frame_uris)} frame "
+                           f"graphs ({total_deleted_components} components)")
+            elif batch_delete_failed:
+                # Do NOT say how many were deleted. A single batch statement that
+                # reported failure most likely applied nothing, but "nothing" is a
+                # claim too — the honest statement is that the delete failed and
+                # these are the frames it was asked to remove.
+                message = (f"Delete FAILED: the batch delete of "
+                           f"{total_deleted_components} components across "
+                           f"{len(deleted_frame_uris)} frame graphs reported "
+                           f"failure; the frames may still be present")
+            else:
+                message = "No frame graphs were deleted"
+
             if invalid_frames:
                 message += f", {len(invalid_frames)} frames skipped (ownership validation failed)"
-            
-            # The batch delete's failure used to be reported ONLY in the
-            # retired second-store status field, alongside `success=True` — so a
-            # caller reading `success` saw a clean delete. Removing that field
-            # would have dropped the signal, so it goes in `message` instead.
-            # NOT folded into `success`: that is a behaviour change and is left as
-            # a decision rather than taken here (`issues/241`).
-            if batch_delete_failed:
-                message += " (WARNING: the batch delete reported failure)"
-            
+
             return DeleteFrameResult(
                 success=success,
                 deleted_frame_uris=deleted_frame_uris,
                 deleted_component_count=total_deleted_components,
                 validation_results=validation_results,
                 message=message,
+                error="batch delete reported failure" if batch_delete_failed else None,
             )
             
         except Exception as e:
