@@ -15,6 +15,12 @@
 ## ONE THING FIXED 2026-09-26: `create_backend_adapter`'s `else` no longer falls
 ## back to the retired adapter — it defaults to `sparql_sql`, pinned by test and
 ## verified by falsification. Everything else here is unstarted.
+##
+## THE PLAN DOES NOT REACH ZERO on its own: after the `git mv`, 31 files and 201
+## `fuseki` lines remain under `vitalgraph/` — 19 files / 79 lines of them in no
+## step at all, including `config_loader.py`, which still reads `FUSEKI_*` env vars
+## and exposes `get_fuseki_config()`. Step 8 sweeps that and GATES it; see "Does
+## the plan reach ...". Two residues are deliberate and named there.
 
 **Related:** `issues/240` (found this — a Fuseki test script was cited as evidence
 about live callers, which is the failure mode this material creates),
@@ -314,11 +320,82 @@ should be repointed at the archive path in the same change.
    `tests/unit/test_connection_settings_are_required.py` — last, because they can
    only become no-ops once the code is gone, and dropping them earlier makes the
    guard fail on `vitalgraph_impl.py`.
+8. **Sweep the residue and GATE it.** Steps 1-7 do NOT reach zero — see the
+   accounting below. Clear the 19 files that no other step touches, then add a
+   guard asserting `fuseki` appears nowhere under `vitalgraph/` except a short,
+   justified allow-list. Without the guard "nothing Fuseki in the main packages"
+   is a claim that decays on the first merge; with it, it is an invariant.
 
 Steps 2 and 3 are the ones that stop the bleeding; 1 is the one that makes 6
-possible; 6 is the goal. 5 is the step that is easiest to forget, because nothing
-in `kg_impl/` imports the Fuseki packages — so no import error, no failing test
-and no `git mv` will remind anyone it is outstanding.
+possible; 6 is the goal; 8 is what makes the goal CHECKABLE. 5 is the step that is
+easiest to forget, because nothing in `kg_impl/` imports the Fuseki packages — so
+no import error, no failing test and no `git mv` will remind anyone it is
+outstanding.
+
+## Does the plan reach "nothing Fuseki outside the archive"? NOT AS WRITTEN
+
+Asked directly, and worth answering with a count rather than a yes. After step 6
+moves the two packages, **31 files and 201 `fuseki` lines remain under
+`vitalgraph/`**. They fall into three groups, and only the first two are
+intentional:
+
+**Deliberate, and should stay:**
+
+  * `db/sparql_sql/` — 17 lines across `sparql_sql_space_impl.py` (9),
+    `sparql_sql_db_objects.py` (3), `sparql_sql_db_impl.py` (3),
+    `sparql_sql_schema.py` (2). Step 6 repoints these AT the archive path; they
+    describe the archived behaviour by contrast ("unlike fuseki_postgresql, which
+    relies on Fuseki for query execution") and rewriting them loses the contrast.
+  * `db/backend_config.py` — the refusal added in step 3. The `POSTGRESQL`
+    precedent keeps the enum member and a message naming the replacement, which is
+    what turns an old `.env` into a clear error instead of a `ValueError` on an
+    unknown enum name. **OPEN DECISION:** whether `BackendType.FUSEKI` /
+    `FUSEKI_POSTGRESQL` stay for that, or go entirely. Keeping them is the
+    precedent and the better error; removing them is the only way the enum stops
+    advertising backends that do not exist. Currently 37 lines, most of which the
+    refusal replaces.
+
+**Partially covered — the step handles the CODE but not the prose:**
+
+  * `kg_impl/` — step 5 removes the adapter and the 33 `fuseki_success` lines, but
+    `kg_backend_utils.py:5`/`:189`, `kgentity_delete_impl.py:28`/`:145`,
+    `kgslot_delete_impl.py:26`, `kgentity_update_impl.py:6`/`:38`,
+    `kgslot_update_impl.py`, `kgtypes_update_impl.py` and
+    `kg_graph_retrieval_utils.py` describe dual-write-to-Fuseki in docstrings that
+    survive it.
+  * `impl/vitalgraphapp_impl.py` (10) and `admin_cmd/vitalgraphdb_admin_cmd.py`
+    (9) — step 4 takes the `fuseki_admin` call sites; the dataset auto-register
+    block and the `get_fuseki_postgresql_config()` call are not in any step.
+
+**No step touches these at all — 19 files, 79 lines:**
+
+    config/config_loader.py                 27   FUSEKI_URL/DATASET/USERNAME/...,
+                                                 get_fuseki_config(),
+                                                 get_fuseki_postgresql_config()
+    impl/vitalgraph_impl.py                 20   builds the Fuseki backend config
+    ops/database_op.py, graph_import_op.py   5
+    endpoint/kgentities, kgdocuments, kgframes 6
+    space/space_manager.py, space_impl.py    4
+    db/db_inf.py, db_admin_inf.py,
+      space_backend_interface.py             4   interface docstrings offering
+                                                 Fuseki as a live example
+    kg_impl/ docstrings (7 files)            9
+    entity_registry/entity_registry_impl.py  2
+
+`config_loader.py` is the one that matters beyond tidiness: it still READS
+`FUSEKI_*` environment variables and exposes `get_fuseki_config()`, so the
+configuration surface keeps offering a backend that refuses to construct. That is
+the same class of thing as `.env.example:55` — a live surface for a dead option.
+
+**So the answer is no, and step 8 exists to make it yes.** The guard is the part
+that matters: `issues/214` reached "zero occurrences in tracked files" for the
+client name and it held because a rule enforced it, not because a sweep was
+thorough. The analogue here is a test over `vitalgraph/` with an allow-list
+holding only the `db/sparql_sql/` contrast comments and whatever step 3's refusal
+needs. Note the irony to avoid: step 7 DELETES Fuseki exemptions from one guard,
+and step 8 adds a new guard that needs its own — keep it short and make every
+entry state why, or it becomes the thing `issues/188` describes, a rule that
+passes by exempting what it cannot check.
 
 ## Wider than the 81 files: `kg_impl/` carries Fuseki SEMANTICS, not just imports
 
