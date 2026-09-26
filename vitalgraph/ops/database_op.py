@@ -7,7 +7,7 @@ Provides DatabaseOp subclasses for PostgreSQL maintenance tasks:
 - StatsRebuildOp: Rebuild rdf_pred_stats / rdf_stats tables
 
 These operations must be executed outside a transaction block (autocommit mode).
-Applies to all PostgreSQL-backed backends (fuseki_postgresql, sparql_sql).
+Applies to the PostgreSQL-backed sparql_sql backend.
 """
 
 import logging
@@ -23,7 +23,7 @@ class DatabaseOp(GraphOp):
     Base class for PostgreSQL database maintenance operations.
 
     Each op targets a specific space's tables. The target tables vary
-    by backend (fuseki_postgresql vs sparql_sql) and are resolved at
+    by backend and are resolved at
     runtime from the active backend's schema.
 
     Important: ANALYZE and VACUUM must run outside a transaction block.
@@ -47,30 +47,25 @@ class DatabaseOp(GraphOp):
     def _get_target_tables(self, backend_type: str = 'sparql_sql') -> List[str]:
         """Get tables to maintain for the target space.
 
-        Table names depend on backend:
-        - fuseki_postgresql: {space_id}_term, {space_id}_rdf_quad
-        - sparql_sql: {space_id}_term, {space_id}_rdf_quad, {space_id}_datatype,
-                      {space_id}_rdf_pred_stats, {space_id}_rdf_stats
-
-        Args:
-            backend_type: The active backend type.
+        `backend_type` is accepted and ignored. It used to select a SHORTER list
+        for a second backend that only had two of these tables; that backend is
+        archived (`issues/241`) and the parameter is kept so callers passing it do
+        not break. Every caller now gets the same list, which is the correct
+        answer for the only backend there is.
 
         Returns:
             List of table names to operate on.
         """
         sid = self.space_id
-        if backend_type == 'fuseki_postgresql':
-            return [f"{sid}_term", f"{sid}_rdf_quad"]
-        else:
-            return [
-                f"{sid}_term",
-                f"{sid}_rdf_quad",
-                f"{sid}_datatype",
-                f"{sid}_rdf_pred_stats",
-                f"{sid}_rdf_stats",
-                f"{sid}_edge",
-                f"{sid}_frame_slot",
-            ]
+        return [
+            f"{sid}_term",
+            f"{sid}_rdf_quad",
+            f"{sid}_datatype",
+            f"{sid}_rdf_pred_stats",
+            f"{sid}_rdf_stats",
+            f"{sid}_edge",
+            f"{sid}_frame_slot",
+        ]
 
 
 class AnalyzeOp(DatabaseOp):

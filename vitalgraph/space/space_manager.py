@@ -76,7 +76,7 @@ class SpaceManager:
         
         Args:
             db_impl: Database implementation instance (e.g., PostgreSQLDbImpl) - for PostgreSQL backend
-            space_backend: Space backend implementation (e.g., FusekiSpaceImpl) - for Fuseki backend
+            space_backend: Space backend implementation (e.g., SparqlSQLSpaceImpl)
         """
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         self.db_impl = db_impl
@@ -111,7 +111,7 @@ class SpaceManager:
         try:
             self.logger.info("Initializing SpaceManager from database...")
             
-            # Use space_backend if available (works for both Fuseki and PostgreSQL)
+            # Use space_backend if available (works for any space backend)
             if self.space_backend:
                 self.logger.info(f"Using space backend for initialization: {type(self.space_backend).__name__}")
                 try:

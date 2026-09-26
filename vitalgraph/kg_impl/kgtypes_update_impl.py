@@ -3,7 +3,7 @@ KGTypes UPDATE Implementation for VitalGraph.
 
 This module provides the implementation for updating KG types in the backend storage,
 using the atomic update_quads function for true atomicity and consistency with proper
-dual-write coordination (PostgreSQL first, then Fuseki).
+dual-write coordination in a single PostgreSQL transaction.
 """
 
 import asyncio
@@ -34,7 +34,6 @@ class KGTypesUpdateProcessor:
     1. Build delete quads for existing type data (type + related objects)
     2. Build insert quads for new type data (VitalSigns objects to triples)
     3. Execute atomic update_quads operation (single transaction)
-    4. PostgreSQL-first dual-write with Fuseki synchronization
     """
     
     def __init__(self):

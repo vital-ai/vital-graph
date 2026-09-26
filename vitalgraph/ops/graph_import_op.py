@@ -300,7 +300,7 @@ class GraphImportOp(GraphOp):
             # The V1 PostgreSQLSpaceDBImport has been archived (was in db/postgresql/).
             raise NotImplementedError(
                 "Database import needs to be re-implemented against the active backend "
-                "(sparql_sql or fuseki_postgresql). The V1 PostgreSQLSpaceDBImport has been archived."
+                "(sparql_sql). The V1 PostgreSQLSpaceDBImport has been archived."
             )
             
             # Determine import method

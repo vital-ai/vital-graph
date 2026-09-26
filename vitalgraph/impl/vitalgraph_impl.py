@@ -8,6 +8,24 @@ from vitalgraph.signal.signal_manager import SignalManager
 
 logger = logging.getLogger(__name__)
 
+# Backend names that were once valid in configuration and are not any more.
+#
+# These are STRINGS, deliberately, and this map is the reason `BackendType` no
+# longer carries a member for any of them (`issues/241`). A configured value has
+# to be recognised to be diagnosed, but recognising it is a property of the
+# CONFIG READER, not of the backend registry — and conflating the two is what let
+# `BackendType.POSTGRESQL` outlive `db/postgresql/` by months, doing nothing but
+# holding an error message.
+#
+# Entries stay as long as a `.env` in the wild might still say them, which is
+# longer than the code takes to delete. Removing one turns a clear "retired" error
+# back into "unsupported backend type", so it costs a reader the answer.
+RETIRED_BACKENDS = {
+    'postgresql': "the V1 PostgreSQL backend, archived well before 2026-09",
+    'fuseki': "the Fuseki backend, archived 2026-09",
+    'fuseki_postgresql': "the Fuseki/PostgreSQL hybrid backend, archived 2026-09",
+}
+
 
 class VitalGraphImpl:
     def __init__(self, config=None):
@@ -27,28 +45,16 @@ class VitalGraphImpl:
             try:
                 # Check for backend configuration
                 backend_config = self.config.get_backend_config()
-                backend_type = backend_config.get('type', 'postgresql').lower()
+                # Default matches `config_loader.py`'s. It used to be
+                # 'postgresql', which named a backend whose package had already
+                # been deleted, so the two ends of one resolution chain disagreed
+                # (`issues/241`).
+                backend_type = backend_config.get('type', 'sparql_sql').lower()
                 
                 logger.debug(f"🔍 Backend type detected: '{backend_type}'")
                 logger.debug(f"🔍 Backend config: {backend_config}")
                 
-                if backend_type == 'fuseki':
-                    # Create Fuseki backend configuration
-                    fuseki_config = self.config.get_fuseki_config()
-                    backend_config_obj = BackendConfig(
-                        backend_type=BackendType.FUSEKI,
-                        connection_params={
-                            'server_url': fuseki_config.get('server_url', 'http://localhost:3030'),
-                            'dataset_name': fuseki_config.get('dataset_name', 'vitalgraph'),
-                            'username': fuseki_config.get('username', 'vitalgraph_user'),
-                            'password': fuseki_config.get('password', 'vitalgraph_pass')
-                        }
-                    )
-                    # Use BackendFactory to create space backend (Fuseki doesn't have db_impl)
-                    self.space_backend = BackendFactory.create_space_backend(backend_config_obj)
-                    logger.info(f"✅ Initialized Fuseki backend successfully: {fuseki_config.get('server_url')}")
-                    
-                elif backend_type == 'sparql_sql':
+                if backend_type == 'sparql_sql':
                     logger.debug("Initializing sparql_sql backend...")
                     sparql_sql_config = self.config.get_sparql_sql_config()
 
@@ -65,38 +71,24 @@ class VitalGraphImpl:
                     logger.info("Initialized sparql_sql backend (sidecar=%s)",
                                 sparql_sql_config.get('sidecar', {}).get('url', 'http://localhost:7070'))
 
-                elif backend_type == 'fuseki_postgresql':
-                    logger.debug(f"🔍 Initializing fuseki_postgresql hybrid backend...")
-                    # Create Fuseki-PostgreSQL hybrid backend configuration
-                    fuseki_postgresql_config = self.config.get_fuseki_postgresql_config()
-                    logger.debug(f"🔍 Fuseki-PostgreSQL config: {fuseki_postgresql_config}")
-                    
-                    backend_config_obj = BackendConfig(
-                        backend_type=BackendType.FUSEKI_POSTGRESQL,
-                        connection_params=fuseki_postgresql_config
+                elif backend_type in RETIRED_BACKENDS:
+                    # THIS is where a retired name is recognised — as a string,
+                    # not as a `BackendType` member (`issues/241`). Keeping a live
+                    # enum member just to carry an error message is how one came to
+                    # outlive its implementation entirely.
+                    raise ValueError(
+                        f"Backend type '{backend_type}' is retired and has been "
+                        f"archived: {RETIRED_BACKENDS[backend_type]}. "
+                        f"Use 'sparql_sql'. If this came from a .env file, it is "
+                        f"the LOCAL_BACKEND_TYPE / BACKEND_TYPE setting."
                     )
-                    logger.debug(f"🔍 Created BackendConfig object for FUSEKI_POSTGRESQL")
-                    
-                    # Use BackendFactory to create hybrid space backend
-                    logger.debug(f"🔍 Calling BackendFactory.create_space_backend()...")
-                    self.space_backend = BackendFactory.create_space_backend(backend_config_obj)
-                    logger.debug(f"🔍 Space backend created: {type(self.space_backend)}")
-                    
-                    # For hybrid backend, also create the db_impl from the space backend
-                    if hasattr(self.space_backend, 'postgresql_impl'):
-                        self.db_impl = self.space_backend.postgresql_impl
-                        logger.debug(f"🔍 Set db_impl from space_backend.postgresql_impl: {type(self.db_impl)}")
-                    else:
-                        logger.warning(f"⚠️ space_backend does not have postgresql_impl attribute")
-                    logger.info(f"✅ Initialized Fuseki-PostgreSQL hybrid backend successfully")
-                    
+
                 else:
                     raise ValueError(
                         f"Unsupported backend type: '{backend_type}'. "
-                        f"The 'postgresql' (V1) backend has been archived. "
-                        f"Use 'sparql_sql' or 'fuseki_postgresql' instead."
+                        f"Supported: {', '.join(b.value for b in BackendType)}."
                     )
-                    
+
             except Exception as e:
                 logger.error(f"❌ Could not initialize backend: {e}")
                 logger.debug(f"🔍 Exception type: {type(e)}")

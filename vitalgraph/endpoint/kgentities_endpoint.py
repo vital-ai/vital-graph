@@ -1713,7 +1713,7 @@ class KGEntitiesEndpoint:
             # Look up the owning entity via kGGraphURI, for cache invalidation
             # below. This used to sit inside `if entity_lock_manager:`, and
             # `entity_uri` was bound ONLY there — so on a backend without that
-            # attribute (which is every backend now that Fuseki is deprecated)
+            # attribute (which is every backend there is)
             # the lookup never ran and the read at the invalidation site raised
             # NameError. That surfaced as HTTP 500 from a delete that had
             # already succeeded, and left the entity graph cache stale.
@@ -2975,7 +2975,7 @@ class KGEntitiesEndpoint:
         """Build SPARQL query for listing entity subjects using query builder."""
         from ..kg_impl.kg_sparql_utils import KGSparqlQueryBuilder
         
-        # Get the proper graph URI for Fuseki
+        # Resolve the space's full graph URI
         if hasattr(backend, '_get_space_graph_uri'):
             full_graph_uri = backend._get_space_graph_uri(space_id, graph_id)
         else:
@@ -2991,7 +2991,7 @@ class KGEntitiesEndpoint:
         """Build SPARQL query for listing complete entity graphs using query builder."""
         from ..kg_impl.kg_sparql_utils import KGSparqlQueryBuilder
         
-        # Get the proper graph URI for Fuseki
+        # Resolve the space's full graph URI
         if hasattr(backend, '_get_space_graph_uri'):
             full_graph_uri = backend._get_space_graph_uri(space_id, graph_id)
         else:

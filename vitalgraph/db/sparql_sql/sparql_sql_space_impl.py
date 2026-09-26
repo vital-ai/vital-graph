@@ -1,7 +1,7 @@
 """
 Pure-PostgreSQL space backend using the V2 SPARQL-to-SQL pipeline.
 
-No Fuseki dependency — SPARQL queries and updates are compiled by the
+SPARQL queries and updates are compiled by the
 Jena sidecar into an algebra, then translated to SQL and executed
 directly against PostgreSQL.
 
@@ -157,7 +157,7 @@ def _generate_term_uuid(
     a safe assumption about data written by it:
 
       1. This normalises `term_text` FIRST; the archived
-         `FusekiPostgreSQLSpaceTerms.generate_term_uuid` did not. A blank node
+         the archived implementation did not. A blank node
          spelled `_:b1` therefore hashes there to a different term than `b1`
          does here (`issues/065`, and `term_normalize.py` for why that is a
          wrong-answer bug rather than a cosmetic one).
@@ -299,7 +299,8 @@ def _cleared_graphs_from_update_ops(ops) -> set:
 
 class _SparqlSQLGraphsAdapter:
     """Lightweight adapter so endpoint code can call ``db_space_impl.graphs.list_graphs()``
-    and ``db_space_impl.graphs.get_graph()`` exactly like the fuseki_postgresql backend."""
+    and ``db_space_impl.graphs.get_graph()``, the shape inherited from the
+    archived hybrid backend."""
 
     def __init__(self, space_impl: 'SparqlSQLSpaceImpl'):
         self._impl = space_impl
@@ -417,7 +418,7 @@ class _SparqlSQLGraphsAdapter:
 class _SparqlSQLTransaction:
     """Async context-manager transaction wrapper for the sparql_sql backend.
 
-    Mirrors ``FusekiPostgreSQLTransaction`` so that ``execute_with_transaction``
+    Mirrors the archived backend's transaction object so that ``execute_with_transaction``
     in impl_utils.py works identically for both backends.
     """
 
@@ -496,7 +497,7 @@ class _SparqlSQLDbOpsAdapter:
     ``SparqlSQLSpaceImpl`` so that ``ObjectsImpl`` (and friends) can call
     ``db_space_impl.db_ops.add_rdf_quads_batch()`` etc.
 
-    The shape is inherited: it mirrors the archived ``FusekiPostgreSQLDbOps``
+    The shape is inherited from the archived hybrid backend's db-ops layer
     (`issues/241`), which existed for the same reason — callers want quad ops that
     take an optional caller transaction, and the space impl's own methods are the
     implementation. Named here rather than by reference to the archived class, so
@@ -584,13 +585,13 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         self.connected = False
         self._signal_manager = None
 
-        # Database objects layer (mirrors FusekiPostgreSQLDbObjects API)
+        # Database objects layer (inherited API shape)
         self.db_objects = SparqlSQLDbObjects(self)
 
-        # Graph management adapter (mirrors FusekiPostgreSQLSpaceGraphs API)
+        # Graph management adapter (inherited API shape)
         self.graphs = _SparqlSQLGraphsAdapter(self)
 
-        # Database operations adapter (mirrors FusekiPostgreSQLDbOps API)
+        # Database operations adapter (inherited API shape)
         self.db_ops = _SparqlSQLDbOpsAdapter(self)
 
         # Core adapter (provides create_transaction)
@@ -2518,7 +2519,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
     async def query_quads(self, space_id: str, sparql_query: str) -> List[Dict[str, Any]]:
         """Execute a SPARQL SELECT and return SPARQL JSON bindings.
 
-        Compatible with FusekiPostgreSQLSpaceImpl.query_quads — the triples
+        Compatible with the archived backend's query_quads — the triples
         endpoint expects a list of binding dicts, e.g.
         ``[{'s': {'type': 'uri', 'value': '...'}, ...}, ...]``.
         """

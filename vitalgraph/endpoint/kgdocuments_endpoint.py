@@ -1049,7 +1049,7 @@ class KGDocumentsEndpoint:
 
         Supports both backend types:
           - SparqlSQLSpaceImpl  → pool at backend_impl.db_impl._pool
-          - FusekiPostgreSQLSpaceImpl → pool at backend_impl.postgresql_impl.connection_pool
+          - archived hybrid backend → pool at backend_impl.postgresql_impl.connection_pool
         """
         try:
             # SparqlSQLSpaceImpl path
@@ -1060,7 +1060,7 @@ class KGDocumentsEndpoint:
                     conn = await pool.acquire()
                     return conn, pool
 
-            # FusekiPostgreSQLSpaceImpl path
+            # archived hybrid backend path
             pg = getattr(backend_impl, "postgresql_impl", None)
             if pg is not None:
                 pool = getattr(pg, "connection_pool", None)

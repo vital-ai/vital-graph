@@ -3300,7 +3300,7 @@ class KGFramesEndpoint:
         Update VitalSigns slot objects in backend using atomic update_quads.
         
         Joins DELETE and INSERT into a single PostgreSQL transaction and a
-        single Fuseki request, preventing triple accumulation if the delete
+        single request, preventing triple accumulation if the delete
         phase succeeds but the insert fails (or vice versa).
         """
         try:

@@ -3,7 +3,7 @@ KGEntity Update Implementation for VitalGraph.
 
 This module provides the implementation for updating KG entities in the backend storage,
 using the DELETE + INSERT pattern for complete entity replacement with proper dual-write
-coordination (PostgreSQL first, then Fuseki).
+coordination in a single PostgreSQL transaction.
 """
 
 import asyncio
@@ -35,7 +35,6 @@ class KGEntityUpdateProcessor:
     1. Build delete quads for existing entity data (entity + related objects via kGGraphURI)
     2. Build insert quads for new entity data (VitalSigns objects to triples)
     3. Execute atomic update_quads operation (single transaction)
-    4. PostgreSQL-first dual-write with Fuseki synchronization
     """
     
     def __init__(self):

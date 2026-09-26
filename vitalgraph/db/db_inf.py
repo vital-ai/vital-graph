@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional, List
 class DbImplInterface(ABC):
     """
     Common interface for database implementation components.
-    Both PostgreSQL and FUSEKI_POSTGRESQL backends will implement this interface.
+    Implemented by the sparql_sql backend.
     """
     
     @abstractmethod

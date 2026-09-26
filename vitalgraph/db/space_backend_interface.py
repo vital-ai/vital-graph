@@ -2,7 +2,7 @@
 Abstract interface for space backend implementations.
 
 This module defines the SpaceBackendInterface that all backend implementations
-(PostgreSQL, Fuseki, Oxigraph, Mock) must implement. This ensures consistent
+(sparql_sql, Oxigraph, Mock) must implement. This ensures consistent
 API across different storage backends while allowing backend-specific optimizations.
 """
 
@@ -441,7 +441,6 @@ class SignalManagerInterface(ABC):
     to support different backend notification mechanisms:
     - PostgreSQL: NOTIFY/LISTEN (existing implementation)
     - Oxigraph: In-memory events (non-operational initially)
-    - Fuseki: HTTP webhooks or polling
     - Mock: In-memory event simulation
     
     Different backends may have different mechanisms for notifying

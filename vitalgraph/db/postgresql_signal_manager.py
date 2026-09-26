@@ -1,6 +1,17 @@
-"""
-PostgreSQL-based signal implementation for FUSEKI_POSTGRESQL backend.
-Uses PostgreSQL NOTIFY/LISTEN for real-time notifications.
+"""PostgreSQL NOTIFY/LISTEN signal manager — the signal manager for this store.
+
+MOVED UP TO `db/` 2026-09-26 (`issues/241`). It lived inside a backend package
+that was being archived, while being the signal manager the LIVE backend uses —
+so the archive would have taken the live backend's signalling with it. Its
+docstring named the wrong backend too, in the direction that made the dependency
+invisible.
+
+That was not an accident of this retirement — it is the SECOND time: when the V1
+`postgresql` backend was archived, its signal manager was left here to be shared
+rather than moved out (`backend_config.py` recorded it as "V1 postgresql backend
+archived — use the shared signal manager"). A shared module parked in a retired
+backend's package is the shape to avoid; this lives at the `db/` level so no
+future retirement can strand it again.
 """
 
 import asyncio
@@ -9,8 +20,8 @@ import logging
 from typing import Dict, Any, Optional, Callable, List
 import asyncpg
 
-from ..backend_config import SignalManagerInterface
-from ...utils.resource_manager import track_connection
+from .backend_config import SignalManagerInterface
+from ..utils.resource_manager import track_connection
 
 
 logger = logging.getLogger(__name__)
@@ -18,11 +29,9 @@ logger = logging.getLogger(__name__)
 
 class PostgreSQLSignalManager(SignalManagerInterface):
     """
-    PostgreSQL-based signal implementation for FUSEKI_POSTGRESQL backend.
-    Uses PostgreSQL NOTIFY/LISTEN for real-time notifications.
-    
-    This provides a significant enhancement over the Fuseki no-op signal manager
-    by using PostgreSQL's built-in NOTIFY/LISTEN functionality for real-time events.
+    Uses PostgreSQL NOTIFY/LISTEN for real-time notifications, which is a real
+    implementation rather than the no-op the archived backend's own signal manager
+    provided.
     """
     
     def __init__(self, postgresql_config: dict):

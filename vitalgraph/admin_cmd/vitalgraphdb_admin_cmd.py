@@ -278,9 +278,6 @@ class VitalGraphDBAdminREPL:
         if backend_type == 'sparql_sql':
             from vitalgraph.db.sparql_sql.sparql_sql_admin import SparqlSQLAdmin
             return SparqlSQLAdmin()
-        elif backend_type == 'fuseki_postgresql':
-            from vitalgraph.db.fuseki_postgresql.fuseki_admin import FusekiPostgreSQLAdmin
-            return FusekiPostgreSQLAdmin()
         else:
             return None
     
@@ -412,10 +409,6 @@ class VitalGraphDBAdminREPL:
             # Connection details
             if 'sidecar_url' in info:
                 print(f"Sidecar URL: {info['sidecar_url']}")
-            if 'fuseki_server' in info:
-                print(f"\nFuseki Server: {info['fuseki_server']}")
-                print(f"Fuseki Dataset: {info.get('fuseki_dataset', 'N/A')}")
-                print(f"JWT Authentication: {'Enabled' if info.get('jwt_auth') else 'Disabled'}")
             if 'pg_host' in info:
                 print(f"\nPostgreSQL Host: {info['pg_host']}")
                 print(f"PostgreSQL Database: {info.get('pg_database', 'N/A')}")
@@ -2136,14 +2129,6 @@ Note: All commands must end with a semicolon (;)
                 print(f"🗑️  Dropping per-space tables for '{space_id}'...")
                 async with self.db_impl.connection_pool.acquire() as conn:
                     await SparqlSQLSchema.drop_space(conn, space_id)
-            elif backend_type == 'fuseki_postgresql':
-                from vitalgraph.db.fuseki_postgresql.postgresql_schema import FusekiPostgreSQLSchema
-                schema = FusekiPostgreSQLSchema()
-                print(f"🗑️  Dropping per-space tables for '{space_id}'...")
-                for stmt in schema.drop_space_indexes_sql(space_id):
-                    await self.db_impl.execute_update(stmt)
-                for stmt in schema.drop_space_tables_sql(space_id):
-                    await self.db_impl.execute_update(stmt)
 
             # Remove from admin tables
             print(f"   Removing space from admin tables...")

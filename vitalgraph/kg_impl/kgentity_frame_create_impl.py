@@ -96,7 +96,6 @@ class CreateFrameResult:
     created_uris: List[str]
     message: str
     frame_count: int
-    fuseki_success: Optional[bool] = None
     # Type names present in the payload that were NOT written. Carried so the
     # caller's message can say so: reporting plain success for a payload that
     # was partly discarded is `issues/225`.
@@ -214,14 +213,13 @@ class KGEntityFrameCreateProcessor:
             self.logger.info(f"⏱️ PROCESSOR categorize+grouping+edges: {_p2-_p1:.3f}s")
             
             # Step 6: Execute atomic UPDATE/UPSERT or CREATE operation
-            fuseki_success = True
             if operation_mode and str(operation_mode).upper() in ['UPDATE', 'UPSERT']:
-                success, fuseki_success = await self.execute_atomic_frame_update(backend_adapter, space_id, graph_id, 
+                success = await self.execute_atomic_frame_update(backend_adapter, space_id, graph_id, 
                                                                categories.frame_objects, all_objects, operation_mode,
                                                                  entity_uri=entity_uri)
             else:
                 # Step 7: Execute atomic creation via backend (extracted from lines 1125-1145)
-                success, fuseki_success = await self.execute_frame_creation(backend_adapter, space_id, graph_id, all_objects,
+                success = await self.execute_frame_creation(backend_adapter, space_id, graph_id, all_objects,
                                                                             entity_uri=entity_uri)
             
             if success:
@@ -242,7 +240,6 @@ class KGEntityFrameCreateProcessor:
                     created_uris=created_uris,
                     message=_msg,
                     frame_count=len(categories.frame_objects),
-                    fuseki_success=fuseki_success,
                     unhandled_types=_unhandled
                 )
             else:
@@ -251,7 +248,6 @@ class KGEntityFrameCreateProcessor:
                     created_uris=[],
                     message="Failed to create/update frames",
                     frame_count=0,
-                    fuseki_success=fuseki_success
                 )
                 
         except Exception as e:
@@ -261,7 +257,6 @@ class KGEntityFrameCreateProcessor:
                 created_uris=[],
                 message=f"Error creating/updating frames: {str(e)}",
                 frame_count=0,
-                fuseki_success=False
             )
     
     async def validate_entity_exists(self, backend_adapter: KGBackendInterface, space_id: str, 
@@ -517,7 +512,7 @@ class KGEntityFrameCreateProcessor:
             operation_mode: 'UPDATE' or 'UPSERT'
             
         Returns:
-            Tuple of (success: bool, fuseki_success: Optional[bool])
+            True if the operation committed.
         """
         try:
             import time
@@ -569,14 +564,14 @@ class KGEntityFrameCreateProcessor:
             
             if success:
                 self.logger.debug(f"✅ Atomic frame {operation_mode} completed successfully")
-                return (True, True)
+                return True
             else:
                 self.logger.error(f"❌ Atomic frame {operation_mode} failed")
-                return (False, False)
+                return False
                 
         except Exception as e:
             self.logger.error(f"Error in atomic frame {operation_mode}: {e}")
-            return (False, False)
+            return False
     
     async def build_delete_quads_for_frames(self, backend_adapter: KGBackendInterface, space_id: str,
                                           graph_id: str, frame_objects: List[GraphObject]) -> List[tuple]:
@@ -905,7 +900,7 @@ class KGEntityFrameCreateProcessor:
         lose datatype metadata and cause silent delete failures.
         
         Falls back to the old update_quads path for backends without
-        update_subjects_graph (e.g. legacy Fuseki+PostgreSQL).
+        update_subjects_graph (e.g. a legacy dual-write backend).
         
         Args:
             backend_adapter: Backend adapter for database operations
@@ -914,7 +909,7 @@ class KGEntityFrameCreateProcessor:
             all_objects: All GraphObjects to create (frames, slots, edges)
             
         Returns:
-            Tuple of (success: bool, fuseki_success: bool)
+            True if the operation committed.
         """
         try:
             import time as _time
@@ -955,11 +950,11 @@ class KGEntityFrameCreateProcessor:
             
             if success:
                 self.logger.debug(f"✅ Atomic frame creation completed successfully")
-                return (True, True)
+                return True
             else:
                 self.logger.error(f"❌ Atomic frame creation failed")
-                return (False, False)
+                return False
             
         except Exception as e:
             self.logger.error(f"Error executing frame creation: {e}")
-            return (False, False)
+            return False

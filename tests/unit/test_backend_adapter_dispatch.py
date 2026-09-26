@@ -1,20 +1,21 @@
-"""`create_backend_adapter` must not fall back to the RETIRED backend.
+"""`create_backend_adapter` dispatches on TYPE and refuses what it cannot serve.
 
-`issues/241`. The dispatch is a substring match on the backend's CLASS NAME, and
-its `else` branch returned `FusekiPostgreSQLBackendAdapter` — so a backend the
-function did not recognise was silently adapted as Fuseki. Two failures in one:
+`issues/241`. This started as a guard against the `else` branch returning the
+RETIRED backend's adapter — an unrecognised backend was silently adapted as a
+store it had nothing to do with. That branch is gone now, along with the backend,
+so the guard has moved with the defect rather than being deleted with it:
 
-  * today it adapts a live backend with an adapter written for a different store;
-  * once the Fuseki package is archived the name does not resolve, so the branch
-    whose entire job is to be a fallback raises `NameError`.
+    before   substring of class name, `else` -> the retired adapter
+    interim  substring of class name, `else` -> SparqlSQLBackendAdapter
+    now      isinstance, unknown -> TypeError
 
-The default is now the live backend, matching `config_loader.py`, which resolves
-`BACKEND_TYPE` to `sparql_sql` when nothing says otherwise.
+The interim step was still wrong in the same shape. A rename of
+`SparqlSQLSpaceImpl` would have silently fallen through to the `else` and been
+adapted anyway — correct by accident, because the fallback happened to name the
+only adapter left. Guessing was the defect, not which way it guessed.
 
-These are pure dispatch tests: the adapters are constructed but never called, so
-no database is needed. The stand-in classes exist to exercise the NAME matching,
-which is the mechanism actually under test — a mock with the wrong class name
-would pass the wrong branch, which is the point.
+Pure dispatch tests: adapters are constructed but never called, so no database is
+needed.
 """
 
 from __future__ import annotations
@@ -24,57 +25,47 @@ import pytest
 from vitalgraph.kg_impl.kg_backend_utils import (
     create_backend_adapter,
     SparqlSQLBackendAdapter,
-    FusekiPostgreSQLBackendAdapter,
 )
+from vitalgraph.db.sparql_sql.sparql_sql_space_impl import SparqlSQLSpaceImpl
 
 
-class SparqlSQLSpaceImpl:
-    """Name matches the live backend. `postgresql_config` because the sparql_sql
-    adapter reads it — via `getattr(..., None)`, so absence is tolerated, but a
-    realistic stand-in carries it."""
-    postgresql_config = None
+class _NotABackend:
+    """Matches nothing. The case the old `else` decided and this one refuses."""
 
 
-class FusekiPostgreSQLSpaceImpl:
-    """Name matches the retired hybrid backend, which is still dispatched
-    explicitly while it exists."""
+class SparqlSQLSpaceImplLookalike:
+    """The reason NAME matching had to go.
 
-
-class MysteryBackend:
-    """Matches NEITHER arm — the case the `else` branch decides."""
-
-
-class OxigraphSpaceImpl:
-    """A second unrecognised name, and not a hypothetical: `BackendType.OXIGRAPH`
-    is in the enum (`backend_config.py:19`) and has no arm here."""
-
-
-def test_sparql_sql_backend_gets_the_sparql_sql_adapter():
-    assert isinstance(
-        create_backend_adapter(SparqlSQLSpaceImpl()), SparqlSQLBackendAdapter)
-
-
-def test_fuseki_backend_is_still_dispatched_explicitly_while_it_exists():
-    """Not an endorsement — it pins that the EXPLICIT arm is what serves Fuseki,
-    so the `else` below is genuinely the unrecognised case and not Fuseki's real
-    route. When the package is archived (`issues/241` step 5) this test goes with
-    it, and the assertion above plus the two below are what remain."""
-    assert isinstance(
-        create_backend_adapter(FusekiPostgreSQLSpaceImpl()),
-        FusekiPostgreSQLBackendAdapter)
-
-
-@pytest.mark.parametrize("backend", [MysteryBackend(), OxigraphSpaceImpl()])
-def test_an_unrecognised_backend_does_not_fall_back_to_fuseki(backend):
-    """The regression this file exists for.
-
-    Asserted as `not FusekiPostgreSQLBackendAdapter` as well as
-    `is SparqlSQLBackendAdapter`, because the two say different things: the first
-    is the defect, and it would still be a defect if the default were changed
-    again to some third adapter.
+    Its class name contains `SparqlSQL`, so the old substring dispatch would have
+    handed it the sparql_sql adapter. It is not a `SparqlSQLSpaceImpl`, so this
+    one refuses it. Asserting on the LOOKALIKE rather than only on an obviously
+    foreign object is what distinguishes the two mechanisms — a test using only
+    `_NotABackend` would pass against the old substring form too.
     """
-    adapter = create_backend_adapter(backend)
-    assert not isinstance(adapter, FusekiPostgreSQLBackendAdapter), (
-        f"{type(backend).__name__} was adapted as Fuseki — the retired backend "
-        f"is serving as the fallback again (issues/241)")
-    assert isinstance(adapter, SparqlSQLBackendAdapter)
+
+
+def test_the_live_backend_gets_the_sparql_sql_adapter():
+    impl = SparqlSQLSpaceImpl.__new__(SparqlSQLSpaceImpl)
+    assert isinstance(create_backend_adapter(impl), SparqlSQLBackendAdapter)
+
+
+@pytest.mark.parametrize(
+    "backend", [_NotABackend(), SparqlSQLSpaceImplLookalike()],
+    ids=["unrelated-object", "name-lookalike"])
+def test_an_unsupported_backend_raises_instead_of_being_guessed_at(backend):
+    """Raising is the point.
+
+    With one adapter in the module, returning it for anything that arrives looks
+    harmless and is how the original defect read right up until the adapter it
+    returned was the wrong store's. A caller holding something this function does
+    not know about needs to be told.
+    """
+    with pytest.raises(TypeError, match="No KG backend adapter"):
+        create_backend_adapter(backend)
+
+
+def test_the_error_names_what_was_passed():
+    """So the failure is actionable without a debugger — the old silent path gave
+    the caller nothing to go on, which is why it survived as long as it did."""
+    with pytest.raises(TypeError, match="SparqlSQLSpaceImplLookalike"):
+        create_backend_adapter(SparqlSQLSpaceImplLookalike())

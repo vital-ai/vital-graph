@@ -137,7 +137,6 @@ class VitalGraphConfig:
             VITALGRAPH_ENVIRONMENT=local
             LOCAL_DB_HOST=localhost
             LOCAL_DB_PORT=5432
-            LOCAL_FUSEKI_URL=http://localhost:3030
         
         Returns:
             Complete configuration dictionary
@@ -163,23 +162,6 @@ class VitalGraphConfig:
                 'acquire_timeout': float(self._get_profile_env('DB_ACQUIRE_TIMEOUT', '15')),
                 'enable_quad_logging': self._get_profile_env('DB_ENABLE_QUAD_LOGGING', 'false').lower() == 'true'
             },
-            'fuseki': {
-                'server_url': self._get_profile_env('FUSEKI_URL', 'http://localhost:3030'),
-                'dataset_name': self._get_profile_env('FUSEKI_DATASET', 'vitalgraph'),
-                'username': self._get_profile_env('FUSEKI_USERNAME', ''),
-                'password': self._get_profile_env('FUSEKI_PASSWORD', ''),
-                'connection_limit': int(self._get_profile_env('FUSEKI_CONNECTION_LIMIT', '20')),
-                'auto_register_datasets': self._get_profile_env('FUSEKI_AUTO_REGISTER_DATASETS', 'false').lower() == 'true',
-                'enable_authentication': self._get_profile_env('FUSEKI_ENABLE_AUTH', 'false').lower() == 'true',
-                'keycloak': {
-                    'url': self._get_profile_env('KEYCLOAK_URL', ''),
-                    'realm': self._get_profile_env('KEYCLOAK_REALM', ''),
-                    'client_id': self._get_profile_env('KEYCLOAK_CLIENT_ID', ''),
-                    'client_secret': self._get_profile_env('KEYCLOAK_CLIENT_SECRET', ''),
-                    'username': self._get_profile_env('KEYCLOAK_USERNAME', ''),
-                    'password': self._get_profile_env('KEYCLOAK_PASSWORD', '')
-                }
-            },
             'sparql_sql': {
                 'database': {
                     'host': self._get_profile_env('DB_HOST', 'localhost'),
@@ -202,48 +184,6 @@ class VitalGraphConfig:
                 'sidecar': {
                     'url': self._get_profile_env('SIDECAR_URL', 'http://localhost:7070'),
                 }
-            },
-            'fuseki_postgresql': {
-                'database': {
-                    'host': self._get_profile_env('DB_HOST', 'localhost'),
-                    'port': int(self._get_profile_env('DB_PORT', '5432')),
-                    'database': self._get_profile_env('DB_NAME', 'vitalgraph'),
-                    'username': self._get_profile_env('DB_USERNAME', 'postgres'),
-                    'password': self._get_profile_env('DB_PASSWORD', ''),
-                    'min_pool_size': int(self._get_profile_env('DB_POOL_SIZE', '10')),
-                    'max_pool_size': int(self._get_profile_env('DB_MAX_POOL_SIZE', '30')),
-                    'acquire_timeout': float(self._get_profile_env('DB_ACQUIRE_TIMEOUT', '15'))
-                },
-                'fuseki': {
-                    'server_url': self._get_profile_env('FUSEKI_URL', 'http://localhost:3030'),
-                    'dataset_name': self._get_profile_env('FUSEKI_DATASET', 'vitalgraph'),
-                    'username': self._get_profile_env('FUSEKI_USERNAME', ''),
-                    'password': self._get_profile_env('FUSEKI_PASSWORD', ''),
-                    'connection_limit': int(self._get_profile_env('FUSEKI_CONNECTION_LIMIT', '20')),
-                    'auto_register_datasets': self._get_profile_env('FUSEKI_AUTO_REGISTER_DATASETS', 'false').lower() == 'true',
-                    'enable_authentication': self._get_profile_env('FUSEKI_ENABLE_AUTH', 'false').lower() == 'true',
-                    'keycloak': {
-                        'url': self._get_profile_env('KEYCLOAK_URL', ''),
-                        'realm': self._get_profile_env('KEYCLOAK_REALM', ''),
-                        'client_id': self._get_profile_env('KEYCLOAK_CLIENT_ID', ''),
-                        'client_secret': self._get_profile_env('KEYCLOAK_CLIENT_SECRET', ''),
-                        'username': self._get_profile_env('KEYCLOAK_USERNAME', ''),
-                        'password': self._get_profile_env('KEYCLOAK_PASSWORD', '')
-                    }
-                },
-                'transaction': {
-                    'timeout': int(self._get_profile_env('TRANSACTION_TIMEOUT', '30')),
-                    'isolation_level': self._get_profile_env('TRANSACTION_ISOLATION', 'READ_COMMITTED')
-                },
-                'backup': {
-                    'enabled': self._get_profile_env('BACKUP_ENABLED', 'false').lower() == 'true',
-                    'directory': self._get_profile_env('BACKUP_DIR', '/var/backups/vitalgraph')
-                },
-                'sparql': {
-                    'query_timeout': int(self._get_profile_env('SPARQL_QUERY_TIMEOUT', '300')),
-                    'max_results': int(self._get_profile_env('SPARQL_MAX_RESULTS', '10000'))
-                },
-                'table_prefix': self._get_profile_env('TABLE_PREFIX', 'vitalgraph_')
             },
             'tables': {
                 'prefix': self._get_profile_env('TABLE_PREFIX', 'vg_')
@@ -394,15 +334,6 @@ class VitalGraphConfig:
         """
         return self.config_data.get('backend', {})
     
-    def get_fuseki_config(self) -> Dict[str, Any]:
-        """
-        Get Fuseki backend configuration section.
-        
-        Returns:
-            Dictionary containing Fuseki configuration
-        """
-        return self.config_data.get('fuseki', {})
-    
     def get_sparql_sql_config(self) -> Dict[str, Any]:
         """
         Get sparql_sql backend configuration section.
@@ -412,15 +343,6 @@ class VitalGraphConfig:
                 (database + sidecar sub-dicts)
         """
         return self.config_data.get('sparql_sql', {})
-    
-    def get_fuseki_postgresql_config(self) -> Dict[str, Any]:
-        """
-        Get Fuseki-PostgreSQL hybrid backend configuration section.
-        
-        Returns:
-            Dictionary containing Fuseki-PostgreSQL hybrid configuration
-        """
-        return self.config_data.get('fuseki_postgresql', {})
     
     def get_rdf_pool_config(self) -> Dict[str, Any]:
         """
@@ -531,7 +453,7 @@ def get_scoped_env(key: str, default: str = '') -> str:
         3. *default*
 
     This allows subsystems (Entity Fuzzy, Weaviate, etc.) to share the same
-    environment-scoping convention used by the database / Fuseki config.
+    environment-scoping convention used by the database config.
     """
     env = os.getenv('VITALGRAPH_ENVIRONMENT', 'local').upper()
     value = os.getenv(f'{env}_{key}')

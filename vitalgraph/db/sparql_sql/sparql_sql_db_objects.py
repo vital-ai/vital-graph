@@ -2,8 +2,9 @@
 SPARQL-SQL Database Objects Layer
 
 Implements the database objects layer for the sparql_sql backend.
-Mirrors FusekiPostgreSQLDbObjects but uses execute_sparql_query()
-via the V2 SPARQL-to-SQL pipeline instead of Fuseki directly.
+Uses execute_sparql_query() via the V2 SPARQL-to-SQL pipeline. The shape is
+inherited from an archived hybrid backend (`issues/241`), which reached its
+store over HTTP instead.
 
 Two-phase query pattern:
 1. Phase 1: Find subject URIs matching criteria (SPARQL SELECT)
@@ -71,7 +72,7 @@ def _materialized_filter(pred_var: str = "?p") -> str:
 class SparqlSQLDbObjects:
     """Database objects layer for the sparql_sql backend.
 
-    Provides the same API as ``FusekiPostgreSQLDbObjects`` so that
+    Provides the API the archived hybrid backend's objects layer did, so that
     kg_impl code can call ``backend_adapter.backend.db_objects.*``
     regardless of which backend is active.
     """

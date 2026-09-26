@@ -25,7 +25,7 @@ class KGEntityDeleteProcessor:
     Processor for KGEntity deletion operations with backend integration.
     
     Handles both single entity deletion and entity graph deletion with proper
-    dual-write coordination between Fuseki and PostgreSQL backends.
+    a single PostgreSQL transaction.
     """
     
     def __init__(self):
@@ -142,7 +142,7 @@ class KGEntityDeleteProcessor:
                 # Return non-zero to indicate success (caller checks > 0)
                 return 1 if deleted_quads > 0 else 0
 
-            # Slow path: SPARQL-based delete (fuseki_postgresql and other backends)
+            # Slow path: SPARQL-based delete (other backends)
             full_graph_uri = graph_id
             kg_graph_uri = entity_uri
             

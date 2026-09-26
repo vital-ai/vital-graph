@@ -1,12 +1,12 @@
 """
 Pure-PostgreSQL database implementation for the sparql_sql backend.
 
-Owns its own asyncpg connection pool — no Fuseki dependency.
+Owns its own asyncpg connection pool.
 The pipeline's ``db_provider.configure()`` accepts this instance and
 uses ``connection_pool`` for all SQL operations.
 
-Follows the same pattern as ``FusekiPostgreSQLDbImpl`` but without any
-Fuseki-related components.
+Pattern inherited from an earlier hybrid backend, since archived
+(`issues/241`), minus its second store.
 """
 
 import asyncio

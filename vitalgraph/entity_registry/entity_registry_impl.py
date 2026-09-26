@@ -2,7 +2,7 @@
 Core Entity Registry implementation.
 
 Async operations using asyncpg, sharing the connection pool
-from the Fuseki-PostgreSQL hybrid backend.
+from the space backend.
 
 This class composes domain-specific mixins:
   - ChangeLogMixin:    change log + helpers
@@ -81,7 +81,7 @@ class EntityRegistryImpl(
         Initialize with an asyncpg connection pool.
 
         Args:
-            connection_pool: Shared asyncpg pool from FusekiPostgreSQLDbImpl.
+            connection_pool: Shared asyncpg pool from the space backend.
             fuzzy_index: Optional fuzzy index (EntityFuzzyIndex for Redis/memory,
                          EntityFuzzyIndexPG for PostgreSQL backend).
             signal_manager: Optional SignalManager for cross-worker fuzzy sync.

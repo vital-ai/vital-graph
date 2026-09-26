@@ -88,7 +88,6 @@ class CreateFrameResult:
     created_uris: List[str]
     message: str
     frame_count: int
-    fuseki_success: Optional[bool] = None
     # Type names present in the payload that were NOT written (`issues/225`).
     unhandled_types: List[str] = field(default_factory=list)
 
@@ -164,12 +163,12 @@ class KGFrameCreateProcessor:
             mode_upper = str(operation_mode).upper() if operation_mode else "CREATE"
 
             if mode_upper in ('UPDATE', 'UPSERT'):
-                success, fuseki_success = await self.execute_atomic_frame_update(
+                success = await self.execute_atomic_frame_update(
                     backend_adapter, space_id, graph_id,
                     categories.frame_objects, all_objects, mode_upper
                 )
             else:
-                success, fuseki_success = await self.execute_frame_creation(
+                success = await self.execute_frame_creation(
                     backend_adapter, space_id, graph_id, all_objects
                 )
 
@@ -188,7 +187,6 @@ class KGFrameCreateProcessor:
                     created_uris=created_uris,
                     message=_msg,
                     frame_count=len(categories.frame_objects),
-                    fuseki_success=fuseki_success,
                     unhandled_types=_unhandled
                 )
             else:
@@ -197,7 +195,6 @@ class KGFrameCreateProcessor:
                     created_uris=[],
                     message="Failed to create/update frames",
                     frame_count=0,
-                    fuseki_success=fuseki_success
                 )
 
         except Exception as e:
@@ -207,7 +204,6 @@ class KGFrameCreateProcessor:
                 created_uris=[],
                 message=f"Error: {str(e)}",
                 frame_count=0,
-                fuseki_success=False
             )
 
     async def categorize_frame_objects(self, graph_objects: List[GraphObject]) -> FrameObjectCategories:
@@ -339,11 +335,11 @@ class KGFrameCreateProcessor:
                 _t2 = _time.time()
                 self.logger.info(f"⏱️ FRAME_CREATE fallback update_quads: {_t2-_t1:.3f}s")
 
-            return (True, True) if success else (False, False)
+            return success
 
         except Exception as e:
             self.logger.error(f"Error executing frame creation: {e}")
-            return (False, False)
+            return False
 
     async def execute_atomic_frame_update(self, backend_adapter: KGBackendInterface, space_id: str,
                                           graph_id: str, frame_objects: List[GraphObject],
@@ -393,11 +389,11 @@ class KGFrameCreateProcessor:
             _t2 = _time.time()
             self.logger.info(f"⏱️ FRAME_UPDATE total: {_t2-_t0:.3f}s")
 
-            return (True, True) if success else (False, False)
+            return success
 
         except Exception as e:
             self.logger.error(f"Error in atomic frame update: {e}")
-            return (False, False)
+            return False
 
     async def build_insert_quads_for_objects(self, all_objects: List[GraphObject], graph_id: str) -> list:
         """Build insert quads from VitalSigns objects."""

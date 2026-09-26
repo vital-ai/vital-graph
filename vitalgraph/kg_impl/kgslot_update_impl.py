@@ -3,7 +3,7 @@ KGSlot Update Implementation for VitalGraph.
 
 This module provides the implementation for updating KG slots in the backend storage,
 using the DELETE + INSERT pattern for complete slot replacement with proper dual-write
-coordination (PostgreSQL first, then Fuseki).
+coordination in a single PostgreSQL transaction.
 
 Follows the same pattern as KGEntityUpdateProcessor for consistency.
 """
@@ -32,7 +32,6 @@ class KGSlotUpdateProcessor:
     1. Build delete quads for existing slot data (slot + related objects via kGGraphURI)
     2. Build insert quads for new slot data (VitalSigns objects to triples)
     3. Execute atomic update_quads operation (single transaction)
-    4. PostgreSQL-first dual-write with Fuseki synchronization
     """
     
     def __init__(self):

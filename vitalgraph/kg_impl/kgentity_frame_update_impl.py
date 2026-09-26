@@ -30,7 +30,6 @@ class UpdateFrameResult:
     validation_results: Dict[str, Any]
     message: str
     error: Optional[str] = None
-    fuseki_success: Optional[bool] = None
 
 
 class KGEntityFrameUpdateProcessor:
@@ -191,7 +190,6 @@ class KGEntityFrameUpdateProcessor:
                     updated_component_count=create_result.frame_count,
                     validation_results=validation_results,
                     message=message,
-                    fuseki_success=create_result.fuseki_success
                 )
             else:
                 return UpdateFrameResult(
@@ -201,7 +199,6 @@ class KGEntityFrameUpdateProcessor:
                     validation_results=validation_results,
                     message=f"Frame update failed: {create_result.message}",
                     error=create_result.message,
-                    fuseki_success=create_result.fuseki_success
                 )
             
         except Exception as e:
@@ -213,7 +210,6 @@ class KGEntityFrameUpdateProcessor:
                 validation_results={"valid_frames": 0, "invalid_frames": len(frame_objects)},
                 message=f"Frame update failed: {str(e)}",
                 error=str(e),
-                fuseki_success=False
             )
     
     async def validate_frame_ownership(self, space_id: str, graph_id: str, entity_uri: str, 

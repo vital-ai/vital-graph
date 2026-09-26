@@ -23,7 +23,7 @@ class KGSlotDeleteProcessor:
     Processor for KGSlot deletion operations with backend integration.
     
     Handles both single slot deletion and slot graph deletion with proper
-    dual-write coordination between Fuseki and PostgreSQL backends.
+    a single PostgreSQL transaction.
     """
     
     def __init__(self):

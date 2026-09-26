@@ -5,7 +5,7 @@ This module provides a single point of control for all graph object retrieval op
 ensuring consistent handling of materialized edge predicates across the codebase.
 
 Materialized edge predicates (vg-direct:hasEntityFrame, vg-direct:hasFrame, vg-direct:hasSlot)
-are optimization triples created in Fuseki for query performance. They should be filtered out
+are optimization triples created for query performance. They should be filtered out
 in most operations to prevent VitalSigns conversion errors, but included in deletion and update
 operations to ensure complete cleanup.
 """
@@ -241,7 +241,7 @@ class GraphObjectRetriever:
         Initialize retriever with backend connection.
         
         Args:
-            backend: Backend implementation (Fuseki/PostgreSQL adapter)
+            backend: Backend implementation (adapter)
         """
         self.backend = backend
         self.logger = logging.getLogger(self.__class__.__name__)

@@ -2,8 +2,8 @@
 Backend configuration and factory for VitalGraph space backends.
 
 This module provides configuration classes and factory methods for creating
-different backend implementations (PostgreSQL, Fuseki, Oxigraph) based
-on configuration settings.
+different backend implementations (sparql_sql, Oxigraph) based on configuration
+settings.
 """
 
 from enum import Enum
@@ -17,10 +17,20 @@ logger = logging.getLogger(__name__)
 
 
 class BackendType(Enum):
-    """Supported backend types."""
-    POSTGRESQL = "postgresql"
-    FUSEKI = "fuseki"
-    FUSEKI_POSTGRESQL = "fuseki_postgresql"
+    """Backend types that EXIST. `issues/241`.
+
+    Members are not a wish list or a history — every one names a package a caller
+    can actually get. Three were removed 2026-09-26 for failing that test, one of
+    which had outlived its implementation by long enough that the only thing the
+    member still did was carry an error message. See `issues/241` for which and
+    why.
+
+    Retired NAMES are still recognised, but as strings where the config is read
+    (`impl/vitalgraph_impl.py`), which is where that diagnostic belongs — an enum
+    member is not needed to tell someone their configured value is out of date,
+    and keeping one for that purpose is exactly how a member comes to sit here
+    with nothing behind it.
+    """
     SPARQL_SQL = "sparql_sql"
     OXIGRAPH = "oxigraph"
 
@@ -54,31 +64,7 @@ class BackendFactory:
         """
         logger.info(f"Creating space backend: {config.backend_type.value}")
         
-        if config.backend_type == BackendType.POSTGRESQL:
-            raise ValueError(
-                "The 'postgresql' (V1) backend has been archived. "
-                "Use BackendType.SPARQL_SQL for pure-PostgreSQL or "
-                "BackendType.FUSEKI_POSTGRESQL for the Fuseki hybrid backend."
-            )
-                
-        elif config.backend_type == BackendType.FUSEKI:
-            try:
-                from .fuseki.fuseki_space_impl import FusekiSpaceImpl
-                return FusekiSpaceImpl(**config.connection_params)
-            except ImportError as e:
-                raise ImportError(f"Fuseki backend dependencies not available: {e}")
-                
-        elif config.backend_type == BackendType.FUSEKI_POSTGRESQL:
-            try:
-                from .fuseki_postgresql.fuseki_postgresql_space_impl import FusekiPostgreSQLSpaceImpl
-                # Extract fuseki and postgresql configs from connection_params
-                fuseki_config = config.connection_params.get('fuseki', {})
-                postgresql_config = config.connection_params.get('database', {})
-                return FusekiPostgreSQLSpaceImpl(fuseki_config=fuseki_config, postgresql_config=postgresql_config)
-            except ImportError as e:
-                raise ImportError(f"Fuseki PostgreSQL hybrid backend dependencies not available: {e}")
-                
-        elif config.backend_type == BackendType.SPARQL_SQL:
+        if config.backend_type == BackendType.SPARQL_SQL:
             try:
                 from .sparql_sql.sparql_sql_space_impl import SparqlSQLSpaceImpl
                 postgresql_config = config.connection_params.get('database', {})
@@ -117,37 +103,7 @@ class BackendFactory:
         """
         logger.info(f"Creating SPARQL backend: {config.backend_type.value}")
         
-        if config.backend_type == BackendType.POSTGRESQL:
-            raise ValueError(
-                "The 'postgresql' (V1) SPARQL backend has been archived. "
-                "Use BackendType.SPARQL_SQL for pure-PostgreSQL or "
-                "BackendType.FUSEKI_POSTGRESQL for the Fuseki hybrid backend."
-            )
-                
-        elif config.backend_type == BackendType.FUSEKI:
-            try:
-                from .fuseki.fuseki_sparql_impl import FusekiSparqlImpl
-                from .fuseki.fuseki_space_impl import FusekiSpaceImpl
-                
-                # Fuseki SPARQL implementation requires a space implementation
-                space_impl = FusekiSpaceImpl(**config.connection_params)
-                # FusekiSparqlImpl needs space_impl and space_id, but we'll use a default space_id
-                return FusekiSparqlImpl(space_impl, "default")
-            except ImportError as e:
-                raise ImportError(f"Fuseki SPARQL backend dependencies not available: {e}")
-                
-        elif config.backend_type == BackendType.FUSEKI_POSTGRESQL:
-            try:
-                from .fuseki_postgresql.fuseki_postgresql_space_impl import FusekiPostgreSQLSpaceImpl
-                
-                # Fuseki PostgreSQL hybrid backend handles SPARQL through its space implementation
-                space_impl = FusekiPostgreSQLSpaceImpl(**config.connection_params)
-                # The hybrid backend implements SPARQL operations directly
-                return space_impl
-            except ImportError as e:
-                raise ImportError(f"Fuseki PostgreSQL hybrid SPARQL backend dependencies not available: {e}")
-                
-        elif config.backend_type == BackendType.SPARQL_SQL:
+        if config.backend_type == BackendType.SPARQL_SQL:
             try:
                 from .sparql_sql.sparql_sql_space_impl import SparqlSQLSpaceImpl
                 postgresql_config = config.connection_params.get('database', {})
@@ -182,31 +138,13 @@ class BackendFactory:
         
         signal_config = config.signal_manager_config or {}
         
-        if config.backend_type == BackendType.POSTGRESQL:
-            # V1 postgresql backend archived — use the shared signal manager
+        if config.backend_type == BackendType.SPARQL_SQL:
             try:
-                from .fuseki_postgresql.postgresql_signal_manager import PostgreSQLSignalManager
-                return PostgreSQLSignalManager(**signal_config)
-            except ImportError as e:
-                raise ImportError(f"PostgreSQL signal manager dependencies not available: {e}")
-                
-        elif config.backend_type == BackendType.FUSEKI:
-            try:
-                from .fuseki.fuseki_signal_manager import FusekiSignalManager
-                return FusekiSignalManager(**signal_config)
-            except ImportError as e:
-                raise ImportError(f"Fuseki signal manager dependencies not available: {e}")
-                
-        elif config.backend_type == BackendType.FUSEKI_POSTGRESQL:
-            try:
-                from .fuseki_postgresql.postgresql_signal_manager import PostgreSQLSignalManager
-                return PostgreSQLSignalManager(**signal_config)
-            except ImportError as e:
-                raise ImportError(f"Fuseki PostgreSQL hybrid signal manager dependencies not available: {e}")
-                
-        elif config.backend_type == BackendType.SPARQL_SQL:
-            try:
-                from .fuseki_postgresql.postgresql_signal_manager import PostgreSQLSignalManager
+                # Lives at the `db/` level, not inside a backend package: it was
+                # moved there 2026-09-26 (`issues/241`) because this arm had been
+                # importing the live store's signal manager out of a package that
+                # was about to be archived.
+                from .postgresql_signal_manager import PostgreSQLSignalManager
                 return PostgreSQLSignalManager(**signal_config)
             except ImportError as e:
                 raise ImportError(f"SPARQL SQL signal manager dependencies not available: {e}")

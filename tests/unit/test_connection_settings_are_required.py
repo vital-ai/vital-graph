@@ -71,19 +71,24 @@ class TestNoConnectionInventsCredentials:
     """
 
     # Excluded deliberately, not overlooked:
-    #   fuseki*            a separate backend this work does not touch
     #   config_loader.py   a STATED default profile, not a silent fallback
     #   connection_config  names the strings in order to forbid them
     #   signal_manager     `CHANNEL_USER = "vitalgraph_user"` is a NOTIFY channel
     #                      name that happens to collide with the credential
-    EXCLUDE = ("fuseki", "config_loader.py", "connection_config.py", "signal_manager.py")
+    #
+    # A `fuseki` entry was here too, justified as "a separate backend this work
+    # does not touch". It is gone with the backend (`issues/241`) — and it was the
+    # reason the exemptions had to be dropped LAST: `vitalgraph_impl.py` built a
+    # Fuseki config from a file whose name says nothing about Fuseki, so removing
+    # the entry before the code would have made this test fail on a real offender
+    # it was never meant to catch.
+    EXCLUDE = ("config_loader.py", "connection_config.py", "signal_manager.py")
     BAD = ("vitalgraph_user", "vitalgraph_pass")
 
-    # Fuseki's HTTP credentials share these literals but are a different config
-    # domain — `require` is about naming a POSTGRES database. Skipped by the
-    # config variable rather than by path, because `vitalgraph_impl.py` builds a
-    # fuseki config from a file whose name says nothing about fuseki.
-    SKIP_LINE = ("fuseki",)
+    # Was `("fuseki",)`: that backend's HTTP credentials shared these literals
+    # while being a different config domain. Both the backend and the config
+    # section are gone (`issues/241`), so the guard now covers every line it sees.
+    SKIP_LINE = ()
 
     def _offenders(self):
         out = []

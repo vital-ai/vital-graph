@@ -8,7 +8,7 @@ Defines DDL for:
 - Indexes optimized for the V2 SPARQL-to-SQL pipeline
 - Standard XSD datatype seed data
 
-Unlike the fuseki_postgresql backend (which relies on Fuseki for query
+Unlike the archived hybrid backend (which relied on an external store for query
 indexing), this backend queries PostgreSQL directly, so proper indexes
 on term and rdf_quad are essential.
 """
@@ -1620,7 +1620,7 @@ class SparqlSQLSchema:
         """Return SQL statements to create indexes on per-space tables.
 
         These are critical for the V2 pipeline which queries PostgreSQL
-        directly (unlike fuseki_postgresql which relies on Fuseki).
+        directly (unlike the archived hybrid backend).
         """
         t = self.get_table_names(space_id)
 

@@ -1,7 +1,7 @@
 """
 Common admin interface for VitalGraph database backends.
 
-Each backend implementation (sparql_sql, fuseki_postgresql) provides
+Each backend implementation provides
 its own admin module that implements this interface.  The admin CLI
 delegates to the backend-specific admin module instead of containing
 inline DDL and queries.

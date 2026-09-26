@@ -11,7 +11,7 @@ class SpaceImpl:
     Generic space implementation that provides database access methods for RDF operations.
     
     This class acts as a lightweight wrapper that delegates to backend-specific implementations
-    (e.g., PostgreSQLDbImpl, FusekiSpaceImpl) for actual space operations. This separation allows
+    (e.g., SparqlSQLSpaceImpl) for actual space operations. This separation allows
     for support of multiple database backends while maintaining a consistent interface.
     """
     
@@ -51,7 +51,7 @@ class SpaceImpl:
         self.logger.info(f"create() called for space '{self.space_id}'")
 
         try:
-            # Create space storage (Fuseki dataset + PostgreSQL primary data tables)
+            # Create space storage (PostgreSQL primary data tables)
             success = await self.backend.create_space_storage(self.space_id, partition_quads)
             if not success:
                 self.logger.error(f"❌ Failed to create space storage '{self.space_id}'")

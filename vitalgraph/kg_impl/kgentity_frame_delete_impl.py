@@ -21,7 +21,6 @@ class DeleteFrameResult:
     validation_results: Dict[str, Any]
     message: str
     error: Optional[str] = None
-    fuseki_success: Optional[bool] = None
 
 
 class KGEntityFrameDeleteProcessor:
@@ -85,7 +84,7 @@ class KGEntityFrameDeleteProcessor:
             deleted_frame_uris = []
             total_deleted_components = 0
             
-            any_fuseki_failure = False
+            batch_delete_failed = False
             
             for frame_uri in validated_frame_uris:
                 try:
@@ -119,9 +118,9 @@ class KGEntityFrameDeleteProcessor:
             
             # Phase 3: Single batch delete of all collected triples
             if all_triples:
-                fuseki_success = await self._batch_delete_triples(space_id, graph_id, all_triples)
-                if fuseki_success is False:
-                    any_fuseki_failure = True
+                deleted_ok = await self._batch_delete_triples(space_id, graph_id, all_triples)
+                if not deleted_ok:
+                    batch_delete_failed = True
                 self.logger.info(f"🗑️ Batch deleted {len(all_triples)} triples for {len(deleted_frame_uris)} frames")
             else:
                 self.logger.warning(f"⚠️ No triples found to delete")
@@ -138,8 +137,14 @@ class KGEntityFrameDeleteProcessor:
             if invalid_frames:
                 message += f", {len(invalid_frames)} frames skipped (ownership validation failed)"
             
-            # Determine overall fuseki_success: None if no issues, False if any Fuseki failure
-            overall_fuseki_success = False if any_fuseki_failure else True
+            # The batch delete's failure used to be reported ONLY in the
+            # retired second-store status field, alongside `success=True` — so a
+            # caller reading `success` saw a clean delete. Removing that field
+            # would have dropped the signal, so it goes in `message` instead.
+            # NOT folded into `success`: that is a behaviour change and is left as
+            # a decision rather than taken here (`issues/241`).
+            if batch_delete_failed:
+                message += " (WARNING: the batch delete reported failure)"
             
             return DeleteFrameResult(
                 success=success,
@@ -147,7 +152,6 @@ class KGEntityFrameDeleteProcessor:
                 deleted_component_count=total_deleted_components,
                 validation_results=validation_results,
                 message=message,
-                fuseki_success=overall_fuseki_success
             )
             
         except Exception as e:
@@ -159,7 +163,6 @@ class KGEntityFrameDeleteProcessor:
                 validation_results={"valid_frames": 0, "invalid_frames": len(frame_uris)},
                 message=f"Frame deletion failed: {str(e)}",
                 error=str(e),
-                fuseki_success=False
             )
     
     async def validate_frame_ownership(self, space_id: str, graph_id: str, entity_uri: str, 
@@ -439,7 +442,6 @@ class KGEntityFrameDeleteProcessor:
             triples: List of (s, p, o, o_type) tuples to delete
             
         Returns:
-            fuseki_success value (True/False/None)
         """
         try:
             delete_statements = []
@@ -477,17 +479,15 @@ class KGEntityFrameDeleteProcessor:
             
             result = await self.backend.execute_sparql_update(space_id, delete_query)
             
-            fuseki_success = True
-            if hasattr(result, 'fuseki_success'):
-                fuseki_success = result.fuseki_success
-            
+            # One store, so one outcome. This used to read a second-store status
+            # attribute off the result and return it as a THIRD state meaning
+            # "PostgreSQL committed but the other store may not have"
+            # (`issues/241`). No result object carries that attribute any more, so
+            # the branch was always taking the True path.
             if result:
-                if fuseki_success is False:
-                    self.logger.error(f"⚠️ FUSEKI_SYNC_FAILURE: Triples deleted from PostgreSQL but Fuseki may be inconsistent")
-                return fuseki_success
-            else:
-                self.logger.error(f"❌ Batch delete failed")
-                return False
+                return True
+            self.logger.error("❌ Batch delete failed")
+            return False
                 
         except Exception as e:
             self.logger.error(f"❌ Error in batch delete: {e}")

@@ -215,9 +215,6 @@ class VitalGraphAppImpl:
             if backend_type == 'sparql_sql':
                 from vitalgraph.db.sparql_sql.sparql_sql_admin import SparqlSQLAdmin
                 admin = SparqlSQLAdmin()
-            elif backend_type == 'fuseki_postgresql':
-                from vitalgraph.db.fuseki_postgresql.fuseki_admin import FusekiPostgreSQLAdmin
-                admin = FusekiPostgreSQLAdmin()
             else:
                 self.logger.warning(f"VG_AUTO_INIT: unsupported backend type '{backend_type}', skipping")
                 return
@@ -448,17 +445,6 @@ class VitalGraphAppImpl:
                         self.logger.info(f"SpaceManager initialized with {len(self.space_manager)} spaces")
                         self.logger.debug(f"Available spaces: {list(self.space_manager._spaces.keys()) if hasattr(self.space_manager, '_spaces') else 'N/A'}")
                         
-                        # Auto-register Fuseki datasets for all known spaces
-                        space_backend = getattr(self.vital_graph_impl, 'space_backend', None)
-                        fuseki_mgr = getattr(space_backend, 'fuseki_manager', None)
-                        if fuseki_mgr and hasattr(self.space_manager, '_spaces'):
-                            space_ids = list(self.space_manager._spaces.keys())
-                            if space_ids:
-                                try:
-                                    stats = await fuseki_mgr.ensure_datasets_registered(space_ids)
-                                    self.logger.info(f"Fuseki auto-register: {stats}")
-                                except Exception as e:
-                                    self.logger.warning(f"Fuseki auto-register failed: {e}")
                     else:
                         self.logger.warning("SpaceManager initialization skipped - conditions not met")
                     
@@ -536,11 +522,10 @@ class VitalGraphAppImpl:
                             from vitalgraph.process.metrics_rollup_job import MetricsRollupJob
                             
                             # Get PostgreSQL config for lock manager connection
-                            backend_type = self.config.get_backend_config().get('type', 'sparql_sql')
-                            if backend_type == 'sparql_sql':
-                                pg_config = self.config.get_sparql_sql_config().get('database', {})
-                            else:
-                                pg_config = self.config.get_fuseki_postgresql_config().get('database', {})
+                            # One backend, so one source of database config. The
+                            # `else` arm here called a retired backend's config
+                            # getter, which no longer exists (`issues/241`).
+                            pg_config = self.config.get_sparql_sql_config().get('database', {})
                             
                             tracker = ProcessTracker(pool)
                             maintenance_job = MaintenanceJob(pool, process_tracker=tracker, postgresql_config=pg_config)
