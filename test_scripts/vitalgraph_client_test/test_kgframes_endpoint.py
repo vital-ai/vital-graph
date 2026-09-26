@@ -9,7 +9,7 @@ Architecture: Uses TWO-ENDPOINT testing pattern:
 - KGEntities endpoint: Creates entity graphs with frames/slots
 - KGFrames endpoint: Tests frame operations on existing entity graphs
 
-Follows the correct pattern from fuseki_postgresql test implementation.
+Follows the pattern established by the earlier endpoint tests.
 """
 
 import sys

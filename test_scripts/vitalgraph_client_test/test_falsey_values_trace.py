@@ -12,8 +12,8 @@ during entity graph creation. Tests each layer of the quad pipeline:
 5. Server-side QuadRequest deserialization
 6. quad_list_to_graphobjects() roundtrip (server-side)
 7. to_rdf() conversion (server-side)
-8. Full end-to-end via client
-9. Fuseki storage verification
+8. Full end-to-end via client (step 9 was a direct query to a retired
+   store and was removed with it — `issues/241`)
 10. Read-back via client API
 
 Usage:
@@ -377,7 +377,7 @@ async def main():
             tests_failed += 1
     
     # ---- STEP 8: Full end-to-end via client ----
-    trace_step(8, "Full end-to-end: Create entity graph via client, verify in Fuseki")
+    trace_step(8, "Full end-to-end: create entity graph via client")
     
     client = VitalGraphClient()
     try:
@@ -416,133 +416,6 @@ async def main():
         else:
             logger.info(f"  ❌ Entity graph creation failed: {response.error_message}")
             tests_failed += 1
-        
-        # ---- STEP 9: Query Fuseki directly ----
-        trace_step(9, "Query Fuseki directly for stored values")
-        
-        # Determine Fuseki dataset name
-        fuseki_dataset = f"vitalgraph_space_{SPACE_ID}"
-        fuseki_url = f"http://localhost:3030/{fuseki_dataset}/query"
-        
-        # Query for boolean slot
-        sparql_query = f"""
-        SELECT ?p ?o WHERE {{
-            GRAPH <{GRAPH_ID}> {{
-                <{BOOL_SLOT_URI}> ?p ?o
-            }}
-        }}
-        """
-        
-        logger.info(f"  Querying Fuseki at: {fuseki_url}")
-        logger.info(f"  SPARQL: {sparql_query.strip()}")
-        
-        async with httpx.AsyncClient() as http:
-            resp = await http.get(
-                fuseki_url,
-                params={'query': sparql_query},
-                headers={'Accept': 'application/sparql-results+json'}
-            )
-            
-            if resp.status_code == 200:
-                fuseki_result = resp.json()
-                bindings = fuseki_result.get('results', {}).get('bindings', [])
-                
-                logger.info(f"\n  Boolean slot triples in Fuseki ({len(bindings)} triples):")
-                has_boolean_value = False
-                for b in bindings:
-                    p = b.get('p', {}).get('value', '')
-                    o = b.get('o', {})
-                    logger.info(f"    {p} = {o}")
-                    if 'hasBooleanSlotValue' in p:
-                        has_boolean_value = True
-                
-                if has_boolean_value:
-                    logger.info(f"  ✅ Boolean false IS stored in Fuseki!")
-                    tests_passed += 1
-                else:
-                    logger.info(f"  ❌ Boolean false is MISSING from Fuseki!")
-                    tests_failed += 1
-            else:
-                logger.info(f"  ❌ Fuseki query failed: {resp.status_code} - {resp.text[:200]}")
-                tests_failed += 1
-        
-        # Query for currency slot
-        sparql_query2 = f"""
-        SELECT ?p ?o WHERE {{
-            GRAPH <{GRAPH_ID}> {{
-                <{CURRENCY_SLOT_URI}> ?p ?o
-            }}
-        }}
-        """
-        
-        async with httpx.AsyncClient() as http:
-            resp2 = await http.get(
-                fuseki_url,
-                params={'query': sparql_query2},
-                headers={'Accept': 'application/sparql-results+json'}
-            )
-            
-            if resp2.status_code == 200:
-                fuseki_result2 = resp2.json()
-                bindings2 = fuseki_result2.get('results', {}).get('bindings', [])
-                
-                logger.info(f"\n  Currency slot triples in Fuseki ({len(bindings2)} triples):")
-                has_currency_value = False
-                for b in bindings2:
-                    p = b.get('p', {}).get('value', '')
-                    o = b.get('o', {})
-                    logger.info(f"    {p} = {o}")
-                    if 'hasCurrencySlotValue' in p:
-                        has_currency_value = True
-                
-                if has_currency_value:
-                    logger.info(f"  ✅ Currency 0.0 IS stored in Fuseki!")
-                    tests_passed += 1
-                else:
-                    logger.info(f"  ❌ Currency 0.0 is MISSING from Fuseki!")
-                    tests_failed += 1
-            else:
-                logger.info(f"  ❌ Fuseki query failed: {resp2.status_code}")
-                tests_failed += 1
-        
-        # Query for text slot (control)
-        sparql_query3 = f"""
-        SELECT ?p ?o WHERE {{
-            GRAPH <{GRAPH_ID}> {{
-                <{TEXT_SLOT_URI}> ?p ?o
-            }}
-        }}
-        """
-        
-        async with httpx.AsyncClient() as http:
-            resp3 = await http.get(
-                fuseki_url,
-                params={'query': sparql_query3},
-                headers={'Accept': 'application/sparql-results+json'}
-            )
-            
-            if resp3.status_code == 200:
-                fuseki_result3 = resp3.json()
-                bindings3 = fuseki_result3.get('results', {}).get('bindings', [])
-                
-                logger.info(f"\n  Text slot triples in Fuseki ({len(bindings3)} triples):")
-                has_text_value = False
-                for b in bindings3:
-                    p = b.get('p', {}).get('value', '')
-                    o = b.get('o', {})
-                    logger.info(f"    {p} = {o}")
-                    if 'hasTextSlotValue' in p:
-                        has_text_value = True
-                
-                if has_text_value:
-                    logger.info(f"  ✅ Text value IS stored in Fuseki (control)")
-                    tests_passed += 1
-                else:
-                    logger.info(f"  ❌ Text value is MISSING from Fuseki! (control test failed too)")
-                    tests_failed += 1
-            else:
-                logger.info(f"  ❌ Fuseki query failed: {resp3.status_code}")
-                tests_failed += 1
         
         # ---- STEP 10: Read back via client API ----
         trace_step(10, "Read back entity graph via client API, check boolean/currency values")

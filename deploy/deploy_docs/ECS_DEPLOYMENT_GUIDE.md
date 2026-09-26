@@ -74,7 +74,7 @@ The loader (`VitalGraphConfig`) resolves each key in order:
 
 | Variable | Default | Description |
 |---|---|---|
-| `{P}_BACKEND_TYPE` | `fuseki_postgresql` | Set to **`sparql_sql`** for pure-PostgreSQL mode |
+| `{P}_BACKEND_TYPE` | `sparql_sql` | The only backend; retired values are rejected (`issues/241`) |
 | `{P}_DB_HOST` | `localhost` | PostgreSQL hostname |
 | `{P}_DB_PORT` | `5432` | PostgreSQL port |
 | `{P}_DB_NAME` | `sparql_sql_graph` | Database name |

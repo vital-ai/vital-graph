@@ -38,7 +38,7 @@ from vitalgraph.model.kgframes_model import FrameDeleteResponse
 from vitalgraph.kg_impl.kgentity_frame_delete_impl import KGEntityFrameDeleteProcessor
 
 # Import test data utility (using existing KGEntity test data)
-from test_scripts.fuseki_postgresql.kgentity_test_data import KGEntityTestDataCreator
+from test_scripts.test_script_kg_impl.kgentity_test_data import KGEntityTestDataCreator
 
 
 logger = logging.getLogger(__name__)

@@ -3,7 +3,7 @@
 Datatype Preservation Test Case
 
 Tests that all DB write paths correctly preserve RDFLib datatype and language
-metadata through to both Fuseki and PostgreSQL.  Covers the fixes applied to:
+metadata through to storage.  Covers the fixes applied to:
 
 1. Entity update (kgentity_update_impl) — typed literals in update_quads
 2. Entity delete (kgentity_delete_impl) — typed literals in delete quads

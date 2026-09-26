@@ -84,7 +84,7 @@ if gc_minor:
 # --- Duplicate deletes (race condition indicator) ---
 deletes = []
 for line in lines:
-    m = re.search(r'FUSEKI_DELETE.*hasTextSlotValue.*\"(LoadTest_\w+)\"', line)
+    m = re.search(r'DELETE.*hasTextSlotValue.*\"(LoadTest_\w+)\"', line)
     if m: deletes.append(m.group(1))
 dups = {k: v for k, v in Counter(deletes).items() if v > 1}
 print(f'\n=== Duplicate Deletes (race condition): {len(dups)} ===')

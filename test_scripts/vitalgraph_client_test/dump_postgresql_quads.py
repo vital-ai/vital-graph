@@ -58,15 +58,12 @@ class PostgreSQLQuadDumper:
     
     def _get_postgresql_config(self) -> dict:
         """Extract PostgreSQL configuration from the config file."""
-        # Check if this is a fuseki_postgresql backend
-        backend_type = self.config.get('backend', {}).get('type', 'postgresql')
-        
-        if backend_type == 'fuseki_postgresql':
-            # Get PostgreSQL config from fuseki_postgresql section
-            pg_config = self.config.get('fuseki_postgresql', {}).get('database', {})
-        else:
-            # Standard PostgreSQL backend
-            pg_config = self.config.get('backend', {})
+        # The `sparql_sql` section carries the database sub-dict. This used to
+        # branch on backend type and read a retired backend's own section, which
+        # no longer exists in the config at all (`issues/241`); the `backend`
+        # fallback is kept for a config that predates the split.
+        pg_config = (self.config.get('sparql_sql', {}).get('database')
+                     or self.config.get('backend', {}))
         
         return {
             'host': pg_config.get('host', 'localhost'),

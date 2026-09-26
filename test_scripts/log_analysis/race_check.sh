@@ -1,5 +1,5 @@
 #!/bin/bash
-# Check for race conditions: duplicate FUSEKI deletes of the same value
+# Check for race conditions: duplicate deletes of the same value
 # Usage: ./race_check.sh [--since TIME]  (default: last 5 minutes)
 
 SINCE="${2:-5m}"
@@ -13,10 +13,10 @@ from collections import Counter
 
 lines = sys.stdin.readlines()
 
-# Find all FUSEKI_DELETE values
+# Find all DELETE values
 deletes = []
 for line in lines:
-    m = re.search(r'FUSEKI_DELETE.*hasTextSlotValue.*\"(LoadTest_\w+)\"', line)
+    m = re.search(r'DELETE.*hasTextSlotValue.*\"(LoadTest_\w+)\"', line)
     if m: deletes.append(m.group(1))
 
 dups = {k: v for k, v in Counter(deletes).items() if v > 1}

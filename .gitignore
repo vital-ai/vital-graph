@@ -314,8 +314,9 @@ pyrightconfig.json
 internal_data
 generated_instances
 
-# Fuseki TDB database files (large binaries)
-deploy/fuseki_deploy_test/docker/databases/
+# Retired backend's TDB database files (large binaries). The tree moved to
+# archive/ (`issues/241`); the pattern stays so an old checkout stays clean.
+archive/archive_vitalgraph_old/deploy_fuseki_deploy_test/docker/databases/
 *.dat
 
 

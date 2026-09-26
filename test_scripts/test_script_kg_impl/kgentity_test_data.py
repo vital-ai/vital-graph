@@ -1,6 +1,13 @@
 """
 KGEntity Test Data Creator
 
+MOVED OUT OF `test_scripts/fuseki_postgresql/` 2026-09-26 (`issues/241`). It has no
+Fuseki content at all — it builds KG entities, frames and slots — and ten live test
+cases under `test_script_kg_impl/` import it. It was parked in the retired backend's
+test directory, so archiving that directory broke all ten. Same shape as
+`db/postgresql_signal_manager.py`: shared code living in one backend's package,
+found only when the package moved.
+
 Creates comprehensive test data for KGEntity endpoint testing using correct VitalSigns properties.
 This module provides test data for:
 - Basic entities (Person, Organization, Project) with frames and slots

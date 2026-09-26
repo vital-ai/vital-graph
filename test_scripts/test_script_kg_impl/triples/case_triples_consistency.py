@@ -2,7 +2,7 @@
 Modular test case for triples dual-write consistency validation.
 
 This module provides comprehensive testing for validating dual-write consistency
-between Fuseki and PostgreSQL storage layers.
+across storage layers.
 """
 
 import logging
@@ -16,7 +16,7 @@ class TriplesConsistencyTester:
     Modular test case for triples dual-write consistency validation.
     
     Tests:
-    - Dual-write consistency validation between Fuseki and PostgreSQL
+    - Storage consistency validation
     - Storage layer synchronization verification
     - Error handling and validation
     """

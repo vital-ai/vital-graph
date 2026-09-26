@@ -4,7 +4,7 @@
 -- Required extension for REGEX performance (GIN trigram indexes)
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
--- Admin tables (shared schema with fuseki_postgresql)
+-- Admin tables
 CREATE TABLE IF NOT EXISTS install (
     id SERIAL PRIMARY KEY,
     install_datetime TIMESTAMP,

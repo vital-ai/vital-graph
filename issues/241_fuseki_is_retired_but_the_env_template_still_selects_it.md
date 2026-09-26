@@ -2,9 +2,9 @@
 
 ## Status: STEPS 0-8 DONE 2026-09-26. **`vitalgraph/` does not name a retired
 ## backend anywhere — zero, no allow-list**, and a guard test fails if one
-## reappears (falsified). 80 files archived to `archive/archive_vitalgraph_old/`
+## reappears (falsified). **102 files archived** to `archive/archive_vitalgraph_old/`
 ## with history preserved; `BackendType` is `SPARQL_SQL` + `OXIGRAPH`.
-## tests/unit 4903 passed, 0 failures.
+## tests/unit 4880 passed, 0 failures.
 ##
 ## THE `RETIRED_BACKENDS` MAP IS GONE TOO, and this file argued for it twice
 ## before that was settled. First it proposed keeping dead ENUM MEMBERS to carry a
@@ -19,17 +19,41 @@
 ## — the bad value and the valid set, which is what a reader needs. The "better
 ## diagnostic" the map was defended with was never worth the memory it required.
 ##
-## WHAT REMAINS, and it is not `vitalgraph/`:
-##   * **45 files under `test_scripts/`** still name Fuseki. One
-##     (`test_script_kg_impl/backend/case_backend_initialization.py`) imports the
-##     MOVED packages, so it is broken now — it is a Fuseki backend test and
-##     should be archived, not repaired.
-##   * `deploy/deploy_docs/ECS_DEPLOYMENT_GUIDE.md`, `.gitignore`,
-##     `test_scripts/auth/.env.example`,
-##     `vitalgraph_sparql_sql_dev/scripts/benchmark_fuseki_vs_sql.py`.
-##   * The guard covers `vitalgraph/` ONLY. Widen it when those are archived, not
-##     before: a guard that fails on 45 pre-existing hits gets disabled rather
-##     than fixed (`issues/188`).
+## SWEEP EXTENDED TO `test_scripts/` 2026-09-26. 23 more archived (and one moved
+## back OUT); the two
+## `fuseki` mentions left there are deliberate provenance notes. Two things found
+## by doing it, both consequences of the earlier commit that nothing would have
+## reported:
+##
+##   * **`case_frame_operations_reset.py` asserted `fuseki_success is True`.** With
+##     the field removed, `getattr(..., None)` returns None, `None is not True`,
+##     so it recorded FUSEKI_SYNC_FAILURE and appended an error on EVERY update,
+##     delete and recreate. Removing a field did not make a reader inert — it made
+##     it fail closed on every operation. These are `test_scripts/`, so no pytest
+##     run would have said so.
+##   * **Ten live test cases imported `kgentity_test_data` out of the archived
+##     Fuseki test directory.** It has ZERO Fuseki content — it builds entities,
+##     frames and slots — and was simply parked there. Moved to
+##     `test_script_kg_impl/` and the ten imports repointed. Same shape as
+##     `postgresql_signal_manager.py` in step 1: shared code living in one
+##     backend's package, discovered only when the package moved. Twice in one
+##     issue is the pattern worth naming.
+##
+## Also repaired: `dump_postgresql_quads.py` read the `fuseki_postgresql` CONFIG
+## SECTION, which step 3 deleted; `test_falsey_values_trace.py` lost its step 9
+## (a direct query to the retired store) and keeps steps 1-8 and 10.
+##
+## STILL PRESENT, deliberately:
+##   * `test_scripts/jena_sidecar/data_profile.md` — historical Fuseki-vs-SQL
+##     literal comparison, headed as such. Its datatype findings are what
+##     `issues/221`/`234` turned out to be about, and the Jena SIDECAR is live and
+##     unrelated.
+##   * `vitalgraph_sparql_sql_dev/scripts/benchmark_fuseki_vs_sql.py` — cannot run,
+##     LEFT IN PLACE: that package is a deliberate staging area for experiments and
+##     is not swept.
+##   * `vitalhome/.../vitalsigns_config.yaml.template` — `database_type: "fuseki"`
+##     in an example service block. That is VitalSigns' config vocabulary, not this
+##     project's backend registry, so it is not ours to change.
 ##
 ## One behaviour question RAISED, not decided: a failed batch delete in
 ## `kgentity_frame_delete_impl` used to report `success=True` with a false

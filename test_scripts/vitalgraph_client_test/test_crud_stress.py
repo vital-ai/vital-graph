@@ -220,12 +220,11 @@ async def main():
         # Track stress test results
         stress_test_passed = 0
         stress_test_failed = 0
-        stress_test_fuseki_failures = 0
         stress_test_failures = []
         stress_test_timings = []  # Collect timing data from each iteration
         stress_test_recreate_timings = []  # Collect delete/recreate timing
         
-        prev_fuseki_failure = False
+        prev_iteration_failed = False
         
         for iteration in range(1, NUM_FRAME_UPDATE_ITERATIONS + 1):
             # Generate random value for this iteration
@@ -234,14 +233,14 @@ async def main():
             
             logger.info(f"\n--- Iteration {iteration}/{NUM_FRAME_UPDATE_ITERATIONS} (value: '{update_value}') ---")
             
-            # Recovery: if the previous iteration had fuseki failures, the frame may
-            # be out of sync (deleted from PG but still in Fuseki, or vice versa).
+            # Recovery: if the previous iteration failed, the frame may be left
+            # in a partial state, so resync before continuing.
             # Attempt to delete and recreate the frame to resync both stores.
-            if prev_fuseki_failure:
-                logger.info(f"🔄 RECOVERY: Previous iteration had fuseki failures, resyncing frame data...")
+            if prev_iteration_failed:
+                logger.info("🔄 RECOVERY: previous iteration failed, resyncing frame data...")
                 try:
                     company_frame_uri = f"{created_entity_uris[0].replace('/organization/', '/frame/')}_company"
-                    # Step 1: Fetch stale frame objects from Fuseki (they may still exist there)
+                    # Step 1: Fetch any stale frame objects still present
                     fetch_resp = await client.kgentities.get_kgentity_frames(
                         space_id=space_id, graph_id=graph_id,
                         entity_uri=created_entity_uris[0],
@@ -250,28 +249,25 @@ async def main():
                     saved_objects = list(fetch_resp.frame_graph.objects) if fetch_resp.frame_graph else []
                     logger.info(f"🔄 RECOVERY: Fetched {len(saved_objects)} stale frame objects")
                     
-                    # Step 2: Delete to clean up stale Fuseki data
+                    # Step 2: Delete to clean up stale data
                     del_resp = await client.kgentities.delete_entity_frames(
                         space_id=space_id, graph_id=graph_id,
                         entity_uri=created_entity_uris[0],
                         frame_uris=[company_frame_uri]
                     )
-                    _del_ok = getattr(del_resp, 'fuseki_success', None)
-                    logger.info(f"🔄 RECOVERY: Delete retry fuseki_success={_del_ok}")
                     
-                    # Step 3: Recreate the frame in both PG and Fuseki
+                    # Step 3: Recreate the frame
                     if saved_objects:
                         create_resp = await client.kgentities.create_entity_frames(
                             space_id=space_id, graph_id=graph_id,
                             entity_uri=created_entity_uris[0],
                             objects=saved_objects
                         )
-                        _create_ok = getattr(create_resp, 'fuseki_success', None)
-                        logger.info(f"🔄 RECOVERY: Recreate fuseki_success={_create_ok}, success={create_resp.is_success}")
+                        logger.info(f"🔄 RECOVERY: Recreate success={create_resp.is_success}")
                     else:
                         logger.warning(f"🔄 RECOVERY: No frame objects to recreate — frame may have been fully deleted")
                     
-                    prev_fuseki_failure = False
+                    prev_iteration_failed = False
                 except Exception as e:
                     logger.error(f"🔄 RECOVERY: Failed to resync: {e}")
             
@@ -288,16 +284,11 @@ async def main():
             if "recreate_timing" in frame_results:
                 stress_test_recreate_timings.append(frame_results["recreate_timing"])
             
-            # Track fuseki failures
-            iter_fuseki_failures = frame_results.get('fuseki_failures', 0)
-            if iter_fuseki_failures > 0:
-                stress_test_fuseki_failures += iter_fuseki_failures
-                logger.error(f"⚠️ Iteration {iteration}: {iter_fuseki_failures} FUSEKI_SYNC_FAILURE(s)")
             
             # Track failure state for recovery on next iteration
-            # Trigger on ANY failure (fuseki sync failures OR client timeouts) since both
-            # can leave frame state inconsistent between PG and Fuseki
-            prev_fuseki_failure = frame_results["tests_failed"] > 0
+            # Trigger on ANY failure, since any of them can leave frame state
+            # partially written.
+            prev_iteration_failed = frame_results["tests_failed"] > 0
             
             if frame_results["tests_failed"] == 0:
                 stress_test_passed += 1
@@ -328,7 +319,6 @@ async def main():
         logger.info(f"Total iterations: {NUM_FRAME_UPDATE_ITERATIONS}")
         logger.info(f"Passed: {stress_test_passed}/{NUM_FRAME_UPDATE_ITERATIONS} ({stress_test_passed/NUM_FRAME_UPDATE_ITERATIONS*100:.1f}%)")
         logger.info(f"Failed: {stress_test_failed}/{NUM_FRAME_UPDATE_ITERATIONS} ({stress_test_failed/NUM_FRAME_UPDATE_ITERATIONS*100:.1f}%)")
-        logger.info(f"Fuseki sync failures: {stress_test_fuseki_failures}")
         if stress_test_failures:
             for f in stress_test_failures:
                 logger.info(f"  Iteration {f['iteration']} (value: '{f['value']}'): {f['errors']}")

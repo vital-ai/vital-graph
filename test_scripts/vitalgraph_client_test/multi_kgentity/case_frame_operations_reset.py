@@ -47,7 +47,6 @@ class FrameOperationsResetTester:
             "tests_run": 0,
             "tests_passed": 0,
             "tests_failed": 0,
-            "fuseki_failures": 0,
             "errors": []
         }
         
@@ -290,15 +289,6 @@ class FrameOperationsResetTester:
                     )
                     t_update_elapsed = time.time() - t_update_start
                     
-                    # Check fuseki_success on update response
-                    _fuseki = getattr(update_response, 'fuseki_success', None)
-                    if _fuseki is not True:
-                        logger.error(f"   ⚠️ FUSEKI_SYNC_FAILURE on update: fuseki_success={_fuseki}")
-                        results["fuseki_failures"] += 1
-                        results["tests_failed"] += 1
-                        results["errors"].append(f"fuseki_success not True on update: {_fuseki}")
-                    else:
-                        logger.info(f"   fuseki_success={_fuseki}")
                     
                     if update_response.is_success:
                         logger.info(f"   ✅ Frame updated successfully ({t_update_elapsed:.3f}s)")
@@ -411,15 +401,6 @@ class FrameOperationsResetTester:
                 )
                 t_delete_elapsed = time.time() - t_delete_start
                 
-                # Check fuseki_success on delete response
-                _fuseki_del = getattr(delete_response, 'fuseki_success', None)
-                if _fuseki_del is not True:
-                    logger.error(f"   ⚠️ FUSEKI_SYNC_FAILURE on delete: fuseki_success={_fuseki_del}")
-                    results["fuseki_failures"] += 1
-                    results["tests_failed"] += 1
-                    results["errors"].append(f"fuseki_success not True on delete: {_fuseki_del}")
-                else:
-                    logger.info(f"   delete fuseki_success={_fuseki_del}")
                 
                 if not delete_response.is_success:
                     logger.error(f"   ❌ Delete failed: {delete_response.message}")
@@ -468,15 +449,6 @@ class FrameOperationsResetTester:
                 )
                 t_recreate_elapsed = time.time() - t_recreate_start
                 
-                # Check fuseki_success on recreate response
-                _fuseki_create = getattr(recreate_response, 'fuseki_success', None)
-                if _fuseki_create is not True:
-                    logger.error(f"   ⚠️ FUSEKI_SYNC_FAILURE on recreate: fuseki_success={_fuseki_create}")
-                    results["fuseki_failures"] += 1
-                    results["tests_failed"] += 1
-                    results["errors"].append(f"fuseki_success not True on recreate: {_fuseki_create}")
-                else:
-                    logger.info(f"   recreate fuseki_success={_fuseki_create}")
                 
                 if not recreate_response.is_success:
                     logger.error(f"   ❌ Recreate failed: {recreate_response.message}")

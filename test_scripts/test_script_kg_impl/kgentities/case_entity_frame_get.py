@@ -29,7 +29,7 @@ from vitalgraph.model.kgentities_model import EntityFramesResponse
 from vitalgraph.utils.quad_format_utils import graphobjects_to_quad_list, quad_list_to_graphobjects
 
 # Import test data creator
-from test_scripts.fuseki_postgresql.kgentity_test_data import KGEntityTestDataCreator
+from test_scripts.test_script_kg_impl.kgentity_test_data import KGEntityTestDataCreator
 
 
 logger = logging.getLogger(__name__)

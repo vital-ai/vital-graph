@@ -3,7 +3,7 @@
 Datatype Preservation Test — Main Orchestrator
 
 Tests that all DB write paths correctly preserve RDFLib datatype and language
-metadata through to both Fuseki and PostgreSQL.  Verifies the fixes applied to:
+metadata through to storage.  Verifies the fixes applied to:
 
   - Entity create/update/delete (kgentity_delete_impl, kgentity_update_impl)
   - Frame/slot create/update (kgframes_endpoint, kgentity_frame_create_impl)

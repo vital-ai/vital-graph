@@ -169,7 +169,7 @@ class DevDbImpl(DbImplInterface):
 
     Used by the standalone dev/test package (DAWG tests, benchmarks).
     The main VitalGraph service uses its own DbImplInterface implementation
-    (e.g. FusekiPostgreSQLDbImpl) instead.
+    (e.g. the space backend's own db impl) instead.
 
     Usage:
         from vitalgraph_sparql_sql_dev.db import DevDbImpl
