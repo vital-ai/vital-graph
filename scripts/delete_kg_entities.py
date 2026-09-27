@@ -151,6 +151,19 @@ def _owner(subject: str, uris: list) -> str:
 
 
 def delete_batch(api, a, uris) -> int:
+    """Delete a batch and return HOW MANY THE SERVER SAYS IT REMOVED.
+
+    `not_found` IS NOT SUCCESS. It used to be accepted here, and the caller
+    discarded this return value and counted `len(uris)` instead — so a run
+    against the wrong space, the wrong graph, or an already-empty set reported
+    every entity as deleted. On 2026-09-26 that produced "3,000 deleted, 0
+    blocked, 0 failed" for 3,000 entities that were never touched, because the
+    run had been silently pointed at a server where the space does not exist.
+
+    `deleted_count` is the only trustworthy figure — the same lesson as the
+    copy path's `created_count` and as `issues/229`: trust the OUTCOME, not the
+    fact that the call returned.
+    """
     r = api._call(
         "DELETE",
         "/api/graphs/kgentities?" + _qs({
@@ -158,9 +171,14 @@ def delete_batch(api, a, uris) -> int:
             "uri_list": ",".join(u.strip("<>") for u in uris),
             "delete_entity_graph": "true"}))
     status = str(r.get("status", "")).lower()
-    if status not in ("deleted", "ok", "success", "not_found"):
+    if status not in ("deleted", "ok", "success"):
         raise RuntimeError(f"delete status={r.get('status')}: {r.get('message')}")
-    return r.get("deleted_count") or 0
+    n = r.get("deleted_count")
+    if n is None:
+        raise RuntimeError(
+            f"delete returned no deleted_count (status={r.get('status')}); "
+            f"cannot tell what was removed")
+    return n
 
 
 def _qs(params):
@@ -232,7 +250,7 @@ def phase_delete(api, a, st: State):
 
     units = [todo[i:i + a.batch] for i in range(0, len(todo), a.batch)]
     started = time.time()
-    tally = {"deleted": 0, "blocked": 0, "failed": 0, "entities": 0}
+    tally = {"deleted": 0, "blocked": 0, "failed": 0, "absent": 0, "entities": 0}
     lock = threading.Lock()
     stop = threading.Event()
 
@@ -252,10 +270,20 @@ def phase_delete(api, a, st: State):
                         print(f"  BLOCKED {len(bad)}: {list(bad.values())[0][:110]}",
                               flush=True)
             if uris:
-                delete_batch(api, a, uris)
+                # Count what the SERVER removed, not how many we asked about.
+                removed = delete_batch(api, a, uris)
                 with lock:
-                    tally["deleted"] += len(uris)
+                    tally["deleted"] += removed
                     tally["entities"] += len(uris)
+                    short = len(uris) - removed
+                    if short > 0:
+                        # Absent is not deleted. It usually means the run is
+                        # pointed somewhere unexpected, or the set was already
+                        # gone — either way the operator must see it rather than
+                        # read a clean tally.
+                        tally["absent"] += short
+                        print(f"  ABSENT {short} of {len(uris)}: server removed "
+                              f"{removed} (e.g. {uris[0][:66]})", flush=True)
                     for u in uris:
                         st.append(st.done, {"uri": u, "ts": datetime.now().isoformat(
                             timespec="seconds")})
@@ -281,16 +309,24 @@ def phase_delete(api, a, st: State):
                     el = time.time() - started
                     rate = tally["entities"] / el if el else 0
                     print(f"  {tally['entities']:,}/{len(todo):,}  "
-                          f"deleted={tally['deleted']:,} blocked={tally['blocked']} "
+                          f"deleted={tally['deleted']:,} absent={tally['absent']:,} "
+                          f"blocked={tally['blocked']} "
                           f"failed={tally['failed']}  {rate:.1f} ent/s", flush=True)
 
     el = time.time() - started
     print(f"\ndone in {el/60:.1f}m: {tally['deleted']:,} deleted, "
-          f"{tally['blocked']:,} blocked, {tally['failed']} failed")
+          f"{tally['absent']:,} absent, {tally['blocked']:,} blocked, "
+          f"{tally['failed']} failed")
+    if tally["absent"]:
+        # The loud version of the bug this replaced: a run that deleted nothing
+        # used to look identical to a run that deleted everything.
+        print(f"  WARNING: {tally['absent']:,} entities were NOT removed because "
+              f"the server did not have them. Check --space/--graph and that this "
+              f"run is pointed at the server you meant.")
     if tally["blocked"]:
         print(f"  blocked entities are in {st.failed} — they were NOT deleted")
     print("next: verify")
-    return 1 if (tally["failed"] or tally["blocked"]) else 0
+    return 1 if (tally["failed"] or tally["blocked"] or tally["absent"]) else 0
 
 
 def phase_verify(api, a, st: State):

@@ -127,6 +127,25 @@ NORMALISED_ADDITIONS = {
 # --------------------------------------------------------------------------
 
 def load_env() -> dict:
+    """`.env`, with the REAL environment taking precedence.
+
+    THE ENVIRONMENT WINS, and it did not used to. This read the file only, so
+    `LOCAL_CLIENT_SERVER_URL=http://localhost:8002 python scripts/...` was
+    silently ignored and the run went wherever `.env` pointed — which is
+    :8001, the DEV stack. That is the exact override
+    `docker-compose.test.yml` tells operators to use for the test stack, and
+    the one `tests/api/conftest.py` warns about getting wrong.
+
+    It cost a real mistake on 2026-09-26: a delete meant for the test stack
+    ran against dev, where the space does not exist, so every call came back
+    `not_found` and the run reported 3,000 successful deletions of nothing.
+    A silent redirect to the wrong ENVIRONMENT is the worst class of
+    configuration bug — the operation succeeds, against the wrong system.
+
+    Only keys already present in the file are overridden, plus the small set
+    named below. Copying all of `os.environ` in would let unrelated shell
+    variables shadow credentials.
+    """
     values = {}
     for line in (PROJECT_ROOT / ".env").read_text().splitlines():
         line = line.strip()
@@ -137,6 +156,26 @@ def load_env() -> dict:
         if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
             v = v[1:-1]
         values[k.strip()] = v
+
+    # Keys an operator may legitimately supply without them being in .env —
+    # chiefly the ones that decide WHICH SERVER a run talks to.
+    _ALSO = (
+        "LOCAL_CLIENT_SERVER_URL", "PROD_CLIENT_SERVER_URL",
+        "LOCAL_CLIENT_AUTH_USERNAME", "LOCAL_CLIENT_AUTH_PASSWORD",
+        "PROD_AUTH_ROOT_USERNAME", "PROD_AUTH_ROOT_PASSWORD",
+        "VG_ARCHIVE_SRC", "VG_ARCHIVE_DST", "VG_ARCHIVE_GRAPH", "VG_ARCHIVE_TYPE",
+    )
+    overridden = []
+    for k in list(values) + [k for k in _ALSO if k not in values]:
+        env_v = os.environ.get(k)
+        if env_v is not None and env_v != values.get(k):
+            values[k] = env_v
+            overridden.append(k)
+    if overridden:
+        # Say it out loud. The failure this prevents is a run that targeted the
+        # wrong server without anyone noticing, so the override must be visible
+        # in the output of every run that uses one.
+        print(f"env override from the shell: {', '.join(sorted(overridden))}")
     return values
 
 
