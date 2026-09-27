@@ -190,14 +190,36 @@ the guard, threshold and top-K all appear in the SQL.
     like a successful unfiltered query. That cost one wrong bisect here, and it is
     the same class as everything else in this session: an input the server accepts
     and does not act on.
-  * **`POST /api/graphs/kgdocuments` returned `200 OK` with `status: None` and
-    created NOTHING.** Reproduced while trying to build synthetic segments: three
-    `KGDocument` objects with a non-excluded `kGDocumentSegmentTypeURI`, HTTP 200,
-    and zero terms in the space afterwards. Not investigated, not filed — but it is
-    the reason the reproduction below is still incomplete, and it looks like
-    another instance of the `issues/242` family.
+  * ~~**`POST /api/graphs/kgdocuments` returned 200 having created nothing.**~~
+    **WITHDRAWN — I misread the client wrapper.** Called directly, the endpoint
+    answers exactly as it should:
 
-**What is still unexplained** is only the wikipedia case: `total=66`, page `0`. The
+        status : invalid_request
+        message: Cannot directly create/modify segmentation-managed documents.
+                 Update the original document instead.
+
+    `_create` runs `_check_write_protection(quads)` first, and a hand-forged
+    `kGDocumentSegmentTypeURI` is precisely what that exists to refuse. The write
+    protection is CORRECT and is why the synthetic-segment reproduction could not be
+    built that way. What was wrong was my reading: the script printed
+    `getattr(resp, "status", resp)` and got `None`, and I recorded "created nothing,
+    200 OK" from that instead of asking the endpoint. The reason was one curl away.
+
+    The residue worth keeping: the protection list (`_MANAGED_SEGMENT_TYPES`, four
+    entries including `paragraph`) is WIDER than the query's exclusion list (three,
+    without `paragraph`). So `paragraph` is a segment type that cannot be written by
+    hand and is not filtered out of listings — which is exactly the gap a synthetic
+    reproduction wanted to use, and it is closed in one direction only.
+
+**SOLVED 2026-09-26 — the cause is `issues/220`'s guard, and it is written up
+there.** The top-K guard restricts the vector scan to the EXTEND node's child, which
+does not include the `FILTER NOT EXISTS` the algebra applies above it. So top-K is
+chosen from 209 subjects instead of the 66 that survive, and on this data all five
+nearest are `markdown_section`/`segmentation_parent` — every one dropped by the
+outer join. Restricted to the 66 the same top-K returns 5 rows. Not a data problem
+and not `244`/`245`; the fix is a design decision in `220`.
+
+Superseded, kept for the reasoning: what follows was written before that. The
 probe reproduces the count/page DISAGREEMENT (4 vs 2 — the count ignores the vector
 filter) but not the collapse to zero. The remaining difference between the two is
 the data, not the query shape, and the next step is a probe whose segments carry a

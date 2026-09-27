@@ -44,10 +44,22 @@ The reproduction that FOUND this — `nurture_msg_prod` — was re-exported with
 the fix, re-imported as `nurture_typed`, and dropped on 2026-09-21. The
 corrected space is the evidence the fix holds at production scale:
 
-    nurture_msg_prod (broken)      nurture_typed (re-exported)
-    dt_val              0          dt_val            581,237   of 581,237 terms
-    entity_prop_sort.value_dt  0   value_dt          174,220
-    entity_slot_sort.value_dt  0   value_dt          415,426
+    nurture_msg_prod (broken)      nurture_typed (re-exported)   now
+    dt_val              0          dt_val            581,237     581,237 (unchanged)
+    entity_prop_sort.value_dt  0   value_dt          174,220     170,658
+    entity_slot_sort.value_dt  0   value_dt          415,426     406,978
+
+2026-09-26: a local delete experiment on the vg test stack consumed ~2% of
+this space (1,780 of 87,110 entities, 1,011,607 quads). Figures above are
+the ORIGINAL measurements with the current values beside them — the drop is
+that experiment, NOT a regression. There is no local source to reload from:
+`nurture_msg_prod` was dropped and the only local prod copy is less than
+half the size.
+
+**The claim this table supports is UNAFFECTED.** What matters here is non-zero
+against zero, and `dt_val` — the count of terms that kept their datatype — is
+still exactly 581,237. The two `value_dt` figures fell only in proportion to the
+entities removed; they are generated columns over the rows that remain.
 
 `value_dt` is the line that matters, for the same reason `num_val` mattered in
 the round trip above: it is `GENERATED ALWAYS AS (...) STORED` keyed on

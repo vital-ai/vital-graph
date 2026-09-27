@@ -141,11 +141,19 @@ too, and the route both this file and `issues/210` recommend does not work.
 
 `nurture_typed` on the vg test stack (5433) is this issue's shape at scale:
 
-    nurture_typed_entity_slot_sort   2,995,193 rows
+    nurture_typed_entity_slot_sort   2,995,193 rows   (now 2,934,198)
     distinct frames                    509,203
-    distinct owning entities            87,110
+    distinct owning entities            87,110         (now 85,330)
     distinct slot types                    146
     MsgTimestamp / MsgChannel / MsgDirection / MsgSender / MsgCycleNumber
+
+2026-09-26: a local delete experiment on the vg test stack consumed ~2% of
+this space (1,780 of 87,110 entities, 1,011,607 quads). Figures above are
+the ORIGINAL measurements with the current values beside them — the drop is
+that experiment, NOT a regression. There is no local source to reload from:
+`nurture_msg_prod` was dropped and the only local prod copy is less than
+half the size.
+
                                        322,036 each
     MsgContent                         322,020
 
