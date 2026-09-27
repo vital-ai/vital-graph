@@ -2,8 +2,13 @@
 
 ## Status: FIXED 2026-09-26, verified against a rebuilt stack: the wikipedia
 ## vectorization tests go from 0 vectors to 209, and the `tests/api` vectorization
-## failures drop from 7 to 1. The remaining one is a DIFFERENT defect, localised
-## below and not fixed here.
+## failures drop from 7 to 1. The remaining one is a DIFFERENT defect, still OPEN.
+##
+## CARRIES A RETRACTION: "the vector SQL never ran" was a measurement artefact —
+## `ALTER DATABASE log_min_duration_statement` applies at LOGIN, so the app's
+## existing pool connections never honoured it. Re-measured with `ALTER SYSTEM`,
+## the scan runs, with `issues/220`'s guard and the threshold both present. That
+## RULES OUT 220's shape as the explanation here.
 
 **Related:** `issues/219` (the auto-sync scope check this extends — the fix that
 made skipping the normal outcome), `issues/244` (the other half of the same test
@@ -128,11 +133,34 @@ re-spend it. All four were tested, not reasoned away:
     `'[]'::vector` on a missing index row or a provider error — a zero vector that
     scores 0 for everything, which would produce exactly this symptom. Both
     branches log at ERROR and NEITHER appears in the run's log.
-  * **The vector SQL running and returning nothing.** It never ran: with
-    `log_min_duration_statement = 0` on the test database for one failing run
-    (reverted afterwards), the captured statements contain **zero** occurrences of
-    `<=>` or `__vg_score`. So the page produced no vector scan at all, which is why
-    it is 14-15 ms rather than the 168 ms a scan costs.
+  * ~~**The vector SQL never ran.**~~ **RETRACTED — this was a MEASUREMENT
+    ARTEFACT, and it was wrong in the direction that sent the whole investigation
+    sideways.** The claim rested on `log_min_duration_statement = 0` set with
+    `ALTER DATABASE`, which applies at LOGIN and therefore not to the app's
+    already-established pool connections. Re-measured with `ALTER SYSTEM` +
+    `pg_reload_conf()` (a SIGHUP-level GUC, so existing sessions do pick it up):
+    **12 statements containing `<=>` for one failing run.** The vector scan runs.
+
+    What it actually looks like, embedding elided:
+
+        JOIN (SELECT subject_uuid, 1 - (embedding <=> 'E'::vector) AS __vg_score
+              FROM {space}_vec_document_segments
+              WHERE TRUE
+                AND 1 - (embedding <=> 'E'::vector) > 0.0
+                AND subject_uuid IN (SELECT DISTINCT v0__uuid
+                                     FROM (<child>) AS __cs
+                                     WHERE v0__uuid IS NOT NULL)
+              ORDER BY embedding <=> 'E'::vector
+              LIMIT 5) AS vt0
+
+    So `issues/220`'s guard IS applied, the threshold IS applied, and the top-K is
+    restricted to the child's subjects. That rules OUT the shape 220 warns about
+    (top-K taken from the whole table and then losing rows to the join) as the
+    explanation for THIS failure.
+
+    **Worth keeping for its own sake:** the vector scan has `WHERE TRUE AND ...`
+    with NO context filter, so it searches every graph in the space. Harmless on a
+    single-graph space, not obviously harmless otherwise, and not investigated.
 
 The probe space also showed the managed-segment filter working as designed:
 segments from the markdown method are `urn:segtype:markdown_section`, which the
@@ -140,6 +168,41 @@ segments from the markdown method are `urn:segtype:markdown_section`, which the
 and the page — count and page AGREE there. The wikipedia space is the case where
 they disagree (66 against 0), and reproducing that specific disagreement is where
 this stands.
+
+## Where it actually stands, and the reproduction that exists now
+
+`test_scripts/debug/_segment_content_predicates.py` builds a segmented document
+with a vector index in a space it LEAVES IN PLACE (`dbg_seg_predicates`). Against
+it, with the vector criteria in the RIGHT PLACE, the whole path works:
+
+    base, managed segments included          total=4  uris=4
+    + vector_criteria                        total=4  uris=2   <- filter applied
+    + vector_criteria + include_segment_text total=4  uris=2
+
+So enriched vector search over segments is NOT broken in general. It filters, and
+the guard, threshold and top-K all appear in the SQL.
+
+**Two things that cost time and are worth writing down:**
+
+  * **`vector_criteria` belongs on the TOP-LEVEL `KGQueryCriteria`, not inside
+    `document_criteria`.** Put in the wrong place it is SILENTLY IGNORED — the
+    generated SPARQL simply has no `?vg_score` and no `BIND`, and the response looks
+    like a successful unfiltered query. That cost one wrong bisect here, and it is
+    the same class as everything else in this session: an input the server accepts
+    and does not act on.
+  * **`POST /api/graphs/kgdocuments` returned `200 OK` with `status: None` and
+    created NOTHING.** Reproduced while trying to build synthetic segments: three
+    `KGDocument` objects with a non-excluded `kGDocumentSegmentTypeURI`, HTTP 200,
+    and zero terms in the space afterwards. Not investigated, not filed — but it is
+    the reason the reproduction below is still incomplete, and it looks like
+    another instance of the `issues/242` family.
+
+**What is still unexplained** is only the wikipedia case: `total=66`, page `0`. The
+probe reproduces the count/page DISAGREEMENT (4 vs 2 — the count ignores the vector
+filter) but not the collapse to zero. The remaining difference between the two is
+the data, not the query shape, and the next step is a probe whose segments carry a
+segment type the `FILTER NOT EXISTS` does not list — which is what the failed
+synthetic-segment creation above was for.
 
 ## Not established
 

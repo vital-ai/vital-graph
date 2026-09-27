@@ -72,6 +72,24 @@ async def main() -> int:
         except Exception as exc:
             print("graph:", exc)
 
+        INDEX = "document_segments"
+        try:
+            await client.vector_indexes.delete_index(space_id=SPACE, index_name=INDEX)
+        except Exception:
+            pass
+        await client.vector_indexes.create_index(
+            space_id=SPACE, index_name=INDEX, dimensions=384,
+            distance_metric="cosine", provider="vitalsigns",
+            model_name="paraphrase-multilingual-MiniLM-L12-v2",
+            description="issues/245 probe")
+        mp = await client.search_mappings.create_mapping(
+            space_id=SPACE, index_name=INDEX,
+            mapping_type="kgdocument_segment", enabled=True, source_type="default")
+        await client.search_mappings.add_index(
+            space_id=SPACE, mapping_id=mp.mapping_id,
+            index_type="vector", index_name=INDEX)
+        print("vector index + mapping:", mp.mapping_id)
+
         cfg = await client.kgdocuments.create_segmentation_config(
             space_id=SPACE,
             document_type_uri=DOC_TYPE,
@@ -105,6 +123,16 @@ async def main() -> int:
         else:
             print("NO SEGMENTS — the probe could not build its own fixture")
             return 2
+
+        for _ in range(30):
+            await asyncio.sleep(2.0)
+            v = await client.vector_indexes.get_vectors(
+                space_id=SPACE, index_name=INDEX, graph_uri=GRAPH)
+            if v.total_count:
+                print(f"vectors: {v.total_count}")
+                break
+        else:
+            print("NO VECTORS")
 
         print(f"\nspace LEFT IN PLACE: {SPACE}  graph: {GRAPH}")
         print("now inspect with:\n"
