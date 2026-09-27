@@ -444,3 +444,56 @@ cleanup-did-not-happen case is the one that most needs checking.
 Benchmarks taken while a load is draining are not baselines. The fixture is now
 quiet (0 batches in two minutes, 74,465,500 quads settled), so figures from here
 are comparable and the ones above are not, quite.
+
+---
+
+## PART 2 RAN, 2026-09-25 — it was already built, and it passes
+
+Recorded above as "the missing test". It exists: `tests/load/concurrent_load.py`
+(`run_load`), `tests/load/test_concurrent_query_write_jobs.py`, and Part 3's
+scoped-data machinery in `tests/load/run_scoped_data.py`. Opt-in via
+`VG_RUN_LOAD_TEST=1`, which is why it reads as absent.
+
+Run on the vg-test stack against `sp_lead_synth_100k` — **74,202,700 quads**,
+larger than production's 50.2M — with 4,064,500 `entity_slot_sort` rows:
+
+    queries 11,805   ok 11,805   timeouts 0   failures 0
+    p50 160.8 ms     p99 828.9 ms    max 1,345.4 ms
+    writes 774       write_errors 0  seconds 209.6
+
+    find:count_absent    n=2,890  p50 163.1  p99 838.9  max 1,285.9
+    find:count_campaign  n=2,615  p50 183.4  p99 895.7  max 1,345.4
+    find:page_campaign   n=2,749  p50 172.3  p99 859.5  max 1,329.2
+    open:entity_graph    n=3,551  p50 130.2  p99 723.4  max 1,208.0
+
+**All four assertions pass**: zero timeouts and zero cancellations, p99 828.9 ms
+under the stated 1,000 ms, slowest query 1,345 ms under the 5,000 ms ceiling, and
+ingest kept progressing (774 writes, no errors). Cleanup removed the run's 774
+quads and `verify_clean` found no residue, so Part 3 works too.
+
+`VG_LOAD_SPACE=sp_lead_synth_100k VG_LOAD_GRAPH=urn:sp_lead_synth_100k`, because
+the default `lead_nurture_grouped` exists on neither local stack. The fixture
+carries the nurture shape the criteria need (`NurtureCampaignURI`, `SFLeadId` on
+a `NurtureInfoFrame`), which is why the substitution is sound rather than
+convenient.
+
+### What this does and does NOT measure
+
+Worth stating, because the obvious reading is wrong. **The harness runs each job
+ONCE, deliberately** — its own comment says the question is "what a user sees
+WHILE they run, not whether they finish". So it prices ONE PASS of stats
+recompute, the coverage probe and analytics.
+
+`issues/236`, `237`, `238` and `143` rec 1 all reduced how OFTEN background work
+runs, not what one pass costs. **This harness is therefore not a before/after for
+them**, and running it against the pre-fix code would read about the same. What
+it does establish is the other half: a single pass of the real job set, against a
+74M-quad space, with reads and writes in flight, keeps p99 under a second and
+never approaches a timeout. The frequency reduction is measured where frequency
+lives — `pg_stat_statements` over a long window, per `issues/143`.
+
+`ANALYZE`/`VACUUM` are NOT in the job set (confirmed after the run:
+`analyze_count = 0` on all four tables). That is the harness's choice, not a gap
+in the gates — the set is stats, coverage and analytics, on the reasoning above.
+A variant that includes them is the obvious extension and would be the first
+place to look for a pass that does approach the ceiling.

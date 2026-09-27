@@ -8,9 +8,20 @@ Runs every N minutes (default 5). Each cycle:
 4. Records results in the process table
 5. Optionally runs cleanup of old process records (once per day)
 
-Freshness thresholds (skip if ALL true):
-- ANALYZE: n_mod_since_analyze < 10,000 AND last_analyze < 10 min ago
-- VACUUM:  n_dead_tup < 10,000 AND last_vacuum < 30 min ago
+NEED GATES — run only where there is work (`issues/236`):
+- ANALYZE: n_mod_since_analyze >= 10,000, or the table has never been analyzed
+- VACUUM:  n_dead_tup         >= 10,000, or the table has never been vacuumed
+
+Applied TWICE, because the pick is per space and the work is per table:
+1. `_pick_worst_for_*` chooses a space that has work; staleness ORDERS the
+   candidates (inside the score) but no longer makes one eligible.
+2. `_tables_needing` then drops that space's tables that have nothing to do, so
+   churn in a 40-row `_datatype` cannot drag a 24 GB `_rdf_quad` through a pass.
+
+These were previously CONJUNCTIONS — "skip if fresh AND recent" — which made
+elapsed time sufficient to schedule work on a table that had not changed by one
+row. Production had absorbed 32,115 ANALYZEs and 13,696 VACUUMs across three
+idle fixture spaces on that basis.
 """
 
 import asyncio
@@ -30,12 +41,16 @@ from ..db.connection_config import require
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Freshness thresholds
+# Need thresholds — the ONLY thing that makes maintenance eligible (`issues/236`)
 # ---------------------------------------------------------------------------
-ANALYZE_MOD_THRESHOLD = 10_000       # skip if fewer mods since last analyze
-ANALYZE_STALENESS_MINUTES = 10       # skip if analyzed within this many minutes
-VACUUM_DEAD_THRESHOLD = 10_000       # skip if fewer dead tuples
-VACUUM_STALENESS_MINUTES = 30        # skip if vacuumed within this many minutes
+ANALYZE_MOD_THRESHOLD = 10_000       # run only at or above this many mods
+VACUUM_DEAD_THRESHOLD = 10_000       # run only at or above this many dead tuples
+
+# DELETED, not merely unused: `ANALYZE_STALENESS_MINUTES` (10) and
+# `VACUUM_STALENESS_MINUTES` (30). They were the second half of a conjunction
+# that let elapsed time schedule work on an unchanged table, and leaving them
+# defined would invite exactly that reading back. Staleness still orders the
+# queue — `minutes_since` inside the scores — it just cannot create work.
 
 # The stats coverage audit, the `pruned` semantics and the oversized-pair
 # sample went with `_run_stats_integrity` and `_run_stats_prune`
@@ -1014,13 +1029,28 @@ class MaintenanceJob:
                 (now - last).total_seconds() / 60.0 if last else float("inf")
             )
 
-            # Fresh enough → skip
-            if mods < ANALYZE_MOD_THRESHOLD and minutes_since < ANALYZE_STALENESS_MINUTES:
+            # NEED IS NECESSARY, NOT MERELY SUFFICIENT (`issues/236`).
+            #
+            # This was `mods < THRESHOLD and minutes_since < STALENESS`, a
+            # CONJUNCTION — so once the staleness window passed, elapsed time
+            # alone made a space eligible and the score below then ranked it by
+            # the very staleness that let it in. Nothing re-checked whether
+            # there was work. Measured on production: three FIXTURE spaces with
+            # zero pending mods and zero dead tuples had absorbed 32,115
+            # ANALYZEs and 13,696 VACUUMs, and `<space>_rdf_quad` — 24 GB,
+            # `n_mod_since_analyze = 0` — was being ANALYZEd every ~25 minutes
+            # at 24.8s a pass.
+            #
+            # Staleness keeps its job: it ORDERS the queue, inside the score. It
+            # no longer POPULATES it.
+            #
+            # `last is None` stays eligible — a never-analyzed space must get its
+            # first pass, which is what the `inf` branch below was protecting.
+            if mods < ANALYZE_MOD_THRESHOLD and last is not None:
                 continue
 
-            # Score: mods weighted by staleness.  When mods == 0 but
-            # last_analyze is None (never analyzed), use staleness alone
-            # so the space is still eligible.
+            # Score: mods weighted by staleness.  A space reaching here with
+            # mods == 0 has never been analyzed, so staleness alone orders it.
             if mods == 0:
                 score = minutes_since   # inf when never analyzed
             else:
@@ -1048,12 +1078,16 @@ class MaintenanceJob:
                 (now - last).total_seconds() / 60.0 if last else float("inf")
             )
 
-            # Fresh enough → skip
-            if dead < VACUUM_DEAD_THRESHOLD and minutes_since < VACUUM_STALENESS_MINUTES:
+            # NEED IS NECESSARY (`issues/236`) — see `_pick_worst_for_analyze`.
+            # The VACUUM half of the same conjunction, and the more obviously
+            # wrong of the two: `<space>_term` is INSERT-ONLY — lifetime
+            # `n_tup_upd = 0`, six deletes, zero dead tuples — and had been
+            # vacuumed 9,543 times for 26.9 hours, entirely on elapsed time.
+            if dead < VACUUM_DEAD_THRESHOLD and last is not None:
                 continue
 
-            # Score: dead tuples weighted by staleness.  When dead == 0
-            # but last_vacuum is None (never vacuumed), use staleness alone.
+            # Score: dead tuples weighted by staleness.  A space reaching here
+            # with dead == 0 has never been vacuumed, so staleness alone orders it.
             if dead == 0:
                 score = minutes_since   # inf when never vacuumed
             else:
@@ -1086,8 +1120,17 @@ class MaintenanceJob:
             )
             await self._tracker.mark_running(process_id, self._instance_id)
 
-        tables = self._space_tables(space_id)
+        # Only the tables that actually have work (`issues/236`).
+        tables = await self._tables_needing("ANALYZE", space_id)
         try:
+            if not tables:
+                result = {"space_id": space_id, "tables_analyzed": 0,
+                          "tables_attempted": 0, "skipped": "no table needed it"}
+                if self._tracker and process_id:
+                    await self._tracker.mark_completed(process_id, result_details=result)
+                logger.info("MaintenanceJob: ANALYZE %s — no table needed it", space_id)
+                return result
+
             if self._pg_config:
                 analyzed = await asyncio.to_thread(self._sync_run_tables, "ANALYZE", tables)
             else:
@@ -1121,8 +1164,17 @@ class MaintenanceJob:
             )
             await self._tracker.mark_running(process_id, self._instance_id)
 
-        tables = self._space_tables(space_id)
+        # Only the tables that actually have work (`issues/236`).
+        tables = await self._tables_needing("VACUUM", space_id)
         try:
+            if not tables:
+                result = {"space_id": space_id, "tables_vacuumed": 0,
+                          "tables_attempted": 0, "skipped": "no table needed it"}
+                if self._tracker and process_id:
+                    await self._tracker.mark_completed(process_id, result_details=result)
+                logger.info("MaintenanceJob: VACUUM %s — no table needed it", space_id)
+                return result
+
             if self._pg_config:
                 vacuumed = await asyncio.to_thread(self._sync_run_tables, "VACUUM", tables)
             else:
@@ -2156,6 +2208,21 @@ class MaintenanceJob:
             try:
                 async with self._pool.acquire() as conn:
                     async with maintenance_timeouts(conn):
+                        # GATED ON WRITES (`issues/143` rec 1). This is the
+                        # SECOND call site of `frame_slot_drift`: the one in
+                        # `_run_frame_entity_integrity` has carried the gate
+                        # since `issues/150`, and this one never did — so the
+                        # same full scan ran twice a cycle, once gated and once
+                        # not. Measured on production: 34,979 calls at 2,304 ms
+                        # = 22.4 hours, on `testspace`, whose quad table has a
+                        # write watermark of ZERO. It has never been written to.
+                        #
+                        # Its own convergence test is the next `if` below —
+                        # counts equal and no orphans — so the gate can be told
+                        # exactly when there is nothing left to find.
+                        if not await probe_data_changed(
+                                conn, space_id, "frame_slot_integrity"):
+                            continue
                         # CLIENT-side timeout, not just the server fence above.
                         # The pool's 60s `command_timeout` cancels in the
                         # DRIVER whatever the server is told (`issues/149`), so
@@ -2166,6 +2233,9 @@ class MaintenanceJob:
                         expected, actual = await frame_slot_drift(
                             conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
                         orphan_rate = await frame_slot_orphan_rate(conn, space_id)
+                        mark_probe_converged(
+                            space_id, "frame_slot_integrity",
+                            expected == actual and orphan_rate == 0.0)
             except asyncpg.UndefinedTableError:
                 continue          # space not migrated — the rewrite declines
             except Exception as exc:
@@ -2560,8 +2630,35 @@ class MaintenanceJob:
             try:
                 async with self._pool.acquire() as conn:
                     async with maintenance_timeouts(conn):
-                        gaps = await entity_slot_sort_coverage(
-                            conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
+                        # GATED ON WRITES (`issues/143` rec 1) — and ONLY this
+                        # probe, not the whole iteration.
+                        #
+                        # 30,833 calls at 2,852 ms = 24.4 hours on production,
+                        # on `testspace`, whose quad write watermark is ZERO.
+                        #
+                        # `continue` would be wrong here: the block below
+                        # maintains `slot_sort_coverage` — the marker the READ
+                        # path's fast gate consults — and releases a whole-space
+                        # block. Skipping that does not waste time, it leaves the
+                        # fast path off (`issues/167`: two spaces sat blocked
+                        # over complete tables until someone ran the DELETE by
+                        # hand). It is also 13x cheaper: `entity_slot_sort_all_types`
+                        # measures 220 ms against this probe's 2,852 ms, so
+                        # gating the expensive half and leaving the marker to run
+                        # every cycle costs almost nothing and keeps the gate's
+                        # failure mode as "wasted work" rather than "wrong page".
+                        if await probe_data_changed(
+                                conn, space_id, "entity_slot_sort_coverage"):
+                            gaps = await entity_slot_sort_coverage(
+                                conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
+                            # A gap is outstanding work: the backfill this step
+                            # drives only ADDs, so a large one takes many passes
+                            # and a write-only gate would strand it half-filled
+                            # (`issues/149`).
+                            mark_probe_converged(
+                                space_id, "entity_slot_sort_coverage", not gaps)
+                        else:
+                            gaps = []
             except asyncpg.UndefinedTableError:
                 continue  # space predates the table, or is not a KG space
             except Exception as exc:
@@ -2831,6 +2928,87 @@ class MaintenanceJob:
             autocommit=True,
             options=maintenance_conn_options(),
         )
+
+    #: Per-table need query. The space-level pick decides WHICH space; this
+    #: decides which of its tables actually have work (`issues/236`).
+    _TABLE_NEED_SQL = """
+        SELECT relname, n_mod_since_analyze, n_dead_tup,
+               GREATEST(COALESCE(last_analyze,     'epoch'::timestamptz),
+                        COALESCE(last_autoanalyze, 'epoch'::timestamptz))
+                   > 'epoch'::timestamptz AS ever_analyzed,
+               GREATEST(COALESCE(last_vacuum,     'epoch'::timestamptz),
+                        COALESCE(last_autovacuum, 'epoch'::timestamptz))
+                   > 'epoch'::timestamptz AS ever_vacuumed
+        FROM pg_stat_user_tables WHERE relname = ANY(%s)
+    """
+
+    @staticmethod
+    def _needs(command: str, row) -> bool:
+        """Does this one table have work for *command*?
+
+        Same rule as the space-level gate: real need, or never done at all.
+        """
+        if command == "ANALYZE":
+            return ((row["n_mod_since_analyze"] or 0) >= ANALYZE_MOD_THRESHOLD
+                    or not row["ever_analyzed"])
+        return ((row["n_dead_tup"] or 0) >= VACUUM_DEAD_THRESHOLD
+                or not row["ever_vacuumed"])
+
+    async def _tables_needing(self, command: str, space_id: str) -> List[str]:
+        """Filter a space's tables down to those with work for *command*.
+
+        WHY A SECOND GATE (`issues/236`). The pick is per SPACE and the action
+        was per SPACE too — all seven tables, unconditionally. So 10,000
+        modifications in `{space}_datatype` (40 rows on production) dragged
+        `{space}_rdf_quad` (24 GB) and `{space}_term` (3.7 GB) through a full
+        pass with nothing to do. The space-level gate alone cannot fix that: a
+        space with real churn is correctly picked, and then still does every
+        table. Production had `<space>_rdf_quad` at `n_mod_since_analyze = 0`
+        being ANALYZEd every ~25 minutes for exactly this reason.
+
+        A table absent from `pg_stat_user_tables` is treated as NEEDING the
+        operation — it is a table the stats view has not seen, and skipping on
+        missing information is how a gap becomes permanent.
+
+        One catalog read of seven rows per cycle, against passes costing 8-25s
+        each.
+        """
+        tables = self._space_tables(space_id)
+        try:
+            if self._pg_config:
+                rows = await asyncio.to_thread(self._sync_fetch_table_need, tables)
+            else:
+                rows = await self._async_fetch_table_need(tables)
+        except Exception as e:
+            # The gate's own failure must not stop maintenance; fall back to the
+            # old behaviour rather than silently doing nothing.
+            logger.warning("%s need-probe failed for %s (%s) — running all tables",
+                           command, space_id, e)
+            return tables
+
+        seen = {r["relname"]: r for r in rows}
+        needed = [t for t in tables
+                  if t not in seen or self._needs(command, seen[t])]
+        skipped = len(tables) - len(needed)
+        if skipped:
+            logger.info("MaintenanceJob: %s %s — %d/%d tables have work, %d skipped",
+                        command, space_id, len(needed), len(tables), skipped)
+        return needed
+
+    def _sync_fetch_table_need(self, tables: List[str]):
+        import psycopg.rows
+        conn = self._make_sync_connection()
+        try:
+            with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+                cur.execute(self._TABLE_NEED_SQL, (tables,))
+                return cur.fetchall()
+        finally:
+            conn.close()
+
+    async def _async_fetch_table_need(self, tables: List[str]):
+        async with self._pool.acquire() as conn:
+            return await conn.fetch(
+                self._TABLE_NEED_SQL.replace("%s", "$1"), tables)
 
     _SQL_COMMANDS = {"ANALYZE": "ANALYZE", "VACUUM": "VACUUM"}
 

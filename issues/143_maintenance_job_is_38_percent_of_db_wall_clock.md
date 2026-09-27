@@ -165,3 +165,110 @@ it fixed; the whole point is that the same SQL varies 9x by what else is running
 Split on the timestamp prefix, regex `duration: ([0-9.]+) ms`, classify by
 statement prefix. Statements logged as `statement:` (not `execute`) carry
 inlined literals and can be replayed directly.
+
+## Re-measured 2026-09-25 — 23 days on, recommendations 1/3/4 still unwritten
+
+Found while triaging a report of slow production queries that turned out to have
+an upstream cause. The box was **idle** throughout — 19 idle connections,
+nothing running, no ungranted locks — which makes this a clean read of the
+background load rather than of an incident.
+
+`pg_stat_statements`, 57-day window (reset 2026-07-30), on the same 4-vCPU
+`db.r6g.xlarge`, now a 114 GB database:
+
+| | calls | hours | share of all exec time |
+|---|---:|---:|---:|
+| `ANALYZE` / `VACUUM` alone | 194,151 | 129.8 | **21.1%** |
+| everything else | 400,680,645 | 485.1 | 78.9% |
+
+**21.1% is a floor, not the figure.** It counts only statements beginning
+`ANALYZE`/`VACUUM`; every probe in this issue is a `SELECT` and lands in
+"everything else". The named ones are still there and still ungated:
+
+    edge_table_drift (this issue's query 2)
+      <space>      5,633 calls  mean 18,134 ms   28.4 h
+      lead_prod    5,881 calls  mean  5,116 ms    8.4 h
+    frame_slot drift  24,522 calls  mean 1,909 ms   13.0 h
+    edge-count probe  32,904 calls  mean 2,324 ms   21.2 h
+    stats recompute      735 calls  mean ~45,000 ms  9.1 h
+
+`sync_edge_table.py:435` now carries the conclusion in its own docstring —
+*"THIS QUERY SHOULD NOT EXIST ON A SCHEDULE AT ALL. Both sides are counts the
+write path already knows, and recomputing them from ~50M rows every cycle is the
+defect."* — so recommendation 1 is agreed in the code and simply not built.
+
+The three single largest statements in the entire database are maintenance:
+
+    ANALYZE "<space>_rdf_quad"      7,023 calls  mean 24.8s  max 341s   48.3 h
+    VACUUM  "<space>_term"          9,486 calls  mean 10.2s             26.9 h
+    ANALYZE "<space>_term"          7,574 calls  mean  8.1s             17.1 h
+
+Two things that were NOT true in the original measurement and should not be
+re-diagnosed from it:
+
+  * **`issues/136` is fixed.** Maintenance connections take a 15-minute
+    `statement_timeout` (`MAINTENANCE_STATEMENT_TIMEOUT_MS`), which is why an
+    ANALYZE can run 341s against the database's 60s default. VACUUM completes;
+    dead tuples on the big tables read 0 and 644.
+  * **`issues/139` has not returned.** `<space>_rdf_stats` sums to 22,846,358
+    with a 3,025,627 max — the post-fix shape, not the corrupt one.
+
+**New, and split out as `issues/236`:** the ANALYZE/VACUUM scheduler's skip
+condition is a conjunction (`maintenance_job.py:1018`, `:1052`), so elapsed time
+alone schedules work on tables with zero modifications and zero dead tuples.
+Three idle fixture spaces have absorbed 32,115 ANALYZEs and 13,696 VACUUMs on
+that basis, and `<space>_term` — insert-only, six lifetime deletes — has been
+vacuumed 9,543 times. That is this issue's recommendation 1, one layer down.
+
+**Tracked by `issues/239`** as of 2026-09-25. This issue is the parent finding
+of that group and its recommendations 1, 3 and 4 are still the largest single
+block of remaining work in it.
+
+## Rec 1, 2026-09-25: it was HALF done, and the missing half was invisible
+
+Recorded above as unwritten. It was in fact built for two probes and missing on
+two others, and the reason it read as unwritten is worth keeping.
+
+**What was already there.** `probe_data_changed` / `mark_probe_converged`
+(`issues/150`) gate a probe on the quad table's write watermark and keep it open
+while a repair has outstanding work. `edge_table_drift` and `frame_entity_drift`
+have carried it since. **It works**: over 16,691 cycles, `testspace` — write
+watermark ZERO, never written — ran `edge_table_drift` **0 times**, while
+actively-written spaces ran it ~35% of cycles. A write-existence gate cannot do
+better than that on a space that is continuously written, which is the honest
+ceiling of rec 1 as specified.
+
+**What was missing, and where the hours actually were.** Two expensive probes
+had no gate at all, and both were burning time on `testspace`:
+
+| probe | calls | mean | hours | why ungated |
+|---|---:|---:|---:|---|
+| `entity_slot_sort_coverage` | 30,833 | 2,852 ms | **24.4** | never gated |
+| `frame_slot_drift` (2nd call site) | 34,979 | 2,304 ms | **22.4** | `_run_frame_slot_integrity` is a near-copy of `_run_frame_entity_integrity`, which IS gated — the copy lost the gate |
+
+**46.8 hours, on a space that has never been written to.** Both are now gated.
+
+Two details that made this worth doing carefully rather than quickly:
+
+  * **The coverage step gets the gate on the PROBE, not the iteration.** The same
+    loop maintains `slot_sort_coverage` — the marker the READ path's fast gate
+    consults — and releases whole-space blocks. A `continue` there does not waste
+    time, it leaves the fast path off (`issues/167`: two spaces sat blocked over
+    complete tables until someone ran a DELETE by hand). The marker query
+    `entity_slot_sort_all_types` measures **220 ms against the probe's 2,852 ms**,
+    so gating the expensive half and letting the marker run every cycle costs
+    almost nothing and keeps the failure mode at "wasted work" rather than
+    "wrong page".
+  * **The guard test was hand-kept, which is why this survived.**
+    `test_the_remaining_o_graph_probes_are_gated` asks "is this probe NAME gated
+    somewhere" — and for `frame_slot_drift` the answer was yes, at the other call
+    site. It is now joined by a test DERIVED PER CALL SITE, scoped to the
+    enclosing function. A character-window version of that test passes on the
+    real code and fails to catch the defect, because the gate and call are ~1,200
+    characters apart in comments; the window wide enough to accept that also
+    accepts an ungated copy sixty lines below. There is a test asserting the
+    detector flags the real pre-fix source, by function name.
+
+**Recs 3 and 4 are untouched** and the framing above still stands: what remains
+for the actively-written spaces is to make the counts INCREMENTAL, not to sample
+or to lengthen an interval. `sync_edge_table.py:435` still says so.

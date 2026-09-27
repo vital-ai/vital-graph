@@ -99,17 +99,109 @@ async def test_spaces_and_probes_do_not_share_a_watermark():
 
 def test_the_remaining_o_graph_probes_are_gated():
     """The slot-sort walk left this path entirely in `issues/151` — coverage
-    replaced it. The gate still guards the two sibling drift probes, which are
-    the remaining full-table scans on the maintenance loop (edge_table_drift
-    measured 17.7s over ~50M rows)."""
+    replaced it. The gate still guards the sibling drift probes, which are the
+    remaining full-table scans on the maintenance loop (edge_table_drift
+    measured 17.7s over ~50M rows).
+
+    `frame_slot_integrity` and `entity_slot_sort_coverage` joined the list in
+    `issues/143` rec 1 — see the call-site test below for why naming them here
+    was not enough.
+    """
     src = inspect.getsource(M)
-    for probe in ("edge_table_drift", "frame_entity_drift"):
-        i = src.index(f'probe_data_changed(\n' if False else f'"{probe}")')
+    for probe in ("edge_table_drift", "frame_entity_drift",
+                  "frame_slot_integrity", "entity_slot_sort_coverage"):
+        i = src.index(f'"{probe}")')
         window = src[max(0, i - 400):i]
         assert "probe_data_changed(" in window, f"{probe} is ungated"
     assert "mark_probe_converged(" in src, (
         "without recording convergence a repair strands half-done on a quiet "
         "space — the gate would skip the passes it still needs")
+
+
+#: Probe functions whose cost is proportional to the SPACE, so every call site
+#: needs a change gate. Measured on production over 57 days (`issues/143`):
+#:   frame_slot_drift             34,979 calls  2,304 ms  22.4 h
+#:   entity_slot_sort_coverage    30,833 calls  2,852 ms  24.4 h
+#:   edge_table_drift              5,737 calls 18,161 ms  28.9 h
+#: all three largely on `testspace`, whose quad write watermark is ZERO.
+_EXPENSIVE_PROBES = (
+    "edge_table_drift",
+    "frame_slot_drift",
+    "entity_slot_sort_coverage",
+)
+
+
+def _ungated_call_sites(src: str, probes=_EXPENSIVE_PROBES) -> list:
+    """Call sites of *probes* whose ENCLOSING FUNCTION holds no gate.
+
+    Scoped to the function, not to a character window. A window is the obvious
+    implementation and it does not work: the real code carries ~1,200 characters
+    of comment between the gate and the call, so any window wide enough to
+    accept that also accepts a second, ungated call site sixty lines below the
+    first — which is the exact defect this is meant to catch.
+    """
+    lines = src.split("\n")
+    # (start_line_index, name) for every def, innermost-last
+    defs = [(n, ln.strip().split("(")[0].replace("async def ", "").replace("def ", ""))
+            for n, ln in enumerate(lines)
+            if ln.lstrip().startswith(("def ", "async def "))]
+
+    out = []
+    for n, ln in enumerate(lines):
+        for fn in probes:
+            if f"await {fn}(" not in ln:
+                continue
+            owner = [(d, name) for d, name in defs if d < n]
+            start = owner[-1][0] if owner else 0
+            name = owner[-1][1] if owner else "<module>"
+            body = "\n".join(lines[start:n])
+            if "probe_data_changed(" not in body:
+                out.append(f"{fn} at line {n + 1} in {name}()")
+    return out
+
+
+def test_every_call_site_of_an_expensive_probe_is_gated():
+    """DERIVED PER CALL SITE, not from a list of probe names.
+
+    `issues/143` rec 1 was recorded as done and was not: `frame_slot_drift` had
+    TWO call sites, `_run_frame_entity_integrity` (gated since `issues/150`) and
+    `_run_frame_slot_integrity` (never gated), so the same full scan ran twice a
+    cycle — once gated, once not. The test above could not see that, because it
+    asks "is this probe NAME gated somewhere" and the answer was yes.
+
+    A second call site is the natural way this regresses: someone copies a step,
+    and the copy loses the gate while the original keeps it.
+    """
+    ungated = _ungated_call_sites(inspect.getsource(M))
+    assert not ungated, (
+        "these call sites re-derive over the whole space on every cycle with no "
+        "change gate:\n    " + "\n    ".join(ungated))
+
+
+def test_the_detector_finds_an_ungated_call_site():
+    """A derived test that cannot fail is worse than no test.
+
+    The shape of the real defect: two call sites, the first gated, the second a
+    copy that lost it.
+    """
+    gated_then_not = (
+        "async def _run_frame_entity_integrity(self):\n"
+        '    if not await probe_data_changed(conn, sid, "frame_entity_drift"):\n'
+        "        continue\n"
+        "    expected, actual = await frame_slot_drift(conn, sid)\n"
+        "\n"
+        "async def _run_frame_slot_integrity(self):\n"
+        "    expected, actual = await frame_slot_drift(conn, sid)\n"
+    )
+    found = _ungated_call_sites(gated_then_not, ("frame_slot_drift",))
+    assert len(found) == 1, found
+    assert "_run_frame_slot_integrity" in found[0], found
+
+    # and it does not cry wolf on a gated one
+    assert _ungated_call_sites(
+        "async def step(self):\n"
+        '    if await probe_data_changed(c, s, "x"):\n'
+        "        await edge_table_drift(c, s)\n", ("edge_table_drift",)) == []
 
 
 def test_the_slot_sort_repair_no_longer_uses_the_o_graph_walk():

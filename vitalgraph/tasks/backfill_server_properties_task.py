@@ -25,6 +25,7 @@ Configuration (via environment or VitalGraphConfig):
 import asyncio
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
@@ -155,6 +156,14 @@ class BackfillServerPropertiesTask:
         self.batch_size = _env_int('BACKFILL_BATCH_SIZE', 200)
         self.active_interval = _env_float('BACKFILL_ACTIVE_INTERVAL', 0.5)
         self.idle_timeout = _env_float('BACKFILL_IDLE_TIMEOUT', 1800.0)
+        # How long a cached discovery result is trusted before re-deriving it
+        # anyway, so a missed invalidation self-heals (`issues/237`). An hour,
+        # not `backfill_state`'s 24: graph membership changes slowly but the
+        # re-derivation is cheap enough that an hour costs nothing.
+        self.discovery_recheck_s = _env_float(
+            'BACKFILL_DISCOVERY_RECHECK_S', 3600.0)
+        #: space_id -> (graph_uris, quad_inserts, stats_reset, cached_at)
+        self._discovery_cache: dict = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -316,6 +325,67 @@ class BackfillServerPropertiesTask:
     # Target discovery and iteration
     # ------------------------------------------------------------------
 
+    async def _discover_graphs_cached(self, space_id: str) -> List[str]:
+        """Graphs holding KGEntity data, re-derived only when quads changed.
+
+        DISCOVERY RAN BEFORE THE GATE THAT WOULD HAVE SKIPPED IT (`issues/237`).
+        `discover_graphs_sql` is a `SELECT DISTINCT` over the space's quad table
+        joined to `term`, and it ran for every space at the top of every cycle —
+        *then* `_iteration` consulted `backfill_state.is_complete`, the cheap
+        per-graph marker whose own comment prices what it saves. So a space where
+        every graph was already complete paid full discovery forever. It was also
+        self-reinforcing: a cycle in which every target is skipped completes
+        almost instantly, so the faster the gate worked, the sooner the scan ran
+        again. Measured on production: 45,336 calls, 754M buffers, 35.0 hours.
+
+        The signal is `backfill_state.quad_activity` — the same free
+        `pg_stat_user_tables` counter the per-graph markers already use, paired
+        with `stats_reset` so a counter reset is detected rather than inferred.
+        Reusing it deliberately: a second invalidation signal would be a second
+        thing to get wrong.
+
+        THREE WAYS IT RE-DERIVES ANYWAY, because a missed graph means entities
+        that never get stamped:
+
+        * a nudge (`_force_full_check`) ignores the cache entirely — the caller
+          said data arrived, and the statistics view lags commits by design;
+        * a cache entry older than `discovery_recheck_s` is ignored;
+        * any failure to read the signal re-derives.
+
+        `n_tup_ins` does not move on a DELETE, so a graph that loses its last
+        KGEntity can linger in the cache until the recheck. That costs a target
+        whose scan finds nothing — the cheap direction — and it is why the
+        recheck exists rather than being optional.
+        """
+        cached = self._discovery_cache.get(space_id)
+        if cached is not None and not self._force_full_check:
+            graphs, ins, reset, at = cached
+            if (time.monotonic() - at) < self.discovery_recheck_s:
+                try:
+                    now_ins, now_reset = await backfill_state.quad_activity(
+                        self.pool, space_id)
+                except Exception as e:
+                    logger.debug("Backfill: discovery signal unreadable for "
+                                 "%s (%s) — re-deriving", space_id, e)
+                else:
+                    if (now_ins is not None and now_ins == ins
+                            and now_reset == reset):
+                        logger.debug("Backfill: %s unchanged, reusing %d "
+                                     "discovered graph(s)", space_id, len(graphs))
+                        return graphs
+
+        # Read the signal BEFORE the scan. Taken after, an insert landing during
+        # discovery would be recorded as already covered and never re-derived.
+        try:
+            ins, reset = await backfill_state.quad_activity(self.pool, space_id)
+        except Exception:
+            ins, reset = None, None
+        graphs = await discover_graphs_sql(self.pool, space_id)
+        if ins is not None:
+            self._discovery_cache[space_id] = (graphs, ins, reset,
+                                               time.monotonic())
+        return graphs
+
     async def _refresh_targets(self) -> List[Tuple[str, str]]:
         """Discover all (space_id, graph_id) pairs with KGEntity data."""
         targets: List[Tuple[str, str]] = []
@@ -332,7 +402,7 @@ class BackfillServerPropertiesTask:
             spaces = [s for s in spaces if s not in self.exclude_spaces]
         for space_id in spaces:
             try:
-                graphs = await discover_graphs_sql(self.pool, space_id)
+                graphs = await self._discover_graphs_cached(space_id)
                 for gid in graphs:
                     targets.append((space_id, gid))
             except Exception as e:
