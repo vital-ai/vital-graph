@@ -236,3 +236,37 @@ async def get_fts_stats(conn, space_id: str, index_name: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error("Error getting FTS stats for '%s' in %s: %s", index_name, space_id, e)
         return {"row_count": 0, "distinct_entity_count": 0, "has_tsv_count": 0}
+
+
+async def update_rank_normalization(conn, space_id: str, index_name: str,
+                                    rank_normalization: int) -> bool:
+    """Set an existing FTS index's `ts_rank_cd` normalization bitmask.
+
+    ADDED FOR `issues/233` step 3 (apply config), which found there was no way to
+    change this after creation: `ensure_fts_index` takes it only when creating,
+    and `update_fts_languages` does not touch it. So a config document could
+    describe a rank normalization that apply was unable to produce, and the
+    mismatch would show up only as every score being computed the other way.
+
+    Cheap and physical-object-free, unlike a language change: the bitmask is read
+    at QUERY time by `ts_rank_cd`, so nothing is stored differently and no tsv
+    needs recomputing. That is why this is a registry update and not a rebuild.
+
+    Returns True when a row was updated.
+    """
+    try:
+        result = await conn.execute(
+            f"UPDATE {space_id}_fts_index SET rank_normalization = $1 "
+            f"WHERE index_name = $2", rank_normalization, index_name)
+        updated = result.endswith(" 1")
+        if updated:
+            logger.info("FTS index %s/%s rank_normalization -> %s",
+                        space_id, index_name, rank_normalization)
+        else:
+            logger.warning("FTS index %s/%s not found for rank_normalization "
+                           "update", space_id, index_name)
+        return updated
+    except Exception as e:
+        logger.error("Failed to update rank_normalization for %s/%s: %s",
+                     space_id, index_name, e)
+        return False

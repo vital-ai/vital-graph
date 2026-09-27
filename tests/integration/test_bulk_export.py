@@ -132,8 +132,15 @@ async def test_export_manifest_records_snapshot_watermark(
             "SELECT $1::text::pg_snapshot::text", manifest["snapshot"])
 
     assert manifest["space_id"] == src
-    assert manifest["version"] == 1
+    # Version 2 adds the config sidecar (`issues/233` step 5). The bump is the
+    # point: a reader that only understands v1 must be able to tell.
+    assert manifest["version"] == 2
     assert set(manifest["tables"]) == {"datatype", "term", "rdf_quad"}
+    # The config travels WITH the data, because it is not derivable from it and a
+    # round trip without it left a restored space answering searches differently.
+    assert manifest["config"] == "config.json"
+    assert manifest["config_includes_secrets"] is True
+    assert (tmp_path / "config.json").exists()
     assert paths["manifest"].endswith("manifest.json")
 
 

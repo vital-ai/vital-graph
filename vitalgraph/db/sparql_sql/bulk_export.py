@@ -10,6 +10,14 @@ Only the core tables are exported: the edge/frame_entity/geo/stats tables are
 deterministic functions of the quads, so shipping them would just bloat the
 backup — they are resynced on import instead.
 
+The SEARCH CONFIG is different and IS exported, as a `config.json` sidecar
+(`issues/233` step 5). It is not derivable from the quads, and without it a round
+trip through here silently dropped every index mapping — leaving a restored space
+holding the right data and answering searches differently, with no error. Import
+applies it with REPLACE semantics, matching the TRUNCATE this already does to the
+data. The sidecar may contain provider credentials in clear, because a backup
+that cannot be restored is not a backup; treat the export directory as a secret.
+
 ``export_space`` runs all three COPYs in one ``REPEATABLE READ`` snapshot and
 records that snapshot in a ``manifest.json`` sidecar, so an export is internally
 consistent and can anchor a later catch-up sync.  See
@@ -23,6 +31,7 @@ import logging
 import os
 from typing import Dict
 
+from .config_export import export_space_config
 from .sparql_sql_schema import SparqlSQLSchema
 
 logger = logging.getLogger(__name__)
@@ -33,14 +42,21 @@ _EXPORT_TABLES = ("datatype", "term", "rdf_quad")
 
 # Sidecar file recording the export's snapshot watermark (see export_space).
 _MANIFEST_NAME = "manifest.json"
-_MANIFEST_VERSION = 1
+_MANIFEST_VERSION = 2          # 2 adds the config sidecar (`issues/233` step 5)
+
+# The space's SEARCH CONFIG, exported alongside the data (`issues/233` step 5).
+# Without it a round trip through here silently dropped every index mapping, and
+# the config IS the search behaviour: same data, different mappings, different
+# answers, no error.
+_CONFIG_NAME = "config.json"
 
 
 def _bare(name: str) -> str:
     return name.split(".")[-1]
 
 
-async def export_space(conn, space_id: str, dest_dir: str) -> Dict[str, str]:
+async def export_space(conn, space_id: str, dest_dir: str, *,
+                       include_secrets: bool = True) -> Dict[str, str]:
     """Binary-COPY each core table to ``<dest_dir>/<table>.bin``.
 
     All three COPYs run inside a single ``REPEATABLE READ`` read-only
@@ -84,12 +100,36 @@ async def export_space(conn, space_id: str, dest_dir: str) -> Dict[str, str]:
             paths[key] = path
             logger.info("export_space(%s): %s -> %s", space_id, table, path)
 
+        # CONFIG, IN THE SAME SNAPSHOT (`issues/233` step 5). Inside the
+        # transaction so the config describes the same point in time as the
+        # data — a mapping added mid-export would otherwise appear in a backup
+        # of quads taken before it.
+        config_doc = await export_space_config(
+            conn, space_id, include_secrets=include_secrets)
+
+    config_path = os.path.join(dest_dir, _CONFIG_NAME)
+    with open(config_path, "w", encoding="utf-8") as fh:
+        json.dump(config_doc, fh, indent=2, sort_keys=True, default=str)
+    paths["config"] = config_path
+    if include_secrets and config_doc.get("vector_indexes"):
+        # Said once, loudly. The directory already holds every quad in the
+        # space, so it was always sensitive — but a provider credential is the
+        # kind of sensitive that ends up in a ticket.
+        logger.warning(
+            "export_space(%s): %s may contain provider credentials in clear "
+            "(include_secrets=True, the default here because a backup that "
+            "cannot be restored is not a backup). Treat the export directory "
+            "as a secret.", space_id, _CONFIG_NAME)
+
     manifest = {
         "space_id": space_id,
         "version": _MANIFEST_VERSION,
         "snapshot": snapshot,
         "wal_lsn": lsn,
-        "tables": {k: os.path.basename(v) for k, v in paths.items()},
+        "tables": {k: os.path.basename(v)
+                   for k, v in paths.items() if k in _EXPORT_TABLES},
+        "config": os.path.basename(config_path),
+        "config_includes_secrets": bool(include_secrets),
     }
     manifest_path = os.path.join(dest_dir, _MANIFEST_NAME)
     with open(manifest_path, "w", encoding="utf-8") as fh:
@@ -298,9 +338,61 @@ async def import_space(conn, space_id: str, paths: Dict[str, str],
             "scripts/backfill_slot_sort_coverage.py) before serving this space.",
             space_id)
 
+    # ---- SEARCH CONFIG (`issues/233` step 5) --------------------------------
+    #
+    # Without this a round trip through here silently dropped every index
+    # mapping, and the config IS the search behaviour: the restored space held
+    # the right quads and answered searches differently, with no error.
+    #
+    # REPLACE, not merge. This function TRUNCATEs and re-COPYs — it restores OVER
+    # a space — so config the backup does not contain has no more claim to
+    # survive than data the backup does not contain. Merge would leave a mapping
+    # from whatever the space used to be, pointing at an index the restore did
+    # not bring, which is exactly the kind of "faithfully wrong" state
+    # `issues/041` and `issues/168` are both about.
+    #
+    # A FAILURE HERE DOES NOT ROLL BACK THE DATA. Raising would abort the
+    # caller's transaction and discard a restore that may have taken hours,
+    # because of a config document that can be re-applied in a second through
+    # `POST /api/spaces/config/apply`. So it is recorded and logged at ERROR —
+    # visible, fixable, and not a reason to lose the data.
+    config_result = None
+    config_path = paths.get("config")
+    if config_path and os.path.exists(config_path):
+        try:
+            with open(config_path, encoding="utf-8") as fh:
+                document = json.load(fh)
+            from .config_apply import apply_space_config
+            report = await apply_space_config(conn, space_id, document,
+                                              replace=True)
+            config_result = {"created": len(report["created"]),
+                             "updated": len(report["updated"]),
+                             "removed": len(report["removed"]),
+                             "failed": report["failed"]}
+            logger.info("import_space(%s): config applied %s",
+                        space_id, config_result)
+        except Exception as exc:
+            config_result = {"error": str(exc)}
+            logger.error(
+                "import_space(%s): SEARCH CONFIG NOT APPLIED (%s). The data is "
+                "restored and correct; this space's index mappings are NOT what "
+                "the backup described, so searches will answer differently. "
+                "Re-apply with POST /api/spaces/config/apply using %s.",
+                space_id, exc, config_path)
+    else:
+        # An export taken before `issues/233` step 5 has no config sidecar. That
+        # is not an error — it is the state every existing backup is in — but a
+        # restore from one leaves the config untouched and should say so.
+        logger.info(
+            "import_space(%s): no %s in the export, search config left as-is. "
+            "Exports taken before the config sidecar existed cannot restore it.",
+            space_id, _CONFIG_NAME)
+
     counts = {}
     for key in _EXPORT_TABLES:
         counts[key] = await conn.fetchval(f"SELECT count(*) FROM {_bare(t[key])}")
+    if config_result is not None:
+        counts["config"] = config_result
     logger.info("import_space(%s): restored %s", space_id, counts)
     return counts
 

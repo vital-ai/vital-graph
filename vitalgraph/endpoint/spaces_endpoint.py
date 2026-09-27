@@ -146,6 +146,177 @@ class SpacesEndpoint:
                 quad_dump=None
             )
     
+    def _resolve_pool(self):
+        """The pool, however this API instance happens to hold one.
+
+        Extracted verbatim from `get_space_analytics`, which grew four fallbacks
+        because the pool lives in a different place depending on how the API was
+        constructed. Shared rather than copied so a fifth arrangement is fixed in
+        one place.
+        """
+        pool = (getattr(self.api, '_pool', None)
+                or getattr(getattr(self.api, 'db_impl', None),
+                           'connection_pool', None))
+        if pool:
+            return pool
+        sm = getattr(self.api, 'space_manager', None)
+        if sm and hasattr(sm, '_backend'):
+            pool = getattr(sm._backend, '_pool', None)
+        if not pool and sm:
+            for sr in getattr(sm, '_spaces', {}).values():
+                backend = getattr(getattr(sr, 'space_impl', None), 'backend', None)
+                if backend:
+                    pool = (getattr(backend, '_pool', None)
+                            or getattr(getattr(backend, '_db', None), '_pool', None))
+                    if pool:
+                        break
+        return pool
+
+    async def get_space_config(self, space_id: str, include_secrets: bool = False,
+                              current_user=None):
+        """Export a space's SEARCH CONFIG as a reviewable document (`issues/233`).
+
+        Read-only. The config IS the search behaviour — a space with the same data
+        and different mappings answers differently, with no error — and until now
+        nothing could show an operator what a space's config actually is.
+
+        `include_secrets` defaults to FALSE, so the ordinary response is safe to
+        paste into a ticket or commit: anything key-shaped in `provider_config` is
+        redacted and the redaction is listed under `redacted`.
+        """
+        from ..db.sparql_sql.config_export import export_space_config
+        try:
+            pool = self._resolve_pool()
+            if not pool:
+                # HTTP 200 with a domain outcome, like every other handler here.
+                return {"status": OperationStatus.QUERY_FAILED.value,
+                        "message": "Database pool not available"}
+            async with pool.acquire() as conn:
+                doc = await export_space_config(
+                    conn, space_id, include_secrets=include_secrets)
+            # FOUND, not OK: this is a READ, and the family's read vocabulary is
+            # FOUND/EMPTY. A space always has bootstrap config, so a document is
+            # always returned and EMPTY would be misleading.
+            return {"status": OperationStatus.FOUND.value, "config": doc}
+        except Exception as e:
+            # QUERY_FAILED — a READ failing, not a write. `exc_info` because the
+            # first version of this used a non-existent enum member and the broad
+            # except turned that AttributeError into a plausible domain outcome;
+            # a traceback in the log is what tells the two apart next time.
+            self.logger.error("Config export failed for %s: %s", space_id, e,
+                              exc_info=True)
+            return {"status": OperationStatus.QUERY_FAILED.value,
+                    "message": f"Config export failed: {e}"}
+
+    async def diff_space_config(self, space_id: str, document: Dict,
+                                current_user=None):
+        """Report what differs between *document* and the live config (`issues/233`).
+
+        Read-only despite being a POST — the document has to arrive in a body.
+        `differs` is the verdict; `sections` names what would be added, what is
+        extra, and which fields changed; `unknown` lists values the document
+        cannot see because they were redacted when it was exported.
+        """
+        from ..db.sparql_sql.config_diff import diff_space_config
+        try:
+            if not isinstance(document, dict) or "version" not in document:
+                return {"status": OperationStatus.INVALID_REQUEST.value,
+                        "message": "body must be a config document with a "
+                                   "'version' field, as returned by "
+                                   "GET /api/spaces/config"}
+            pool = self._resolve_pool()
+            if not pool:
+                return {"status": OperationStatus.QUERY_FAILED.value,
+                        "message": "Database pool not available"}
+            async with pool.acquire() as conn:
+                report = await diff_space_config(conn, space_id, document)
+            return {"status": OperationStatus.FOUND.value, "diff": report}
+        except Exception as e:
+            self.logger.error("Config diff failed for %s: %s", space_id, e,
+                              exc_info=True)
+            return {"status": OperationStatus.QUERY_FAILED.value,
+                    "message": f"Config diff failed: {e}"}
+
+    async def apply_space_config(self, space_id: str, document: Dict,
+                                 dry_run: bool = False, replace: bool = False,
+                                 current_user=None):
+        """Apply a config document to a space, MERGE semantics (`issues/233`).
+
+        Creates what is missing and updates what differs. Goes through the
+        lifecycle managers, so a vector index arrives with its data table rather
+        than as a registry row pointing at nothing.
+
+        `replace=True` ALSO REMOVES config the document omits and DROPS the
+        physical `_vec_`/`_fts_` tables for removed indexes. That destroys
+        computed embeddings, which re-applying the document cannot restore — so
+        the report lists every removal with the row count it destroyed, and
+        `dry_run=True` reports those counts without writing. Run the dry run.
+
+        A refusal — wrong version, or redacted secrets that cannot be applied — is
+        `INVALID_REQUEST` with the reason, and nothing was written.
+        """
+        from ..db.sparql_sql.config_apply import (
+            ConfigApplyRefused, apply_space_config)
+        try:
+            if not isinstance(document, dict) or "version" not in document:
+                return {"status": OperationStatus.INVALID_REQUEST.value,
+                        "message": "body must be a config document with a "
+                                   "'version' field, as returned by "
+                                   "GET /api/spaces/config"}
+            pool = self._resolve_pool()
+            if not pool:
+                return {"status": OperationStatus.STORE_FAILED.value,
+                        "message": "Database pool not available"}
+            async with pool.acquire() as conn:
+                report = await apply_space_config(conn, space_id, document,
+                                                  dry_run=dry_run,
+                                                  replace=replace)
+            # UPDATED vs NO_OP: applying an already-matching document is a
+            # success that changed nothing, and a caller polling toward a desired
+            # state needs to tell those apart.
+            status = (OperationStatus.UPDATED if report.get("changed")
+                      else OperationStatus.NO_OP)
+            return {"status": status.value, "apply": report}
+        except ConfigApplyRefused as e:
+            # A refusal is a DOMAIN outcome and nothing was written. Not a 500,
+            # and deliberately not silent.
+            self.logger.warning("Config apply refused for %s: %s", space_id, e)
+            return {"status": OperationStatus.INVALID_REQUEST.value,
+                    "message": str(e)}
+        except Exception as e:
+            self.logger.error("Config apply failed for %s: %s", space_id, e,
+                              exc_info=True)
+            return {"status": OperationStatus.STORE_FAILED.value,
+                    "message": f"Config apply failed: {e}"}
+
+    async def get_space_objects(self, space_id: str, current_user=None):
+        """Every catalogue object that names a space (`issues/232` step 1).
+
+        Read-only audit. A rename must cover tables, partition children, indexes,
+        constraints, sequences, trigger functions and triggers — `ALTER TABLE …
+        RENAME TO` covers only the first, and the rest keep working under the old
+        name because the catalogue links by oid.
+
+        `mismatched` is the interesting field: objects attached to this space
+        whose own name does not carry its id, i.e. evidence of a previous rename
+        that renamed only the tables. `shadowed_by` names any space whose id this
+        one is a prefix of, whose objects were therefore excluded.
+        """
+        from ..db.sparql_sql.space_rename_enumerate import enumerate_space_objects
+        try:
+            pool = self._resolve_pool()
+            if not pool:
+                return {"status": OperationStatus.QUERY_FAILED.value,
+                        "message": "Database pool not available"}
+            async with pool.acquire() as conn:
+                result = await enumerate_space_objects(conn, space_id)
+            return {"status": OperationStatus.FOUND.value, "objects": result}
+        except Exception as e:
+            self.logger.error("Object enumeration failed for %s: %s", space_id, e,
+                              exc_info=True)
+            return {"status": OperationStatus.QUERY_FAILED.value,
+                    "message": f"Object enumeration failed: {e}"}
+
     async def get_space_analytics(self, space_id: str, refresh: bool, graph_uri=None, current_user=None):
         """Get analytics for a space. Optionally trigger a fresh computation."""
         try:
@@ -386,6 +557,97 @@ class SpacesEndpoint:
             require_space_read(current_user, space_id)
             return await self.get_space_info(space_id, current_user)
         
+        @self.router.get(
+            "/spaces/config",
+            tags=["Spaces"],
+            summary="Export Space Search Config",
+            description="Export a space's search config (vector/FTS indexes, "
+                        "search and fuzzy mappings, geo and segmentation config) "
+                        "as a reviewable, diffable document. Read-only. Secrets "
+                        "in provider_config are redacted unless "
+                        "include_secrets=true."
+        )
+        async def get_space_config_route(
+            space_id: str = Query(..., description="Space ID"),
+            include_secrets: bool = Query(
+                False, description="Return provider_config secrets in clear. The "
+                                   "response is then a credential — default is "
+                                   "redacted."),
+            current_user: Dict = Depends(self.auth_dependency),
+        ):
+            require_space_read(current_user, space_id)
+            return await self.get_space_config(space_id, include_secrets,
+                                               current_user)
+
+        @self.router.post(
+            "/spaces/config/diff",
+            tags=["Spaces"],
+            summary="Diff A Config Document Against A Space",
+            description="Report what differs between a config document (as "
+                        "returned by GET /api/spaces/config) and a space's live "
+                        "config. READ-ONLY — a POST only because the document "
+                        "travels in the body. Requires read access, not write."
+        )
+        async def diff_space_config_route(
+            document: Dict,
+            space_id: str = Query(..., description="Space ID to compare against"),
+            current_user: Dict = Depends(self.auth_dependency),
+        ):
+            # READ access: this changes nothing. Requiring write would stop the
+            # people most likely to be auditing a config from running it.
+            require_space_read(current_user, space_id)
+            return await self.diff_space_config(space_id, document, current_user)
+
+        @self.router.post(
+            "/spaces/config/apply",
+            tags=["Spaces"],
+            summary="Apply A Config Document To A Space",
+            description="Apply a config document (as returned by "
+                        "GET /api/spaces/config) to a space. MERGE semantics: "
+                        "creates what is missing, updates what differs, never "
+                        "removes what the document omits unless replace=true. "
+                        "Use dry_run=true to see the steps without writing — with "
+                        "replace it also reports the row counts a real run would "
+                        "destroy. Requires WRITE access."
+        )
+        async def apply_space_config_route(
+            document: Dict,
+            space_id: str = Query(..., description="Space ID to apply to"),
+            dry_run: bool = Query(
+                False, description="Report what would change without writing"),
+            replace: bool = Query(
+                False, description="Also REMOVE config the document omits, "
+                                   "dropping the physical _vec_/_fts_ tables of "
+                                   "removed indexes. Destroys embeddings that "
+                                   "re-applying cannot restore — pair with "
+                                   "dry_run first."),
+            current_user: Dict = Depends(self.auth_dependency),
+        ):
+            # WRITE, unlike the diff route beside it. A dry run still requires it:
+            # deciding by the flag would make the permission depend on a query
+            # parameter the caller chooses.
+            require_space_write(current_user, space_id)
+            return await self.apply_space_config(space_id, document, dry_run,
+                                                 replace, current_user)
+
+        @self.router.get(
+            "/spaces/objects",
+            tags=["Spaces"],
+            summary="Enumerate A Space's Catalogue Objects",
+            description="List every catalogue object that names a space — tables, "
+                        "partition children, indexes, constraints, sequences, "
+                        "trigger functions, triggers. Read-only. Reports "
+                        "`mismatched` objects left behind by a previous partial "
+                        "rename, and `shadowed_by` for a space whose id is a "
+                        "prefix of another's."
+        )
+        async def get_space_objects_route(
+            space_id: str = Query(..., description="Space ID"),
+            current_user: Dict = Depends(self.auth_dependency),
+        ):
+            require_space_read(current_user, space_id)
+            return await self.get_space_objects(space_id, current_user)
+
         @self.router.get(
             "/spaces/analytics",
             response_model=SpaceAnalyticsResponse,
