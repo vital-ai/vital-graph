@@ -237,11 +237,55 @@ and returned the request pool at every one; each tier now prefers INTERNAL.
 create/mark_running/mark_completed, and mutual exclusion is by advisory lock, not
 liveness — so contention here delays a status write rather than causing a job to
 be wrongly declared dead. That makes it deferral, which is the design intent
-("INTERNAL skips rather than queues"). It is NOT obviously the right size though:
-`VACUUM` can hold a connection for minutes (`issues/136`: prod VACUUMs are killed
-at the 60s `statement_timeout`), so one long VACUUM plus one long ANALYZE leaves
-one connection for everything else. Wants measuring under a real maintenance
-cycle before the default moves.
+("INTERNAL skips rather than queues").
+
+### MEASURED 2026-09-27: three is not the constraint, and one earlier reason to
+### doubt it was wrong
+
+**The `VACUUM` argument does not apply.** This section previously said three
+might be too few because "VACUUM can hold a connection for minutes". It does not
+hold a POOL connection: `MaintenanceJob` runs ANALYZE and VACUUM on dedicated
+psycopg connections in a background thread whenever `postgresql_config` is set,
+which it is (`vitalgraphapp_impl` passes it). The pool is used only for
+"lightweight async ops" per its own docstring. That is also why killing the
+client during the 2026-09-24 incident did not stop the queued ANALYZEs — the
+same property, noted earlier in this issue.
+
+**Measured under load, local test stack, `VG_SLOW_ACQUIRE_SECONDS=0.05`:**
+
+    40 concurrent writers, 75s        48,675 entities written, 0 failed
+    pool_wait records, ANY class                                    0
+    reads                            p50 32ms  p99 252ms  max 892ms
+
+    pg_stat_activity, 12 samples through a 40-writer run:
+      backends                       35 (constant)
+      ACTIVE queries                 0-8, mostly 1-3
+      running ANALYZE                0, every sample
+      vec/fts queries (auto-sync)    0-2
+
+So under request-driven write load the database sees only ONE TO THREE active
+queries however many HTTP writers are offered — the app is the constraint, not
+either pool — and the internal pool never needed more than two of its three
+connections. **Nothing waited 50ms on either pool.** Three is ample here and the
+default stays.
+
+### What this did NOT test, and why that is structural
+
+**The ANALYZE-on-INTERNAL path never fired**, and could not: `record_changes` and
+`maybe_analyze` exist ONLY in the three `*_bulk` methods
+(`add_rdf_quads_batch_bulk`, `remove_rdf_quads_batch_bulk`,
+`delete_entity_graph_bulk`). The kgentities create path uses the non-bulk
+`add_rdf_quads_batch`, so no volume of ordinary API writes can trigger it —
+36,925 then 48,675 entities produced zero ANALYZEs. Statistics on that path are
+kept current by the periodic `MaintenanceJob` instead, which is the safety net,
+so this is a design consequence rather than a gap.
+
+The untested case is therefore the one the 2026-09-24 incident actually involved:
+a BULK operation crossing the 50,000-change threshold (`DEFAULT_ANALYZE_THRESHOLD`)
+while auto-sync also wants an internal connection. Testing it means running a bulk
+copy or bulk delete at volume, which is not something to do casually — and with
+`issues/238` undeployed, the prod-shaped version of that is what produced the
+stalls in the first place. Sequenced behind deploying 238.
 
 **Step 1 — first pass, 2026-09-24.** A dedicated pool (`internal_pool`, max 3,
 `internal_pool_size`) created, registered and closed alongside the request pool.
