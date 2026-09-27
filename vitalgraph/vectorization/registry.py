@@ -222,6 +222,27 @@ def clear_cache() -> None:
     _instance_by_signature.clear()
 
 
+def invalidate_space(space_id: str) -> int:
+    """Drop cached providers for one space. Returns how many were dropped.
+
+    ADDED FOR `issues/232` step 4. `_provider_cache` is keyed
+    `f"{space_id}:{index_name}"` and the only way to clear it was the global
+    `clear_cache()`, which throws away every OTHER space's providers too — and a
+    local provider costs hundreds of milliseconds to seconds to rebuild, because
+    it constructs a tokenizer and an ONNX InferenceSession. So a rename either
+    stranded entries under the old id or paid a cold start for the whole process.
+
+    `_instance_by_signature` is deliberately NOT touched: it is keyed by
+    (provider, config), not by space, so its entries stay valid across a rename
+    and are exactly the expensive ones to rebuild.
+    """
+    prefix = f"{space_id}:"
+    stale = [k for k in _provider_cache if k.startswith(prefix)]
+    for k in stale:
+        del _provider_cache[k]
+    return len(stale)
+
+
 def _register_builtin_providers() -> None:
     """Register built-in providers. Called at module import time."""
     from vitalgraph.vectorization.vitalsigns_provider import (

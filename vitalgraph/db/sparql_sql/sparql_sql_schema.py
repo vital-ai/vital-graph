@@ -364,7 +364,7 @@ class SparqlSQLSchema:
                 graph_uri VARCHAR(500),
                 graph_name VARCHAR(255),
                 created_time TIMESTAMP,
-                FOREIGN KEY (space_id) REFERENCES space(space_id) ON DELETE CASCADE,
+                FOREIGN KEY (space_id) REFERENCES space(space_id) ON DELETE CASCADE ON UPDATE CASCADE,
                 UNIQUE (space_id, graph_uri)
             )
         '''),
@@ -388,7 +388,19 @@ class SparqlSQLSchema:
         ("user_space_access", '''
             CREATE TABLE IF NOT EXISTS user_space_access (
                 user_id INTEGER NOT NULL REFERENCES "user"(user_id) ON DELETE CASCADE,
-                space_id VARCHAR(255) NOT NULL,
+                -- FK ADDED FOR `issues/232`. This table had NO foreign key on
+                -- space_id, so unlike the eleven tables that do, it would not
+                -- REJECT a rename that forgot it — it would silently keep rows
+                -- pointing at an id nobody uses, which is a silent revocation of
+                -- every user's access to the renamed space. The one failure in
+                -- that issue that is both invisible and security-relevant.
+                --
+                -- ON UPDATE CASCADE so `UPDATE space SET space_id` carries the
+                -- grants along, which is what makes the rename a catalogue
+                -- operation rather than a repoint-everything-by-hand one.
+                space_id VARCHAR(255) NOT NULL
+                    REFERENCES space(space_id)
+                    ON DELETE CASCADE ON UPDATE CASCADE,
                 access_level VARCHAR(2) NOT NULL CHECK (access_level IN ('rw', 'r')),
                 granted_by VARCHAR(255),
                 granted_time TIMESTAMPTZ DEFAULT now(),
@@ -488,7 +500,7 @@ class SparqlSQLSchema:
         '''),
         ("backfill_state", '''
             CREATE TABLE IF NOT EXISTS backfill_state (
-                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
+                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE ON UPDATE CASCADE,
                 graph_uri TEXT NOT NULL,
                 completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 quad_inserts BIGINT,
@@ -526,7 +538,7 @@ class SparqlSQLSchema:
         # only in what they tell an operator.
         ("type_agreement", '''
             CREATE TABLE IF NOT EXISTS type_agreement (
-                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
+                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE ON UPDATE CASCADE,
                 kind VARCHAR(16) NOT NULL,
                 predicate_uri TEXT NOT NULL,
                 agrees BOOLEAN,
@@ -554,7 +566,7 @@ class SparqlSQLSchema:
         # reader never has to know how the two counts were obtained.
         ("slot_sort_coverage", '''
             CREATE TABLE IF NOT EXISTS slot_sort_coverage (
-                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
+                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE ON UPDATE CASCADE,
                 entity_type_uuid UUID NOT NULL,
                 entities_in_table BIGINT NOT NULL,
                 entities_of_type BIGINT NOT NULL,
@@ -582,7 +594,7 @@ class SparqlSQLSchema:
         # that a real unique key rather than one that admits duplicates.
         ("slot_sort_block", '''
             CREATE TABLE IF NOT EXISTS slot_sort_block (
-                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
+                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE ON UPDATE CASCADE,
                 entity_type_uuid UUID,
                 reason TEXT NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -607,7 +619,7 @@ class SparqlSQLSchema:
         # must not un-gate the other.
         ("prop_sort_block", '''
             CREATE TABLE IF NOT EXISTS prop_sort_block (
-                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
+                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE ON UPDATE CASCADE,
                 -- NULLABLE, meaning "the whole space". It was NOT NULL, on the
                 -- theory that a whole-space block could be borrowed from
                 -- `slot_sort_block`. That was wrong in one direction: READING
@@ -630,7 +642,7 @@ class SparqlSQLSchema:
         # `count(DISTINCT entity_uuid)` over the derived table is seconds.
         ("prop_sort_coverage", '''
             CREATE TABLE IF NOT EXISTS prop_sort_coverage (
-                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
+                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE ON UPDATE CASCADE,
                 entity_type_uuid UUID NOT NULL,
                 entities_in_table BIGINT NOT NULL,
                 entities_of_type BIGINT NOT NULL,
@@ -642,7 +654,7 @@ class SparqlSQLSchema:
         ("space_analytics", '''
             CREATE TABLE IF NOT EXISTS space_analytics (
                 id SERIAL PRIMARY KEY,
-                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
+                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE ON UPDATE CASCADE,
                 computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 computation_time_ms INTEGER,
                 analytics_json JSONB NOT NULL
@@ -650,7 +662,7 @@ class SparqlSQLSchema:
         '''),
         ("query_metrics", '''
             CREATE TABLE IF NOT EXISTS query_metrics (
-                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
+                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE ON UPDATE CASCADE,
                 bucket_start TIMESTAMPTZ NOT NULL,
                 bucket_granularity VARCHAR(10) NOT NULL DEFAULT 'minute',
                 endpoint VARCHAR(100) NOT NULL,
@@ -665,7 +677,7 @@ class SparqlSQLSchema:
         ("slow_query_log", '''
             CREATE TABLE IF NOT EXISTS slow_query_log (
                 id BIGSERIAL PRIMARY KEY,
-                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
+                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE ON UPDATE CASCADE,
                 endpoint VARCHAR(100) NOT NULL,
                 duration_ms INTEGER NOT NULL,
                 recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -676,7 +688,7 @@ class SparqlSQLSchema:
             CREATE TABLE IF NOT EXISTS import_export_job (
                 job_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 job_type TEXT NOT NULL CHECK (job_type IN ('import', 'export')),
-                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
+                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE ON UPDATE CASCADE,
                 graph_uri TEXT,
                 status TEXT NOT NULL DEFAULT 'created'
                     CHECK (status IN ('created','pending','running','completed','failed','cancelled')),
