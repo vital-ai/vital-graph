@@ -29,6 +29,7 @@ from .ir import (
     KIND_SLICE, KIND_ORDER, KIND_PROJECT, KIND_EXTEND,
     KIND_DISTINCT, KIND_REDUCED, KIND_FILTER,
 )
+from .declines import Rule
 from .vg_functions import (
     VG_VECTOR_SIMILARITY, VG_VECTOR_NEARBY,
     is_vg_function, is_vg_vector_function, is_vg_text_function,
@@ -66,6 +67,12 @@ def vg_optimize(plan: PlanV2) -> PlanV2:
 #   hints['vg_top_k'] = {'limit': N, 'direction': 'DESC'}
 # ---------------------------------------------------------------------------
 
+# Declared so the refusal is REPORTABLE rather than only logged: "why is this
+# query not using the vector fast path" is asked about one query, by someone holding
+# that query and not the log level it ran under (`declines.py`).
+VECTOR_TOP_K = Rule("vector_top_k", stage="vg_optimize")
+
+
 def _annotate_vector_top_k(plan: PlanV2) -> None:
     """Detect SLICE→ORDER→…→EXTEND(vg:vector*/text*/hybrid*) and annotate."""
     if plan.kind != KIND_SLICE or plan.limit <= 0:
@@ -87,6 +94,38 @@ def _annotate_vector_top_k(plan: PlanV2) -> None:
     if not (is_vg_vector_function(extend_node.extend_expr)
             or is_vg_text_function(extend_node.extend_expr)
             or is_vg_trigram_function(extend_node.extend_expr)):
+        return
+
+    # REFUSE when a restriction sits between the ORDER and the EXTEND.
+    #
+    # `issues/220`. The top-K rewrite emits a driving subquery that takes the K
+    # nearest vectors and INNER JOINs them to the pattern, restricted to the
+    # subjects in the EXTEND's CHILD. Its comment promises those K "are guaranteed
+    # to survive the downstream INNER JOIN" — and that holds only if the child
+    # carries every restriction. A FILTER placed ABOVE the extend is not in the
+    # child, so the K are chosen from a SUPERSET and the join discards them.
+    #
+    # Measured: a document query reported total_count=66 and returned ZERO. The
+    # child yielded 209 subjects (every segment plus the parent copies) instead of
+    # the 66 that survive, and all five top-K rows were segment types the outer
+    # FILTER excludes. Restricted to the 66, the same top-K returned 5 rows.
+    #
+    # The score threshold is the ONE filter that is safe here, because it is pushed
+    # INTO the driving subquery by `_annotate_filter_threshold`. Any other filter
+    # means the rewrite cannot keep its promise, so it declines and the correlated
+    # form serves the query — which scores per row and therefore applies the outer
+    # filters first. Slower for this shape, correct for every shape.
+    blocking = _restriction_between(plan.child, extend_node, score_var)
+    if blocking is not None:
+        VECTOR_TOP_K.decline(
+            "a FILTER above the EXTEND is not in the driving subquery's child, "
+            "so the top-K rows are not guaranteed to survive the join",
+            score_var=score_var, blocking=blocking)
+        logger.info(
+            "vg_optimize: top-K DECLINED for ?%s — %s between ORDER and EXTEND "
+            "is not visible to the driving subquery (issues/220)",
+            score_var, blocking,
+        )
         return
 
     # Annotate the EXTEND node
@@ -144,6 +183,36 @@ def _find_extend_for_var(
     if node.children:
         return _find_extend_for_var(node.children[0], var_name, depth + 1)
 
+    return None
+
+
+def _restriction_between(
+    top: Optional[PlanV2], extend_node: PlanV2, score_var: str,
+    depth: int = 0,
+) -> Optional[str]:
+    """Name of the first restricting node between `top` and `extend_node`, if any.
+
+    `issues/220`. Walks the same chain `_find_extend_for_var` walks and reports a
+    node that removes rows the driving subquery's child would have kept. Only the
+    score threshold is exempt: `_annotate_filter_threshold` pushes that one INTO the
+    subquery, so it is applied on the vector side rather than above the join.
+
+    Returns None when the path is clear, which is the only case where the top-K
+    rewrite can promise that its K rows survive.
+    """
+    node = top
+    while node is not None and depth <= 6:
+        if node is extend_node:
+            return None
+        if node.kind == KIND_FILTER:
+            for expr in (node.filter_exprs or []):
+                # A threshold on the score variable is pushed into the subquery.
+                if _extract_threshold(expr, score_var) is None:
+                    return "FILTER"
+        if not node.children:
+            return None
+        node = node.children[0]
+        depth += 1
     return None
 
 

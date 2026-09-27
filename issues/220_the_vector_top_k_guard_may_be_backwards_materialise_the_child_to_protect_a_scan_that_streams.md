@@ -1,6 +1,12 @@
 # The Vector Top-K Guard Materialises The Expensive Side To Protect A Scan That Streams
 
-## Status: OPEN, and no longer a hypothesis in the part that matters. MEASURED
+## Status: CORRECTNESS FIXED 2026-09-26 — the rewrite declines when it cannot keep
+## its promise, and the failing query returns 5 rows where it returned 0. The
+## PERFORMANCE question this issue was raised for is STILL OPEN and still unmeasured,
+## and over-fetch-and-retry — the better design — is still not built. See the last
+## two sections.
+##
+## Originally: OPEN, and no longer a hypothesis in the part that matters. MEASURED
 ## 2026-09-26 against a live failing case: the guard DOES NOT KEEP ITS PROMISE.
 ## `child_sql` is the EXTEND node's child, so any filter the algebra puts ABOVE the
 ## Extend — a `FILTER NOT EXISTS`, for one — is invisible to it. The top-K is
@@ -159,3 +165,52 @@ neither pgvector, the HNSW index, the threshold nor the data is at fault.
     segments are the ones in scope here — and why they cannot be created by hand,
     since the write protection uses the four-entry list. One list refuses what the
     other serves.
+
+## FIXED 2026-09-26 — the rewrite now DECLINES rather than promising what it cannot keep
+
+`_annotate_vector_top_k` refuses to annotate when a restriction sits between the
+ORDER and the EXTEND, because that is exactly the case the driving subquery's child
+cannot see. The correlated form then serves the query, which scores per row and so
+applies the outer filters first.
+
+**The score threshold is the one exemption**, and it is principled rather than
+convenient: `_annotate_filter_threshold` pushes that filter INTO the driving
+subquery, so it is applied on the vector side rather than above the join. Every
+other filter means the K rows are chosen from a superset.
+
+    vg_optimize: top-K DECLINED for ?vg_score — FILTER between ORDER and EXTEND
+      is not visible to the driving subquery (issues/220)
+
+Declared as a `Rule` so the refusal is REPORTABLE, not just logged — "why is this
+query not using the vector fast path" is asked about one query by someone holding
+that query and not the log level it ran under.
+
+**Verified on the case that found it:** `total_count=66` with 0 results becomes
+**5 results**, and all five are the `paragraph` segment type — the in-scope one —
+checked by looking the returned URIs up in the quad table rather than by trusting
+the count. `tests/api/test_wikipedia_document_e2e.py` +
+`test_kgtypes_entity_integration.py`: **41 passed, 0 failed**, where 7 were failing
+before this and `issues/244`/`245`. tests/unit 4973 passed.
+
+**What the decline costs, on this query:** 29-169 ms server-side over 5 runs (min
+29, med 61, max 169), against the ~15 ms the broken form took to return nothing.
+That is not a like-for-like comparison and is not offered as one — the old number is
+the cost of returning zero rows.
+
+## STILL OPEN after this fix
+
+  * **The original cost question is untouched.** This changes WHEN the rewrite
+    fires, not what it does when it fires. Whether materialising the child costs
+    more than the streaming HNSW scan it protects is still unmeasured, and the A/B
+    in "What would settle it" is still unrun.
+  * **Over-fetch-and-retry is still the better design and is NOT built.** Declining
+    is correct and small; over-fetch would keep the optimisation for filtered
+    queries by verifying survival after the join instead of predicting it. It needs
+    a retry loop in the executor rather than a single statement, which is why it was
+    not done here.
+  * **The regression risk of declining is unquantified.** Any filtered vector query
+    now takes the correlated path. On this 209-vector index that is tens of
+    milliseconds; on a large index with a selective filter it could be much worse,
+    and there is no fixture with a large vector table AND a filtered query to
+    measure it on. That fixture is the missing piece, and it is the same one the
+    cost A/B needs.
