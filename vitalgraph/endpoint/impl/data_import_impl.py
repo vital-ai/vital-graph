@@ -1252,6 +1252,21 @@ class ImportEngine:
         ``graphobjects_to_quad_list`` (fast property-map path, no rdflib)
         and inserted into the term/quad tables.
 
+        NOT TERM-EXACT — THIS PATH WRITES THE ONTOLOGY'S IDEA OF EACH LITERAL
+        (``issues/234``).  A block holds objects, not quads, and a GraphObject
+        does not carry an RDF datatype: the datatype is re-derived from the
+        property on the way out.  So a literal whose stored datatype DISAGREES
+        with its property's is rewritten to the property's — measured on a
+        real export, ``xsd:decimal`` under a ``DoubleProperty`` comes back
+        ``xsd:float`` (and ``"8778.90"`` comes back ``"8778.9"``, because the
+        value passes through a Python float).  Predicates the object's class
+        does not accept are dropped outright, which is ``issues/036``.
+
+        Import an N-Quads file (``import_ntriples_incremental``) instead when
+        the source terms must survive byte for byte — rebuilding a space,
+        anything that will be checksummed against its source, or any literal
+        whose datatype is not the one its property declares.
+
         ``checkpoint_offset`` here counts *blocks processed* (not bytes),
         allowing resume after cancel.
         """

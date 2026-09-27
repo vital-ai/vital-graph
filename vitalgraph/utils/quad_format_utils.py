@@ -28,7 +28,8 @@ from vitalgraph.model.quad_model import Quad, QuadRequest, QuadResponse
 
 logger = logging.getLogger(__name__)
 
-# The default XSD string datatype — literals with this type omit the ^^<datatype> suffix
+# The default XSD string datatype. Written out explicitly like any other, not
+# elided — see `rdflib_term_to_nquads` and `issues/234`.
 XSD_STRING = "http://www.w3.org/2001/XMLSchema#string"
 
 
@@ -51,7 +52,15 @@ def rdflib_term_to_nquads(term: Node) -> str:
         escaped = _escape_nquads_string(str(term))
         if term.language:
             return f'"{escaped}"@{term.language}'
-        elif term.datatype and str(term.datatype) != XSD_STRING:
+        elif term.datatype:
+            # `xsd:string` IS WRITTEN OUT, not elided (`issues/221`, `issues/234`).
+            # RDF 1.1 makes the two forms equivalent, so eliding it looked free —
+            # but `bulk_export._nt_term_sql` and `ExportEngine` both emit it, and
+            # the quad's term uuid hashes the datatype id, so the elided form is a
+            # DIFFERENT term from the one every other producer writes for the
+            # same literal. A literal with NO datatype (an annotation — see
+            # `add_to_list_impl`, which builds those as bare `Literal(str(av))`)
+            # still comes out plain, which is what the store holds for them.
             return f'"{escaped}"^^<{str(term.datatype)}>'
         else:
             return f'"{escaped}"'
@@ -208,51 +217,73 @@ def _graphobjects_to_quad_list_rdflib(
 # Fast outbound path — no rdflib (uses to_property_maps + ontology manager)
 # ---------------------------------------------------------------------------
 
-# Cache: property_uri → bool (is URI property)
-_uri_prop_cache: dict = {}
+#: property_uri → the VitalSigns property class, or None when unresolvable.
+#: A miss is cached as `_UNRESOLVED` rather than left absent, so an unknown
+#: predicate does not re-enter the ontology manager on every value.
+_prop_class_cache: dict = {}
+_UNRESOLVED = object()
 
 
-def _is_uri_property(prop_uri: str) -> Optional[bool]:
-    """Check if a property URI is a URI-typed property via ontology manager."""
-    cached = _uri_prop_cache.get(prop_uri)
-    if cached is not None:
+def _property_class(prop_uri: str):
+    """Resolve a property URI to its VitalSigns property class, or None."""
+    cached = _prop_class_cache.get(prop_uri, _UNRESOLVED)
+    if cached is not _UNRESOLVED:
         return cached
 
     try:
         from vital_ai_vitalsigns.vitalsigns import VitalSigns
-        from vital_ai_vitalsigns.model.properties.URIProperty import URIProperty
         vs = VitalSigns()
         ont_manager = vs.get_ontology_manager()
         prop_info = ont_manager.get_property_info(prop_uri)
         prop_class = prop_info.get("prop_class") if prop_info else None
-        result = prop_class is URIProperty
-        _uri_prop_cache[prop_uri] = result
-        return result
     except Exception:
+        # Not cached: an ontology manager that is not ready yet would otherwise
+        # poison every property URI it was asked about first.
         return None
 
+    _prop_class_cache[prop_uri] = prop_class
+    return prop_class
 
-def _value_to_nquads_outbound(value, is_uri: bool) -> str:
-    """Encode a native Python value to an N-Quads object term string."""
+
+def _value_to_nquads_outbound(value, is_uri: bool, prop_class=None) -> str:
+    """Encode a native Python value to an N-Quads object term string.
+
+    THE DATATYPE COMES FROM THE PROPERTY, NOT FROM THE PYTHON TYPE
+    (`issues/234`). A Python `str` carries no RDF datatype and a Python `float`
+    is neither `xsd:float` nor `xsd:double`, so inferring from the value —
+    which this did — silently rewrote every literal it encoded: `xsd:string`
+    became a plain literal and `xsd:float` became `xsd:double`. Measured at
+    3.9% of quads on a 259,531-quad sample of a production copy. Every rewrite
+    is value-equivalent in RDF 1.1 and NONE of them is the same term: the
+    datatype id is hashed into the term uuid, so the rewritten quad is a
+    different row with a different checksum.
+
+    `get_rdf_datatype` is asked because it is the SAME classmethod
+    `IProperty.to_rdf` uses to write the store (`add_to_list_impl` →
+    `prop_instance.to_rdf()`), so the answer here agrees with what a write
+    through the object API would have produced, by construction rather than by
+    a table maintained in two places. No property subclass overrides it today;
+    resolving the class is what keeps that true if one ever does.
+    """
     if is_uri and isinstance(value, str):
         return f"<{value}>"
+
+    from vital_ai_vitalsigns.model.properties.IProperty import IProperty
+    datatype = str((prop_class or IProperty).get_rdf_datatype(value))
+
+    # Lexical forms follow `IProperty.to_rdf`, with one exception: booleans.
+    # `to_rdf` hands rdflib `str(True)` -> "True" and rdflib normalises it to
+    # "true" on the way into the Literal. Nothing normalises here, so the
+    # canonical form is written directly.
     if isinstance(value, bool):
-        return f'"{str(value).lower()}"^^<{_XSD}boolean>'
-    if isinstance(value, int):
-        return f'"{value}"^^<{_XSD}integer>'
-    if isinstance(value, float):
-        return f'"{value}"^^<{_XSD}double>'
-    if isinstance(value, str):
-        escaped = _escape_nquads_string(value)
-        return f'"{escaped}"'
-    # datetime
-    from datetime import datetime
-    if isinstance(value, datetime):
-        iso = value.isoformat()
-        return f'"{iso}"^^<{_XSD}dateTime>'
-    # fallback
-    escaped = _escape_nquads_string(str(value))
-    return f'"{escaped}"'
+        lexical = str(value).lower()
+    elif isinstance(value, (int, float)):
+        lexical = str(value)
+    else:
+        from datetime import datetime
+        lexical = value.isoformat() if isinstance(value, datetime) else str(value)
+
+    return f'"{_escape_nquads_string(lexical)}"^^<{datatype}>'
 
 
 def _graphobjects_to_quad_list_fast(
@@ -260,6 +291,8 @@ def _graphobjects_to_quad_list_fast(
     graph_uri: Optional[str] = None
 ) -> List[Quad]:
     """Convert GraphObjects → Quads via to_property_maps (no rdflib)."""
+    from vital_ai_vitalsigns.model.properties.URIProperty import URIProperty
+
     maps = GraphObject.to_property_maps(graph_objects)
 
     g_encoded = f"<{graph_uri}>" if graph_uri else None
@@ -276,13 +309,12 @@ def _graphobjects_to_quad_list_fast(
 
         for prop_uri, value in pm['properties'].items():
             p_enc = f"<{prop_uri}>"
-            is_uri = _is_uri_property(prop_uri)
-            if is_uri is None:
-                is_uri = False
+            prop_class = _property_class(prop_uri)
+            is_uri = prop_class is URIProperty
 
             values = value if isinstance(value, list) else [value]
             for v in values:
-                o_enc = _value_to_nquads_outbound(v, is_uri)
+                o_enc = _value_to_nquads_outbound(v, is_uri, prop_class)
                 quads.append(Quad(s=s, p=p_enc, o=o_enc, g=g_encoded))
 
         # Annotation triples (rdfs:label, rdfs:comment, etc.)

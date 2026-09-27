@@ -325,7 +325,16 @@ class Sampler:
             for c in CURRENCY_BUCKETS:
                 if v >= c:
                     self.currency_gte[c] += 1
-            return lit(f"{v:.2f}", "decimal")
+            # xsd:float, and `str(v)` rather than `f"{v:.2f}"` — BOTH of those
+            # are what the template's own currency literals are, and what the
+            # only writer of this predicate produces (`issues/235`).
+            # `hasCurrencySlotValue` is a `DoubleProperty`, which VitalSigns
+            # serialises as xsd:float, so `xsd:decimal` is a term nothing in
+            # the system can write: the fixture was the repo's only source of
+            # one. Selectivity needs a different DISTRIBUTION, which is above,
+            # not a different datatype. A trailing zero goes the same way —
+            # `str(float)` never produces "8778.90".
+            return lit(str(v), "float")
         if slot == "mqlv2":
             is_true = self.rng.random() < self.mql_true_rate
             self.mqlv2_total += 1
@@ -459,12 +468,22 @@ def nurture_triples(entity_uri: str, new_id: str, sampler: Sampler) -> list[str]
     # itself belongs to its own graph but to no frame's.
     frame_objects = [
         frame, c_slot, l_slot,
-        f"{entity_uri}:edge:entity_to_nurtureinfoframe_0",
         f"{frame}:edge:to_slot_nurturecampaign",
         f"{frame}:edge:to_slot_sfleadid",
     ]
     out += _grouping(frame_objects, entity_uri, frame)
-    out += _grouping([entity_uri], entity_uri)
+    # THE ENTITY->FRAME EDGE TAKES THE ENTITY GROUPING ONLY (`issues/235`). It
+    # ATTACHES the frame rather than living inside it, and `Edge_hasEntityKGFrame`
+    # has no `frameGraphURI` property at all — setting it raises AttributeError,
+    # so no write path can produce that quad and an object round trip drops it
+    # silently (`issues/036`). `kg_sparql_utils.py:682` relies on its absence to
+    # keep the entity edge OUT of a frame-graph read; stamping it here made the
+    # fixture answer that query differently from production. The other frames'
+    # entity edges were always correct — they are stamped by the URI-shape pass
+    # below, which only matches subjects containing `:frame:`.
+    out += _grouping(
+        [entity_uri, f"{entity_uri}:edge:entity_to_nurtureinfoframe_0"],
+        entity_uri)
     return out
 
 
@@ -648,6 +667,9 @@ def generate(template_dir: Path, out_dir: Path, n_entities: int, seed: int,
             "MQLRatingPoints": "uniform int [0,100], xsd:integer",
             "MQLv2": f"Bernoulli(p={mql_true_rate}), xsd:boolean",
             "CompanyStateCode": "weighted choice over 49 states, xsd:string",
+            "MonthlyGrossSales/VerifiedRevenue": (
+                "lognormal(mu=10.5, sigma=1.2) rounded to cents, "
+                "hasCurrencySlotValue, xsd:float"),
             "NurtureCampaignURI": (
                 f"mixture fitted to production: {NURTURE_HEAD_SHARE:.1%} one "
                 f"dominant campaign, {NURTURE_SINGLETON_SHARE:.1%} per-entity "
