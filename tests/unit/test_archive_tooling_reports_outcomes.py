@@ -31,6 +31,37 @@ import delete_kg_entities as dke  # noqa: E402
 
 
 # --------------------------------------------------------------------------
+# These tests used to read the DEVELOPER'S `.env`, which is gitignored — so they
+# asserted on a machine-specific, untracked file and could only pass by luck.
+# In CI there is no file at all and all four raised `FileNotFoundError`. They now
+# supply their own, which is also what makes them test the PRECEDENCE RULE rather
+# than whatever the local file happens to contain.
+# --------------------------------------------------------------------------
+
+_ENV_FILE = """\
+LOCAL_CLIENT_SERVER_URL=http://localhost:8001
+LOCAL_CLIENT_AUTH_USERNAME=file-user
+LOCAL_CLIENT_AUTH_PASSWORD=file-pass
+PROD_CLIENT_SERVER_URL=https://prod.example.com
+VG_ARCHIVE_SRC=file_src
+VG_ARCHIVE_DST=file_dst
+VG_ARCHIVE_GRAPH=urn:file:graph
+"""
+
+
+@pytest.fixture(autouse=True)
+def env_file(tmp_path, monkeypatch):
+    """Give `load_env()` a `.env` of our own, at a PROJECT_ROOT we control.
+
+    Autouse because every test in the first section calls `load_env()`, and one
+    reading the real file would reintroduce exactly the machine-dependence this
+    replaces.
+    """
+    (tmp_path / ".env").write_text(_ENV_FILE)
+    monkeypatch.setattr(ake, "PROJECT_ROOT", tmp_path)
+    return tmp_path
+
+# --------------------------------------------------------------------------
 # 1. load_env: the environment must win
 # --------------------------------------------------------------------------
 
@@ -48,7 +79,10 @@ def test_the_file_still_supplies_what_the_shell_does_not():
     """The override is a precedence rule, not a replacement — credentials and
     everything else must keep coming from `.env`."""
     env = ake.load_env()
-    assert env.get("LOCAL_CLIENT_SERVER_URL"), "file value lost when nothing overrides"
+    assert env["LOCAL_CLIENT_SERVER_URL"] == "http://localhost:8001", \
+        "file value lost when nothing overrides it"
+    assert env["LOCAL_CLIENT_AUTH_PASSWORD"] == "file-pass", \
+        "a credential the shell did not supply must still come from the file"
     assert len(env) > 5, "load_env stopped reading the file"
 
 

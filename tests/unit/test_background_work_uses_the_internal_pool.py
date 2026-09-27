@@ -154,10 +154,16 @@ def test_the_scheduled_background_jobs_are_routed():
     scheduler and a process table; the property under test is which pool each
     receives, which is textual.
     """
-    import inspect
-    from vitalgraph.impl import vitalgraphapp_impl
-
-    src = inspect.getsource(vitalgraphapp_impl)
+    # READ the module, do not IMPORT it. Importing `vitalgraphapp_impl` pulls in
+    # `starlette.middleware.sessions`, which needs `itsdangerous` — a `server`
+    # extra that the unit-test environment installs deliberately WITHOUT (see the
+    # note on the `dev` extra in `pyproject.toml`, which names this exact package
+    # as incidental). The property under test is textual, so the text is all this
+    # needs; importing for `inspect.getsource` made a source assertion depend on
+    # the whole server's dependency tree and failed CI.
+    from pathlib import Path as _Path
+    src = (_Path(__file__).resolve().parents[2]
+           / "vitalgraph" / "impl" / "vitalgraphapp_impl.py").read_text()
 
     # The INTERNAL handle must come from the shared helper, which is what makes
     # "disabled on purpose" distinguishable from "missing by accident". A bare

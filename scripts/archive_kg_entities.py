@@ -147,7 +147,13 @@ def load_env() -> dict:
     variables shadow credentials.
     """
     values = {}
-    for line in (PROJECT_ROOT / ".env").read_text().splitlines():
+    # A MISSING `.env` IS NOT AN ERROR. This used to `read_text()` unconditionally,
+    # so the script and its tests raised `FileNotFoundError` anywhere the file does
+    # not exist — CI, a fresh clone, a container. The override set below exists
+    # precisely so the shell can supply what decides WHICH SERVER a run talks to,
+    # and that has to keep working when there is no file to override.
+    env_file = PROJECT_ROOT / ".env"
+    for line in (env_file.read_text().splitlines() if env_file.exists() else []):
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue

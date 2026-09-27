@@ -67,20 +67,32 @@ services:
       - vitalgraph_network
 
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    # See docker-compose.test.yml for why this is `chainguard/minio:latest` and
+    # not a pinned quay.io/minio tag: MinIO withdrew its public images.
+    image: chainguard/minio:latest
     container_name: vitalgraph-minio
+    # Chainguard's image runs as uid 65532. The minio_data volume below predates
+    # this change and is root-owned (the old official image ran as root), so a
+    # nonroot server cannot write to it — MinIO exits with "file access denied"
+    # and any existing dev objects become unreachable. Staying root keeps that
+    # volume readable. The test stack has no volume and so needs no override.
+    user: "0:0"
     ports:
       - "9000:9000"  # MinIO API
       - "9001:9001"  # MinIO Console
     environment:
       - MINIO_ROOT_USER=minioadmin
       - MINIO_ROOT_PASSWORD=minioadmin
+      # Consumed by the healthcheck below, which cannot use curl.
+      - MC_HOST_local=http://minioadmin:minioadmin@localhost:9000
     command: server /data --console-address ":9001"
     volumes:
       - minio_data:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      # The old image shipped curl; this one ships mc and no HTTP client at all,
+      # so a curl healthcheck would mark the container unhealthy forever.
+      test: ["CMD", "mc", "ready", "local"]
       interval: 30s
       timeout: 20s
       retries: 3

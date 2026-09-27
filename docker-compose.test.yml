@@ -302,7 +302,19 @@ services:
       - vitalgraph_test
 
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    # NOT PINNED, and deliberately so. MinIO withdrew its public images: both
+    # `minio/minio` (Docker Hub) and `quay.io/minio/minio` now answer every tag
+    # with "access to the requested resource is not authorized", including the
+    # RELEASE.2025-09-07T16-13-09Z this line used to pin. That broke "Start test
+    # stack" on every E2E run until this change.
+    #
+    # Chainguard builds upstream MinIO and is a drop-in: same `server` command,
+    # same /data, same MINIO_ROOT_* variables. Its free tier publishes only
+    # `latest` — there are no version tags, and old digests are garbage-collected,
+    # so a digest pin would break within days. `bitnamilegacy/minio` IS pinnable
+    # (e.g. 2025.7.23-debian-12-r5) if a floating tag ever causes trouble, but it
+    # runs as uid 1001 and serves from /bitnami/minio/data, so it is not drop-in.
+    image: chainguard/minio:latest
     container_name: vitalgraph-test-minio
     command: server /data --console-address ":9001"
     environment:
