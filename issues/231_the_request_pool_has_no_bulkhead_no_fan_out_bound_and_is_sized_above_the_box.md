@@ -417,10 +417,79 @@ this issue is read selectively.
 Cheap to fix when its turn comes: wrap in try/except, release on failure, add
 `track_connection`. The reason to wait is sequencing, not difficulty.
 
-## TO BE INVESTIGATED AND RESOLVED: what the stalled reads are actually waiting on
+## ANSWERED 2026-09-26: the stalls were IO, not connections — so the pool split
+## does not fix them
 
-**Open. This is the question that decides how much of this issue is worth
-doing, and it is not answered.**
+**Resolved by measurement, and the answer narrows this issue.** The question was
+what the stalled reads were waiting on, because three causes produce the same
+symptom and only one is addressed by anything here.
+
+Measured on the local test stack against `nurture_typed`, whose
+`entity_slot_sort` is 2,995,193 rows against production's 3,027,690 — the same
+12 subject uuids, both inside `BEGIN`/`ROLLBACK`:
+
+    shape                        plan                   buffers    time
+    pre-fix (sub-select arms)    Seq Scan               77,923     3,756.9 ms
+    fixed   (arrays resolved)    3x Bitmap Index Scan        37        10.2 ms
+
+**369x slower, 2,100x more buffers.** 77,546 buffer reads is **606 MB per single
+entity delete**, or ~4 TB across the 6,810-entity production run. That does not
+merely cost IO — it repeatedly evicts `shared_buffers`, so unrelated reads that
+would have hit cache go to disk instead.
+
+That accounts for all three things the `ANALYZE` story could not:
+
+  * **`pool_wait` stayed 0** at a 0.05s threshold. No connection starvation; the
+    pool was never the scarce resource.
+  * **The stalls were intermittent and irregular** (26s, 47s, 10s, 34s, with
+    0.05-0.50s between). Most reads still found their pages; occasionally one
+    needed pages the delete had just evicted.
+  * **More delay did not help.** Sleeping between batches does not reduce 606 MB
+    per delete, it only spreads the eviction out — which is why 0.2s and 3.0s
+    sleeps behaved the same.
+
+**So the cause is `issues/238`, which is FIXED and NOT DEPLOYED.** Deploying it
+is the fix for what was observed on 2026-09-26; nothing in this issue is.
+
+### What that means for sequencing
+
+**Step 1 keeps its full justification** — it prevents the 2026-09-24 mode, where
+six `ANALYZE` held six of thirty connections and readers could not acquire one.
+That is a different, measured failure and the bulkhead makes it impossible.
+
+**Step 3 (QUERY/MUTATION) loses the argument it was partly resting on.** It was
+being sequenced next partly on the belief that connection contention caused the
+recent stalls. It did not. Step 3 still has a case — a reserved floor readers
+cannot lose to writers — but that case is now *unmeasured* here, and the honest
+order is:
+
+    1. DEPLOY issues/238                     (fixed, not deployed, ~369x)
+    2. re-measure the same bulk delete        (does anything stall at all?)
+    3. THEN decide step 3 vs step 4 vs step 5 on what is left
+
+**Prediction on record, so deploying it is a test:** with `issues/238` deployed,
+the 6,810-entity delete that took 89.7 minutes at 0.9 ent/s should complete in
+minutes with no multi-second read stalls. If stalls survive, the cause is
+something neither this issue nor 238 has identified, and THAT is when to spend
+effort on `pg_stat_activity` sampling.
+
+### The `pg_stat_activity` sample, still unused
+
+Kept because it is the right instrument if the prediction above fails:
+
+    SELECT pid, state, wait_event_type, wait_event, now() - query_start AS age,
+           left(query, 120)
+      FROM pg_stat_activity
+     WHERE datname = current_database() AND state <> 'idle'
+     ORDER BY age DESC;
+
+    wait_event_type = 'Lock'        -> the bulkhead is IRRELEVANT
+    wait_event_type = 'IO' / CPU    -> capacity; 238 and a read replica
+    waiting on acquire(), pool full -> the bulkhead fixes it directly
+
+Sampling it needs a watchdog that fires ON a slow read rather than on a timer —
+the stalls had no usable period. The latency probe that found them already
+exists and would only need the sample added to its breach path.
 
 ### The retraction
 
@@ -435,8 +504,10 @@ a plain `SELECT` takes. `ANALYZE` does not block readers. It explains the
 connection, readers unable to acquire one — but it does not explain a single
 read stalling for 47 seconds while connections are available.
 
-So the mechanism behind these stalls is currently UNKNOWN, and part of the case
-for the remaining work here rested on it.
+The retraction stands on its own merits, and the mechanism is now known — see
+the measurement above. Kept because the WRONG explanation is instructive: it was
+plausible, it fit the timing, and it was believed for several hours. What killed
+it was checking the lock modes rather than the narrative.
 
 ### What a pool split can and cannot fix
 
@@ -469,7 +540,7 @@ makes that impossible, and that alone justifies step 1.
     and re-run the same bulk delete: if the stalls disappear, this issue's
     remaining scope shrinks to the outage mode alone.
 
-### The evidence so far points AWAY from connections
+### The evidence that pointed AWAY from connections, before the direct measurement
 
 From the local A/B (`test_scripts/perf/pool_bulkhead_ab.sh`):
 
@@ -483,9 +554,11 @@ will not touch these stalls** — it will still close the outage mode, which is 
 different and real failure, but it should not be sold as the fix for what was
 observed on 2026-09-26.
 
-### The measurement that settles it
+### What settled it (superseded: see the EXPLAIN measurement at the top)
 
-One sample of `pg_stat_activity` taken DURING a stall, not after:
+The plan at the time was to sample `pg_stat_activity` DURING a stall. It was not
+needed — comparing the two delete plans directly was cheaper and more decisive,
+because it measures the WORK rather than catching a symptom in flight:
 
     SELECT pid, state, wait_event_type, wait_event, now() - query_start AS age,
            left(query, 120)
