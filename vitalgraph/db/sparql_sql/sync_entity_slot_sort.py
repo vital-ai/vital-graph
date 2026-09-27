@@ -289,15 +289,42 @@ async def _type_args(space_id: str):
 # keep the OLD value forever. The row COUNT never changes in that failure, so no
 # drift check can see it — exactly the defect `sync_frame_entity_before_delete`
 # documents having shipped.
+#
+# EVERY ARM IS `= ANY(array)` SO THE PLANNER CAN BitmapOr THEM (`issues/238`).
+# The two edge indirections used to be `IN (SELECT dest_node_uuid FROM edge
+# WHERE edge_uuid = ANY($1))`, evaluated inside this DELETE. A BitmapOr can only
+# combine INDEXABLE conditions, and a subquery arm compiles to a hashed SubPlan,
+# which is not one — so a single unindexable arm forced the whole disjunction to
+# a SEQUENTIAL SCAN of the table. Measured on production: 647,255 calls, 59.6
+# hours, and a per-call cost tracking TABLE SIZE (59 ms / 249 ms / 721 ms across
+# 224k / 958k / 3.03M rows) while deleting eleven to thirty-five rows. The
+# planner estimated 718,210 rows — 75% of the table — for a filter matching ~11.
+#
+# Resolving the edge destinations into `$2` first costs one index scan on
+# `idx_{space}_edge_edge` and makes the cost proportional to the uuids passed in
+# rather than to the table. All five reachability arms survive; see above for
+# why each is load-bearing.
 _TOUCHED_FILTER = """
-    (slot_uuid = ANY($1)
-     OR entity_uuid = ANY($1)
-     OR frame_uuid = ANY($1)
-     OR slot_uuid IN (SELECT dest_node_uuid FROM {t_edge}
-                      WHERE edge_uuid = ANY($1))
-     OR frame_uuid IN (SELECT dest_node_uuid FROM {t_edge}
-                       WHERE edge_uuid = ANY($1)))
+    (slot_uuid = ANY($1::uuid[])
+     OR entity_uuid = ANY($1::uuid[])
+     OR frame_uuid = ANY($1::uuid[])
+     OR slot_uuid = ANY($2::uuid[])
+     OR frame_uuid = ANY($2::uuid[]))
 """
+
+
+async def _edge_dest_nodes(conn, space_id: str,
+                           touched_uuids: List[uuid.UUID]) -> List[uuid.UUID]:
+    """Destinations of any edge whose `edge_uuid` is in *touched_uuids*.
+
+    The eager half of `_TOUCHED_FILTER`. Runs in the caller's transaction and
+    immediately before the DELETE, so it reads exactly the edge rows the
+    subquery form would have read.
+    """
+    rows = await conn.fetch(
+        f"SELECT dest_node_uuid FROM {space_id}_edge WHERE edge_uuid = ANY($1::uuid[])",
+        touched_uuids)
+    return [r["dest_node_uuid"] for r in rows]
 
 
 async def sync_entity_slot_sort_before_delete(
@@ -308,14 +335,15 @@ async def sync_entity_slot_sort_before_delete(
     if not subject_uuids:
         return 0
     t = f"{space_id}_entity_slot_sort"
-    where = _TOUCHED_FILTER.format(t_edge=f"{space_id}_edge")
+    edge_dests = await _edge_dest_nodes(conn, space_id, subject_uuids)
     if context_uuid:
         result = await conn.execute(
-            f"DELETE FROM {t} WHERE {where} AND context_uuid = $2",
-            subject_uuids, context_uuid)
+            f"DELETE FROM {t} WHERE {_TOUCHED_FILTER} AND context_uuid = $3",
+            subject_uuids, edge_dests, context_uuid)
     else:
         result = await conn.execute(
-            f"DELETE FROM {t} WHERE {where}", subject_uuids)
+            f"DELETE FROM {t} WHERE {_TOUCHED_FILTER}",
+            subject_uuids, edge_dests)
     deleted = int(result.split()[-1]) if result else 0
     if deleted:
         logger.debug("entity_slot_sort before_delete(%s): %d rows",
