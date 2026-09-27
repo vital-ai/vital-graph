@@ -1,64 +1,19 @@
 # 241 — Fuseki is retired, but the env template still selects it and the factory still builds it
 
-## Status: STEPS 0-8 DONE 2026-09-26. **`vitalgraph/` does not name a retired
-## backend anywhere — zero, no allow-list**, and a guard test fails if one
-## reappears (falsified). **102 files archived** to `archive/archive_vitalgraph_old/`
-## with history preserved; `BackendType` is `SPARQL_SQL` + `OXIGRAPH`.
-## tests/unit 4880 passed, 0 failures.
+## Status: DONE — steps 0-8 all complete and verified against the code
+## 2026-09-26. **`vitalgraph/` names a retired backend in ZERO places**, with no
+## allow-list, gated by `tests/unit/test_retired_backends_are_gone.py` (falsified).
+## `BackendType` is exactly `['sparql_sql', 'oxigraph']`. 102 files moved into
+## `archive/archive_vitalgraph_old/` with history preserved.
 ##
-## THE `RETIRED_BACKENDS` MAP IS GONE TOO, and this file argued for it twice
-## before that was settled. First it proposed keeping dead ENUM MEMBERS to carry a
-## "that was retired" message; then, when the rule "remove backends that do not
-## exist" killed that, it moved the same idea into a string map in
-## `impl/vitalgraph_impl.py` and called that the right home for the diagnostic.
-## Both versions kept the code knowing about something that had been removed,
-## which is the state this issue existed to end. A stale `.env` now gets
+## WHAT IS LEFT is outside the main package and is listed under "Remaining" at the
+## end — 4 Keycloak client IDs that are EXTERNAL identifiers, one historical doc,
+## one non-runnable benchmark in the dev staging area, and two provenance notes.
+## Nothing that can misconfigure or mislead a caller.
 ##
-##     Unsupported backend type: 'fuseki_postgresql'. Supported: sparql_sql, oxigraph.
-##
-## — the bad value and the valid set, which is what a reader needs. The "better
-## diagnostic" the map was defended with was never worth the memory it required.
-##
-## SWEEP EXTENDED TO `test_scripts/` 2026-09-26. 23 more archived (and one moved
-## back OUT); the two
-## `fuseki` mentions left there are deliberate provenance notes. Two things found
-## by doing it, both consequences of the earlier commit that nothing would have
-## reported:
-##
-##   * **`case_frame_operations_reset.py` asserted `fuseki_success is True`.** With
-##     the field removed, `getattr(..., None)` returns None, `None is not True`,
-##     so it recorded FUSEKI_SYNC_FAILURE and appended an error on EVERY update,
-##     delete and recreate. Removing a field did not make a reader inert — it made
-##     it fail closed on every operation. These are `test_scripts/`, so no pytest
-##     run would have said so.
-##   * **Ten live test cases imported `kgentity_test_data` out of the archived
-##     Fuseki test directory.** It has ZERO Fuseki content — it builds entities,
-##     frames and slots — and was simply parked there. Moved to
-##     `test_script_kg_impl/` and the ten imports repointed. Same shape as
-##     `postgresql_signal_manager.py` in step 1: shared code living in one
-##     backend's package, discovered only when the package moved. Twice in one
-##     issue is the pattern worth naming.
-##
-## Also repaired: `dump_postgresql_quads.py` read the `fuseki_postgresql` CONFIG
-## SECTION, which step 3 deleted; `test_falsey_values_trace.py` lost its step 9
-## (a direct query to the retired store) and keeps steps 1-8 and 10.
-##
-## STILL PRESENT, deliberately:
-##   * `test_scripts/jena_sidecar/data_profile.md` — historical Fuseki-vs-SQL
-##     literal comparison, headed as such. Its datatype findings are what
-##     `issues/221`/`234` turned out to be about, and the Jena SIDECAR is live and
-##     unrelated.
-##   * `vitalgraph_sparql_sql_dev/scripts/benchmark_fuseki_vs_sql.py` — cannot run,
-##     LEFT IN PLACE: that package is a deliberate staging area for experiments and
-##     is not swept.
-##   * `vitalhome/.../vitalsigns_config.yaml.template` — `database_type: "fuseki"`
-##     in an example service block. That is VitalSigns' config vocabulary, not this
-##     project's backend registry, so it is not ours to change.
-##
-## One behaviour question RAISED, not decided: a failed batch delete in
-## `kgentity_frame_delete_impl` used to report `success=True` with a false
-## second-store flag. The signal now goes in `message`; folding it into `success`
-## is a behaviour change and wants a decision.
+## Two defects were introduced by this work and fixed: the adapter dispatch refused
+## an already-built adapter (`issues/243`), and `case_frame_operations_reset.py`
+## asserted a field that no longer exists so it failed on every operation.
 
 **Related:** `issues/240` (found this — a Fuseki test script was cited as evidence
 about live callers, which is the failure mode this material creates),
@@ -364,132 +319,38 @@ claims to hold. Deleting it removes the thing those comments point at; archiving
 it keeps the claim checkable. If the reference is to stay useful, the comments
 should be repointed at the archive path in the same change.
 
-## Order of work
+## Order of work — ALL DONE 2026-09-26, each verified against the code
 
-0. ~~**Stop the adapter factory defaulting to Fuseki**~~ **DONE 2026-09-26** —
-   `create_backend_adapter` defaults to `SparqlSQLBackendAdapter`, so archiving
-   can no longer turn a silent mis-adaptation into a `NameError` on the fallback
-   path. Numbered 0 because it was not in the original plan and is independent of
-   everything below.
-1. **Move `postgresql_signal_manager.py` out** of `fuseki_postgresql/` to a
-   neutral home and repoint all three factory arms. Nothing else can proceed
-   safely before this.
-2. **Fix `.env.example:55`** — the one item that can misconfigure someone today,
-   and independent of the move.
-3. **Delete the `FUSEKI` / `FUSEKI_POSTGRESQL` arms** from both factories, and
-   **delete the `POSTGRESQL` arm and enum member with them** — its package is
-   already gone, so it is the same defect one retirement earlier ("The enum",
-   decided 2026-09-26: remove backends that do not exist). This replaces the
-   earlier plan of ADDING a refusal in the `POSTGRESQL` style.
-   Then put the diagnostic where it survives the members: the `else` in
-   `impl/vitalgraph_impl.py:94`, naming the retired strings explicitly — and fix
-   that message, which currently recommends `'fuseki_postgresql'`, plus the
-   `'postgresql'` default at `:30`. After this nothing can construct a retired
-   backend and the move cannot break a running one.
-4. **Remove or gate** the two `fuseki_admin` call sites; delete
-   `tests/unit/test_space_graph_filter.py`.
-5. **Strip the Fuseki semantics out of `kg_impl/`** — the "wider than the 81
-   files" items below, which a `git mv` will NOT touch because `kg_impl/` is not
-   among the 81. Delete `FusekiPostgreSQLBackendAdapter`
-   (`kg_backend_utils.py:210`) and its dispatch arm, drop the `fuseki_success`
-   field and the `FUSEKI_SYNC_FAILURE` log from the four write paths (33 lines),
-   and remove the Fuseki cell from
-   `tests/unit/test_backend_adapter_dispatch.py`. **Ordered after 3, and the
-   reason is not what it first looks like:** deleting the arm while the backend can
-   still be CONSTRUCTED does not leave it unadapted — the `else` hands it
-   `SparqlSQLBackendAdapter`, silently. That is step 0's defect in mirror image,
-   reappearing for the one backend whose name still matches. Verified by
-   simulating it. Once 3 refuses construction the arm is unreachable, and from
-   then on the order stops mattering — so this is a constraint on the WINDOW, not
-   a permanent dependency, and the window is real only because `.env.example`
-   selects Fuseki until 2 and an already-copied `.env` is not fixed by 2 either.
-   **While that function is open, replace the class-NAME substring dispatch** with
-   something explicit — it is the mechanism that made the bad default reachable,
-   and with one arm left "substring of a class name" has no remaining excuse.
-   Independent of the archive, so it can slip without blocking 6.
-6. **`git mv` the 81 files** into `archive/archive_vitalgraph_old/`, and repoint
-   the parity comments in `sparql_sql_space_impl.py`, `sparql_sql_db_impl.py`,
-   `sparql_sql_db_objects.py` and `sparql_sql_schema.py` at the new path.
-7. **Drop both Fuseki exemptions** from
-   `tests/unit/test_connection_settings_are_required.py` — last, because they can
-   only become no-ops once the code is gone, and dropping them earlier makes the
-   guard fail on `vitalgraph_impl.py`.
-8. **Sweep the residue and GATE it.** Steps 1-7 do NOT reach zero — see the
-   accounting below. Clear the 19 files that no other step touches, then add a
-   guard asserting `fuseki` appears nowhere under `vitalgraph/` except a short,
-   justified allow-list. Without the guard "nothing Fuseki in the main packages"
-   is a claim that decays on the first merge; with it, it is an invariant.
+Verified by inspection at the end, not from memory — the status line claimed these
+were done for a while before this list said so.
 
-Steps 2 and 3 are the ones that stop the bleeding; 1 is the one that makes 6
-possible; 6 is the goal; 8 is what makes the goal CHECKABLE. 5 is the step that is
-easiest to forget, because nothing in `kg_impl/` imports the Fuseki packages — so
-no import error, no failing test and no `git mv` will remind anyone it is
-outstanding.
-
-## Does the plan reach "nothing Fuseki outside the archive"? NOT AS WRITTEN
-
-Asked directly, and worth answering with a count rather than a yes. After step 6
-moves the two packages, **31 files and 201 `fuseki` lines remain under
-`vitalgraph/`**. They fall into three groups, and only the first two are
-intentional:
-
-**Deliberate, and should stay:**
-
-  * `db/sparql_sql/` — 17 lines across `sparql_sql_space_impl.py` (9),
-    `sparql_sql_db_objects.py` (3), `sparql_sql_db_impl.py` (3),
-    `sparql_sql_schema.py` (2). Step 6 repoints these AT the archive path; they
-    describe the archived behaviour by contrast ("unlike fuseki_postgresql, which
-    relies on Fuseki for query execution") and rewriting them loses the contrast.
-  * `db/backend_config.py` — **nothing, as it turns out.** This row originally
-    reserved the step-3 refusal as deliberate residue. The decision to REMOVE
-    backends that do not exist (see "The enum") deletes the arms and the members
-    instead of adding a refusal, and moves the diagnostic to
-    `impl/vitalgraph_impl.py`'s `else` — which names retired backends in a STRING,
-    not as enum members. So `backend_config.py` should reach zero `fuseki` lines,
-    and the only deliberate residue left in the whole tree is the
-    `db/sparql_sql/` contrast comments above.
-
-**Partially covered — the step handles the CODE but not the prose:**
-
-  * `kg_impl/` — step 5 removes the adapter and the 33 `fuseki_success` lines, but
-    `kg_backend_utils.py:5`/`:189`, `kgentity_delete_impl.py:28`/`:145`,
-    `kgslot_delete_impl.py:26`, `kgentity_update_impl.py:6`/`:38`,
-    `kgslot_update_impl.py`, `kgtypes_update_impl.py` and
-    `kg_graph_retrieval_utils.py` describe dual-write-to-Fuseki in docstrings that
-    survive it.
-  * `impl/vitalgraphapp_impl.py` (10) and `admin_cmd/vitalgraphdb_admin_cmd.py`
-    (9) — step 4 takes the `fuseki_admin` call sites; the dataset auto-register
-    block and the `get_fuseki_postgresql_config()` call are not in any step.
-
-**No step touches these at all — 19 files, 79 lines:**
-
-    config/config_loader.py                 27   FUSEKI_URL/DATASET/USERNAME/...,
-                                                 get_fuseki_config(),
-                                                 get_fuseki_postgresql_config()
-    impl/vitalgraph_impl.py                 20   builds the Fuseki backend config
-    ops/database_op.py, graph_import_op.py   5
-    endpoint/kgentities, kgdocuments, kgframes 6
-    space/space_manager.py, space_impl.py    4
-    db/db_inf.py, db_admin_inf.py,
-      space_backend_interface.py             4   interface docstrings offering
-                                                 Fuseki as a live example
-    kg_impl/ docstrings (7 files)            9
-    entity_registry/entity_registry_impl.py  2
-
-`config_loader.py` is the one that matters beyond tidiness: it still READS
-`FUSEKI_*` environment variables and exposes `get_fuseki_config()`, so the
-configuration surface keeps offering a backend that refuses to construct. That is
-the same class of thing as `.env.example:55` — a live surface for a dead option.
-
-**So the answer is no, and step 8 exists to make it yes.** The guard is the part
-that matters: `issues/214` reached "zero occurrences in tracked files" for the
-client name and it held because a rule enforced it, not because a sweep was
-thorough. The analogue here is a test over `vitalgraph/` with an allow-list
-holding only the `db/sparql_sql/` contrast comments and whatever step 3's refusal
-needs. Note the irony to avoid: step 7 DELETES Fuseki exemptions from one guard,
-and step 8 adds a new guard that needs its own — keep it short and make every
-entry state why, or it becomes the thing `issues/188` describes, a rule that
-passes by exempting what it cannot check.
+0. ~~Stop the adapter factory defaulting to Fuseki.~~ `create_backend_adapter`
+   returns `SparqlSQLBackendAdapter` and is IDEMPOTENT — an already-built adapter
+   passes through. It briefly refused one instead, which broke frame-graph
+   retrieval; see `issues/243`.
+1. ~~Move `postgresql_signal_manager.py` out of the retired package.~~ Now
+   `vitalgraph/db/postgresql_signal_manager.py`. This was the blocker: the LIVE
+   backend's signal manager was inside the package being archived.
+2. ~~Fix `.env.example`.~~ `LOCAL_BACKEND_TYPE=sparql_sql`, 18 `FUSEKI_*` variables
+   dropped, `LOCAL_SIDECAR_URL` added because the Jena sidecar is what this backend
+   actually needs.
+3. ~~Delete the factory arms and the enum members.~~ `BackendType` is exactly
+   `['sparql_sql', 'oxigraph']`. `POSTGRESQL` went too — its package had already
+   been deleted, so the style this issue planned to COPY was itself the defect.
+4. ~~Remove the `fuseki_admin` call sites; delete the retired unit test.~~ Zero
+   references under `vitalgraph/`; `tests/unit/test_space_graph_filter.py` gone.
+5. ~~Strip the Fuseki semantics out of `kg_impl/`.~~ `FusekiPostgreSQLBackendAdapter`
+   and every `fuseki_success` are gone, and the dispatch is `isinstance` rather than
+   a substring of a class name.
+6. ~~`git mv` into the archive.~~ No `vitalgraph/db/fuseki*` remains;
+   `archive/archive_vitalgraph_old/` holds 153 tracked files, 102 of them moved by
+   this work.
+7. ~~Drop both Fuseki exemptions from `test_connection_settings_are_required.py`.~~
+   `EXCLUDE` and `SKIP_LINE` no longer name it; the one mention left is the comment
+   recording why they went. The guard now covers every line it sees.
+8. ~~Sweep the residue and gate it.~~
+   `tests/unit/test_retired_backends_are_gone.py`, NO allow-list, verified by
+   falsification. `vitalgraph/` is at zero.
 
 ## Wider than the 81 files: `kg_impl/` carries Fuseki SEMANTICS, not just imports
 
@@ -615,3 +476,43 @@ they are about the ARCHIVED behaviour rather than this backend's:
 `sparql_sql_schema.py:11`/`:1623` ("unlike fuseki_postgresql, which relies on
 Fuseki for query execution"). Those should be repointed at the archive path in
 step 6 rather than rewritten.
+
+## Remaining — the whole tracked tree, 2026-09-26
+
+Every tracked occurrence outside `archive/` and `issues/`, counted rather than
+estimated. `vitalgraph/` is absent from this list, which is the point.
+
+    .env.example                                     5   Keycloak CLIENT IDs
+    tests/unit/test_retired_backends_are_gone.py      6   the gate itself
+    tests/unit/test_connection_settings_are_required  3   why the exemptions went
+    test_scripts/jena_sidecar/data_profile.md        11   historical comparison
+    test_scripts/test_script_kg_impl/kgentity_test_data.py  2  provenance note
+    vitalgraph_sparql_sql_dev/scripts/benchmark_fuseki_vs_sql.py  54
+    vitalgraph_sparql_sql_dev/data/load_wordnet_frames.py  1   historical note
+    .gitignore                                       1   archived TDB path
+    deploy/deploy_docs/ECS_DEPLOYMENT_GUIDE.md        1   the env-var table
+    vitalhome/.../vitalsigns_config.yaml.template     1   VitalSigns vocabulary
+    tests/unit/test_frame_delete_reports_failure.py   1   issues/242 history
+
+None of these can misconfigure anything or tell a caller a backend exists:
+
+  * **The 4 Keycloak client IDs** (`fuseki-client`, `fuseki-graphdb`) name clients
+    registered in a Keycloak realm. Changing them breaks auth rather than tidying
+    it — they are external identifiers that happen to contain the word.
+  * **The two test files and the two provenance notes** exist to say why something
+    was removed. Deleting them would delete the reason.
+  * **`data_profile.md`** is a historical Fuseki-vs-SQL literal comparison, headed as
+    such. Its datatype findings are what `issues/221`/`234` turned out to be about,
+    and the Jena SIDECAR it sits beside is live and unrelated.
+  * **`benchmark_fuseki_vs_sql.py`** cannot run. LEFT IN PLACE: that package is a
+    deliberate staging area for experiments and is not swept.
+  * **`vitalsigns_config.yaml.template`** — `database_type: "fuseki"` in an example
+    service block. That is VitalSigns' config vocabulary, not this project's
+    backend registry, so it is not ours to change.
+  * **The deploy guide and `.gitignore`** are one line each and cosmetic; the
+    gitignore pattern now points at the archived path so an old checkout stays
+    clean.
+
+The gate is scoped to `vitalgraph/` ONLY, deliberately: a guard that fails on
+pre-existing hits elsewhere gets disabled rather than fixed (`issues/188`). Widening
+it would mean deciding each of the above, and each has a reason to stay.
