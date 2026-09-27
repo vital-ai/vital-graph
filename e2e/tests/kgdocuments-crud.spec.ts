@@ -1,5 +1,6 @@
 import { test, expect, request } from '@playwright/test';
 import { ADMIN_USER, ADMIN_PASS, SPACE_ID, GRAPH_ID, SEEDED_DOCUMENT } from '../seed-constants';
+import { termValue } from '../nquads';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -790,8 +791,11 @@ test.describe('KG Documents — upload conversion', () => {
 
     // The original HTML must survive byte-for-byte. It previously lost its
     // outer angle brackets because the quad literal was not N-Quads encoded.
+    // Decode the term rather than stripping quotes: the encoder now writes
+    // `^^<xsd:string>` on every literal, so a quote-only strip left the
+    // datatype attached to the value (see e2e/nquads.ts).
     const html = await propertyOf(body.document_uri, 'hasKGDocumentHTMLContent');
-    expect(html.replace(/^"|"$/g, '')).toBe(HTML_SOURCE);
+    expect(termValue(html)).toBe(HTML_SOURCE);
 
     await expect(page.getByTestId('upload-notice')).toContainText('converted', { timeout: 10_000 });
   });

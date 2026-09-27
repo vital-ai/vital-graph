@@ -1,5 +1,6 @@
 import { test, expect, request } from '@playwright/test';
 import { ADMIN_USER, ADMIN_PASS } from '../seed-constants';
+import { termValue } from '../nquads';
 
 /**
  * Tier 7 — KG Types CRUD Write Operations
@@ -37,7 +38,9 @@ async function cleanupCrudType() {
   for (const q of quads) {
     const s = String(q.s || '').replace(/^<|>$/g, '');
     const p = String(q.p || '').replace(/^<|>$/g, '');
-    const o = String(q.o || '').replace(/^<|>$/g, '').replace(/^"|"$/g, '');
+    // Not a quote strip: a literal now carries `^^<xsd:string>`, which would
+    // make this comparison match nothing and skip the cleanup in silence.
+    const o = termValue(q.o);
     if (p === HAS_NAME && o === CRUD_TYPE_NAME) {
       urisToDelete.add(s);
     }

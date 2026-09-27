@@ -19,6 +19,7 @@ import {
   ENTITIES,
   EXPECTED_ENTITY_COUNT,
 } from './seed-constants';
+import { termValue } from './nquads';
 
 const BASE_URL = process.env.VG_TEST_URL || 'http://localhost:8002';
 const MAX_WAIT_MS = 60_000;
@@ -86,7 +87,7 @@ async function verifySeededFixture(token: string): Promise<void> {
   for (const quad of data.results ?? []) {
     const s = String(quad.s ?? '').replace(/^<|>$/g, '');
     if (String(quad.p ?? '').includes('hasName')) {
-      byUri.set(s, String(quad.o ?? '').replace(/^"|"$/g, ''));
+      byUri.set(s, termValue(quad.o));
     }
   }
 
