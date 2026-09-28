@@ -66,16 +66,42 @@ class AdminEndpoint:
                     "Resync is only available for the sparql_sql backend",
                 )
 
-            pool = getattr(db_impl, 'connection_pool', None)
+            # INTERNAL pool (`issues/231`). A full resync TRUNCATEs and rebuilds
+            # every auxiliary table and then ANALYZEs them — minutes on a large
+            # space. Holding a REQUEST connection for that is the bulkhead's
+            # whole point, and this site was missed by the step-1 sweep because
+            # it is a synchronous request handler rather than one of the
+            # `create_task` spawn sites that sweep audited.
+            #
+            # Nothing waits on this interactively: the caller gets counts when it
+            # finishes, and it is a repair, not a read.
+            from vitalgraph.db.pool import internal_pool_for
+            pool = internal_pool_for(db_impl)
             if not pool:
                 raise HTTPException(status_code=500, detail="No connection pool available")
 
             try:
                 from vitalgraph.db.sparql_sql.resync_all import resync_all_auxiliary_tables
 
+                # RAISE THE FENCES, or this dies exactly where the automatic
+                # repairs die. `statement_timeout` is 60s on production — sized
+                # for user queries — and the rebuild is a multi-minute walk plus
+                # INSERT. Measured on production 2026-09-28: the
+                # lighter paths on one large space were being killed repeatedly
+                # (`refresh_type_agreement` x3, `edge_integrity` drift probe x2),
+                # so the space could not self-heal at all and its
+                # `entity_slot_sort` sat at 0 of 3,238,789 slots.
+                #
+                # `maintenance_timeouts` raises BOTH fences and restores them.
+                # Both matter: `issues/149` raised only `statement_timeout` and
+                # the backfill then lost 43 lock races at the read path's 10s
+                # `lock_timeout`.
+                from vitalgraph.process.maintenance_job import maintenance_timeouts
+
                 t0 = _time.monotonic()
                 async with pool.acquire() as conn:
-                    result = await resync_all_auxiliary_tables(conn, space_id)
+                    async with maintenance_timeouts(conn):
+                        result = await resync_all_auxiliary_tables(conn, space_id)
                 elapsed_ms = (_time.monotonic() - t0) * 1000
 
                 self.logger.info(
