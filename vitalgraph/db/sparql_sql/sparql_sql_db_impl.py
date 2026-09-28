@@ -151,6 +151,11 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
             from vitalgraph.db.pool import (
                 create_pool, register_pool, PoolClass, DEFAULT_ACQUIRE_TIMEOUT,
             )
+            # The INTERNAL pool's client-side fence must match the maintenance
+            # budget, not the read path's. See its `command_timeout` below.
+            from vitalgraph.process.maintenance_job import (
+                MAINTENANCE_STATEMENT_TIMEOUT_MS,
+            )
 
             min_size = self.config.get('min_pool_size', 10)
             max_size = self.config.get('max_pool_size', 30)
@@ -263,7 +268,29 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
                     min_size=1,
                     max_size=internal_max,
                     max_inactive_connection_lifetime=120.0,
-                    command_timeout=self.config.get('command_timeout', 60),
+                    # MAINTENANCE BUDGET, not the request path's 60s.
+                    #
+                    # `command_timeout` is asyncpg's CLIENT-SIDE limit and is a
+                    # SEPARATE fence from the server's `statement_timeout`.
+                    # `maintenance_timeouts()` raises the server one; it cannot
+                    # touch this. So a repair that correctly cleared the server
+                    # fence was still killed here at 60s, raising
+                    # `asyncio.TimeoutError` — whose `str()` is EMPTY, which is
+                    # why it surfaced as `Resync failed: ` with no reason.
+                    #
+                    # Measured on production 2026-09-28: a full resync of a
+                    # 3.2M-slot space died four times at ~60-70s each (the client
+                    # retried), having raised the server fence to 15 minutes.
+                    # `issues/231` listed this interaction as unestablished —
+                    # "two 60s limits on the same statement, from different
+                    # layers". It is established now.
+                    #
+                    # This pool exists only for deferrable background work, so
+                    # the maintenance budget belongs at BOTH layers here. The
+                    # REQUEST pool keeps 60s.
+                    command_timeout=self.config.get(
+                        'internal_command_timeout',
+                        MAINTENANCE_STATEMENT_TIMEOUT_MS / 1000.0),
                     acquire_timeout=acquire_timeout,
                     init=_init_conn,
                 )
