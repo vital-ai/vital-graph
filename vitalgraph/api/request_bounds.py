@@ -274,6 +274,11 @@ class RequestBoundsMiddleware:
         forwarded: asyncio.Queue = asyncio.Queue()
         disconnected = asyncio.Event()
         responding = asyncio.Event()
+        # Set when the LAST body chunk has gone out. `responding` marks the
+        # start of a response; nothing marked its end, so a client closing
+        # because it was finished looked identical to one walking away
+        # mid-query (`issues/247`).
+        response_done = asyncio.Event()
         replayed = False
 
         async def wrapped_receive():
@@ -295,6 +300,9 @@ class RequestBoundsMiddleware:
             if message["type"] == "http.response.start":
                 responding.set()
             await send(message)
+            if (message["type"] == "http.response.body"
+                    and not message.get("more_body", False)):
+                response_done.set()
 
         handler = asyncio.ensure_future(
             self.app(scope, wrapped_receive, wrapped_send))
@@ -332,6 +340,22 @@ class RequestBoundsMiddleware:
                 return
 
             hung_up = gone in done
+
+            # A CLOSE AFTER THE WHOLE RESPONSE WENT OUT IS NOT AN ABANDONMENT.
+            # The client read its answer and hung up, which is what a client
+            # is supposed to do; the handler is merely winding down and `gone`
+            # won the race. Cancelling achieves nothing (the bytes are sent),
+            # and logging it buries every GENUINE abandonment under one entry
+            # per served request — ~91,800 a day (`issues/247`).
+            #
+            # Deliberately NOT a log-level change: DEBUG would hide the real
+            # ones too.
+            if hung_up and response_done.is_set():
+                try:
+                    await handler
+                except Exception:
+                    pass      # already delivered; its tail is not ours
+                return
             reason = "client disconnected" if hung_up else "deadline exceeded"
 
             # Cancel AND AWAIT. Returning while the query is still winding down

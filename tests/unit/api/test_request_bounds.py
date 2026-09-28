@@ -575,3 +575,168 @@ class TestDeadline:
             _request_deadline_s, _DEFAULT_REQUEST_DEADLINE_S)
         monkeypatch.setenv("VITALGRAPH_REQUEST_DEADLINE_S", "two minutes")
         assert _request_deadline_s() == _DEFAULT_REQUEST_DEADLINE_S
+
+
+class TestASuccessfulRequestIsNotCalledADisconnect:
+    """`issues/247`. A client closing after it has its answer is not abandonment.
+
+    Measured on production 2026-09-28: ~91,800 INFO lines a day saying
+    "client disconnected", of which the top entries were a 70ms lookup (14,842)
+    and the ALB health check (2,804). One controlled request — 200 OK, correct
+    body — produced the line too.
+
+    The middleware tracked when a response STARTED and never when it FINISHED,
+    so `gone` winning the race against a handler that had already sent
+    everything read as a hang-up. The label was not false; it was useless, and
+    it buried the genuine abandonments this log exists to surface.
+    """
+
+    def test_a_normal_request_logs_no_disconnect(self, monkeypatch, caplog):
+        import logging
+        monkeypatch.setenv("VITALGRAPH_REQUEST_DEADLINE_S", "20")
+        app = FastAPI()
+        app.add_middleware(RequestBoundsMiddleware)
+
+        @app.get("/quick")
+        async def quick():
+            return {"ok": True}
+
+        with caplog.at_level(logging.INFO):
+            with TestClient(app) as c:
+                r = c.get("/quick")
+        assert r.status_code == 200 and r.json() == {"ok": True}
+        assert "client disconnected" not in caplog.text, (
+            "a successful request is still being reported as abandoned")
+        assert "request bounded" not in caplog.text
+
+    def test_a_health_check_logs_no_disconnect(self, monkeypatch, caplog):
+        """The endpoint that made the defect obvious: 2,804 'abandoned' health
+        checks in six hours is not a plausible reading of an ALB probe."""
+        import logging
+        monkeypatch.setenv("VITALGRAPH_REQUEST_DEADLINE_S", "20")
+        app = FastAPI()
+        app.add_middleware(RequestBoundsMiddleware)
+
+        @app.get("/health")
+        async def health():
+            return {"status": "ok"}
+
+        with caplog.at_level(logging.INFO):
+            with TestClient(app) as c:
+                for _ in range(5):
+                    assert c.get("/health").status_code == 200
+        assert "client disconnected" not in caplog.text
+
+    def test_a_REAL_abandonment_is_still_reported(self, monkeypatch, caplog):
+        """The fix must not silence the case the log exists for.
+
+        A read whose deadline expires before any byte is sent is still bounded
+        and still logged — `issues/044` cancels it deliberately, to stop burning
+        a pool slot and a database backend for a response nobody will read.
+        """
+        import logging
+        monkeypatch.setenv("VITALGRAPH_REQUEST_DEADLINE_S", "0.2")
+        app = FastAPI()
+        app.add_middleware(RequestBoundsMiddleware)
+
+        @app.get("/slow")
+        async def slow():
+            await asyncio.sleep(5)
+            return {"ok": True}
+
+        with caplog.at_level(logging.INFO):
+            with TestClient(app) as c:
+                r = c.get("/slow")
+        assert r.status_code == 504
+        assert "request bounded" in caplog.text, (
+            "the fix silenced a genuine bounded request")
+        assert "deadline exceeded" in caplog.text
+
+
+class TestDisconnectAfterAResponseIsNotAnAbandonment:
+    """`issues/247`, driven at the ASGI layer — TestClient CANNOT reach this.
+
+    The three tests above go through `TestClient`, which never sends
+    `http.disconnect`, so they never enter the `hung_up` branch at all: they
+    passed with the fix REVERTED. That is exactly the shape of vacuous test this
+    repository keeps finding, so these drive the middleware directly with a
+    hand-rolled receive/send and a disconnect delivered at the moment production
+    delivers one — after the whole response has gone out, while the handler
+    coroutine is still winding down.
+    """
+
+    @staticmethod
+    def _scope(path="/quick"):
+        return {"type": "http", "method": "GET", "path": path,
+                "headers": [], "query_string": b""}
+
+    @pytest.mark.asyncio
+    async def test_a_close_after_the_full_response_is_not_logged(self, caplog):
+        import logging
+        from vitalgraph.api.request_bounds import RequestBoundsMiddleware
+
+        responded = asyncio.Event()
+
+        async def app(scope, receive, send):
+            await send({"type": "http.response.start", "status": 200,
+                        "headers": [(b"content-type", b"application/json")]})
+            await send({"type": "http.response.body", "body": b'{"ok":true}',
+                        "more_body": False})
+            responded.set()
+            await asyncio.sleep(0.3)        # handler winds down AFTER responding
+
+        async def receive():
+            if not receive.sent_request:
+                receive.sent_request = True
+                return {"type": "http.request", "body": b"", "more_body": False}
+            await responded.wait()          # client closes once it has the body
+            return {"type": "http.disconnect"}
+        receive.sent_request = False
+
+        sent = []
+
+        async def send(m):
+            sent.append(m)
+
+        with caplog.at_level(logging.INFO):
+            await RequestBoundsMiddleware(app)(self._scope(), receive, send)
+
+        assert any(m["type"] == "http.response.body" for m in sent), \
+            "the response never went out"
+        assert "client disconnected" not in caplog.text, (
+            "a client that closed AFTER receiving its whole response was "
+            "reported as an abandonment — this is the defect")
+
+    @pytest.mark.asyncio
+    async def test_a_close_BEFORE_the_response_is_still_logged(self, caplog):
+        """The genuine case must survive the fix: a client that walks away
+        mid-query is abandonment, and cancelling it is the point of
+        `issues/044`."""
+        import logging
+        from vitalgraph.api.request_bounds import RequestBoundsMiddleware
+
+        started = asyncio.Event()
+
+        async def app(scope, receive, send):
+            started.set()
+            await asyncio.sleep(5)          # still querying; nothing sent yet
+            await send({"type": "http.response.start", "status": 200,
+                        "headers": []})
+
+        async def receive():
+            if not receive.sent_request:
+                receive.sent_request = True
+                return {"type": "http.request", "body": b"", "more_body": False}
+            await started.wait()
+            await asyncio.sleep(0.05)
+            return {"type": "http.disconnect"}
+        receive.sent_request = False
+
+        async def send(m):
+            pass
+
+        with caplog.at_level(logging.INFO):
+            await RequestBoundsMiddleware(app)(self._scope(), receive, send)
+
+        assert "client disconnected" in caplog.text, (
+            "the fix silenced a REAL abandonment")
