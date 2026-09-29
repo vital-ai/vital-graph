@@ -341,47 +341,28 @@ def group_objects_by_frame_graph(
     return groups
 
 
-def group_objects_by_entity(objects: List[GraphObject]) -> Dict[str, List[GraphObject]]:
-    """
-    Group objects by their entity URI for multi-entity-graph responses.
-    
-    Args:
-        objects: List of all GraphObjects
-        
-    Returns:
-        Dictionary mapping entity URIs to their objects
-    """
-    from vital_ai_vitalsigns.model.VITAL_Node import VITAL_Node
-    
-    entity_groups = {}
-    
-    for obj in objects:
-        if hasattr(obj, 'URI'):
-            entity_uri = obj.URI
-            if entity_uri not in entity_groups:
-                entity_groups[entity_uri] = []
-            entity_groups[entity_uri].append(obj)
-    
-    return entity_groups
+def group_objects_by_entity_graph(
+        objects: List[GraphObject]) -> Dict[str, List[GraphObject]]:
+    """Split a merged object list into one list per entity graph.
 
+    `issues/240`. The entity counterpart of `group_objects_by_frame_graph`, but
+    it does NOT need the requested URIs: every object in an entity graph carries
+    `kGGraphURI` naming the graph it belongs to, so the grouping key is on the
+    data. Frames have no such uniform back-pointer, which is why that side has to
+    reconstruct the linkage from edges.
 
-def group_objects_by_frame(objects: List[GraphObject]) -> Dict[str, List[GraphObject]]:
+    An object with no `kGGraphURI` is DROPPED rather than collected under a
+    `None` key — it belongs to no entity graph, and a `None` group would be
+    rendered as if it were one.
+
+    This is the rule `kgentities_endpoint` open-coded identically in both
+    `include_entity_graph` branches; it is here so the two cannot drift.
     """
-    Group objects by their frame URI for multi-frame-graph responses.
-    
-    Args:
-        objects: List of all GraphObjects
-        
-    Returns:
-        Dictionary mapping frame URIs to their objects
-    """
-    frame_groups = {}
-    
+    groups: Dict[str, List[GraphObject]] = {}
+
     for obj in objects:
-        if hasattr(obj, 'URI'):
-            frame_uri = obj.URI
-            if frame_uri not in frame_groups:
-                frame_groups[frame_uri] = []
-            frame_groups[frame_uri].append(obj)
-    
-    return frame_groups
+        graph_uri = str(obj.kGGraphURI) if getattr(obj, 'kGGraphURI', None) else None
+        if graph_uri:
+            groups.setdefault(graph_uri, []).append(obj)
+
+    return groups

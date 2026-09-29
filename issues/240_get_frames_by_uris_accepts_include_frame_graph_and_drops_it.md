@@ -2,6 +2,7 @@
 
 ## Status: FIXED 2026-09-29 — implemented AND batched. The `uris=` form returns
 ## frame graphs in ONE query, and that query is reusable by `issues/210`/`226`.
+## Two dead, wrong grouping helpers found in the same module were removed with it.
 
 ## What was done, in three steps and two corrections
 
@@ -46,6 +47,73 @@ removing one arm fails it with that message.
 carries the control pair — flag FALSE must cause no graph query at all, since a
 function that always fetched them would pass the positive assertion while
 ignoring the flag just as completely. 85 frame integration tests pass unchanged.
+
+## Two dead helpers found alongside it, both wrong the same way — REMOVED
+
+Splitting the merged response turned up `group_objects_by_frame` and
+`group_objects_by_entity` in `vitalgraph/client/response/response_builder.py`.
+Both did this:
+
+    for obj in objects:
+        if hasattr(obj, 'URI'):
+            groups.setdefault(obj.URI, []).append(obj)
+
+**That is not grouping by frame or by entity.** Keying on the object's OWN URI
+produces one group per object — N groups of one, for any input. A caller asking
+for "the objects of frame X" would have got back the single object whose URI is
+X, silently, and `group_objects_by_entity` also carried an unused `VITAL_Node`
+import.
+
+**Neither has ever had a caller.** `git log -S` puts both in `d5d3d636`
+(2026-01-26, "sync") as part of one 288-line insertion into the module; nothing
+in the tree has ever called them, and they are exported from no `__init__.py`.
+They were added dead and stayed dead, which is exactly why being wrong cost
+nothing and why nothing surfaced it. Had either been wired up during this issue
+— and `group_objects_by_frame` is one autocomplete away from the
+`group_objects_by_frame_graph` written for it — it would have produced N
+single-object graphs and looked plausible doing it.
+
+### The fix, and it differs per helper because their replacements differ
+
+**`group_objects_by_frame` — deleted.** `group_objects_by_frame_graph` is the
+correct implementation of that name's intent, and frames need the four UNION
+linkages above, not an attribute lookup. Keeping a broken near-homonym beside it
+is a trap.
+
+**`group_objects_by_entity` — replaced by `group_objects_by_entity_graph`**,
+which is NOT newly invented: it is the rule `kgentities_endpoint` had already
+open-coded, correctly, in both of its `include_entity_graph` branches (formerly
+`:203-208` and `:505-510`, verbatim identical):
+
+    graph_uri = str(obj.kGGraphURI) if obj.kGGraphURI else None
+    if graph_uri:
+        groups.setdefault(graph_uri, []).append(obj)
+
+So the entity side never had this bug in live code — it had the right rule twice
+and a wrong helper nobody called. Both call sites now go through the helper, so
+the duplicate cannot drift.
+
+**Entities do not need the requested URIs; frames do.** Every object in an
+entity graph carries `kGGraphURI` naming its graph, so the key is on the data.
+Frames have no such uniform back-pointer, which is the whole reason the frame
+side must reconstruct linkage from edges. The two helpers are asymmetric because
+the data is.
+
+**An object with no `kGGraphURI` is dropped, not collected under `None`** — a
+`None` key becomes `build_entity_graph(None, objs)`, a graph that does not exist
+sitting in the response list beside real ones. And the value is `str()`-ed:
+`kGGraphURI` is a property object, so grouping on the raw value would key by
+identity and split one graph into many. Both are pinned.
+
+This follows `issues/241`'s precedent — dead enum members for a retired backend
+were removed rather than repaired — for the same reason: code with no caller has
+no behaviour to preserve, so "fix it" and "delete it" differ only in what the
+next reader has to trust.
+
+**Tests:** `tests/unit/test_client_partitions_entity_graphs.py`, 6 cases. Two
+are textual — both branches route through the helper, and neither old name may
+return — because the rest needs a live server and the property is "there is one
+copy of this rule".
 
 ## Still open
 

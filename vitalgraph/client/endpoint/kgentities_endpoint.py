@@ -43,7 +43,8 @@ from ..response.response_builder import (
     extract_pagination_metadata,
     build_entity_graph,
     build_frame_graph,
-    count_object_types
+    count_object_types,
+    group_objects_by_entity_graph
 )
 
 logger = logging.getLogger(__name__)
@@ -200,11 +201,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
             pagination = extract_pagination_from_json_quads(response_data)
             
             if include_entity_graph:
-                entity_graphs_dict = {}
-                for obj in objects:
-                    graph_uri = str(obj.kGGraphURI) if hasattr(obj, 'kGGraphURI') and obj.kGGraphURI else None
-                    if graph_uri:
-                        entity_graphs_dict.setdefault(graph_uri, []).append(obj)
+                entity_graphs_dict = group_objects_by_entity_graph(objects)
                 entity_graphs = [build_entity_graph(eu, objs) for eu, objs in entity_graphs_dict.items()]
                 return build_success_response(
                     MultiEntityGraphResponse,
@@ -502,11 +499,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
             pagination = extract_pagination_from_json_quads(response_data)
             
             if include_entity_graph:
-                entity_graphs_dict = {}
-                for obj in objects:
-                    graph_uri = str(obj.kGGraphURI) if hasattr(obj, 'kGGraphURI') and obj.kGGraphURI else None
-                    if graph_uri:
-                        entity_graphs_dict.setdefault(graph_uri, []).append(obj)
+                entity_graphs_dict = group_objects_by_entity_graph(objects)
                 entity_graphs = [build_entity_graph(eu, objs) for eu, objs in entity_graphs_dict.items()]
                 return build_success_response(
                     MultiEntityGraphResponse,
