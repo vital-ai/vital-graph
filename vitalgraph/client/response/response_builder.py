@@ -252,6 +252,95 @@ def build_frame_graph(frame_uri: str, objects: List[GraphObject]) -> FrameGraph:
     return FrameGraph(frame_uri=frame_uri, objects=objects)
 
 
+def group_objects_by_frame_graph(
+        frame_uris: List[str],
+        objects: List[GraphObject]) -> Dict[str, List[GraphObject]]:
+    """Split a MERGED object list into one list per frame.
+
+    `issues/240`. The `uris=` endpoint answers N frames in ONE query and returns
+    a single flat, de-duplicated object list, so per-frame attribution has to be
+    recovered here. `build_frame_graph(uri, objects)` handed EVERY frame the
+    WHOLE list — which was invisible while the server returned no graph objects
+    at all (each frame got the frames and no slots), and becomes every frame
+    claiming every other frame's slots the moment the server starts working.
+
+    `FrameGraph.objects` is documented as "GraphObjects in THIS frame graph", so
+    the whole list is a contract violation, not a rounding error.
+
+    THE FOUR LINKAGES MIRROR THE SERVER QUERY, and must stay in step with it:
+
+        the frame itself
+        attribute    an object naming the frame in `hasFrameGraphURI`
+        connection   an edge whose source IS the frame
+        connection   the destination of such an edge (the slot)
+
+    Duplicating them here is the cost of a flat response. The alternative is for
+    the endpoint to return the grouping it already computes — which is the
+    better end state and a response-shape change, so it is not done here.
+
+    An object may belong to SEVERAL frames (a shared slot); it appears in each,
+    matching what a per-frame fetch would have returned.
+    """
+    wanted = list(dict.fromkeys(frame_uris))
+    groups: Dict[str, List[GraphObject]] = {u: [] for u in wanted}
+    by_uri = {}
+    for o in objects:
+        u = str(getattr(o, 'URI', '') or '')
+        if u:
+            by_uri[u] = o
+
+    # Pass 1 — the frame itself, and anything naming it.
+    edges_by_frame: Dict[str, List[str]] = {u: [] for u in wanted}
+    for o in objects:
+        o_uri = str(getattr(o, 'URI', '') or '')
+        if o_uri in groups:
+            groups[o_uri].append(o)
+
+        for prop in ('hasFrameGraphURI', 'frameGraphURI'):
+            if hasattr(o, prop):
+                fg = str(getattr(o, prop) or '')
+                if fg in groups and o_uri != fg:
+                    groups[fg].append(o)
+                break
+
+        # An edge out of a frame belongs to it, and so does what it points at.
+        src = dst = None
+        for prop in ('hasEdgeSource', 'edgeSource', 'source'):
+            if hasattr(o, prop):
+                src = str(getattr(o, prop) or '')
+                break
+        for prop in ('hasEdgeDestination', 'edgeDestination', 'destination'):
+            if hasattr(o, prop):
+                dst = str(getattr(o, prop) or '')
+                break
+        if src and src in groups:
+            if o_uri != src:
+                groups[src].append(o)
+            if dst:
+                edges_by_frame[src].append(dst)
+
+    # Pass 2 — the slots those edges point at, now that every edge is known.
+    for frame_uri, dests in edges_by_frame.items():
+        for d in dests:
+            obj = by_uri.get(d)
+            if obj is not None:
+                groups[frame_uri].append(obj)
+
+    # De-dupe per frame, preserving order: a slot reachable by two linkages is
+    # one object, not two.
+    for frame_uri, objs in groups.items():
+        seen = set()
+        deduped = []
+        for o in objs:
+            u = str(getattr(o, 'URI', '') or id(o))
+            if u not in seen:
+                seen.add(u)
+                deduped.append(o)
+        groups[frame_uri] = deduped
+
+    return groups
+
+
 def group_objects_by_entity(objects: List[GraphObject]) -> Dict[str, List[GraphObject]]:
     """
     Group objects by their entity URI for multi-entity-graph responses.

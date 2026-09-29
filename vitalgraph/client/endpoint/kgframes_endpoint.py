@@ -38,6 +38,7 @@ from ..response.response_builder import (
     build_frame_graph,
     count_object_types,
     extract_pagination_metadata,
+    group_objects_by_frame_graph,
 )
 from ...model.kgframes_model import (
     FrameQueryRequest, FrameQueryResponse,
@@ -289,7 +290,15 @@ class KGFramesEndpoint(BaseEndpoint):
             pagination = extract_pagination_from_json_quads(response_data)
             
             if include_frame_graph:
-                frame_graphs = [build_frame_graph(uri, objects) for uri in uris]
+                # PARTITION, don't hand every frame the whole list. The endpoint
+                # answers N frames in one query and returns a single merged,
+                # de-duplicated object list (`issues/240`), so attribution is
+                # recovered here. The previous form gave each FrameGraph every
+                # object — harmless only while the server returned no graph
+                # objects at all, and wrong the moment it did.
+                grouped = group_objects_by_frame_graph(uris, objects)
+                frame_graphs = [build_frame_graph(uri, grouped.get(uri, []))
+                                for uri in uris]
                 return build_success_response(
                     MultiFrameGraphResponse,
                     frame_graph_list=frame_graphs,
