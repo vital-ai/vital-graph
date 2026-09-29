@@ -1,9 +1,26 @@
 # 240 — `_get_frames_by_uris` accepts `include_frame_graph` and drops it
 
-## Status: OPEN — found 2026-09-25 by reading the code `issues/210` recommends
-## building on. The flag is in the signature and NOWHERE in the body, so the
-## multi-URI lookup returns frames without their graphs, HTTP 200, no message.
-## The single-URI lookup on the same endpoint DOES implement it.
+## Status: FIXED 2026-09-29 by OPTION 3 — the `uris=` form now says the flag is
+## not implemented, in the response body, only when the caller asked. The
+## capability itself is still unbuilt and belongs with `issues/210`/`issues/226`.
+
+## What was done
+
+Option 3 of the three below, and for the reason stated there: the right
+implementation is ONE batched query over the page — the shape
+`_fetch_entity_graphs` already uses — and `issues/210`/`issues/226` need that
+same query. A per-URI repair here would inherit 25 round trips and ship a second
+thing to undo. A parameter that silently does nothing is worse than one that
+says so, so it now says so.
+
+Also corrected: the `/kgqueries` message from `issues/210` told callers to use
+"/kgframes, where the flag is implemented on the URI lookups". Only the
+SINGLE-uri form implements it, so that sent them from one silent no-op to
+another. It now names `?uri=` and states that `?uris=` does not implement it.
+
+**Tests:** `tests/unit/test_frames_by_uris_does_not_drop_the_flag.py`, 4 cases,
+including the control cell — a request that did NOT ask gets no message. That
+pair is what `issues/210` used and what would have caught this originally.
 
 **Related:** `issues/210` (`include_frame_graph` on `/kgqueries` — which states
 this surface is clean, and is wrong for the `uris=` form), `issues/209` (the same

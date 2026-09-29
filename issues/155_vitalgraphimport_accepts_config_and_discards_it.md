@@ -1,7 +1,35 @@
 # `vitalgraphimport --config` Is Accepted And Discarded
 
-## Status: OPEN. Found 2026-09-04 using the CLI to load a fixture into the
-## docker test stack.
+## Status: FIXED 2026-09-29 — `--config` now REFUSES with exit 2 and names the
+## environment variables to use. NOT implemented as a config path, and the
+## preferred option below is withdrawn for a reason the issue could not have
+## known.
+
+## Why option 1 was not taken
+
+The fix preferred below — "give `VitalGraphConfig` an optional config path" —
+would reverse a deliberate decision. Configuration has been ENVIRONMENT-ONLY
+since **2026-02-03** (`5e62cf03`): `VitalGraphConfig.__init__` builds from
+`_load_from_env()` and sets `config_path = None`, and the YAML loading was
+removed in the same commit. That is seven months BEFORE this issue was written,
+so satisfying the flag means re-adding file loading that was taken out on
+purpose — a larger change than the flag justifies, and one that reintroduces two
+sources of truth.
+
+So the flag refuses instead, loudly, naming the profile variables from this
+issue's own workaround section. The help text no longer promises a file.
+
+One detail worth keeping: the first version of the refusal used `return 2` in
+`main()`, which ends in `sys.exit(exit_code)` — so it exited **0** and the
+refusal was as silent as the bug it replaced. `sys.exit(2)` now, with a test
+asserting the code.
+
+**Tests:** `tests/unit/test_import_cmd_config_flag.py`, 5 cases, including the
+general form this issue asked for — every argument the parser accepts must be
+read or refused. It found a false positive on `--format` first (explicit
+`dest="file_format"`), which is why the check honours `dest=` rather than
+deriving it from the flag name.
+
 
 ## What happens
 

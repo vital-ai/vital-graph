@@ -1710,11 +1710,17 @@ class KGQueriesEndpoint:
             # found an unconditional crash instead.
             _msg = ""
             if getattr(query_request, "include_frame_graph", False):
+                # "the URI lookups" was too broad and is corrected here
+                # (`issues/240`): only the SINGLE-uri form honours the flag. The
+                # `uris=` form accepted and dropped it, so this message was
+                # sending callers from one silent no-op to another.
                 _msg = ("include_frame_graph is accepted but NOT implemented on "
                         "/kgqueries: frame_graph is null on every result. Use "
-                        "/kgframes, where the flag is implemented on the URI "
-                        "lookups, or slot_projection/property_projection to name "
-                        "the columns you need. See issues/210.")
+                        "/kgframes?uri= for a single frame, where the flag IS "
+                        "implemented, or slot_projection/property_projection to "
+                        "name the columns you need. The /kgframes?uris= form "
+                        "does not implement it either. See issues/210, "
+                        "issues/240.")
                 self.logger.warning(
                     "frame_query: include_frame_graph=True requested on %s and "
                     "is not implemented; returning frame_graph=None with a "

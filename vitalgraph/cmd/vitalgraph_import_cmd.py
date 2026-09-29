@@ -267,9 +267,25 @@ Examples:
         "--replace-mode", default="append",
         choices=["append", "replace"],
         help="For incremental mode: append or replace existing data (default: append)")
+    # `issues/155`. This USED to promise a config file and silently ignore it:
+    # `args.config` was never referenced and `VitalGraphConfig()` takes no path.
+    # The failure that produces is WRITING TO THE WRONG DATABASE without
+    # saying so — it only failed loudly in the reported case because the space
+    # happened not to exist in the other target. Fixture names are reused across
+    # the host cluster and the docker stack, so the normal case is a silent
+    # success against the wrong one.
+    #
+    # NOT implemented rather than made to work: configuration has been
+    # environment-only since 2026-02-03 (`VitalGraphConfig.__init__` builds from
+    # `_load_from_env()` and sets `config_path = None`), which is seven months
+    # BEFORE that issue proposed adding a path back. Re-adding YAML loading to
+    # satisfy one flag would reverse that decision; the flag now refuses and
+    # says what to use instead.
     parser.add_argument(
         "--config", "-c", default=None,
-        help="Path to vitalgraphdb-config.yaml (default: env / standard locations)")
+        help="NOT SUPPORTED — configuration is environment-driven. "
+             "Set VITALGRAPH_ENVIRONMENT and the <PROFILE>_DB_* variables "
+             "(see --help output below). Passing this flag is an error.")
     parser.add_argument(
         "--dry-run", action="store_true",
         help="Validate parameters only, do not write data")
@@ -279,6 +295,25 @@ Examples:
 
 def main():
     args = parse_args()
+
+    # Refuse loudly. Accepting it and continuing is how this wrote to the wrong
+    # database (`issues/155`); an error a caller can read beats a silent
+    # retarget they cannot.
+    if args.config is not None:
+        print(
+            "❌ --config/-c is NOT supported: configuration is environment-driven,\n"
+            "   and this flag was silently ignored (issues/155). Point the CLI at a\n"
+            "   target with the profile variables instead, for example:\n"
+            "\n"
+            "     LOCAL_DB_HOST=localhost LOCAL_DB_PORT=5433 \\\n"
+            "     LOCAL_DB_NAME=sparql_sql_graph \\\n"
+            "     LOCAL_DB_USERNAME=postgres LOCAL_DB_PASSWORD=testpass \\\n"
+            "       vitalgraphimport -s <space> -f <file>\n",
+            file=sys.stderr)
+        # sys.exit, NOT return: `main()` is the console-script entry point and
+        # ends in `sys.exit(exit_code)`, so returning here would exit 0 and make
+        # the refusal as silent as the bug it replaces.
+        sys.exit(2)
     exit_code = asyncio.run(_run(args))
     sys.exit(exit_code)
 

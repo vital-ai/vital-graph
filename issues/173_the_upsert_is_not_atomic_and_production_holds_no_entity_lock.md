@@ -1,6 +1,36 @@
 # 173 — The upsert is not atomic, and production holds no entity lock
 
-## Status: OPEN
+## Status: FIXED — landed 2026-09-07 in `vitalgraph/db/sparql_sql/entity_lock.py`
+## and `kg_backend_utils.upsert_objects_atomic`. THIS HEADER SAID "OPEN" UNTIL
+## 2026-09-28, which is how it came top of a priority review of the issue set
+## while being the one thing already done.
+
+## Verified fixed 2026-09-28, against the code and against production
+
+    entity_lock.py exists, `entity_lock_key(uri)` + `lock_entities`   yes
+    pg_advisory_xact_lock taken inside the write transaction          yes
+    upsert_objects_atomic — "Replace one or more entity graphs in
+      ONE locked transaction"                                        yes
+    the 8 `getattr(..., 'entity_lock_manager', None)` ceremonies      GONE
+      (0 occurrences in kgentities_endpoint / kgdocuments_endpoint)
+    is_create no longer restamps a supplied creation time             yes
+      (`preserve_supplied` in kg_server_properties.py)
+    tests/unit/test_entity_lock.py — key stability, sorted-order
+      acquisition, duplicate collapse, empty no-op                    9 cases
+
+    production, both live spaces, duplicate single-valued predicates:
+      hasObjectModificationDateTime   0
+      hasObjectCreationTime           0
+
+**What is NOT covered**, and belongs to `issues/174` rather than here: the
+concurrency test this issue asked for — "two concurrent upserts of the same
+entity URI, asserting exactly one of each timestamp afterwards, which must fail
+against today's code". `test_entity_lock.py` tests the LOCK (key derivation,
+ordering, collapse); nothing fires two real upserts at one URI. The lock is
+correct in isolation and the end-to-end race is unproven by test.
+
+## Original report below.
+
 
 **Found:** 2026-09-07, while repairing the data damage it caused
 **Related:** `scripts/repair_duplicate_single_valued.py` (repairs the
