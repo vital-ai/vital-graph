@@ -1355,15 +1355,13 @@ class KGFramesEndpoint:
         single-URI sibling `_get_frame_by_uri` implemented it all along, which is
         what made this a drop rather than an unbuilt feature.
 
-        PER-URI, NOT BATCHED, and that is a known cost rather than an oversight.
-        One `_get_frame_graph` per frame under the existing `bounded_gather`, so
-        a 25-URI request makes 25 graph queries where the entity side does one
-        (`_fetch_entity_graphs`, batched over a `VALUES` clause). The batched
-        form is the right end state and `issues/210`/`issues/226` need the same
-        query — but a caller asking for frame graphs and silently receiving none
-        is the worse failure, so this is correct-and-slow until that lands.
-        Measured shape, from `issues/226`: a 25-frame page is ~2,567 quads /
-        11,924 buffers / 53.6-341.8 ms as ONE query.
+        BATCHED: one SELECT for every frame, via
+        `frame_graph_processor.get_frame_graphs`, which binds `?frame` from a
+        VALUES clause instead of interpolating a literal. A 25-URI request makes
+        ONE graph query, matching the shape the entity side already uses
+        (`_fetch_entity_graphs`). The first fix here was per-URI — correct but 25
+        round trips — and `issues/210`/`issues/226` need this same query, so it
+        is written once, in the processor, and they can call it too.
 
         The frame appears in BOTH its lookup result and its own graph, so
         `_dedupe_by_uri` is not optional — without it every quad of every frame
@@ -1382,24 +1380,6 @@ class KGFramesEndpoint:
                     self.logger.warning(f"Failed to retrieve frame {frame_uri}: {e}")
                     return None
             
-            async def _fetch_graph(frame_uri):
-                """The frame's graph, mirroring the single-URI path at `:1113`."""
-                try:
-                    fg = await self._get_frame_graph(
-                        space_id=space_id, graph_id=graph_id,
-                        frame_uri=frame_uri, current_user=current_user)
-                except Exception as e:
-                    # ERROR, not warning: the caller ASKED for graphs, and
-                    # dropping one silently is the defect this function had.
-                    self.logger.error(
-                        "Failed to retrieve frame graph for %s: %s", frame_uri, e)
-                    return None
-                if fg and getattr(fg, 'graph_objects', None):
-                    return fg.graph_objects
-                if fg and getattr(fg, 'graph', None):
-                    return fg.graph          # legacy shape, as the sibling handles
-                return None
-
             # BOUNDED (`issues/231`): `frame_uris` is caller-supplied.
             results = await bounded_gather(
                 [partial(_fetch_frame, uri) for uri in frame_uris])
@@ -1410,9 +1390,22 @@ class KGFramesEndpoint:
                     all_objects.extend(result.objects)
 
             if include_frame_graph and frame_uris:
-                graphs = await bounded_gather(
-                    [partial(_fetch_graph, uri) for uri in frame_uris])
-                for objs in graphs:
+                # ONE query for every frame, not one per frame. See the
+                # docstring: this is the `_fetch_entity_graphs` shape the entity
+                # side already uses.
+                try:
+                    graphs = await self.frame_graph_processor.get_frame_graphs(
+                        backend_adapter=backend_adapter,
+                        space_id=space_id, graph_id=graph_id,
+                        frame_uris=list(frame_uris))
+                except Exception as e:
+                    # ERROR, not warning: the caller ASKED for graphs, and
+                    # dropping them silently is the defect this function had.
+                    self.logger.error(
+                        "Frame graphs failed for %d uri(s) in %s: %s",
+                        len(frame_uris), space_id, e)
+                    graphs = {}
+                for objs in graphs.values():
                     if objs:
                         all_objects.extend(objs)
                 # NOT optional — the frame is in both lists. See the docstring.

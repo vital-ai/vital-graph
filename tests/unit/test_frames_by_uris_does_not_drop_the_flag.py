@@ -72,6 +72,20 @@ def _endpoint(graph_objects_for):
         return types.SimpleNamespace(graph_objects=objs, graph=None) if objs else None
 
     ep._get_frame_graph = _frame_graph
+
+    # The uris= form now goes through the BATCHED processor call. Recording the
+    # frames it was asked for is what lets the control test assert that a caller
+    # who did not ask causes no query at all.
+    async def _get_frame_graphs(backend_adapter, space_id, graph_id, frame_uris):
+        out = {}
+        for u in frame_uris:
+            objs = graph_objects_for(u)
+            if objs:
+                out[u] = objs
+        return out
+
+    ep.frame_graph_processor = types.SimpleNamespace(
+        get_frame_graphs=_get_frame_graphs)
     return ep
 
 

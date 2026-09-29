@@ -253,6 +253,114 @@ class KGFrameGraphProcessor:
         """
         return query
 
+    def _build_frame_graphs_query(self, frame_uris: list, graph_id: str) -> str:
+        """The four-arm frame-graph query, batched over N frames with VALUES.
+
+        `issues/240`. The per-frame form makes one SELECT per URI, so a 25-frame
+        page costs 25 round trips where the entity side does one
+        (`_fetch_entity_graphs`). This is the same query with `?frame` bound by a
+        VALUES clause instead of a literal, projecting `?frame` alongside
+        `?subject` so the results can be grouped back per frame.
+
+        ALL FOUR ARMS ARE PRESERVED, and that is the whole risk of this change.
+        The singular version's docstring records why: only the attribute linkage
+        was implemented once, so a CONNECTION frame returned the frame alone,
+        `get_frame_graph` read one object as "frame only" and returned None, and
+        the UI reported "No slots found for this frame" for a frame with two.
+        A pattern anchored on an absent predicate matches nothing rather than
+        failing, so a dropped arm here is silent. The equivalence test against
+        the singular implementation exists for exactly that.
+        """
+        values = " ".join(f"<{u}>" for u in frame_uris)
+        query = f"""
+        PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
+        PREFIX vital: <http://vital.ai/ontology/vital-core#>
+        SELECT DISTINCT ?frame ?subject WHERE {{
+            VALUES ?frame {{ {values} }}
+            GRAPH <{graph_id}> {{
+                # The frame itself
+                {{ ?frame ?p ?o . BIND(?frame AS ?subject) }}
+                UNION
+                # Attribute linkage: objects naming this frame
+                {{ ?subject haley:hasFrameGraphURI ?frame . }}
+                UNION
+                # Connection linkage: the edges out of this frame
+                {{ ?subject vital:hasEdgeSource ?frame . }}
+                UNION
+                # Connection linkage: the slots those edges point at
+                {{ ?_slotEdge vital:hasEdgeSource ?frame .
+                   ?_slotEdge vital:hasEdgeDestination ?subject . }}
+            }}
+        }}
+        """
+        return query
+
+    async def get_frame_graphs(
+        self,
+        backend_adapter,
+        space_id: str,
+        graph_id: str,
+        frame_uris: list,
+    ) -> dict:
+        """Frame graphs for MANY frames: one SELECT, one object fetch.
+
+        Returns `{frame_uri: [graph objects]}`, omitting frames with nothing.
+
+        Added alongside `get_frame_graph` rather than replacing it — the
+        single-URI path is in production and its behaviour is pinned by tests, so
+        it keeps working unchanged while this is proven equivalent.
+
+        One object can belong to SEVERAL frames (a shared subject), so objects
+        are fetched ONCE over the union of subjects and then distributed by URI.
+        Fetching per frame would refetch them and is the cost this removes.
+        """
+        if not frame_uris:
+            return {}
+        try:
+            query = self._build_frame_graphs_query(list(frame_uris), graph_id)
+            results = await backend_adapter.execute_sparql_query(space_id, query)
+
+            bindings = []
+            if isinstance(results, dict):
+                if 'results' in results and 'bindings' in results['results']:
+                    bindings = results['results']['bindings']
+                elif 'bindings' in results:
+                    bindings = results['bindings']
+            elif isinstance(results, list):
+                bindings = results
+
+            per_frame = {}
+            all_subjects = []
+            for b in bindings:
+                f = (b.get('frame') or {}).get('value')
+                s_uri = (b.get('subject') or {}).get('value')
+                if not f or not s_uri:
+                    continue
+                per_frame.setdefault(f, []).append(s_uri)
+                all_subjects.append(s_uri)
+
+            if not all_subjects:
+                return {}
+
+            # Deduped: the same subject reached from two frames is one fetch.
+            unique = list(dict.fromkeys(all_subjects))
+            objects = await backend_adapter.get_objects_by_uris(
+                space_id, unique, graph_id) or []
+            by_uri = {str(getattr(o, 'URI', '')): o for o in objects}
+
+            out = {}
+            for f, subs in per_frame.items():
+                objs = [by_uri[u] for u in dict.fromkeys(subs) if u in by_uri]
+                if objs:
+                    out[f] = objs
+            self.logger.info(
+                "Frame graphs: %d frame(s), %d distinct subject(s), one query",
+                len(out), len(unique))
+            return out
+        except Exception as e:
+            self.logger.error(f"Failed to get frame graphs: {e}", exc_info=True)
+            return {}
+
     def _build_frame_graph_delete_query(self, frame_uri: str, graph_id: str) -> str:
         """
         Build SPARQL DELETE query for complete frame graph.

@@ -1,39 +1,56 @@
 # 240 — `_get_frames_by_uris` accepts `include_frame_graph` and drops it
 
-## Status: FIXED 2026-09-29 — IMPLEMENTED, per-URI. The `uris=` form now returns
-## frame graphs when asked, mirroring the single-URI sibling.
+## Status: FIXED 2026-09-29 — implemented AND batched. The `uris=` form returns
+## frame graphs in ONE query, and that query is reusable by `issues/210`/`226`.
 
-## What was done, and a correction to the first attempt
+## What was done, in three steps and two corrections
 
-**First attempt took option 3** — make it SAY it is unimplemented — on this
-issue's own recommendation that the batched form is the right end state and
-should be written once, with `issues/210`/`issues/226`. That was wrong as a
-response to "fix this": it documented the gap instead of closing it, and left a
-capability `issues/226` is actively asking for still broken.
+**The defect.** `include_frame_graph` was in the signature of
+`_get_frames_by_uris` and NOWHERE in the body, so the multi-URI form returned
+frames without their graphs — HTTP 200, `status=FOUND`, nothing to say a
+parameter had been ignored. The single-URI sibling implemented it all along.
 
-**Option 1 as shipped.** One `_get_frame_graph` per frame under the existing
-`bounded_gather`, mirroring `_get_frame_by_uri` at `:1113`, then
-`_dedupe_by_uri`. The hard part was already solved in the sibling — including
-the de-duplication trap, where the frame appears in BOTH its lookup result and
-its own graph, so every one of its quads would emit twice.
+**First attempt: option 3** — make it SAY it is unimplemented, on this issue's
+own recommendation that the batched form should be written once with
+`issues/210`/`226`. Wrong as a response to "fix this": it documented the gap
+instead of closing it, and `issues/226` is a consumer waiting on the capability.
 
-**The per-URI cost is known and accepted, not overlooked.** A 25-URI request
-makes 25 graph queries where the entity side does one (`_fetch_entity_graphs`,
-batched over a `VALUES` clause); `issues/226` measured the batched shape at
-~2,567 quads / 11,924 buffers / 53.6-341.8 ms for a 25-frame page. Correct and
-slow beats silently empty, and the batched form remains the right end state —
-it is the same query `issues/210`/`issues/226` need, so it should be written
-there, once, and this call site switched to it.
+**Second: option 1**, per-URI, mirroring the sibling. Correct, and 25 round
+trips for a 25-URI request.
 
-Also corrected: the `/kgqueries` message from `issues/210` told callers to use
-"/kgframes, where the flag is implemented on the URI lookups" — true only of the
-single-URI form at the time. Both forms implement it now.
+**Shipped: option 2**, batched. `KGFrameGraphProcessor.get_frame_graphs` binds
+`?frame` from a `VALUES` clause instead of interpolating a literal, projects
+`?frame` alongside `?subject`, and fetches objects ONCE over the union of
+subjects — a subject reachable from two frames is one fetch, not two. One SELECT
+per request, matching `_fetch_entity_graphs` on the entity side.
 
-**Tests:** `tests/unit/test_frames_by_uris_does_not_drop_the_flag.py`, 5 cases.
-The control pair is the point — flag true gets graph objects, flag FALSE fetches
-no graph at all — because a function that always fetched them would pass the
-positive test while ignoring the flag just as completely. Reverted to the
-original defect, `test_the_flag_TRUE_returns_the_frame_graph` fails.
+**Added ALONGSIDE `get_frame_graph`, not replacing it.** The single-URI path is
+in production with its own tests; it keeps working unchanged.
+
+## The risk this carried, and the test that covers it
+
+The four UNION arms are the whole risk. The singular query's docstring records
+why: only the ATTRIBUTE linkage was implemented once, so a CONNECTION frame
+returned the frame alone, `get_frame_graph` read one object as "frame only" and
+returned None, and the UI reported "No slots found for this frame" for a frame
+with two. **A pattern anchored on an absent predicate matches nothing rather
+than failing** — a dropped arm is silent.
+
+`tests/unit/test_frame_graphs_batched_equivalence.py` uses the SINGULAR builder
+as the oracle: arm-for-arm counts of `hasFrameGraphURI`, `hasEdgeSource` and
+`hasEdgeDestination` must match, and no frame URI may be interpolated into a
+pattern (which would make the VALUES clause decorative). Mutation-checked —
+removing one arm fails it with that message.
+
+**Tests:** 10 cases across two files. `tests/unit/test_frames_by_uris_does_not_drop_the_flag.py`
+carries the control pair — flag FALSE must cause no graph query at all, since a
+function that always fetched them would pass the positive assertion while
+ignoring the flag just as completely. 85 frame integration tests pass unchanged.
+
+## Still open
+
+`issues/210`/`issues/226` can now call `get_frame_graphs` rather than writing
+their own; that is the reuse this was factored for, and it has not been done.
 
 **Related:** `issues/210` (`include_frame_graph` on `/kgqueries` — which states
 this surface is clean, and is wrong for the `uris=` form), `issues/209` (the same
