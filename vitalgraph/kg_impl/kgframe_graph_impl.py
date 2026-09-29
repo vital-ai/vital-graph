@@ -223,6 +223,28 @@ class KGFrameGraphProcessor:
         `edgeDestination` — so slots without their edges would still render
         nothing.
 
+        BOTH CONNECTION ARMS ARE TYPED TO `Edge_hasKGSlot` (`issues/250`). They
+        were untyped, matching ANY edge out of the frame — and a frame's other
+        outbound edge is `Edge_hasKGFrame`, pointing at a CHILD frame. So the
+        child frame arrived in the parent's graph as a bare destination with
+        none of its own slots behind it, because a child carries its OWN
+        `hasFrameGraphURI` and the attribute arm above never reaches it. A child
+        frame with zero slots is indistinguishable from a frame whose slots were
+        not fetched, which is the same ambiguity this docstring already warns
+        about. Typing the arms makes the contract above — "Does NOT include
+        child frames" — true, rather than half-applied.
+
+        Nothing legitimate is lost: the whole corpus has three edge types, and
+        only `Edge_hasKGSlot` and `Edge_hasKGFrame` can leave a frame at all
+        (`Edge_hasEntityKGFrame` runs entity->frame).
+
+        THE FILTER IS ON `vital:vitaltype`, NOT `rdf:type`, and that is not
+        interchangeable here. `vitaltype` is the single-valued type URI this
+        codebase counts on and the predicate `kg_query_builder` already uses to
+        type a slot edge. Anchoring on the wrong one would match nothing and
+        return every connection frame as slotless — silently, for the same
+        reason a missing arm is silent.
+
         Args:
             frame_uri: Frame URI
             graph_id: Graph identifier
@@ -242,11 +264,13 @@ class KGFrameGraphProcessor:
                 # Attribute linkage: objects naming this frame
                 {{ ?subject haley:hasFrameGraphURI <{frame_uri}> . }}
                 UNION
-                # Connection linkage: the edges out of this frame
-                {{ ?subject vital:hasEdgeSource <{frame_uri}> . }}
+                # Connection linkage: the SLOT edges out of this frame
+                {{ ?subject vital:hasEdgeSource <{frame_uri}> .
+                   ?subject vital:vitaltype haley:Edge_hasKGSlot . }}
                 UNION
                 # Connection linkage: the slots those edges point at
                 {{ ?_slotEdge vital:hasEdgeSource <{frame_uri}> .
+                   ?_slotEdge vital:vitaltype haley:Edge_hasKGSlot .
                    ?_slotEdge vital:hasEdgeDestination ?subject . }}
             }}
         }}
@@ -270,6 +294,11 @@ class KGFrameGraphProcessor:
         A pattern anchored on an absent predicate matches nothing rather than
         failing, so a dropped arm here is silent. The equivalence test against
         the singular implementation exists for exactly that.
+
+        The two connection arms are typed to `Edge_hasKGSlot` — see the singular
+        builder for why (`issues/250`: untyped, they dragged in the child frame
+        that `Edge_hasKGFrame` points at, without its slots). Both builders must
+        change together or the equivalence test fails, which is the point of it.
         """
         values = " ".join(f"<{u}>" for u in frame_uris)
         query = f"""
@@ -284,11 +313,13 @@ class KGFrameGraphProcessor:
                 # Attribute linkage: objects naming this frame
                 {{ ?subject haley:hasFrameGraphURI ?frame . }}
                 UNION
-                # Connection linkage: the edges out of this frame
-                {{ ?subject vital:hasEdgeSource ?frame . }}
+                # Connection linkage: the SLOT edges out of this frame
+                {{ ?subject vital:hasEdgeSource ?frame .
+                   ?subject vital:vitaltype haley:Edge_hasKGSlot . }}
                 UNION
                 # Connection linkage: the slots those edges point at
                 {{ ?_slotEdge vital:hasEdgeSource ?frame .
+                   ?_slotEdge vital:vitaltype haley:Edge_hasKGSlot .
                    ?_slotEdge vital:hasEdgeDestination ?subject . }}
             }}
         }}

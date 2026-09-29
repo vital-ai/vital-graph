@@ -1,8 +1,51 @@
 # 250 — A nested frame graph returns the child frame and none of its slots
 
-## Status: OPEN. Verified live in local data 2026-09-29. NOT introduced by
-## `issues/240` — the batched query preserved the singular contract exactly,
-## which is what the equivalence test pins. The scope was always this narrow.
+## Status: OPTION 3 DONE 2026-09-29 — both connection arms are now typed to
+## `Edge_hasKGSlot`, so the child-frame stub is gone and the documented contract
+## ("does NOT include child frames") is true rather than half-applied.
+## THE TRAVERSAL QUESTION IS STILL OPEN: a nested frame's slots are still not
+## returned. This made the current behaviour honest; it did not make it complete.
+##
+## NOT introduced by `issues/240` — the batched query preserved the singular
+## contract exactly, which is what the equivalence test pins.
+
+## What was done
+
+Both builders in `vitalgraph/kg_impl/kgframe_graph_impl.py`, changed together
+because the equivalence test fails if only one moves:
+
+    { ?subject vital:hasEdgeSource ?frame .
+      ?subject vital:vitaltype haley:Edge_hasKGSlot . }
+
+**Nothing legitimate is lost, and that is measured rather than assumed.** Edges
+whose source resolves to a `KGFrame`, whole corpus:
+
+    Edge_hasKGSlot     1,437,778
+    Edge_hasKGFrame        5,443
+
+Two types, no third. So the filter drops exactly the child-frame edges. On the
+sampled parent (`...frame:contacts:0`) that is 1 slot edge kept and 1 child-frame
+edge dropped, along with the stub it pointed at.
+
+**The filter is on `vital:vitaltype`, not `rdf:type`.** Both predicates exist in
+the data (`rdf:type` has 3.2M quads), so this looks like a free choice and is
+not: `vitaltype` is the single-valued type URI the codebase counts on and the one
+`kg_query_builder.py:976` already uses to type a slot edge. The wrong predicate
+matches nothing and returns every connection frame slotless, with no error —
+the same silent shape as a dropped arm. Pinned by its own test.
+
+**The client was deliberately NOT typed to match.** `group_objects_by_frame_graph`
+stays tolerant: the server is the only producer, so a child-frame edge no longer
+reaches it, and filtering by class name on a deserialised object risks dropping
+every slot if the name is wrong. Recorded in its docstring.
+
+**Tests:** 4 added to `test_frame_graphs_batched_equivalence.py` — both arms
+typed, in BOTH builders (parametrised, since the equivalence test only proves
+they agree, not that either is right); `vitaltype` not `rdf:type`; and the edge
+object itself still returned, because the client identifies a slot BY its edge
+and dropping that arm would render nothing.
+
+## Original report follows.
 
 ## The shape
 

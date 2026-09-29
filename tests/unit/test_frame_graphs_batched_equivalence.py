@@ -117,3 +117,55 @@ async def test_empty_input_makes_no_query(proc):
                                     get_objects_by_uris=None)
     assert await proc.get_frame_graphs(adapter, "sp", "urn:g", []) == {}
     assert not called
+
+
+# --------------------------------------------------------------------------
+# `issues/250` — the connection arms must be typed
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("build", ["single", "plural"])
+def test_both_connection_arms_are_typed_to_the_slot_edge(proc, build):
+    """THE CHILD-FRAME STUB. Untyped, these arms matched ANY edge out of the
+    frame, and a frame's other outbound edge is `Edge_hasKGFrame` -> a CHILD
+    frame. The child arrived with none of its slots (it carries its own
+    `hasFrameGraphURI`, which the attribute arm cannot reach from the parent),
+    and a frame with zero slots reads exactly like a frame whose slots were not
+    fetched.
+
+    Both builders are checked: they must move together, and the equivalence test
+    above only proves they AGREE, not that either is right.
+    """
+    q = (proc._build_frame_graph_query("urn:f1", "urn:g") if build == "single"
+         else proc._build_frame_graphs_query(["urn:f1"], "urn:g"))
+
+    assert q.count("haley:Edge_hasKGSlot") == 2, (
+        "expected both connection arms typed to the slot edge; an untyped arm "
+        "pulls the child frame into its parent's graph")
+
+
+@pytest.mark.parametrize("build", ["single", "plural"])
+def test_the_type_filter_uses_vitaltype_not_rdf_type(proc, build):
+    """NOT INTERCHANGEABLE, and wrong is silent.
+
+    `vitaltype` is the single-valued type URI this codebase counts on, and the
+    predicate `kg_query_builder.py` already uses to type a slot edge. `rdf:type`
+    is present in the data too, so this looks like a free choice — but anchoring
+    the arm on the wrong predicate matches nothing, and every CONNECTION frame
+    comes back slotless with no error. That is the exact failure the four arms
+    exist to prevent.
+    """
+    q = (proc._build_frame_graph_query("urn:f1", "urn:g") if build == "single"
+         else proc._build_frame_graphs_query(["urn:f1"], "urn:g"))
+
+    assert q.count("vital:vitaltype haley:Edge_hasKGSlot") == 2
+    assert "rdf:type haley:Edge_hasKGSlot" not in q
+
+
+def test_the_slot_edge_itself_is_still_returned(proc):
+    """Typing must not be mistaken for "only the slots". The client pairs the
+    EDGE with its destination to identify a slot, so dropping the edge arm
+    renders nothing — see the singular builder's note."""
+    q = proc._build_frame_graphs_query(["urn:f1"], "urn:g")
+
+    assert "?subject vital:hasEdgeSource ?frame" in q, (
+        "the arm returning the edge object itself is gone")

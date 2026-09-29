@@ -274,6 +274,14 @@ def group_objects_by_frame_graph(
         connection   an edge whose source IS the frame
         connection   the destination of such an edge (the slot)
 
+    The server TYPES both connection arms to `Edge_hasKGSlot` (`issues/250`);
+    this does not, and that asymmetry is deliberate. The server is the only
+    producer of these responses, so a child-frame edge no longer arrives here to
+    be mis-grouped — and filtering by class name on a deserialised object is a
+    silent-drop risk of its own: get the name wrong and every slot vanishes with
+    no error. Staying tolerant is the safer half of the mirror. If this ever
+    consumes a response from another producer, revisit that.
+
     Duplicating them here is the cost of a flat response. The alternative is for
     the endpoint to return the grouping it already computes — which is the
     better end state and a response-shape change, so it is not done here.
