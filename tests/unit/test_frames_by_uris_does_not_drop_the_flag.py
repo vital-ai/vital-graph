@@ -1,60 +1,142 @@
-"""`include_frame_graph` on the `uris=` form says it is unimplemented.
+"""`include_frame_graph` works on the `uris=` form, not just `?uri=`.
 
 `issues/240`. The flag was in the signature of `_get_frames_by_uris` and NOWHERE
 in the body, so the multi-URI lookup returned frames without their graphs —
 HTTP 200, `status=FOUND`, nothing to say a parameter had been ignored. The
-single-URI sibling on the same endpoint DOES implement it, which is what makes
-this a drop rather than an unbuilt feature.
+single-URI sibling implemented it all along, which is what made this a drop
+rather than an unbuilt feature.
 
 It survived because it was untested: the only `/kgframes` cell with the flag set
-covers `?uri=`, and its docstring says so. **A control pair — flag true says
-something, flag false says nothing — is what catches this**, and it is the pair
+covers `?uri=`, and its docstring says so. **The control pair — flag true gets
+graph objects, flag false does not — is what catches it**, and it is the pair
 `issues/210` used on the neighbouring surface.
 
-Not implemented here on purpose. The right version is ONE batched query over the
-page, which `issues/210`/`issues/226` need anyway; a per-URI repair would inherit
-25 round trips and ship a second thing to undo.
+Driven through the function with a stubbed backend rather than a live space: the
+property under test is whether the flag is READ, and a real space would only add
+setup that can itself fail.
 """
 
-import inspect
+import asyncio
+import types
 
-from vitalgraph.endpoint import kgframes_endpoint, kgquery_endpoint
+import pytest
 
-SRC = inspect.getsource(kgframes_endpoint.KGFramesEndpoint._get_frames_by_uris)
-
-
-def test_the_flag_is_no_longer_dropped_silently():
-    """The defect: the parameter appeared once, in the signature."""
-    body = SRC.split('"""', 2)[-1]          # past the docstring
-    assert "include_frame_graph" in body, (
-        "the flag is still only in the signature — it is being dropped")
-    assert "issues/240" in SRC
+from vitalgraph.endpoint import kgframes_endpoint
 
 
-def test_it_reports_the_limitation_in_the_RESPONSE_not_just_a_log():
-    """A caller cannot read the server's log. The outcome goes in the body, per
-    the house rule that domain outcomes are HTTP 200 with the reason in the
-    payload — not an HTTPException."""
-    assert "message=_msg" in SRC, "the limitation never reaches the caller"
-    assert "NOT implemented" in SRC
-    assert "HTTPException" not in SRC.split("_msg =")[1].split("return")[0], (
-        "a domain outcome must not be raised as an HTTP error")
+class _Obj:
+    """Minimal GraphObject stand-in: `_dedupe_by_uri` keys on URI."""
+
+    def __init__(self, uri):
+        self.URI = uri
+
+    def __repr__(self):
+        return f"<{self.URI}>"
 
 
-def test_a_request_that_did_NOT_ask_gets_no_message():
-    """THE CONTROL CELL, and it is not hypothetical: `issues/210` shipped an
-    unconditional message on this exact pattern, and the test written to stop
-    that found a crash instead."""
-    assert '_msg = ""' in SRC, "no empty default — the message may be unconditional"
-    assert "if include_frame_graph:" in SRC, (
-        "the message is not gated on the caller having asked")
+class _LookupResult:
+    def __init__(self, objects):
+        self.objects = objects
+
+
+@pytest.fixture(autouse=True)
+def _no_quad_serialisation(monkeypatch):
+    """Quad conversion needs real VitalSigns internals and is not what is under
+    test here — the question is whether the FLAG IS READ. Swap it for a shim
+    that preserves one quad per object so the assertions can see them."""
+    from vitalgraph.model.quad_model import Quad
+
+    def _shim(objects, graph_id):
+        # Real `Quad` — the response model validates, so a namespace is rejected.
+        return [Quad(s=f"<{o.URI}>", p="<urn:p>", o="<urn:o>", g=f"<{graph_id}>")
+                for o in objects]
+    monkeypatch.setattr(kgframes_endpoint, "graphobjects_to_quad_list", _shim)
+
+
+def _endpoint(graph_objects_for):
+    """A KGFramesEndpoint with the two collaborators this path uses stubbed."""
+    ep = object.__new__(kgframes_endpoint.KGFramesEndpoint)
+    ep.logger = types.SimpleNamespace(
+        info=lambda *a, **k: None, warning=lambda *a, **k: None,
+        error=lambda *a, **k: None, debug=lambda *a, **k: None)
+
+    async def _adapter(space_id):
+        async def get_object(space_id, graph_id, uri):
+            return _LookupResult([_Obj(uri)])
+        return types.SimpleNamespace(get_object=get_object)
+
+    ep._get_backend_adapter = _adapter
+
+    async def _frame_graph(space_id, graph_id, frame_uri, current_user):
+        objs = graph_objects_for(frame_uri)
+        return types.SimpleNamespace(graph_objects=objs, graph=None) if objs else None
+
+    ep._get_frame_graph = _frame_graph
+    return ep
+
+
+def _uris_of(resp):
+    return {q.s.strip("<>") for q in resp.results} if resp.results else set()
+
+
+@pytest.mark.asyncio
+async def test_the_flag_TRUE_returns_the_frame_graph():
+    """The defect: this returned only the frames."""
+    ep = _endpoint(lambda uri: [_Obj(uri), _Obj(uri + ":slot1")])
+    resp = await ep._get_frames_by_uris(
+        "sp", "urn:g", ["urn:f1", "urn:f2"], include_frame_graph=True,
+        current_user={})
+    got = _uris_of(resp)
+    assert "urn:f1:slot1" in got and "urn:f2:slot1" in got, (
+        f"the frame graphs are missing — the flag is still being dropped: {got}")
+
+
+@pytest.mark.asyncio
+async def test_the_flag_FALSE_returns_only_the_frames():
+    """THE CONTROL. Without it, a function that always fetched graphs would
+    pass the test above while ignoring the flag just as completely."""
+    called = []
+
+    def _graph(uri):
+        called.append(uri)
+        return [_Obj(uri + ":slot1")]
+
+    ep = _endpoint(_graph)
+    resp = await ep._get_frames_by_uris(
+        "sp", "urn:g", ["urn:f1"], include_frame_graph=False, current_user={})
+    assert called == [], "the graph was fetched for a caller that did not ask"
+    assert _uris_of(resp) == {"urn:f1"}
+
+
+@pytest.mark.asyncio
+async def test_the_frame_is_not_emitted_twice():
+    """The de-duplication trap the sibling documents: the frame is in BOTH the
+    lookup result and its own graph, so every one of its quads would emit twice.
+    Invisible until the graph actually contains something."""
+    ep = _endpoint(lambda uri: [_Obj(uri), _Obj(uri + ":slot1")])
+    resp = await ep._get_frames_by_uris(
+        "sp", "urn:g", ["urn:f1"], include_frame_graph=True, current_user={})
+    subjects = [q.s.strip("<>") for q in resp.results]
+    assert subjects.count("urn:f1") == len(
+        [s for s in set(subjects) if s == "urn:f1"]), (
+        f"the frame's quads are duplicated: {subjects}")
+
+
+@pytest.mark.asyncio
+async def test_a_frame_with_no_graph_still_returns_the_frame():
+    """`_get_frame_graph` returns None for a frame with no attribute-linked
+    slots. That must not drop the frame itself."""
+    ep = _endpoint(lambda uri: None)
+    resp = await ep._get_frames_by_uris(
+        "sp", "urn:g", ["urn:f1"], include_frame_graph=True, current_user={})
+    assert _uris_of(resp) == {"urn:f1"}
 
 
 def test_the_kgqueries_message_no_longer_misdirects():
     """It told callers to use `/kgframes` 'where the flag is implemented on the
-    URI lookups'. Only the single-URI form implements it, so that sent them from
-    one silent no-op to another."""
+    URI lookups' while the `uris=` form dropped it. Now both forms implement it,
+    so the message must not claim otherwise either."""
+    import inspect
+    from vitalgraph.endpoint import kgquery_endpoint
     q = inspect.getsource(kgquery_endpoint)
-    assert "/kgframes?uri= for a single frame" in q
-    assert "the flag is implemented on the URI lookups" not in q, (
-        "the over-broad claim issues/240 corrects is back")
+    assert "the flag is implemented on the URI lookups" not in q

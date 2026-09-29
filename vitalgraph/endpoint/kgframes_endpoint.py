@@ -1347,23 +1347,28 @@ class KGFramesEndpoint:
             return []
         
     async def _get_frames_by_uris(self, space_id: str, graph_id: str, frame_uris: List[str], include_frame_graph: bool = False, current_user: Dict = None) -> QuadResponse:
-        """Get multiple frames by URI list.
+        """Get multiple frames by URI list, with their graphs when asked.
 
-        `include_frame_graph` IS ACCEPTED AND NOT IMPLEMENTED HERE, and now says
-        so (`issues/240`). It was in the signature and nowhere in the body, so
-        the multi-URI form returned frames without their graphs — HTTP 200,
-        `status=FOUND`, nothing to indicate a parameter had been ignored. The
-        single-URI sibling `_get_frame_by_uri` DOES implement it (`:1113`), which
-        is what made this a drop rather than an unbuilt feature.
+        `issues/240`. `include_frame_graph` was in the signature and NOWHERE in
+        the body, so this returned frames without their graphs — HTTP 200,
+        `status=FOUND`, nothing to say a parameter had been ignored. The
+        single-URI sibling `_get_frame_by_uri` implemented it all along, which is
+        what made this a drop rather than an unbuilt feature.
 
-        Saying so rather than implementing it, deliberately, and it is the same
-        choice `issues/210` made for `/kgqueries`: the right implementation is
-        ONE batched query over the page — the shape `_fetch_entity_graphs`
-        already uses — not a per-URI `_get_frame_graph` inheriting the 25 round
-        trips this function's `bounded_gather` would impose. That work belongs
-        with `issues/210`/`issues/226`, which need the same query, so it gets
-        written once. Until then a parameter that silently does nothing is worse
-        than one that says so.
+        PER-URI, NOT BATCHED, and that is a known cost rather than an oversight.
+        One `_get_frame_graph` per frame under the existing `bounded_gather`, so
+        a 25-URI request makes 25 graph queries where the entity side does one
+        (`_fetch_entity_graphs`, batched over a `VALUES` clause). The batched
+        form is the right end state and `issues/210`/`issues/226` need the same
+        query — but a caller asking for frame graphs and silently receiving none
+        is the worse failure, so this is correct-and-slow until that lands.
+        Measured shape, from `issues/226`: a 25-frame page is ~2,567 quads /
+        11,924 buffers / 53.6-341.8 ms as ONE query.
+
+        The frame appears in BOTH its lookup result and its own graph, so
+        `_dedupe_by_uri` is not optional — without it every quad of every frame
+        emits twice. That trap is documented at the sibling (`:1119`) and was
+        invisible there until the graph actually contained something.
         """
         try:
             # Get backend adapter
@@ -1377,6 +1382,24 @@ class KGFramesEndpoint:
                     self.logger.warning(f"Failed to retrieve frame {frame_uri}: {e}")
                     return None
             
+            async def _fetch_graph(frame_uri):
+                """The frame's graph, mirroring the single-URI path at `:1113`."""
+                try:
+                    fg = await self._get_frame_graph(
+                        space_id=space_id, graph_id=graph_id,
+                        frame_uri=frame_uri, current_user=current_user)
+                except Exception as e:
+                    # ERROR, not warning: the caller ASKED for graphs, and
+                    # dropping one silently is the defect this function had.
+                    self.logger.error(
+                        "Failed to retrieve frame graph for %s: %s", frame_uri, e)
+                    return None
+                if fg and getattr(fg, 'graph_objects', None):
+                    return fg.graph_objects
+                if fg and getattr(fg, 'graph', None):
+                    return fg.graph          # legacy shape, as the sibling handles
+                return None
+
             # BOUNDED (`issues/231`): `frame_uris` is caller-supplied.
             results = await bounded_gather(
                 [partial(_fetch_frame, uri) for uri in frame_uris])
@@ -1385,28 +1408,20 @@ class KGFramesEndpoint:
             for result in results:
                 if result and hasattr(result, 'objects') and result.objects:
                     all_objects.extend(result.objects)
+
+            if include_frame_graph and frame_uris:
+                graphs = await bounded_gather(
+                    [partial(_fetch_graph, uri) for uri in frame_uris])
+                for objs in graphs:
+                    if objs:
+                        all_objects.extend(objs)
+                # NOT optional — the frame is in both lists. See the docstring.
+                all_objects = self._dedupe_by_uri(all_objects)
             
             quads = await asyncio.to_thread(graphobjects_to_quad_list, all_objects, graph_id)
 
-            # Only when the caller ASKED. A control cell asserts that a request
-            # which did not ask gets no message — `issues/210` shipped an
-            # unconditional one and the test written to stop that found a crash.
-            _msg = ""
-            if include_frame_graph:
-                _msg = ("include_frame_graph is accepted but NOT implemented on "
-                        "the uris= form of /kgframes: the frames are returned "
-                        "without their graphs. Use ?uri= for a single frame, "
-                        "where the flag IS implemented, or slot_projection to "
-                        "name the columns you need. See issues/240.")
-                self.logger.warning(
-                    "_get_frames_by_uris: include_frame_graph=True requested on "
-                    "%s for %d uri(s) and is not implemented; returning frames "
-                    "without their graphs, with a message (issues/240)",
-                    space_id, len(frame_uris))
-
             return QuadResponse(
                 status=OperationStatus.FOUND if all_objects else OperationStatus.EMPTY,
-                message=_msg,
                 results=quads,
                 total_count=len(all_objects),
                 page_size=len(frame_uris),

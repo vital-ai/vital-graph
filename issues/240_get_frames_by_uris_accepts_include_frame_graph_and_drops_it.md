@@ -1,26 +1,39 @@
 # 240 — `_get_frames_by_uris` accepts `include_frame_graph` and drops it
 
-## Status: FIXED 2026-09-29 by OPTION 3 — the `uris=` form now says the flag is
-## not implemented, in the response body, only when the caller asked. The
-## capability itself is still unbuilt and belongs with `issues/210`/`issues/226`.
+## Status: FIXED 2026-09-29 — IMPLEMENTED, per-URI. The `uris=` form now returns
+## frame graphs when asked, mirroring the single-URI sibling.
 
-## What was done
+## What was done, and a correction to the first attempt
 
-Option 3 of the three below, and for the reason stated there: the right
-implementation is ONE batched query over the page — the shape
-`_fetch_entity_graphs` already uses — and `issues/210`/`issues/226` need that
-same query. A per-URI repair here would inherit 25 round trips and ship a second
-thing to undo. A parameter that silently does nothing is worse than one that
-says so, so it now says so.
+**First attempt took option 3** — make it SAY it is unimplemented — on this
+issue's own recommendation that the batched form is the right end state and
+should be written once, with `issues/210`/`issues/226`. That was wrong as a
+response to "fix this": it documented the gap instead of closing it, and left a
+capability `issues/226` is actively asking for still broken.
+
+**Option 1 as shipped.** One `_get_frame_graph` per frame under the existing
+`bounded_gather`, mirroring `_get_frame_by_uri` at `:1113`, then
+`_dedupe_by_uri`. The hard part was already solved in the sibling — including
+the de-duplication trap, where the frame appears in BOTH its lookup result and
+its own graph, so every one of its quads would emit twice.
+
+**The per-URI cost is known and accepted, not overlooked.** A 25-URI request
+makes 25 graph queries where the entity side does one (`_fetch_entity_graphs`,
+batched over a `VALUES` clause); `issues/226` measured the batched shape at
+~2,567 quads / 11,924 buffers / 53.6-341.8 ms for a 25-frame page. Correct and
+slow beats silently empty, and the batched form remains the right end state —
+it is the same query `issues/210`/`issues/226` need, so it should be written
+there, once, and this call site switched to it.
 
 Also corrected: the `/kgqueries` message from `issues/210` told callers to use
-"/kgframes, where the flag is implemented on the URI lookups". Only the
-SINGLE-uri form implements it, so that sent them from one silent no-op to
-another. It now names `?uri=` and states that `?uris=` does not implement it.
+"/kgframes, where the flag is implemented on the URI lookups" — true only of the
+single-URI form at the time. Both forms implement it now.
 
-**Tests:** `tests/unit/test_frames_by_uris_does_not_drop_the_flag.py`, 4 cases,
-including the control cell — a request that did NOT ask gets no message. That
-pair is what `issues/210` used and what would have caught this originally.
+**Tests:** `tests/unit/test_frames_by_uris_does_not_drop_the_flag.py`, 5 cases.
+The control pair is the point — flag true gets graph objects, flag FALSE fetches
+no graph at all — because a function that always fetched them would pass the
+positive test while ignoring the flag just as completely. Reverted to the
+original defect, `test_the_flag_TRUE_returns_the_frame_graph` fails.
 
 **Related:** `issues/210` (`include_frame_graph` on `/kgqueries` — which states
 this surface is clean, and is wrong for the `uris=` form), `issues/209` (the same
