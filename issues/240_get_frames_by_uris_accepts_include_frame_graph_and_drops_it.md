@@ -95,9 +95,15 @@ the duplicate cannot drift.
 
 **Entities do not need the requested URIs; frames do.** Every object in an
 entity graph carries `kGGraphURI` naming its graph, so the key is on the data.
-Frames have no such uniform back-pointer, which is the whole reason the frame
-side must reconstruct linkage from edges. The two helpers are asymmetric because
-the data is.
+The frame side must also reconstruct linkage from edges, because a space may use
+EITHER the attribute or the connection form and the query cannot pick a side.
+
+> **Corrected 2026-09-29.** This paragraph originally said frames have "no such
+> uniform back-pointer". That is wrong — frames DO carry `hasFrameGraphURI`, and
+> it is the second of the four arms. What it does not do is span a parent/child
+> frame boundary: a child frame carries its OWN frame graph URI, so none of this
+> reaches a nested frame's slots. Filed as `issues/250`, which also records that
+> the untyped connection arms pull the child frame in WITHOUT its slots.
 
 **An object with no `kGGraphURI` is dropped, not collected under `None`** — a
 `None` key becomes `build_entity_graph(None, objs)`, a graph that does not exist
