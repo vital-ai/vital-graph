@@ -29,6 +29,7 @@ from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
 
 # Backend adapter import
 from vitalgraph.kg_impl.kg_backend_utils import KGBackendInterface
+from vitalgraph.kg_impl.edge_uris import edge_uri
 
 
 def _sparql_binding_to_rdflib(binding) -> Any:
@@ -427,15 +428,17 @@ class KGEntityFrameCreateProcessor:
             List[GraphObject]: Created Edge_hasEntityKGFrame objects
         """
         entity_frame_edges = []
-        
+
         # Create Edge_hasEntityKGFrame edges server-side for each frame (extracted from lines 1019-1040)
         for frame_obj in frame_objects:
-            # Create entity-to-frame edge with unique URI
-            import uuid
-            edge_uri = f"http://edge/entity_frame_edge_{uuid.uuid4()}"
-            
+            # DETERMINISTIC, from the two endpoints (`issues/253`). A `uuid4()`
+            # here meant re-creating a frame added a SECOND edge to it rather
+            # than rewriting the first — the subject-level delete cannot remove
+            # an edge whose URI it has just invented — which is also why a
+            # timed-out POST could not be retried.
             entity_frame_edge = Edge_hasEntityKGFrame()
-            entity_frame_edge.URI = edge_uri
+            entity_frame_edge.URI = edge_uri(
+                "Edge_hasEntityKGFrame", entity_uri, frame_obj.URI)
             entity_frame_edge.edgeSource = entity_uri
             entity_frame_edge.edgeDestination = frame_obj.URI
             
@@ -476,11 +479,11 @@ class KGEntityFrameCreateProcessor:
             if not isinstance(frame_obj, KGFrame):
                 continue
             child_uri = str(frame_obj.URI)
-            parent_id = parent_frame_uri.split('/')[-1]
-            child_id = child_uri.split('/')[-1]
-            
+
             edge = Edge_hasKGFrame()
-            edge.URI = f"http://vital.ai/haley.ai/app/Edge_hasKGFrame/{parent_id}_{child_id}_edge"
+            # Already deterministic; `edge_uri` produces the identical string and
+            # is where the convention now lives (`issues/253`).
+            edge.URI = edge_uri("Edge_hasKGFrame", parent_frame_uri, child_uri)
             edge.edgeSource = parent_frame_uri
             edge.edgeDestination = child_uri
             if hasattr(edge, 'kGGraphURI'):

@@ -23,6 +23,7 @@ from ..model.result_status import OperationStatus
 
 # Local imports
 from .kg_backend_utils import KGBackendInterface, BackendOperationResult
+from .edge_uris import edge_uri
 from .kg_validation_utils import KGEntityValidator, KGGroupingURIManager, KGOwnershipValidator, ValidationResult
 
 
@@ -425,9 +426,12 @@ class KGEntityCreateProcessor:
             for entity in entities:
                 entity_uri = str(entity.URI)
                 
-                # Create edge from parent to child entity
+                # Create edge from parent to child entity.
+                # DETERMINISTIC from the two endpoints (`issues/253`): a random
+                # URI made the write non-idempotent, so a timed-out POST could
+                # not be retried and a replay attached the child twice.
                 edge = Edge_hasEntityKGFrame()
-                edge.URI = f"http://vital.ai/haley.ai/app/Edge_hasEntityKGFrame/{self._generate_uuid()}"
+                edge.URI = edge_uri("Edge_hasEntityKGFrame", parent_uri, entity_uri)
                 edge.edgeSource = parent_uri
                 edge.edgeDestination = entity_uri
                 
@@ -459,12 +463,6 @@ class KGEntityCreateProcessor:
                 message=message,
                 updated_uri=""
             )
-    
-
-    def _generate_uuid(self) -> str:
-        """Generate a UUID for new entities."""
-        import uuid
-        return str(uuid.uuid4())
 
 
 # Convenience functions for direct usage

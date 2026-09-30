@@ -24,6 +24,7 @@ from ..model.result_status import OperationStatus
 
 # Local imports
 from .kg_backend_utils import KGBackendInterface, BackendOperationResult
+from .edge_uris import edge_uri
 from .kg_validation_utils import KGEntityValidator, KGGroupingURIManager, ValidationResult
 
 
@@ -277,9 +278,12 @@ class KGSlotCreateProcessor:
             for slot in slots:
                 slot_uri = str(slot.URI)
                 
-                # Create edge from frame to slot
+                # Create edge from frame to slot.
+                # DETERMINISTIC from the two endpoints (`issues/253`): a random
+                # URI made the write non-idempotent, so re-sending a slot
+                # attached it to its frame a second time.
                 edge = Edge_hasKGSlot()
-                edge.URI = f"http://vital.ai/haley.ai/app/Edge_hasKGSlot/{self._generate_uuid()}"
+                edge.URI = edge_uri("Edge_hasKGSlot", frame_uri, slot_uri)
                 edge.hasEdgeSource = frame_uri
                 edge.hasEdgeDestination = slot_uri
                 
@@ -310,11 +314,6 @@ class KGSlotCreateProcessor:
                 message=message,
                 updated_uri=""
             )
-
-    def _generate_uuid(self) -> str:
-        """Generate a UUID for new slots."""
-        import uuid
-        return str(uuid.uuid4())
 
 
 # Convenience functions for direct usage
