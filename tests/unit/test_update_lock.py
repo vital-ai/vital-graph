@@ -43,12 +43,24 @@ class FakeConn:
         self.owner_map = owner_map or {}         # subject URI -> grouping URI, "in the store"
         self.locked: list = []                   # advisory keys, in acquisition order
         self.probe_count = 0                     # how many times the WHERE was materialised
+        # An update locks MANY groupings, so it takes `lock_entities`' bounded
+        # path (`issues/253`), which saves and restores `lock_timeout` around the
+        # acquisition. Answer the SHOW with something PostgreSQL would accept
+        # back, or the fake diverges from the real connection.
+        self.lock_timeout = "10000ms"
 
     async def execute(self, sql, *args):
         if "CREATE TEMP TABLE" in sql:
             self.probe_count += 1
+        if sql.startswith("SET lock_timeout"):
+            self.lock_timeout = sql.split("'")[1]
         if "pg_advisory_xact_lock" in sql:
             self.locked.append(args[0])
+
+    async def fetchval(self, sql, *args):
+        if sql.strip().upper() == "SHOW LOCK_TIMEOUT":
+            return self.lock_timeout
+        raise AssertionError(f"unexpected fetchval: {sql}")
 
     async def fetch(self, sql, *args):
         if "hasKGGraphURI" in sql or "predicate_uuid = $1" in sql:

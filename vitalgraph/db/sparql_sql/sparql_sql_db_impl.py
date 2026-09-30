@@ -11,6 +11,7 @@ Pattern inherited from an earlier hybrid backend, since archived
 
 import asyncio
 import logging
+import os
 from typing import Dict, List, Optional, Union, Any
 
 import asyncpg
@@ -21,6 +22,81 @@ from ...utils.resource_manager import track_pool
 from ..connection_config import require
 
 logger = logging.getLogger(__name__)
+
+
+# How long a REQUEST may wait to acquire a lock before giving up (`issues/253`).
+# 0 disables the fence and restores PostgreSQL's default of waiting forever,
+# which is what production was measured doing on 2026-09-30.
+#
+# 10 s and not lower: at the measured ~0.25 s service time that still allows a
+# queue of ~40 writes to the same entity to drain, so it fences the pathological
+# case without failing a busy-but-healthy one. And not higher: the caller's own
+# read timeout is 30 s, so anything above that is a fence only the client ever
+# reaches, which is the situation this replaces.
+_DEFAULT_REQUEST_LOCK_TIMEOUT_S = 10.0
+
+
+def _request_lock_timeout_s() -> float:
+    raw = os.environ.get("VITALGRAPH_REQUEST_LOCK_TIMEOUT_S")
+    if raw is None:
+        return _DEFAULT_REQUEST_LOCK_TIMEOUT_S
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        logger.warning(
+            "VITALGRAPH_REQUEST_LOCK_TIMEOUT_S=%r is not a number; using %.1fs",
+            raw, _DEFAULT_REQUEST_LOCK_TIMEOUT_S)
+        return _DEFAULT_REQUEST_LOCK_TIMEOUT_S
+
+
+async def _init_conn(conn):
+    """Codecs every connection needs, whichever pool it belongs to."""
+    import json as _json
+    await conn.set_type_codec(
+        'jsonb', encoder=_json.dumps, decoder=_json.loads,
+        schema='pg_catalog',
+    )
+    await conn.set_type_codec(
+        'json', encoder=_json.dumps, decoder=_json.loads,
+        schema='pg_catalog',
+    )
+
+
+async def _init_request_conn(conn):
+    """Request connections: codecs, plus a bound on WAITING for a lock.
+
+    `issues/253`. Measured on production 2026-09-30: `lock_timeout`
+    is **0** there — `source: default`, no `pg_db_role_setting`
+    override — so a request waiting for a lock waited FOREVER, capped
+    only by `statement_timeout` at 60 s. That is how a frame write
+    whose own work is ~0.9 s took 51.7 s: 6.4 s of it was spent
+    before its first statement ran, and the worst case was a
+    near-minute wait behind a queue of writes to the same lead.
+    `issues/231` recorded 10 s for this and that was wrong for the
+    app's sessions.
+
+    A lock wait is the one delay where waiting longer cannot improve
+    the answer: the work has not started, so failing at 10 s and
+    failing at 60 s lose exactly the same amount of work, and the
+    first tells the caller 50 s sooner.
+
+    SET ONCE PER CONNECTION, not per statement. `bounded_lock_wait`
+    and `lock_entities` narrow it further for specific statements and
+    restore what they found, so this becomes the value they restore
+    TO rather than something they fight with.
+
+    REQUEST POOL ONLY, and that is the whole reason this is a second
+    init. Background work legitimately waits for locks — ANALYZE,
+    VACUUM, an index build, a resync taking ACCESS EXCLUSIVE — and a
+    pool-wide fence would kill it mid-way and report success, which
+    is `issues/136` (the RDS `statement_timeout` killing 91% of
+    VACUUMs on the big quad table) in a new costume. The INTERNAL
+    pool keeps `lock_timeout = 0` deliberately.
+    """
+    await _init_conn(conn)
+    ms = int(_request_lock_timeout_s() * 1000)
+    if ms > 0:
+        await conn.execute(f"SET lock_timeout = '{ms}ms'")
 
 
 # ---------------------------------------------------------------------------
@@ -136,18 +212,6 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
         try:
             logger.debug("Connecting to PostgreSQL for sparql_sql backend...")
 
-            import json as _json
-
-            async def _init_conn(conn):
-                await conn.set_type_codec(
-                    'jsonb', encoder=_json.dumps, decoder=_json.loads,
-                    schema='pg_catalog',
-                )
-                await conn.set_type_codec(
-                    'json', encoder=_json.dumps, decoder=_json.loads,
-                    schema='pg_catalog',
-                )
-
             from vitalgraph.db.pool import (
                 create_pool, register_pool, PoolClass, DEFAULT_ACQUIRE_TIMEOUT,
             )
@@ -243,7 +307,7 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
                 max_inactive_connection_lifetime=120.0,
                 command_timeout=self.config.get('command_timeout', 60),
                 acquire_timeout=acquire_timeout,
-                init=_init_conn,
+                init=_init_request_conn,
             )
             # REQUEST, not QUERY: this pool still serves reads AND writes.
             # Calling it QUERY would file every mutation wait as a query wait,

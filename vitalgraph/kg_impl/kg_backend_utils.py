@@ -141,6 +141,7 @@ async def fast_typed_subject_page(backend, space_id: str, graph_id: str,
 # `issues/175` class 2. Defined in the db layer, which kg_impl already
 # depends on; the reverse would invert the layering.
 from ..db.sparql_sql.conn_scope import write_conn as _write_conn
+from ..db.sparql_sql.entity_lock import EntityLockTimeout
 
 
 @dataclass
@@ -746,6 +747,22 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             self.logger.error("update_quads failed: %s", e)
             return False
 
+    def _lock_timeout_failed(self, where: str, exc: EntityLockTimeout,
+                             subjects: int) -> bool:
+        """Log a lock timeout NAMING THE ENTITY, and report the write as failed.
+
+        Reported from production (`issues/253`): "a failure cannot be traced to a
+        lead, so nothing can be reconciled." PostgreSQL says `canceling statement
+        due to lock timeout`, which identifies the STATEMENT — and every write to
+        every lead issues the same one. The lock key is the only thing that says
+        which entity was being written, so it belongs on the error line.
+        """
+        self.logger.error(
+            "%s LOCK TIMEOUT after %.3fs waiting on entity %s (key %d); "
+            "%d subject(s) NOT written",
+            where, exc.waited_s, exc.uri, exc.key, subjects)
+        return False
+
     async def upsert_objects_atomic(self, space_id: str, graph_id: str,
                                     entity_uris: List[str],
                                     objects: List[GraphObject],
@@ -854,6 +871,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                 "\u23f1\ufe0f  upsert_objects_atomic: %.3fs (%d entit(y/ies), %d quads)",
                 _time.monotonic() - _t0, len(entity_uris), len(quads))
             return True
+        except EntityLockTimeout as e:
+            return self._lock_timeout_failed("upsert_objects_atomic", e, len(entity_uris))
         except Exception as e:
             self.logger.error("upsert_objects_atomic failed: %s", e)
             return False
@@ -967,6 +986,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             _t1 = _time.monotonic()
             self.logger.info("⏱️  update_entity_graph: %.3fs", _t1 - _t0)
             return True
+        except EntityLockTimeout as e:
+            return self._lock_timeout_failed("update_entity_graph", e, 1)
         except Exception as e:
             self.logger.error("update_entity_graph failed: %s", e)
             return False
@@ -1147,6 +1168,9 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             self.logger.info("⏱️  update_subjects_graph: %.3fs (%d subjects)",
                              _t1 - _t0, len(subject_uris))
             return True
+        except EntityLockTimeout as e:
+            return self._lock_timeout_failed(
+                "update_subjects_graph", e, len(subject_uris))
         except Exception as e:
             self.logger.error("update_subjects_graph failed: %s", e)
             return False
