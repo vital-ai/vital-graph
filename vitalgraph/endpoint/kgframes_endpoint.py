@@ -65,6 +65,7 @@ from ..kg_impl.kgframe_query_impl import KGFrameQueryProcessor
 from ..kg_impl.kg_backend_utils import create_backend_adapter
 from ..cache.count_cache import _count_cache
 from ..auth.role_dependencies import require_space_read, require_space_write
+from .impl.impl_utils import SubjectWriteFailed
 from functools import partial
 from ..utils.bounded_gather import bounded_gather
 
@@ -1814,6 +1815,18 @@ class KGFramesEndpoint:
 
         except HTTPException:
             raise
+        except SubjectWriteFailed as e:
+            # A REFUSED write is a domain fault, not a server fault: HTTP 200 with
+            # `STORE_FAILED`, which derives `success=false`. `issues/253` decided
+            # this deliberately over a 503 — see `model/result_status.py` for the
+            # vocabulary and the reason 500 is wrong here.
+            self.logger.error("Frame slot create did not happen: %s", e)
+            return SlotCreateResponse(
+                status=OperationStatus.STORE_FAILED,
+                message=str(e),
+                created_count=0,
+                created_uris=[],
+            )
         except Exception as e:
             self.logger.error(f"Error creating frame slots: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to create frame slots: {e}")
@@ -1889,6 +1902,15 @@ class KGFramesEndpoint:
 
         except HTTPException:
             raise
+        except SubjectWriteFailed as e:
+            # Domain fault, HTTP 200, `success=false` (`issues/253`).
+            self.logger.error("Frame slot update did not happen: %s", e)
+            return SlotUpdateResponse(
+                status=OperationStatus.STORE_FAILED,
+                message=str(e),
+                updated_count=0,
+                updated_uris=[],
+            )
         except Exception as e:
             self.logger.error(f"Error updating frame slots: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to update frame slots: {e}")
@@ -2725,8 +2747,14 @@ class KGFramesEndpoint:
                                  if hasattr(obj, 'URI') and obj.URI})
             
             if hasattr(backend, 'update_subjects_graph'):
-                await backend.update_subjects_graph(
-                    space_id, graph_id, subject_uris, insert_quads)
+                # CHECK IT. `update_subjects_graph` reports failure — including a
+                # lock timeout — by returning False, and this discarded it and
+                # returned the URIs it INTENDED to write, so a write that did not
+                # happen was reported as frames created (`issues/253`, and the
+                # same shape as `issues/242` and `issues/245`).
+                if not await backend.update_subjects_graph(
+                        space_id, graph_id, subject_uris, insert_quads):
+                    raise SubjectWriteFailed("frame write", len(subject_uris))
             else:
                 delete_quads = []
                 if subject_uris:
@@ -3409,8 +3437,10 @@ class KGFramesEndpoint:
             
             # Step 2: Subject-level delete + insert (safe path)
             if hasattr(backend, 'update_subjects_graph'):
-                await backend.update_subjects_graph(
-                    space_id, graph_id, slot_uris, insert_quads)
+                # Checked, not discarded (`issues/253`).
+                if not await backend.update_subjects_graph(
+                        space_id, graph_id, slot_uris, insert_quads):
+                    raise SubjectWriteFailed("slot update", len(slot_uris))
             else:
                 subject_values = " ".join(f"<{uri}>" for uri in slot_uris)
                 query = f"""SELECT ?subject ?predicate ?object WHERE {{
@@ -3524,8 +3554,10 @@ class KGFramesEndpoint:
                                  if hasattr(obj, 'URI') and obj.URI})
             
             if hasattr(backend, 'update_subjects_graph'):
-                await backend.update_subjects_graph(
-                    space_id, graph_id, subject_uris, insert_quads)
+                # Checked, not discarded (`issues/253`).
+                if not await backend.update_subjects_graph(
+                        space_id, graph_id, subject_uris, insert_quads):
+                    raise SubjectWriteFailed("slot write", len(subject_uris))
             else:
                 delete_quads = []
                 if subject_uris:

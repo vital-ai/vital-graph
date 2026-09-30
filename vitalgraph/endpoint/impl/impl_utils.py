@@ -26,6 +26,31 @@ class ImplConflictError(Exception):
     pass
 
 
+class SubjectWriteFailed(Exception):
+    """A subject-level write did not happen (`issues/253`).
+
+    `update_subjects_graph` reports failure — an entity-lock timeout being the
+    production case — by returning False, and five call sites discarded that and
+    returned the URIs they had INTENDED to write, so the response said CREATED
+    for a write that never landed.
+
+    A TYPED exception rather than a bare raise, because the handler has to be
+    able to tell this apart from a genuine fault: a refused write is a
+    `STORE_FAILED` in an HTTP 200 body ("write failed for a describable data
+    reason"), NOT the `ERROR`/500 that an unhandled exception becomes. That
+    distinction is the whole point — see `model/result_status.py` — and a
+    `RuntimeError` would have been mapped to a 500 by the enclosing handler,
+    which is the contract this codebase deliberately does not use for this case.
+    """
+
+    def __init__(self, what: str, subjects: int):
+        self.what = what
+        self.subjects = subjects
+        super().__init__(
+            f"{what} failed for {subjects} subject(s); "
+            f"see the server log for the cause")
+
+
 
 
 

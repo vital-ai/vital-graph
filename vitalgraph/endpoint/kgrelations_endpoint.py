@@ -39,6 +39,7 @@ from fastapi import Response as FastAPIResponse
 
 
 from ..auth.role_dependencies import require_space_read, require_space_write
+from .impl.impl_utils import SubjectWriteFailed
 
 
 class OperationMode(str, Enum):
@@ -641,8 +642,13 @@ class KGRelationsEndpoint:
             # Subject-level delete + insert (safe path)
             if hasattr(backend, 'update_subjects_graph'):
                 if insert_quads or True:  # always delete existing
-                    await backend.update_subjects_graph(
-                        space_id, graph_id, [relation_uri], insert_quads)
+                    # Checked, not discarded: appending the URI after an
+                    # unchecked write reported a relation as updated when the
+                    # write had failed (`issues/253`).
+                    if not await backend.update_subjects_graph(
+                            space_id, graph_id, [relation_uri], insert_quads):
+                        raise SubjectWriteFailed(
+                            f"relation update ({relation_uri})", 1)
                     updated_uris.append(relation_uri)
             else:
                 query = f"""SELECT ?p ?o WHERE {{
@@ -699,8 +705,11 @@ class KGRelationsEndpoint:
             # Subject-level delete + insert (safe path)
             if hasattr(backend, 'update_subjects_graph'):
                 if insert_quads:
-                    await backend.update_subjects_graph(
-                        space_id, graph_id, [relation_uri], insert_quads)
+                    # Checked, not discarded (`issues/253`).
+                    if not await backend.update_subjects_graph(
+                            space_id, graph_id, [relation_uri], insert_quads):
+                        raise SubjectWriteFailed(
+                            f"relation upsert ({relation_uri})", 1)
                     upserted_uris.append(relation_uri)
             else:
                 query = f"""SELECT ?p ?o WHERE {{
