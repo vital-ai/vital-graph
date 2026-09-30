@@ -256,6 +256,29 @@ async def sync_frame_slot_after_edge_insert(conn, space_id: str,
     return n
 
 
+async def _edge_source_nodes(conn, space_id: str,
+                             touched_uuids: List[uuid.UUID]) -> List[uuid.UUID]:
+    """Frames that own any touched slot or touched edge (`issues/253`).
+
+    The eager half of `sync_frame_slot_before_delete`'s filter: the frames a
+    pending delete can reach INDIRECTLY, because a write that repoints a slot
+    touches the slot and not the frame. Runs in the caller's transaction and
+    immediately before the DELETE, so it reads exactly the edge rows the
+    subquery form would have read.
+
+    Both arms are indexable — `dest_node_uuid` by `idx_{space}_edge_dst_src` and
+    `edge_uuid` by `idx_{space}_edge_edge` — so this is the cheap half of the
+    trade: one bitmap lookup instead of a table scan downstream.
+    """
+    if not touched_uuids:
+        return []
+    rows = await conn.fetch(
+        f"SELECT DISTINCT source_node_uuid FROM {space_id}_edge "
+        f"WHERE dest_node_uuid = ANY($1::uuid[]) OR edge_uuid = ANY($1::uuid[])",
+        touched_uuids)
+    return [r["source_node_uuid"] for r in rows]
+
+
 async def sync_frame_slot_before_delete(conn, space_id: str,
                                         subject_uuids: List[uuid.UUID],
                                         context_uuid: Optional[uuid.UUID] = None) -> int:
@@ -271,18 +294,33 @@ async def sync_frame_slot_before_delete(conn, space_id: str,
     if not await _table_present(conn, space_id):
         return 0
     t_fs = f"{space_id}_frame_slot"
-    t_edge = f"{space_id}_edge"
-    where = f"""(frame_uuid = ANY($1)
-                 OR frame_uuid IN (SELECT source_node_uuid FROM {t_edge}
-                                   WHERE dest_node_uuid = ANY($1)
-                                      OR edge_uuid = ANY($1)))"""
+    # BOTH ARMS `= ANY(array)` SO THE PLANNER CAN BitmapOr THEM (`issues/253`,
+    # applying `issues/238`'s fix to this table). The second arm used to be
+    #
+    #     OR frame_uuid IN (SELECT source_node_uuid FROM {space}_edge
+    #                       WHERE dest_node_uuid = ANY($1) OR edge_uuid = ANY($1))
+    #
+    # evaluated inside this DELETE. A BitmapOr can only combine INDEXABLE
+    # conditions and a subquery arm compiles to a hashed SubPlan, which is not
+    # one — so a single unindexable arm forced the whole disjunction to a
+    # SEQUENTIAL SCAN, giving this statement a cost proportional to TABLE SIZE
+    # while it deletes a handful of rows. 238 fixed its twin in
+    # `sync_entity_slot_sort` and this one was left behind; production logs on
+    # 2026-09-30 then showed it as 96.6% of the four pre-delete scans.
+    #
+    # Measured locally on a real 401,543-row `frame_slot` (474,031-row edge
+    # table), realistic 15-subject write, 5 runs, both forms deleting the same 7
+    # rows: Seq Scan 37.0/38.0/348.3 ms and 11,260 buffers, against 0.045 ms and
+    # 215 buffers plus a 0.054 ms resolve — 384x including the resolve.
+    roots = await _edge_source_nodes(conn, space_id, subject_uuids)
+    where = "(frame_uuid = ANY($1::uuid[]) OR frame_uuid = ANY($2::uuid[]))"
     if context_uuid is not None:
         result = await _forced(conn,
-            f"DELETE FROM {t_fs} WHERE {where} AND context_uuid = $2",
-            subject_uuids, context_uuid)
+            f"DELETE FROM {t_fs} WHERE {where} AND context_uuid = $3",
+            subject_uuids, roots, context_uuid)
     else:
         result = await _forced(conn, f"DELETE FROM {t_fs} WHERE {where}",
-                               subject_uuids)
+                               subject_uuids, roots)
     n = int(result.split()[-1]) if result else 0
     if n:
         logger.debug("sync_frame_slot_before_delete(%s): %d row(s)", space_id, n)
