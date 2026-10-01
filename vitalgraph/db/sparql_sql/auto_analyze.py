@@ -15,6 +15,7 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 from ..connection_config import require
+from ...utils.background import BackgroundTasks
 
 logger = logging.getLogger(__name__)
 
@@ -255,11 +256,12 @@ def get_last_analyze_time(space_id: str) -> Optional[float]:
 # acquisition on EVERY write to discover there was nothing to do. At a 50,000-row
 # threshold that is almost every write.
 
-# Tasks in flight per space. A strong reference is required: callers
-# fire-and-forget the return value, and a task referenced by nothing can be
-# garbage-collected mid-ANALYZE (the same reason `vectorization.auto_sync` keeps
-# its own registry).
-_IN_FLIGHT: Dict[str, set] = {}
+# Scheduling lives in `utils.background`: a strong reference is required, because
+# a task referenced by nothing can be garbage-collected mid-ANALYZE, and the
+# exception has to be logged because nothing awaits it. Shared rather than
+# re-implemented — `kg_backend_utils` schedules the aux-table ANALYZE the same
+# way, and this bookkeeping is exactly where fire-and-forget goes wrong.
+_TASKS = BackgroundTasks("auto_analyze")
 
 
 def changes_pending(space_id: str,
@@ -295,33 +297,8 @@ def schedule_maybe_analyze(db_impl, space_id: str, *,
         logger.debug("auto_analyze(%s): no pool available, skipping", space_id)
         return None
 
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        logger.debug("auto_analyze(%s): no running event loop, skipping", space_id)
-        return None
-
     async def _run() -> None:
         async with pool.acquire() as conn:
             await maybe_analyze(conn, space_id, threshold, pg_config=pg_config)
 
-    task = loop.create_task(_run(), name=f"auto_analyze:{space_id}")
-    _IN_FLIGHT.setdefault(space_id, set()).add(task)
-
-    def _on_done(t) -> None:
-        pending = _IN_FLIGHT.get(space_id)
-        if pending is not None:
-            pending.discard(t)
-            if not pending:
-                _IN_FLIGHT.pop(space_id, None)
-        if t.cancelled():
-            return
-        # Swallowed deliberately: an unhandled task exception would surface as a
-        # bare "Task exception was never retrieved" with no context, and nothing
-        # is waiting on this to decide anything.
-        exc = t.exception()
-        if exc is not None:
-            logger.error("auto_analyze(%s) task failed: %s", space_id, exc)
-
-    task.add_done_callback(_on_done)
-    return task
+    return _TASKS.schedule(_run(), key=space_id)

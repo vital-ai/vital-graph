@@ -36,10 +36,8 @@ SPACE = "sp_analyze_test"
 @pytest.fixture(autouse=True)
 def _clean():
     auto_analyze._change_counts.pop(SPACE, None)
-    auto_analyze._IN_FLIGHT.pop(SPACE, None)
     yield
     auto_analyze._change_counts.pop(SPACE, None)
-    auto_analyze._IN_FLIGHT.pop(SPACE, None)
 
 
 class FakePool:
@@ -134,10 +132,10 @@ class TestTheScheduledPath:
         record_changes(SPACE, DEFAULT_ANALYZE_THRESHOLD)
         task = schedule_maybe_analyze(FakeDbImpl(), SPACE)
 
-        assert task in auto_analyze._IN_FLIGHT[SPACE]
+        assert auto_analyze._TASKS.in_flight(SPACE) == 1
         release.set()
         await asyncio.wait_for(task, timeout=1)
-        assert SPACE not in auto_analyze._IN_FLIGHT
+        assert auto_analyze._TASKS.in_flight(SPACE) == 0
 
     @pytest.mark.asyncio
     async def test_a_failing_analyze_is_logged_and_never_raised_at_the_caller(
@@ -155,7 +153,7 @@ class TestTheScheduledPath:
             await asyncio.sleep(0)              # let the done-callback run
         assert any("auto_analyze" in r.getMessage() and "exploded" in r.getMessage()
                    for r in caplog.records), caplog.text
-        assert SPACE not in auto_analyze._IN_FLIGHT
+        assert auto_analyze._TASKS.in_flight(SPACE) == 0
 
     def test_no_event_loop_is_not_an_error(self):
         # Called from sync context (a script, a test): skip, do not explode.
@@ -200,3 +198,78 @@ class TestNoCallSiteAwaitsItAnyMore:
         assert not internal_acquires, \
             f"an internal-pool connection is acquired inline at {internal_acquires}"
         assert len(scheduled) == 3, f"expected 3 scheduled sites, found {scheduled}"
+
+
+class TestTheAuxTableAnalyzeIsScheduledToo:
+    """`store_objects`' own ANALYZE — the LATENT twin of the lost-write defect.
+
+    It was awaited in the request path at a measured 3.389 s on production, and
+    `store_objects` takes a `conn` parameter: the first caller to pass one would
+    have had this ANALYZE awaited inside its transaction, against a 60 s
+    `idle_in_transaction_session_timeout`. Nobody passes one today. Scheduling it
+    means nobody can.
+    """
+
+    def _adapter(self):
+        from vitalgraph.kg_impl.kg_backend_utils import SparqlSQLBackendAdapter
+
+        class _Backend:
+            schema = None
+            db_impl = None
+            postgresql_config = None
+
+        return SparqlSQLBackendAdapter(_Backend())
+
+    @pytest.mark.asyncio
+    async def test_the_tier_0_guard_means_an_ordinary_write_creates_no_task(
+            self, monkeypatch):
+        from vitalgraph.kg_impl import kg_backend_utils as kbu
+
+        monkeypatch.setattr(auto_analyze, "was_analyzed_recently",
+                            lambda space_id, max_age_seconds=None: True)
+        adapter = self._adapter()
+        adapter._schedule_analyze_aux_tables(SPACE)
+        assert kbu._AUX_ANALYZE_TASKS.in_flight(SPACE) == 0
+
+    @pytest.mark.asyncio
+    async def test_otherwise_it_schedules_without_awaiting(self, monkeypatch):
+        from vitalgraph.kg_impl import kg_backend_utils as kbu
+
+        monkeypatch.setattr(auto_analyze, "was_analyzed_recently",
+                            lambda space_id, max_age_seconds=None: False)
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _body(self, space_id, since=None):
+            started.set()
+            await release.wait()
+            return True
+
+        monkeypatch.setattr(kbu.SparqlSQLBackendAdapter,
+                            "_maybe_analyze_aux_tables", _body)
+        adapter = self._adapter()
+        adapter._schedule_analyze_aux_tables(SPACE)
+
+        assert not started.is_set()          # returned before the ANALYZE began
+        assert kbu._AUX_ANALYZE_TASKS.in_flight(SPACE) == 1
+        await asyncio.wait_for(started.wait(), timeout=1)
+        release.set()
+        for _ in range(10):
+            await asyncio.sleep(0)
+            if kbu._AUX_ANALYZE_TASKS.in_flight(SPACE) == 0:
+                break
+        assert kbu._AUX_ANALYZE_TASKS.in_flight(SPACE) == 0
+
+    def test_store_objects_does_not_await_it(self):
+        # The guard, over the AST for the reason noted above.
+        import ast
+        import inspect
+
+        from vitalgraph.kg_impl import kg_backend_utils as kbu
+
+        tree = ast.parse(inspect.getsource(kbu))
+        awaited = [n.lineno for n in ast.walk(tree)
+                   if isinstance(n, ast.Await) and isinstance(n.value, ast.Call)
+                   and getattr(n.value.func, "attr", None)
+                   == "_maybe_analyze_aux_tables"]
+        assert not awaited, f"the aux-table ANALYZE is awaited at {awaited}"

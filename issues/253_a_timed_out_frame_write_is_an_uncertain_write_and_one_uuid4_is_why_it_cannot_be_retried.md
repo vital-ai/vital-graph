@@ -532,6 +532,33 @@ kills the transaction*. Demoting it on the evidence then available was correct;
 the evidence that settles it is the ANALYZE durations in the database log, which
 nothing had looked at.
 
+### The latent twin, also fixed 2026-10-01
+
+`store_objects` awaited its own `_maybe_analyze_aux_tables` — **3.389 s measured
+on production**, charged to a user's write for work that is deferrable by
+definition. And `store_objects` takes a `conn` parameter, so **the first caller to
+pass one would have recreated the lost-write defect in a second place.** No caller
+passes one today (0 of 11 call sites), which is why this never fired; scheduling
+it means it cannot.
+
+Its tier-0 guard is now checked in the SCHEDULER, in process and free, so an
+ordinary write creates no task at all. The body re-checks it, which keeps the body
+correct for anyone calling it directly. Its `since` argument became optional and
+defaults to entry: it was being handed the write's own `_t2`, which measured
+"write start to ANALYZE end" and is meaningless once the ANALYZE is no longer part
+of the write.
+
+### The scheduling primitive is shared, not re-implemented
+
+Three places now schedule unawaited work, and fire-and-forget has three ways to go
+wrong — a task nobody references can be garbage-collected mid-flight, an exception
+surfaces as a contextless "Task exception was never retrieved", and no running
+loop must not be an error. `utils/background.BackgroundTasks` holds all three in
+one place, with `auto_analyze` and the aux-table path both using it.
+`vectorization.auto_sync` keeps its own registry deliberately: it also cancels
+in-flight work when a space is dropped, and that extra requirement is why it is
+not folded in.
+
 ### FIXED 2026-10-01 — scheduled, never awaited
 
 `auto_analyze.schedule_maybe_analyze` replaces the inline acquire-and-await at

@@ -143,6 +143,10 @@ async def fast_typed_subject_page(backend, space_id: str, graph_id: str,
 from ..db.sparql_sql.conn_scope import write_conn as _write_conn
 from ..db.sparql_sql.entity_lock import EntityLockTimeout
 from ..utils.exception_detail import describe_exception
+from ..utils.background import BackgroundTasks
+
+# Post-write aux-table ANALYZE, scheduled per space (`issues/253`).
+_AUX_ANALYZE_TASKS = BackgroundTasks("aux-table ANALYZE")
 
 
 # Phases of one write, in the order they complete. Printing them in a fixed order
@@ -316,10 +320,15 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             # applicant's entities are appended. MaintenanceJob and autovacuum own
             # those two tables now.
             # See planning/planning_performance/prod_db_saturation_plan.md
-            try:
-                await self._maybe_analyze_aux_tables(space_id, since=_t2)
-            except Exception as ae:
-                self.logger.warning("ANALYZE after bulk insert failed (non-fatal): %s", ae)
+            # SCHEDULED, NEVER AWAITED (`issues/253`). This was
+            # `await self._maybe_analyze_aux_tables(...)`, measured at 3.389 s on
+            # production — charged to a user's write, for work that is deferrable
+            # by definition. It is also the LATENT TWIN of the defect that lost
+            # five writes: `store_objects` takes a `conn` parameter, so the first
+            # caller to pass one would have had this ANALYZE awaited inside its
+            # transaction, and `idle_in_transaction_session_timeout` is 60 s.
+            # Nobody passes one today; scheduling it means nobody can.
+            self._schedule_analyze_aux_tables(space_id)
 
             self.logger.info("⏱️  BACKEND store_objects total: %.3fs", _time.monotonic() - _t0)
 
@@ -347,7 +356,24 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             self._analyze_lock_manager = mgr
         return self._analyze_lock_manager
 
-    async def _maybe_analyze_aux_tables(self, space_id: str, since: float) -> bool:
+    def _schedule_analyze_aux_tables(self, space_id: str) -> None:
+        """Schedule the post-write aux-table ANALYZE. Never awaited.
+
+        The tier-0 guard is checked HERE, in process and free, so an ordinary
+        write creates no task at all — the body re-checks it, which keeps the
+        body correct for anyone calling it directly.
+        """
+        from ..db.sparql_sql.auto_analyze import (
+            ANALYZE_LOCAL_GUARD_SECONDS, was_analyzed_recently,
+        )
+        if was_analyzed_recently(space_id,
+                                 max_age_seconds=ANALYZE_LOCAL_GUARD_SECONDS):
+            return
+        _AUX_ANALYZE_TASKS.schedule(
+            self._maybe_analyze_aux_tables(space_id), key=space_id)
+
+    async def _maybe_analyze_aux_tables(self, space_id: str,
+                                        since: Optional[float] = None) -> bool:
         """ANALYZE the auxiliary tables for *space_id*, rate-limited across processes.
 
         Three tiers, each covering a case the previous one cannot:
@@ -366,6 +392,11 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         Returns True if ANALYZE actually ran.
         """
         import time as _time
+        # Timed from ENTRY when the caller does not supply a start. It used to be
+        # handed the write's own `_t2`, which measured "write start to ANALYZE
+        # end" — meaningless now that this is scheduled rather than awaited.
+        if since is None:
+            since = _time.monotonic()
         from ..db.sparql_sql.auto_analyze import (
             was_analyzed_recently, set_last_analyze_time, fetch_last_analyze_age,
             ANALYZE_LOCAL_GUARD_SECONDS, ANALYZE_MIN_INTERVAL,
