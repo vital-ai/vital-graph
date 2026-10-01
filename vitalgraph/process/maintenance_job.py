@@ -1919,6 +1919,16 @@ class MaintenanceJob:
         for sid in sorted(pending)[:_SWEEP_SPACES_PER_CYCLE]:
             try:
                 async with self._pool.acquire() as conn:
+                    # THE SPACE MAY HAVE GONE since it was marked pending
+                    # (`issues/253`). Sweeping a dropped space logs
+                    # `relation "..." does not exist` once per table per cycle,
+                    # and PostgreSQL records every failed statement server-side
+                    # even though this `except` swallows it.
+                    from ..db.sparql_sql.space_presence import space_tables_present
+                    if not await space_tables_present(conn, sid):
+                        logger.debug("referential sweep: space %s is gone, "
+                                     "skipping", sid)
+                        continue
                     # frame_slot BEFORE edges, and the order is load-bearing:
                     # a frame_slot row is validated against the edge table, so
                     # cleaning it after the edges it reads have gone makes it

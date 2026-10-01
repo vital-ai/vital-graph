@@ -493,9 +493,10 @@ async def _space_still_exists(conn, space_id: str) -> bool:
     Also covers the multi-worker case, where the deletion happened in a
     different process and cancel_space_syncs() could not reach this task.
     """
-    return bool(
-        await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"{space_id}_rdf_quad")
-    )
+    # Delegated so there is ONE implementation: the maintenance sweep and the
+    # server-property backfill ask the same question (`issues/253`).
+    from ..db.sparql_sql.space_presence import space_tables_present
+    return await space_tables_present(conn, space_id)
 
 
 async def _run_sync(

@@ -402,6 +402,15 @@ class BackfillServerPropertiesTask:
             spaces = [s for s in spaces if s not in self.exclude_spaces]
         for space_id in spaces:
             try:
+                # Same race as the maintenance sweep (`issues/253`): the space
+                # list is a snapshot, and discovering graphs in a space that has
+                # since been dropped logs `relation "..." does not exist`.
+                async with self.pool.acquire() as _c:
+                    from ..db.sparql_sql.space_presence import space_tables_present
+                    if not await space_tables_present(_c, space_id):
+                        logger.debug("Backfill: space %s is gone, skipping",
+                                     space_id)
+                        continue
                 graphs = await self._discover_graphs_cached(space_id)
                 for gid in graphs:
                     targets.append((space_id, gid))
