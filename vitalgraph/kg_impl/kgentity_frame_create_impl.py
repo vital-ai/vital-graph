@@ -28,7 +28,7 @@ from ai_haley_kg_domain.model.KGSlot import KGSlot
 from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
 
 # Backend adapter import
-from vitalgraph.kg_impl.kg_backend_utils import KGBackendInterface
+from vitalgraph.kg_impl.kg_backend_utils import KGBackendInterface, StaleWrite
 from vitalgraph.kg_impl.edge_uris import edge_uri
 
 
@@ -131,7 +131,8 @@ class KGEntityFrameCreateProcessor:
         entity_uri: str,
         frame_objects: List[GraphObject],
         operation_mode: str = "CREATE",
-        parent_frame_uri: Optional[str] = None
+        parent_frame_uri: Optional[str] = None,
+        if_unmodified_since: Optional[str] = None,
     ) -> CreateFrameResult:
         """
         Create frame graph and link to existing entity.
@@ -217,11 +218,13 @@ class KGEntityFrameCreateProcessor:
             if operation_mode and str(operation_mode).upper() in ['UPDATE', 'UPSERT']:
                 success = await self.execute_atomic_frame_update(backend_adapter, space_id, graph_id, 
                                                                categories.frame_objects, all_objects, operation_mode,
-                                                                 entity_uri=entity_uri)
+                                                                 entity_uri=entity_uri,
+                                                                 if_unmodified_since=if_unmodified_since)
             else:
                 # Step 7: Execute atomic creation via backend (extracted from lines 1125-1145)
                 success = await self.execute_frame_creation(backend_adapter, space_id, graph_id, all_objects,
-                                                                            entity_uri=entity_uri)
+                                                                            entity_uri=entity_uri,
+                                                                            if_unmodified_since=if_unmodified_since)
             
             if success:
                 created_uris = [str(obj.URI) for obj in all_objects if hasattr(obj, 'URI')]
@@ -251,6 +254,14 @@ class KGEntityFrameCreateProcessor:
                     frame_count=0,
                 )
                 
+        except StaleWrite:
+            # A REFUSAL, not a failure, and the difference is the whole point
+            # (`issues/253`): the caller must be told its entity moved so it can
+            # re-read and merge, where a generic failure tells it to give up or
+            # to replay the same losing write. Every broad `except` between the
+            # guard and the endpoint has to let this one past, and three of them
+            # did not — the refusal arrived over HTTP as `store_failed`.
+            raise
         except Exception as e:
             self.logger.error(f"Error creating/updating frames: {e}")
             return CreateFrameResult(
@@ -497,7 +508,8 @@ class KGEntityFrameCreateProcessor:
     async def execute_atomic_frame_update(self, backend_adapter: KGBackendInterface, space_id: str,
                                         graph_id: str, frame_objects: List[GraphObject], all_objects: List[GraphObject],
                                         operation_mode: str,
-                                        entity_uri: Optional[str] = None) -> tuple:
+                                        entity_uri: Optional[str] = None,
+                                        if_unmodified_since: Optional[str] = None) -> tuple:
         """
         Execute atomic frame UPDATE/UPSERT via subject-level delete + insert.
         
@@ -537,7 +549,13 @@ class KGEntityFrameCreateProcessor:
                 # take the same one to be excluded from them.
                 success = await backend_adapter.update_subjects_graph(
                     space_id, graph_id, subject_uris, insert_quads,
-                    lock_uris=[entity_uri] if entity_uri else None)
+                    lock_uris=[entity_uri] if entity_uri else None,
+                    # The guard and the stamp both key on the OWNING ENTITY, the
+                    # same thing the lock keys on (`issues/253`). Stamping here
+                    # rather than after the write is what makes the comparison
+                    # race-free for the next writer.
+                    if_unmodified_since=if_unmodified_since,
+                    guard_subject=entity_uri)
                 t2 = time.time()
                 self.logger.info(f"⏱️ FRAME_UPDATE step2 update_subjects_graph: {t2-t1:.3f}s "
                                f"({len(subject_uris)} subjects, {len(insert_quads)} quads)")
@@ -572,6 +590,8 @@ class KGEntityFrameCreateProcessor:
                 self.logger.error(f"❌ Atomic frame {operation_mode} failed")
                 return False
                 
+        except StaleWrite:
+            raise                     # a refusal must reach the caller as one
         except Exception as e:
             self.logger.error(f"Error in atomic frame {operation_mode}: {e}")
             return False
@@ -893,7 +913,8 @@ class KGEntityFrameCreateProcessor:
 
     async def execute_frame_creation(self, backend_adapter: KGBackendInterface, space_id: str, 
                                    graph_id: str, all_objects: List[GraphObject],
-                                   entity_uri: Optional[str] = None) -> bool:
+                                   entity_uri: Optional[str] = None,
+                                   if_unmodified_since: Optional[str] = None) -> bool:
         """
         Execute atomic frame creation via subject-level delete + insert.
         
@@ -936,7 +957,13 @@ class KGEntityFrameCreateProcessor:
                 # take the same one to be excluded from them.
                 success = await backend_adapter.update_subjects_graph(
                     space_id, graph_id, subject_uris, insert_quads,
-                    lock_uris=[entity_uri] if entity_uri else None)
+                    lock_uris=[entity_uri] if entity_uri else None,
+                    # The guard and the stamp both key on the OWNING ENTITY, the
+                    # same thing the lock keys on (`issues/253`). Stamping here
+                    # rather than after the write is what makes the comparison
+                    # race-free for the next writer.
+                    if_unmodified_since=if_unmodified_since,
+                    guard_subject=entity_uri)
                 _t2 = _time.time()
                 self.logger.info(f"⏱️ FRAME_CREATE step2 update_subjects_graph: {_t2-_t1:.3f}s "
                                f"({len(subject_uris)} subjects, {len(insert_quads)} quads)")
@@ -958,6 +985,8 @@ class KGEntityFrameCreateProcessor:
                 self.logger.error(f"❌ Atomic frame creation failed")
                 return False
             
+        except StaleWrite:
+            raise                     # a refusal must reach the caller as one
         except Exception as e:
             self.logger.error(f"Error executing frame creation: {e}")
             return False

@@ -93,6 +93,23 @@
 ## outliving their client). Where this file says "the reporter's 044" it means
 ## theirs.
 
+## ADDED 2026-10-01 (2) — THE STANDALONE-FRAME ROUTES ARE GUARDED TOO, keyed on
+## the FRAME because they have no owning entity. Five more defects between the
+## mechanism and the caller, one of which stored a value NO READ COULD SEE: the
+## stamp quad was written with a predicate that had no term row, so every read
+## joined it away while the write reported success. See "The kgframes routes had
+## no guard". Also corrects a claim made earlier the same day: the lockless
+## `update_subjects_graph` call I pointed at is on a DEAD path.
+
+## ADDED 2026-10-01 — THE LOST UPDATE IS BUILT AND PROVEN OVER HTTP, and it was
+## written up here as "not built" until today. `if_unmodified_since` on both
+## entity-frame writes, compare-and-set inside the write transaction, and
+## `status="conflict"` in a 200 body. The guard worked first time; FOUR defects
+## sat between it and the caller, three of them the same mistake in three layers
+## (a refusal reduced to a count). See "BUILT AND PROVEN OVER HTTP". The caller
+## half is still unbuilt and still load-bearing: nothing sends the parameter yet,
+## so the old last-writer-wins behaviour is what runs in production.
+
 ## What is fixed
 
 **1. The write is idempotent, so a replay is a no-op.** `vitalgraph/kg_impl/edge_uris.py`
@@ -1138,6 +1155,210 @@ handle a refusal. **That last part is load-bearing**: under the decision above, 
 refusal is a `CONFLICT` in a 200 body, and an unread 409 is worth exactly as much
 as an unread 200. Building the server half alone would add API surface and change
 nothing that happens.
+
+### BUILT AND PROVEN OVER HTTP 2026-10-01 — and the mechanism was the easy half
+
+The sketch above is now the implementation, end to end: `if_unmodified_since` on
+both entity-frame write endpoints, a compare-and-set inside the write
+transaction, and `status="conflict"` in a 200 body on a refusal.
+
+The guard itself worked on the first run. **Four separate defects sat between it
+and the caller**, each one turning a correct refusal into something a caller
+cannot act on, and each only visible over HTTP:
+
+| # | Where | What the caller saw | Why |
+|---|-------|---------------------|-----|
+| 1 | `kgentity_frame_create_impl` ×3, `kgentity_frame_update_impl` ×1 | `store_failed` | four `except Exception: return False` handlers on the climb, each swallowing the refusal |
+| 2 | `kgentities_endpoint._update_entity_frames` | HTTP **500** | the handler returned `FrameUpdateResponse`, imported function-locally *inside the `try`* — so the name was an unbound local and the mapping was correct and unreachable |
+| 3 | client `update_entity_frames` | `status=None`, `is_conflict` False | the "nothing was updated" short-circuit built its response without the server's status, and a refusal has the same count as a failure |
+| 4 | — | — | `update_entity_frames` validates frame ownership, so a conditional write is only meaningful on a frame that already exists |
+
+Numbers 1–3 are the same mistake in three layers: **the count and the status
+carry different information, and every layer that reduced the outcome to a
+boolean destroyed the one that mattered.** A refused write and a failed write
+are both "zero frames written"; only the status says which, and the whole point
+of the feature is that the caller does the opposite thing in each case.
+
+Worth stating plainly: with the mechanism built and all three unit-level proofs
+green, the contract was still broken in every one of the four ways above. None of
+them is reachable from below the HTTP boundary.
+
+**What is proven** (`tests/api/test_a_stale_frame_write_is_refused_over_http.py`,
+8 tests, against the test image):
+
+- the entity carries a stamp a caller can read, and a frame write stamps the
+  *entity* — the precondition for a per-entity check
+- a write holding the current stamp is accepted
+- a write holding a stale one returns `status="conflict"`, `is_success` False,
+  `is_conflict` True, in an HTTP **200**
+- the message names the entity, the stamp sent and the stamp found — enough to
+  log the race without another round trip
+- a refused write wrote *nothing*: the stamp did not move and the losing frame
+  is not in the graph
+- both entry points carry it (`_create_or_update_frames` and
+  `_update_entity_frames` are separately plumbed)
+- omitting the parameter leaves the previous last-writer-wins behaviour exactly
+  as it was
+- **the reported symptom itself**: two savers read the same stamp, both edit the
+  same slot, the one that read first writes last — and the newer value survives.
+  Without the guard that write succeeds and the newer value is gone.
+
+### The client could send the stamp but not read it, and the obvious way to read it is wrong
+
+Sending `if_unmodified_since` is only half the loop. The client had no way to
+*read* the value to send, so every caller would have had to know
+`http://vital.ai/ontology/vital#hasObjectModificationDateTime` — and two test
+scripts in this repository had already hardcoded it.
+
+**The trap, which is the reason this needed an accessor rather than a line of
+documentation.** The natural thing for a caller to write is:
+
+    str(entity.objectModificationDateTime)      # 2026-10-01 12:23:37.333100+00:00
+    # what the server stored:                     2026-10-01T12:23:37.333100+00:00
+
+VitalSigns parses the literal into a `datetime`, so `str()` renders it
+space-separated while the stored term text keeps the ISO `T`. The guard compares
+the stored STRING deliberately — a datetime comparison would forgive a
+formatting difference, and a formatting difference means something rewrote the
+value — so the space form is refused **every time**. A caller doing the obvious
+thing would see a permanent conflict, re-read, get the same unusable value, and
+be stuck in a loop with nothing to fix. Silent and total, and it would have
+looked like the feature was broken rather than the call.
+
+Built:
+
+| | |
+|---|---|
+| `modification_stamp(obj)` | the wire form, for any GraphObject |
+| `find_modification_stamp(objects, uri)` | picks the object by URI |
+| `EntityGraph.modification_stamp` | the ENTITY's, not the first in the graph |
+| `EntityGraphResponse.modification_stamp` | the graph read |
+| `GraphObjectResponse.modification_stamp_for(uri)` | the flat read — cheaper, and enough |
+| `MultiEntityGraphResponse.modification_stamps` | URI -> stamp, for a batch |
+
+The entity-versus-graph distinction matters: an entity graph holds the entity,
+its frames, its slots and their edges, and **every one of them carries its own
+stamp**. Frames are written more often than the entity, so "the first stamp in
+the list" is usually a frame's — accepted or refused for a reason the caller
+cannot see. The guard keys on the owning entity, so the accessor does too.
+
+The URI itself now has ONE definition, `vitalgraph/model/server_properties.py`,
+which `kg_server_properties` re-exports under its existing names. The client
+package deliberately does not import `kg_impl`, and the alternative was a second
+copy — which this file's own §"What is already right" says of the success-status
+set: a hand-copied list is how the two drift.
+
+So the loop a caller writes is:
+
+    r = await c.kgentities.get_kgentity(..., include_entity_graph=True)
+    w = await c.kgentities.update_entity_frames(
+            ..., if_unmodified_since=r.modification_stamp)
+    if w.is_conflict:
+        ...   # somebody else wrote: read again, re-merge, re-send
+
+`tests/unit/test_the_client_can_read_the_stamp_it_must_send.py`, 17 tests,
+including the `str()` form, three stamp formats round-tripped unchanged, the
+entity-versus-frame pick, and that the client, the server and the guard all read
+the same constant. The API test now reads the stamp through this accessor rather
+than parsing the predicate itself, so the published API is what gets exercised
+against real server data.
+
+**The third entry point is deliberately left out.** `operation_mode=replace`
+also writes entity frames, and it does NOT accept `if_unmodified_since`. Replace
+deletes the existing frames with its own SPARQL updates *before* calling the
+create path, outside the transaction the guard runs in — so a refusal would land
+after the deletes and leave the entity with neither the old frames nor the new
+ones. That is worse than the lost update it would prevent. Making replace
+conditional means first making its delete and its insert one transaction. The
+dispatch site says so, so nobody adds the parameter for symmetry.
+
+`tests/unit/test_a_refusal_is_not_swallowed_on_the_way_up.py` pins defects 1–2
+structurally, over the AST, for the next person who adds a handler on this path:
+a broad `except` that can see the write must be preceded by an `except
+StaleWrite`, that handler must re-raise bare, and it must import the model it
+returns rather than borrowing the body's import. Verified to fail when any one
+guard is removed.
+
+**Still the caller's half, and still load-bearing.** The server now refuses, but
+a refusal nobody reads changes nothing — the portal logged 42,343 successful
+writes and one error while losing updates. Nothing sends `if_unmodified_since`
+yet; until a caller does, this is API surface and the old behaviour is what runs.
+
+### The kgframes routes had no guard, and the guard did not reach them (2026-10-01)
+
+Raised in review: the work above covers `/kgentities/kgframes` only. The
+`/kgframes` and `/kgframes/kgslots` routes write frames and slots too, and had
+no conditional write.
+
+**They cannot key on an entity.** `_create_frames` says so in its own docstring —
+"`entity_uri` is accepted for backward compatibility but is NOT used. Standalone
+frames have no entity dependency" — and `_update_frame_slots` is not even given
+one. So these guard on the **frame**, whose own
+`hasObjectModificationDateTime` is the version, and which is the same key the
+advisory lock already takes on that path.
+
+**A correction to what this file said first.** I reported the `update_subjects_graph`
+call at `kgframes_endpoint.py:2755` as taking no lock. It does not, but it is
+**dead**: its only callers are `_update_frames_in_backend` and
+`_upsert_frames_in_backend`, and nothing calls either. The live standalone write
+goes through `KGFrameCreateProcessor`, which has taken a frame-graph lock since
+`issues/174`. Only the two SLOT writers were genuinely lockless, and they now
+take the frame.
+
+Five defects, all of them only reachable over HTTP:
+
+| # | What the caller saw | Why |
+|---|---------------------|-----|
+| 1 | a frame with **no stamp at all**, so nothing to be conditional on | the quad was written with a predicate uuid that had **no row in the term table**. Every read joins terms to get the text back, so the join dropped it: the row was there, the write reported success, and the value was invisible to the API, to SPARQL and to the caller about to send it back |
+| 2 | a successful write that left the frame unstamped | the stamp was written BEFORE the subject-level DELETE, and a standalone frame guards on ITSELF — so it was among the subjects being replaced and its own stamp was deleted a statement later |
+| 3 | HTTP **500** on a refusal | the four mode handlers turn anything they catch into a 500, and a refusal is not an anything |
+| 4 | `status=None`, `is_conflict` False | four client `success is False` short-circuits built their response without the server's status |
+| 5 | — | `_update_frame_slots` is given only a frame URI, which settles the key question: there is nothing else to use |
+
+Number 1 is the one worth remembering. **It never showed on the entity path**
+because an entity already carries that predicate from ordinary server-property
+stamping, so the term row was always already there. A standalone frame in a
+fresh space is the first subject ever stamped without one. A write that succeeds
+and stores a value no read can see is the worst shape in this file, and nothing
+below HTTP would have caught it — the quad count was right.
+
+**Two parameters, because they are two questions.** `guard_subject` is compared
+before the write; `stamp_subjects` is the list whose version the write advances,
+applied after it. They were one parameter at first, and that could only stamp a
+single subject — so a write covering several frames left the others with their
+version unchanged, which reads as "nobody wrote" to the next conditional caller.
+That is the lost update coming back in through its own fix.
+
+**One stamp cannot cover several frames.** A `/kgframes` write accepts any number
+of frames and a precondition names one version of one thing, so sending both is
+refused as `INVALID_REQUEST` — not `CONFLICT`, because the caller has to change
+what it SENDS rather than re-read, and not narrowed silently to one of them.
+
+**Deliberately excluded**, same reasoning as the entity route:
+`operation_mode=replace` deletes the existing frames before the guarded write, so
+a refusal would leave neither the old frames nor the new ones.
+
+**THE TWO KEYS ARE CORRECT, and I first wrote this up as a gap.** I noted that a
+`/kgentities/kgframes` write keys on the entity and does not move the frame's
+stamp, called that a cross-route bypass, and proposed stamping frames on the
+entity route to close it. **Wrong framing**, corrected on review: a frame inside
+an entity and a top-level frame (or a child of one) are DIFFERENT THINGS in this
+model, reached through different routes, and the unit of concurrency follows the
+object — the entity for the first, the frame for the second. The two families do
+not write the same frames, so there is no cross-route writer to exclude, and
+different locking behaviour between the two endpoints is the design rather than a
+shortfall in it.
+
+So the frame stamping I proposed for the entity route is NOT needed, and would be
+cost for nothing: that route writes a whole frame set at once, and it would be
+advancing a version no caller of that route reads.
+
+`tests/api/test_a_stale_standalone_frame_write_is_refused.py`, 10 tests: the
+frame carries a stamp, the stamp advances on every write INCLUDING a slot-only
+write, a current stamp is accepted, a stale one is a `conflict` in a 200, a
+refused write left the frame untouched, omitting it keeps last-writer-wins, the
+ambiguous precondition is a bad request while the same batch still works
+unconditionally, and the slot route guards on its frame.
 
 ## What needs to change in the client
 

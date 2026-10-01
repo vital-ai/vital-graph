@@ -70,11 +70,13 @@ async def arena(make_space, space_impl):
             space_id, graph, [FRAME],
             [(URIRef(FRAME), URIRef("urn:p"), Literal(val), URIRef(graph))],
             lock_uris=[ENTITY],
-            stamp_entity=ENTITY if stamp_it else None,
+            guard_subject=ENTITY if stamp_it else None,
             if_unmodified_since=expect)
 
     await write("v0")
-    return {"stamp": stamp, "value": value, "write": write}
+    return {"stamp": stamp, "value": value, "write": write,
+            "space_id": space_id, "graph": graph, "t": t, "pool": pool,
+            "adapter": adapter}
 
 
 class TestTheLostUpdate:
@@ -114,3 +116,83 @@ class TestTheLostUpdate:
         await arena["write"]("B", expect=shared)
         assert await arena["write"]("legacy", stamp_it=False) is True
         assert await arena["value"]() == "legacy"
+
+
+class TestTheStampIsReadableAndNotJustPresent:
+    """A quad whose predicate has no term row exists and cannot be read.
+
+    Found over HTTP, not here: the frame came back with no stamp while the quad
+    sat in `rdf_quad`. Every read joins the term table to turn uuids back into
+    text, so a missing term row makes the join drop the row — silently, with the
+    write reporting success.
+
+    It could not happen on the ENTITY path, which is why the first version of
+    this mechanism looked correct: an entity already carries this predicate from
+    ordinary server-property stamping, so the term row was always already there.
+    The first subject ever stamped WITHOUT one was a standalone frame in a fresh
+    space. These tests assert the join, not the row count, because the row count
+    was right.
+    """
+
+    async def test_the_predicate_has_a_term_row(self, arena):
+        async with arena["pool"].acquire() as c:
+            assert await c.fetchval(
+                f"SELECT EXISTS(SELECT 1 FROM {arena['t']['term']} "
+                f"WHERE term_text = $1)", MODIFICATION_TIME_URI), (
+                    "the stamp predicate has no term row, so every read that "
+                    "joins terms drops the stamp")
+
+    async def test_the_stamp_quad_survives_the_join(self, arena):
+        # The same shape as an API read: subject, predicate and object all
+        # resolved through the term table.
+        async with arena["pool"].acquire() as c:
+            got = await c.fetchval(
+                f"SELECT tt.term_text FROM {arena['t']['rdf_quad']} q "
+                f"JOIN {arena['t']['term']} ts ON ts.term_uuid = q.subject_uuid "
+                f"JOIN {arena['t']['term']} tp ON tp.term_uuid = q.predicate_uuid "
+                f"JOIN {arena['t']['term']} tt ON tt.term_uuid = q.object_uuid "
+                f"WHERE ts.term_text = $1 AND tp.term_text = $2",
+                ENTITY, MODIFICATION_TIME_URI)
+        assert got, "the stamp is in the table but no read can see it"
+
+    async def test_a_subject_stamped_without_being_written_is_readable(self, arena):
+        # The slot-route shape: the FRAME's version advances while only its slots
+        # are written, so the stamped subject is not among `subject_uris` and
+        # nothing else in the write puts its term row there.
+        other = "urn:lead:stamped-but-not-written"
+        assert await arena["adapter"].update_subjects_graph(
+            arena["space_id"], arena["graph"], [FRAME],
+            [(URIRef(FRAME), URIRef("urn:p"), Literal("x"), URIRef(arena["graph"]))],
+            lock_uris=[ENTITY], stamp_subjects=[other]) is True
+
+        async with arena["pool"].acquire() as c:
+            got = await c.fetchval(
+                f"SELECT tt.term_text FROM {arena['t']['rdf_quad']} q "
+                f"JOIN {arena['t']['term']} ts ON ts.term_uuid = q.subject_uuid "
+                f"JOIN {arena['t']['term']} tp ON tp.term_uuid = q.predicate_uuid "
+                f"JOIN {arena['t']['term']} tt ON tt.term_uuid = q.object_uuid "
+                f"WHERE ts.term_text = $1 AND tp.term_text = $2",
+                other, MODIFICATION_TIME_URI)
+        assert got, "a stamped subject the write did not insert has no term row"
+
+    async def test_a_stamped_subject_that_is_also_rewritten_keeps_its_stamp(self, arena):
+        # The standalone-frame shape: the guarded subject is ALSO among the
+        # subjects being replaced. Stamping before the subject-level DELETE put
+        # the stamp in front of the statement that removes it, so a successful
+        # write left the subject with no stamp at all.
+        assert await arena["adapter"].update_subjects_graph(
+            arena["space_id"], arena["graph"], [FRAME],
+            [(URIRef(FRAME), URIRef("urn:p"), Literal("y"), URIRef(arena["graph"]))],
+            lock_uris=[FRAME], guard_subject=FRAME) is True
+
+        async with arena["pool"].acquire() as c:
+            got = await c.fetchval(
+                f"SELECT tt.term_text FROM {arena['t']['rdf_quad']} q "
+                f"JOIN {arena['t']['term']} tp ON tp.term_uuid = q.predicate_uuid "
+                f"JOIN {arena['t']['term']} tt ON tt.term_uuid = q.object_uuid "
+                f"WHERE q.subject_uuid = $1 AND tp.term_text = $2 "
+                f"AND q.context_uuid = $3",
+                _generate_term_uuid(FRAME, 'U'), MODIFICATION_TIME_URI,
+                _generate_term_uuid(arena["graph"], 'U'))
+        assert got, ("the write deleted its own stamp: it was written before the "
+                     "subject-level DELETE that covers the same subject")

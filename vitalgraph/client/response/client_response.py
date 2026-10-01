@@ -5,17 +5,65 @@ Standardized response objects for all VitalGraph client operations.
 All responses contain VitalSigns GraphObjects, hiding wire format complexity.
 """
 
+import json
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from vitalgraph.model.spaces_model import Space
 from vitalgraph.model.result_status import OperationStatus, _SUCCESS_STATUSES
+from vitalgraph.model.server_properties import MODIFICATION_TIME_URI
 
 # String values of the OperationStatus members that mean "the expected thing happened".
 # Used to derive is_success from the server's domain `status` (HTTP is 200 for all
 # domain outcomes, so success/failure must be read from the body, not the HTTP code).
 _SUCCESS_STATUS_VALUES = frozenset(s.value for s in _SUCCESS_STATUSES)
+
+
+def modification_stamp(obj: GraphObject) -> Optional[str]:
+    """The object's `hasObjectModificationDateTime`, in the form the server compares.
+
+    Half of the optimistic-concurrency loop (`issues/253`): read this, pass it to
+    a write as `if_unmodified_since`, and on `is_conflict` read it again and
+    re-merge. The other half is the write parameter; without this the caller has
+    to know the predicate URI, and two test scripts had already hardcoded it.
+
+    READ IT THROUGH HERE, NOT OFF THE ATTRIBUTE. The obvious thing a caller would
+    write is `str(entity.objectModificationDateTime)`, and that is **a value the
+    server can never match**: VitalSigns parses the literal into a `datetime`, so
+    `str()` renders it space-separated — `2026-10-01 12:23:37.333100+00:00` —
+    while the stored term text is ISO-8601 with the `T`. The server compares the
+    stored STRING deliberately (a datetime comparison would forgive a formatting
+    difference, and a formatting difference means something rewrote the value),
+    so the space form would refuse every write and the caller would see a
+    permanent conflict it could do nothing about. This returns the wire form,
+    which is what round-trips.
+
+    Returns None when the object carries no stamp — a legitimate answer for an
+    entity written before stamping, and the caller then has nothing to be
+    conditional on.
+    """
+    try:
+        return json.loads(obj.to_json()).get(MODIFICATION_TIME_URI)
+    except Exception:
+        return None
+
+
+def find_modification_stamp(objects: Optional[List[GraphObject]],
+                            uri: Optional[str]) -> Optional[str]:
+    """`modification_stamp` of the object in *objects* whose URI is *uri*.
+
+    An entity graph holds the entity, its frames, its slots and their edges, and
+    every one of them carries its own stamp. The guard keys on the OWNING ENTITY,
+    so picking the first stamp in the list would send a frame's — accepted or
+    refused for the wrong reason.
+    """
+    if not objects or not uri:
+        return None
+    for obj in objects:
+        if str(getattr(obj, "URI", "")) == str(uri):
+            return modification_stamp(obj)
+    return None
 
 
 class VitalGraphResponse(BaseModel):
@@ -68,6 +116,22 @@ class VitalGraphResponse(BaseModel):
         """Whether the operation did not succeed (inverse of is_success)."""
         return not self.is_success
 
+    @property
+    def is_conflict(self) -> bool:
+        """Whether the write was REFUSED because the target moved underneath it.
+
+        `issues/253`. A caller needs this apart from `is_error`, because the two
+        want opposite responses: a conflict means re-read, re-merge and try
+        again, while a `store_failed` means the write did not happen for a reason
+        retrying will not change. Both are `is_error`, and treating a conflict
+        like the latter is how a lost update becomes a dropped one.
+
+        Do NOT retry a conflict with the same `if_unmodified_since` — the whole
+        point is that the value is stale, so the retry would be refused
+        identically. Re-read first.
+        """
+        return self.status == OperationStatus.CONFLICT.value
+
     def raise_for_error(self):
         """Raise VitalGraphClientError if the response indicates a non-success outcome."""
         if self.is_error:
@@ -89,6 +153,16 @@ class GraphObjectResponse(VitalGraphResponse):
     def count(self) -> int:
         """Get count of objects in response."""
         return len(self.objects) if self.objects else 0
+
+    def modification_stamp_for(self, uri: str) -> Optional[str]:
+        """The stamp of the object with *uri*, for `if_unmodified_since`.
+
+        `issues/253`. This is the flat read — `get_kgentity` without
+        `include_entity_graph` — which is the cheaper way to open the
+        read-modify-write loop when the caller only needs the stamp. Takes a URI
+        because a flat response may hold many objects and there is no "the" one.
+        """
+        return find_modification_stamp(self.objects, uri)
 
 
 class PaginatedGraphObjectResponse(GraphObjectResponse):
@@ -135,11 +209,20 @@ class EntityGraph(BaseModel):
     
     entity_uri: str = Field(description="URI of the entity")
     objects: List[GraphObject] = Field(description="List of GraphObjects in this entity graph")
-    
+
     @property
     def count(self) -> int:
         """Get count of objects in this entity graph."""
         return len(self.objects)
+
+    @property
+    def modification_stamp(self) -> Optional[str]:
+        """The ENTITY's stamp, to pass as `if_unmodified_since` (`issues/253`).
+
+        The entity's, not the graph's: the frames and slots in here each carry
+        their own, and the write guard keys on the owning entity.
+        """
+        return find_modification_stamp(self.objects, self.entity_uri)
 
 
 class FrameGraph(BaseModel):
@@ -152,6 +235,16 @@ class FrameGraph(BaseModel):
     def count(self) -> int:
         """Get count of objects in this frame graph."""
         return len(self.objects)
+
+    @property
+    def modification_stamp(self) -> Optional[str]:
+        """The FRAME's stamp, to pass as `if_unmodified_since` (`issues/253`).
+
+        The frame's, not its slots': the standalone-frame routes guard on the
+        frame because they have no owning entity, and a slot's own stamp would be
+        a different version of a different thing.
+        """
+        return find_modification_stamp(self.objects, self.frame_uri)
 
 
 class CreateEntityResponse(VitalGraphResponse):
@@ -192,6 +285,18 @@ class EntityGraphResponse(VitalGraphResponse):
     requested_uri: Optional[str] = Field(default=None, description="Entity URI requested")
     requested_reference_id: Optional[str] = Field(default=None, description="Reference ID requested (if used)")
 
+    @property
+    def modification_stamp(self) -> Optional[str]:
+        """The entity's stamp, to pass as `if_unmodified_since` (`issues/253`).
+
+            r = await c.kgentities.get_kgentity(..., include_entity_graph=True)
+            w = await c.kgentities.update_entity_frames(
+                    ..., if_unmodified_since=r.modification_stamp)
+            if w.is_conflict:
+                ...    # somebody else wrote: read again, re-merge, re-send
+        """
+        return self.objects.modification_stamp if self.objects else None
+
 
 class FrameGraphResponse(VitalGraphResponse):
     """Response for single frame graph operation."""
@@ -203,6 +308,18 @@ class FrameGraphResponse(VitalGraphResponse):
     entity_uri: Optional[str] = Field(default=None, description="Entity URI that owns the frames")
     parent_frame_uri: Optional[str] = Field(default=None, description="Parent frame URI filter (if used)")
     requested_frame_uri: Optional[str] = Field(default=None, description="Frame URI requested")
+
+    @property
+    def modification_stamp(self) -> Optional[str]:
+        """The frame's stamp, to pass as `if_unmodified_since` (`issues/253`).
+
+            r = await c.kgframes.get_kgframe(..., include_frame_graph=True)
+            w = await c.kgframes.update_kgframes(
+                    ..., if_unmodified_since=r.modification_stamp)
+            if w.is_conflict:
+                ...    # somebody else wrote: read again, re-merge, re-send
+        """
+        return self.frame_graph.modification_stamp if self.frame_graph else None
 
 
 class FrameResponse(GraphObjectResponse):
@@ -252,6 +369,17 @@ class MultiEntityGraphResponse(VitalGraphResponse):
     space_id: Optional[str] = Field(default=None, description="Space ID from request")
     graph_id: Optional[str] = Field(default=None, description="Graph ID from request")
     requested_uris: Optional[List[str]] = Field(default=None, description="Entity URIs requested")
+
+    @property
+    def modification_stamps(self) -> Dict[str, Optional[str]]:
+        """Entity URI -> its stamp, for a batch read (`issues/253`).
+
+        A dict rather than a list, because the per-entity write that follows
+        needs the stamp for ITS entity and the two orders need not agree. An
+        entity with no stamp appears with None rather than being dropped — it is
+        still an entity the caller read.
+        """
+        return {g.entity_uri: g.modification_stamp for g in (self.graph_list or [])}
     requested_reference_ids: Optional[List[str]] = Field(default=None, description="Reference IDs requested (if used)")
 
 

@@ -1098,7 +1098,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
         entity_uri: str,
         objects: List,
         parent_frame_uri: Optional[str] = None,
-        operation_mode: str = "create"
+        operation_mode: str = "create",
+        if_unmodified_since: Optional[str] = None,
     ) -> FrameResponse:
         """
         Create frames for a specific entity.
@@ -1128,7 +1129,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 graph_id=graph_id,
                 entity_uri=entity_uri,
                 parent_frame_uri=parent_frame_uri,
-                operation_mode=operation_mode
+                operation_mode=operation_mode,
+                if_unmodified_since=if_unmodified_since,
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
@@ -1176,7 +1178,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
         graph_id: str,
         entity_uri: str,
         objects: List,
-        parent_frame_uri: Optional[str] = None
+        parent_frame_uri: Optional[str] = None,
+        if_unmodified_since: Optional[str] = None,
     ) -> FrameResponse:
         """
         Update frames for a specific entity.
@@ -1205,7 +1208,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 graph_id=graph_id,
                 entity_uri=entity_uri,
                 parent_frame_uri=parent_frame_uri,
-                operation_mode="update"
+                operation_mode="update",
+                if_unmodified_since=if_unmodified_since,
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
@@ -1223,6 +1227,14 @@ class KGEntitiesEndpoint(BaseEndpoint):
                     error_code=12,
                     error_message=error_msg,
                     status_code=response.status_code,
+                    # CARRY THE SERVER'S VERDICT (`issues/253`). "Nothing was
+                    # updated" is the shape of a refusal as much as a failure,
+                    # and a refused write arrives here with `status="conflict"`
+                    # and zero frames. Dropping the status collapsed the two,
+                    # leaving `is_conflict` False on exactly the response that
+                    # tells the caller to re-read and merge.
+                    status=response_data.get('status'),
+                    message=error_msg,
                     space_id=space_id,
                     graph_id=graph_id
                 )
@@ -1313,6 +1325,12 @@ class KGEntitiesEndpoint(BaseEndpoint):
                     error_code=error_code,
                     error_message=error_msg,
                     status_code=response.status_code,
+                    # CARRY THE SERVER'S VERDICT (`issues/253`). A refused
+                    # conditional write arrives here as `success=false` with
+                    # `status="conflict"`; dropping the status collapses it into
+                    # an ordinary failure, so `is_conflict` is False on exactly
+                    # the response that tells the caller to re-read and merge.
+                    status=response_data.get('status'),
                     space_id=space_id,
                     graph_id=graph_id,
                     requested_uris=frame_uris

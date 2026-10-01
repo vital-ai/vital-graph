@@ -32,7 +32,8 @@ from ai_haley_kg_domain.model.KGSlot import KGSlot
 from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
 
 # Backend adapter import
-from vitalgraph.kg_impl.kg_backend_utils import KGBackendInterface
+from vitalgraph.kg_impl.kg_backend_utils import (
+    AmbiguousPrecondition, KGBackendInterface, StaleWrite)
 
 
 def _sparql_binding_to_rdflib(binding):
@@ -114,7 +115,8 @@ class KGFrameCreateProcessor:
         space_id: str,
         graph_id: str,
         frame_objects: List[GraphObject],
-        operation_mode: str = "CREATE"
+        operation_mode: str = "CREATE",
+        if_unmodified_since: Optional[str] = None,
     ) -> CreateFrameResult:
         """
         Create/update standalone frames.
@@ -165,11 +167,13 @@ class KGFrameCreateProcessor:
             if mode_upper in ('UPDATE', 'UPSERT'):
                 success = await self.execute_atomic_frame_update(
                     backend_adapter, space_id, graph_id,
-                    categories.frame_objects, all_objects, mode_upper
+                    categories.frame_objects, all_objects, mode_upper,
+                    if_unmodified_since=if_unmodified_since,
                 )
             else:
                 success = await self.execute_frame_creation(
-                    backend_adapter, space_id, graph_id, all_objects
+                    backend_adapter, space_id, graph_id, all_objects,
+                    if_unmodified_since=if_unmodified_since,
                 )
 
             _t2 = _time.time()
@@ -197,6 +201,11 @@ class KGFrameCreateProcessor:
                     frame_count=0,
                 )
 
+        except (StaleWrite, AmbiguousPrecondition):
+            # A REFUSAL, not a failure: the caller must be told its frame moved
+            # (re-read and merge) or that its precondition was ambiguous (send
+            # one frame). A generic failure tells it to give up (`issues/253`).
+            raise
         except Exception as e:
             self.logger.error(f"Error in standalone frame {operation_mode}: {e}")
             return CreateFrameResult(
@@ -295,7 +304,8 @@ class KGFrameCreateProcessor:
         return objects
 
     async def execute_frame_creation(self, backend_adapter: KGBackendInterface, space_id: str,
-                                     graph_id: str, all_objects: List[GraphObject]) -> tuple:
+                                     graph_id: str, all_objects: List[GraphObject],
+                                     if_unmodified_since: Optional[str] = None) -> tuple:
         """
         Execute atomic frame creation via subject-level delete + insert.
         """
@@ -322,9 +332,27 @@ class KGFrameCreateProcessor:
                 _lock_uris = sorted({str(g) for g in
                                      (getattr(o, 'frameGraphURI', None) for o in all_objects)
                                      if g})
+                # THE FRAME IS THE PRECONDITION KEY (`issues/253`). A standalone
+                # frame has no owning entity to compare against — that is what
+                # "standalone" means — so `if_unmodified_since` is compared on the
+                # frame, which is the same key the lock above already takes.
+                #
+                # Guarded only when the call resolves to ONE frame. A single
+                # precondition over several has no meaning, and quietly applying
+                # it to one of them would look like it worked.
+                #
+                # STAMPED FOR ALL of them regardless, so the version a caller
+                # reads advances on every write: a frame left unstamped by a
+                # batch write reads as "nobody wrote" to the next conditional
+                # caller, which is the lost update coming back in through the fix.
+                if if_unmodified_since is not None and len(_lock_uris) != 1:
+                    raise AmbiguousPrecondition(len(_lock_uris))
                 success = await backend_adapter.update_subjects_graph(
                     space_id, graph_id, subject_uris, insert_quads,
-                    lock_uris=_lock_uris or None)
+                    lock_uris=_lock_uris or None,
+                    if_unmodified_since=if_unmodified_since,
+                    guard_subject=_lock_uris[0] if if_unmodified_since is not None else None,
+                    stamp_subjects=_lock_uris)
                 _t2 = _time.time()
                 self.logger.info(f"⏱️ FRAME_CREATE step2 update_subjects_graph: {_t2-_t1:.3f}s")
             else:
@@ -337,13 +365,16 @@ class KGFrameCreateProcessor:
 
             return success
 
+        except (StaleWrite, AmbiguousPrecondition):
+            raise                     # a refusal must reach the caller as one
         except Exception as e:
             self.logger.error(f"Error executing frame creation: {e}")
             return False
 
     async def execute_atomic_frame_update(self, backend_adapter: KGBackendInterface, space_id: str,
                                           graph_id: str, frame_objects: List[GraphObject],
-                                          all_objects: List[GraphObject], operation_mode: str) -> tuple:
+                                          all_objects: List[GraphObject], operation_mode: str,
+                                          if_unmodified_since: Optional[str] = None) -> tuple:
         """
         Execute atomic frame UPDATE/UPSERT via subject-level delete + insert.
         """
@@ -369,9 +400,27 @@ class KGFrameCreateProcessor:
                 _lock_uris = sorted({str(g) for g in
                                      (getattr(o, 'frameGraphURI', None) for o in all_objects)
                                      if g})
+                # THE FRAME IS THE PRECONDITION KEY (`issues/253`). A standalone
+                # frame has no owning entity to compare against — that is what
+                # "standalone" means — so `if_unmodified_since` is compared on the
+                # frame, which is the same key the lock above already takes.
+                #
+                # Guarded only when the call resolves to ONE frame. A single
+                # precondition over several has no meaning, and quietly applying
+                # it to one of them would look like it worked.
+                #
+                # STAMPED FOR ALL of them regardless, so the version a caller
+                # reads advances on every write: a frame left unstamped by a
+                # batch write reads as "nobody wrote" to the next conditional
+                # caller, which is the lost update coming back in through the fix.
+                if if_unmodified_since is not None and len(_lock_uris) != 1:
+                    raise AmbiguousPrecondition(len(_lock_uris))
                 success = await backend_adapter.update_subjects_graph(
                     space_id, graph_id, subject_uris, insert_quads,
-                    lock_uris=_lock_uris or None)
+                    lock_uris=_lock_uris or None,
+                    if_unmodified_since=if_unmodified_since,
+                    guard_subject=_lock_uris[0] if if_unmodified_since is not None else None,
+                    stamp_subjects=_lock_uris)
             else:
                 delete_quads = await self.build_delete_quads_for_frames(
                     backend_adapter, space_id, graph_id, frame_objects)
@@ -391,6 +440,8 @@ class KGFrameCreateProcessor:
 
             return success
 
+        except (StaleWrite, AmbiguousPrecondition):
+            raise                     # a refusal must reach the caller as one
         except Exception as e:
             self.logger.error(f"Error in atomic frame update: {e}")
             return False

@@ -22,10 +22,17 @@ logger = logging.getLogger(__name__)
 # Property URIs
 # ---------------------------------------------------------------------------
 
-CREATION_TIME_URI = "http://vital.ai/ontology/vital-aimp#hasObjectCreationTime"
-MODIFICATION_TIME_URI = "http://vital.ai/ontology/vital#hasObjectModificationDateTime"
-STATUS_TYPE_URI = "http://vital.ai/ontology/vital-aimp#hasObjectStatusType"
-ENTITY_TYPE_URI = "http://vital.ai/ontology/haley-ai-kg#hasKGEntityType"
+# Defined in `vitalgraph.model.server_properties` and re-exported here under the
+# names this module has always used. They are API contract, not internals — a
+# caller sends `hasObjectModificationDateTime` back as `if_unmodified_since`
+# (`issues/253`) — and the client package does not import `kg_impl`, so a shared
+# home is what keeps the two from drifting.
+from ..model.server_properties import (  # noqa: F401
+    CREATION_TIME_URI,
+    MODIFICATION_TIME_URI,
+    STATUS_TYPE_URI,
+    ENTITY_TYPE_URI,
+)
 
 # ---------------------------------------------------------------------------
 # Default values

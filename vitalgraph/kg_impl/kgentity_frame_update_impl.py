@@ -18,7 +18,7 @@ from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 
 # Backend adapter import
-from vitalgraph.kg_impl.kg_backend_utils import KGBackendInterface
+from vitalgraph.kg_impl.kg_backend_utils import KGBackendInterface, StaleWrite
 
 
 @dataclass
@@ -84,7 +84,8 @@ class KGEntityFrameUpdateProcessor:
     
     async def update_frames(self, space_id: str, graph_id: str, entity_uri: str, 
                            frame_objects: List[GraphObject],
-                           parent_frame_uri: Optional[str] = None) -> UpdateFrameResult:
+                           parent_frame_uri: Optional[str] = None,
+                           if_unmodified_since: Optional[str] = None) -> UpdateFrameResult:
         """
         Update frames and their complete frame graphs within entity context.
         
@@ -153,7 +154,8 @@ class KGEntityFrameUpdateProcessor:
                 entity_uri=entity_uri,
                 frame_objects=validated_frame_objects,
                 operation_mode="UPDATE",
-                parent_frame_uri=parent_frame_uri
+                parent_frame_uri=parent_frame_uri,
+                if_unmodified_since=if_unmodified_since,
             )
             
             validation_results = {
@@ -201,6 +203,8 @@ class KGEntityFrameUpdateProcessor:
                     error=create_result.message,
                 )
             
+        except StaleWrite:
+            raise                     # a refusal must reach the caller as one
         except Exception as e:
             self.logger.error(f"❌ Error in frame update process: {e}")
             return UpdateFrameResult(

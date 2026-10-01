@@ -66,6 +66,7 @@ from ..kg_impl.kg_backend_utils import create_backend_adapter
 from ..cache.count_cache import _count_cache
 from ..auth.role_dependencies import require_space_read, require_space_write
 from .impl.impl_utils import SubjectWriteFailed
+from ..kg_impl.kg_backend_utils import AmbiguousPrecondition, StaleWrite
 from functools import partial
 from ..utils.bounded_gather import bounded_gather
 
@@ -146,6 +147,7 @@ class KGFramesEndpoint:
         self, space_id: str, graph_id: str, quads: List[Quad],
         operation_mode: str, entity_uri: Optional[str] = None,
         parent_uri: Optional[str] = None, current_user: Dict = None,
+        if_unmodified_since: Optional[str] = None,
     ):
         """Create or update standalone frames from quads.
 
@@ -207,13 +209,17 @@ class KGFramesEndpoint:
 
             # --- dispatch by mode ---
             if op_mode == OperationMode.CREATE:
-                _result = await self._handle_create_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri)
+                _result = await self._handle_create_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri,
+                                                         if_unmodified_since=if_unmodified_since)
             elif op_mode == OperationMode.UPDATE:
-                _result = await self._handle_update_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri)
+                _result = await self._handle_update_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri,
+                                                         if_unmodified_since=if_unmodified_since)
             elif op_mode == OperationMode.UPSERT:
-                _result = await self._handle_upsert_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri)
+                _result = await self._handle_upsert_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri,
+                                                         if_unmodified_since=if_unmodified_since)
             elif op_mode == OperationMode.REPLACE:
-                _result = await self._handle_replace_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri)
+                _result = await self._handle_replace_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri,
+                                                         if_unmodified_since=if_unmodified_since)
             else:
                 return _fail(f"Invalid operation_mode: {op_mode}", OperationStatus.INVALID_REQUEST)
 
@@ -225,6 +231,32 @@ class KGFramesEndpoint:
 
         except HTTPException:
             raise
+        except StaleWrite as e:
+            # REFUSED because the FRAME moved (`issues/253`). A domain outcome in
+            # a 200 body, per this codebase's convention: the caller re-reads,
+            # re-merges and retries. Nothing is broken and nothing was written.
+            from ..model.kgframes_model import FrameCreateResponse, FrameUpdateResponse
+            self.logger.warning("Frame write refused as stale: %s", e)
+            if str(operation_mode).lower() == "update":
+                return FrameUpdateResponse(
+                    status=OperationStatus.CONFLICT, message=str(e),
+                    updated_uri="", updated_count=0)
+            return FrameCreateResponse(
+                status=OperationStatus.CONFLICT, message=str(e),
+                created_count=0, created_uris=[], slots_created=0)
+        except AmbiguousPrecondition as e:
+            # The caller's request, not the data: one stamp cannot cover several
+            # frames. INVALID_REQUEST so it is not mistaken for a conflict and
+            # retried unchanged.
+            from ..model.kgframes_model import FrameCreateResponse, FrameUpdateResponse
+            self.logger.warning("Frame write precondition is ambiguous: %s", e)
+            if str(operation_mode).lower() == "update":
+                return FrameUpdateResponse(
+                    status=OperationStatus.INVALID_REQUEST, message=str(e),
+                    updated_uri="", updated_count=0)
+            return FrameCreateResponse(
+                status=OperationStatus.INVALID_REQUEST, message=str(e),
+                created_count=0, created_uris=[], slots_created=0)
         except Exception as e:
             self.logger.error(f"Frame operation from objects failed: {e}")
             raise HTTPException(status_code=500, detail=f"Frame operation failed: {e}")
@@ -678,6 +710,15 @@ class KGFramesEndpoint:
             operation_mode: str = Query("create", description="Operation mode: create, update, or upsert"),
             parent_uri: Optional[str] = Query(None, description="Parent URI for hierarchical relationships"),
             entity_uri: Optional[str] = Query(None, description="Entity URI for frame association"),
+            if_unmodified_since: Optional[str] = Query(
+                None,
+                description=(
+                    "The frame's hasObjectModificationDateTime as the "
+                    "caller read it. When supplied, the write is REFUSED with "
+                    "status=conflict if the frame has changed since — so a "
+                    "slower save cannot overwrite a newer one. Keyed on the "
+                    "FRAME: these routes have no owning entity. Omit for the "
+                    "previous last-writer-wins behaviour.")),
             body: QuadRequest = Body(..., description="GraphObjects serialized as JSON Quads"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
@@ -692,6 +733,7 @@ class KGFramesEndpoint:
                 return await self._create_frames(
                     space_id, graph_id, quads, operation_mode,
                     entity_uri=entity_uri, parent_uri=parent_uri, current_user=current_user,
+                    if_unmodified_since=if_unmodified_since,
                 )
             except Exception as e:
                 self.logger.error(f"❌ ROUTE: Exception in create_or_update_frames: {type(e).__name__}: {str(e)}")
@@ -826,6 +868,15 @@ class KGFramesEndpoint:
             entity_uri: Optional[str] = Query(None, description="Entity URI for slot context"),
             parent_uri: Optional[str] = Query(None, description="Parent URI for slot hierarchy"),
             operation_mode: str = Query("create", description="Operation mode: create, update, or upsert"),
+            if_unmodified_since: Optional[str] = Query(
+                None,
+                description=(
+                    "The frame's hasObjectModificationDateTime as the "
+                    "caller read it. When supplied, the write is REFUSED with "
+                    "status=conflict if the frame has changed since — so a "
+                    "slower save cannot overwrite a newer one. Keyed on the "
+                    "FRAME: these routes have no owning entity. Omit for the "
+                    "previous last-writer-wins behaviour.")),
             body: QuadRequest = Body(..., description="GraphObjects serialized as JSON Quads"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
@@ -836,9 +887,13 @@ class KGFramesEndpoint:
             require_space_write(current_user, space_id)
             quads = body.quads
             if operation_mode == "update":
-                return await self._update_frame_slots(space_id, graph_id, frame_uri, quads, current_user)
+                return await self._update_frame_slots(
+                    space_id, graph_id, frame_uri, quads, current_user,
+                    if_unmodified_since=if_unmodified_since)
             else:
-                return await self._create_frame_slots(space_id, graph_id, frame_uri, quads, operation_mode, current_user, entity_uri, parent_uri)
+                return await self._create_frame_slots(
+                    space_id, graph_id, frame_uri, quads, operation_mode, current_user,
+                    entity_uri, parent_uri, if_unmodified_since=if_unmodified_since)
         
         @self.router.delete("/kgframes/kgslots", response_model=SlotDeleteResponse, tags=["KG Frame Slots"])
         async def delete_frame_slots(
@@ -1739,7 +1794,7 @@ class KGFramesEndpoint:
             self.logger.error(f"Error getting frame slots: {e}")
             return []
     
-    async def _create_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, quads: List[Quad], operation_mode: OperationMode, current_user: Dict, entity_uri: Optional[str] = None, parent_uri: Optional[str] = None) -> SlotCreateResponse:
+    async def _create_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, quads: List[Quad], operation_mode: OperationMode, current_user: Dict, entity_uri: Optional[str] = None, parent_uri: Optional[str] = None, if_unmodified_since: Optional[str] = None) -> SlotCreateResponse:
         """Create slots for a specific frame from quads."""
         from ..model.kgframes_model import SlotCreateResponse
         vitalsigns_objects = quad_list_to_graphobjects(quads)
@@ -1800,7 +1855,10 @@ class KGFramesEndpoint:
                         )
             
             # Store slots and edges in backend
-            created_uris = await self._store_frame_slots_in_backend(backend, space_id, graph_id, enhanced_objects)
+            created_uris = await self._store_frame_slots_in_backend(
+                backend, space_id, graph_id, enhanced_objects,
+                guard_frame_uri=frame_uri,
+                if_unmodified_since=if_unmodified_since)
             
             # Auto-sync vector/geo data for created slots
             _sync_uris = [str(o.URI) for o in enhanced_objects if hasattr(o, 'URI') and o.URI]
@@ -1815,6 +1873,14 @@ class KGFramesEndpoint:
 
         except HTTPException:
             raise
+        except StaleWrite as e:
+            # REFUSED because the frame moved (`issues/253`). Distinct from the
+            # STORE_FAILED below: a conflict means re-read and retry, a store
+            # failure means retrying will not change the outcome.
+            self.logger.warning("Frame slot create refused as stale: %s", e)
+            return SlotCreateResponse(
+                status=OperationStatus.CONFLICT, message=str(e),
+                created_count=0, created_uris=[])
         except SubjectWriteFailed as e:
             # A REFUSED write is a domain fault, not a server fault: HTTP 200 with
             # `STORE_FAILED`, which derives `success=false`. `issues/253` decided
@@ -1831,7 +1897,7 @@ class KGFramesEndpoint:
             self.logger.error(f"Error creating frame slots: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to create frame slots: {e}")
     
-    async def _update_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, quads: List[Quad], current_user: Dict) -> SlotUpdateResponse:
+    async def _update_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, quads: List[Quad], current_user: Dict, if_unmodified_since: Optional[str] = None) -> SlotUpdateResponse:
         """Update slots for a specific frame from quads."""
         from ..model.kgframes_model import SlotUpdateResponse
         vitalsigns_objects = quad_list_to_graphobjects(quads)
@@ -1887,7 +1953,10 @@ class KGFramesEndpoint:
             self._set_slot_frame_relationships(slots, frame_uri)
             
             # Update slots in backend (delete existing and insert updated)
-            updated_uris = await self._update_frame_slots_in_backend(backend, space_id, graph_id, slots)
+            updated_uris = await self._update_frame_slots_in_backend(
+                backend, space_id, graph_id, slots,
+                guard_frame_uri=frame_uri,
+                if_unmodified_since=if_unmodified_since)
             
             # Auto-sync vector/geo data for updated slots
             _sync_uris = [str(s.URI) for s in slots if hasattr(s, 'URI') and s.URI]
@@ -1902,6 +1971,12 @@ class KGFramesEndpoint:
 
         except HTTPException:
             raise
+        except StaleWrite as e:
+            # REFUSED because the frame moved (`issues/253`).
+            self.logger.warning("Frame slot update refused as stale: %s", e)
+            return SlotUpdateResponse(
+                status=OperationStatus.CONFLICT, message=str(e),
+                updated_count=0, updated_uris=[])
         except SubjectWriteFailed as e:
             # Domain fault, HTTP 200, `success=false` (`issues/253`).
             self.logger.error("Frame slot update did not happen: %s", e)
@@ -2453,7 +2528,8 @@ class KGFramesEndpoint:
         except Exception as e:
             return {"valid": False, "error": str(e)}
     
-    async def _handle_create_mode(self, backend, space_id: str, graph_id: str, frames: List[KGFrame], objects: List[GraphObject], parent_uri: Optional[str]):
+    async def _handle_create_mode(self, backend, space_id: str, graph_id: str, frames: List[KGFrame], objects: List[GraphObject], parent_uri: Optional[str],
+                                  if_unmodified_since: Optional[str] = None):
         """Handle CREATE mode: create frames using standalone frame processor."""
         try:
             # Initialize standalone frame processor if needed
@@ -2466,7 +2542,8 @@ class KGFramesEndpoint:
                 space_id=space_id,
                 graph_id=graph_id,
                 frame_objects=objects,
-                operation_mode="CREATE"
+                operation_mode="CREATE",
+                if_unmodified_since=if_unmodified_since,
             )
             
             if not result.success:
@@ -2498,11 +2575,19 @@ class KGFramesEndpoint:
 
         except HTTPException:
             raise
+        except (StaleWrite, AmbiguousPrecondition):
+            # Past the mode handler, to be answered by `_create_frames`
+            # (`issues/253`). This handler turns anything else into a 500, and
+            # it turned the refusal into one too — a caller cannot tell a
+            # refused write from a broken server, and the client's retry policy
+            # treats the two oppositely.
+            raise
         except Exception as e:
             self.logger.error(f"Error in CREATE mode: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to create frames: {e}")
     
-    async def _handle_update_mode(self, backend, space_id: str, graph_id: str, frames: List[KGFrame], objects: List[GraphObject], parent_uri: Optional[str]):
+    async def _handle_update_mode(self, backend, space_id: str, graph_id: str, frames: List[KGFrame], objects: List[GraphObject], parent_uri: Optional[str],
+                                  if_unmodified_since: Optional[str] = None):
         """Handle UPDATE mode: verify frames exist, then update using standalone processor.
         
         Args:
@@ -2539,7 +2624,8 @@ class KGFramesEndpoint:
                 space_id=space_id,
                 graph_id=graph_id,
                 frame_objects=objects,
-                operation_mode="UPDATE"
+                operation_mode="UPDATE",
+                if_unmodified_since=if_unmodified_since,
             )
             
             if not result.success:
@@ -2561,11 +2647,19 @@ class KGFramesEndpoint:
 
         except HTTPException:
             raise
+        except (StaleWrite, AmbiguousPrecondition):
+            # Past the mode handler, to be answered by `_create_frames`
+            # (`issues/253`). This handler turns anything else into a 500, and
+            # it turned the refusal into one too — a caller cannot tell a
+            # refused write from a broken server, and the client's retry policy
+            # treats the two oppositely.
+            raise
         except Exception as e:
             self.logger.error(f"Error in UPDATE mode: {e}")
             raise HTTPException(status_code=500, detail=f"Update operation failed: {e}")
     
-    async def _handle_upsert_mode(self, backend, space_id: str, graph_id: str, frames: List[KGFrame], objects: List[GraphObject], parent_uri: Optional[str]):
+    async def _handle_upsert_mode(self, backend, space_id: str, graph_id: str, frames: List[KGFrame], objects: List[GraphObject], parent_uri: Optional[str],
+                                  if_unmodified_since: Optional[str] = None):
         """Handle UPSERT mode: create or update frames as needed using standalone processor."""
         try:
             # Initialize standalone frame processor if needed
@@ -2578,7 +2672,8 @@ class KGFramesEndpoint:
                 space_id=space_id,
                 graph_id=graph_id,
                 frame_objects=objects,
-                operation_mode="UPSERT"
+                operation_mode="UPSERT",
+                if_unmodified_since=if_unmodified_since,
             )
             
             if not result.success:
@@ -2600,11 +2695,19 @@ class KGFramesEndpoint:
 
         except HTTPException:
             raise
+        except (StaleWrite, AmbiguousPrecondition):
+            # Past the mode handler, to be answered by `_create_frames`
+            # (`issues/253`). This handler turns anything else into a 500, and
+            # it turned the refusal into one too — a caller cannot tell a
+            # refused write from a broken server, and the client's retry policy
+            # treats the two oppositely.
+            raise
         except Exception as e:
             self.logger.error(f"Error in UPSERT mode: {e}")
             raise HTTPException(status_code=500, detail=f"Upsert operation failed: {e}")
     
-    async def _handle_replace_mode(self, backend, space_id: str, graph_id: str, frames: List[KGFrame], objects: List[GraphObject], parent_uri: Optional[str]):
+    async def _handle_replace_mode(self, backend, space_id: str, graph_id: str, frames: List[KGFrame], objects: List[GraphObject], parent_uri: Optional[str],
+                                  if_unmodified_since: Optional[str] = None):
         """Handle REPLACE mode: delete the existing frame subtree, then insert the new frame graph.
         
         Determines the delete scope from EXISTING frames in the DB:
@@ -2668,7 +2771,14 @@ class KGFramesEndpoint:
                 space_id=space_id,
                 graph_id=graph_id,
                 frame_objects=objects,
-                operation_mode="CREATE"
+                operation_mode="CREATE",
+                # `if_unmodified_since` is DELIBERATELY not passed here
+                # (`issues/253`). Replace DELETES the existing frames before
+                # this call, so a refusal would land after the deletes and
+                # leave neither the old frames nor the new ones. Worse than
+                # the lost update it would prevent, exactly as on the entity
+                # route. Making replace conditional means first making its
+                # delete and insert one transaction.
             )
             
             if not result.success:
@@ -2689,6 +2799,13 @@ class KGFramesEndpoint:
             )
 
         except HTTPException:
+            raise
+        except (StaleWrite, AmbiguousPrecondition):
+            # Past the mode handler, to be answered by `_create_frames`
+            # (`issues/253`). This handler turns anything else into a 500, and
+            # it turned the refusal into one too — a caller cannot tell a
+            # refused write from a broken server, and the client's retry policy
+            # treats the two oppositely.
             raise
         except Exception as e:
             self.logger.error(f"Error in REPLACE mode: {e}")
@@ -2728,6 +2845,17 @@ class KGFramesEndpoint:
         
         Queries existing triples for all subject URIs first, then uses a single
         transaction for delete + insert to prevent triple accumulation.
+
+        NOT ON A LIVE PATH, and that is why it carries no conditional write
+        (`issues/253`). Its only callers are `_update_frames_in_backend` and
+        `_upsert_frames_in_backend`, and NOTHING calls either of those — the live
+        `/kgframes` write goes through `KGFrameCreateProcessor`, which takes the
+        frame-graph lock itself. Left alone rather than extended: a guard here
+        would be untestable through the API, which is the same reason
+        `kgentities_endpoint._delete_frame_by_uri` was deleted rather than
+        repaired. One unit test calls this directly to pin that a failed subject
+        write is not reported as written, which is the only reason it is still
+        here.
         """
         try:
             frame_uris = []
@@ -3418,13 +3546,32 @@ class KGFramesEndpoint:
             self.logger.error(f"Error checking slot-frame connection: {e}")
             return False
     
-    async def _update_frame_slots_in_backend(self, backend, space_id: str, graph_id: str, slots: List[KGSlot]) -> List[str]:
+    async def _update_frame_slots_in_backend(self, backend, space_id: str, graph_id: str,
+                                             slots: List[KGSlot],
+                                             guard_frame_uri: Optional[str] = None,
+                                             if_unmodified_since: Optional[str] = None) -> List[str]:
         """
         Update VitalSigns slot objects in backend using atomic update_quads.
         
         Joins DELETE and INSERT into a single PostgreSQL transaction and a
         single request, preventing triple accumulation if the delete
         phase succeeds but the insert fails (or vice versa).
+
+        THE FRAME IS THE KEY (`issues/253`). These routes have no owning entity
+        to key on — `_create_frames` says so in its own docstring, and
+        `_update_frame_slots` is not even given one — so both the advisory lock
+        and the `if_unmodified_since` comparison key on the frame. Passing
+        `frame_uri` also closes a gap that predates the conditional write: these
+        paths took NO lock at all, so two concurrent writers to one frame were
+        atomic but not exclusive (`issues/174`).
+
+        A DIFFERENT KEY BECAUSE IT IS A DIFFERENT OBJECT, not a weaker version of
+        the entity-scoped one. A frame inside an entity and a top-level frame are
+        distinct things in this model, reached through distinct routes, and the
+        unit of concurrency follows the object: the entity for the first, the
+        frame for the second. `/kgentities/kgframes` keying on the entity and
+        this keying on the frame is therefore correct and not a gap — the two
+        families do not write the same frames.
         """
         try:
             from vital_ai_vitalsigns.model.GraphObject import GraphObject
@@ -3439,7 +3586,10 @@ class KGFramesEndpoint:
             if hasattr(backend, 'update_subjects_graph'):
                 # Checked, not discarded (`issues/253`).
                 if not await backend.update_subjects_graph(
-                        space_id, graph_id, slot_uris, insert_quads):
+                        space_id, graph_id, slot_uris, insert_quads,
+                        lock_uris=[guard_frame_uri] if guard_frame_uri else None,
+                        if_unmodified_since=if_unmodified_since,
+                        guard_subject=guard_frame_uri):
                     raise SubjectWriteFailed("slot update", len(slot_uris))
             else:
                 subject_values = " ".join(f"<{uri}>" for uri in slot_uris)
@@ -3529,12 +3679,31 @@ class KGFramesEndpoint:
             self.logger.error(f"Error deleting frame slots from backend: {e}")
             raise
     
-    async def _store_frame_slots_in_backend(self, backend, space_id: str, graph_id: str, objects: List[GraphObject]) -> List[str]:
+    async def _store_frame_slots_in_backend(self, backend, space_id: str, graph_id: str,
+                                            objects: List[GraphObject],
+                                            guard_frame_uri: Optional[str] = None,
+                                            if_unmodified_since: Optional[str] = None) -> List[str]:
         """
         Store VitalSigns slot objects and edges in backend using atomic update_quads.
         
         Queries existing triples for all subject URIs first, then uses a single
         transaction for delete + insert to prevent triple accumulation.
+
+        THE FRAME IS THE KEY (`issues/253`). These routes have no owning entity
+        to key on — `_create_frames` says so in its own docstring, and
+        `_update_frame_slots` is not even given one — so both the advisory lock
+        and the `if_unmodified_since` comparison key on the frame. Passing
+        `frame_uri` also closes a gap that predates the conditional write: these
+        paths took NO lock at all, so two concurrent writers to one frame were
+        atomic but not exclusive (`issues/174`).
+
+        A DIFFERENT KEY BECAUSE IT IS A DIFFERENT OBJECT, not a weaker version of
+        the entity-scoped one. A frame inside an entity and a top-level frame are
+        distinct things in this model, reached through distinct routes, and the
+        unit of concurrency follows the object: the entity for the first, the
+        frame for the second. `/kgentities/kgframes` keying on the entity and
+        this keying on the frame is therefore correct and not a gap — the two
+        families do not write the same frames.
         """
         try:
             slot_uris = []
@@ -3556,7 +3725,10 @@ class KGFramesEndpoint:
             if hasattr(backend, 'update_subjects_graph'):
                 # Checked, not discarded (`issues/253`).
                 if not await backend.update_subjects_graph(
-                        space_id, graph_id, subject_uris, insert_quads):
+                        space_id, graph_id, subject_uris, insert_quads,
+                        lock_uris=[guard_frame_uri] if guard_frame_uri else None,
+                        if_unmodified_since=if_unmodified_since,
+                        guard_subject=guard_frame_uri):
                     raise SubjectWriteFailed("slot write", len(subject_uris))
             else:
                 delete_quads = []

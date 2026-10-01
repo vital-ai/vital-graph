@@ -41,14 +41,18 @@ class RefusingBackend:
         self.calls = 0
 
     async def update_subjects_graph(self, space_id, graph_id, subject_uris,
-                                    insert_quads, lock_uris=None, conn=None):
+                                    insert_quads, lock_uris=None, conn=None,
+                                    if_unmodified_since=None,
+                                    guard_subject=None, stamp_subjects=None):
         self.calls += 1
         return False
 
 
 class AcceptingBackend(RefusingBackend):
     async def update_subjects_graph(self, space_id, graph_id, subject_uris,
-                                    insert_quads, lock_uris=None, conn=None):
+                                    insert_quads, lock_uris=None, conn=None,
+                                    if_unmodified_since=None,
+                                    guard_subject=None, stamp_subjects=None):
         self.calls += 1
         return True
 

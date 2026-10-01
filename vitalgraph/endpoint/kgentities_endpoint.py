@@ -45,6 +45,7 @@ from ..kg_impl.kgentity_update_impl import KGEntityUpdateProcessor
 from ..kg_impl.kg_validation_utils import KGGroupingURIManager, KGOwnershipValidator
 from ..kg_impl.kgentity_delete_impl import KGEntityDeleteProcessor
 from ..kg_impl.kgentity_frame_create_impl import KGEntityFrameCreateProcessor
+from ..kg_impl.kg_backend_utils import StaleWrite
 from ..kg_impl.kgentity_frame_update_impl import KGEntityFrameUpdateProcessor
 import vital_ai_vitalsigns as vitalsigns
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
@@ -432,6 +433,15 @@ class KGEntitiesEndpoint:
             entity_uri: str = Query(..., description="Entity URI"),
             operation_mode: OperationMode = Query(OperationMode.CREATE, description="Operation mode: create, update, or upsert"),
             parent_frame_uri: Optional[str] = Query(None, description="Parent frame URI for hierarchical operations"),
+            if_unmodified_since: Optional[str] = Query(
+                None,
+                description=(
+                    "The entity's hasObjectModificationDateTime as the caller "
+                    "read it. When supplied, the write is REFUSED with "
+                    "status=conflict if the entity has changed since — so a "
+                    "slower save cannot overwrite a newer one. Omit for the "
+                    "previous last-writer-wins behaviour."),
+            ),
             body: QuadRequest = Body(..., description="GraphObjects serialized as JSON Quads"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
@@ -439,11 +449,24 @@ class KGEntitiesEndpoint:
             require_space_write(current_user, space_id)
             quads = body.quads
             if operation_mode == OperationMode.UPDATE:
-                return await self._update_entity_frames(space_id, graph_id, entity_uri, quads, current_user, parent_frame_uri)
+                return await self._update_entity_frames(
+                    space_id, graph_id, entity_uri, quads, current_user,
+                    parent_frame_uri, if_unmodified_since=if_unmodified_since)
             elif operation_mode == OperationMode.REPLACE:
+                # `if_unmodified_since` is DELIBERATELY not passed here
+                # (`issues/253`). Replace deletes the existing frames with its
+                # own SPARQL updates BEFORE calling the create path, outside the
+                # transaction the guard runs in — so a refusal would land after
+                # the deletes and leave the entity with neither the old frames
+                # nor the new ones. That is worse than the lost update it would
+                # prevent. Making replace conditional means first making its
+                # delete and insert one transaction.
                 return await self._replace_entity_frames(space_id, graph_id, entity_uri, quads, current_user, parent_frame_uri)
             else:
-                return await self._create_or_update_frames(space_id, graph_id, quads, operation_mode, entity_uri=entity_uri, current_user=current_user, parent_frame_uri=parent_frame_uri)
+                return await self._create_or_update_frames(
+                    space_id, graph_id, quads, operation_mode, entity_uri=entity_uri,
+                    current_user=current_user, parent_frame_uri=parent_frame_uri,
+                    if_unmodified_since=if_unmodified_since)
         
         @self.router.delete("/kgentities/kgframes", response_model=FrameDeleteResponse, tags=["KG Entities"])
         async def delete_entity_frames(
@@ -1605,7 +1628,7 @@ class KGEntitiesEndpoint:
                 def __init__(self, graph): self.graph = []
             return FrameResponse([])
     
-    async def _create_or_update_frames(self, space_id: str, graph_id: str, quads: List[Quad], operation_mode: Any, parent_uri: str = None, entity_uri: str = None, current_user: Dict = None, parent_frame_uri: str = None):
+    async def _create_or_update_frames(self, space_id: str, graph_id: str, quads: List[Quad], operation_mode: Any, parent_uri: str = None, entity_uri: str = None, current_user: Dict = None, parent_frame_uri: str = None, if_unmodified_since: str = None):
         """Create or update frames for KGEntities integration from quads."""
         graph_objects = quad_list_to_graphobjects(quads)
         try:
@@ -1668,7 +1691,8 @@ class KGEntitiesEndpoint:
                 entity_uri=entity_uri,
                 frame_objects=graph_objects,
                 operation_mode=operation_mode_str,
-                parent_frame_uri=parent_frame_uri
+                parent_frame_uri=parent_frame_uri,
+                if_unmodified_since=if_unmodified_since
             )
             
             # Handle processor result and maintain API compatibility
@@ -1710,6 +1734,16 @@ class KGEntitiesEndpoint:
 
         except HTTPException:
             raise
+        except StaleWrite as e:
+            # Same refusal on the create/upsert path (`issues/253`).
+            from ..model.kgframes_model import FrameCreateResponse
+            self.logger.warning("Frame write refused as stale: %s", e)
+            return FrameCreateResponse(
+                status=OperationStatus.CONFLICT,
+                message=str(e),
+                created_count=0,
+                created_uris=[],
+            )
         except Exception as e:
             self.logger.error(f"Error creating/updating frames: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to create/update frames: {str(e)}")
@@ -2210,7 +2244,8 @@ class KGEntitiesEndpoint:
     
     async def _update_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, 
                                    quads: List[Quad], current_user: Dict, 
-                                   parent_frame_uri: Optional[str] = None) -> FrameUpdateResponse:
+                                   parent_frame_uri: Optional[str] = None,
+                                   if_unmodified_since: Optional[str] = None) -> FrameUpdateResponse:
         """Update frames within entity context from quads."""
         graph_objects = quad_list_to_graphobjects(quads)
         try:
@@ -2426,7 +2461,8 @@ class KGEntitiesEndpoint:
                     graph_id=graph_id,
                     entity_uri=entity_uri,
                     frame_objects=all_frame_components,
-                    parent_frame_uri=parent_frame_uri
+                    parent_frame_uri=parent_frame_uri,
+                    if_unmodified_since=if_unmodified_since,
                 )
                 
                 update_results.append(result)
@@ -2478,6 +2514,22 @@ class KGEntitiesEndpoint:
 
         except HTTPException:
             raise
+        except StaleWrite as e:
+            # REFUSED, not applied over the top (`issues/253`). A domain outcome
+            # in a 200 body, per this codebase's convention: the caller re-reads,
+            # re-merges and retries. Not a 409, and not a 500 — nothing is broken,
+            # the write simply did not happen.
+            # Import here, not relying on the one in the success branch: that
+            # one makes the name function-local, so the handler sees it unbound
+            # and the refusal came back as a 500.
+            from ..model.kgframes_model import FrameUpdateResponse
+            self.logger.warning("Frame update refused as stale: %s", e)
+            return FrameUpdateResponse(
+                status=OperationStatus.CONFLICT,
+                message=str(e),
+                updated_uri="",
+                updated_count=0,
+            )
         except Exception as e:
             self.logger.error(f"Error updating entity frames: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to update entity frames: {str(e)}")

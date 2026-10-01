@@ -349,7 +349,8 @@ class KGFramesEndpoint(BaseEndpoint):
             )
     
     async def create_kgframes(self, space_id: str, graph_id: str, objects: List[GraphObject],
-                       parent_uri: Optional[str] = None, operation_mode: str = "create") -> CreateEntityResponse:
+                       parent_uri: Optional[str] = None, operation_mode: str = "create",
+                       if_unmodified_since: Optional[str] = None) -> CreateEntityResponse:
         """
         Create KGFrames from GraphObjects.
         
@@ -375,7 +376,8 @@ class KGFramesEndpoint(BaseEndpoint):
                 space_id=space_id,
                 graph_id=graph_id,
                 parent_uri=parent_uri,
-                operation_mode=operation_mode
+                operation_mode=operation_mode,
+                if_unmodified_since=if_unmodified_since
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
@@ -392,6 +394,12 @@ class KGFramesEndpoint(BaseEndpoint):
                     error_code=response_data.get('error_code', 11),
                     error_message=error_msg,
                     status_code=response.status_code,
+                    # CARRY THE SERVER'S VERDICT (`issues/253`). A refused
+                    # conditional write arrives here as `success=false` with
+                    # `status="conflict"`; dropping the status collapses it into
+                    # an ordinary failure, so `is_conflict` is False on exactly
+                    # the response that tells the caller to re-read and merge.
+                    status=response_data.get('status'),
                     created_count=0,
                     created_uris=[]
                 )
@@ -417,7 +425,8 @@ class KGFramesEndpoint(BaseEndpoint):
             )
     
     async def update_kgframes(self, space_id: str, graph_id: str, objects: List[GraphObject],
-                       parent_uri: Optional[str] = None) -> UpdateEntityResponse:
+                       parent_uri: Optional[str] = None,
+                       if_unmodified_since: Optional[str] = None) -> UpdateEntityResponse:
         """
         Update KGFrames from GraphObjects.
         
@@ -442,7 +451,8 @@ class KGFramesEndpoint(BaseEndpoint):
                 space_id=space_id,
                 graph_id=graph_id,
                 operation_mode="update",
-                parent_uri=parent_uri
+                parent_uri=parent_uri,
+                if_unmodified_since=if_unmodified_since
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
@@ -459,6 +469,12 @@ class KGFramesEndpoint(BaseEndpoint):
                     error_code=response_data.get('error_code', 11),
                     error_message=error_msg,
                     status_code=response.status_code,
+                    # CARRY THE SERVER'S VERDICT (`issues/253`). A refused
+                    # conditional write arrives here as `success=false` with
+                    # `status="conflict"`; dropping the status collapses it into
+                    # an ordinary failure, so `is_conflict` is False on exactly
+                    # the response that tells the caller to re-read and merge.
+                    status=response_data.get('status'),
                     updated_uri=''
                 )
             
@@ -515,6 +531,12 @@ class KGFramesEndpoint(BaseEndpoint):
                     error_code=response_data.get('error_code', 11),
                     error_message=error_msg,
                     status_code=response.status_code,
+                    # CARRY THE SERVER'S VERDICT (`issues/253`). A refused
+                    # conditional write arrives here as `success=false` with
+                    # `status="conflict"`; dropping the status collapses it into
+                    # an ordinary failure, so `is_conflict` is False on exactly
+                    # the response that tells the caller to re-read and merge.
+                    status=response_data.get('status'),
                     space_id=space_id, graph_id=graph_id,
                     requested_uris=[uri]
                 )
@@ -576,6 +598,12 @@ class KGFramesEndpoint(BaseEndpoint):
                     error_code=response_data.get('error_code', 11),
                     error_message=error_msg,
                     status_code=response.status_code,
+                    # CARRY THE SERVER'S VERDICT (`issues/253`). A refused
+                    # conditional write arrives here as `success=false` with
+                    # `status="conflict"`; dropping the status collapses it into
+                    # an ordinary failure, so `is_conflict` is False on exactly
+                    # the response that tells the caller to re-read and merge.
+                    status=response_data.get('status'),
                     space_id=space_id, graph_id=graph_id,
                     requested_uris=uri_list.split(',')
                 )
@@ -789,7 +817,7 @@ class KGFramesEndpoint(BaseEndpoint):
 
     # Frame-Slot Sub-Endpoint Operations
     
-    async def create_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, objects: List[GraphObject], parent_uri: Optional[str] = None, operation_mode: str = "create") -> CreateEntityResponse:
+    async def create_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, objects: List[GraphObject], parent_uri: Optional[str] = None, operation_mode: str = "create", if_unmodified_since: Optional[str] = None) -> CreateEntityResponse:
         """
         Create slots for a specific frame.
         
@@ -814,7 +842,8 @@ class KGFramesEndpoint(BaseEndpoint):
             url = f"{self._get_server_url()}/api/graphs/kgframes/kgslots"
             params = build_query_params(
                 space_id=space_id, graph_id=graph_id, frame_uri=frame_uri,
-                parent_uri=parent_uri, operation_mode=operation_mode
+                parent_uri=parent_uri, operation_mode=operation_mode,
+                if_unmodified_since=if_unmodified_since
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
@@ -837,7 +866,7 @@ class KGFramesEndpoint(BaseEndpoint):
             logger.error(f"Error creating frame slots: {e}")
             return build_error_response(CreateEntityResponse, error_code=3, error_message=str(e), status_code=http_status_of(e))
     
-    async def update_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, objects: List[GraphObject], parent_uri: Optional[str] = None) -> UpdateEntityResponse:
+    async def update_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, objects: List[GraphObject], parent_uri: Optional[str] = None, if_unmodified_since: Optional[str] = None) -> UpdateEntityResponse:
         """
         Update slots for a specific frame.
         
@@ -861,7 +890,8 @@ class KGFramesEndpoint(BaseEndpoint):
             url = f"{self._get_server_url()}/api/graphs/kgframes/kgslots"
             params = build_query_params(
                 space_id=space_id, graph_id=graph_id, frame_uri=frame_uri,
-                parent_uri=parent_uri, operation_mode="update"
+                parent_uri=parent_uri, operation_mode="update",
+                if_unmodified_since=if_unmodified_since
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)

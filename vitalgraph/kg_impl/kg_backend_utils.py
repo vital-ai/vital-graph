@@ -182,10 +182,27 @@ def _write_deadline_s() -> float:
         return _DEFAULT_WRITE_DEADLINE_S
 
 
-async def _compare_and_stamp(conn, space_id: str, graph_id: str,
-                             entity_uri: str,
-                             if_unmodified_since: Optional[str]) -> str:
-    """Refuse the write if *entity_uri* moved, then stamp it. Returns the stamp.
+def _stamp_keys(space_id: str, graph_id: str, subject_uri: str):
+    """The (table names, subject, predicate, graph) uuids the stamp lives under."""
+    from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+    from ..db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+    from .kg_server_properties import MODIFICATION_TIME_URI
+
+    return (SparqlSQLSchema.get_table_names(space_id),
+            _generate_term_uuid(subject_uri, 'U'),
+            _generate_term_uuid(MODIFICATION_TIME_URI, 'U'),
+            _generate_term_uuid(graph_id, 'U'))
+
+
+async def _compare_stamp(conn, space_id: str, graph_id: str,
+                         subject_uri: str,
+                         if_unmodified_since: Optional[str]) -> None:
+    """Refuse the write if *subject_uri* has moved since the caller read it.
+
+    SUBJECT, not entity. The entity-frame routes key this on the owning entity,
+    which is what their callers hold. The standalone-frame routes have no owning
+    entity at all — `_create_frames` says so in its own docstring — so they key it
+    on the FRAME. The mechanism never cared; only the name did (`issues/253`).
 
     Direct SQL rather than a SPARQL update, for two reasons: it has to run on the
     CALLER's connection inside the open transaction, and the SPARQL path
@@ -197,15 +214,7 @@ async def _compare_and_stamp(conn, space_id: str, graph_id: str,
     wrong here: if the stored text differs from what the caller read, something
     rewrote it, and refusing is the safe answer.
     """
-    from datetime import datetime, timezone
-    from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
-    from ..db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
-    from .kg_server_properties import MODIFICATION_TIME_URI
-
-    t = SparqlSQLSchema.get_table_names(space_id)
-    s_uuid = _generate_term_uuid(entity_uri, 'U')
-    p_uuid = _generate_term_uuid(MODIFICATION_TIME_URI, 'U')
-    g_uuid = _generate_term_uuid(graph_id, 'U')
+    t, s_uuid, p_uuid, g_uuid = _stamp_keys(space_id, graph_id, subject_uri)
 
     row = await conn.fetchrow(
         f"SELECT tt.term_text AS stamp FROM {t['rdf_quad']} q "
@@ -216,8 +225,25 @@ async def _compare_and_stamp(conn, space_id: str, graph_id: str,
     actual = row["stamp"] if row else None
 
     if if_unmodified_since is not None and actual != if_unmodified_since:
-        raise StaleWrite(entity_uri, if_unmodified_since, actual)
+        raise StaleWrite(subject_uri, if_unmodified_since, actual)
 
+
+async def _stamp_subject(conn, space_id: str, graph_id: str,
+                         subject_uri: str) -> str:
+    """Record that *subject_uri* was just written. Returns the stamp.
+
+    SEPARATE FROM THE COMPARE, and it has to run AFTER the write (`issues/253`).
+    The stamped subject may itself be among the subjects the write is replacing —
+    which is exactly the standalone-frame case, where the guarded frame is also
+    the thing being rewritten. Stamping before the subject-level DELETE put the
+    stamp in front of the statement that removes it, so the frame came out of a
+    successful write carrying no stamp and the caller had nothing to send next
+    time. Stamping afterwards also makes the value mean "this write finished",
+    which is what the next writer compares against.
+    """
+    from datetime import datetime, timezone
+
+    t, s_uuid, p_uuid, g_uuid = _stamp_keys(space_id, graph_id, subject_uri)
     now = datetime.now(timezone.utc).isoformat()
     # Replace rather than add: the property is single-valued, and `issues/173`
     # is what happens when a write leaves two of them behind.
@@ -225,14 +251,43 @@ async def _compare_and_stamp(conn, space_id: str, graph_id: str,
         f"DELETE FROM {t['rdf_quad']} WHERE subject_uuid = $1 "
         f"AND predicate_uuid = $2 AND context_uuid = $3",
         s_uuid, p_uuid, g_uuid)
-    await _insert_stamp(conn, t, s_uuid, p_uuid, g_uuid, now)
+    await _insert_stamp(conn, t, s_uuid, p_uuid, g_uuid, now,
+                        subject_uri=subject_uri)
     return now
 
 
-async def _insert_stamp(conn, t, s_uuid, p_uuid, g_uuid, value: str) -> None:
-    """Insert the timestamp term and its quad, both idempotently."""
+async def _insert_stamp(conn, t, s_uuid, p_uuid, g_uuid, value: str,
+                        subject_uri: Optional[str] = None) -> None:
+    """Insert the timestamp term and its quad, all idempotently.
+
+    THE PREDICATE TERM TOO, and leaving it out wrote a quad that existed and
+    could not be read (`issues/253`). A quad references terms by uuid, and every
+    read joins the term table to get the text back — so a quad whose predicate
+    has no term row is dropped by the join. Silently: the row is there, the write
+    reports success, and the value is invisible to the API, to SPARQL and to the
+    caller that is about to send it back as `if_unmodified_since`.
+
+    It never showed on the ENTITY path because an entity already carries this
+    predicate from the ordinary server-property stamping, so the term row was
+    always already there. A standalone FRAME in a fresh space is the first
+    subject to be stamped without one, and the frame came back with no stamp at
+    all while the quad sat in the table.
+    """
     from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+    from .kg_server_properties import MODIFICATION_TIME_URI
     XSD_DT = "http://www.w3.org/2001/XMLSchema#dateTime"
+
+    # The predicate, and the subject when it was given: a stamped subject is not
+    # always one this write inserted — the slot routes stamp the FRAME while
+    # writing only its slots.
+    _terms = [(p_uuid, MODIFICATION_TIME_URI)]
+    if subject_uri is not None:
+        _terms.append((s_uuid, subject_uri))
+    for _uuid, _text in _terms:
+        await conn.execute(
+            f"INSERT INTO {t['term']} (term_uuid, term_text, term_type, lang, datatype_id) "
+            f"VALUES ($1, $2, 'U', NULL, NULL) ON CONFLICT DO NOTHING",
+            _uuid, _text)
     dt_id = await conn.fetchval(
         f"INSERT INTO {t['datatype']} (datatype_uri) VALUES ($1) "
         f"ON CONFLICT (datatype_uri) DO UPDATE SET datatype_uri = EXCLUDED.datatype_uri "
@@ -267,13 +322,34 @@ class StaleWrite(Exception):
     value the previous writer has not published yet.
     """
 
-    def __init__(self, entity_uri: str, expected: str, actual: Optional[str]):
-        self.entity_uri = entity_uri
+    def __init__(self, subject_uri: str, expected: str, actual: Optional[str]):
+        self.subject_uri = subject_uri
         self.expected = expected
         self.actual = actual
         super().__init__(
-            f"{entity_uri} changed since it was read: expected "
+            f"{subject_uri} changed since it was read: expected "
             f"modification time {expected!r}, found {actual!r}")
+
+
+class AmbiguousPrecondition(Exception):
+    """One `if_unmodified_since` was sent for a write covering several frames.
+
+    `issues/253`. A precondition names ONE version of ONE thing. The
+    standalone-frame route accepts any number of frames in a call, and there is
+    no honest reading of a single stamp across them: comparing it against one
+    and ignoring the rest would report success while leaving the others
+    unguarded, which is the failure the caller used the parameter to avoid.
+
+    Refused as INVALID_REQUEST rather than silently narrowed, so a caller that
+    batches frames finds out at once instead of believing it is protected.
+    """
+
+    def __init__(self, frame_count: int):
+        self.frame_count = frame_count
+        super().__init__(
+            f"if_unmodified_since covers one frame, but this write covers "
+            f"{frame_count}. Send the frames one at a time to write "
+            f"conditionally, or omit it to keep last-writer-wins.")
 
 
 class WriteDeadlineExceeded(Exception):
@@ -1272,12 +1348,27 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                                      lock_uris: Optional[List[str]] = None,
                                      conn=None,
                                      if_unmodified_since: Optional[str] = None,
-                                     stamp_entity: Optional[str] = None) -> bool:
+                                     guard_subject: Optional[str] = None,
+                                     stamp_subjects: Optional[List[str]] = None) -> bool:
         """Atomically replace quads for a list of subject URIs.
 
         Subject-level delete + insert in a single transaction.  Avoids the
         fragile quad-level UUID matching in ``remove_rdf_quads_batch_bulk``.
         Used by frame create/update paths where the subject URIs are known.
+
+        ``guard_subject`` AND ``stamp_subjects`` ARE DIFFERENT QUESTIONS, and
+        collapsing them into one parameter built a trap (`issues/253`). The guard
+        compares ONE subject — a precondition over several has no meaning, so a
+        caller writing many frames must either pick one or go unconditional. The
+        stamp advances the version of EVERY subject this write changed, which is
+        what the next caller reads. With one parameter for both, a write touching
+        several frames could only stamp one of them, so the others came out of a
+        successful write with their version unchanged — and a caller polling that
+        version would see "nobody wrote" and overwrite, which is the lost update
+        this whole mechanism exists to stop, reintroduced by the fix.
+
+        `stamp_subjects` defaults to `[guard_subject]`, so guarding one subject
+        keeps advancing it without the caller saying so twice.
 
         ``lock_uris`` SERIALISES ON THE GROUPING, not on the subjects being
         written (`issues/174`). This transaction was already atomic; it was not
@@ -1340,11 +1431,13 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                         # the endpoint stamps this property AFTER the write and
                         # OUTSIDE the lock, so the next writer can read a value
                         # its predecessor has not published yet.
-                        _target = stamp_entity or (lock_uris[0] if lock_uris else None)
-                        if _target and (if_unmodified_since is not None
-                                        or stamp_entity):
-                            _now = await _compare_and_stamp(
-                                conn, space_id, graph_id, _target,
+                        # SUBJECT, not entity: the entity-frame routes pass the
+                        # owning entity, the standalone-frame routes pass the
+                        # frame, because they have no entity to pass.
+                        _guard = guard_subject or (lock_uris[0] if lock_uris else None)
+                        if _guard and if_unmodified_since is not None:
+                            await _compare_stamp(
+                                conn, space_id, graph_id, _guard,
                                 if_unmodified_since)
                             _marks["guard"] = _time.monotonic()
 
@@ -1414,6 +1507,19 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                             await self.backend.add_rdf_quads_batch_bulk(
                                 space_id, insert_quads, connection=conn)
                         _mark("insert")
+
+                        # AFTER the insert, for the reason in `_stamp_subject`:
+                        # a standalone frame guards on itself, so a stamp
+                        # written before the delete above would not survive it.
+                        #
+                        # EVERY subject whose version this write advanced, not
+                        # just the guarded one — see the note on the parameters.
+                        _to_stamp = (stamp_subjects if stamp_subjects is not None
+                                     else ([guard_subject] if guard_subject else []))
+                        for _s in _to_stamp:
+                            await _stamp_subject(conn, space_id, graph_id, _s)
+                        if _to_stamp:
+                            _marks["stamp"] = _time.monotonic()
 
                 # BOUNDED AS A WHOLE, measured from entry so the acquire counts
                 # too (`issues/253`). `wait_for` and not a cooperative check
