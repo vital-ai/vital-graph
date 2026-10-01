@@ -532,6 +532,36 @@ kills the transaction*. Demoting it on the evidence then available was correct;
 the evidence that settles it is the ANALYZE durations in the database log, which
 nothing had looked at.
 
+### Verified against the real stack 2026-10-01, and the run found one more defect
+
+    tests/unit            5,152 passed, 0 failed
+    tests/integration       686 passed, 6 xfail, 0 failed
+    tests/api               517 passed, 9 skipped, 0 failed
+    write-load (opt-in)    12,525 writes, 0 failed; reads p50 31ms p99 407ms max 522ms
+
+All against a REBUILT image — `tests/api` talks to :8002 over HTTP, so a stale
+container reports a pass that means nothing.
+
+**The write-load test is the one that matters here**, because an **11.167 s ANALYZE
+fired during it** while those 12,525 writes and 216 reads went through with zero
+failures. Before this fix the write that triggered it would have waited those 11
+seconds; the incident that test guards took ordinary reads from 0.22 s to over 50 s.
+
+**And fire-and-forget introduced a defect of its own: a scheduled ANALYZE outlives
+its space.** The API suite deletes its ephemeral space mid-flight and the task then
+logs `relation "apitest_…_edge" does not exist`. `vectorization.auto_sync` hit this
+first and `delete_space_with_tables` already cancels its tasks before dropping, so
+`BackgroundTasks` gained `cancel(key)` — which cancels AND WAITS, since the caller
+is about to drop the tables those tasks read — and `cancel_all(key)` sweeps every
+registry, so the next scheduler someone adds is covered without anyone remembering
+to wire it in. Re-verified by rebuilding and re-running the suite: those warnings
+went from several to zero.
+
+Two `relation … does not exist` sources remain and are NOT this:
+`maintenance_job._run_edge_integrity` and
+`backfill_server_properties_task._refresh_targets` race a space deletion the same
+way, pre-existing, left alone.
+
 ### The latent twin, also fixed 2026-10-01
 
 `store_objects` awaited its own `_maybe_analyze_aux_tables` — **3.389 s measured
