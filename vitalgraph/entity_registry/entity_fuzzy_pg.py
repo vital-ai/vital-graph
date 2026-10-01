@@ -150,12 +150,15 @@ class EntityFuzzyIndexPG:
         return len(self._entity_cache)
 
     async def get_entity_count_db(self) -> int:
-        """Get the total number of entities indexed (from PostgreSQL)."""
-        async with self.pool.acquire() as conn:
-            count = await conn.fetchval(
-                "SELECT COUNT(DISTINCT entity_key) FROM entity_fuzzy_band"
-            )
-            return count or 0
+        """Get the total number of ENTITIES indexed (from PostgreSQL).
+
+        Reads the hash table, which is one row per entity. It does NOT count
+        ``entity_fuzzy_band`` keys: ``entity_key`` is
+        ``entity_id::variant_index``, so an entity contributes one key per
+        name variant and a key count runs ahead of the entity count by the
+        number of active aliases.
+        """
+        return await self.storage.get_entity_count()
 
     # ------------------------------------------------------------------
     # Entity lifecycle (async)
@@ -171,9 +174,16 @@ class EntityFuzzyIndexPG:
             entity_id: The entity ID.
             entity: Entity dict with primary_name, aliases, country, region, locality.
         """
-        # Remove existing entries if present (for updates)
-        if entity_id in self._entity_cache:
-            await self.remove_entity(entity_id)
+        # Remove existing band rows unconditionally.
+        #
+        # This used to be `if entity_id in self._entity_cache`, which is a
+        # per-process SCORING cache populated lazily by queries — not a record
+        # of what is stored. On a cold cache the delete never fired and any
+        # band row the new write did not reproduce survived, silently, because
+        # insert_bands is ON CONFLICT DO NOTHING (issues/252).
+        await self.storage.remove_entity_bands_by_entity_id(TABLE_PRIMARY, entity_id)
+        await self.storage.remove_entity_bands_by_entity_id(TABLE_PHONETIC, entity_id)
+        self._entity_cache.pop(entity_id, None)
 
         alias_names = []
         for alias in (entity.get('aliases') or []):
@@ -240,16 +250,15 @@ class EntityFuzzyIndexPG:
         Args:
             entity_id: The entity ID to remove.
         """
-        cached = self._entity_cache.get(entity_id)
-        variant_count = (cached or {}).get('_variant_count', 1)
-
-        # Build all keys to remove
-        primary_keys = [self._lsh_key(entity_id, i) for i in range(variant_count)]
-        phonetic_keys = [self._phonetic_lsh_key(entity_id, i) for i in range(variant_count)]
-
-        # Remove from PostgreSQL
-        await self.storage.remove_entity_bands(TABLE_PRIMARY, primary_keys)
-        await self.storage.remove_entity_bands(TABLE_PHONETIC, phonetic_keys)
+        # Delete by entity id, not by a reconstructed key list.
+        #
+        # This used to build keys from `_entity_cache[...]['_variant_count']`,
+        # DEFAULTING TO 1 on a miss — so a removal on a cold cache deleted
+        # `entity_id::0` and left every alias variant behind (issues/252). The
+        # count is not knowable from a per-process cache, so it is no longer
+        # asked for.
+        await self.storage.remove_entity_bands_by_entity_id(TABLE_PRIMARY, entity_id)
+        await self.storage.remove_entity_bands_by_entity_id(TABLE_PHONETIC, entity_id)
         await self.storage.delete_fuzzy_hash(entity_id)
 
         # Remove from local cache
@@ -649,6 +658,24 @@ class EntityFuzzyIndexPG:
 
             if not rows:
                 break
+
+            if since is not None:
+                # Incremental re-index REPLACES these entities, so their existing
+                # band rows have to go first. Without this the path only ever
+                # inserted, and `insert_bands` is ON CONFLICT DO NOTHING — so a
+                # renamed entity kept its old bands alongside the new ones, the
+                # same leak as issues/252 by a different route. The full-rebuild
+                # branch does not need it; `truncate_all` above covers it.
+                #
+                # Safe here because pages are ordered by entity_id and advance
+                # with `> last_entity_id`, so page id-sets are disjoint: a delete
+                # for this page can never remove rows a later flush inserts for
+                # an earlier one.
+                page_ids = list({r['entity_id'] for r in rows})
+                await self.storage.remove_entity_bands_by_entity_ids(
+                    TABLE_PRIMARY, page_ids)
+                await self.storage.remove_entity_bands_by_entity_ids(
+                    TABLE_PHONETIC, page_ids)
 
             for row in rows:
                 entity_id = row['entity_id']

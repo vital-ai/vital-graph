@@ -27,8 +27,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Add project root to Python path
-project_root = Path(__file__).parent.parent
+# Add project root to Python path. Three levels up, not two: this file lives at
+# <root>/apps/entity_registry/, so parent.parent is apps/ — which put apps/ on
+# sys.path instead of the repo, left `.env` unfound, and let `import vitalgraph`
+# resolve to an installed copy rather than the checkout being edited.
+project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from dotenv import load_dotenv
@@ -72,15 +75,9 @@ class EntityAdmin:
             max_size=5,
         )
 
-        # Initialize fuzzy index (optional)
-        try:
-            from vitalgraph.entity_registry.entity_fuzzy import EntityFuzzyIndex
-            self.fuzzy = EntityFuzzyIndex.from_env()
-            if self.fuzzy:
-                count = await self.fuzzy.initialize(self.pool)
-                logger.info(f"Fuzzy index loaded {count} entities")
-        except Exception as e:
-            logger.debug(f"Fuzzy index not available: {e}")
+        # The fuzzy index is built on first use, not here — see _ensure_fuzzy.
+        # Building it eagerly made every command pay for it, including `stats`
+        # and `export`, which never touch it.
 
         # Initialize Weaviate index (optional)
         try:
@@ -88,6 +85,60 @@ class EntityAdmin:
             self.weaviate = await EntityWeaviateIndex.from_env()
         except Exception as e:
             logger.debug(f"Weaviate index not available: {e}")
+
+    # ------------------------------------------------------------------
+    # Fuzzy index selection
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _fuzzy_backend() -> str:
+        """The configured fuzzy backend, resolved the way the server resolves it.
+
+        Uses ``get_scoped_env`` so a profile-prefixed setting works —
+        ``LOCAL_ENTITY_FUZZY_BACKEND`` in a local ``.env``,
+        ``PROD_ENTITY_FUZZY_BACKEND`` in a deployed task.
+        """
+        from vitalgraph.config.config_loader import get_scoped_env
+        return get_scoped_env('ENTITY_FUZZY_BACKEND', 'memory').lower()
+
+    def _fuzzy_is_pg(self) -> bool:
+        """Whether the live index is the PostgreSQL-backed one."""
+        from vitalgraph.entity_registry.entity_fuzzy_pg import EntityFuzzyIndexPG
+        return isinstance(self.fuzzy, EntityFuzzyIndexPG)
+
+    async def _ensure_fuzzy(self):
+        """Build the fuzzy index on first use, matching the configured backend.
+
+        Returns the index, or None with a message printed if it cannot be built.
+
+        The two backends need opposite treatment here. ``postgresql`` keeps the
+        index in the band tables, and scoring metadata is loaded per query, so
+        there is nothing to warm — constructing the object is the whole job.
+        ``memory`` has nothing persisted, so it must be built from PostgreSQL
+        before any command can read it.
+        """
+        if self.fuzzy is not None:
+            return self.fuzzy
+
+        backend = self._fuzzy_backend()
+        try:
+            if backend == 'postgresql':
+                from vitalgraph.entity_registry.entity_fuzzy_pg import EntityFuzzyIndexPG
+                self.fuzzy = EntityFuzzyIndexPG.from_env(self.pool)
+            else:
+                from vitalgraph.entity_registry.entity_fuzzy import EntityFuzzyIndex
+                self.fuzzy = EntityFuzzyIndex.from_env()
+                start = time.time()
+                count = await self.fuzzy.initialize(self.pool)
+                logger.info(
+                    f"Fuzzy index ({backend}) built in-process: "
+                    f"{count:,} entities in {time.time() - start:.1f}s"
+                )
+        except Exception as e:
+            print(f"Fuzzy index unavailable on backend '{backend}': {e}")
+            logger.debug("Fuzzy index construction failed", exc_info=True)
+            self.fuzzy = None
+        return self.fuzzy
 
     async def disconnect(self):
         """Clean up connections."""
@@ -354,23 +405,48 @@ class EntityAdmin:
 
     async def cmd_fuzzy_status(self, args):
         """Show MinHash LSH fuzzy index status."""
-        if not self.fuzzy:
-            print("Fuzzy index is not enabled. Set ENTITY_FUZZY_ENABLED=true")
+        if not await self._ensure_fuzzy():
             return
+
         print("Fuzzy Index Status")
         print(LINE)
-        print(f"  Entities indexed:  {self.fuzzy.entity_count:,}")
-        print(f"  Initialized:       {self.fuzzy._initialized}")
+
+        if self._fuzzy_is_pg():
+            from vitalgraph.entity_registry.entity_fuzzy_storage import (
+                TABLE_PRIMARY, TABLE_PHONETIC,
+            )
+            print("  Backend:           postgresql")
+            entities = await self.fuzzy.get_entity_count_db()
+            primary_variants, primary_entities = \
+                await self.fuzzy.storage.get_indexed_counts(TABLE_PRIMARY)
+            phonetic_variants, _ = \
+                await self.fuzzy.storage.get_indexed_counts(TABLE_PHONETIC)
+            print(f"  Entities hashed:   {entities:,}")
+            print(f"  Entities banded:   {primary_entities:,}")
+            print(f"  Name variants:     {primary_variants:,}  "
+                  f"(primary name + active aliases)")
+            print(f"  Phonetic variants: {phonetic_variants:,}")
+            if phonetic_variants < primary_variants:
+                print(f"                     {primary_variants - phonetic_variants:,}"
+                      f" fewer — names yielding no phonetic code")
+            if entities != primary_entities:
+                print(f"  ⚠️  hashed and banded disagree by "
+                      f"{abs(entities - primary_entities):,} — a partial rebuild")
+        else:
+            backend = 'redis' if self.fuzzy.storage_config else 'memory'
+            print(f"  Backend:           {backend}")
+            print(f"  Entities indexed:  {self.fuzzy.entity_count:,}")
+            if backend == 'memory':
+                print("                     (built in this process; "
+                      "discarded on exit)")
+
         print(f"  Num permutations:  {self.fuzzy.num_perm}")
         print(f"  LSH threshold:     {self.fuzzy.threshold}")
         print(f"  Shingle k:         {self.fuzzy.shingle_k}")
-        backend = 'redis' if self.fuzzy.storage_config else 'memory'
-        print(f"  Backend:           {backend}")
 
     async def cmd_fuzzy_sync(self, args):
         """Sync fuzzy index from PostgreSQL."""
-        if not self.fuzzy:
-            print("Fuzzy index is not enabled. Set ENTITY_FUZZY_ENABLED=true")
+        if not await self._ensure_fuzzy():
             return
 
         if getattr(args, 'entity_id', None):
@@ -395,41 +471,161 @@ class EntityAdmin:
                 print(f"DRY RUN: Would sync entity {eid} to fuzzy index")
                 return
 
-            self.fuzzy.add_entity(eid, entity)
+            if self._fuzzy_is_pg():
+                await self.fuzzy.add_entity(eid, entity)
+            else:
+                self.fuzzy.add_entity(eid, entity)
             print(f"Synced entity {eid} to fuzzy index")
-        else:
-            # Full sync
+            return
+
+        since_hours = getattr(args, 'since_hours', None)
+        if since_hours:
+            since = datetime.now(timezone.utc) - timedelta(hours=since_hours)
             if getattr(args, 'dry_run', False):
                 async with self.pool.acquire() as conn:
-                    count = await conn.fetchval("SELECT COUNT(*) FROM entity WHERE status = 'active'")
-                print(f"DRY RUN: Would sync {count:,} entities to fuzzy index")
+                    count = await conn.fetchval(
+                        "SELECT COUNT(*) FROM entity "
+                        "WHERE status = 'active' AND updated_time >= $1", since
+                    )
+                print(f"DRY RUN: Would re-index {count:,} entities "
+                      f"updated since {since:%Y-%m-%d %H:%M} UTC")
                 return
 
             start = time.time()
-            count = await self.fuzzy.initialize(self.pool)
-            duration = time.time() - start
-            print(f"Full fuzzy sync complete: {count:,} entities in {duration:.1f}s")
+            count = await self.fuzzy.initialize(self.pool, since=since)
+            print(f"Incremental fuzzy sync complete: {count:,} entities "
+                  f"in {time.time() - start:.1f}s")
+            return
+
+        # Everything below rebuilds the whole index.
+        if self._fuzzy_is_pg():
+            # initialize(since=None) opens with storage.truncate_all(). That is
+            # a rebuild of the live index, and it already has a dedicated tool
+            # that reports band row counts and can be run with --status first.
+            print("Refusing a full rebuild of the PostgreSQL fuzzy index here.")
+            print()
+            print("  The band tables ARE the index — a full sync truncates and")
+            print("  reloads them, which is not what a 'sync' should do to live")
+            print("  data. Use the rebuild tool, which is the maintained path:")
+            print()
+            print("    python apps/fuzzy_index/migrate_fuzzy_redis_to_pg.py --status")
+            print("    python apps/fuzzy_index/migrate_fuzzy_redis_to_pg.py --rebuild")
+            print()
+            print("  To catch up after an import instead, without truncating:")
+            print()
+            print("    entity_admin.py fuzzy sync --since-hours 24")
+            print("    entity_admin.py fuzzy sync --entity-id <id>")
+            return
+
+        if getattr(args, 'dry_run', False):
+            async with self.pool.acquire() as conn:
+                count = await conn.fetchval("SELECT COUNT(*) FROM entity WHERE status = 'active'")
+            print(f"DRY RUN: Would sync {count:,} entities to fuzzy index")
+            return
+
+        start = time.time()
+        count = await self.fuzzy.initialize(self.pool)
+        duration = time.time() - start
+        print(f"Full fuzzy sync complete: {count:,} entities in {duration:.1f}s")
+        if not self.fuzzy.storage_config:
+            print("  NOTE: in-memory backend — this index is discarded on exit.")
 
     async def cmd_fuzzy_check(self, args):
         """Verify fuzzy index matches PostgreSQL."""
-        if not self.fuzzy:
-            print("Fuzzy index is not enabled. Set ENTITY_FUZZY_ENABLED=true")
+        if not await self._ensure_fuzzy():
             return
 
-        async with self.pool.acquire() as conn:
-            pg_count = await conn.fetchval("SELECT COUNT(*) FROM entity WHERE status = 'active'")
+        # The writer's predicates, not `= 'active'`. _do_initialize selects on
+        # `e.status <> DELETED` and `ea.status <> RETRACTED`, and a check that
+        # invents its own definition of "should be indexed" reports phantom drift
+        # the moment a third status value exists.
+        from vitalgraph.entity_registry.entity_status import DELETED, RETRACTED
 
-        fuzzy_count = self.fuzzy.entity_count
+        async with self.pool.acquire() as conn:
+            pg_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM entity WHERE status <> $1", DELETED
+            )
 
         print("Fuzzy Index Consistency Check")
         print(LINE)
+
+        if not self._fuzzy_is_pg():
+            # The in-process index was just built from this same query, so the
+            # counts agree by construction and this comparison proves nothing.
+            print(f"  PostgreSQL active entities: {pg_count:,}")
+            print(f"  Fuzzy index entities:       {self.fuzzy.entity_count:,}")
+            print()
+            print("  This is not a consistency check on the in-memory backend:")
+            print("  the index was built from the same query a moment ago, so")
+            print("  the counts agree whatever the state of anything else.")
+            return
+
+        from vitalgraph.entity_registry.entity_fuzzy_storage import (
+            TABLE_PRIMARY, TABLE_PHONETIC,
+        )
+        async with self.pool.acquire() as conn:
+            alias_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM entity_alias a JOIN entity e "
+                "ON e.entity_id = a.entity_id "
+                "WHERE a.status <> $1 AND e.status <> $2",
+                RETRACTED, DELETED,
+            )
+        hashed = await self.fuzzy.get_entity_count_db()
+        banded_variants, banded_entities = \
+            await self.fuzzy.storage.get_indexed_counts(TABLE_PRIMARY)
+        phonetic_variants, _ = \
+            await self.fuzzy.storage.get_indexed_counts(TABLE_PHONETIC)
+
+        # One key per name variant: the primary name plus each active alias.
+        # Comparing variants against entities reports a false gap of exactly
+        # the alias count, which is why the two are counted separately.
+        expected_variants = pg_count + alias_count
+
         print(f"  PostgreSQL active entities: {pg_count:,}")
-        print(f"  Fuzzy index entities:       {fuzzy_count:,}")
-        if pg_count == fuzzy_count:
-            print("  ✅ Counts match")
+        print(f"  Active aliases:             {alias_count:,}")
+        print(f"  Expected name variants:     {expected_variants:,}")
+        print(LINE)
+        print(f"  Entities hashed:            {hashed:,}")
+        print(f"  Entities banded:            {banded_entities:,}")
+        print(f"  Name variants banded:       {banded_variants:,}")
+        print(f"  Phonetic variants banded:   {phonetic_variants:,}")
+        print(LINE)
+
+        problems = []
+        if hashed != pg_count:
+            problems.append(
+                f"hash table is {abs(hashed - pg_count):,} "
+                f"{'short of' if hashed < pg_count else 'ahead of'} the entity table"
+            )
+        if banded_entities != pg_count:
+            problems.append(
+                f"band tables cover {abs(banded_entities - pg_count):,} "
+                f"{'fewer' if banded_entities < pg_count else 'more'} entities "
+                f"than the entity table"
+            )
+        if banded_variants != expected_variants:
+            problems.append(
+                f"banded variants differ from expected by "
+                f"{abs(banded_variants - expected_variants):,}"
+            )
+
+        if not problems:
+            print("  ✅ Index agrees with the entity and alias tables")
         else:
-            print(f"  ⚠️  Mismatch: {abs(pg_count - fuzzy_count):,} difference")
-            print("  Run 'fuzzy sync --full' to re-sync")
+            for p in problems:
+                print(f"  ⚠️  {p}")
+            print()
+            print("  Rebuild with:")
+            print("    python apps/fuzzy_index/migrate_fuzzy_redis_to_pg.py --rebuild")
+            print("  Or catch up incrementally:")
+            print("    entity_admin.py fuzzy sync --since-hours 24")
+
+        if phonetic_variants < banded_variants:
+            print()
+            print(f"  {banded_variants - phonetic_variants:,} variants have no "
+                  f"phonetic entry — expected for names that")
+            print("  yield no phonetic code (digits are dropped); not a defect "
+                  "on its own.")
 
     # ==================================================================
     # Weaviate commands
@@ -729,8 +925,7 @@ class EntityAdmin:
 
     async def cmd_search_similar(self, args):
         """Find near-duplicates via MinHash LSH."""
-        if not self.fuzzy:
-            print("Fuzzy index is not enabled. Set ENTITY_FUZZY_ENABLED=true")
+        if not await self._ensure_fuzzy():
             return
 
         name = getattr(args, 'name', None)
@@ -761,14 +956,19 @@ class EntityAdmin:
                 )
                 entity['aliases'] = [dict(a) for a in alias_rows]
 
-            candidates = self.fuzzy.find_similar(
-                entity, limit=limit, min_score=min_score,
-            )
+            if self._fuzzy_is_pg():
+                candidates = await self.fuzzy.find_similar(
+                    entity, limit=limit, min_score=min_score,
+                )
+            else:
+                candidates = self.fuzzy.find_similar(
+                    entity, limit=limit, min_score=min_score,
+                )
             # Exclude the entity itself from results
             candidates = [c for c in candidates if c['entity_id'] != entity_id]
             label = f"Duplicates for {entity_id} ({entity['primary_name']})"
         else:
-            candidates = self.fuzzy.find_similar_by_name(
+            kwargs = dict(
                 name=name,
                 country=getattr(args, 'country', None),
                 region=getattr(args, 'region', None),
@@ -776,6 +976,10 @@ class EntityAdmin:
                 limit=limit,
                 min_score=min_score,
             )
+            if self._fuzzy_is_pg():
+                candidates = await self.fuzzy.find_similar_by_name(**kwargs)
+            else:
+                candidates = self.fuzzy.find_similar_by_name(**kwargs)
             label = f'Similar to "{name}"'
 
         fmt = getattr(args, 'format', 'table')
@@ -1074,7 +1278,12 @@ def main():
     fuzzy_sub = fuzzy_parser.add_subparsers(dest='sub')
     fuzzy_sub.add_parser('status', help='Fuzzy index health and stats')
     sync_p = fuzzy_sub.add_parser('sync', help='Sync fuzzy index')
-    sync_p.add_argument('--full', action='store_true', help='Full re-sync from PostgreSQL')
+    sync_p.add_argument('--full', action='store_true',
+                        help='Full re-sync from PostgreSQL (in-memory/redis backends only; '
+                             'the postgresql backend rebuilds via migrate_fuzzy_redis_to_pg.py)')
+    sync_p.add_argument('--since-hours', type=float,
+                        help='Incremental: re-index entities updated in the last N hours '
+                             '(does not truncate)')
     sync_p.add_argument('--entity-id', help='Sync a single entity')
     sync_p.add_argument('--dry-run', action='store_true', help='Report what would change')
     fuzzy_sub.add_parser('check', help='Verify fuzzy index matches PostgreSQL')

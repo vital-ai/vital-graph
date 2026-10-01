@@ -22,6 +22,21 @@ TABLE_PRIMARY = 'entity_fuzzy_band'
 TABLE_PHONETIC = 'entity_fuzzy_phonetic_band'
 TABLE_HASH = 'entity_fuzzy_hash'
 
+# SQL that recovers the entity_id from an entity_key. THE TWO BAND TABLES USE
+# DIFFERENT KEY SHAPES and the difference is silent if you get it wrong:
+#
+#     primary    entity_id::variant          -> field 1
+#     phonetic   P::entity_id::variant       -> field 2
+#
+# Applying the primary expression to the phonetic table yields the literal 'P'
+# for every row, so an index on it holds one distinct value and a delete keyed
+# on it matches the WHOLE TABLE. Read from this map rather than inlining the
+# expression, and keep it in step with the indexes in entity_registry_schema.
+ENTITY_ID_EXPR = {
+    TABLE_PRIMARY: "split_part(entity_key, '::', 1)",
+    TABLE_PHONETIC: "split_part(entity_key, '::', 2)",
+}
+
 
 def compute_band_ranges(num_perm: int, threshold: float) -> List[Tuple[int, int]]:
     """Compute optimal band ranges for MinHash LSH.
@@ -246,24 +261,55 @@ class PostgreSQLFuzzyStorage:
                 entity_keys,
             )
 
-    async def remove_entity_bands_by_prefix(
+    async def remove_entity_bands_by_entity_id(
         self,
         table: str,
         entity_id: str,
     ):
-        """Remove all band entries for an entity using prefix match.
+        """Remove EVERY band entry for an entity, whatever its variant count.
 
-        Use this when you don't know exact variant keys. Matches
-        entity_id::* pattern.
+        This is the delete to reach for. It needs no knowledge of how many name
+        variants the entity has, which is the point: a caller that must supply
+        the variant count can only be as correct as its bookkeeping, and the
+        previous caller's bookkeeping was a per-process cache (`issues/252`).
+
+        Matches ``ENTITY_ID_EXPR[table]`` by plain equality, so it uses the
+        entity-id expression index and is unaffected by database collation. It
+        replaced a ``LIKE 'entity_id::%'`` form that no btree can serve under a
+        non-C collation — which is every deployed database, though not local.
 
         Args:
-            table: Table name.
-            entity_id: The entity ID (without ::variant_idx suffix).
+            table: Band table name.
+            entity_id: The entity ID, with no ``::variant`` suffix.
         """
         async with self.pool.acquire() as conn:
             await conn.execute(
-                f"DELETE FROM {table} WHERE entity_key LIKE $1",
-                f"{entity_id}::%",
+                f"DELETE FROM {table} WHERE {ENTITY_ID_EXPR[table]} = $1",
+                entity_id,
+            )
+
+    async def remove_entity_bands_by_entity_ids(
+        self,
+        table: str,
+        entity_ids: List[str],
+    ):
+        """Batched form of :meth:`remove_entity_bands_by_entity_id`.
+
+        One statement for a page of entities rather than one round trip each,
+        for the incremental re-index path. Same index, same collation
+        independence.
+
+        Args:
+            table: Band table name.
+            entity_ids: Entity IDs, with no ``::variant`` suffixes.
+        """
+        if not entity_ids:
+            return
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                f"DELETE FROM {table} "
+                f"WHERE {ENTITY_ID_EXPR[table]} = ANY($1::text[])",
+                entity_ids,
             )
 
     async def truncate(self, table: str):
@@ -383,6 +429,34 @@ class PostgreSQLFuzzyStorage:
         """
         async with self.pool.acquire() as conn:
             return await conn.fetchval(f"SELECT COUNT(*) FROM {TABLE_HASH}")
+
+    async def get_indexed_counts(self, table: str) -> Tuple[int, int]:
+        """Count what a band table actually holds, as (variants, entities).
+
+        Counts a SINGLE band rather than the whole table. Every name variant
+        is written to every band, so band 0 carries the full key set at
+        1/N_BANDS of the rows — which is the difference between an indexed
+        range scan and a full scan of tens of millions of rows.
+
+        The two numbers differ by design and the gap is meaningful:
+        ``entity_key`` is ``entity_id::variant_index``, so one entity
+        contributes one key per name variant (primary name plus each active
+        alias). Comparing the VARIANT count against a count of entities
+        reports a difference on a perfectly healthy index.
+
+        Args:
+            table: Band table name.
+
+        Returns:
+            (distinct entity_key values, distinct entity_id values).
+        """
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT COUNT(*) AS variants, "
+                f"COUNT(DISTINCT {ENTITY_ID_EXPR[table]}) AS entities "
+                f"FROM {table} WHERE band_id = 0"
+            )
+            return int(row['variants']), int(row['entities'])
 
     async def has_band_data(self) -> bool:
         """Check whether the band tables already hold data.

@@ -23,7 +23,7 @@ sys.path.insert(0, str(project_root))
 
 import asyncpg
 
-from vitalgraph.entity_registry.entity_fuzzy_pg import EntityFuzzyIndexPG, compute_entity_hash
+from vitalgraph.entity_registry.entity_fuzzy_pg import EntityFuzzyIndexPG, compute_fuzzy_hash
 from vitalgraph.entity_registry.entity_fuzzy_storage import (
     PostgreSQLFuzzyStorage,
     TABLE_PRIMARY,
@@ -283,17 +283,17 @@ async def test_index_initialize(pool):
     return True
 
 
-async def test_compute_entity_hash():
-    """Test compute_entity_hash determinism."""
-    print("\n=== Test: compute_entity_hash ===")
+async def test_compute_fuzzy_hash():
+    """Test compute_fuzzy_hash determinism."""
+    print("\n=== Test: compute_fuzzy_hash ===")
     ent = TEST_ENTITIES[0]
-    h1 = compute_entity_hash(ent)
-    h2 = compute_entity_hash(ent)
+    h1 = compute_fuzzy_hash(ent)
+    h2 = compute_fuzzy_hash(ent)
     assert h1 == h2, "Hash not deterministic"
     assert len(h1) == 32, f"Expected 32 chars, got {len(h1)}"
 
     # Different entity should have different hash
-    h3 = compute_entity_hash(TEST_ENTITIES[2])
+    h3 = compute_fuzzy_hash(TEST_ENTITIES[2])
     assert h3 != h1, "Different entities should have different hashes"
     print(f"  PASS: deterministic 32-char hex hash ({h1[:8]}...)")
     return True
@@ -316,7 +316,7 @@ async def main():
         await ensure_tables(pool)
 
         results = []
-        results.append(await test_compute_entity_hash())
+        results.append(await test_compute_fuzzy_hash())
         results.append(await test_storage_basic(pool))
         results.append(await test_index_add_query(pool))
         results.append(await test_index_remove(pool))

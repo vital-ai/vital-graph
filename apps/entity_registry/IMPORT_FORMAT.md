@@ -553,8 +553,12 @@ python entity_registry/entity_import_jsonl.py \
 | `--dry-run` | — | Validate only — no writes at all, including reference types |
 | `--error-log` | — | Path to write validation errors (JSONL) |
 
-The script does **not** trigger dedup or Weaviate index rebuilds. Use the
-admin rebuild endpoint or `entity_admin.py` commands separately after import.
+The script does **not** trigger fuzzy or Weaviate index rebuilds. Rebuild them
+separately after import — `migrate_fuzzy_redis_to_pg.py --rebuild` for the fuzzy
+index, `entity_admin.py weaviate rebuild` or the admin rebuild endpoint for
+Weaviate. Until you do, imported entities are absent from the fuzzy index: the
+server only self-builds when the band tables are empty (`skip_if_populated=True`),
+so a restart will not pick them up either.
 
 ---
 
@@ -577,9 +581,16 @@ python entity_registry/entity_import_jsonl.py \
     --error-log errors.jsonl
 
 # Rebuild indexes separately
-python entity_registry/entity_admin.py dedup-sync
-python entity_registry/entity_admin.py weaviate-rebuild
+python apps/fuzzy_index/migrate_fuzzy_redis_to_pg.py --rebuild
+python entity_registry/entity_admin.py weaviate rebuild
 ```
+
+> The full fuzzy rebuild goes through `migrate_fuzzy_redis_to_pg.py`, not
+> `entity_admin.py` — on the `postgresql` backend `fuzzy sync` refuses a full
+> rebuild and points here, because a full sync truncates the band tables.
+> To catch up on just what the import added, without truncating:
+> `entity_admin.py fuzzy sync --since-hours N`. Verify either way with
+> `entity_admin.py fuzzy check`.
 
 ---
 

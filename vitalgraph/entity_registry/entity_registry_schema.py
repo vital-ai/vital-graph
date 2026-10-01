@@ -344,6 +344,25 @@ class EntityRegistrySchema:
         # Fuzzy band indexes (covering index for fast band lookups)
         'CREATE INDEX IF NOT EXISTS idx_fuzzy_band_lookup ON entity_fuzzy_band (band_id, band_hash) INCLUDE (entity_key)',
         'CREATE INDEX IF NOT EXISTS idx_fuzzy_phonetic_lookup ON entity_fuzzy_phonetic_band (band_id, band_hash) INCLUDE (entity_key)',
+
+        # Entity-id expression indexes, for removing every band row of one
+        # entity without knowing its variant count (issues/252).
+        #
+        # Deleting by entity_key alone cannot use the primary key, where it is
+        # the THIRD column: measured 6.3 s per call on production. These make it
+        # an equality lookup instead. Equality, not LIKE — a prefix match is
+        # unindexable under any non-C collation, which is every deployed
+        # database.
+        #
+        # THE EXPRESSION DIFFERS PER TABLE. Primary keys are entity_id::variant;
+        # phonetic keys are P::entity_id::variant. Field 1 of a phonetic key is
+        # the literal 'P', so the primary expression here would build an index
+        # holding a single distinct value. Must match ENTITY_ID_EXPR in
+        # entity_fuzzy_storage.py.
+        "CREATE INDEX IF NOT EXISTS idx_fuzzy_band_entity_id "
+        "ON entity_fuzzy_band ((split_part(entity_key, '::', 1)))",
+        "CREATE INDEX IF NOT EXISTS idx_fuzzy_phonetic_entity_id "
+        "ON entity_fuzzy_phonetic_band ((split_part(entity_key, '::', 2)))",
     ]
 
     SEED_ENTITY_TYPES = [
