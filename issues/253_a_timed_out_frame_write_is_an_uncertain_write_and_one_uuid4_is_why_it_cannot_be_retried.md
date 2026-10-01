@@ -352,20 +352,18 @@ the session's own `lock_timeout`". It is not bounded at all. A frame write locks
 ONE entity, so the reported case is precisely the case with no bound — see "What
 step 1 changes".
 
-**And the reported 286 "writes failed on lock timeouts" cannot be
-`lock_timeout`**, because there is none. Over the whole of 09-26 this log contains
-zero occurrences of `lock timeout`, zero of `update_subjects_graph failed`, and
-zero of `deadline exceeded`. Whatever those 286 are, they are not this, and the
-claim needs its own evidence before anything is built on it.
+**~~And the reported 286 cannot be `lock_timeout`~~ — WITHDRAWN.** That rested on
+a `length(events)` count that reads only the first page. Counted properly there
+are 231 lock-timeout kills over eight days, 121 on 09-26: the reporter's figure is
+corroborated. See "ANSWERED 2026-10-01".
 
-### One more consequence, and it is good news
+### ~~One more consequence, and it is good news~~ — HALF WITHDRAWN
 
-**No write failed on the spike day.** Zero `update_subjects_graph failed` lines in
-24 hours, and the 51.7 s write logged its own completion. So those writes LANDED,
-late, exactly as "the server does not stop when the caller gives up" predicts.
-The uncertain writes in this report are overwhelmingly writes that SUCCEEDED
-after the caller stopped listening — which is what the frame comparison should
-expect to find.
+**"No write failed on the spike day" is WRONG** — a `length(events)` pagination
+artifact; there were 79 that day (see the retraction above). What survives is the
+part that was independently verified: the writes that merely timed out at the
+caller's 30 s DID land, confirmed by sampling the three slowest and finding
+2-4 s of real write work apiece, each followed by its cache invalidation.
 
 ### What step 1 changes
 
@@ -480,6 +478,82 @@ with it. The two fences want ordering: a lock wait bounded BELOW the command
 timeout, so the failure is a clean server-side error rather than a killed
 connection. Part 5 (10 s) establishes that ordering; this is the reason it is not
 merely a latency improvement.
+
+## ANSWERED 2026-10-01 — the three open questions, and a RETRACTION
+
+### RETRACTION FIRST: "VitalGraph logged zero lock timeouts" was a tooling artifact
+
+`aws logs filter-log-events --query 'length(events)'` prints a count **PER PAGE**,
+and the first page of a large group is often empty. I read that first `0` as the
+answer. Counted properly, the same 24 hours of 09-26 contains **199** lines
+matching `lock timeout`.
+
+So two claims in this file were wrong and are withdrawn:
+
+  * ~~"No write failed on the spike day"~~ — **79** `update_subjects_graph failed`
+    on 09-26 alone.
+  * ~~"The caller's 286 lock timeouts cannot be `lock_timeout`"~~ — **they are
+    corroborated.** The reporter was right.
+
+### 1. The caller's "286 lock timeouts": CONFIRMED
+
+Per-day census over 09-23..09-30, from the application log:
+
+    update_subjects_graph failed                295
+    canceling statement due to lock             231      <- the caller's 286
+    Atomic frame UPDATE failed                  169
+    Atomic frame creation failed                126
+    canceling statement due to statement timeout 38
+
+`231` lock-timeout kills in eight days, **121 of them on 09-26**, against a
+reported 286 in seven. Right mechanism, right order of magnitude. And
+`169 + 126 = 295` exactly matches `update_subjects_graph failed`, so every
+backend failure surfaced at the processor level — the two counts corroborate each
+other rather than being independent guesses.
+
+### 2. Did the ~190 uncertain writes land? YES — but that was the wrong question
+
+**The 30-second caller timeouts landed.** `slow_query_log` holds **127**
+frame-write requests over 30 s for 09-24..09-29 (its retention starts 09-24,
+which accounts for the gap to the reported 145), by day:
+1 / 5 / **109** / 6 / 2 / 4. A row exists BECAUSE the handler returned —
+`MetricsMiddleware` records in a `finally` after `call_next`.
+
+Sampled the three slowest on 09-26 (164.6 s, 162.9 s, 158.9 s, all `lead_prod`,
+all the same lead): their actual writes took **2.186 s, 3.296 s and 4.118 s**,
+each followed by its post-write cache invalidation, and **zero failures in that
+whole minute**. The other ~160 s was queueing behind the same lead. They landed.
+
+**But ~295 OTHER frame writes failed outright in eight days — about 37 a day —
+and those did not land.** That is far worse than this file previously implied, and
+it splits cleanly:
+
+  * **~231 died at the 10 s `lock_timeout`** having done nothing at all. Nothing
+    was written, nothing was corrupted, and the caller was told — in a 200 body it
+    does not read.
+  * **~12 ran and never committed** (`cannot call Transaction.__aexit__`), the
+    idle-in-transaction losses whose root cause is the awaited ANALYZE.
+
+So the honest summary is the inverse of the original report's framing: the
+*uncertain* writes were mostly fine, and the *certain* failures are the loss —
+roughly **29 silently-failed writes a day** from lock timeouts alone.
+
+**This strengthens the case for deploying.** Both unshipped performance fixes
+attack exactly what produces a lock timeout: the `frame_slot` filter (384x) cuts
+time held under the lock, and not awaiting the ANALYZE removes 60-98 s holds
+entirely. A lock timeout is a queue symptom, and those two shorten the queue.
+
+### 3. `lead_prod`'s quad PK: slim 4-column, and so is every other space
+
+    all NINE spaces on the instance report the same shape, including
+    `lead_prod_rdf_quad`, `lead_data_rdf_quad`, `prod_kg*`, `sp_kg_types`,
+    `wordnet_frames` and `testspace` — no space is on the old key
+
+`PK(subject_uuid, predicate_uuid, object_uuid, context_uuid)` everywhere — no
+`quad_uuid`. `ON CONFLICT DO NOTHING` genuinely dedupes, so a replay cannot
+duplicate quads on any production space. **The gate on the client-side retry is
+CLEARED**, and with the deterministic edge URIs already in, `idempotent=True` is
+safe to turn on.
 
 ## ROOT CAUSE FOUND 2026-10-01 — a write holds its transaction open across an ANALYZE
 
