@@ -6,7 +6,7 @@
 ## The production application connects to **`vitalgraph-pg18-prod`** (PostgreSQL
 ## 18.4), taken from the task definition's `PROD_DB_HOST`. The Secrets Manager
 ## entry it draws its PASSWORD from (`vitalgraph/prod/database-new`) carries a
-## `host` field naming a DIFFERENT instance, `cardiff-postgres-prod`. I used the
+## `host` field naming a DIFFERENT, unrelated instance. I used the
 ## secret's host. Every "measured on production" claim about database SETTINGS or
 ## database LOGS below was therefore read from an instance the app does not use.
 ##
@@ -480,6 +480,69 @@ with it. The two fences want ordering: a lock wait bounded BELOW the command
 timeout, so the failure is a clean server-side error rather than a killed
 connection. Part 5 (10 s) establishes that ordering; this is the reason it is not
 merely a latency improvement.
+
+## What the database log shows, and what it eliminates (2026-10-01)
+
+Configuration bounds what it CAN show: `log_min_duration_statement = 1000`,
+`log_lock_waits = off`, `log_disconnections = off`, `log_statement = none`,
+`log_min_messages = warning`. So: statements over 1 s, FATAL/ERROR/WARNING,
+checkpoints, autovacuum. Nothing sub-second, no lock waits, no session lifetimes.
+
+Contents of 21:00-21:59 UTC on 2026-09-30 — 354 LOG, 4 FATAL, 1 ERROR:
+
+  * **4 FATAL `terminating connection due to idle-in-transaction timeout`** at
+    21:29, 21:33, 21:38 and 21:42, each 75-93 s before an application-side
+    failure. With 18:18:05 that is **5 for 5**.
+  * **1 ERROR**, `canceling statement due to statement timeout`, on a
+    `WITH targets AS (…)` statement — a maintenance query, not a write.
+  * 252 slow statements: `INSERT INTO {space}_term` at **5141 / 2427 / 2300 /
+    2022 ms** (the slowest write statement in the hour, and nothing in this issue
+    touches it); `DELETE FROM {space}_frame_slot` **eight times at 1.0-1.2 s**,
+    which is the statement part 6 makes 384x faster, so production is paying it;
+    one `DELETE FROM lead_prod_entity_slot_sort` at 1217 ms; 54 slow
+    `SELECT count…`.
+  * 75 `could not receive data from client: Connection reset by peer`, all on
+    this database, spread across the whole hour at 1-6/min — consistent with pool
+    recycling rather than a pathology.
+  * 12 checkpoints, 2 autovacuums, 1 autoanalyze.
+
+**THE DECISIVE DETAIL: three of the four killed sessions appear in the log ONLY
+as a FATAL.** No slow statement at all. So nothing slow was happening in the
+database on those connections — every statement they ran was under a second, and
+then the application stopped talking to them with a transaction open. **The
+database log eliminates the database as the location of the delay.**
+
+### A suspicion raised and withdrawn
+
+One session (pid 2100892) ran a `frame_slot` DELETE and then a generated
+`SELECT p0.v0 …`, which looked like a READ executing inside a write transaction —
+a real possibility, since `execute_sparql_query` accepts a caller's `conn` by
+design (`issues/175` class 2). **Tested and false.** Of 29 sessions with slow
+statements, 3 ran both a slow write and a slow read, and the gaps are **26 s, 2
+minutes and 24 minutes** — a pooled connection reused across requests, not a
+shared transaction.
+
+### What is now eliminated, and what remains
+
+    lock wait            NO -- lock_timeout is 10 s
+    sidecar compile      NO -- sidecar=0 ms in every pipeline line in the window
+    SQL generation       NO -- peaked at 283 ms
+    event-loop starvation NO -- busy task streams gap at most 2 s, not 60 s
+    a read inside the write transaction  NO -- see above
+    anything in the database  NO -- three of four killed sessions ran nothing slow
+
+What remains is an application-side await inside the transaction that is not a
+database statement — a semaphore, the thread pool, or another coroutine. **The
+phase timestamps added 2026-10-01 are what will name it**: they are logged on the
+FAILURE path as well as the success path, because every one of these losses ends
+in an exception, and a phase that never completed prints `-`. A write parked with
+its transaction open will read as
+`phases acquire=… begin=… lock=… presync=- insert=- commit=-`.
+
+Instrumented: `update_subjects_graph`, where all five losses occurred.
+NOT instrumented: `upsert_objects_atomic` and `update_entity_graph`, deliberately,
+to keep the change small — if a loss ever appears there it will need the same
+treatment.
 
 ## The report, as received
 

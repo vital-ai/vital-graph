@@ -145,6 +145,34 @@ from ..db.sparql_sql.entity_lock import EntityLockTimeout
 from ..utils.exception_detail import describe_exception
 
 
+# Phases of one write, in the order they complete. Printing them in a fixed order
+# with a placeholder for the ones that never happened is the point: on the
+# failures this exists for, the TAIL IS MISSING and where it stops is the answer.
+_WRITE_PHASES = ("acquire", "begin", "lock", "presync", "insert", "commit")
+
+
+def _phase_breakdown(started: float, marks: Dict[str, float]) -> str:
+    """`phases acquire=0.001s begin=0.000s lock=0.002s presync=0.198s …`.
+
+    Each number is the time that phase TOOK, i.e. the gap from the previous mark,
+    so the figures sum to the elapsed total rather than repeating it. A phase that
+    did not complete prints `-`, and everything after it is `-` too; a write that
+    died waiting with its transaction open therefore reads as
+    `acquire=… begin=… lock=… presync=- insert=- commit=-`, which says it stopped
+    between the lock and the end of the scans without needing another deploy to
+    find out (`issues/253`).
+    """
+    out, prev = [], started
+    for name in _WRITE_PHASES:
+        at = marks.get(name)
+        if at is None:
+            out.append(f"{name}=-")
+            continue
+        out.append(f"{name}={at - prev:.3f}s")
+        prev = at
+    return "phases " + " ".join(out)
+
+
 @dataclass
 class BackendOperationResult:
     """Result of a backend operation."""
@@ -749,7 +777,7 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             return False
 
     def _lock_timeout_failed(self, where: str, exc: EntityLockTimeout,
-                             subjects: int) -> bool:
+                             subjects: int, phases: str = "") -> bool:
         """Log a lock timeout NAMING THE ENTITY, and report the write as failed.
 
         Reported from production (`issues/253`): "a failure cannot be traced to a
@@ -760,8 +788,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         """
         self.logger.error(
             "%s LOCK TIMEOUT after %.3fs waiting on entity %s (key %d); "
-            "%d subject(s) NOT written",
-            where, exc.waited_s, exc.uri, exc.key, subjects)
+            "%d subject(s) NOT written %s",
+            where, exc.waited_s, exc.uri, exc.key, subjects, phases)
         return False
 
     async def upsert_objects_atomic(self, space_id: str, graph_id: str,
@@ -1084,6 +1112,25 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         knows which grouping it is writing; that is where the decision belongs.
         """
         import time as _time
+        # PHASE MARKS, and they are kept OUTSIDE the `try` on purpose: the losses
+        # this exists to explain all END IN AN EXCEPTION (`issues/253`), so a
+        # breakdown logged only on the happy path would miss every one of them.
+        # `_mark` records when a phase COMPLETED; a phase that never completed is
+        # absent, and its absence is the answer — it says where the request
+        # stopped.
+        #
+        # WHY THESE PHASES. Production loses writes to
+        # `idle_in_transaction_session_timeout`: the transaction is open, NO
+        # statement is running, and nothing arrives for 60 s. The database log
+        # cannot show that (three of four killed sessions have no slow statement
+        # at all) and the four scans are already timed, so what is missing is the
+        # time around them — acquiring the connection, BEGIN, the lock, the two
+        # prop-sort syncs, the insert, and the COMMIT.
+        _marks: Dict[str, float] = {}
+
+        def _mark(name: str) -> None:
+            _marks[name] = _time.monotonic()
+
         try:
             if not subject_uris and not insert_quads:
                 return True
@@ -1096,10 +1143,13 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             s_uuids = [_generate_term_uuid(uri, 'U') for uri in subject_uris]
 
             async with _write_conn(self.backend.db_impl.connection_pool, conn) as conn:
+                _mark("acquire")
                 async with conn.transaction():
+                    _mark("begin")
                     if lock_uris:
                         from ..db.sparql_sql.entity_lock import lock_entities
                         await lock_entities(conn, lock_uris)
+                    _mark("lock")
                     if s_uuids:
                         # Sync auxiliary tables before delete.
                         #
@@ -1159,21 +1209,30 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                             "(%d subjects, %d quads deleted)",
                             _s1 - _s0, _s2 - _s1, _s3 - _s2, _s4 - _s3,
                             len(s_uuids), deleted)
+                    _mark("presync")
 
                     # Insert new quads
                     if insert_quads:
                         await self.backend.add_rdf_quads_batch_bulk(
                             space_id, insert_quads, connection=conn)
+                    _mark("insert")
+                # The COMMIT itself, which is the one phase that happens after
+                # the last statement the database will ever log for this session.
+                _mark("commit")
 
             _t1 = _time.monotonic()
-            self.logger.info("⏱️  update_subjects_graph: %.3fs (%d subjects)",
-                             _t1 - _t0, len(subject_uris))
+            self.logger.info("⏱️  update_subjects_graph: %.3fs (%d subjects) %s",
+                             _t1 - _t0, len(subject_uris),
+                             _phase_breakdown(_t0, _marks))
             return True
         except EntityLockTimeout as e:
             return self._lock_timeout_failed(
-                "update_subjects_graph", e, len(subject_uris))
+                "update_subjects_graph", e, len(subject_uris),
+                phases=_phase_breakdown(_t0, _marks))
         except Exception as e:
-            self.logger.error("update_subjects_graph failed: %s", describe_exception(e))
+            self.logger.error("update_subjects_graph failed: %s | %s",
+                              describe_exception(e),
+                              _phase_breakdown(_t0, _marks))
             return False
 
     async def delete_entity_graph_direct(self, space_id: str, graph_id: str,

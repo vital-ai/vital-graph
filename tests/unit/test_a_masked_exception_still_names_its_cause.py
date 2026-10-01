@@ -126,6 +126,12 @@ class TestTheWritePathsUseIt:
     def test_every_swallowing_write_path_describes_the_chain(self):
         # A guard, not a style check: each of these is a path where a failing
         # rollback can replace the real error, and `%s` on its own loses it.
+        #
+        # Matched as "this path's error line routes the exception through
+        # describe_exception", NOT as an exact format string. The first version
+        # asserted the exact string and broke the moment `update_subjects_graph`
+        # gained a phase breakdown — it caught a real change, but the thing it
+        # should protect is the unmasking, not the punctuation around it.
         import inspect
 
         from vitalgraph.kg_impl import kg_backend_utils
@@ -133,4 +139,8 @@ class TestTheWritePathsUseIt:
         src = inspect.getsource(kg_backend_utils)
         for name in ("store_objects", "update_quads", "upsert_objects_atomic",
                      "update_entity_graph", "update_subjects_graph"):
-            assert f'"{name} failed: %s", describe_exception(e)' in src, name
+            marker = f'"{name} failed'
+            at = src.find(marker)
+            assert at != -1, f"{name} has no failure log line at all"
+            # Within the same call, generously bounded.
+            assert "describe_exception(e)" in src[at:at + 300], name
