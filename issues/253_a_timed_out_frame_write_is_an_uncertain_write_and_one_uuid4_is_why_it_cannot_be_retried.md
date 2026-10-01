@@ -1,6 +1,61 @@
 # 253 — A timed-out frame write is an uncertain write, and one `uuid4()` is why it cannot be retried
 
-## Status: PARTIALLY FIXED 2026-09-29 (four parts, tests pass, each checked
+## RETRACTION 2026-10-01 — I READ THE WRONG DATABASE, AND IT INVERTS TWO
+## FINDINGS AND VOIDS ONE FIX'S JUSTIFICATION. Read this before anything below.
+##
+## The production application connects to **`vitalgraph-pg18-prod`** (PostgreSQL
+## 18.4), taken from the task definition's `PROD_DB_HOST`. The Secrets Manager
+## entry it draws its PASSWORD from (`vitalgraph/prod/database-new`) carries a
+## `host` field naming a DIFFERENT instance, `cardiff-postgres-prod`. I used the
+## secret's host. Every "measured on production" claim about database SETTINGS or
+## database LOGS below was therefore read from an instance the app does not use.
+##
+## Corrected, read as the app's own role on the right instance:
+##
+##     lock_timeout                        = 10000  (source: DATABASE)
+##     statement_timeout                   = 60000  (configuration file)
+##     idle_in_transaction_session_timeout = 60000  (configuration file)
+##     running build: v0.0.77 / 0ba7f87f22e5 / deployed 2026-09-29 14:38:54 UTC
+##
+##   1. **`lock_timeout` IS 10 s, set via `ALTER DATABASE`, and `issues/231` was
+##      RIGHT.** My "it is 0, so nothing bounds a lock wait" was the wrong
+##      instance. A single-key lock wait has always been bounded at 10 s.
+##   2. **PostgreSQL DID close those connections.** My "the client side did it,
+##      because the database logged nothing" read the wrong instance's log. The
+##      right one logs a FATAL for every one.
+##   3. **The 5 lost writes are `idle_in_transaction_session_timeout`** — 60 s,
+##      from the configuration file — and the match is exact: `FATAL: terminating
+##      connection due to idle-in-transaction timeout` at 18:18:05, and four more
+##      inside 21:00-21:59, against 5 app-side failures at 18:19:06, 21:32:03,
+##      21:34:28, 21:39:26 and 21:43:38. Each FATAL precedes its app-side error by
+##      61-93 s, which is the app discovering the dead connection at rollback.
+##      **Not a lock wait (bounded at 10 s) and not asyncpg's `command_timeout`.**
+##   4. **Part 5's justification is VOID.** The request-pool `lock_timeout` fence
+##      was built because "nothing bounds a lock wait". Something does. The fence
+##      now duplicates a database-level setting at the same value; it is harmless
+##      and explicit, and it is NOT the fix for the 5 losses. Decide whether to
+##      keep it on its own merits, not on the reason it was written.
+##   5. **THE REAL DEFECT IS UNADDRESSED AND UNIDENTIFIED**: something holds a
+##      write transaction OPEN AND IDLE for more than 60 seconds. Idle means BEGIN
+##      has been sent, no statement is running, and none arrives. Nothing built in
+##      this issue touches that. The `describe_exception` logging is what will name
+##      it on the next occurrence.
+##
+## What is NOT affected by the mix-up: everything measured from the APPLICATION
+## logs (the presync/total/BULK breakdowns, `issues/238`'s deployment and its
+## effect, the 138 writes to one lead, the five failures and their durations), and
+## everything measured locally (the 384x `frame_slot` result, the equivalence
+## checks, the 55P03 mechanism). Those came from the app's own log group and a
+## local database, neither of which depends on which RDS instance I opened.
+
+## Status: SIX PARTS FIXED 2026-09-29/30, NONE DEPLOYED, and RE-BASED TWICE BY
+## MEASUREMENT 2026-09-30. A later report of 5 writes that did not stick is
+## explained in "the 5 failed writes" below: they are CONFIRMED LOSSES, caused by
+## an unbounded lock wait meeting asyncpg's 60 s `command_timeout`, which kills
+## the connection under the open transaction. Part 5 is the fix and is waiting on
+## a deploy.
+##
+## Originally: PARTIALLY FIXED 2026-09-29 (four parts, tests pass, each checked
 ## against the reverted code), and RE-BASED BY MEASUREMENT 2026-09-30 — see
 ## "MEASURED 2026-09-30 — step 1". Read that section before acting on anything
 ## else here: it corrects this file's central number and one of its fixes.
@@ -273,7 +328,7 @@ queue is what the caller sees. At today's ~0.25 s it takes a much bigger burst t
 build anything, which is visible in the numbers — writes over 2 s went from
 29.72% to 0.47%, and over 30 s from one to none.
 
-### `lock_timeout` IS ZERO ON PRODUCTION, and that changes two things
+### ~~`lock_timeout` IS ZERO ON PRODUCTION~~ — WRONG INSTANCE, see the retraction at the top
 
 Read directly from the production instance as the app's own role:
 
@@ -332,6 +387,99 @@ changes what a contended write DOES — fails at 10 s instead of hanging), then
 part 6 (it changes what a write COSTS, and should show up as the four-scan block
 dropping from 0.199 s to near zero in the same `presync` line this was measured
 from).
+
+## MEASURED 2026-09-30 (evening) — the 5 failed writes, and they are REAL losses
+
+Reported: 5 writes did not stick, read-back showed them unchanged, "most likely
+rejected by the per-entity write lock as busy", and a retry with the same cutoff
+expired all 5.
+
+**The server logged all five, and it was not a rejection.** Nothing rejects a
+write on the deployed code — `lock_timeout` is 0 there, so a contended write
+WAITS. What the log says, five times on 09-30 (18:19:06, 21:32:03, 21:34:28,
+21:39:26, 21:43:38 UTC):
+
+    update_subjects_graph failed: cannot call Transaction.__aexit__():
+    the underlying connection is closed
+
+with the write's own duration beside it:
+
+    18:19:06   FRAME_CREATE step2   122.039s  (21 subjects, 146 quads)
+    21:32:03   FRAME_UPDATE step2   190.847s  (15 subjects, 106 quads)
+    21:43:38   FRAME_UPDATE step2   154.025s  (15 subjects, 106 quads)
+
+12 occurrences over 7 days, of which these 5 are one day — so a low-rate failure
+that clustered. The 21:32-21:43 group of four inside eleven minutes is the
+reported retry batch.
+
+**These are CONFIRMED LOSSES, and that is the difference from everything above.**
+The connection died under an open transaction, so it never committed and nothing
+was written. The earlier population — the 30 s caller timeouts — were writes that
+LANDED late; these did not land at all, which is exactly why the read-back shows
+the leads unchanged. They stay lost until the applicant saves that page again.
+
+**None of them reached its first statement.** There is no `presync` line for any
+of the three above — that line is emitted after the four scans complete — so the
+122-191 s was spent before any work began, in connection acquisition and the
+entity lock wait. Neighbouring writes in the same seconds completed in
+0.27-0.42 s, so the box was healthy and these specific requests were blocked.
+
+**~~PostgreSQL did not close those connections~~ — IT DID.** This paragraph read
+the wrong instance's log (see the retraction). The real instance logs `FATAL:
+terminating connection due to idle-in-transaction timeout` once per failure, 5
+for 5. The chain below is kept only because it was the reasoning at the time:
+
+    unbounded lock wait  ->  something client-side kills the connection
+                         ->  transaction never commits, write is lost
+                         ->  the error reports the SYMPTOM, not the cause
+
+**WHICH client-side thing is NOT established, and the durations argue against the
+obvious answer.** asyncpg's `command_timeout = 60` on the REQUEST pool is the
+leading candidate, but 122 / 154 / 191 s do not divide cleanly by a 60 s fence,
+and the pool's `acquire_timeout` is 15 s (read from the production log), so
+waiting for a connection cannot account for the remainder either. A dead socket
+noticed only at rollback would fit the durations better than a timer that fired
+on schedule. Candidates, none confirmed: the 60 s command timeout with its
+callback delayed by a starved event loop (GC pauses are logged in the same
+windows); a TCP connection dropped in between and discovered late; something
+else.
+
+**The logging added for this will answer it on the next occurrence** — the masked
+cause names itself (`TimeoutError` for the fence, `ConnectionDoesNotExistError`
+or a reset for a dead socket), which is the whole reason it was worth adding
+before deploying anything.
+
+**This is what part 5 fixes, and it is the argument for deploying it.** With
+`lock_timeout = 10 s` on the request pool the wait ends at 10 s with a clean
+55P03 on a LIVE connection: the transaction rolls back cleanly, `EntityLockTimeout`
+names the lead, and the caller gets a `STORE_FAILED` it can act on — instead of a
+two-to-three-minute hang ending in an InterfaceError that names nothing.
+
+### Two findings worth their own fixes
+
+**1. The cause is masked — FIXED 2026-09-30, and it is why the mechanism above is
+still a candidate list rather than a conclusion.** When the body
+of `async with conn.transaction()` raises and `__aexit__` also raises, Python
+REPLACES the body's exception — so `update_subjects_graph`'s `except Exception as e`
+logs the transaction-exit `InterfaceError` and discards the real one, which is
+still sitting in `e.__context__`. Logging `__context__` alongside would have said
+`asyncio.TimeoutError` (or whatever it really was) immediately. Note the related
+trap already recorded in `sparql_sql_db_impl.py`: a `command_timeout` raises
+`asyncio.TimeoutError`, **whose `str()` is empty** — so even unmasked it needs
+`repr()` or the type name to be legible. `utils/exception_detail.describe_exception`
+now handles both — it walks `__cause__`/`__context__`, labels a deliberate `raise
+... from` differently from an accident of nesting, honours
+`__suppress_context__`, caps the chain, survives a cyclic one, and prints the
+TYPE when `str()` is empty. Wired into the five swallowing write paths in
+`kg_backend_utils`, with a guard test per path.
+
+**2. `command_timeout` outliving the fence it should follow.** A 60 s client-side
+fence on a statement whose server-side wait is unbounded means the CLIENT always
+wins, and the client's way of winning destroys the connection and the transaction
+with it. The two fences want ordering: a lock wait bounded BELOW the command
+timeout, so the failure is a clean server-side error rather than a killed
+connection. Part 5 (10 s) establishes that ordering; this is the reason it is not
+merely a latency improvement.
 
 ## The report, as received
 

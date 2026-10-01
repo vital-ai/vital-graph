@@ -142,6 +142,7 @@ async def fast_typed_subject_page(backend, space_id: str, graph_id: str,
 # depends on; the reverse would invert the layering.
 from ..db.sparql_sql.conn_scope import write_conn as _write_conn
 from ..db.sparql_sql.entity_lock import EntityLockTimeout
+from ..utils.exception_detail import describe_exception
 
 
 @dataclass
@@ -300,7 +301,7 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                 data={"stored_count": len(objects), "quad_count": inserted},
             )
         except Exception as e:
-            self.logger.error("store_objects failed: %s", e)
+            self.logger.error("store_objects failed: %s", describe_exception(e))
             return BackendOperationResult(success=False, message=str(e), error=str(e))
 
     # ------------------------------------------------------------------
@@ -744,7 +745,7 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                 what=f"update_quads({space_id}, {graph_id})")
             return True
         except Exception as e:
-            self.logger.error("update_quads failed: %s", e)
+            self.logger.error("update_quads failed: %s", describe_exception(e))
             return False
 
     def _lock_timeout_failed(self, where: str, exc: EntityLockTimeout,
@@ -874,7 +875,7 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         except EntityLockTimeout as e:
             return self._lock_timeout_failed("upsert_objects_atomic", e, len(entity_uris))
         except Exception as e:
-            self.logger.error("upsert_objects_atomic failed: %s", e)
+            self.logger.error("upsert_objects_atomic failed: %s", describe_exception(e))
             return False
 
     async def update_entity_graph(self, space_id: str, graph_id: str,
@@ -989,7 +990,7 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         except EntityLockTimeout as e:
             return self._lock_timeout_failed("update_entity_graph", e, 1)
         except Exception as e:
-            self.logger.error("update_entity_graph failed: %s", e)
+            self.logger.error("update_entity_graph failed: %s", describe_exception(e))
             return False
 
     async def update_entity_subject_only(self, space_id: str, graph_id: str,
@@ -1172,7 +1173,7 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             return self._lock_timeout_failed(
                 "update_subjects_graph", e, len(subject_uris))
         except Exception as e:
-            self.logger.error("update_subjects_graph failed: %s", e)
+            self.logger.error("update_subjects_graph failed: %s", describe_exception(e))
             return False
 
     async def delete_entity_graph_direct(self, space_id: str, graph_id: str,
