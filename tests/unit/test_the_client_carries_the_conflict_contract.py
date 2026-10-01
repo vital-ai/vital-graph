@@ -11,6 +11,7 @@ RESPONSE — `status="conflict"` when the write is refused for that reason. It
 arrives in a 200 body, per this codebase's convention, so nothing about the HTTP
 status reveals it.
 """
+import ast
 import inspect
 
 import pytest
@@ -85,3 +86,117 @@ class TestTheResponseSide:
         # will not either. A hand-copied list is how the two drift.
         from vitalgraph.client.response.client_response import _SUCCESS_STATUS_VALUES
         assert _SUCCESS_STATUS_VALUES == frozenset(s.value for s in _SUCCESS_STATUSES)
+
+
+# Routes whose server side compares `if_unmodified_since` (`issues/253`). Keyed
+# by URL rather than by method name, because the question is which ENDPOINT the
+# call reaches — four client methods POST to `/api/graphs/kgframes` under names
+# that do not say so, and all four were missed on the first pass.
+GUARDED_ROUTES = (
+    "/api/graphs/kgentities/kgframes",
+    "/api/graphs/kgframes",
+    "/api/graphs/kgframes/kgslots",
+)
+
+
+def _writes_to_guarded_routes(module):
+    """{method -> accepts if_unmodified_since} for every write reaching a guard."""
+    tree = ast.parse(inspect.getsource(module))
+    out = {}
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.AsyncFunctionDef, ast.FunctionDef)):
+            continue
+        verbs, urls = set(), set()
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Call) and getattr(n.func, "attr", None) in (
+                    "_make_request", "_make_typed_request"):
+                if n.args and isinstance(n.args[0], ast.Constant):
+                    verbs.add(n.args[0].value)
+            if isinstance(n, ast.Assign):
+                for t in n.targets:
+                    if getattr(t, "id", None) != "url":
+                        continue
+                    if isinstance(n.value, ast.Constant):
+                        urls.add(n.value.value)
+                    elif isinstance(n.value, ast.JoinedStr):
+                        urls.add("".join(v.value for v in n.value.values
+                                         if isinstance(v, ast.Constant)))
+        if not ({"POST", "PUT"} & verbs):
+            continue
+        if not any(u in GUARDED_ROUTES for u in urls):
+            continue
+        names = [a.arg for a in fn.args.args + fn.args.kwonlyargs]
+        out[fn.name] = "if_unmodified_since" in names
+    return out
+
+
+class TestEveryWriteThatCanBeRefusedCanAlsoOptIn:
+    """A guard the client cannot reach is API surface and nothing else.
+
+    Four methods POST to `/api/graphs/kgframes` — `create_kgframes_with_slots`,
+    `update_kgframes_with_slots`, `create_child_frames`, `update_child_frames` —
+    and none of their names mentions the route. All four were missed when the
+    parameter was added to the obvious ones, so this asks the question by URL
+    rather than by name, and the next method added to that route inherits it.
+    """
+
+    @pytest.mark.parametrize("modname", ["kgentities_endpoint", "kgframes_endpoint"])
+    def test_no_guarded_write_is_missing_the_parameter(self, modname):
+        from vitalgraph.client.endpoint import kgentities_endpoint, kgframes_endpoint
+        module = {"kgentities_endpoint": kgentities_endpoint,
+                  "kgframes_endpoint": kgframes_endpoint}[modname]
+        writes = _writes_to_guarded_routes(module)
+        assert writes, f"{modname}: found no writes to a guarded route — did a URL change?"
+        missing = sorted(m for m, ok in writes.items() if not ok)
+        assert not missing, (
+            f"{modname}: these reach a route that compares if_unmodified_since "
+            f"but cannot send it: {missing}")
+
+    def test_it_is_sent_and_not_merely_accepted(self):
+        # The same failure as `issues/240` and `issues/210`: a parameter taken and
+        # dropped leaves the caller believing it is protected. Read over the AST,
+        # not off the class — these are methods on endpoint classes and the
+        # module namespace does not hold them.
+        from vitalgraph.client.endpoint import kgentities_endpoint, kgframes_endpoint
+        for module in (kgentities_endpoint, kgframes_endpoint):
+            source = inspect.getsource(module)
+            tree = ast.parse(source)
+            bodies = {
+                fn.name: ast.get_source_segment(source, fn)
+                for fn in ast.walk(tree)
+                if isinstance(fn, (ast.AsyncFunctionDef, ast.FunctionDef))}
+            for name in _writes_to_guarded_routes(module):
+                assert "if_unmodified_since=if_unmodified_since" in bodies[name], (
+                    f"{module.__name__}.{name} accepts the precondition and "
+                    f"never sends it")
+
+
+class TestANullListIsNotAMissingOne:
+    """`get(k, default)` does not apply the default when the key is null.
+
+    Four client methods read `response_data.get('updated_uri') or
+    response_data.get('updated_uris', [None])[0]`. The server sends
+    `updated_uris: null` when it has none, so the default never fired and `None[0]`
+    raised `'NoneType' object is not subscriptable` — surfacing as a 500-shaped
+    client error with the server's actual answer thrown away.
+
+    A refused conditional write was simply the first response shaped that way
+    (`updated_uri` empty, `updated_uris` null). The crash was already latent for
+    any such response, which is why this is asserted on the pattern and not on
+    the conflict.
+    """
+
+    def test_the_pattern_is_gone_everywhere(self):
+        from vitalgraph.client.endpoint import kgframes_endpoint
+        src = inspect.getsource(kgframes_endpoint)
+        assert "get('updated_uris', [None])[0]" not in src
+        assert "get(\"updated_uris\", [None])[0]" not in src
+
+    def test_the_semantics_that_broke_it(self):
+        # The distinction in one line, so the next reader does not have to
+        # rediscover why the default looked sufficient.
+        null_list = {"updated_uris": None}
+        assert null_list.get("updated_uris", [None]) is None      # the bug
+        assert (null_list.get("updated_uris") or [None])[0] is None  # the fix
+        absent = {}
+        assert absent.get("updated_uris", [None]) == [None]       # why it looked fine

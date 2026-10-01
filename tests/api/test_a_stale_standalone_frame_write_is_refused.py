@@ -231,3 +231,96 @@ class TestTheSlotRouteGuardsOnItsFrame:
             objects=[slot])
         assert r.is_success, r.error_message or r.message
         assert await _stamp(vg_client, test_space, test_graph, frame) != before
+
+
+class TestTheOtherWritesToTheSameRoute:
+    """Four more client methods POST to `/api/graphs/kgframes`.
+
+    None of their names says so, and all four were missed when the parameter was
+    first added to the obvious ones. A unit test now pins the audit by URL; this
+    proves the two that a test can drive actually refuse over HTTP, because
+    "sends the parameter" and "is refused" are different claims.
+    """
+
+    async def test_frames_with_slots_refuses_a_stale_stamp(
+            self, vg_client, test_space, test_graph, frame):
+        stamp = await _stamp(vg_client, test_space, test_graph, frame)
+        _, objs = _frame("winner", uri=frame)
+        r = await vg_client.kgframes.update_kgframes_with_slots(
+            space_id=test_space, graph_id=test_graph, objects=objs,
+            if_unmodified_since=stamp)
+        assert r.is_success, r.error_message or r.message
+
+        _, objs = _frame("loser", uri=frame)
+        r = await vg_client.kgframes.update_kgframes_with_slots(
+            space_id=test_space, graph_id=test_graph, objects=objs,
+            if_unmodified_since=stamp)
+        assert r.is_conflict is True, (
+            f"status={r.status!r} message={r.message or r.error_message!r}")
+
+    async def test_the_create_halves_refuse_a_stale_stamp_too(
+            self, vg_client, test_space, test_graph, frame):
+        # The create/upsert halves take a DIFFERENT server handler from the
+        # update halves (`_handle_create_mode` vs `_handle_update_mode`), each
+        # with its own broad `except`, so passing on one says nothing about the
+        # other — that is exactly how the 500 on the update path survived a green
+        # create path earlier in this issue.
+        stamp = await _stamp(vg_client, test_space, test_graph, frame)
+        _, objs = _frame("winner", uri=frame)
+        r = await vg_client.kgframes.create_kgframes_with_slots(
+            space_id=test_space, graph_id=test_graph, objects=objs,
+            if_unmodified_since=stamp)
+        assert r.is_success, r.error_message or r.message
+
+        _, objs = _frame("loser", uri=frame)
+        r = await vg_client.kgframes.create_kgframes_with_slots(
+            space_id=test_space, graph_id=test_graph, objects=objs,
+            if_unmodified_since=stamp)
+        assert r.is_conflict is True, (
+            f"status={r.status!r} message={r.message or r.error_message!r}")
+
+    async def test_create_child_frames_refuses_a_stale_stamp(
+            self, vg_client, test_space, test_graph, frame):
+        child_uri, child = _frame("c0")
+        r = await vg_client.kgframes.create_child_frames(
+            space_id=test_space, graph_id=test_graph,
+            parent_frame_uri=frame, objects=child)
+        assert r.is_success, r.error_message or r.message
+
+        stamp = await _stamp(vg_client, test_space, test_graph, child_uri)
+        _, objs = _frame("winner", uri=child_uri)
+        r = await vg_client.kgframes.create_child_frames(
+            space_id=test_space, graph_id=test_graph,
+            parent_frame_uri=frame, objects=objs, if_unmodified_since=stamp)
+        assert r.is_success, r.error_message or r.message
+
+        _, objs = _frame("loser", uri=child_uri)
+        r = await vg_client.kgframes.create_child_frames(
+            space_id=test_space, graph_id=test_graph,
+            parent_frame_uri=frame, objects=objs, if_unmodified_since=stamp)
+        assert r.is_conflict is True, (
+            f"status={r.status!r} message={r.message or r.error_message!r}")
+
+    async def test_child_frames_refuses_a_stale_stamp(
+            self, vg_client, test_space, test_graph, frame):
+        # A child frame is its own frame and carries its own version, so the
+        # precondition is about the CHILD being written, not the parent.
+        child_uri, child = _frame("c0")
+        r = await vg_client.kgframes.create_child_frames(
+            space_id=test_space, graph_id=test_graph,
+            parent_frame_uri=frame, objects=child)
+        assert r.is_success, r.error_message or r.message
+
+        stamp = await _stamp(vg_client, test_space, test_graph, child_uri)
+        _, objs = _frame("winner", uri=child_uri)
+        r = await vg_client.kgframes.update_child_frames(
+            space_id=test_space, graph_id=test_graph,
+            parent_frame_uri=frame, objects=objs, if_unmodified_since=stamp)
+        assert r.is_success, r.error_message or r.message
+
+        _, objs = _frame("loser", uri=child_uri)
+        r = await vg_client.kgframes.update_child_frames(
+            space_id=test_space, graph_id=test_graph,
+            parent_frame_uri=frame, objects=objs, if_unmodified_since=stamp)
+        assert r.is_conflict is True, (
+            f"status={r.status!r} message={r.message or r.error_message!r}")

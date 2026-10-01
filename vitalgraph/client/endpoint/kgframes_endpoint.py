@@ -478,7 +478,14 @@ class KGFramesEndpoint(BaseEndpoint):
                     updated_uri=''
                 )
             
-            updated_uri = response_data.get('updated_uri') or response_data.get('updated_uris', [None])[0]
+            # `or [None]`, NOT `get(..., [None])`: the default only applies when
+            # the key is ABSENT, and the server sends `updated_uris: null` when
+            # it has none — so this raised `'NoneType' object is not
+            # subscriptable` for any response whose `updated_uri` is falsy
+            # (`issues/253`). A refused conditional write is simply the first
+            # response shaped that way; the crash was already latent.
+            updated_uri = (response_data.get('updated_uri')
+                           or (response_data.get('updated_uris') or [None])[0])
             
             return build_success_response(
                 UpdateEntityResponse,
@@ -684,7 +691,8 @@ class KGFramesEndpoint(BaseEndpoint):
             )
     
     async def create_kgframes_with_slots(self, space_id: str, graph_id: str, objects: List[GraphObject],
-                                  parent_uri: Optional[str] = None, operation_mode: str = "create") -> CreateEntityResponse:
+                                  parent_uri: Optional[str] = None, operation_mode: str = "create",
+                                  if_unmodified_since: Optional[str] = None) -> CreateEntityResponse:
         """
         Create KGFrames with their associated slots from GraphObjects.
         
@@ -708,7 +716,8 @@ class KGFramesEndpoint(BaseEndpoint):
             url = f"{self._get_server_url()}/api/graphs/kgframes"
             params = build_query_params(
                 space_id=space_id, graph_id=graph_id,
-                parent_uri=parent_uri, operation_mode=operation_mode
+                parent_uri=parent_uri, operation_mode=operation_mode,
+                if_unmodified_since=if_unmodified_since
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
@@ -732,7 +741,8 @@ class KGFramesEndpoint(BaseEndpoint):
             return build_error_response(CreateEntityResponse, error_code=3, error_message=str(e), status_code=http_status_of(e))
     
     async def update_kgframes_with_slots(self, space_id: str, graph_id: str, objects: List[GraphObject],
-                                  parent_uri: Optional[str] = None) -> UpdateEntityResponse:
+                                  parent_uri: Optional[str] = None,
+                                  if_unmodified_since: Optional[str] = None) -> UpdateEntityResponse:
         """
         Update KGFrames with their associated slots from GraphObjects.
         
@@ -755,7 +765,8 @@ class KGFramesEndpoint(BaseEndpoint):
             url = f"{self._get_server_url()}/api/graphs/kgframes"
             params = build_query_params(
                 space_id=space_id, graph_id=graph_id,
-                parent_uri=parent_uri, operation_mode='update'
+                parent_uri=parent_uri, operation_mode='update',
+                if_unmodified_since=if_unmodified_since
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
@@ -763,7 +774,14 @@ class KGFramesEndpoint(BaseEndpoint):
             response = await self._make_request('POST', url, params=params, json=body,
                                                 headers={'Content-Type': content_type}, idempotent=True)
             response_data = response.json()
-            updated_uri = response_data.get('updated_uri') or response_data.get('updated_uris', [None])[0]
+            # `or [None]`, NOT `get(..., [None])`: the default only applies when
+            # the key is ABSENT, and the server sends `updated_uris: null` when
+            # it has none — so this raised `'NoneType' object is not
+            # subscriptable` for any response whose `updated_uri` is falsy
+            # (`issues/253`). A refused conditional write is simply the first
+            # response shaped that way; the crash was already latent.
+            updated_uri = (response_data.get('updated_uri')
+                           or (response_data.get('updated_uris') or [None])[0])
             
             return build_success_response(
                 UpdateEntityResponse, status_code=response.status_code,
@@ -899,7 +917,14 @@ class KGFramesEndpoint(BaseEndpoint):
             response = await self._make_request('POST', url, params=params, json=body,
                                                 headers={'Content-Type': content_type}, idempotent=True)
             response_data = response.json()
-            updated_uri = response_data.get('updated_uri') or response_data.get('updated_uris', [None])[0]
+            # `or [None]`, NOT `get(..., [None])`: the default only applies when
+            # the key is ABSENT, and the server sends `updated_uris: null` when
+            # it has none — so this raised `'NoneType' object is not
+            # subscriptable` for any response whose `updated_uri` is falsy
+            # (`issues/253`). A refused conditional write is simply the first
+            # response shaped that way; the crash was already latent.
+            updated_uri = (response_data.get('updated_uri')
+                           or (response_data.get('updated_uris') or [None])[0])
             
             return build_success_response(
                 UpdateEntityResponse, status_code=response.status_code,
@@ -1088,7 +1113,7 @@ class KGFramesEndpoint(BaseEndpoint):
 
     # Frame-to-Frame Sub-Endpoint Operations
 
-    async def create_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, objects: List[GraphObject]) -> CreateEntityResponse:
+    async def create_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, objects: List[GraphObject], if_unmodified_since: Optional[str] = None) -> CreateEntityResponse:
         """
         Create child frames for a parent frame.
         
@@ -1109,7 +1134,8 @@ class KGFramesEndpoint(BaseEndpoint):
         
         try:
             url = f"{self._get_server_url()}/api/graphs/kgframes"
-            params = build_query_params(space_id=space_id, graph_id=graph_id, parent_uri=parent_frame_uri)
+            params = build_query_params(space_id=space_id, graph_id=graph_id, parent_uri=parent_frame_uri,
+                                        if_unmodified_since=if_unmodified_since)
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
             # idempotent=True below: replay-safe, see `_make_request`.
@@ -1131,7 +1157,7 @@ class KGFramesEndpoint(BaseEndpoint):
             logger.error(f"Error creating child frames: {e}")
             return build_error_response(CreateEntityResponse, error_code=3, error_message=str(e), status_code=http_status_of(e))
     
-    async def update_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, objects: List[GraphObject]) -> UpdateEntityResponse:
+    async def update_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, objects: List[GraphObject], if_unmodified_since: Optional[str] = None) -> UpdateEntityResponse:
         """
         Update child frames for a parent frame.
         
@@ -1154,7 +1180,8 @@ class KGFramesEndpoint(BaseEndpoint):
             url = f"{self._get_server_url()}/api/graphs/kgframes"
             params = build_query_params(
                 space_id=space_id, graph_id=graph_id,
-                parent_uri=parent_frame_uri, operation_mode='update'
+                parent_uri=parent_frame_uri, operation_mode='update',
+                if_unmodified_since=if_unmodified_since
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
@@ -1162,7 +1189,14 @@ class KGFramesEndpoint(BaseEndpoint):
             response = await self._make_request('POST', url, params=params, json=body,
                                                 headers={'Content-Type': content_type}, idempotent=True)
             response_data = response.json()
-            updated_uri = response_data.get('updated_uri') or response_data.get('updated_uris', [None])[0]
+            # `or [None]`, NOT `get(..., [None])`: the default only applies when
+            # the key is ABSENT, and the server sends `updated_uris: null` when
+            # it has none — so this raised `'NoneType' object is not
+            # subscriptable` for any response whose `updated_uri` is falsy
+            # (`issues/253`). A refused conditional write is simply the first
+            # response shaped that way; the crash was already latent.
+            updated_uri = (response_data.get('updated_uri')
+                           or (response_data.get('updated_uris') or [None])[0])
             
             return build_success_response(
                 UpdateEntityResponse, status_code=response.status_code,

@@ -1360,6 +1360,43 @@ refused write left the frame untouched, omitting it keeps last-writer-wins, the
 ambiguous precondition is a bad request while the same batch still works
 unconditionally, and the slot route guards on its frame.
 
+### The client was NOT fully updated, and asking by name is why (2026-10-01)
+
+Asked in review, after I had said the client was current. It was not. I had
+added `if_unmodified_since` to the methods whose names sounded like frame writes
+and stopped there. **Four more POST to `/api/graphs/kgframes`** — the same route,
+now with a server-side guard — and none of their names says so:
+
+    create_kgframes_with_slots      update_kgframes_with_slots
+    create_child_frames             update_child_frames
+
+So the guard was reachable for a caller using `update_kgframes` and not for one
+using `update_child_frames`, writing the same kind of object through the same
+endpoint. The audit that found them asks **by URL**, not by name, and is now a
+test — so the next method added to that route inherits the requirement instead of
+depending on someone noticing.
+
+**And a latent client crash, which the refusal merely exposed.** Four methods read:
+
+    response_data.get('updated_uri') or response_data.get('updated_uris', [None])[0]
+
+`get(k, default)` does not apply the default when the key is **present and
+null**, and the server sends `updated_uris: null` when it has none. So this
+raised `'NoneType' object is not subscriptable` for ANY response whose
+`updated_uri` is falsy, reported it as a client-side error with error_code 4, and
+threw the server's actual answer away. A refused conditional write is simply the
+first response shaped that way (`updated_uri` empty, `updated_uris` null) — the
+crash was already there for anything else that produced it. Fixed at all four
+sites as `(… or [None])[0]`, pinned on the PATTERN rather than on the conflict,
+because the conflict is not what is wrong with it.
+
+All four are driven over HTTP, because "sends the parameter" and "is refused" are
+different claims and the unit audit only proves the first. The create and update
+halves are tested separately on purpose: they take DIFFERENT server handlers
+(`_handle_create_mode` vs `_handle_update_mode`), each with its own broad
+`except`, and that is exactly how the 500 on the update path survived a green
+create path earlier in this issue. Both halves pass.
+
 ## What needs to change in the client
 
 Nothing here is built. Read the replay-safety table FIRST: it is not uniform
