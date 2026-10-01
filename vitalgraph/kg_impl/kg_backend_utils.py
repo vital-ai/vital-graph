@@ -216,13 +216,21 @@ async def _compare_stamp(conn, space_id: str, graph_id: str,
     """
     t, s_uuid, p_uuid, g_uuid = _stamp_keys(space_id, graph_id, subject_uri)
 
-    row = await conn.fetchrow(
+    # LIMIT 2, not LIMIT 1, and no `ORDER BY` needed because two rows is already
+    # the answer. `LIMIT 1` without an order made this nondeterministic the
+    # moment the single-valued invariant broke — the guard would pass or fail on
+    # whichever row the scan reached first. `issues/173` IS that invariant
+    # breaking, which is why the write side replaces rather than adds; this is
+    # the read side refusing to guess.
+    rows = await conn.fetch(
         f"SELECT tt.term_text AS stamp FROM {t['rdf_quad']} q "
         f"JOIN {t['term']} tt ON tt.term_uuid = q.object_uuid "
         f"WHERE q.subject_uuid = $1 AND q.predicate_uuid = $2 "
-        f"AND q.context_uuid = $3 LIMIT 1",
+        f"AND q.context_uuid = $3 LIMIT 2",
         s_uuid, p_uuid, g_uuid)
-    actual = row["stamp"] if row else None
+    if len(rows) > 1:
+        raise AmbiguousStamp(subject_uri, [r["stamp"] for r in rows])
+    actual = rows[0]["stamp"] if rows else None
 
     if if_unmodified_since is not None and actual != if_unmodified_since:
         raise StaleWrite(subject_uri, if_unmodified_since, actual)
@@ -329,6 +337,54 @@ class StaleWrite(Exception):
         super().__init__(
             f"{subject_uri} changed since it was read: expected "
             f"modification time {expected!r}, found {actual!r}")
+
+
+class UnguardableWrite(Exception):
+    """`if_unmodified_since` was supplied with no subject to compare it against.
+
+    `issues/253`. A wiring error, not a caller error: `update_subjects_graph`
+    derives the guarded subject from `guard_subject`, falling back to the first
+    lock URI, and with neither it cannot honour the precondition. The previous
+    code SKIPPED the comparison in that case and returned success, which is an
+    unconditional write reported as a conditional one.
+
+    Loud on purpose. Every live call site passes `guard_subject`, so reaching
+    this means a new call site threaded the parameter without the means to
+    satisfy it, and a 500 naming the subjects says so. Compare
+    `AmbiguousPrecondition`, which IS the caller's doing and is answered as
+    INVALID_REQUEST.
+    """
+
+    def __init__(self, subject_uris):
+        self.subject_uris = list(subject_uris or [])
+        super().__init__(
+            "if_unmodified_since was supplied but the write names no subject to "
+            "compare it against (no guard_subject, no lock_uris); refusing "
+            f"rather than writing unconditionally. subjects={self.subject_uris[:5]}")
+
+
+class AmbiguousStamp(Exception):
+    """The guarded subject carries MORE THAN ONE modification stamp.
+
+    `issues/253`. The read used `LIMIT 1` with no `ORDER BY`, so a violated
+    single-valued invariant made the guard nondeterministic: it passed or failed
+    depending on which row the scan happened to reach first, which is the worst
+    possible behaviour for a check whose entire purpose is to be decisive.
+
+    The invariant is real and `issues/173` is it being broken, which is why the
+    stamp WRITE replaces rather than adds. This is the read side defending
+    itself. Not reported as a CONFLICT: a conflict tells the caller to re-read
+    and retry, and re-reading cannot resolve duplicate stamps, so that would be
+    an infinite loop. Only CONDITIONAL writes are affected; an unconditional
+    write never reads the stamp.
+    """
+
+    def __init__(self, subject_uri: str, found):
+        self.subject_uri = subject_uri
+        self.found = list(found)
+        super().__init__(
+            f"{subject_uri} carries {len(self.found)} modification stamps, so "
+            f"if_unmodified_since cannot be decided: {self.found[:3]}")
 
 
 class AmbiguousPrecondition(Exception):
@@ -1435,7 +1491,30 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                         # owning entity, the standalone-frame routes pass the
                         # frame, because they have no entity to pass.
                         _guard = guard_subject or (lock_uris[0] if lock_uris else None)
-                        if _guard and if_unmodified_since is not None:
+                        if if_unmodified_since is not None:
+                            # RAISE rather than skip when there is nothing to
+                            # compare against (`issues/253`). This read
+                            # `if _guard and if_unmodified_since is not None`,
+                            # so a caller that passed a precondition with
+                            # neither `guard_subject` nor `lock_uris` had the
+                            # comparison SILENTLY DROPPED and got a success for
+                            # an unconditional write — the one shape this whole
+                            # mechanism exists to prevent, and the shape the
+                            # deploy note calls worse than not shipping the
+                            # feature because it looks like it works.
+                            #
+                            # Unreachable today: every call site passes
+                            # `guard_subject` equal to its single lock URI, from
+                            # required route parameters. So this is a wiring
+                            # error in a FUTURE call site, not a caller mistake
+                            # — which is why it raises loudly here instead of
+                            # being mapped to a 4xx like `AmbiguousPrecondition`
+                            # (that one IS the caller's doing). A 500 naming the
+                            # subjects is the right answer to "the server was
+                            # asked for a guarantee it was not given the means
+                            # to provide".
+                            if not _guard:
+                                raise UnguardableWrite(subject_uris)
                             await _compare_stamp(
                                 conn, space_id, graph_id, _guard,
                                 if_unmodified_since)

@@ -286,6 +286,25 @@ def schedule_maybe_analyze(db_impl, space_id: str, *,
     if not changes_pending(space_id, threshold):
         return None
 
+    # ONE IN FLIGHT PER SPACE. Without this, every write past the threshold
+    # schedules another task until the first one takes the advisory lock and
+    # resets the counter, and each queued task acquires an INTERNAL-pool
+    # connection (3 slots) only to find the lock held. The window is short and
+    # the no-ops are cheap, but the task that HOLDS the lock parks one of those
+    # three slots for the 60-98 s of the ANALYZE itself, against the same pool
+    # the maintenance job, the segmentation worker and `auto_sync` draw from —
+    # so the burst competes for two slots at exactly the wrong moment.
+    #
+    # Skipping cannot LOSE an analyze: `changes_pending` stays true, so the next
+    # write schedules again. It can only defer one, and if writes stop entirely
+    # the maintenance job's own ANALYZE still runs. `maybe_analyze` keeps its
+    # advisory lock regardless — this reduces the queue, it is not the
+    # correctness boundary.
+    if _TASKS.in_flight(space_id):
+        logger.debug("auto_analyze(%s): one already in flight, not queueing another",
+                     space_id)
+        return None
+
     from ..pool import internal_pool_for
     # `internal_pool_for`, not `db_impl._internal_pool`: it distinguishes an
     # internal pool that is absent ON PURPOSE from one that is missing by

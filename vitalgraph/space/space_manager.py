@@ -366,21 +366,33 @@ class SpaceManager:
             # embed text and then write; left running they spend real money on
             # a space being deleted and then fail against half-dropped tables,
             # filling the PostgreSQL log with "relation does not exist".
+            # ONE `try` EACH, because they are independent sweeps and sharing one
+            # made the second depend on the first (`issues/253`). With both in a
+            # single block, a throw from `cancel_space_syncs` skipped
+            # `cancel_all` and logged a warning — leaving exactly the wall of
+            # `relation "…" does not exist` that `cancel_all` was added to stop,
+            # in the case where teardown is already going wrong and the log
+            # matters most. `cancel_all` sweeping every registry covers a
+            # scheduler added LATER; it does not cover a sibling raising FIRST.
             try:
                 from vitalgraph.vectorization.auto_sync import cancel_space_syncs
                 await cancel_space_syncs(space_id)
-                # And the scheduled ANALYZEs, for the same reason (`issues/253`).
-                # Found by running the API suite: it deletes its ephemeral space
-                # while an ANALYZE is still in flight, and the task then logs a
-                # wall of `relation "…" does not exist`. `cancel_all` sweeps every
-                # background registry, so a scheduler added later is covered
-                # without anyone remembering to wire it in here.
-                from vitalgraph.utils.background import cancel_all
-                await cancel_all(space_id)
             except Exception as sync_e:
                 # Never block deletion on sync teardown.
                 self.logger.warning(
                     f"Error cancelling auto-sync tasks for '{space_id}': {sync_e}"
+                )
+
+            try:
+                # The scheduled ANALYZEs, for the same reason. Found by running
+                # the API suite: it deletes its ephemeral space while an ANALYZE
+                # is still in flight, and the task then logs against tables that
+                # have gone.
+                from vitalgraph.utils.background import cancel_all
+                await cancel_all(space_id)
+            except Exception as bg_e:
+                self.logger.warning(
+                    f"Error cancelling background tasks for '{space_id}': {bg_e}"
                 )
 
             # Create SpaceImpl for deletion operations
