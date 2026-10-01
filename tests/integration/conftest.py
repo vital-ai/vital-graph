@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -161,6 +162,25 @@ async def make_space(space_manager):
 
     async def _make(space_id: str = None, partition_quads: int = 0) -> str:
         sid = space_id or f"{TEST_SPACE_PREFIX}{uuid.uuid4().hex[:12]}"
+        if space_id is not None:
+            # A FIXED name SURVIVES AN INTERRUPTED RUN, so the next run fails
+            # with `SpaceAlreadyExistsError` forever rather than once — and that
+            # failure reads as a code regression rather than as stale state,
+            # which is the expensive part. `test_query_work_is_proportional`
+            # records the same bite and answers it by not using a fixed name;
+            # the rename suites cannot, because their prefix-shadowing cases need
+            # one id to be a PREFIX of another and `issues/246`'s id ceiling
+            # forces them short.
+            #
+            # So a fixed id is cleared first. Only the explicit-name path: a
+            # generated name cannot collide, and nothing in the suite asks
+            # `make_space` to refuse an existing id (checked), so this removes no
+            # assertion anyone was relying on.
+            try:
+                await space_manager.delete_space_with_tables(sid)
+            except Exception as e:                       # pragma: no cover
+                logging.getLogger(__name__).debug(
+                    "pre-clean of fixed space id %s skipped: %s", sid, e)
         ok = await space_manager.create_space_with_tables(
             sid, sid, partition_quads=partition_quads)
         assert ok, f"space manager failed to create {sid}"

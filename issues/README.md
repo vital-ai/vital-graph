@@ -157,6 +157,23 @@ class), `173` (the entity lock the `238` scan was held inside).
 
 ## Fixtures and test infrastructure
 
+**A FIXED space id survives an interrupted run, and the failure looks like a code
+regression.** `make_space` is unique-by-default and only collides when a caller
+supplies a name — but a supplied name outlives a suite that was stopped
+mid-flight, so every later run fails with `SpaceAlreadyExistsError` rather than
+the one run that was killed. It reads as a defect in the code under test, which is
+the expensive part: it cost an hour on 2026-10-01, where a run killed at ~90%
+left 30 spaces behind and the next run reported 24 failures across
+`test_space_rename.py` and `test_space_rename_enumerate.py`.
+
+`test_query_work_is_proportional` answers it by not using a fixed name, which is
+the better fix where it is available. The rename suites cannot: their
+prefix-shadowing cases need one id to be a PREFIX of another, and `issues/246`'s
+id ceiling forces them short. So `make_space` now CLEARS a supplied id before
+creating it — the explicit-name path only, since a generated name cannot collide
+and nothing asks the factory to refuse an existing id. Verified by seeding
+`inttest_rn2` deliberately and re-running: 22/22 pass where they previously failed.
+
 | | status | |
 |---|---|---|
 
