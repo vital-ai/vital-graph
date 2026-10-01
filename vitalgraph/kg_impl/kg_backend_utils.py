@@ -13,6 +13,7 @@ second backend is expected — `issues/241`.
 import asyncio
 import contextlib
 import logging
+import os
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, Tuple, Union, cast
 from dataclasses import dataclass
@@ -147,6 +148,60 @@ from ..utils.background import BackgroundTasks
 
 # Post-write aux-table ANALYZE, scheduled per space (`issues/253`).
 _AUX_ANALYZE_TASKS = BackgroundTasks("aux-table ANALYZE")
+
+
+# How long one subject-level write may take, end to end (`issues/253`).
+#
+# WHY A WRITE NEEDS ITS OWN BOUND. Every other fence covers a different thing and
+# together they leave a hole: `statement_timeout` bounds each STATEMENT (60 s on
+# production), `lock_timeout` each LOCK WAIT (10 s), and
+# `idle_in_transaction_session_timeout` bounds IDLENESS — by destroying the
+# connection, 60 s after the transaction went quiet, which is how five writes
+# were lost on 2026-09-30. Nothing bounded the write as a whole, so a write that
+# parked between statements for any reason ended as a loss the caller could not
+# see: the connection was killed, the rollback failed, and the error named the
+# rollback rather than the cause.
+#
+# 25 s, not lower: the measured write is 0.273 s median and 1.1 s at p99, and the
+# worst legitimate case seen was ~11 s, so this fences the pathological case and
+# not a slow-but-working one. And not higher: the caller's own read timeout is
+# 30 s, and a fence above that is one only the client ever reaches — which is the
+# situation it replaces. 0 disables it.
+_DEFAULT_WRITE_DEADLINE_S = 25.0
+
+
+def _write_deadline_s() -> float:
+    raw = os.environ.get("VITALGRAPH_WRITE_DEADLINE_S")
+    if raw is None:
+        return _DEFAULT_WRITE_DEADLINE_S
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        logger.warning("VITALGRAPH_WRITE_DEADLINE_S=%r is not a number; using %.1fs",
+                       raw, _DEFAULT_WRITE_DEADLINE_S)
+        return _DEFAULT_WRITE_DEADLINE_S
+
+
+class WriteDeadlineExceeded(Exception):
+    """A subject-level write ran past its budget and was rolled back.
+
+    CANCELLATION IS THE POINT, and it is the opposite call from
+    `api/request_bounds.py`, which refuses to cancel a write — deliberately,
+    because a client that hung up "may well have intended the write" and a
+    rollback it cannot observe is silent data loss. That reasoning does not apply
+    here: the caller IS still waiting, the rollback is REPORTED to it as a
+    failure, and the alternative is not a slow write but a lost one. A
+    cooperative check between phases could not do this, because the parks that
+    cost production its writes were parks INSIDE an await that never returned.
+    """
+
+    def __init__(self, waited_s: float, budget_s: float, phases: str):
+        self.waited_s = waited_s
+        self.budget_s = budget_s
+        self.phases = phases
+        super().__init__(
+            f"write exceeded its {budget_s:.1f}s budget after {waited_s:.1f}s; "
+            f"{phases}")
 
 
 # Phases of one write, in the order they complete. Printing them in a fixed order
@@ -1175,78 +1230,98 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
 
             async with _write_conn(self.backend.db_impl.connection_pool, conn) as conn:
                 _mark("acquire")
-                async with conn.transaction():
-                    _mark("begin")
-                    if lock_uris:
-                        from ..db.sparql_sql.entity_lock import lock_entities
-                        await lock_entities(conn, lock_uris)
-                    _mark("lock")
-                    if s_uuids:
-                        # Sync auxiliary tables before delete.
-                        #
-                        # TIMED INDIVIDUALLY because the aggregate was
-                        # misleading: `FRAME_CREATE step2` is 7.52s mean / 22.8s
-                        # max on production for FOURTEEN subjects, of which the
-                        # insert is ~0.3s, and the caller's log attributed the
-                        # whole thing to "update_subjects_graph" with no way to
-                        # tell which of these four statements owned it. Each one
-                        # scans for the affected quads before the DELETE, so any
-                        # of them could. Sub-millisecond to emit, and it runs on
-                        # the path that starves the connection pool.
-                        _s0 = _time.monotonic()
-                        from ..db.sparql_sql.sync_frame_slot_table import sync_frame_slot_before_delete
-                        await sync_frame_slot_before_delete(conn, space_id, s_uuids, context_uuid=g_uuid)
-                        _s1 = _time.monotonic()
-                        from ..db.sparql_sql.sync_edge_table import sync_edge_table_before_delete
-                        await sync_edge_table_before_delete(conn, space_id, s_uuids, context_uuid=g_uuid)
-                        _s2 = _time.monotonic()
-                        from ..db.sparql_sql.sync_entity_slot_sort import (
-                            sync_entity_slot_sort_before_delete)
-                        from ..db.sparql_sql.sync_entity_prop_sort import (
-                            sync_entity_prop_sort_after_change)
-                        from ..db.sparql_sql.sync_frame_prop_sort import (
-                            sync_frame_prop_sort_after_change)
-                        # `entity_slot_sort` BEFORE the delete (`issues/194`):
-                        # its rows are reached through the edge table the delete
-                        # invalidates, so afterwards they cannot be found — and
-                        # a stale row makes a sort order by a value that is
-                        # gone. Timed like its siblings above, for the same
-                        # reason: any of these scans can own the latency.
-                        await sync_entity_slot_sort_before_delete(
-                            conn, space_id, s_uuids, context_uuid=g_uuid)
-                        _s3 = _time.monotonic()
 
-                        # Delete all quads for these subjects in this graph
-                        result = await conn.execute(
-                            f"DELETE FROM {t['rdf_quad']} "
-                            f"WHERE subject_uuid = ANY($1) AND context_uuid = $2",
-                            s_uuids, g_uuid,
-                        )
-                        _s4 = _time.monotonic()
-                        # AND THE PROP TABLES AFTER IT, because a delete there
-                        # is a RECOMPUTE against the survivors rather than a row
-                        # drop: they store the MIN of a multi-valued property,
-                        # and for a subject deleted outright this empties its
-                        # rows. Before the delete it would re-derive the value
-                        # being removed.
-                        await sync_entity_prop_sort_after_change(
-                            conn, space_id, s_uuids, context_uuid=g_uuid)
-                        await sync_frame_prop_sort_after_change(
-                            conn, space_id, s_uuids, context_uuid=g_uuid)
-                        deleted = int(result.split()[-1]) if result else 0
-                        self.logger.info(
-                            "⏱️  update_subjects_graph presync: frame_entity=%.3fs "
-                            "edge=%.3fs stats=%.3fs delete=%.3fs "
-                            "(%d subjects, %d quads deleted)",
-                            _s1 - _s0, _s2 - _s1, _s3 - _s2, _s4 - _s3,
-                            len(s_uuids), deleted)
-                    _mark("presync")
+                async def _txn() -> None:
+                    async with conn.transaction():
+                        _mark("begin")
+                        if lock_uris:
+                            from ..db.sparql_sql.entity_lock import lock_entities
+                            await lock_entities(conn, lock_uris)
+                        _mark("lock")
+                        if s_uuids:
+                            # Sync auxiliary tables before delete.
+                            #
+                            # TIMED INDIVIDUALLY because the aggregate was
+                            # misleading: `FRAME_CREATE step2` is 7.52s mean / 22.8s
+                            # max on production for FOURTEEN subjects, of which the
+                            # insert is ~0.3s, and the caller's log attributed the
+                            # whole thing to "update_subjects_graph" with no way to
+                            # tell which of these four statements owned it. Each one
+                            # scans for the affected quads before the DELETE, so any
+                            # of them could. Sub-millisecond to emit, and it runs on
+                            # the path that starves the connection pool.
+                            _s0 = _time.monotonic()
+                            from ..db.sparql_sql.sync_frame_slot_table import sync_frame_slot_before_delete
+                            await sync_frame_slot_before_delete(conn, space_id, s_uuids, context_uuid=g_uuid)
+                            _s1 = _time.monotonic()
+                            from ..db.sparql_sql.sync_edge_table import sync_edge_table_before_delete
+                            await sync_edge_table_before_delete(conn, space_id, s_uuids, context_uuid=g_uuid)
+                            _s2 = _time.monotonic()
+                            from ..db.sparql_sql.sync_entity_slot_sort import (
+                                sync_entity_slot_sort_before_delete)
+                            from ..db.sparql_sql.sync_entity_prop_sort import (
+                                sync_entity_prop_sort_after_change)
+                            from ..db.sparql_sql.sync_frame_prop_sort import (
+                                sync_frame_prop_sort_after_change)
+                            # `entity_slot_sort` BEFORE the delete (`issues/194`):
+                            # its rows are reached through the edge table the delete
+                            # invalidates, so afterwards they cannot be found — and
+                            # a stale row makes a sort order by a value that is
+                            # gone. Timed like its siblings above, for the same
+                            # reason: any of these scans can own the latency.
+                            await sync_entity_slot_sort_before_delete(
+                                conn, space_id, s_uuids, context_uuid=g_uuid)
+                            _s3 = _time.monotonic()
 
-                    # Insert new quads
-                    if insert_quads:
-                        await self.backend.add_rdf_quads_batch_bulk(
-                            space_id, insert_quads, connection=conn)
-                    _mark("insert")
+                            # Delete all quads for these subjects in this graph
+                            result = await conn.execute(
+                                f"DELETE FROM {t['rdf_quad']} "
+                                f"WHERE subject_uuid = ANY($1) AND context_uuid = $2",
+                                s_uuids, g_uuid,
+                            )
+                            _s4 = _time.monotonic()
+                            # AND THE PROP TABLES AFTER IT, because a delete there
+                            # is a RECOMPUTE against the survivors rather than a row
+                            # drop: they store the MIN of a multi-valued property,
+                            # and for a subject deleted outright this empties its
+                            # rows. Before the delete it would re-derive the value
+                            # being removed.
+                            await sync_entity_prop_sort_after_change(
+                                conn, space_id, s_uuids, context_uuid=g_uuid)
+                            await sync_frame_prop_sort_after_change(
+                                conn, space_id, s_uuids, context_uuid=g_uuid)
+                            deleted = int(result.split()[-1]) if result else 0
+                            self.logger.info(
+                                "⏱️  update_subjects_graph presync: frame_entity=%.3fs "
+                                "edge=%.3fs stats=%.3fs delete=%.3fs "
+                                "(%d subjects, %d quads deleted)",
+                                _s1 - _s0, _s2 - _s1, _s3 - _s2, _s4 - _s3,
+                                len(s_uuids), deleted)
+                        _mark("presync")
+
+                        # Insert new quads
+                        if insert_quads:
+                            await self.backend.add_rdf_quads_batch_bulk(
+                                space_id, insert_quads, connection=conn)
+                        _mark("insert")
+
+                # BOUNDED AS A WHOLE, measured from entry so the acquire counts
+                # too (`issues/253`). `wait_for` and not a cooperative check
+                # between phases: the parks that cost production its writes were
+                # parks INSIDE an await that never returned, which a check can
+                # only notice once the await comes back — by which time
+                # PostgreSQL has already destroyed the connection.
+                _budget = _write_deadline_s()
+                if _budget <= 0:
+                    await _txn()
+                else:
+                    _left = _budget - (_time.monotonic() - _t0)
+                    try:
+                        await asyncio.wait_for(_txn(), max(0.001, _left))
+                    except (asyncio.TimeoutError, TimeoutError):
+                        raise WriteDeadlineExceeded(
+                            _time.monotonic() - _t0, _budget,
+                            _phase_breakdown(_t0, _marks)) from None
                 # The COMMIT itself, which is the one phase that happens after
                 # the last statement the database will ever log for this session.
                 _mark("commit")
@@ -1256,6 +1331,14 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                              _t1 - _t0, len(subject_uris),
                              _phase_breakdown(_t0, _marks))
             return True
+        except WriteDeadlineExceeded as e:
+            # Reported, not silent — which is the whole difference from the
+            # losses this came out of: the transaction rolled back on a LIVE
+            # connection and the caller is told, with the phase that parked.
+            self.logger.error(
+                "update_subjects_graph DEADLINE: %s (%d subject(s) NOT written)",
+                e, len(subject_uris))
+            return False
         except EntityLockTimeout as e:
             return self._lock_timeout_failed(
                 "update_subjects_graph", e, len(subject_uris),

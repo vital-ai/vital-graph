@@ -17,6 +17,8 @@ logged on the FAILURE path too**. Every one of these losses ends in an exception
 so a line emitted only on success would have missed all five. A phase that never
 completed prints `-`, and the missing tail is the answer.
 """
+import asyncio
+
 import pytest
 
 from vitalgraph.kg_impl.kg_backend_utils import (
@@ -88,6 +90,17 @@ class FakeConn:
         self.statements.append(sql)
         return "DELETE 0"
 
+    async def fetch(self, sql, *args):
+        # The slot-sort sync resolves edge indirections with `fetch`; nothing
+        # here depends on the rows, only on the phases being reached.
+        return []
+
+    async def fetchval(self, sql, *args):
+        # `_table_present` asks `to_regclass`; None means "absent", which makes
+        # the aux-table syncs skip. Keeps this fake to the statements the phase
+        # breakdown is about.
+        return None
+
 
 class FakeSchema:
     @staticmethod
@@ -158,3 +171,86 @@ class TestTheFailurePath:
                     if "LOCK TIMEOUT" in r.getMessage())
         assert "urn:lead:42" in line
         assert "phases " in line and "lock=-" in line
+
+
+class TestTheWriteIsBoundedAsAWhole:
+    """`issues/253`. Every other fence covers something else and together they
+    left a hole: `statement_timeout` bounds each statement, `lock_timeout` each
+    lock wait, and `idle_in_transaction_session_timeout` bounds idleness BY
+    DESTROYING THE CONNECTION — which is how five writes were lost. Nothing
+    bounded the write as a whole, so a write that parked between statements ended
+    as a loss the caller could not see.
+
+    The bound CANCELS, which is the opposite call from `api/request_bounds.py`.
+    That module refuses to cancel a write because the client has hung up and a
+    rollback it cannot observe is silent loss. Here the caller is still waiting,
+    the rollback is reported to it, and the alternative is not a slow write but a
+    lost one.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_parked_write_is_cut_off_and_reported(
+            self, adapter, monkeypatch, caplog):
+        from vitalgraph.db.sparql_sql import entity_lock
+
+        async def _park(conn, uris, budget_s=None):
+            await asyncio.sleep(30)          # the shape of the production park
+
+        monkeypatch.setattr(entity_lock, "lock_entities", _park)
+        monkeypatch.setenv("VITALGRAPH_WRITE_DEADLINE_S", "0.2")
+
+        with caplog.at_level("ERROR"):
+            ok = await adapter.update_subjects_graph(
+                "sp", "urn:g", ["urn:s:1"], [], lock_uris=["urn:e:1"],
+                conn=FakeConn())
+
+        assert ok is False
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("DEADLINE" in m for m in msgs), msgs
+        line = next(m for m in msgs if "DEADLINE" in m)
+        # Names the budget, the elapsed time, and WHERE it parked.
+        assert "0.2s budget" in line
+        assert "phases " in line and "lock=-" in line
+
+    @pytest.mark.asyncio
+    async def test_the_transaction_is_rolled_back_not_left_open(
+            self, adapter, monkeypatch):
+        # The property that makes cancelling defensible: the write does not
+        # commit, and the connection is left in a known state.
+        from vitalgraph.db.sparql_sql import entity_lock
+
+        async def _park(conn, uris, budget_s=None):
+            await asyncio.sleep(30)
+
+        monkeypatch.setattr(entity_lock, "lock_entities", _park)
+        monkeypatch.setenv("VITALGRAPH_WRITE_DEADLINE_S", "0.2")
+        conn = FakeConn()
+        await adapter.update_subjects_graph(
+            "sp", "urn:g", ["urn:s:1"], [], lock_uris=["urn:e:1"], conn=conn)
+        assert conn.statements[0] == "BEGIN"
+        assert conn.statements[-1] == "ROLLBACK", conn.statements
+
+    @pytest.mark.asyncio
+    async def test_a_normal_write_is_untouched_by_the_bound(self, adapter):
+        # The common case must not pay for the fence, nor be at risk from it.
+        conn = FakeConn()
+        ok = await adapter.update_subjects_graph(
+            "sp", "urn:g", [], [], conn=conn)
+        assert ok is True
+
+    @pytest.mark.asyncio
+    async def test_zero_disables_the_bound(self, adapter, monkeypatch):
+        from vitalgraph.db.sparql_sql import entity_lock
+
+        calls = []
+
+        async def _quick(conn, uris, budget_s=None):
+            calls.append(uris)
+
+        monkeypatch.setattr(entity_lock, "lock_entities", _quick)
+        monkeypatch.setenv("VITALGRAPH_WRITE_DEADLINE_S", "0")
+        conn = FakeConn()
+        ok = await adapter.update_subjects_graph(
+            "sp", "urn:g", ["urn:s:1"], [], lock_uris=["urn:e:1"], conn=conn)
+        assert ok is True and calls
+        assert conn.statements[-1] == "COMMIT"
