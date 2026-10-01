@@ -75,7 +75,24 @@ class KGFramesEndpoint(BaseEndpoint):
             if content is not None:
                 kwargs['content'] = content
             if idempotent is not None:
-                # Read-only POSTs opt into post-send retry; see client retry policy.
+                # WHICH POSTS MAY BE REPLAYED, and this used to be read-only ones
+                # only (`issues/253`). A POST is not idempotent by method, so the
+                # retry policy refuses to replay one after a post-send failure —
+                # which on production turned ~190 timed-out frame writes a week
+                # into UNCERTAIN WRITES nobody could resolve.
+                #
+                # A WRITE may now opt in where the server path makes it true: the
+                # subject-level write DELETES the subjects it is about to write
+                # before writing them, and every server-minted edge URI is derived
+                # from its endpoints rather than `uuid4()`, so a replay rewrites
+                # the same rows instead of adding to them. All nine production
+                # spaces were checked to carry the slim (s,p,o,c) quad key, so
+                # `ON CONFLICT DO NOTHING` really dedupes.
+                #
+                # NOT `create_kgentities`: its server path is a pure INSERT behind
+                # an existence check. A replay is safe for the DATA but answers
+                # ALREADY_EXISTS — a reported failure for a write that in fact
+                # succeeded — so it stays off until a caller can tell those apart.
                 kwargs['idempotent'] = idempotent
             
             response = await self._make_authenticated_request(method, url, **kwargs)
@@ -362,8 +379,9 @@ class KGFramesEndpoint(BaseEndpoint):
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            # idempotent=True below: replay-safe, see `_make_request`.
             response = await self._make_request('POST', url, params=params, json=body,
-                                                headers={'Content-Type': content_type})
+                                                headers={'Content-Type': content_type}, idempotent=True)
             response_data = response.json()
             
             # Check if response indicates failure (success=false)
@@ -428,8 +446,9 @@ class KGFramesEndpoint(BaseEndpoint):
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            # idempotent=True below: replay-safe, see `_make_request`.
             response = await self._make_request('POST', url, params=params, json=body,
-                                                headers={'Content-Type': content_type})
+                                                headers={'Content-Type': content_type}, idempotent=True)
             response_data = response.json()
             
             # Check if response indicates failure (success=false)
@@ -665,8 +684,9 @@ class KGFramesEndpoint(BaseEndpoint):
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            # idempotent=True below: replay-safe, see `_make_request`.
             response = await self._make_request('POST', url, params=params, json=body,
-                                                headers={'Content-Type': content_type})
+                                                headers={'Content-Type': content_type}, idempotent=True)
             response_data = response.json()
             created_count = response_data.get('created_count', 0)
             created_uris = response_data.get('created_uris', [])
@@ -711,8 +731,9 @@ class KGFramesEndpoint(BaseEndpoint):
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            # idempotent=True below: replay-safe, see `_make_request`.
             response = await self._make_request('POST', url, params=params, json=body,
-                                                headers={'Content-Type': content_type})
+                                                headers={'Content-Type': content_type}, idempotent=True)
             response_data = response.json()
             updated_uri = response_data.get('updated_uri') or response_data.get('updated_uris', [None])[0]
             
@@ -797,8 +818,9 @@ class KGFramesEndpoint(BaseEndpoint):
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            # idempotent=True below: replay-safe, see `_make_request`.
             response = await self._make_request('POST', url, params=params, json=body,
-                                                headers={'Content-Type': content_type})
+                                                headers={'Content-Type': content_type}, idempotent=True)
             response_data = response.json()
             created_count = response_data.get('created_count', 0)
             created_uris = response_data.get('created_uris', [])
@@ -843,8 +865,9 @@ class KGFramesEndpoint(BaseEndpoint):
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            # idempotent=True below: replay-safe, see `_make_request`.
             response = await self._make_request('POST', url, params=params, json=body,
-                                                headers={'Content-Type': content_type})
+                                                headers={'Content-Type': content_type}, idempotent=True)
             response_data = response.json()
             updated_uri = response_data.get('updated_uri') or response_data.get('updated_uris', [None])[0]
             
@@ -1059,8 +1082,9 @@ class KGFramesEndpoint(BaseEndpoint):
             params = build_query_params(space_id=space_id, graph_id=graph_id, parent_uri=parent_frame_uri)
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            # idempotent=True below: replay-safe, see `_make_request`.
             response = await self._make_request('POST', url, params=params, json=body,
-                                                headers={'Content-Type': content_type})
+                                                headers={'Content-Type': content_type}, idempotent=True)
             response_data = response.json()
             created_count = response_data.get('created_count', 0)
             created_uris = response_data.get('created_uris', [])
@@ -1104,8 +1128,9 @@ class KGFramesEndpoint(BaseEndpoint):
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            # idempotent=True below: replay-safe, see `_make_request`.
             response = await self._make_request('POST', url, params=params, json=body,
-                                                headers={'Content-Type': content_type})
+                                                headers={'Content-Type': content_type}, idempotent=True)
             response_data = response.json()
             updated_uri = response_data.get('updated_uri') or response_data.get('updated_uris', [None])[0]
             

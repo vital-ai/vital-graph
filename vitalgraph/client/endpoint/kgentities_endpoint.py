@@ -80,7 +80,24 @@ class KGEntitiesEndpoint(BaseEndpoint):
             if content is not None:
                 kwargs['content'] = content
             if idempotent is not None:
-                # Read-only POSTs opt into post-send retry; see client retry policy.
+                # WHICH POSTS MAY BE REPLAYED, and this used to be read-only ones
+                # only (`issues/253`). A POST is not idempotent by method, so the
+                # retry policy refuses to replay one after a post-send failure —
+                # which on production turned ~190 timed-out frame writes a week
+                # into UNCERTAIN WRITES nobody could resolve.
+                #
+                # A WRITE may now opt in where the server path makes it true: the
+                # subject-level write DELETES the subjects it is about to write
+                # before writing them, and every server-minted edge URI is derived
+                # from its endpoints rather than `uuid4()`, so a replay rewrites
+                # the same rows instead of adding to them. All nine production
+                # spaces were checked to carry the slim (s,p,o,c) quad key, so
+                # `ON CONFLICT DO NOTHING` really dedupes.
+                #
+                # NOT `create_kgentities`: its server path is a pure INSERT behind
+                # an existence check. A replay is safe for the DATA but answers
+                # ALREADY_EXISTS — a reported failure for a write that in fact
+                # succeeded — so it stays off until a caller can tell those apart.
                 kwargs['idempotent'] = idempotent
             
             response = await self._make_authenticated_request(method, url, **kwargs)
@@ -657,8 +674,9 @@ class KGEntitiesEndpoint(BaseEndpoint):
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            # idempotent=True below: replay-safe, see `_make_request`.
             response = await self._make_request('POST', url, params=params, json=body,
-                                                headers={'Content-Type': content_type})
+                                                headers={'Content-Type': content_type}, idempotent=True)
             response_data = response.json()
             
             # Server returns EntityUpdateResponse with metadata (updated_uri)
@@ -722,8 +740,9 @@ class KGEntitiesEndpoint(BaseEndpoint):
             )
 
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            # idempotent=True below: replay-safe, see `_make_request`.
             response = await self._make_request('POST', url, params=params, json=body,
-                                                headers={'Content-Type': content_type})
+                                                headers={'Content-Type': content_type}, idempotent=True)
             response_data = response.json()
 
             # Check server-side success flag
@@ -1113,8 +1132,9 @@ class KGEntitiesEndpoint(BaseEndpoint):
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            # idempotent=True below: replay-safe, see `_make_request`.
             response = await self._make_request('POST', url, params=params, json=body,
-                                                headers={'Content-Type': content_type})
+                                                headers={'Content-Type': content_type}, idempotent=True)
             response_data = response.json()
             
             # Parse created frames from response
@@ -1125,7 +1145,13 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 objects=created_objects,
                 status_code=response.status_code,
                 status=response_data.get('status'),
-                message=f"Created {len(created_objects)} frames",
+                # THE SERVER'S MESSAGE FIRST (`issues/253`). A composed one reads
+                # "Created 0 frames" on a refused write and throws the server's
+                # explanation away — and that explanation is the only place the
+                # reason survives, since `raise_for_error` falls back to it.
+                # Every sibling write method already does this; these two did not.
+                message=response_data.get(
+                    "message", f"Created {len(created_objects)} frames"),
                 space_id=space_id,
                 graph_id=graph_id,
                 metadata={'object_types': count_object_types(created_objects)},
@@ -1183,8 +1209,9 @@ class KGEntitiesEndpoint(BaseEndpoint):
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            # idempotent=True below: replay-safe, see `_make_request`.
             response = await self._make_request('POST', url, params=params, json=body,
-                                                headers={'Content-Type': content_type})
+                                                headers={'Content-Type': content_type}, idempotent=True)
             response_data = response.json()
             
             # Check if update actually succeeded (frames_updated > 0)
@@ -1208,7 +1235,13 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 objects=updated_objects,
                 status_code=response.status_code,
                 status=response_data.get('status'),
-                message=f"Updated {len(updated_objects)} frames",
+                # THE SERVER'S MESSAGE FIRST (`issues/253`). A composed one reads
+                # "Updated 0 frames" on a refused write and throws the server's
+                # explanation away — and that explanation is the only place the
+                # reason survives, since `raise_for_error` falls back to it.
+                # Every sibling write method already does this; these two did not.
+                message=response_data.get(
+                    "message", f"Updated {len(updated_objects)} frames"),
                 space_id=space_id,
                 graph_id=graph_id,
                 metadata={'object_types': count_object_types(updated_objects)},
