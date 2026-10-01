@@ -369,6 +369,14 @@ class SpaceManager:
             try:
                 from vitalgraph.vectorization.auto_sync import cancel_space_syncs
                 await cancel_space_syncs(space_id)
+                # And the scheduled ANALYZEs, for the same reason (`issues/253`).
+                # Found by running the API suite: it deletes its ephemeral space
+                # while an ANALYZE is still in flight, and the task then logs a
+                # wall of `relation "…" does not exist`. `cancel_all` sweeps every
+                # background registry, so a scheduler added later is covered
+                # without anyone remembering to wire it in here.
+                from vitalgraph.utils.background import cancel_all
+                await cancel_all(space_id)
             except Exception as sync_e:
                 # Never block deletion on sync teardown.
                 self.logger.warning(

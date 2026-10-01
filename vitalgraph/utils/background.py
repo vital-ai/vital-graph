@@ -16,19 +16,49 @@ things done right, and each of them has already been got wrong somewhere:
 3. **NO EVENT LOOP IS NOT AN ERROR.** These paths are reached from scripts and
    tests that call the write methods synchronously. Skip quietly.
 
-`vectorization.auto_sync` got all three right first and keeps its own registry
-because it also cancels in-flight work when a space is dropped; that extra
-requirement is why it is not folded in here.
+A FOURTH thing, learned by running the tests rather than by reasoning: a
+scheduled task OUTLIVES the space it was scheduled for. The API suite deletes its
+ephemeral space while an ANALYZE is still in flight, and the task then logs a wall
+of `relation "…" does not exist`. `cancel_all` closes that, and
+`space_manager.delete_space_with_tables` calls it before dropping anything — the
+same thing it already does for `vectorization.auto_sync`, which hit this first and
+whose registry stays separate because it carries extra per-space semantics.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Dict, Optional, Set
+import weakref
+from typing import Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["BackgroundTasks"]
+__all__ = ["BackgroundTasks", "cancel_all"]
+
+# Every live registry, so one call can sweep them all when a space is dropped.
+# WEAK references: a registry created in a test must not be kept alive by this,
+# and a dead one must not be swept.
+#
+# A registry-of-registries rather than a list of cancel calls at the drop site,
+# because the failure this prevents is someone adding a FOURTH scheduler and
+# forgetting to wire its teardown in — `vectorization.auto_sync` learned that
+# lesson by filling the PostgreSQL log with "relation does not exist" when its
+# tasks woke against a half-dropped schema.
+_REGISTRIES: "weakref.WeakSet[BackgroundTasks]" = weakref.WeakSet()
+
+
+async def cancel_all(key: str, *, timeout: float = 5.0) -> int:
+    """Cancel in-flight tasks for *key* across every registry. Returns the count.
+
+    Call this BEFORE dropping a space's tables. A scheduled task that wakes up
+    against a half-dropped schema logs a wall of "relation does not exist", and
+    PostgreSQL records every failed statement server-side even though the client
+    swallows it.
+    """
+    cancelled = 0
+    for registry in list(_REGISTRIES):
+        cancelled += await registry.cancel(key, timeout=timeout)
+    return cancelled
 
 
 class BackgroundTasks:
@@ -41,6 +71,7 @@ class BackgroundTasks:
     def __init__(self, label: str):
         self._label = label
         self._in_flight: Dict[str, Set[asyncio.Task]] = {}
+        _REGISTRIES.add(self)
 
     def schedule(self, coro, *, key: str) -> Optional[asyncio.Task]:
         """Run *coro* in the background. Returns the task, or None if not started.
@@ -77,3 +108,26 @@ class BackgroundTasks:
         exc = task.exception()
         if exc is not None:
             logger.error("%s(%s) task failed: %s", self._label, key, exc)
+
+    async def cancel(self, key: str, *, timeout: float = 5.0) -> int:
+        """Cancel the tasks for *key* and WAIT for them. Returns how many.
+
+        Waiting matters: the caller is about to drop the tables these tasks are
+        reading, and returning before they have actually stopped would leave the
+        race this exists to close.
+        """
+        pending = list(self._in_flight.get(key, ()))
+        if not pending:
+            return 0
+        for task in pending:
+            task.cancel()
+        # `return_exceptions`: a task that was mid-statement surfaces the
+        # cancellation as an exception, and one of those must not stop the rest
+        # from being awaited.
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*pending, return_exceptions=True), timeout)
+        except (asyncio.TimeoutError, TimeoutError):
+            logger.warning("%s(%s): %d task(s) did not stop within %.1fs",
+                           self._label, key, len(pending), timeout)
+        return len(pending)

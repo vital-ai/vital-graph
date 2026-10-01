@@ -119,3 +119,92 @@ class TestNoEventLoop:
         assert tasks.schedule(coro, key="k") is None
         with pytest.raises(RuntimeError, match="cannot reuse"):
             asyncio.get_event_loop_policy().new_event_loop().run_until_complete(coro)
+
+
+class TestCancellationBeforeASpaceIsDropped:
+    """Found by running the API suite, not by reasoning about it.
+
+    A scheduled ANALYZE OUTLIVES the space it was scheduled for: the suite deletes
+    its ephemeral space while the task is still in flight, and the task then logs a
+    wall of `relation "…" does not exist`. `vectorization.auto_sync` hit this first
+    and `space_manager.delete_space_with_tables` already cancels its tasks before
+    dropping; this is the same requirement for the ANALYZE schedulers.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cancel_stops_the_tasks_and_waits_for_them(self):
+        tasks = BackgroundTasks("probe")
+        stopped = []
+
+        running = asyncio.Event()
+
+        async def _work():
+            try:
+                running.set()
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                stopped.append(True)
+                raise
+
+        for _ in range(3):
+            tasks.schedule(_work(), key="sp")
+        # LET THEM START. `create_task` does not enter the coroutine until the
+        # next loop step, and a task cancelled before its first step never runs
+        # its body — so cancelling immediately would pass this test while proving
+        # nothing about a RUNNING task, which is the only case that matters here.
+        await asyncio.wait_for(running.wait(), timeout=1)
+        n = await tasks.cancel("sp")
+
+        assert n == 3
+        # WAITED, not just signalled — the caller is about to drop the tables
+        # these tasks read.
+        assert len(stopped) == 3
+        assert tasks.in_flight("sp") == 0
+
+    @pytest.mark.asyncio
+    async def test_cancelling_an_unknown_key_is_free(self):
+        tasks = BackgroundTasks("probe")
+        assert await tasks.cancel("never-scheduled") == 0
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_task_is_not_reported_as_a_failure(self, caplog):
+        tasks = BackgroundTasks("probe")
+
+        async def _work():
+            await asyncio.sleep(10)
+
+        with caplog.at_level("ERROR"):
+            tasks.schedule(_work(), key="sp")
+            await tasks.cancel("sp")
+            await asyncio.sleep(0)
+        assert not [r for r in caplog.records if "task failed" in r.getMessage()]
+
+    @pytest.mark.asyncio
+    async def test_cancel_all_sweeps_every_registry(self):
+        # The property that matters for the next scheduler someone adds: the drop
+        # path makes ONE call and does not have to know about it.
+        from vitalgraph.utils.background import cancel_all
+
+        a, b = BackgroundTasks("probe-a"), BackgroundTasks("probe-b")
+
+        async def _work():
+            await asyncio.sleep(10)
+
+        a.schedule(_work(), key="sp")
+        b.schedule(_work(), key="sp")
+        b.schedule(_work(), key="other")
+
+        assert await cancel_all("sp") >= 2
+        assert a.in_flight("sp") == 0 and b.in_flight("sp") == 0
+        assert b.in_flight("other") == 1          # a different key is untouched
+        await b.cancel("other")
+
+    @pytest.mark.asyncio
+    async def test_the_space_drop_path_calls_it(self):
+        # A guard: the registry sweep is worthless if nothing invokes it.
+        import inspect
+
+        from vitalgraph.space.space_manager import SpaceManager
+
+        src = inspect.getsource(SpaceManager.delete_space_with_tables)
+        assert "cancel_all(space_id)" in src
