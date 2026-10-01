@@ -45,6 +45,13 @@ class OperationStatus(str, Enum):
     ALREADY_EXISTS = "already_exists"   # create on an existing URI
     NOT_FOUND = "not_found"             # get/update/delete a missing specific URI
     PARTIAL = "partial"                 # batch: some items succeeded, some failed
+    CONFLICT = "conflict"               # the target changed since the caller read
+                                        # it, so the write was REFUSED rather than
+                                        # applied over the top (`issues/253`). A
+                                        # domain outcome, not a fault: the caller
+                                        # re-reads, re-merges and tries again.
+                                        # Distinct from ALREADY_EXISTS, which is
+                                        # about identity rather than staleness.
 
     # ── domain faults (success=False, still HTTP 200) ──
     INVALID_REQUEST = "invalid_request"   # bad/missing params, no valid objects

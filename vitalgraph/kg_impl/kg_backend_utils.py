@@ -182,6 +182,100 @@ def _write_deadline_s() -> float:
         return _DEFAULT_WRITE_DEADLINE_S
 
 
+async def _compare_and_stamp(conn, space_id: str, graph_id: str,
+                             entity_uri: str,
+                             if_unmodified_since: Optional[str]) -> str:
+    """Refuse the write if *entity_uri* moved, then stamp it. Returns the stamp.
+
+    Direct SQL rather than a SPARQL update, for two reasons: it has to run on the
+    CALLER's connection inside the open transaction, and the SPARQL path
+    (`touch_entity_modification_time`) issues its own statement outside any
+    transaction of ours, which is the window this closes.
+
+    The comparison is on the string form, which is what the caller was given. A
+    datetime comparison would be more forgiving of formatting, and forgiveness is
+    wrong here: if the stored text differs from what the caller read, something
+    rewrote it, and refusing is the safe answer.
+    """
+    from datetime import datetime, timezone
+    from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+    from ..db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+    from .kg_server_properties import MODIFICATION_TIME_URI
+
+    t = SparqlSQLSchema.get_table_names(space_id)
+    s_uuid = _generate_term_uuid(entity_uri, 'U')
+    p_uuid = _generate_term_uuid(MODIFICATION_TIME_URI, 'U')
+    g_uuid = _generate_term_uuid(graph_id, 'U')
+
+    row = await conn.fetchrow(
+        f"SELECT tt.term_text AS stamp FROM {t['rdf_quad']} q "
+        f"JOIN {t['term']} tt ON tt.term_uuid = q.object_uuid "
+        f"WHERE q.subject_uuid = $1 AND q.predicate_uuid = $2 "
+        f"AND q.context_uuid = $3 LIMIT 1",
+        s_uuid, p_uuid, g_uuid)
+    actual = row["stamp"] if row else None
+
+    if if_unmodified_since is not None and actual != if_unmodified_since:
+        raise StaleWrite(entity_uri, if_unmodified_since, actual)
+
+    now = datetime.now(timezone.utc).isoformat()
+    # Replace rather than add: the property is single-valued, and `issues/173`
+    # is what happens when a write leaves two of them behind.
+    await conn.execute(
+        f"DELETE FROM {t['rdf_quad']} WHERE subject_uuid = $1 "
+        f"AND predicate_uuid = $2 AND context_uuid = $3",
+        s_uuid, p_uuid, g_uuid)
+    await _insert_stamp(conn, t, s_uuid, p_uuid, g_uuid, now)
+    return now
+
+
+async def _insert_stamp(conn, t, s_uuid, p_uuid, g_uuid, value: str) -> None:
+    """Insert the timestamp term and its quad, both idempotently."""
+    from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+    XSD_DT = "http://www.w3.org/2001/XMLSchema#dateTime"
+    dt_id = await conn.fetchval(
+        f"INSERT INTO {t['datatype']} (datatype_uri) VALUES ($1) "
+        f"ON CONFLICT (datatype_uri) DO UPDATE SET datatype_uri = EXCLUDED.datatype_uri "
+        f"RETURNING datatype_id", XSD_DT)
+    o_uuid = _generate_term_uuid(value, 'L', None, dt_id)
+    await conn.execute(
+        f"INSERT INTO {t['term']} (term_uuid, term_text, term_type, lang, datatype_id) "
+        f"VALUES ($1, $2, 'L', NULL, $3) ON CONFLICT DO NOTHING",
+        o_uuid, value, dt_id)
+    await conn.execute(
+        f"INSERT INTO {t['rdf_quad']} "
+        f"(subject_uuid, predicate_uuid, object_uuid, context_uuid) "
+        f"VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+        s_uuid, p_uuid, o_uuid, g_uuid)
+
+
+class StaleWrite(Exception):
+    """The caller's write was refused because the entity moved under it.
+
+    THE LOST UPDATE (`issues/253`), which no amount of locking prevents. The
+    entity lock makes one WRITE atomic; the race spans a caller's READ, its merge
+    and its write, issued as three separate requests. Production reported a
+    slower save overwriting a newer one with every request reporting success, and
+    an autosave that sent 138 writes for one lead in four minutes is exactly the
+    shape that loses them.
+
+    So the caller may pass the `hasObjectModificationDateTime` it read, and the
+    write is refused if the stored value has moved. Compared INSIDE the write
+    transaction and under the entity lock, because a check anywhere else is a
+    race of its own: the endpoint already stamped this property AFTER the write
+    and OUTSIDE the lock, which leaves a window where the next writer reads a
+    value the previous writer has not published yet.
+    """
+
+    def __init__(self, entity_uri: str, expected: str, actual: Optional[str]):
+        self.entity_uri = entity_uri
+        self.expected = expected
+        self.actual = actual
+        super().__init__(
+            f"{entity_uri} changed since it was read: expected "
+            f"modification time {expected!r}, found {actual!r}")
+
+
 class WriteDeadlineExceeded(Exception):
     """A subject-level write ran past its budget and was rolled back.
 
@@ -1176,7 +1270,9 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                                      subject_uris: List[str],
                                      insert_quads: List[tuple],
                                      lock_uris: Optional[List[str]] = None,
-                                     conn=None) -> bool:
+                                     conn=None,
+                                     if_unmodified_since: Optional[str] = None,
+                                     stamp_entity: Optional[str] = None) -> bool:
         """Atomically replace quads for a list of subject URIs.
 
         Subject-level delete + insert in a single transaction.  Avoids the
@@ -1238,6 +1334,20 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                             from ..db.sparql_sql.entity_lock import lock_entities
                             await lock_entities(conn, lock_uris)
                         _mark("lock")
+
+                        # COMPARE-AND-SET, under the lock and in this
+                        # transaction (`issues/253`). Anywhere else is a race:
+                        # the endpoint stamps this property AFTER the write and
+                        # OUTSIDE the lock, so the next writer can read a value
+                        # its predecessor has not published yet.
+                        _target = stamp_entity or (lock_uris[0] if lock_uris else None)
+                        if _target and (if_unmodified_since is not None
+                                        or stamp_entity):
+                            _now = await _compare_and_stamp(
+                                conn, space_id, graph_id, _target,
+                                if_unmodified_since)
+                            _marks["guard"] = _time.monotonic()
+
                         if s_uuids:
                             # Sync auxiliary tables before delete.
                             #
@@ -1331,6 +1441,11 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                              _t1 - _t0, len(subject_uris),
                              _phase_breakdown(_t0, _marks))
             return True
+        except StaleWrite as e:
+            # REFUSED, not applied over the top. A domain outcome the caller can
+            # act on: re-read, re-merge, retry.
+            self.logger.warning("update_subjects_graph REFUSED (stale): %s", e)
+            raise
         except WriteDeadlineExceeded as e:
             # Reported, not silent — which is the whole difference from the
             # losses this came out of: the transaction rolled back on a LIVE
