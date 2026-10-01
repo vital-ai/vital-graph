@@ -221,3 +221,107 @@ def set_last_analyze_time(space_id: str) -> None:
 def get_last_analyze_time(space_id: str) -> Optional[float]:
     """Return the monotonic timestamp of the last ANALYZE, or None."""
     return _last_analyze_time.get(space_id)
+
+
+# ---------------------------------------------------------------------------
+# Fire-and-forget scheduling (`issues/253`)
+# ---------------------------------------------------------------------------
+#
+# WHY NO WRITE MAY AWAIT THIS. Three call sites used to do
+#
+#     async with self._db._internal_pool.acquire() as conn:
+#         await maybe_analyze(conn, space_id, pg_config=...)
+#
+# under a comment saying "outside transaction" — which held only when the
+# enclosing function opened its own transaction. Every caller that passes
+# `connection=` (the frame-write path always does) still had its WRITE
+# TRANSACTION OPEN around it, so the write's session sat IDLE IN TRANSACTION for
+# the whole ANALYZE.
+#
+# Measured on production 2026-09-30: those ANALYZEs run **60-98 seconds each** on
+# `rdf_quad` and `term`, back to back, while
+# `idle_in_transaction_session_timeout` is 60 s. PostgreSQL terminated the
+# write's connection, the ANALYZE finished, the write resumed one to two seconds
+# later and died in its rollback. **Five confirmed lost writes in one day**, and
+# the database log matches it 4 for 4 in the hour examined: every
+# idle-in-transaction FATAL falls inside an ANALYZE window.
+#
+# So this is scheduled, never awaited. A request must not wait on deferrable
+# maintenance even when it holds no transaction — one to three minutes added to a
+# user's write is its own defect.
+#
+# THE THRESHOLD IS CHECKED BEFORE ANYTHING IS ACQUIRED. `maybe_analyze` tests it
+# after being handed a connection, so the old shape paid an internal-pool
+# acquisition on EVERY write to discover there was nothing to do. At a 50,000-row
+# threshold that is almost every write.
+
+# Tasks in flight per space. A strong reference is required: callers
+# fire-and-forget the return value, and a task referenced by nothing can be
+# garbage-collected mid-ANALYZE (the same reason `vectorization.auto_sync` keeps
+# its own registry).
+_IN_FLIGHT: Dict[str, set] = {}
+
+
+def changes_pending(space_id: str,
+                    threshold: int = DEFAULT_ANALYZE_THRESHOLD) -> bool:
+    """Whether enough rows have changed to be worth an ANALYZE.
+
+    In-process and free — no connection, no catalogue read. This is the guard
+    that keeps the common write off the scheduling path entirely.
+    """
+    return _change_counts.get(space_id, 0) >= threshold
+
+
+def schedule_maybe_analyze(db_impl, space_id: str, *,
+                           pg_config: Optional[Dict[str, Any]] = None,
+                           threshold: int = DEFAULT_ANALYZE_THRESHOLD):
+    """Schedule `maybe_analyze` in the background. NEVER awaited by a write.
+
+    Returns the task, or None when there is nothing to do, no event loop, or no
+    pool to use. `maybe_analyze` re-checks the threshold and takes a
+    non-blocking advisory lock of its own, so a duplicate schedule is harmless.
+    """
+    if not changes_pending(space_id, threshold):
+        return None
+
+    from ..pool import internal_pool_for
+    # `internal_pool_for`, not `db_impl._internal_pool`: it distinguishes an
+    # internal pool that is absent ON PURPOSE from one that is missing by
+    # accident, and returns the request pool rather than raising. Reaching for
+    # the attribute directly would turn a configuration choice into an
+    # AttributeError on a background path nobody is watching.
+    pool = internal_pool_for(db_impl)
+    if pool is None:
+        logger.debug("auto_analyze(%s): no pool available, skipping", space_id)
+        return None
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.debug("auto_analyze(%s): no running event loop, skipping", space_id)
+        return None
+
+    async def _run() -> None:
+        async with pool.acquire() as conn:
+            await maybe_analyze(conn, space_id, threshold, pg_config=pg_config)
+
+    task = loop.create_task(_run(), name=f"auto_analyze:{space_id}")
+    _IN_FLIGHT.setdefault(space_id, set()).add(task)
+
+    def _on_done(t) -> None:
+        pending = _IN_FLIGHT.get(space_id)
+        if pending is not None:
+            pending.discard(t)
+            if not pending:
+                _IN_FLIGHT.pop(space_id, None)
+        if t.cancelled():
+            return
+        # Swallowed deliberately: an unhandled task exception would surface as a
+        # bare "Task exception was never retrieved" with no context, and nothing
+        # is waiting on this to decide anything.
+        exc = t.exception()
+        if exc is not None:
+            logger.error("auto_analyze(%s) task failed: %s", space_id, exc)
+
+    task.add_done_callback(_on_done)
+    return task

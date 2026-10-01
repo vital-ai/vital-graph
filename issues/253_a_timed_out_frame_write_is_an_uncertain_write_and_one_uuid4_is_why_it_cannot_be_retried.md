@@ -35,11 +35,11 @@
 ##      now duplicates a database-level setting at the same value; it is harmless
 ##      and explicit, and it is NOT the fix for the 5 losses. Decide whether to
 ##      keep it on its own merits, not on the reason it was written.
-##   5. **THE REAL DEFECT IS UNADDRESSED AND UNIDENTIFIED**: something holds a
-##      write transaction OPEN AND IDLE for more than 60 seconds. Idle means BEGIN
-##      has been sent, no statement is running, and none arrives. Nothing built in
-##      this issue touches that. The `describe_exception` logging is what will name
-##      it on the next occurrence.
+##   5. **THE REAL DEFECT IS NOW IDENTIFIED and still unfixed** — see "ROOT CAUSE
+##      FOUND". `add_rdf_quads_batch_bulk` awaits `maybe_analyze` inside the
+##      CALLER's transaction, and production ANALYZEs `rdf_quad` and `term` for
+##      60-98 s each. Matched 4 for 4 against the database log, with each app
+##      failure landing 1-2 s after an ANALYZE sequence ends.
 ##
 ## What is NOT affected by the mix-up: everything measured from the APPLICATION
 ## logs (the presync/total/BULK breakdowns, `issues/238`'s deployment and its
@@ -480,6 +480,97 @@ with it. The two fences want ordering: a lock wait bounded BELOW the command
 timeout, so the failure is a clean server-side error rather than a killed
 connection. Part 5 (10 s) establishes that ordering; this is the reason it is not
 merely a latency improvement.
+
+## ROOT CAUSE FOUND 2026-10-01 — a write holds its transaction open across an ANALYZE
+
+**`add_rdf_quads_batch_bulk` awaits `maybe_analyze` inside the CALLER's
+transaction**, and on production that ANALYZE runs for one to three minutes.
+
+    # sparql_sql_space_impl.py:1686-1693
+    # Track row changes for auto-ANALYZE (outside transaction)
+    from .auto_analyze import record_changes, maybe_analyze
+    record_changes(space_id, count)
+    self._invalidate_counts_for_quads(space_id, quads)
+    async with self._db._internal_pool.acquire() as conn:
+        await maybe_analyze(conn, space_id, pg_config=self.postgresql_config)
+
+**The comment is true only for one of the two branches.** When this function opens
+its own transaction, the block really is outside it. When a caller passes
+`connection=conn` — which `update_subjects_graph` always does, and six other call
+sites in `kg_backend_utils` do — the CALLER's write transaction is still open
+around all of it. `maybe_analyze` then does
+`await asyncio.to_thread(_sync_analyze, tables, pg_config)`, ANALYZEing every
+per-space table on a separate connection while the write's own session sits IDLE
+IN TRANSACTION.
+
+**The database log, matched 4 for 4.** Every idle-in-transaction FATAL falls
+inside an ANALYZE window, and each application failure lands ONE TO TWO SECONDS
+after that ANALYZE sequence finishes — the write resumes the instant the ANALYZE
+returns and finds its connection already terminated:
+
+    ANALYZE sequence (a different session)                FATAL      app failure
+    rdf_quad 90.4s -> term 98.0s   21:28:52-21:32:01      21:29:53   21:32:03
+    rdf_quad 60.2s -> term 83.5s   21:32:02-21:34:27      21:33:03   21:34:28
+    rdf_quad 46.5s -> term 86.7s   21:37:10-21:39:24      21:38:11   21:39:26
+    rdf_quad 68.1s -> term 81.5s   21:41:04-21:43:37      21:42:05   21:43:38
+
+Sequence durations of 189 s / 145 s / 134 s / 153 s against reported write totals
+of 122 s / 154 s / 191 s. The rarity matches too: `maybe_analyze`'s threshold is
+**50,000 row changes** and it skips when another holds its advisory lock, so only
+an occasional write pays it — about five a day.
+
+**Earlier shape breakdowns of this log MISSED these statements**, because the
+regex required `execute` (the extended protocol) and ANALYZE arrives as a simple
+statement. That is why an earlier pass concluded "no ANALYZE in the hour"; there
+were twenty, the longest 98 s.
+
+**And it partly vindicates this issue's FIRST hypothesis**, which was demoted for
+good reason at the time. "The post-write ANALYZE is the stall" was the right
+suspect and the wrong mechanism: not *the write waits for an ANALYZE so it is
+slow*, but *the write holds a transaction open across the ANALYZE, so PostgreSQL
+kills the transaction*. Demoting it on the evidence then available was correct;
+the evidence that settles it is the ANALYZE durations in the database log, which
+nothing had looked at.
+
+### FIXED 2026-10-01 — scheduled, never awaited
+
+`auto_analyze.schedule_maybe_analyze` replaces the inline acquire-and-await at
+**all three sites** — `add_rdf_quads_batch_bulk`, `remove_rdf_quads_batch_bulk`
+and `delete_entity_graph_bulk`, two of which take a caller's connection and so
+had the hazard inside someone else's transaction. `record_changes` and the count
+invalidation are in-memory and stay where they are.
+
+Fire-and-forget rather than merely "skip it when the caller owns the
+transaction": a request should not wait one to three minutes for deferrable
+maintenance even on the path that owns its transaction, and `maybe_analyze`
+already takes a non-blocking advisory lock, so a duplicate schedule is harmless.
+The pattern — a per-space in-flight registry holding a strong reference, plus a
+done-callback that discards it and logs — is `vectorization.auto_sync`'s, reused
+rather than reinvented.
+
+**The threshold is now checked BEFORE anything is acquired.** `maybe_analyze`
+tests it only after being handed a connection, so the old shape paid an
+internal-pool acquisition on EVERY write to discover there was nothing to do — at
+a 50,000-row threshold, nearly every write. A test asserts an ordinary write
+acquires nothing at all.
+
+Tests: `tests/unit/test_a_write_never_waits_for_an_analyze.py` — the caller
+returns before the ANALYZE begins, the task is strongly referenced until it
+finishes, a failing ANALYZE is logged and never raised at the caller, no event
+loop is not an error, and an AST guard over the three sites. Reverting one site to
+the awaited form fails that guard.
+
+**One pre-existing test had to be retargeted, not weakened.**
+`test_the_analyze_sites_in_the_write_path_are_routed` (from `issues/231`) pinned
+the three sites as the two-line text `_internal_pool.acquire() … await
+maybe_analyze(`. That code is gone, so the test now asserts the same requirement
+where it now lives: three `schedule_maybe_analyze` sites, the scheduler choosing
+its pool through `internal_pool_for`, and `auto_analyze` never reaching for
+`connection_pool` directly.
+
+**What this does NOT need:** the phase timestamps would have shown this as
+`insert=` absorbing the whole duration with `commit=-`; they are still worth
+having for the next unknown, but the cause is established without them.
 
 ## What the database log shows, and what it eliminates (2026-10-01)
 

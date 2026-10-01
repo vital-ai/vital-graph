@@ -1682,15 +1682,28 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     self._db._pool, _do_bulk,
                     what=f"add_rdf_quads_batch_bulk({space_id})")
 
-            # Track row changes for auto-ANALYZE (outside transaction)
-            from .auto_analyze import record_changes, maybe_analyze
+            # Track row changes for auto-ANALYZE.
+            #
+            # SCHEDULED, NEVER AWAITED (`issues/253`). This block used to acquire
+            # an internal connection and `await maybe_analyze(...)` here, under a
+            # comment claiming it was "outside transaction" — true only when THIS
+            # function opened the transaction. Every caller passing `connection=`
+            # still had its write transaction open, so the write's session sat
+            # IDLE IN TRANSACTION for the whole ANALYZE. Production ANALYZEs
+            # `rdf_quad` and `term` for 60-98 s each while
+            # `idle_in_transaction_session_timeout` is 60 s, which cost five
+            # confirmed lost writes in one day.
+            from .auto_analyze import record_changes, schedule_maybe_analyze
             record_changes(space_id, count)
             self._invalidate_counts_for_quads(space_id, quads)
             # INTERNAL pool, not the request pool (`issues/231`). ANALYZE is
             # deferrable and self-serialising; on the request pool a burst of
-            # writers stacks ANALYZE on connections readers need.
-            async with self._db._internal_pool.acquire() as conn:
-                await maybe_analyze(conn, space_id, pg_config=self.postgresql_config)
+            # writers stacks ANALYZE on connections readers need. The pool is
+            # chosen inside the scheduler, which also checks the change threshold
+            # BEFORE acquiring anything — the old shape paid an acquisition on
+            # every write to discover there was nothing to do.
+            schedule_maybe_analyze(self._db, space_id,
+                                   pg_config=self.postgresql_config)
             return count
 
         except Exception as e:
@@ -1902,8 +1915,18 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 _t1 - _t0, len(subject_uuids), deleted, edge_deleted,
             )
 
-            # Track row changes for auto-ANALYZE (outside transaction)
-            from .auto_analyze import record_changes, maybe_analyze
+            # Track row changes for auto-ANALYZE.
+            #
+            # SCHEDULED, NEVER AWAITED (`issues/253`). This block used to acquire
+            # an internal connection and `await maybe_analyze(...)` here, under a
+            # comment claiming it was "outside transaction" — true only when THIS
+            # function opened the transaction. Every caller passing `connection=`
+            # still had its write transaction open, so the write's session sat
+            # IDLE IN TRANSACTION for the whole ANALYZE. Production ANALYZEs
+            # `rdf_quad` and `term` for 60-98 s each while
+            # `idle_in_transaction_session_timeout` is 60 s, which cost five
+            # confirmed lost writes in one day.
+            from .auto_analyze import record_changes, schedule_maybe_analyze
             record_changes(space_id, deleted)
             # This method deletes within ONE graph and has no quad list.
             try:
@@ -1913,9 +1936,12 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 logger.debug("count cache invalidation skipped: %s", _e)
             # INTERNAL pool, not the request pool (`issues/231`). ANALYZE is
             # deferrable and self-serialising; on the request pool a burst of
-            # writers stacks ANALYZE on connections readers need.
-            async with self._db._internal_pool.acquire() as conn:
-                await maybe_analyze(conn, space_id, pg_config=self.postgresql_config)
+            # writers stacks ANALYZE on connections readers need. The pool is
+            # chosen inside the scheduler, which also checks the change threshold
+            # BEFORE acquiring anything — the old shape paid an acquisition on
+            # every write to discover there was nothing to do.
+            schedule_maybe_analyze(self._db, space_id,
+                                   pg_config=self.postgresql_config)
             return deleted
         except Exception as e:
             logger.error("delete_entity_graph_bulk(%s, %s) failed: %s", space_id, entity_uri, e)
@@ -2033,15 +2059,28 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     self._db._pool, _do_bulk,
                     what=f"remove_rdf_quads_batch_bulk({space_id})")
 
-            # Track row changes for auto-ANALYZE (outside transaction)
-            from .auto_analyze import record_changes, maybe_analyze
+            # Track row changes for auto-ANALYZE.
+            #
+            # SCHEDULED, NEVER AWAITED (`issues/253`). This block used to acquire
+            # an internal connection and `await maybe_analyze(...)` here, under a
+            # comment claiming it was "outside transaction" — true only when THIS
+            # function opened the transaction. Every caller passing `connection=`
+            # still had its write transaction open, so the write's session sat
+            # IDLE IN TRANSACTION for the whole ANALYZE. Production ANALYZEs
+            # `rdf_quad` and `term` for 60-98 s each while
+            # `idle_in_transaction_session_timeout` is 60 s, which cost five
+            # confirmed lost writes in one day.
+            from .auto_analyze import record_changes, schedule_maybe_analyze
             record_changes(space_id, count)
             self._invalidate_counts_for_quads(space_id, quads)
             # INTERNAL pool, not the request pool (`issues/231`). ANALYZE is
             # deferrable and self-serialising; on the request pool a burst of
-            # writers stacks ANALYZE on connections readers need.
-            async with self._db._internal_pool.acquire() as conn:
-                await maybe_analyze(conn, space_id, pg_config=self.postgresql_config)
+            # writers stacks ANALYZE on connections readers need. The pool is
+            # chosen inside the scheduler, which also checks the change threshold
+            # BEFORE acquiring anything — the old shape paid an acquisition on
+            # every write to discover there was nothing to do.
+            schedule_maybe_analyze(self._db, space_id,
+                                   pg_config=self.postgresql_config)
             return count
         except Exception as e:
             logger.error("remove_rdf_quads_batch_bulk(%s) failed: %s", space_id, e)

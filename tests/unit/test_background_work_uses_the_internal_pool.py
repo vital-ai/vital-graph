@@ -108,33 +108,43 @@ def test_an_unconnected_impl_still_raises():
 
 
 def test_the_analyze_sites_in_the_write_path_are_routed():
-    """THE OUTAGE PATH, pinned as source.
+    """THE OUTAGE PATH. The property is unchanged; WHERE it lives moved.
 
     `add_rdf_quads_batch_bulk`, `remove_rdf_quads_batch_bulk` and
-    `delete_entity_graph_bulk` each end by acquiring a connection to ANALYZE.
-    All three acquired from `_db._pool` — the request pool — which is how a
-    bulk copy's maintenance came to hold the connections readers needed.
+    `delete_entity_graph_bulk` each end by triggering an ANALYZE. All three once
+    acquired from `_db._pool` — the request pool — which is how a bulk copy's
+    maintenance came to hold the connections readers needed (`issues/231`).
 
-    Asserted against the SOURCE rather than by executing the bulk paths: those
-    require a live space, a populated schema and a real transaction, and a test
-    that heavy would be run rarely enough to regress unnoticed. The property
-    here is narrow and textual, so pin it narrowly and textually.
+    They no longer acquire anything inline: `issues/253` found that AWAITING the
+    ANALYZE there held the caller's write transaction open across a 60-98 s
+    statement, and PostgreSQL terminated the connection as idle-in-transaction —
+    five confirmed lost writes in a day. The three sites now call
+    `schedule_maybe_analyze`, which chooses the pool itself.
+
+    So the pool choice is asserted where it now happens, and the earlier
+    two-line textual shape is gone because the code it described is gone. The
+    requirement it protected is not: ANALYZE must not be taken on the request
+    pool by default.
     """
+    import ast
     import inspect
-    from vitalgraph.db.sparql_sql import sparql_sql_space_impl
+
+    from vitalgraph.db.sparql_sql import auto_analyze, sparql_sql_space_impl
 
     src = inspect.getsource(sparql_sql_space_impl)
-    routed = src.count("self._db._internal_pool.acquire() as conn:\n"
-                       "                await maybe_analyze(")
-    assert routed == 3, f"expected 3 routed ANALYZE sites, found {routed}"
+    scheduled = src.count("schedule_maybe_analyze(self._db")
+    assert scheduled == 3, f"expected 3 scheduled ANALYZE sites, found {scheduled}"
 
-    # And none left behind on the request pool. Checked as the same two-line
-    # shape, because a single stale site is the whole defect — two routed and
-    # one missed leaks maintenance onto readers exactly as before, while
-    # looking fixed.
-    stale = src.count("self._db._pool.acquire() as conn:\n"
-                      "                await maybe_analyze(")
-    assert stale == 0, f"{stale} ANALYZE site(s) still on the request pool"
+    # The scheduler picks the pool through the sanctioned accessor, which returns
+    # the INTERNAL pool and falls back to the request pool only when an operator
+    # has deliberately disabled the split (`internal_pool_for`'s own contract).
+    sched = inspect.getsource(auto_analyze.schedule_maybe_analyze)
+    assert "internal_pool_for(" in sched
+    # Not reaching past it to the request pool.
+    tree = ast.parse(inspect.getsource(auto_analyze))
+    direct = [n.lineno for n in ast.walk(tree)
+              if isinstance(n, ast.Attribute) and n.attr == "connection_pool"]
+    assert not direct, f"auto_analyze reaches for the request pool at {direct}"
 
 
 # --------------------------------------------------------------------------
