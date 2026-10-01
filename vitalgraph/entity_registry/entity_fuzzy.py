@@ -219,11 +219,13 @@ class EntityFuzzyIndex:
             ENTITY_FUZZY_BACKEND: 'memory' (default) or 'redis'
             ENTITY_FUZZY_REDIS_HOST: Redis host (default 'localhost')
             ENTITY_FUZZY_REDIS_PORT: Redis port (default 6379)
-            ENTITY_FUZZY_NUM_PERM: Number of permutations (default 128)
+            ENTITY_FUZZY_NUM_PERM: Number of permutations (default 64)
             ENTITY_FUZZY_THRESHOLD: LSH threshold (default 0.3)
-            VITALGRAPH_ENVIRONMENT: Environment name used as Redis key prefix
-                (e.g. 'local', 'dev', 'prod').  Results in keys like
-                ``dev_fuzzy_bucket_...`` and ``dev_fuzzy_phonetic_bucket_...``
+            VITALGRAPH_ENVIRONMENT: Environment name used as the Redis key hash
+                tag (e.g. 'local', 'dev').  Gives keys like
+                ``{dev_fuzzy}_bucket_...`` and ``{dev_fuzzy}_phonetic_bucket_...``.
+                'prod', 'production' and unset are the *unprefixed* case and use
+                the bare ``{fuzzy}`` tag — there is no ``prod_fuzzy`` namespace.
         """
         from vitalgraph.config.config_loader import get_scoped_env
 

@@ -38,7 +38,7 @@ VitalGraph is a FastAPI-based knowledge graph service backed by PostgreSQL. In t
 | **PostgreSQL** | Primary data store for quads, admin tables, entity registry, agent registry, process tracking | 5432 |
 | **S3 / MinIO** | Object storage for file attachments | 9000 |
 | **Weaviate** (optional) | Vector search for entity registry semantic queries | 8080/50051 |
-| **MemoryDB / Redis** (optional) | Persistent LSH index for entity dedup across restarts | 6379 |
+| **MemoryDB / Redis** (optional, legacy) | LSH index for entity dedup. Superseded by the `postgresql` backend, which is what production runs — see [Section 2.5](#25-entity-registry-optional-services) | 6379 |
 
 ### Request Flow
 
@@ -125,18 +125,57 @@ The loader (`VitalGraphConfig`) resolves each key in order:
 | `WEAVIATE_GRPC_HOST` | — | Weaviate gRPC host |
 | `WEAVIATE_GRPC_PORT` | `50051` | Weaviate gRPC port |
 
-#### MemoryDB / Redis (persistent dedup index)
+#### Entity fuzzy / dedup index
+
+> **The prefix is `ENTITY_FUZZY_`, not `ENTITY_DEDUP_`.** Nothing reads
+> `ENTITY_DEDUP_*` — the name this table used to document. A set of them sat in
+> the production task definition for months, complete with a MemoryDB host and a
+> Secrets Manager password, and did nothing except make it look like production
+> talked to MemoryDB. They were removed 2026-09-29.
 
 | Variable | Default | Description |
 |---|---|---|
-| `ENTITY_DEDUP_BACKEND` | `memory` | `memory` (in-process) or `redis` |
-| `ENTITY_DEDUP_REDIS_HOST` | `localhost` | Redis / MemoryDB host |
-| `ENTITY_DEDUP_REDIS_PORT` | `6379` | Redis port |
-| `ENTITY_DEDUP_REDIS_USERNAME` | — | ACL username (MemoryDB) |
-| `ENTITY_DEDUP_REDIS_PASSWORD` | — | AUTH password |
-| `ENTITY_DEDUP_REDIS_SSL` | `false` | `true` for MemoryDB (TLS required) |
-| `ENTITY_DEDUP_NUM_PERM` | `128` | MinHash permutation count |
-| `ENTITY_DEDUP_THRESHOLD` | `0.3` | LSH similarity threshold |
+| `ENTITY_FUZZY_BACKEND` | `memory` | `memory` (in-process), `postgresql` (**what production runs**), or `redis` (legacy) |
+| `ENTITY_FUZZY_NUM_PERM` | `64` | MinHash permutation count |
+| `ENTITY_FUZZY_THRESHOLD` | `0.3` | LSH similarity threshold |
+| `ENTITY_FUZZY_ENABLED` | — | **CLI only.** `true` turns on the fuzzy index in `vitalgraphentityregistry` when `ENTITY_FUZZY_BACKEND` is not `postgresql`. The server ignores it. |
+
+Used by the `redis` backend:
+
+| Variable | Default | Description |
+|---|---|---|
+| `ENTITY_FUZZY_REDIS_HOST` | `localhost` | Redis / MemoryDB host |
+| `ENTITY_FUZZY_REDIS_PORT` | `6379` | Redis port |
+| `ENTITY_FUZZY_REDIS_USERNAME` | — | ACL username (MemoryDB) |
+| `ENTITY_FUZZY_REDIS_PASSWORD` | — | AUTH password |
+| `ENTITY_FUZZY_REDIS_SSL` | `false` | `true` for MemoryDB (TLS required) |
+| `ENTITY_FUZZY_REDIS_CLUSTER` | `false` | `true` for MemoryDB / ElastiCache cluster mode |
+
+These are not exclusive to the `redis` backend. `QUERY_METRICS_REDIS_*` falls back
+to the matching `ENTITY_FUZZY_REDIS_*` value when unset
+(`vitalgraph/metrics/query_metrics.py`), whatever `ENTITY_FUZZY_BACKEND` is set to.
+Set them for a backend you are actually selecting, and know that the query-metrics
+path will pick them up too.
+
+**Scoping — with one exception.** The server reads all of these through
+`get_scoped_env`, so `VITALGRAPH_ENVIRONMENT=prod` makes
+`PROD_ENTITY_FUZZY_BACKEND` take precedence over the unprefixed name.
+
+The `vitalgraphentityregistry` CLI does **not**: it reads bare
+`ENTITY_FUZZY_BACKEND` from the environment directly
+(`vitalgraph/entity_registry_cmd/vitalgraph_entity_registry_cmd.py`). In a task
+that sets only `PROD_ENTITY_FUZZY_BACKEND=postgresql` — which is what production
+does — the CLI comes up with no fuzzy index and `search-similar` prints
+`Fuzzy index not enabled`. Export the unprefixed name for the shell you run it
+from:
+
+```bash
+ENTITY_FUZZY_BACKEND=postgresql vitalgraphentityregistry
+```
+
+Setting `ENTITY_FUZZY_BACKEND=redis` without the `ENTITY_FUZZY_REDIS_*` values is
+not a fallback to anything: it connects to `localhost:6379` with no TLS and no
+auth. Treat the three backends as separate deployments, not as a failover chain.
 
 ### 2.6 VitalSigns Configuration (vitalhome)
 
@@ -578,14 +617,59 @@ With ECS task IAM roles, you can omit the access/secret keys and let the SDK use
 
 Provides semantic vector search over the entity registry. Authenticates via Keycloak OAuth2. See [Section 2.5](#25-entity-registry-optional-services) for configuration.
 
-### 9.3 MemoryDB / Redis (Optional)
+### 9.3 Entity fuzzy index backend
 
-Provides persistent MinHash LSH dedup index for the entity registry. When using AWS MemoryDB:
-- TLS is required (`ENTITY_DEDUP_REDIS_SSL=true`)
-- ACL credentials are passed via `ENTITY_DEDUP_REDIS_USERNAME` / `ENTITY_DEDUP_REDIS_PASSWORD`
-- The index key prefix is scoped by `VITALGRAPH_ENVIRONMENT` (e.g., `prod_dedup_bucket_...`)
+The entity registry's near-duplicate ("dedup") index has three backends, selected
+by `ENTITY_FUZZY_BACKEND`.
 
-If using the `memory` backend (default), the dedup index is rebuilt from PostgreSQL on each process start.
+**`postgresql` — what production runs.** The index lives in `entity_fuzzy_band`,
+`entity_fuzzy_phonetic_band` and `entity_fuzzy_hash` in the application database,
+served by `EntityFuzzyIndexPG` over the request pool. No external service. Each
+boot logs `Entity fuzzy using PostgreSQL backend`, which is the quickest way to
+confirm what an environment is actually on.
+
+Moving to it from `redis` is not a table copy — the Redis store was a datasketch
+`MinHashLSH`, so the index is **rebuilt** in PostgreSQL from the `entity` table,
+which is the source of truth either way:
+
+```bash
+python apps/fuzzy_index/migrate_fuzzy_redis_to_pg.py --rebuild
+python apps/fuzzy_index/migrate_fuzzy_redis_to_pg.py --status   # verify
+```
+
+Despite the name, that script reads nothing from Redis on `--rebuild`. It creates
+the band tables if they are absent, then streams the `entity` table into them. The
+server also self-heals on boot — `EntityFuzzyIndexPG.initialize(skip_if_populated=True)`
+builds the bands if the tables are empty — so the script is for doing it
+deliberately, ahead of a cutover, rather than during the first request.
+
+It takes `--num-perm` / `--threshold` from its own flags, defaulting to `64` /
+`0.3`, and does **not** read `ENTITY_FUZZY_NUM_PERM` / `ENTITY_FUZZY_THRESHOLD`.
+If a deployment overrides either, pass the same values on the command line —
+bands built at one `num_perm` do not match a server running another.
+
+Two nearby scripts are **not** the tool for this, despite looking like it:
+
+- `apps/entity_registry/fuzzy_sync.py --rebuild` only ever constructs
+  `EntityFuzzyIndex` (memory / redis). It never touches the PG band tables.
+- `apps/fuzzy_index/sync_fuzzy_index.py` exits immediately without a Redis
+  backend configured, and its `--backfill` fills NULL `fuzzy_hash` values rather
+  than rebuilding bands.
+
+**`memory` (default).** In-process; rebuilt from PostgreSQL on each process start.
+Fine for a single process, and it loses the index on every restart.
+
+**`redis` (legacy).** AWS MemoryDB or ElastiCache. TLS is required
+(`ENTITY_FUZZY_REDIS_SSL=true`), ACL credentials go in
+`ENTITY_FUZZY_REDIS_USERNAME` / `ENTITY_FUZZY_REDIS_PASSWORD`, cluster mode needs
+`ENTITY_FUZZY_REDIS_CLUSTER=true`, and the keys carry a hash tag derived from
+`VITALGRAPH_ENVIRONMENT` — but **production is the unprefixed case**. `prod`,
+`production` and unset all use the bare tag, so keys are `{fuzzy}_bucket_...`;
+every other environment is namespaced, e.g. `{dev_fuzzy}_bucket_...`
+(`entity_fuzzy.py`, `from_env`). Phonetic bands live under
+`{fuzzy}_phonetic_bucket_...`; in cluster mode both sets are split further into
+per-band tags (`{fuzzy_b03}`, `{fuzzy_ph_b03}`) so bands spread across shards.
+There is no `prod_fuzzy_` prefix — do not go looking for one.
 
 ---
 
@@ -600,7 +684,7 @@ VitalGraph uses PostgreSQL `NOTIFY` / `LISTEN` for real-time inter-process commu
 | `vitalgraph_space` | Space create/update/delete → SpaceManager cache sync |
 | `vitalgraph_graph` | Graph changes |
 | `vitalgraph_user` | User changes |
-| `vitalgraph_entity_dedup` | Entity dedup index sync (add/remove/reload_full) |
+| `vitalgraph_entity_fuzzy` | Entity fuzzy / dedup index sync (add/remove/reload_full) |
 | `vitalgraph_process` | Process status updates |
 
 ### How It Works
@@ -612,7 +696,7 @@ The `SignalManager` maintains two persistent psycopg3 connections:
 This enables:
 - **Cross-instance cache invalidation**: When one ECS task creates a space, all other tasks update their in-memory SpaceManager
 - **WebSocket bridge**: PostgreSQL notifications are forwarded to connected WebSocket clients for real-time UI updates
-- **Entity dedup sync**: When one task adds an entity, other tasks update their local MinHash index
+- **Entity fuzzy sync**: When one task adds an entity, other tasks update their local MinHash index
 
 ---
 
@@ -949,7 +1033,7 @@ PROD_SIDECAR_URL=http://localhost:7070
 
 ### 15.4 Optional Entity Registry Containers
 
-If using Weaviate or MemoryDB, add the relevant environment variables and secrets to the `vitalgraph` container definition. These are external services (not sidecar containers) — configure security groups to allow access from the ECS task.
+If using Weaviate, or the legacy `redis` fuzzy backend, add the relevant environment variables and secrets to the `vitalgraph` container definition. These are external services (not sidecar containers) — configure security groups to allow access from the ECS task. Add them only for a backend you are actually selecting: env vars no code reads are worse than absent, because they describe an architecture that is not running.
 
 ---
 
@@ -1099,4 +1183,4 @@ asyncio.run(check())
 | MinIO Console | 9001 | HTTP |
 | Weaviate HTTP | 8080 | HTTP |
 | Weaviate gRPC | 50051 | gRPC |
-| Redis / MemoryDB | 6379 | TCP |
+| Redis / MemoryDB (only if `ENTITY_FUZZY_BACKEND=redis`) | 6379 | TCP |
