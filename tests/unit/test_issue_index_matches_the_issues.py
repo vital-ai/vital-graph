@@ -82,6 +82,45 @@ def test_every_indexed_issue_has_a_file():
     assert not missing, f"indexed but no such issue file: {missing}"
 
 
+def test_every_indexed_issue_is_COMMITTED():
+    """The file has to exist for everyone, not just on the author's disk.
+
+    WHY THIS IS SEPARATE from the check above, which reads the filesystem and so
+    passes for a file that is merely PRESENT. An untracked draft satisfies it
+    locally and fails nowhere until CI checks out the commit and finds the
+    pointer dangling — which is exactly what happened on 2026-10-01: a commit
+    added index rows for `248`, `249`, `251` and `252` while those files sat
+    untracked, the author's local run was green, and the next SIX pushes were
+    red on a defect none of them introduced.
+
+    A pointer that outlives what it points at is this file's whole subject, and
+    "committed" is the only version of "exists" that a reader other than the
+    author can rely on. Skipped outside a git checkout rather than failed: a
+    source tarball is a legitimate place to run the suite and has no index to
+    consult.
+    """
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-z", "--", "issues"],
+            cwd=ISSUES.parent, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:   # pragma: no cover
+        pytest.skip(f"git not usable here: {e}")
+    if out.returncode != 0:                              # pragma: no cover
+        pytest.skip("not a git checkout")
+
+    tracked = {pathlib.PurePosixPath(p).name
+               for p in out.stdout.split("\0") if p}
+    untracked = [
+        num for num, _ in _index_rows()
+        if not any(n.startswith(f"{num}_") and n.endswith(".md")
+                   for n in tracked)]
+    assert not untracked, (
+        "the index points at issue files that are NOT COMMITTED, so every "
+        "checkout but this one sees a dangling row: " + repr(untracked))
+
+
 def test_no_archived_issue_still_says_open():
     """The archive is the claim that nothing remains to do. It must read that way.
 

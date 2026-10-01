@@ -165,6 +165,49 @@ async function expectOrderToChangeFrom(
   }).toPass({ timeout: 20_000 });
 }
 
+/**
+ * Wait until the table shows the list-index ordering for `direction`, then
+ * assert the unindexed rows are last.
+ *
+ * WHY THIS POLLS, and why it checks the INDEXED PREFIX too. The previous version
+ * waited on `expectRowCount` and then read the order once. The count is
+ * INDEXED_COUNT + UNINDEXED_COUNT both before and after a sort applies, so that
+ * wait cannot tell the two apart and the read could land on the PREVIOUS
+ * ordering — flaky, and it failed three retries in CI on 2026-10-01 while
+ * passing on the next commit. Its two sibling tests each wait on something
+ * order-sensitive (`expectFirstRow`, `expectOrderToChangeFrom`); this one waited
+ * on nothing.
+ *
+ * Polling the tail ALONE would not fix it: the unindexed rows are last in both
+ * directions, so a stale ascending order satisfies the descending assertion and
+ * the test passes without the sort having applied. Asserting the indexed prefix
+ * for the direction under test is what makes the wait real — ascending is URI
+ * order reversed (index 1..12), descending is URI order.
+ *
+ * A genuinely wrong order never becomes right, so this still fails; it costs the
+ * timeout rather than reporting a pass.
+ */
+async function expectIndexOrdering(
+  page: import('@playwright/test').Page,
+  direction: 'asc' | 'desc',
+  unindexed: string[],
+) {
+  const indexedExpected = direction === 'asc'
+    ? Array.from({ length: INDEXED_COUNT }, (_, k) => shortFor(INDEXED_COUNT - k))
+    : Array.from({ length: INDEXED_COUNT }, (_, k) => shortFor(k + 1));
+
+  await expect(async () => {
+    const order = await visibleOrder(page);
+    expect(order.length).toBe(INDEXED_COUNT + UNINDEXED_COUNT);
+    // The direction has actually been applied...
+    expect(order.filter(n => Number(n.slice(1)) <= INDEXED_COUNT))
+      .toEqual(indexedExpected);
+    // ...and the rows with no index are at the END, as a set: nothing defines
+    // the order BETWEEN two rows that both lack the sort key.
+    expect(order.slice(-UNINDEXED_COUNT).sort()).toEqual([...unindexed].sort());
+  }).toPass({ timeout: 20_000 });
+}
+
 /** Visible relation short-names (r01…), in render order, for our fixture only. */
 async function visibleOrder(page: import('@playwright/test').Page): Promise<string[]> {
   // Read every row in ONE call. Looping `rows.nth(i).innerText()` re-queries
@@ -260,15 +303,11 @@ test.describe('KG Relations sorting and paging', () => {
 
     // ascending
     await page.locator('[data-testid="relations-sort-index"]').click();
-    await expectRowCount(page, INDEXED_COUNT + UNINDEXED_COUNT);
-    let order = await visibleOrder(page);
-    expect(order.slice(-UNINDEXED_COUNT).sort()).toEqual([...unindexed].sort());
+    await expectIndexOrdering(page, 'asc', unindexed);
 
     // descending — still last, not first
     await page.locator('[data-testid="relations-sort-index"]').click();
-    await expectRowCount(page, INDEXED_COUNT + UNINDEXED_COUNT);
-    order = await visibleOrder(page);
-    expect(order.slice(-UNINDEXED_COUNT).sort()).toEqual([...unindexed].sort());
+    await expectIndexOrdering(page, 'desc', unindexed);
   });
 
   test('toggling to descending reverses the indexed order', async ({ page }) => {
