@@ -2,6 +2,147 @@
 
 Notable changes per release. Dates are the release date, not the first commit.
 
+## 0.0.43 — 2026-10-01
+
+73 commits since 0.0.42 (2026-09-24). THE CLIENT CHANGES, and that is why this
+release exists: a caller can now refuse to lose its own update. Everything here
+is **opt-in** — a client that passes nothing behaves exactly as 0.0.42 did, and
+an older client against a newer server likewise.
+
+### Added — client
+
+- **`if_unmodified_since` on the ten write methods that reach a guarded route.**
+  Pass the `hasObjectModificationDateTime` you read and the write is REFUSED if
+  the stored value has moved, instead of overwriting a newer save. This is the
+  lost update: no amount of locking prevents it, because the race spans a
+  caller's READ, its merge and its write, issued as three separate requests. An
+  autosave sending tens of writes a minute for one record is the shape that
+  loses them, and every request reports success while it happens.
+
+  On `kgentities`: `create_entity_frames`, `update_entity_frames`. On
+  `kgframes`: `create_kgframes`, `update_kgframes`,
+  `create_kgframes_with_slots`, `update_kgframes_with_slots`,
+  `create_frame_slots`, `update_frame_slots`, `create_child_frames`,
+  `update_child_frames`.
+
+  **What it compares depends on which route you use, because the two routes
+  address different objects.** A frame inside an entity is versioned by its
+  owning ENTITY — that is what those callers hold — and a top-level frame or a
+  child of one is versioned by the FRAME, because it has no owning entity. Not
+  a strong guard and a weak one: two different units of concurrency.
+
+  `operation_mode=replace` deliberately does NOT accept it on either route. It
+  deletes the existing frames before writing, so a refusal would land after the
+  deletes and leave neither the old frames nor the new ones.
+
+- **`VitalGraphResponse.is_conflict`**, and `status="conflict"` as a new
+  `OperationStatus`. A refusal arrives as **HTTP 200** with that status, per this
+  project's convention of putting domain outcomes in the body — so nothing about
+  the status code reveals it and a caller reading only the code sees a success.
+  `is_conflict` is what distinguishes it from `is_error`, and the two want
+  OPPOSITE responses: a conflict means re-read, re-merge and send again, while a
+  `store_failed` means retrying will not change the outcome. Treating a conflict
+  as the latter turns a lost update into a dropped one.
+
+  Do NOT replay a conflict with the same `if_unmodified_since`: the point is
+  that the value is stale, so the replay is refused identically.
+
+- **`modification_stamp`, for reading the value you have to send.** On
+  `EntityGraphResponse` and `EntityGraph`, on `FrameGraphResponse` and
+  `FrameGraph`, as `modification_stamp_for(uri)` on any flat
+  `GraphObjectResponse`, and as `modification_stamps` (URI → stamp) on
+  `MultiEntityGraphResponse`.
+
+  **Use these rather than the object's attribute.** The obvious call —
+  `str(entity.objectModificationDateTime)` — produces a value the server can
+  never match: VitalSigns parses the literal into a `datetime`, so `str()`
+  renders it space-separated (`2026-10-01 12:23:37.333100+00:00`) while the
+  stored text keeps the ISO `T`. The comparison is on the stored string
+  deliberately — a datetime comparison would forgive a formatting difference,
+  and a formatting difference means something rewrote the value — so the space
+  form is refused every time, and a caller using it would re-read, get the same
+  unusable value and loop with nothing it could fix. The accessors return the
+  wire form, which round-trips.
+
+  The entity-versus-graph distinction matters: an entity graph holds the entity,
+  its frames, its slots and their edges, and every one of them carries its own
+  stamp. The accessors pick the subject the guard keys on, not the first stamp
+  in the list.
+
+  **Frames did not carry this property before 0.0.43.** A frame written by an
+  older release has no stamp until it is next written; reading one returns
+  `None`, and a caller then writes unconditionally, which is the previous
+  behaviour. Nothing needs backfilling.
+
+- **`idempotent=True` on the 12 replay-safe writes**, so the retry policy may
+  replay them after a post-send failure — `httpx.ReadTimeout` being the case
+  that mattered. A POST is not idempotent by method, so these were never
+  retried, which is how timed-out frame writes became UNCERTAIN WRITES nobody
+  could resolve. Claimable now because every server-minted edge URI is derived
+  from its endpoints rather than `uuid4()`, and the subject-level write deletes
+  what it is about to write.
+
+  `create_kgentities` is deliberately NOT marked: a replay is safe for the DATA
+  but answers `already_exists`, a reported failure for a write that succeeded.
+
+### Changed — client
+
+- **The server's `status` survives a failure response.** Six short-circuits
+  built their response without it — the "nothing was updated" path and five
+  `success is False` paths — so a refused write arrived as `status=None` and
+  `is_conflict` False, which is exactly the response that needed to say
+  otherwise. The count is identical for a refusal and a failure; only the status
+  separates them.
+
+- **`create_entity_frames` and `update_entity_frames` return the SERVER's
+  message** rather than composing `"Created 0 frames"` over it. That message is
+  the only place a refusal's reason survives, since `raise_for_error` falls back
+  to it.
+
+### Fixed — client
+
+- **`updated_uris: null` no longer raises `'NoneType' object is not
+  subscriptable`.** Four methods read
+  `response_data.get('updated_uris', [None])[0]`, and `get(k, default)` does not
+  apply the default when the key is PRESENT AND NULL — which the server sends
+  when it has none. The result was reported as a client-side error with the
+  server's actual answer discarded. **Latent before this release** for any
+  response whose `updated_uri` is falsy; a refused conditional write is simply
+  the first response shaped that way. If you have been seeing that error, you
+  will now get the real response.
+
+### Added — server
+
+- **The write-side half of all of the above**: `if_unmodified_since` on
+  `POST /api/graphs/kgentities/kgframes`, `POST /api/graphs/kgframes` and
+  `POST /api/graphs/kgframes/kgslots`, compared inside the write transaction and
+  under the entity or frame lock — anywhere else is a race of its own. Sending
+  one precondition for a write covering several frames is `INVALID_REQUEST`, not
+  `CONFLICT`: a precondition names one version of one thing, and narrowing it
+  silently to one frame would report success while leaving the rest unguarded.
+
+- **A write is now bounded as a whole** (`VITALGRAPH_WRITE_DEADLINE_S`, default
+  25 s). `statement_timeout` bounds each statement, `lock_timeout` each lock
+  wait, and `idle_in_transaction_session_timeout` bounds idleness by destroying
+  the connection — nothing bounded the write itself, so a write that parked
+  between statements ended as a loss the caller could not see.
+
+### Fixed — server
+
+- **A write no longer waits for an `ANALYZE`.** `add_rdf_quads_batch_bulk`
+  awaited `maybe_analyze` inside the CALLER's transaction; against a 60 s
+  `idle_in_transaction_session_timeout` and ANALYZEs running 60–98 s, the
+  connection was terminated and the write lost. Scheduled on the internal pool
+  instead, at all three sites.
+
+- **A refused subject write is no longer reported as written.** Five sites
+  discarded `update_subjects_graph`'s False return and answered with the URIs
+  they INTENDED to write.
+
+- **`frame_slot`'s pre-delete filter is indexable again** — a subquery arm
+  compiled to a hashed SubPlan and forced a sequential scan. 384x locally
+  (37–348 ms and 11,260 buffers → 0.045 ms and 215 buffers).
+
 ## 0.0.42 — 2026-09-24
 
 21 commits since 0.0.41 (2026-09-22). THE CLIENT CHANGES in this release, which

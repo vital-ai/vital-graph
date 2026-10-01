@@ -198,3 +198,53 @@ class TestTheRefusalSurvivesTheClimb:
             "vitalgraph.model.result_status", fromlist=["_SUCCESS_STATUSES"]
         )._SUCCESS_STATUSES
         assert str(AmbiguousPrecondition(3)).count("3") >= 1
+
+
+class TestTheEntityIsStampedOnceAndInTheTransaction:
+    """The post-write touch is gone from the WRITE paths and kept on the DELETE.
+
+    `issues/253`. Once `update_subjects_graph` stamps the entity inside the write
+    transaction and under the entity lock, the old touch is not merely duplicate
+    work on a path that was timing out — it reopens the race the in-transaction
+    stamp closes. It ran after the COMMIT and outside the LOCK, so a caller
+    reading between the two gets the transaction's value, the touch replaces it,
+    and that caller's next conditional write is refused with nobody else having
+    written. A spurious conflict, and the autosave that prompted this issue sends
+    tens of writes a minute for one lead.
+
+    Deletion is the opposite case and is asserted here too, because the obvious
+    tidy-up is to remove all three: a frame DELETE does not go through the
+    guarded write, so nothing else stamps the entity, and dropping its touch
+    would make a deletion invisible to a caller watching the version.
+    """
+
+    def _calls_touch(self, func):
+        fn = _function(kgentities_endpoint, func)
+        return any(
+            getattr(n.func, "id", None) == "touch_entity_modification_time"
+            or getattr(n.func, "attr", None) == "touch_entity_modification_time"
+            for n in ast.walk(fn) if isinstance(n, ast.Call))
+
+    @pytest.mark.parametrize("func", ["_create_or_update_frames",
+                                      "_update_entity_frames"])
+    def test_the_write_paths_do_not_touch_after_committing(self, func):
+        assert not self._calls_touch(func), (
+            f"{func} stamps the entity inside its transaction AND touches it "
+            f"afterwards, outside the lock — the second one can refuse a write "
+            f"nobody raced")
+
+    def test_the_delete_path_still_does(self):
+        assert self._calls_touch("_delete_entity_frames"), (
+            "frame deletion does not go through the guarded write, so without "
+            "this the entity version does not move when a frame is removed")
+
+    @pytest.mark.parametrize("func", ["_create_or_update_frames",
+                                      "_update_entity_frames"])
+    def test_the_write_paths_still_stamp_in_the_transaction(self, func):
+        # The other half of the claim: the touch is removable only BECAUSE the
+        # guarded write stamps. Asserting the removal alone would pass just as
+        # well if both halves were missing.
+        module_src = inspect.getsource(kgentities_endpoint)
+        src = ast.get_source_segment(
+            module_src, _function(kgentities_endpoint, func))
+        assert "if_unmodified_since=if_unmodified_since" in src

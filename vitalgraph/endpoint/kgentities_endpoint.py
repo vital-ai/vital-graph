@@ -1699,17 +1699,21 @@ class KGEntitiesEndpoint:
             if result.success:
                 self.logger.debug(f"Successfully created/updated {result.frame_count} frame objects")
                 
-                # Touch entity modification time after frame write (T4)
-                if entity_uri:
-                    try:
-                        from datetime import datetime, timezone
-                        from ..kg_impl.kg_server_properties import touch_entity_modification_time
-                        await touch_entity_modification_time(
-                            backend_adapter, space_id, graph_id, entity_uri,
-                            datetime.now(timezone.utc),
-                        )
-                    except Exception as _te:
-                        self.logger.warning(f"touch_entity_modification_time failed (non-critical): {_te}")
+                # The entity stamp is written INSIDE the write transaction and
+                # under the entity lock now, by `update_subjects_graph`'s
+                # compare-and-set (`issues/253`). The post-write touch that used
+                # to live here is REMOVED, not merely redundant:
+                #
+                #   it ran after the COMMIT and outside the LOCK, which is the
+                #   exact race the in-transaction stamp closes. A caller reading
+                #   between the commit and the touch gets the transaction's
+                #   value, the touch then replaces it, and that caller's next
+                #   conditional write is refused with nobody else having
+                #   written — a spurious conflict, on a path whose autosave
+                #   sends tens of writes a minute for one lead.
+                #
+                # It also cost an extra SPARQL update per write on the path this
+                # issue exists because it was timing out.
 
                 # Invalidate entity graph cache (frame write changes the entity graph)
                 if entity_uri:
@@ -2195,6 +2199,12 @@ class KGEntitiesEndpoint:
             result = await processor.delete_frames(space_id, full_graph_uri, entity_uri, frame_uris)
             
             # Touch entity modification time and invalidate cache after frame deletion (T6)
+            #
+            # THIS ONE STAYS, unlike the two on the write paths (`issues/253`).
+            # Deletion does not go through `update_subjects_graph`, so nothing
+            # stamps the entity inside a transaction here — removing this by
+            # symmetry with the write paths would leave a frame deletion
+            # invisible to a caller watching the entity's version.
             if result.deleted_frame_uris:
                 try:
                     from datetime import datetime, timezone
@@ -2481,16 +2491,21 @@ class KGEntitiesEndpoint:
                 if failure_messages:
                     message += f", {len(failed_updates)} frame(s) failed: {'; '.join(failure_messages)}"
                 
-                # Touch entity modification time after frame update (T5)
-                try:
-                    from datetime import datetime, timezone
-                    from ..kg_impl.kg_server_properties import touch_entity_modification_time
-                    await touch_entity_modification_time(
-                        backend_adapter, space_id, graph_id, entity_uri,
-                        datetime.now(timezone.utc),
-                    )
-                except Exception as _te:
-                    self.logger.warning(f"touch_entity_modification_time failed (non-critical): {_te}")
+                # The entity stamp is written INSIDE the write transaction and
+                # under the entity lock now, by `update_subjects_graph`'s
+                # compare-and-set (`issues/253`). The post-write touch that used
+                # to live here is REMOVED, not merely redundant:
+                #
+                #   it ran after the COMMIT and outside the LOCK, which is the
+                #   exact race the in-transaction stamp closes. A caller reading
+                #   between the commit and the touch gets the transaction's
+                #   value, the touch then replaces it, and that caller's next
+                #   conditional write is refused with nobody else having
+                #   written — a spurious conflict, on a path whose autosave
+                #   sends tens of writes a minute for one lead.
+                #
+                # It also cost an extra SPARQL update per write on the path this
+                # issue exists because it was timing out.
 
                 # Invalidate entity graph cache (frame update changes the entity graph)
                 await self._invalidate_entity_cache(space_id, graph_id, entity_uri)
