@@ -262,3 +262,25 @@ touch the shared shape.
     a skip rule that is slightly wrong deletes rows it should have kept.
   * **No timing was taken.** The costs above are row counts and query counts, not
     measured latency.
+
+## Reproducing these numbers
+
+`test_scripts/entity_registry/test_fuzzy_prod_check.py` re-measures them. READ-ONLY — every query is a SELECT or
+a `find_similar` call, so it is safe against production.
+
+    python test_scripts/entity_registry/test_fuzzy_prod_check.py              # all checks
+    python test_scripts/entity_registry/test_fuzzy_prod_check.py --offline    # the arithmetic only, no database
+
+A known-open defect reports **KNOWN**, not a failure: both of these issues are
+open and unbuilt, and a checker that exits non-zero forever is one people learn
+to ignore. It exits non-zero only for a REGRESSION, and reports **FIXED** when a
+documented defect stops reproducing — which means the issue's numbers no longer
+describe the system and should be re-measured before they are trusted.
+
+The duplicate-name clusters are DISCOVERED, not hardcoded: this file names three
+of its eight and says "five more", so a fixed list could not reproduce the 8/8.
+Discovery also keeps customer names out of the checker.
+
+Verified on 2026-10-01 to reproduce the jaccard values (0.000 and 0.333), both
+head-to-head scores (83.3 and 90.0) and both omission-variant shingle counts
+(1 and 5) exactly as recorded above.
