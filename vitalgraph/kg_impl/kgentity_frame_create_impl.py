@@ -28,7 +28,8 @@ from ai_haley_kg_domain.model.KGSlot import KGSlot
 from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
 
 # Backend adapter import
-from vitalgraph.kg_impl.kg_backend_utils import KGBackendInterface, StaleWrite
+from vitalgraph.kg_impl.kg_backend_utils import (
+    GuardUnsatisfiable, KGBackendInterface, StaleWrite)
 from vitalgraph.kg_impl.edge_uris import edge_uri
 
 
@@ -254,7 +255,7 @@ class KGEntityFrameCreateProcessor:
                     frame_count=0,
                 )
                 
-        except StaleWrite:
+        except (StaleWrite, GuardUnsatisfiable):
             # A REFUSAL, not a failure, and the difference is the whole point
             # (`issues/253`): the caller must be told its entity moved so it can
             # re-read and merge, where a generic failure tells it to give up or
@@ -590,7 +591,7 @@ class KGEntityFrameCreateProcessor:
                 self.logger.error(f"❌ Atomic frame {operation_mode} failed")
                 return False
                 
-        except StaleWrite:
+        except (StaleWrite, GuardUnsatisfiable):
             raise                     # a refusal must reach the caller as one
         except Exception as e:
             self.logger.error(f"Error in atomic frame {operation_mode}: {e}")
@@ -985,7 +986,7 @@ class KGEntityFrameCreateProcessor:
                 self.logger.error(f"❌ Atomic frame creation failed")
                 return False
             
-        except StaleWrite:
+        except (StaleWrite, GuardUnsatisfiable):
             raise                     # a refusal must reach the caller as one
         except Exception as e:
             self.logger.error(f"Error executing frame creation: {e}")

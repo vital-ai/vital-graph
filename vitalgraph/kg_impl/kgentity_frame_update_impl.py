@@ -18,7 +18,8 @@ from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 
 # Backend adapter import
-from vitalgraph.kg_impl.kg_backend_utils import KGBackendInterface, StaleWrite
+from vitalgraph.kg_impl.kg_backend_utils import (
+    GuardUnsatisfiable, KGBackendInterface, StaleWrite)
 
 
 @dataclass
@@ -203,7 +204,7 @@ class KGEntityFrameUpdateProcessor:
                     error=create_result.message,
                 )
             
-        except StaleWrite:
+        except (StaleWrite, GuardUnsatisfiable):
             raise                     # a refusal must reach the caller as one
         except Exception as e:
             self.logger.error(f"❌ Error in frame update process: {e}")

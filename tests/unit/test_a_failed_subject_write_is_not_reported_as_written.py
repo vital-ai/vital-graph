@@ -8,6 +8,20 @@ never happened: `issues/242`'s shape ("a failed frame delete reports success in
 four fields") and `issues/245`'s ("logs the URIs it SUBMITTED, not what was
 stored").
 
+THREE OF THOSE SITES ARE GONE, not fixed. `_store_frames_in_backend` and the
+relation write helpers were DELETED on 2026-10-01 as REDUNDANT: each duplicated
+a live path that already does the job and already checks its write —
+`KGFrameCreateProcessor.create_frame` for frames, and
+`KGRelationsCreateProcessor.create_or_update_relations` (via `store_objects`,
+checking `result.success`) for relations. Nothing calls the versions that were
+removed, so the guard they carried could never fire and could not be exercised
+through the API.
+
+This file used to test all three, and the docstring it gave them admitted they
+were "reachable only through helpers nothing calls today" — which was the moment
+to delete them rather than pin their behaviour. What remains covers the two live
+slot paths.
+
 AND IT STAYS A 200, DELIBERATELY. `issues/253` weighed 503 + `Retry-After` —
 which the client's own retry policy would have retried unaided — and chose to
 keep the status code: a refused write is a `STORE_FAILED` domain fault in an HTTP
@@ -88,16 +102,6 @@ class TestTheHelpersRaise:
             await endpoint._update_frame_slots_in_backend(
                 backend, "sp", GRAPH, [slot])
         assert backend.calls == 1
-
-    @pytest.mark.asyncio
-    async def test_a_refused_frame_store_raises(self, endpoint):
-        from ai_haley_kg_domain.model.KGFrame import KGFrame
-
-        frame = KGFrame()
-        frame.URI = FRAME
-        with pytest.raises(SubjectWriteFailed, match="frame write"):
-            await endpoint._store_frames_in_backend(
-                RefusingBackend(), "sp", GRAPH, [frame])
 
     @pytest.mark.asyncio
     async def test_the_happy_path_still_returns_the_uris(self, endpoint, slot):
@@ -203,43 +207,3 @@ class TestTheHandlerReportsItAsADomainFault:
         assert response.status == OperationStatus.CREATED
         assert response.success is True
         assert response.created_uris == [SLOT]
-
-
-class Relationish:
-    """What `_update_relations_in_space` actually requires of a relation: a URI
-    and `to_rdf()`. It takes `List` and duck-types, so this is the contract."""
-
-    URI = "http://vital.ai/haley.ai/domain/KGRelation/rel-1"
-
-    def to_rdf(self):
-        from rdflib import Literal, URIRef
-        return [(URIRef(self.URI), URIRef("urn:p"), Literal("v"))]
-
-
-class TestRelationWrite:
-    """Reachable only through helpers nothing calls today, so these pin the
-    signal rather than a response: whoever wires them up has to handle it."""
-
-    @pytest.mark.asyncio
-    async def test_a_refused_relation_update_raises(self):
-        from vitalgraph.endpoint.kgrelations_endpoint import KGRelationsEndpoint
-
-        endpoint = KGRelationsEndpoint(space_manager=None, auth_dependency=None)
-        endpoint._get_backend_adapter = _refusing_adapter
-
-        with pytest.raises(SubjectWriteFailed, match="relation update"):
-            await endpoint._update_relations_in_space("sp", GRAPH, [Relationish()])
-
-    @pytest.mark.asyncio
-    async def test_a_refused_relation_upsert_raises(self):
-        from vitalgraph.endpoint.kgrelations_endpoint import KGRelationsEndpoint
-
-        endpoint = KGRelationsEndpoint(space_manager=None, auth_dependency=None)
-        endpoint._get_backend_adapter = _refusing_adapter
-
-        with pytest.raises(SubjectWriteFailed, match="relation upsert"):
-            await endpoint._upsert_relations_in_space("sp", GRAPH, [Relationish()])
-
-
-async def _refusing_adapter(space_id):
-    return RefusingBackend()

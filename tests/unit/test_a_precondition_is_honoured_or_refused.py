@@ -25,6 +25,46 @@ from vitalgraph.kg_impl.kg_backend_utils import (
     AmbiguousStamp, StaleWrite, UnguardableWrite, _compare_stamp)
 
 
+# The five functions that ANSWER a refused conditional write. Each already maps
+# `StaleWrite`; each must map `GuardUnsatisfiable` too, or it reaches a broad
+# handler and becomes the 500 the convention forbids.
+ENTRY_POINTS = [
+    ("vitalgraph.endpoint.kgentities_endpoint", "_create_or_update_frames"),
+    ("vitalgraph.endpoint.kgentities_endpoint", "_update_entity_frames"),
+    ("vitalgraph.endpoint.kgframes_endpoint", "_create_frames"),
+    ("vitalgraph.endpoint.kgframes_endpoint", "_create_frame_slots"),
+    ("vitalgraph.endpoint.kgframes_endpoint", "_update_frame_slots"),
+]
+
+
+def _handler_catching(module_name, func_name, exc_name):
+    """The `except` clause in *func_name* that catches *exc_name*, or None.
+
+    Over the AST, because the handlers are not written uniformly: two catch it
+    as `except (SubjectWriteFailed, GuardUnsatisfiable)` and three as a bare
+    `except GuardUnsatisfiable`. A string count sees one of those shapes and
+    silently misses the other — which it did, on the first run of this test.
+    """
+    mod = __import__(module_name, fromlist=[module_name.rsplit('.', 1)[-1]])
+    src = inspect.getsource(mod)
+    tree = ast.parse(src)
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
+               and n.name == func_name), None)
+    assert fn is not None, f"{module_name}.{func_name} not found — renamed?"
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Try):
+            continue
+        for h in node.handlers:
+            t = h.type
+            if t is None:
+                continue
+            parts = t.elts if isinstance(t, ast.Tuple) else [t]
+            if any(getattr(pp, "id", None) == exc_name for pp in parts):
+                return src, h
+    return src, None
+
+
 class FakeConn:
     """Only what `_compare_stamp` touches."""
 
@@ -133,18 +173,76 @@ class TestAPreconditionWithNothingToCompareIsRefused:
 
     def test_it_is_distinct_from_the_callers_mistake(self):
         # `AmbiguousPrecondition` is the caller sending one stamp for several
-        # frames — answered INVALID_REQUEST. This is a wiring error in a call
-        # site, so it is deliberately NOT mapped to a 4xx: a 500 naming the
-        # subjects is the correct answer to "asked for a guarantee without the
-        # means to provide it".
+        # frames — answered INVALID_REQUEST, because the caller must change what
+        # it SENDS. This is a wiring error in a call site, so it is a different
+        # status; it is NOT a different status CLASS. Both are HTTP 200.
         from vitalgraph.kg_impl.kg_backend_utils import AmbiguousPrecondition
 
         assert not issubclass(UnguardableWrite, AmbiguousPrecondition)
-        from vitalgraph.endpoint import kgframes_endpoint
-        src = inspect.getsource(kgframes_endpoint)
-        assert "except UnguardableWrite" not in src, (
-            "mapping this to a response would hide a wiring bug behind a "
-            "caller-facing status")
+
+    def test_it_answers_in_the_body_and_not_with_a_500(self):
+        """The convention: 200 with a status, unless the SERVICE is failing.
+
+        This assertion replaces one that said the opposite. An earlier version
+        of this test — and two docstrings two files away — claimed a 500 was
+        correct here, and a reviewer reading them recommended adding a bare
+        `raise` that would have produced exactly that. `result_status.py` is
+        unambiguous: `STORE_FAILED` is "write failed for a describable data
+        reason", `ERROR` is "server-level internal error". A wiring error and a
+        violated data invariant are describable data reasons.
+        """
+        from vitalgraph.kg_impl.kg_backend_utils import GuardUnsatisfiable
+        from vitalgraph.model.result_status import (
+            OperationStatus, _SUCCESS_STATUSES)
+
+        missing = [
+            f"{m.rsplit('.', 1)[-1]}.{f}" for m, f in ENTRY_POINTS
+            if _handler_catching(m, f, "GuardUnsatisfiable")[1] is None]
+        assert not missing, (
+            "these answer StaleWrite but not GuardUnsatisfiable, so an "
+            f"undecidable guard 500s instead of answering: {missing}")
+
+        assert issubclass(UnguardableWrite, GuardUnsatisfiable)
+        assert issubclass(AmbiguousStamp, GuardUnsatisfiable)
+        assert OperationStatus.STORE_FAILED not in _SUCCESS_STATUSES
+
+    def test_the_reason_reaches_the_body_not_only_the_log(self):
+        """`STORE_FAILED` promises a describable reason; it has to be IN there.
+
+        These were collapsed into `update_subjects_graph`'s bare `False`, so the
+        caller built a fresh `SubjectWriteFailed("slot update", N)` and the body
+        said "slot update, N subjects" while the real cause — the subjects, or
+        the conflicting stamps — lived only in the log. `StaleWrite` already
+        re-raised and reached the body with its own message; these now do too.
+        """
+        from vitalgraph.kg_impl import kg_backend_utils
+
+        src = inspect.getsource(kg_backend_utils.SparqlSQLBackendAdapter
+                                .update_subjects_graph)
+        assert "except GuardUnsatisfiable" in src, (
+            "collapsed into `return False`, the cause cannot reach the body")
+
+        # And every handler must RENDER it rather than compose over it.
+        for module_name, func_name in ENTRY_POINTS:
+            msrc, handler = _handler_catching(
+                module_name, func_name, "GuardUnsatisfiable")
+            assert handler is not None, f"{func_name} does not answer it at all"
+            # EVERY `message=` in the handler, not merely one of them.
+            # `_create_frames` returns from two branches, so "`str(e)` appears
+            # somewhere in the handler" passed while one branch dropped the
+            # reason — caught by reverting that branch and seeing this test
+            # still pass.
+            messages = [
+                ast.get_source_segment(msrc, kw.value) or ""
+                for call in ast.walk(handler)
+                if isinstance(call, ast.Call)
+                for kw in call.keywords if kw.arg == "message"]
+            assert messages, f"{func_name} returns no message at all"
+            bare = [m for m in messages if "e" not in m or "str(e)" not in m]
+            assert not bare, (
+                f"{func_name} answers the undecidable guard with a composed "
+                f"message that drops the reason, so STORE_FAILED carries no "
+                f"describable one: {bare}")
 
     def test_the_message_names_the_subjects(self):
         e = UnguardableWrite(["urn:a", "urn:b"])

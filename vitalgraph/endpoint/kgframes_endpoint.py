@@ -66,7 +66,8 @@ from ..kg_impl.kg_backend_utils import create_backend_adapter
 from ..cache.count_cache import _count_cache
 from ..auth.role_dependencies import require_space_read, require_space_write
 from .impl.impl_utils import SubjectWriteFailed
-from ..kg_impl.kg_backend_utils import AmbiguousPrecondition, StaleWrite
+from ..kg_impl.kg_backend_utils import (
+    AmbiguousPrecondition, GuardUnsatisfiable, StaleWrite)
 from functools import partial
 from ..utils.bounded_gather import bounded_gather
 
@@ -243,6 +244,20 @@ class KGFramesEndpoint:
                     updated_uri="", updated_count=0)
             return FrameCreateResponse(
                 status=OperationStatus.CONFLICT, message=str(e),
+                created_count=0, created_uris=[], slots_created=0)
+        except GuardUnsatisfiable as e:
+            # A DESCRIBABLE DATA REASON, so STORE_FAILED in a 200 — not the
+            # 500 that an unhandled exception becomes (`issues/253`; see
+            # `GuardUnsatisfiable` and `model/result_status.py`). `str(e)` is
+            # the point: it names the subjects, or the conflicting stamps.
+            from ..model.kgframes_model import FrameCreateResponse, FrameUpdateResponse
+            self.logger.error("Frame write undecidable: %s", e)
+            if str(operation_mode).lower() == "update":
+                return FrameUpdateResponse(
+                    status=OperationStatus.STORE_FAILED, message=str(e),
+                    updated_uri="", updated_count=0)
+            return FrameCreateResponse(
+                status=OperationStatus.STORE_FAILED, message=str(e),
                 created_count=0, created_uris=[], slots_created=0)
         except AmbiguousPrecondition as e:
             # The caller's request, not the data: one stamp cannot cover several
@@ -1881,7 +1896,7 @@ class KGFramesEndpoint:
             return SlotCreateResponse(
                 status=OperationStatus.CONFLICT, message=str(e),
                 created_count=0, created_uris=[])
-        except SubjectWriteFailed as e:
+        except (SubjectWriteFailed, GuardUnsatisfiable) as e:
             # A REFUSED write is a domain fault, not a server fault: HTTP 200 with
             # `STORE_FAILED`, which derives `success=false`. `issues/253` decided
             # this deliberately over a 503 — see `model/result_status.py` for the
@@ -1977,7 +1992,7 @@ class KGFramesEndpoint:
             return SlotUpdateResponse(
                 status=OperationStatus.CONFLICT, message=str(e),
                 updated_count=0, updated_uris=[])
-        except SubjectWriteFailed as e:
+        except (SubjectWriteFailed, GuardUnsatisfiable) as e:
             # Domain fault, HTTP 200, `success=false` (`issues/253`).
             self.logger.error("Frame slot update did not happen: %s", e)
             return SlotUpdateResponse(
@@ -2575,7 +2590,8 @@ class KGFramesEndpoint:
 
         except HTTPException:
             raise
-        except (StaleWrite, AmbiguousPrecondition):
+        except (StaleWrite, AmbiguousPrecondition,
+                GuardUnsatisfiable):
             # Past the mode handler, to be answered by `_create_frames`
             # (`issues/253`). This handler turns anything else into a 500, and
             # it turned the refusal into one too — a caller cannot tell a
@@ -2647,7 +2663,8 @@ class KGFramesEndpoint:
 
         except HTTPException:
             raise
-        except (StaleWrite, AmbiguousPrecondition):
+        except (StaleWrite, AmbiguousPrecondition,
+                GuardUnsatisfiable):
             # Past the mode handler, to be answered by `_create_frames`
             # (`issues/253`). This handler turns anything else into a 500, and
             # it turned the refusal into one too — a caller cannot tell a
@@ -2695,7 +2712,8 @@ class KGFramesEndpoint:
 
         except HTTPException:
             raise
-        except (StaleWrite, AmbiguousPrecondition):
+        except (StaleWrite, AmbiguousPrecondition,
+                GuardUnsatisfiable):
             # Past the mode handler, to be answered by `_create_frames`
             # (`issues/253`). This handler turns anything else into a 500, and
             # it turned the refusal into one too — a caller cannot tell a
@@ -2800,7 +2818,8 @@ class KGFramesEndpoint:
 
         except HTTPException:
             raise
-        except (StaleWrite, AmbiguousPrecondition):
+        except (StaleWrite, AmbiguousPrecondition,
+                GuardUnsatisfiable):
             # Past the mode handler, to be answered by `_create_frames`
             # (`issues/253`). This handler turns anything else into a 500, and
             # it turned the refusal into one too — a caller cannot tell a
@@ -2839,108 +2858,8 @@ class KGFramesEndpoint:
             self.logger.error(f"Error checking frame existence: {e}")
             return False
     
-    async def _store_frames_in_backend(self, backend, space_id: str, graph_id: str, objects: List[GraphObject]) -> List[str]:
-        """
-        Store VitalSigns frame objects in backend using atomic update_quads.
-        
-        Queries existing triples for all subject URIs first, then uses a single
-        transaction for delete + insert to prevent triple accumulation.
-
-        NOT ON A LIVE PATH, and that is why it carries no conditional write
-        (`issues/253`). Its only callers are `_update_frames_in_backend` and
-        `_upsert_frames_in_backend`, and NOTHING calls either of those — the live
-        `/kgframes` write goes through `KGFrameCreateProcessor`, which takes the
-        frame-graph lock itself. Left alone rather than extended: a guard here
-        would be untestable through the API, which is the same reason
-        `kgentities_endpoint._delete_frame_by_uri` was deleted rather than
-        repaired. One unit test calls this directly to pin that a failed subject
-        write is not reported as written, which is the only reason it is still
-        here.
-        """
-        try:
-            frame_uris = []
-            for obj in objects:
-                if isinstance(obj, KGFrame):
-                    frame_uris.append(str(obj.URI))
-            
-            # Step 1: Build insert quads from VitalSigns objects (preserve RDFLib objects)
-            triples = await asyncio.to_thread(GraphObject.to_triples_list, objects)
-            insert_quads = [(str(s), str(p), o, graph_id) for s, p, o in triples]
-            
-            if not insert_quads:
-                return frame_uris
-            
-            # Step 2: Subject-level delete + insert (safe path)
-            subject_uris = list({str(obj.URI) for obj in objects
-                                 if hasattr(obj, 'URI') and obj.URI})
-            
-            if hasattr(backend, 'update_subjects_graph'):
-                # CHECK IT. `update_subjects_graph` reports failure — including a
-                # lock timeout — by returning False, and this discarded it and
-                # returned the URIs it INTENDED to write, so a write that did not
-                # happen was reported as frames created (`issues/253`, and the
-                # same shape as `issues/242` and `issues/245`).
-                if not await backend.update_subjects_graph(
-                        space_id, graph_id, subject_uris, insert_quads):
-                    raise SubjectWriteFailed("frame write", len(subject_uris))
-            else:
-                delete_quads = []
-                if subject_uris:
-                    subject_values = " ".join(f"<{uri}>" for uri in subject_uris)
-                    query = f"""SELECT ?subject ?predicate ?object WHERE {{
-                        GRAPH <{graph_id}> {{
-                            VALUES ?subject {{ {subject_values} }}
-                            ?subject ?predicate ?object .
-                        }}
-                    }}"""
-                    
-                    results = await backend.execute_sparql_query(space_id, query)
-                    
-                    bindings = []
-                    if isinstance(results, dict) and 'results' in results and isinstance(results['results'], dict):
-                        bindings = results['results'].get('bindings', [])
-                    elif isinstance(results, list):
-                        bindings = results
-                    
-                    from vitalgraph.kg_impl.kgentity_frame_create_impl import _sparql_binding_to_rdflib
-                    for row in bindings:
-                        if isinstance(row, dict):
-                            s = str(row['subject'].get('value', '')) if isinstance(row.get('subject'), dict) else str(row.get('subject', ''))
-                            p = str(row['predicate'].get('value', '')) if isinstance(row.get('predicate'), dict) else str(row.get('predicate', ''))
-                            o = _sparql_binding_to_rdflib(row.get('object', ''))
-                            if s and p and o is not None:
-                                delete_quads.append((s, p, o, graph_id))
-                
-                await backend.update_quads(space_id, graph_id, delete_quads, insert_quads)
-            
-            return frame_uris
-            
-        except Exception as e:
-            self.logger.error(f"Error storing frames in backend: {e}")
-            raise
     
-    async def _update_frames_in_backend(self, backend, space_id: str, graph_id: str, objects: List[GraphObject]) -> List[str]:
-        """
-        Update VitalSigns objects in backend via atomic update_quads.
-        
-        Delegates to _store_frames_in_backend which handles atomic
-        delete + insert in a single transaction.
-        """
-        try:
-            return await self._store_frames_in_backend(backend, space_id, graph_id, objects)
-            
-        except Exception as e:
-            self.logger.error(f"Error updating frames in backend: {e}")
-            raise
     
-    async def _upsert_frames_in_backend(self, backend, space_id: str, graph_id: str, objects: List[GraphObject]) -> List[str]:
-        """Upsert VitalSigns objects in backend via atomic update_quads."""
-        try:
-            return await self._store_frames_in_backend(backend, space_id, graph_id, objects)
-            
-        except Exception as e:
-            self.logger.error(f"Error upserting frames in backend: {e}")
-            raise
     
     async def _delete_frame_from_backend(self, backend, space_id: str, graph_id: str, frame_uri: str) -> bool:
         """Delete frame and all objects in its frame graph using frameGraphURI grouping.
@@ -3135,19 +3054,27 @@ class KGFramesEndpoint:
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             return []
     
-    # NOTE: _update_frames_in_backend and _upsert_frames_in_backend are defined
-    # earlier in the class and delegate to _store_frames_in_backend which uses
-    # atomic update_quads.  The second definitions below are kept as overrides
-    # for the slot-related sub-section of the endpoint.
+    # `_store_frames_in_backend`, `_update_frames_in_backend` and
+    # `_upsert_frames_in_backend` were DELETED here 2026-10-01 (`issues/253`).
+    #
+    # REDUNDANT, which is the reason — not merely uncalled. The live standalone
+    # frame write is `KGFrameCreateProcessor.create_frame`, reached from
+    # `_create_frames` through the mode handlers, and it writes through the same
+    # `update_subjects_graph` with the frame-graph lock these did not take. So
+    # the capability survives in one place instead of two, and NOTHING IS LOST —
+    # which is the test `kgentities_endpoint._delete_frame_by_uri` was deleted
+    # against, and the clause that matters in it.
+    #
+    # Weaker than that precedent in one respect, stated so nobody over-reads
+    # this: `_delete_frame_by_uri` had ALSO never executed (it raised TypeError
+    # on every invocation), so there was no behaviour to preserve at all. These
+    # three would most likely have worked if wired up. They were deleted because
+    # the live path already does the job, not because they were broken.
+    #
+    # They were also a closed cycle — the first called only by the other two,
+    # which nothing called — and `_upsert_frames_in_backend` was defined TWICE,
+    # which the note that used to live here described as deliberate overrides.
 
-    async def _upsert_frames_in_backend(self, backend, space_id: str, graph_id: str, objects: List[GraphObject]) -> List[str]:
-        """Upsert VitalSigns objects in backend via atomic update_quads."""
-        try:
-            return await self._store_frames_in_backend(backend, space_id, graph_id, objects)
-            
-        except Exception as e:
-            self.logger.error(f"Error upserting frames in backend: {e}")
-            raise
 
     # Removed duplicate _delete_frame_from_backend method - using the implementation above
     # Removed duplicate _get_all_triples_for_subjects method - using the implementation above

@@ -33,7 +33,8 @@ from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
 
 # Backend adapter import
 from vitalgraph.kg_impl.kg_backend_utils import (
-    AmbiguousPrecondition, KGBackendInterface, StaleWrite)
+    AmbiguousPrecondition, GuardUnsatisfiable, KGBackendInterface,
+    StaleWrite)
 
 
 def _sparql_binding_to_rdflib(binding):
@@ -201,7 +202,8 @@ class KGFrameCreateProcessor:
                     frame_count=0,
                 )
 
-        except (StaleWrite, AmbiguousPrecondition):
+        except (StaleWrite, AmbiguousPrecondition,
+                GuardUnsatisfiable):
             # A REFUSAL, not a failure: the caller must be told its frame moved
             # (re-read and merge) or that its precondition was ambiguous (send
             # one frame). A generic failure tells it to give up (`issues/253`).
@@ -365,7 +367,8 @@ class KGFrameCreateProcessor:
 
             return success
 
-        except (StaleWrite, AmbiguousPrecondition):
+        except (StaleWrite, AmbiguousPrecondition,
+                GuardUnsatisfiable):
             raise                     # a refusal must reach the caller as one
         except Exception as e:
             self.logger.error(f"Error executing frame creation: {e}")
@@ -440,7 +443,8 @@ class KGFrameCreateProcessor:
 
             return success
 
-        except (StaleWrite, AmbiguousPrecondition):
+        except (StaleWrite, AmbiguousPrecondition,
+                GuardUnsatisfiable):
             raise                     # a refusal must reach the caller as one
         except Exception as e:
             self.logger.error(f"Error in atomic frame update: {e}")

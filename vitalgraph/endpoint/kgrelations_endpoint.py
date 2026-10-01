@@ -39,7 +39,6 @@ from fastapi import Response as FastAPIResponse
 
 
 from ..auth.role_dependencies import require_space_read, require_space_write
-from .impl.impl_utils import SubjectWriteFailed
 
 
 class OperationMode(str, Enum):
@@ -306,6 +305,22 @@ class KGRelationsEndpoint:
                 created_count=0,
                 created_uris=[],
             )
+
+    # `_store_relations_in_space`, `_update_relations_in_space` and
+    # `_upsert_relations_in_space` were DELETED 2026-10-01 (`issues/253`),
+    # REDUNDANT rather than merely uncalled: the method below is the live
+    # relation write, and it already verifies its result —
+    # `KGRelationsCreateProcessor.create_or_update_relations` writes through
+    # `store_objects` and checks `result.success`. So the capability survives in
+    # one place and nothing is lost, which is the test
+    # `kgentities_endpoint._delete_frame_by_uri` was deleted against.
+    #
+    # One of them carried an UNHANDLED `SubjectWriteFailed`, and the absence of
+    # a handler for it looked exactly like the defect `issues/253` fixed on the
+    # frame paths. It was reported as a live 500 before anyone checked for
+    # callers; it had none, and the live path above never raised it. If these
+    # are ever reintroduced, the handler maps it to `STORE_FAILED` in a 200 as
+    # `kgframes_endpoint` does — never the 500 an unhandled exception becomes.
 
     async def _create_or_update_relations(
         self, space_id: str, graph_id: str, quads: List[Quad],
@@ -586,158 +601,8 @@ class KGRelationsEndpoint:
         
         return create_backend_adapter(backend_impl)
     
-    async def _store_relations_in_space(self, space_id: str, graph_id: str, relations: List) -> List[str]:
-        """Store relations in space and return created URIs."""
-        if not relations:
-            return []
-        
-        backend = await self._get_backend_adapter(space_id)
-        if not backend:
-            return []
-        
-        # Convert relations to RDF quads (preserves RDFLib objects from to_rdf())
-        from rdflib import URIRef
-        quads = []
-        created_uris = []
-        
-        for relation in relations:
-            relation_triples = relation.to_rdf()
-            graph_uri = URIRef(graph_id)
-            for s, p, o in relation_triples:
-                quads.append((s, p, o, graph_uri))
-            
-            if hasattr(relation, 'URI'):
-                created_uris.append(relation.URI)
-        
-        if quads:
-            # Use the adapter's backend which delegates to dual-write coordinator
-            await backend.backend.add_rdf_quads_batch(space_id, quads)
-        
-        return created_uris
     
-    async def _update_relations_in_space(self, space_id: str, graph_id: str, relations: List) -> List[str]:
-        """Update relations in space using atomic update_quads."""
-        if not relations:
-            return []
-        
-        backend = await self._get_backend_adapter(space_id)
-        if not backend:
-            return []
-        
-        from rdflib import URIRef
-        from vitalgraph.kg_impl.kgentity_frame_create_impl import _sparql_binding_to_rdflib
-        
-        updated_uris = []
-        
-        for relation in relations:
-            if not hasattr(relation, 'URI'):
-                continue
-            
-            relation_uri = str(relation.URI)
-            
-            # Build insert quads from VitalSigns (preserves RDFLib objects)
-            relation_triples = relation.to_rdf()
-            insert_quads = [(str(s), str(p), o, graph_id) for s, p, o in relation_triples]
-            
-            # Subject-level delete + insert (safe path)
-            if hasattr(backend, 'update_subjects_graph'):
-                if insert_quads or True:  # always delete existing
-                    # Checked, not discarded: appending the URI after an
-                    # unchecked write reported a relation as updated when the
-                    # write had failed (`issues/253`).
-                    if not await backend.update_subjects_graph(
-                            space_id, graph_id, [relation_uri], insert_quads):
-                        raise SubjectWriteFailed(
-                            f"relation update ({relation_uri})", 1)
-                    updated_uris.append(relation_uri)
-            else:
-                query = f"""SELECT ?p ?o WHERE {{
-                    GRAPH <{graph_id}> {{
-                        <{relation_uri}> ?p ?o .
-                    }}
-                }}"""
-                results = await backend.execute_sparql_query(space_id, query)
-                
-                delete_quads = []
-                bindings = []
-                if isinstance(results, dict) and 'results' in results:
-                    bindings = results['results'].get('bindings', [])
-                elif isinstance(results, list):
-                    bindings = results
-                
-                for binding in bindings:
-                    if isinstance(binding, dict) and 'p' in binding and 'o' in binding:
-                        p_value = binding['p'].get('value', '') if isinstance(binding['p'], dict) else str(binding['p'])
-                        o_rdflib = _sparql_binding_to_rdflib(binding.get('o', ''))
-                        if p_value and o_rdflib is not None:
-                            delete_quads.append((relation_uri, p_value, o_rdflib, graph_id))
-                
-                if delete_quads or insert_quads:
-                    await backend.update_quads(space_id, graph_id, delete_quads, insert_quads)
-                    updated_uris.append(relation_uri)
-        
-        return updated_uris
     
-    async def _upsert_relations_in_space(self, space_id: str, graph_id: str, relations: List) -> List[str]:
-        """Upsert relations in space using atomic update_quads."""
-        if not relations:
-            return []
-        
-        backend = await self._get_backend_adapter(space_id)
-        if not backend:
-            return []
-        
-        from rdflib import URIRef
-        from vitalgraph.kg_impl.kgentity_frame_create_impl import _sparql_binding_to_rdflib
-        
-        upserted_uris = []
-        
-        for relation in relations:
-            if not hasattr(relation, 'URI'):
-                continue
-            
-            relation_uri = str(relation.URI)
-            
-            # Build insert quads from VitalSigns (preserves RDFLib objects)
-            relation_triples = relation.to_rdf()
-            insert_quads = [(str(s), str(p), o, graph_id) for s, p, o in relation_triples]
-            
-            # Subject-level delete + insert (safe path)
-            if hasattr(backend, 'update_subjects_graph'):
-                if insert_quads:
-                    # Checked, not discarded (`issues/253`).
-                    if not await backend.update_subjects_graph(
-                            space_id, graph_id, [relation_uri], insert_quads):
-                        raise SubjectWriteFailed(
-                            f"relation upsert ({relation_uri})", 1)
-                    upserted_uris.append(relation_uri)
-            else:
-                query = f"""SELECT ?p ?o WHERE {{
-                    GRAPH <{graph_id}> {{
-                        <{relation_uri}> ?p ?o .
-                    }}
-                }}"""
-                results = await backend.execute_sparql_query(space_id, query)
-                
-                delete_quads = []
-                bindings = []
-                if isinstance(results, dict) and 'results' in results:
-                    bindings = results['results'].get('bindings', [])
-                elif isinstance(results, list):
-                    bindings = results
-                
-                for binding in bindings:
-                    if isinstance(binding, dict) and 'p' in binding and 'o' in binding:
-                        p_value = binding['p'].get('value', '') if isinstance(binding['p'], dict) else str(binding['p'])
-                        o_rdflib = _sparql_binding_to_rdflib(binding.get('o', ''))
-                        if p_value and o_rdflib is not None:
-                            delete_quads.append((relation_uri, p_value, o_rdflib, graph_id))
-                
-                if insert_quads:
-                    await backend.update_quads(space_id, graph_id, delete_quads, insert_quads)
-                    upserted_uris.append(relation_uri)
-        
-        return upserted_uris
     
     def _extract_count_from_results(self, count_results: Dict[str, Any]) -> int:
         """Extract count from SPARQL count query results."""

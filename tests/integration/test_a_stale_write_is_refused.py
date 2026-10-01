@@ -23,7 +23,8 @@ from rdflib import Literal, URIRef
 
 from .conftest import skip_no_infra
 
-from vitalgraph.kg_impl.kg_backend_utils import StaleWrite, create_backend_adapter
+from vitalgraph.kg_impl.kg_backend_utils import (
+    AmbiguousStamp, StaleWrite, UnguardableWrite, create_backend_adapter)
 from vitalgraph.kg_impl.kg_server_properties import MODIFICATION_TIME_URI
 from vitalgraph.db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
 
@@ -196,3 +197,63 @@ class TestTheStampIsReadableAndNotJustPresent:
                 _generate_term_uuid(arena["graph"], 'U'))
         assert got, ("the write deleted its own stamp: it was written before the "
                      "subject-level DELETE that covers the same subject")
+
+
+class TestAnUndecidableGuardCarriesItsReason:
+    """The guard cannot be decided, so nothing is written AND the reason escapes.
+
+    `STORE_FAILED` promises "a describable data reason", and the description has
+    to reach the response. These were collapsed into `update_subjects_graph`'s
+    bare `False`, so the caller built a fresh `SubjectWriteFailed("slot update",
+    N)` and the real cause lived only in the log — the body said how MANY
+    subjects, never which, nor why. Driven against a real database because the
+    claim is about what escapes a real transaction.
+    """
+
+    async def test_a_precondition_with_no_subject_refuses_and_says_so(self, arena):
+        with pytest.raises(UnguardableWrite) as e:
+            await arena["adapter"].update_subjects_graph(
+                arena["space_id"], arena["graph"], [FRAME],
+                [(URIRef(FRAME), URIRef("urn:p"), Literal("nope"),
+                  URIRef(arena["graph"]))],
+                # The defect's shape: a precondition, and nothing to compare it
+                # against. This used to write unconditionally and report success.
+                if_unmodified_since="2026-01-01T00:00:00+00:00")
+        assert FRAME in str(e.value)
+
+    async def test_nothing_was_written_by_the_refused_call(self, arena):
+        before = await arena["value"]()
+        with pytest.raises(UnguardableWrite):
+            await arena["adapter"].update_subjects_graph(
+                arena["space_id"], arena["graph"], [FRAME],
+                [(URIRef(FRAME), URIRef("urn:p"), Literal("must-not-land"),
+                  URIRef(arena["graph"]))],
+                if_unmodified_since="2026-01-01T00:00:00+00:00")
+        assert await arena["value"]() == before
+
+    async def test_two_stamps_refuse_and_name_both(self, arena):
+        # Break the single-valued invariant deliberately — `issues/173` is it
+        # breaking by accident — then show the guard refuses instead of picking
+        # whichever row the scan reaches first.
+        from vitalgraph.kg_impl.kg_backend_utils import _insert_stamp, _stamp_keys
+
+        t, s_uuid, p_uuid, g_uuid = _stamp_keys(
+            arena["space_id"], arena["graph"], ENTITY)
+        async with arena["pool"].acquire() as c:
+            await _insert_stamp(c, t, s_uuid, p_uuid, g_uuid,
+                                "2099-01-01T00:00:00+00:00", subject_uri=ENTITY)
+        try:
+            with pytest.raises(AmbiguousStamp) as e:
+                await arena["write"]("x", expect=await arena["stamp"]())
+            assert "2" in str(e.value)
+        finally:
+            # Put the entity back to one stamp, or every later test in this
+            # module inherits the broken invariant.
+            async with arena["pool"].acquire() as c:
+                await c.execute(
+                    f"DELETE FROM {t['rdf_quad']} WHERE subject_uuid = $1 "
+                    f"AND predicate_uuid = $2 AND context_uuid = $3",
+                    s_uuid, p_uuid, g_uuid)
+                await _insert_stamp(c, t, s_uuid, p_uuid, g_uuid,
+                                    "2026-10-01T00:00:00+00:00",
+                                    subject_uri=ENTITY)

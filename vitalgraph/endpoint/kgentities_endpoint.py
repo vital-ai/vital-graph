@@ -45,7 +45,7 @@ from ..kg_impl.kgentity_update_impl import KGEntityUpdateProcessor
 from ..kg_impl.kg_validation_utils import KGGroupingURIManager, KGOwnershipValidator
 from ..kg_impl.kgentity_delete_impl import KGEntityDeleteProcessor
 from ..kg_impl.kgentity_frame_create_impl import KGEntityFrameCreateProcessor
-from ..kg_impl.kg_backend_utils import StaleWrite
+from ..kg_impl.kg_backend_utils import GuardUnsatisfiable, StaleWrite
 from ..kg_impl.kgentity_frame_update_impl import KGEntityFrameUpdateProcessor
 import vital_ai_vitalsigns as vitalsigns
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
@@ -1738,6 +1738,16 @@ class KGEntitiesEndpoint:
 
         except HTTPException:
             raise
+        except GuardUnsatisfiable as e:
+            # A DESCRIBABLE DATA REASON, so STORE_FAILED in a 200 — not the
+            # 500 that an unhandled exception becomes (`issues/253`; see
+            # `GuardUnsatisfiable` and `model/result_status.py`). `str(e)` is
+            # the point: it names the subjects, or the conflicting stamps.
+            from ..model.kgframes_model import FrameCreateResponse
+            self.logger.error("Frame write undecidable: %s", e)
+            return FrameCreateResponse(
+                status=OperationStatus.STORE_FAILED, message=str(e),
+                created_count=0, created_uris=[])
         except StaleWrite as e:
             # Same refusal on the create/upsert path (`issues/253`).
             from ..model.kgframes_model import FrameCreateResponse
@@ -2529,6 +2539,16 @@ class KGEntitiesEndpoint:
 
         except HTTPException:
             raise
+        except GuardUnsatisfiable as e:
+            # A DESCRIBABLE DATA REASON, so STORE_FAILED in a 200 — not the
+            # 500 that an unhandled exception becomes (`issues/253`; see
+            # `GuardUnsatisfiable` and `model/result_status.py`). `str(e)` is
+            # the point: it names the subjects, or the conflicting stamps.
+            from ..model.kgframes_model import FrameUpdateResponse
+            self.logger.error("Frame update undecidable: %s", e)
+            return FrameUpdateResponse(
+                status=OperationStatus.STORE_FAILED, message=str(e),
+                updated_uri="", updated_count=0)
         except StaleWrite as e:
             # REFUSED, not applied over the top (`issues/253`). A domain outcome
             # in a 200 body, per this codebase's convention: the caller re-reads,

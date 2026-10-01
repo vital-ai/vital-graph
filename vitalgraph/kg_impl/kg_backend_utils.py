@@ -339,20 +339,48 @@ class StaleWrite(Exception):
             f"modification time {expected!r}, found {actual!r}")
 
 
-class UnguardableWrite(Exception):
+class GuardUnsatisfiable(Exception):
+    """The conditional write could not be DECIDED, so nothing was written.
+
+    `issues/253`. Base for the two ways that happens — no subject to compare
+    against, and more than one stored stamp. Shared so an endpoint widens one
+    `except` tuple instead of growing a handler per case, and so the next such
+    case inherits the mapping.
+
+    **STORE_FAILED in an HTTP 200, not a 500.** This codebase answers every
+    DOMAIN outcome in the body and reserves non-200 for the service itself
+    failing (`model/result_status.py`: `STORE_FAILED` is "write failed for a
+    describable data reason"; `ERROR` is "server-level internal error"). A
+    wiring error and a violated data invariant are both describable data
+    reasons. An earlier draft of these docstrings asserted the opposite three
+    times over, and a reviewer reading them recommended adding a bare `raise`
+    that would have produced exactly the 500 the convention forbids — which is
+    the best evidence that what a comment claims about status codes matters as
+    much as the code.
+
+    And the reason has to REACH the body, which is the other half of what
+    `STORE_FAILED` promises. These carry the useful text — the subjects, or the
+    conflicting stamps — so they are re-raised out of `update_subjects_graph`
+    rather than collapsed into its `False`, and the handlers render `str(e)`.
+    Collapsing them left the cause log-only while the body said "slot update, N
+    subjects".
+    """
+
+
+class UnguardableWrite(GuardUnsatisfiable):
     """`if_unmodified_since` was supplied with no subject to compare it against.
 
-    `issues/253`. A wiring error, not a caller error: `update_subjects_graph`
-    derives the guarded subject from `guard_subject`, falling back to the first
-    lock URI, and with neither it cannot honour the precondition. The previous
-    code SKIPPED the comparison in that case and returned success, which is an
-    unconditional write reported as a conditional one.
+    A wiring error, not a caller error: `update_subjects_graph` derives the
+    guarded subject from `guard_subject`, falling back to the first lock URI, and
+    with neither it cannot honour the precondition. The previous code SKIPPED the
+    comparison in that case and returned success, which is an unconditional write
+    reported as a conditional one.
 
-    Loud on purpose. Every live call site passes `guard_subject`, so reaching
-    this means a new call site threaded the parameter without the means to
-    satisfy it, and a 500 naming the subjects says so. Compare
-    `AmbiguousPrecondition`, which IS the caller's doing and is answered as
-    INVALID_REQUEST.
+    Every live call site passes `guard_subject`, so reaching this means a new
+    call site threaded the parameter without the means to satisfy it. Named in
+    the response rather than hidden: see `GuardUnsatisfiable` on why that is a
+    200 with `STORE_FAILED` and not a 500. Compare `AmbiguousPrecondition`,
+    which is the CALLER's doing and is answered as INVALID_REQUEST.
     """
 
     def __init__(self, subject_uris):
@@ -363,7 +391,7 @@ class UnguardableWrite(Exception):
             f"rather than writing unconditionally. subjects={self.subject_uris[:5]}")
 
 
-class AmbiguousStamp(Exception):
+class AmbiguousStamp(GuardUnsatisfiable):
     """The guarded subject carries MORE THAN ONE modification stamp.
 
     `issues/253`. The read used `LIMIT 1` with no `ORDER BY`, so a violated
@@ -373,10 +401,14 @@ class AmbiguousStamp(Exception):
 
     The invariant is real and `issues/173` is it being broken, which is why the
     stamp WRITE replaces rather than adds. This is the read side defending
-    itself. Not reported as a CONFLICT: a conflict tells the caller to re-read
-    and retry, and re-reading cannot resolve duplicate stamps, so that would be
-    an infinite loop. Only CONDITIONAL writes are affected; an unconditional
-    write never reads the stamp.
+    itself. Only CONDITIONAL writes are affected; an unconditional write never
+    reads the stamp.
+
+    NOT a CONFLICT and not a 500. A conflict tells the caller to re-read and
+    retry, and re-reading cannot resolve duplicate stamps, so that would loop
+    forever. A 500 is for the service failing; duplicate stored values are a
+    describable data reason, which is `STORE_FAILED` — with both values in the
+    message, because that is the only place the next person can see them.
     """
 
     def __init__(self, subject_uri: str, found):
@@ -1506,13 +1538,16 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                             # Unreachable today: every call site passes
                             # `guard_subject` equal to its single lock URI, from
                             # required route parameters. So this is a wiring
-                            # error in a FUTURE call site, not a caller mistake
-                            # — which is why it raises loudly here instead of
-                            # being mapped to a 4xx like `AmbiguousPrecondition`
-                            # (that one IS the caller's doing). A 500 naming the
-                            # subjects is the right answer to "the server was
-                            # asked for a guarantee it was not given the means
-                            # to provide".
+                            # error in a FUTURE call site rather than a caller
+                            # mistake — which is why it is not a 4xx like
+                            # `AmbiguousPrecondition` (that one IS the caller's
+                            # doing). It answers STORE_FAILED in a 200, naming
+                            # the subjects: a wiring error is still a
+                            # DESCRIBABLE DATA REASON, and this codebase
+                            # reserves non-200 for the service itself failing.
+                            # An earlier version of this comment said 500, and
+                            # a reviewer reading it recommended a change that
+                            # would have produced one.
                             if not _guard:
                                 raise UnguardableWrite(subject_uris)
                             await _compare_stamp(
@@ -1630,6 +1665,15 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             # REFUSED, not applied over the top. A domain outcome the caller can
             # act on: re-read, re-merge, retry.
             self.logger.warning("update_subjects_graph REFUSED (stale): %s", e)
+            raise
+        except GuardUnsatisfiable as e:
+            # UNDECIDABLE, so nothing was written. Re-raised rather than
+            # collapsed into the `False` below, because these carry the only
+            # description of what went wrong and `STORE_FAILED` promises the
+            # body will have one. Collapsed, the caller built a fresh
+            # `SubjectWriteFailed("slot update", N)` and the cause lived only in
+            # the log.
+            self.logger.error("update_subjects_graph UNDECIDABLE: %s", e)
             raise
         except WriteDeadlineExceeded as e:
             # Reported, not silent — which is the whole difference from the
