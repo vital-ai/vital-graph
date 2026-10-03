@@ -1,9 +1,30 @@
 # Reads Block 10s at a Time on a TRUNCATE Lock the Maintenance Job Holds
 
-## Status: FIXED IN `main`, UNDEPLOYED — 49a63fb (bound the wait) + 3f8d7b5
-## (aggregate before truncating). This is the P1. Measured end-to-end against
-## prod 2026-09-02. It stays "open" until the deploy proves it on production;
-## the verification is in the runbook §15 Phase 1.
+## Status: FIXED AND DEPLOYED — 49a63fb (bound the wait) + 3f8d7b5 (aggregate
+## before truncating). Measured end-to-end against prod 2026-09-02. The deploy
+## has now proved it: see "What production shows" below.
+
+## What production shows, 2026-10-02
+
+The symptom this issue is named for is gone. A 12.8h window carrying 380,585
+events contains ONE stats-read lock failure — the only problem line in it:
+
+    generator - _load_missing_pair_stats - WARNING -
+      semijoin gate: pair stats lookup failed, plan will be chosen
+      without leaf statistics: canceling statement due to lock timeout
+
+Against the original incident's TWO failures inside a single request, each
+waiting the full 10s. No `LIST_ENTITIES` request shows the 10s-multiple gap this
+issue's "Verifying" section says to look for, and the write path is flat over
+30h (p99 0.218s, worst 1.07s).
+
+**One caveat, and it is why `issues/255` exists.** The warning does not say
+which read failed or how long it waited, and `_load_missing_pair_stats` has a
+second read — the bounded `rdf_quad` count at `generator.py:1145` — that this
+issue did NOT fence. So this occurrence is consistent with the fix working
+(~100ms at the fenced site) and also with a full 10s wait at the unfenced one.
+It cannot distinguish them. The five fenced sites are verified by their absence
+from the logs; the sixth read is tracked in `issues/255`.
 
 ## The single measurement that identifies it
 
