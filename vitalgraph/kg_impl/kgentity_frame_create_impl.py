@@ -31,6 +31,7 @@ from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
 from vitalgraph.kg_impl.kg_backend_utils import (
     GuardUnsatisfiable, KGBackendInterface, StaleWrite)
 from vitalgraph.kg_impl.edge_uris import edge_uri
+from vitalgraph.kg_impl.frame_grouping import UngroupableSlot, assign_frame_groupings
 
 
 def _sparql_binding_to_rdflib(binding) -> Any:
@@ -255,7 +256,7 @@ class KGEntityFrameCreateProcessor:
                     frame_count=0,
                 )
                 
-        except (StaleWrite, GuardUnsatisfiable):
+        except (StaleWrite, GuardUnsatisfiable, UngroupableSlot):
             # A REFUSAL, not a failure, and the difference is the whole point
             # (`issues/253`): the caller must be told its entity moved so it can
             # re-read and merge, where a generic failure tells it to give up or
@@ -379,50 +380,20 @@ class KGEntityFrameCreateProcessor:
         Returns:
             List[GraphObject]: Objects with assigned grouping URIs
         """
-        # Build set of frame URIs for lookup
-        frame_uris = {str(obj.URI) for obj in frame_objects if isinstance(obj, KGFrame)}
-        
-        # Build slot→frame ownership map from Edge_hasKGSlot edges
-        # Edge source = frame URI, edge destination = slot URI
-        slot_to_frame = {}
+        # Frame-level grouping is decided in ONE place (`issues/257`): every
+        # frame with itself, every slot with the frame its Edge_hasKGSlot
+        # names, and nothing the client sent survives. This kept a client's
+        # value for a slot whose edge was not in a multi-frame payload, and for
+        # an edge whose source frame was not in the payload. Raises
+        # `UngroupableSlot` for a slot it cannot place.
+        assign_frame_groupings(frame_objects)
+
         for obj in frame_objects:
-            if isinstance(obj, VITAL_Edge) and hasattr(obj, 'edgeSource') and hasattr(obj, 'edgeDestination'):
-                src = str(obj.edgeSource) if obj.edgeSource else None
-                dst = str(obj.edgeDestination) if obj.edgeDestination else None
-                if src in frame_uris and dst:
-                    slot_to_frame[dst] = src
-        
-        # Fallback: if single frame, all non-frame objects belong to it
-        fallback_frame_uri = None
-        if len(frame_uris) == 1:
-            fallback_frame_uri = next(iter(frame_uris))
-        
-        for obj in frame_objects:
-            # Set entity-level grouping URI on ALL objects
+            # Entity-level grouping on ALL objects
             obj.kGGraphURI = entity_uri
-            
-            # Set frame-level grouping URI based on object type
-            if isinstance(obj, Edge_hasEntityKGFrame):
-                # Entity-to-frame edges are NOT part of any frame graph — skip frameGraphURI
-                pass
-            elif isinstance(obj, KGFrame):
-                obj.frameGraphURI = str(obj.URI)
-                # Entity-enclosed frames are Aspects
-                if not getattr(obj, 'kGFormType', None):
-                    obj.kGFormType = "http://vital.ai/ontology/haley-ai-kg#KGFormType_Aspect"
-            elif isinstance(obj, KGSlot):
-                owning_frame = slot_to_frame.get(str(obj.URI), fallback_frame_uri)
-                if owning_frame:
-                    obj.frameGraphURI = owning_frame
-                else:
-                    self.logger.warning(f"⚠️ No owning frame found for slot {obj.URI}")
-            elif isinstance(obj, VITAL_Edge):
-                # Slot edges belong to the frame they source from
-                src = str(obj.edgeSource) if hasattr(obj, 'edgeSource') and obj.edgeSource else None
-                if src in frame_uris:
-                    obj.frameGraphURI = src
-                elif fallback_frame_uri:
-                    obj.frameGraphURI = fallback_frame_uri
+            # Entity-enclosed frames are Aspects
+            if isinstance(obj, KGFrame) and not getattr(obj, 'kGFormType', None):
+                obj.kGFormType = "http://vital.ai/ontology/haley-ai-kg#KGFormType_Aspect"
         
         return frame_objects
     
@@ -591,7 +562,7 @@ class KGEntityFrameCreateProcessor:
                 self.logger.error(f"❌ Atomic frame {operation_mode} failed")
                 return False
                 
-        except (StaleWrite, GuardUnsatisfiable):
+        except (StaleWrite, GuardUnsatisfiable, UngroupableSlot):
             raise                     # a refusal must reach the caller as one
         except Exception as e:
             self.logger.error(f"Error in atomic frame {operation_mode}: {e}")
@@ -896,7 +867,7 @@ class KGEntityFrameCreateProcessor:
                 self.logger.error(f"❌ Atomic frame creation failed")
                 return False
             
-        except (StaleWrite, GuardUnsatisfiable):
+        except (StaleWrite, GuardUnsatisfiable, UngroupableSlot):
             raise                     # a refusal must reach the caller as one
         except Exception as e:
             self.logger.error(f"Error executing frame creation: {e}")

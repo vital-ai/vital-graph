@@ -15,6 +15,7 @@ from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
 from ai_haley_kg_domain.model.KGEntity import KGEntity
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.KGSlot import KGSlot
+from .frame_grouping import assign_frame_groupings
 
 
 @dataclass
@@ -278,69 +279,33 @@ class KGGroupingURIManager:
     def __init__(self):
         self.logger = logging.getLogger(f"{__name__}.KGGroupingURIManager")
     
-    def set_dual_grouping_uris_with_frame_separation(self, objects: List[GraphObject], entity_uri: str) -> None:
+    def set_dual_grouping_uris_with_frame_separation(self, objects: List[GraphObject], entity_uri: str,
+                                                     owning_frame_uri: Optional[str] = None) -> None:
         """
         Set dual grouping URIs with frame separation logic.
         
-        This implements the same logic as the current KGEntities endpoint:
-        - Entity-level grouping (hasKGGraphURI) for complete entity graph retrieval
-        - Frame-level grouping (hasFrameGraphURI) for complete frame graph retrieval
+        - Entity-level grouping (hasKGGraphURI) = `entity_uri`, on every object.
+        - Frame-level grouping (hasFrameGraphURI) is decided by
+          `frame_grouping.assign_frame_groupings` (`issues/257`): every frame
+          with itself, every slot with the frame its Edge_hasKGSlot names, and
+          nothing the client sent survives. This grouped a slot only when its
+          frame AND edge were both in the payload, and otherwise left the
+          client's value in place.
         
         Args:
             objects: List of VitalSigns objects to process
             entity_uri: URI of the main entity
+            owning_frame_uri: the frame a route already knows its slots belong
+                to (the slot route), used for a slot no edge in the payload claims
+
+        Raises:
+            UngroupableSlot: a slot's owning frame cannot be determined.
         """
         try:
-            # Categorize objects by type
-            entities = [obj for obj in objects if isinstance(obj, KGEntity)]
-            frames = [obj for obj in objects if isinstance(obj, KGFrame)]
-            slots = [obj for obj in objects if isinstance(obj, KGSlot)]
-            edges = [obj for obj in objects if isinstance(obj, VITAL_Edge)]
-            
-            # Set entity-level grouping URI on all objects
             for obj in objects:
                 obj.kGGraphURI = entity_uri
-            
             self.logger.debug(f"Set kGGraphURI={entity_uri} on {len(objects)} objects")
-            
-            # Set frame-level grouping URIs using frame separation logic
-            self.logger.debug(f"Processing {len(frames)} frames, {len(slots)} slots, {len(edges)} edges for frame grouping")
-            
-            for frame in frames:
-                frame_uri = str(frame.URI)
-                
-                # Find all objects that belong to this frame
-                frame_objects = [frame]  # Include the frame itself
-                
-                # Find slots and edges connected to this frame
-                slots_found = 0
-                for edge in edges:
-                    if (edge.edgeSource and str(edge.edgeSource) == frame_uri and
-                        edge.edgeDestination):
-                        dest_uri = str(edge.edgeDestination)
-                        # Find the slot object
-                        for slot in slots:
-                            if str(slot.URI) == dest_uri:
-                                frame_objects.append(slot)
-                                # Also add the edge itself to frame objects
-                                frame_objects.append(edge)
-                                slots_found += 1
-                                break
-                
-                if slots_found > 0:
-                    self.logger.debug(f"Frame {frame_uri.split(':')[-2] if ':' in frame_uri else frame_uri}: found {slots_found} slots")
-                
-                # Set frame-level grouping URI on frame objects (including edges)
-                for obj in frame_objects:
-                    obj_type = type(obj).__name__
-                    self.logger.debug(f"Setting frameGraphURI on {obj_type} (URI: {obj.URI})")
-                    
-                    self.logger.debug(f"Object JSON: {obj.to_json()}")
-                
-                    obj.frameGraphURI = frame_uri
-            
-            self.logger.debug(f"Set dual grouping URIs for {len(objects)} objects with entity URI: {entity_uri}")
-            
+            assign_frame_groupings(objects, owning_frame_uri=owning_frame_uri)
         except Exception as e:
             self.logger.error(f"Error setting dual grouping URIs: {e}")
             raise

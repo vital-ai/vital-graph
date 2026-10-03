@@ -20,6 +20,7 @@ from vital_ai_vitalsigns.vitalsigns import VitalSigns
 # Backend adapter import
 from vitalgraph.kg_impl.kg_backend_utils import (
     GuardUnsatisfiable, KGBackendInterface, StaleWrite)
+from vitalgraph.kg_impl.frame_grouping import UngroupableSlot, assign_frame_groupings
 
 
 @dataclass
@@ -204,7 +205,7 @@ class KGEntityFrameUpdateProcessor:
                     error=create_result.message,
                 )
             
-        except (StaleWrite, GuardUnsatisfiable):
+        except (StaleWrite, GuardUnsatisfiable, UngroupableSlot):
             raise                     # a refusal must reach the caller as one
         except Exception as e:
             self.logger.error(f"❌ Error in frame update process: {e}")
@@ -411,15 +412,14 @@ class KGEntityFrameUpdateProcessor:
             frame_objects: List of frame objects to update
             entity_uri: URI of the parent entity
         """
-        try:
-            self.logger.info(f"🏷️  Assigning grouping URIs for {len(frame_objects)} frame objects")
-            
-            # Use the correct dual grouping URI function from graph_operations
-            from vitalgraph.utils.graph_operations import set_dual_grouping_uris
-            set_dual_grouping_uris(frame_objects, entity_uri, self.logger)
-            
-        except Exception as e:
-            self.logger.error(f"❌ Error assigning grouping URIs: {e}")
+        # The canonical grouping (`issues/257`). This ran
+        # `graph_operations.set_dual_grouping_uris` (module now deleted), which
+        # knew six slot classes, and SWALLOWED its errors. Not swallowed now: a slot that
+        # cannot be grouped is refused, before anything is written.
+        self.logger.info(f"🏷️  Assigning grouping URIs for {len(frame_objects)} frame objects")
+        assign_frame_groupings(frame_objects)
+        for obj in frame_objects:
+            obj.kGGraphURI = entity_uri
     
     def _extract_frame_uris_from_results(self, results: Dict[str, Any]) -> List[str]:
         """

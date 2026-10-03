@@ -46,6 +46,7 @@ from ..kg_impl.kg_validation_utils import KGGroupingURIManager, KGOwnershipValid
 from ..kg_impl.kgentity_delete_impl import KGEntityDeleteProcessor
 from ..kg_impl.kgentity_frame_create_impl import KGEntityFrameCreateProcessor
 from ..kg_impl.kg_backend_utils import GuardUnsatisfiable, StaleWrite
+from ..kg_impl.frame_grouping import UngroupableSlot, assign_frame_groupings
 import vital_ai_vitalsigns as vitalsigns
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
@@ -1164,6 +1165,10 @@ class KGEntitiesEndpoint:
 
         except HTTPException:
             raise
+        except UngroupableSlot as e:
+            # A caller error in a 200, not a server error (`issues/257`).
+            return EntityUpdateResponse(
+                status=OperationStatus.INVALID_REQUEST, message=str(e), updated_uri="")
         except Exception as e:
             self.logger.error(f"Error in UPDATE mode handling: {e}")
             raise HTTPException(status_code=500, detail=f"Error updating entities: {str(e)}")
@@ -1780,6 +1785,13 @@ class KGEntitiesEndpoint:
 
         except HTTPException:
             raise
+        except UngroupableSlot as e:
+            # A caller error in a 200 (`issues/257`): the request did not say
+            # which frame a slot belongs to, so nothing was written.
+            from ..model.kgframes_model import FrameCreateResponse
+            return FrameCreateResponse(
+                status=OperationStatus.INVALID_REQUEST, message=str(e),
+                created_count=0, created_uris=[])
         except GuardUnsatisfiable as e:
             # A DESCRIBABLE DATA REASON, so STORE_FAILED in a 200 — not the
             # 500 that an unhandled exception becomes (`issues/253`; see
@@ -1853,6 +1865,15 @@ class KGEntitiesEndpoint:
             replacement_frame_uris = [str(obj.URI) for obj in graph_objects if isinstance(obj, KGFrame) and hasattr(obj, 'URI')]
             if not replacement_frame_uris:
                 return FrameUpdateResponse(status=OperationStatus.INVALID_REQUEST, message="No KGFrame objects found in replacement graph", updated_uri="", updated_count=0)
+
+            # Decide the groupings BEFORE anything is deleted (`issues/257`).
+            # This route deletes the old frames with separate statements and
+            # then creates, so a slot refused at create time would leave the
+            # entity with neither the old frames nor the new ones.
+            try:
+                assign_frame_groupings(graph_objects)
+            except UngroupableSlot as e:
+                return FrameUpdateResponse(status=OperationStatus.INVALID_REQUEST, message=str(e), updated_uri="", updated_count=0)
             
             # Phase 1: Determine delete scope from EXISTING frames in the DB
             from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
@@ -2261,21 +2282,23 @@ class KGEntitiesEndpoint:
                     else:
                         self.logger.warning(f"Edge_hasKGSlot missing edgeSource: {graph_obj.URI}")
                 elif isinstance(graph_obj, KGSlot):
-                    # Find frame via Edge_hasKGSlot edgeDestination, or fall back to frameGraphURI / first frame
+                    # The slot's frame is the one its Edge_hasKGSlot names, or
+                    # the only frame in the request; otherwise it is REFUSED
+                    # (`issues/257`). This TOOK the client's frameGraphURI first,
+                    # and with several frames fell back to whichever came
+                    # first, so a client could file a slot under any frame.
+                    slot_uri = str(graph_obj.URI)
                     target_frame_uri = None
-                    if graph_obj.frameGraphURI:
-                        target_frame_uri = str(graph_obj.frameGraphURI)
-                    else:
-                        # Look for an Edge_hasKGSlot pointing to this slot
-                        slot_uri = str(graph_obj.URI)
-                        for other in graph_objects:
-                            if isinstance(other, Edge_hasKGSlot) and str(other.edgeDestination) == slot_uri:
-                                target_frame_uri = str(other.edgeSource)
-                                break
-                        if not target_frame_uri:
-                            frame_keys = list(frame_groups.keys())
-                            if frame_keys:
-                                target_frame_uri = frame_keys[0]
+                    for other in graph_objects:
+                        if isinstance(other, Edge_hasKGSlot) and str(other.edgeDestination) == slot_uri:
+                            target_frame_uri = str(other.edgeSource)
+                            break
+                    if not target_frame_uri:
+                        _req_frames = [str(o.URI) for o in graph_objects if isinstance(o, KGFrame)]
+                        if len(_req_frames) == 1:
+                            target_frame_uri = _req_frames[0]
+                        else:
+                            raise UngroupableSlot([slot_uri])
                     if target_frame_uri:
                         graph_obj.frameGraphURI = target_frame_uri
                         if target_frame_uri not in frame_groups:
@@ -2432,6 +2455,12 @@ class KGEntitiesEndpoint:
 
         except HTTPException:
             raise
+        except UngroupableSlot as e:
+            # A caller error in a 200 (`issues/257`).
+            from ..model.kgframes_model import FrameUpdateResponse
+            return FrameUpdateResponse(
+                status=OperationStatus.INVALID_REQUEST, message=str(e),
+                updated_uri="", updated_count=0)
         except GuardUnsatisfiable as e:
             # A DESCRIBABLE DATA REASON, so STORE_FAILED in a 200 — not the
             # 500 that an unhandled exception becomes (`issues/253`; see

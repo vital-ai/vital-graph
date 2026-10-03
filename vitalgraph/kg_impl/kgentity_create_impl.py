@@ -25,6 +25,7 @@ from ..model.result_status import OperationStatus
 from .kg_backend_utils import KGBackendInterface, BackendOperationResult
 from .edge_uris import edge_uri
 from .kg_validation_utils import KGEntityValidator, KGGroupingURIManager, KGOwnershipValidator, ValidationResult
+from .frame_grouping import UngroupableSlot, assign_frame_groupings
 
 
 class OperationMode(str, Enum):
@@ -145,6 +146,14 @@ class KGEntityCreateProcessor:
                             pass
                     self.grouping_manager.set_dual_grouping_uris_with_frame_separation(ent_objects, ent_uri)
                     self.logger.debug(f"🔍 Step 4: Set kGGraphURI={ent_uri} on {len(ent_objects)} objects")
+                # FRAME grouping over the WHOLE batch (`issues/257`). The loop
+                # above only reaches each entity and the edges touching it, so
+                # the batch's frames and slots were never grouped and kept
+                # whatever the client sent. Frame grouping does not depend on
+                # which entity owns a frame, so it is decided once here.
+                # (Their hasKGGraphURI in a multi-entity batch is still not
+                # assigned: an entity-grouping gap, recorded in issues/257.)
+                assign_frame_groupings(vitalsigns_objects)
             self.logger.debug(f"🔍 Dual grouping URIs set successfully")
 
             # Step 4b: Set kGFormType on entity-enclosed frames (Aspect)
@@ -179,6 +188,11 @@ class KGEntityCreateProcessor:
             else:
                 return self._create_error_response(operation_mode, f"Invalid operation_mode: {operation_mode}")
                 
+        except UngroupableSlot as e:
+            # A caller error, not a server one (`issues/257`).
+            resp = self._create_error_response(operation_mode, str(e))
+            resp.status = OperationStatus.INVALID_REQUEST
+            return resp
         except Exception as e:
             self.logger.error(f"Error processing entities: {e}")
             return self._create_error_response(operation_mode, f"Failed to process entities: {str(e)}")

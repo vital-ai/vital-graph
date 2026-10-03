@@ -68,6 +68,7 @@ from ..auth.role_dependencies import require_space_read, require_space_write
 from .impl.impl_utils import SubjectWriteFailed
 from ..kg_impl.kg_backend_utils import (
     AmbiguousPrecondition, GuardUnsatisfiable, StaleWrite)
+from ..kg_impl.frame_grouping import UngroupableSlot, assign_frame_groupings
 from functools import partial
 from ..utils.bounded_gather import bounded_gather
 
@@ -232,6 +233,17 @@ class KGFramesEndpoint:
 
         except HTTPException:
             raise
+        except UngroupableSlot as e:
+            # A caller error in a 200 (`issues/257`): the request did not say
+            # which frame a slot belongs to, so nothing was written.
+            from ..model.kgframes_model import FrameCreateResponse, FrameUpdateResponse
+            if str(operation_mode).lower() == "update":
+                return FrameUpdateResponse(
+                    status=OperationStatus.INVALID_REQUEST, message=str(e),
+                    updated_uri="", updated_count=0)
+            return FrameCreateResponse(
+                status=OperationStatus.INVALID_REQUEST, message=str(e),
+                created_count=0, created_uris=[], slots_created=0)
         except StaleWrite as e:
             # REFUSED because the FRAME moved (`issues/253`). A domain outcome in
             # a 200 body, per this codebase's convention: the caller re-reads,
@@ -1776,12 +1788,17 @@ class KGFramesEndpoint:
                     created_uris=[]
                 )
             
-            # Set frameGraphURI on slots to connect them to the frame
-            self._set_slot_frame_relationships(slots, frame_uri)
-            
             # Create Edge_hasKGSlot relationships
             enhanced_objects = self._create_frame_slot_edges(frame_uri, slots, vitalsigns_objects)
-            
+
+            # Groupings for the WHOLE payload, edges included (`issues/257`).
+            # This set them on the slots only, so the Edge_hasKGSlot edges this
+            # route creates itself were stored with no hasFrameGraphURI, and any
+            # edge the client sent kept the client's value. The URL's frame is
+            # the owning frame; the server's own edges are appended last, so
+            # they decide each slot.
+            assign_frame_groupings(enhanced_objects, owning_frame_uri=frame_uri)
+
             # Handle operation mode
             if operation_mode == OperationMode.CREATE:
                 # Verify slots don't already exist
@@ -2517,7 +2534,7 @@ class KGFramesEndpoint:
         except HTTPException:
             raise
         except (StaleWrite, AmbiguousPrecondition,
-                GuardUnsatisfiable):
+                GuardUnsatisfiable, UngroupableSlot):
             # Past the mode handler, to be answered by `_create_frames`
             # (`issues/253`). This handler turns anything else into a 500, and
             # it turned the refusal into one too — a caller cannot tell a
@@ -2590,7 +2607,7 @@ class KGFramesEndpoint:
         except HTTPException:
             raise
         except (StaleWrite, AmbiguousPrecondition,
-                GuardUnsatisfiable):
+                GuardUnsatisfiable, UngroupableSlot):
             # Past the mode handler, to be answered by `_create_frames`
             # (`issues/253`). This handler turns anything else into a 500, and
             # it turned the refusal into one too — a caller cannot tell a
@@ -2639,7 +2656,7 @@ class KGFramesEndpoint:
         except HTTPException:
             raise
         except (StaleWrite, AmbiguousPrecondition,
-                GuardUnsatisfiable):
+                GuardUnsatisfiable, UngroupableSlot):
             # Past the mode handler, to be answered by `_create_frames`
             # (`issues/253`). This handler turns anything else into a 500, and
             # it turned the refusal into one too — a caller cannot tell a
@@ -2672,6 +2689,16 @@ class KGFramesEndpoint:
                     updated_uri="",
                     updated_count=0
                 )
+
+            # Decide the groupings BEFORE anything is deleted (`issues/257`):
+            # the deletes below are separate statements, so a slot refused at
+            # create time would leave neither the old frames nor the new ones.
+            try:
+                assign_frame_groupings(objects)
+            except UngroupableSlot as e:
+                return FrameUpdateResponse(
+                    status=OperationStatus.INVALID_REQUEST, message=str(e),
+                    updated_uri="", updated_count=0)
             
             # Phase 1: Determine delete scope from EXISTING frames in the DB
             from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
@@ -2745,7 +2772,7 @@ class KGFramesEndpoint:
         except HTTPException:
             raise
         except (StaleWrite, AmbiguousPrecondition,
-                GuardUnsatisfiable):
+                GuardUnsatisfiable, UngroupableSlot):
             # Past the mode handler, to be answered by `_create_frames`
             # (`issues/253`). This handler turns anything else into a 500, and
             # it turned the refusal into one too — a caller cannot tell a
@@ -3706,6 +3733,11 @@ class KGFramesEndpoint:
 
         except HTTPException:
             raise
+        except UngroupableSlot as e:
+            # A caller error in a 200 (`issues/257`).
+            return FrameCreateResponse(
+                status=OperationStatus.INVALID_REQUEST, message=str(e),
+                created_count=0, created_uris=[], frames_created=0)
         except Exception as e:
             self.logger.error(f"Child frame creation failed: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Child frame creation failed: {e}")

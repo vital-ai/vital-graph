@@ -28,6 +28,7 @@ from vitalgraph.kg_impl.kg_backend_utils import (
     KGBackendInterface,
     BackendOperationResult
 )
+from vitalgraph.kg_impl.frame_grouping import UngroupableSlot, assign_frame_groupings
 
 
 @dataclass
@@ -150,6 +151,8 @@ class KGFrameHierarchicalProcessor:
                     error=result.error
                 )
                 
+        except UngroupableSlot:
+            raise                     # a caller error, answered INVALID_REQUEST
         except Exception as e:
             self.logger.error(f"Child frame creation failed: {e}", exc_info=True)
             return CreateFrameResult(
@@ -218,22 +221,15 @@ class KGFrameHierarchicalProcessor:
         Returns:
             List of objects with frameGraphURI assigned
         """
-        # Find frame URIs for ownership lookup
-        frame_uris = {str(obj.URI) for obj in objects if isinstance(obj, KGFrame)}
-        fallback_frame_uri = next(iter(frame_uris)) if len(frame_uris) == 1 else None
-        
+        # Decided in ONE place (`issues/257`), discarding anything the client
+        # sent. This set slots and edges only when the request held a single
+        # frame, so with two or more children every slot kept the client's
+        # value. Raises `UngroupableSlot` for a slot it cannot place.
+        assign_frame_groupings(objects)
         for obj in objects:
-            if isinstance(obj, KGFrame):
-                obj.frameGraphURI = str(obj.URI)
-                # Child frames are always Aspects
-                if not getattr(obj, 'kGFormType', None):
-                    obj.kGFormType = "http://vital.ai/ontology/haley-ai-kg#KGFormType_Aspect"
-                self.logger.debug(f"Frame {obj.URI}: frameGraphURI={obj.URI}")
-            else:
-                # Slots and edges belong to a frame
-                if fallback_frame_uri and hasattr(obj, 'frameGraphURI'):
-                    obj.frameGraphURI = fallback_frame_uri
-                    self.logger.debug(f"Object {getattr(obj, 'URI', '?')}: frameGraphURI={fallback_frame_uri}")
+            # Child frames are always Aspects
+            if isinstance(obj, KGFrame) and not getattr(obj, 'kGFormType', None):
+                obj.kGFormType = "http://vital.ai/ontology/haley-ai-kg#KGFormType_Aspect"
         
         return objects
     
@@ -267,8 +263,8 @@ class KGFrameHierarchicalProcessor:
             edge.edgeDestination = str(child_frame.URI)
             
             # No kGGraphURI — entity-scoped concept not used here
-            # frameGraphURI on structural edges is set to parent frame
-            edge.frameGraphURI = parent_frame_uri
+            # No frameGraphURI: a parent -> child link is in no frame's graph
+            # (`issues/257`, decided 2026-10-03).
             
             edges.append(edge)
             self.logger.debug(f"Created Edge_hasKGFrame: {parent_frame_uri} -> {child_frame.URI}")

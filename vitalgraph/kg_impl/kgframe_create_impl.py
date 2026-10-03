@@ -35,6 +35,7 @@ from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
 from vitalgraph.kg_impl.kg_backend_utils import (
     AmbiguousPrecondition, GuardUnsatisfiable, KGBackendInterface,
     StaleWrite)
+from vitalgraph.kg_impl.frame_grouping import UngroupableSlot, assign_frame_groupings
 
 
 def _sparql_binding_to_rdflib(binding):
@@ -203,7 +204,7 @@ class KGFrameCreateProcessor:
                 )
 
         except (StaleWrite, AmbiguousPrecondition,
-                GuardUnsatisfiable):
+                GuardUnsatisfiable, UngroupableSlot):
             # A REFUSAL, not a failure: the caller must be told its frame moved
             # (re-read and merge) or that its precondition was ambiguous (send
             # one frame). A generic failure tells it to give up (`issues/253`).
@@ -268,40 +269,15 @@ class KGFrameCreateProcessor:
 
         No kGGraphURI is set — that is an entity-scoped concept.
         """
-        # Build a map of frame URIs for lookup
-        frame_uris = {str(obj.URI) for obj in objects if isinstance(obj, KGFrame)}
-
-        # For slots/edges, find their owning frame via edge source
-        slot_to_frame = {}
-        for obj in objects:
-            if isinstance(obj, VITAL_Edge) and hasattr(obj, 'edgeSource') and hasattr(obj, 'edgeDestination'):
-                src = str(obj.edgeSource) if obj.edgeSource else None
-                dst = str(obj.edgeDestination) if obj.edgeDestination else None
-                if src in frame_uris and dst:
-                    slot_to_frame[dst] = src
-
-        # Fallback: if single frame, all non-frame objects belong to it
-        fallback_frame_uri = None
-        if len(frame_uris) == 1:
-            fallback_frame_uri = next(iter(frame_uris))
+        # Decided in ONE place (`issues/257`), discarding anything the client
+        # sent. Raises `UngroupableSlot` for a slot it cannot place; this kept
+        # the client's value for such a slot silently.
+        assign_frame_groupings(objects)
 
         for obj in objects:
-            if isinstance(obj, KGFrame):
-                obj.frameGraphURI = str(obj.URI)
-                # Standalone frames are Assertions (top-level independent facts)
-                if not getattr(obj, 'kGFormType', None):
-                    obj.kGFormType = "http://vital.ai/ontology/haley-ai-kg#KGFormType_Assertion"
-            elif isinstance(obj, KGSlot):
-                owning_frame = slot_to_frame.get(str(obj.URI), fallback_frame_uri)
-                if owning_frame:
-                    obj.frameGraphURI = owning_frame
-            elif isinstance(obj, VITAL_Edge):
-                # Edge belongs to the frame it sources from
-                src = str(obj.edgeSource) if hasattr(obj, 'edgeSource') and obj.edgeSource else None
-                if src in frame_uris:
-                    obj.frameGraphURI = src
-                elif fallback_frame_uri:
-                    obj.frameGraphURI = fallback_frame_uri
+            # Standalone frames are Assertions (top-level independent facts)
+            if isinstance(obj, KGFrame) and not getattr(obj, 'kGFormType', None):
+                obj.kGFormType = "http://vital.ai/ontology/haley-ai-kg#KGFormType_Assertion"
 
         return objects
 
@@ -368,7 +344,7 @@ class KGFrameCreateProcessor:
             return success
 
         except (StaleWrite, AmbiguousPrecondition,
-                GuardUnsatisfiable):
+                GuardUnsatisfiable, UngroupableSlot):
             raise                     # a refusal must reach the caller as one
         except Exception as e:
             self.logger.error(f"Error executing frame creation: {e}")
@@ -444,7 +420,7 @@ class KGFrameCreateProcessor:
             return success
 
         except (StaleWrite, AmbiguousPrecondition,
-                GuardUnsatisfiable):
+                GuardUnsatisfiable, UngroupableSlot):
             raise                     # a refusal must reach the caller as one
         except Exception as e:
             self.logger.error(f"Error in atomic frame update: {e}")

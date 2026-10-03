@@ -629,6 +629,12 @@ dead and are left as archive.
      - a slot's is the frame that links it by `Edge_hasKGSlot`;
      - an `Edge_hasKGSlot`'s is its source frame.
 
+     - an `Edge_hasKGFrame` (parent -> child) has NO grouping (decided
+       2026-10-03, `issues/257`), so the frame graph never includes the links
+       to child frames: a shallow `update`/`upsert` of a parent cannot unlink
+       its children, and `replace`'s subtree delete removes those links
+       explicitly, as the subtree primitive already specifies.
+
      So the 913–925 root-grouped child frames and their slots in the three
      production copies are regrouped under the child, and the bulk-loaded
      spaces are backfilled by the same rule. Nothing that a frame does not own

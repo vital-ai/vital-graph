@@ -262,75 +262,11 @@ def validate_frame_graph_structure(objects: List[Any]) -> Dict[str, Any]:
         }
 
 
-def analyze_frame_structure_for_grouping(objects: List[Any]) -> Dict[str, List[Any]]:
-    """Analyze entity graph objects to determine frame membership for grouping URI assignment.
-    
-    This function identifies which objects belong to which frames within an entity graph,
-    enabling proper dual grouping URI assignment (both entity-level and frame-level).
-    
-    Args:
-        objects: List of VitalSigns objects from an entity graph
-        
-    Returns:
-        Dict mapping frame URIs to lists of objects that belong to that frame:
-        {
-            'frame_uri_1': [frame_obj, slot_obj_1, slot_obj_2, edge_obj_1, edge_obj_2],
-            'frame_uri_2': [frame_obj, slot_obj_3, edge_obj_3],
-            ...
-        }
-    """
-    try:
-        # Import VitalSigns models
-        from ai_haley_kg_domain.model.KGFrame import KGFrame
-        from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
-        from ai_haley_kg_domain.model.KGIntegerSlot import KGIntegerSlot
-        from ai_haley_kg_domain.model.KGBooleanSlot import KGBooleanSlot
-        from ai_haley_kg_domain.model.KGDoubleSlot import KGDoubleSlot
-        from ai_haley_kg_domain.model.KGDateTimeSlot import KGDateTimeSlot
-        from ai_haley_kg_domain.model.KGEntitySlot import KGEntitySlot
-        from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
-        
-        # Separate objects by type
-        frames = [obj for obj in objects if isinstance(obj, KGFrame)]
-        slots = [obj for obj in objects if isinstance(obj, (KGTextSlot, KGIntegerSlot, KGBooleanSlot, KGDoubleSlot, KGDateTimeSlot, KGEntitySlot))]
-        frame_slot_edges = [obj for obj in objects if isinstance(obj, Edge_hasKGSlot)]
-        
-        # Build frame membership mapping
-        frame_structure = {}
-        
-        for frame in frames:
-            frame_uri = str(frame.URI)
-            frame_components = [frame]  # Start with the frame itself
-            
-            # Find slots connected to this frame
-            connected_slots = []
-            connecting_edges = []
-            
-            for edge in frame_slot_edges:
-                source_uri = str(edge.edgeSource) if hasattr(edge, 'edgeSource') else None
-                dest_uri = str(edge.edgeDestination) if hasattr(edge, 'edgeDestination') else None
-                
-                if source_uri == frame_uri:
-                    # This edge connects from this frame
-                    connecting_edges.append(edge)
-                    
-                    # Find the slot this edge connects to
-                    for slot in slots:
-                        if str(slot.URI) == dest_uri:
-                            connected_slots.append(slot)
-                            break
-            
-            # Add connected slots and edges to frame components
-            frame_components.extend(connected_slots)
-            frame_components.extend(connecting_edges)
-            
-            frame_structure[frame_uri] = frame_components
-        
-        return frame_structure
-        
-    except Exception as e:
-        logger.error(f"Error analyzing frame structure for grouping: {e}")
-        return {}
+# `analyze_frame_structure_for_grouping` was DELETED here 2026-10-03
+# (`issues/257`), with `vitalgraph/utils/graph_operations.py`, its only caller,
+# which nothing imported. It grouped six slot classes and left every other slot
+# with the client's grouping. Frame grouping is decided in
+# `kg_impl/frame_grouping.py`.
 
 
 def validate_parent_object_exists(parent_uri: str, available_objects: List[Any]) -> bool:
