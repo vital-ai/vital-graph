@@ -75,7 +75,7 @@ and **a frame with zero slots is indistinguishable from a frame whose slots were
 not fetched** — the exact ambiguity `issues/240` was written about, where the UI
 reported "No slots found for this frame" for a frame that had two.
 
-## Measured, local `cardiff_kg` 2026-09-29
+## Measured, local `the_kg_space` 2026-09-29
 
     Edge_hasKGFrame total                                  5,741
       ... whose source resolves to a KGFrame                5,443
@@ -166,7 +166,7 @@ the part actively misleading a caller today.
 
 ## Reproduce
 
-    psql -d cardiff_kg_local -At -c "..."   # the three counts above
+    psql -d the_kg_space_local -At -c "..."   # the three counts above
 
 Or by inspection: `_build_frame_graphs_query` binds `?frame` from a VALUES
 clause and every arm anchors on `?frame`. No arm mentions `Edge_hasKGFrame` or
