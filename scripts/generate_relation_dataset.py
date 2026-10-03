@@ -54,9 +54,15 @@ Structure generated
   root has exactly one manager. Backward fan-out is 1 by construction — a tree
   living *inside* the relation edge type, which is exactly why pooling by edge
   type loses information.
-* **Assertion frames** — top-level. A fraction leave `hasKGFormType` UNSET, since
-  unset defaults to assertion and a fixture that always states it cannot catch a
-  reader that requires the explicit triple.
+* **Assertion frames** — top-level, every one with an EXPLICIT
+  `hasKGFormType` (`issues/257`, decided 2026-10-03). A fraction used to leave it
+  unset, relying on "unset defaults to Assertion"; but that default is decided by
+  the ABSENCE of `hasFrameGraphURI`, and every frame is now grouped with itself,
+  so an unset frame here would read as an Aspect.
+* **Groupings** on every frame graph by the rule: a frame with itself, a slot and
+  its Edge_hasKGSlot with the frame, a parent -> child Edge_hasKGFrame with none;
+  and `hasKGGraphURI` = the person across the entity-attached Aspect frame and on
+  the person itself (`issues/091`'s self-link).
 * **Aspect frames** — attached to an entity, or beneath an assertion, so both
   parent kinds appear.
 * **Slots**, including `hasEntitySlotValue` pointing at entities with a skewed
@@ -104,6 +110,8 @@ HAS_FORM_TYPE = f"<{KG}hasKGFormType>"
 HAS_RELATION_TYPE = f"<{KG}hasKGRelationType>"
 HAS_TEXT_VALUE = f"<{KG}hasTextSlotValue>"
 HAS_ENTITY_VALUE = f"<{KG}hasEntitySlotValue>"
+HAS_FRAME_GRAPH = f"<{KG}hasFrameGraphURI>"
+HAS_KG_GRAPH = f"<{KG}hasKGGraphURI>"
 
 FORM_ASSERTION = f"<{KG}KGFormType_Assertion>"
 FORM_ASPECT = f"<{KG}KGFormType_Aspect>"
@@ -123,7 +131,6 @@ REPORTS_PER_MANAGER = 5
 
 MENTIONS_PER_PERSON = (0, 0, 1, 2)
 
-FORM_TYPE_UNSET_EVERY = 4
 
 # Entity-valued slot targets. wordnet measures in-degree avg 5.20 / max 1,342,
 # a 258x mean-to-max ratio; a hub set of a few thousandths reproduces that order.
@@ -241,23 +248,25 @@ def generate(out_dir: Path, entities: int, seed: int) -> dict:
 
     for i in range(n_persons):
         e = person[i]
+        emit(_t(e, HAS_KG_GRAPH, e))
         af = f"<{NS}:frame:assert:{i}>"
         emit(_t(af, VITALTYPE, KGFRAME))
         emit(_t(af, HAS_FRAME_TYPE, f"<{NS}:frame_type:Profile>"))
-        if i % FORM_TYPE_UNSET_EVERY:
-            emit(_t(af, HAS_FORM_TYPE, FORM_ASSERTION))
-            n_assert_set += 1
-        else:
-            n_assert_unset += 1
+        emit(_t(af, HAS_FORM_TYPE, FORM_ASSERTION))
+        emit(_t(af, HAS_FRAME_GRAPH, af))
+        n_assert_set += 1
 
         pf = f"<{NS}:frame:aspect:e{i}>"
         emit(_t(pf, VITALTYPE, KGFRAME))
         emit(_t(pf, HAS_FRAME_TYPE, f"<{NS}:frame_type:Contact>"))
         emit(_t(pf, HAS_FORM_TYPE, FORM_ASPECT))
+        emit(_t(pf, HAS_FRAME_GRAPH, pf))
+        emit(_t(pf, HAS_KG_GRAPH, e))
         ee = f"<{NS}:edge:ef:{i}>"
         emit(_t(ee, VITALTYPE, E_ENTITY_FRAME))
         emit(_t(ee, EDGE_SOURCE, e))
         emit(_t(ee, EDGE_DEST, pf))
+        emit(_t(ee, HAS_KG_GRAPH, e))
         n_aspect += 1
         n_aspect_entity += 1
 
@@ -265,6 +274,7 @@ def generate(out_dir: Path, entities: int, seed: int) -> dict:
         emit(_t(cf, VITALTYPE, KGFRAME))
         emit(_t(cf, HAS_FRAME_TYPE, f"<{NS}:frame_type:Detail>"))
         emit(_t(cf, HAS_FORM_TYPE, FORM_ASPECT))
+        emit(_t(cf, HAS_FRAME_GRAPH, cf))
         fe = f"<{NS}:edge:ff:{i}>"
         emit(_t(fe, VITALTYPE, E_FRAME))
         emit(_t(fe, EDGE_SOURCE, af))
@@ -281,6 +291,11 @@ def generate(out_dir: Path, entities: int, seed: int) -> dict:
             emit(_t(se, VITALTYPE, E_SLOT))
             emit(_t(se, EDGE_SOURCE, frame))
             emit(_t(se, EDGE_DEST, s))
+            emit(_t(s, HAS_FRAME_GRAPH, frame))
+            emit(_t(se, HAS_FRAME_GRAPH, frame))
+            if frame == pf:                  # the entity-attached frame's graph
+                emit(_t(s, HAS_KG_GRAPH, e))
+                emit(_t(se, HAS_KG_GRAPH, e))
             n_slots += 1
             if tag == "c":
                 emit(_t(s, HAS_TEXT_VALUE, _lit(f"note {i}")))

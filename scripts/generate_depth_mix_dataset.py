@@ -87,7 +87,13 @@ EDGE_SOURCE = "<http://vital.ai/ontology/vital-core#hasEdgeSource>"
 # fixture — it is a mixture that makes every non-Company cell vacuous, which is
 # exactly what the first version produced.
 _NESTED_RE = re.compile(r":frame:(\w+):0:frame:(\w+):0")
-_PARENT_EDGE_RE = re.compile(r"^(urn:acme:lead:[A-Za-z0-9]+):frame:(\w+):0:edge:to_(\w+)$")
+# Parent -> child FRAME edges only: `{e}:frame:{parent}:0:edge:to_{child}`.
+# `(?!slot_)` because a root frame's SLOT edge has the same shape
+# (`{e}:frame:nurtureinfoframe:0:edge:to_slot_nurturecampaign`) and was matched
+# too, so flattening rewired it to be SOURCED FROM THE ENTITY: a slot edge from
+# an entity, which the model does not allow, and which left the slot reachable
+# from no frame. Found by the issues/257 grouping census of this fixture.
+_PARENT_EDGE_RE = re.compile(r"^(urn:acme:lead:[A-Za-z0-9]+):frame:(\w+):0:edge:to_(?!slot_)(\w+)$")
 _SUBJ_RE = re.compile(r"^<([^>]+)>")
 
 

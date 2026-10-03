@@ -172,36 +172,70 @@ failures, all `test_document_converter` (the env lacks `mammoth` and
    - grouping is derived from `Edge_hasKGSlot` for every `KGSlot` subclass, not
      a list of six;
    - the dead `set_dual_grouping_uris` is deleted.
-2. **Fix the generators. DECIDED 2026-10-03: the bulk-loaded spaces lack
-   groupings because the generators that built them are WRONG**, not because
-   such spaces are a different kind of space. Every generator must emit both
-   groupings by the rule: `hasKGGraphURI` = the entity on every object of an
-   entity graph, and `hasFrameGraphURI` = the frame itself / the frame that links
-   the slot / the edge's source frame. What each does today, by reading:
-   - `scripts/generate_lead_dataset.py`: groupings were added to the NURTURE
-     path only (`2ee163ba`, 2026-09-06, `issues/171`); the base lead path that
-     built `sp_lead_synth_*`, `sp_lead_types`, `sp_lead_depth1` and
-     `sp_lead_dup` emits none. The nurture path derives the frame by PARSING the
-     URI, taking the first `:frame:<name>:<ordinal>` segment, so a nested child
-     frame's slots would be grouped under the ROOT. That is the production
-     defect's shape, written into a fixture. Unverified against its output.
-     Derive from the frame/slot/edge structure the generator itself builds,
-     not from URI text;
-   - `scripts/generate_graph_dataset.py`: none by default; with
-     `--form-type-fraction` it deliberately sets some frames' `hasFrameGraphURI`
-     to an arbitrary `:framegraph:N` URI, not the frame, for `issues/088`'s
-     anti-join case. The rule forbids that shape, so that case needs another way
-     to arise;
-   - `generate_relation_dataset.py`, `generate_depth_mix_dataset.py`,
-     `generate_duplicate_quad_dataset.py`, `load_wordnet_csv.py`: none.
+2. **Fix the generators. DONE 2026-10-03 (uncommitted).** The bulk-loaded
+   spaces lack groupings because the generators that built them were WRONG.
+   Every generator now emits both groupings by the rule, AND an explicit
+   `hasKGFormType` on every frame (the decision recorded under "Form type"
+   below):
+   - `generate_lead_dataset.py`: a new `entity_groupings` derives groupings
+     from the frame/slot/edge STRUCTURE the triples describe, replacing the
+     URI-text pass that took the FIRST `:frame:<name>:<n>` segment. That pass
+     grouped every nested child frame and its slots under the ROOT, and every
+     parent -> child edge under the parent. Frames get `KGFormType_Aspect`
+     (entity-scoped, as the server's entity-frame write sets it);
+   - `generate_graph_dataset.py`: every frame is grouped with itself and is an
+     explicit Assertion (standalone); slots and slot edges are grouped with
+     their frame. The arbitrary `:framegraph:N` grouping for `issues/088`'s
+     anti-join is gone; `--form-type-fraction` now only makes a share of
+     frames explicit Aspects;
+   - `generate_relation_dataset.py`: explicit form type on every frame (the
+     "unset Assertion" share is gone, because under the rule it would read as
+     an Aspect), groupings on every frame graph, `hasKGGraphURI` across the
+     entity-attached frame, and the person's self-link (`issues/091`);
+   - `generate_depth_mix_dataset.py` inherits the lead fix. Its census found an
+     OLDER bug: the flattener's parent-edge regex also matched a root frame's
+     SLOT edges (`…:edge:to_slot_…`), so flattening re-sourced them FROM THE
+     ENTITY. Fixed with `(?!slot_)`;
+   - `generate_duplicate_quad_dataset.py` and `load_wordnet_csv.py` build no
+     frames. `wordnet_frames` comes from an export, so it is repaired, not
+     regenerated.
 
-   Each fix is checked by running the census on a freshly generated space:
-   every column 0. Then the existing spaces are regenerated from the fixed
-   generators, or backfilled. Regenerating reloads spaces, so it is done only
-   when asked.
-3. **Add the census to the maintenance audit**, as `issues/091`'s self-link
-   check was, so drift is reported rather than found by accident. It must
-   cover frames as well as slots and edges.
+   Verified by a census of each generator's output against the rule, computed
+   from the structure that output describes. At HEAD: lead 814/1,074 frames
+   wrong and nearly every slot; graph and relation, every frame. Fixed: zero in
+   every column. `tests/unit/test_generators_follow_the_grouping_rule.py`, 4
+   cases: all FAIL on HEAD's generators, all pass fixed. The lead end-to-end
+   case needs the gitignored templates and skips without them.
+
+   Existing spaces are regenerated from the fixed generators, or repaired.
+   Regenerating reloads spaces, so it is done only when asked.
+3. ~~**Add the census to the maintenance audit.**~~ **DROPPED 2026-10-03: this
+   is a ONE-TIME data update, not something maintenance watches for.** The
+   writers are closed (step 1) and the generators fixed (step 2), so nothing
+   should produce bad groupings again; the census runs before and after the
+   repair (step 4) instead. A sampled watch was built and removed unmerged.
+
+**Form type (DECIDED 2026-10-03, option 2).** The server classifies a frame
+WITHOUT `hasKGFormType` by grouping: no `hasFrameGraphURI` -> Assertion, has
+one -> Aspect (`kgframes_endpoint.py`, copied into `sync_frame_prop_sort.py`).
+Under "every frame is grouped with itself" that unset default could only fire on
+defective data, and adding groupings would FLIP every unset-and-ungrouped frame
+from Assertion to Aspect: every frame in `wordnet_frames` and the bulk-loaded
+spaces, and an uncounted share of production's ~275,000 unset frames. So the
+repair FIRST sets an explicit `hasKGFormType` on every frame lacking one, by
+today's rule (no grouping -> Assertion, grouped -> Aspect), and only then
+touches groupings. Nothing reclassifies. Generators emit it explicitly too.
+
+**Method (decided 2026-10-03): SPARQL UPDATE** for setting these properties in
+bulk, not the per-subject API write path. The update path takes the grouping
+locks in the write's transaction (`acquire_update_locks`) and re-derives the
+edge, frame_slot, slot-sort and both prop-sort tables for the subjects it
+touches. Two cautions from its own code: an edge-table sync failure after an
+update is logged as non-critical rather than raised, and under heavy
+concurrent writes the update lock can give up and proceed unlocked
+(`issues/174`'s residual). So production runs in a quiet window, with the
+census before and after.
+
 4. **Repair the data, dev first.** Apply the rule above. For the production
    copies, regroup each child frame and its slots under the child. For the
    bulk-loaded spaces, backfill. The rewrite must keep the derived tables in

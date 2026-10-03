@@ -562,37 +562,87 @@ def render_entity(lead_id: str, lines: list[str], new_id: str,
     # (`GroupingURIQueryBuilder.build_complete_entity_graph_query`) returning a
     # fraction of the graph — which is a worse fixture than one returning
     # nothing, because it looks like it works.
-    #
-    # Derived from the URIs rather than from the ontology: every URI in this
-    # model is `{entity}:frame:{name}:{n}...`, so an object's frame is its URI
-    # truncated at the frame segment. That is the same substitution the cloning
-    # itself relies on.
+    existing = set(out)
+    out += [g for g in entity_groupings(out, entity_uri) if g not in existing]
+    return out
+
+
+def entity_groupings(lines: list[str], entity_uri: str) -> list[str]:
+    """`hasKGGraphURI` and `hasFrameGraphURI` for one entity's triples.
+
+    THE RULE (`issues/256`, `issues/257`, decided 2026-10-03), the same one the
+    server applies in `vitalgraph/kg_impl/frame_grouping.py`:
+
+        hasKGGraphURI     -> the entity, on every entity-scoped subject;
+        hasFrameGraphURI  -> a KGFrame: ITSELF
+                             an Edge_hasKGSlot: its SOURCE frame
+                             a slot: the frame whose Edge_hasKGSlot links it
+                             Edge_hasKGFrame / Edge_hasEntityKGFrame / the
+                             entity: NONE (structural links are in no frame's
+                             graph).
+
+    AND AN EXPLICIT FORM TYPE (decided 2026-10-03, option 2 in `issues/257`).
+    Every frame here is entity-scoped, so `hasKGFormType = KGFormType_Aspect`,
+    as the server's entity-frame write sets it. The templates carry none, and
+    the unset default classifies by grouping (no `hasFrameGraphURI` ->
+    Assertion), which cannot survive "every frame is grouped with itself".
+    Emitting it keeps every frame an Aspect, as it already was.
+
+    DERIVED FROM STRUCTURE, NOT URI TEXT. This used to take an object's frame
+    from its URI, truncated at the FIRST `:frame:<name>:<n>` segment. The
+    templates nest child frames in the URI
+    (`{e}:frame:companyframe:0:frame:companyaddressframe:0:slot:...`), so every
+    child frame and its slots were grouped under the ROOT, and every
+    parent -> child edge under the parent: the shape found in production
+    (`issues/257`), written into the fixture. Here each subject's vitaltype and
+    edge endpoints are read from the triples themselves.
+    """
+    vitaltype: dict[str, str] = {}
+    has_form_type: set[str] = set()
+    src: dict[str, str] = {}
+    dst: dict[str, str] = {}
+    subjects: list[str] = []
     seen: set[str] = set()
-    grouping: list[str] = []
-    for line in out:
+    for line in lines:
         m = TRIPLE_RE.match(line)
         if not m:
             continue
-        subj = m.group(1)
-        if subj in seen or not subj.startswith(entity_uri):
-            continue
-        seen.add(subj)
-        if subj.endswith(":hasKGGraphURI"):
-            continue
-        grouping.append(f"<{subj}> <{KG}hasKGGraphURI> <{entity_uri}> .")
-        # `...:frame:leadstatusframe:0` — take through the ordinal, so a slot
-        # and its frame group together and two frames do not merge.
-        parts = subj.split(":frame:")
-        if len(parts) > 1:
-            tail = parts[1].split(":")
-            if len(tail) >= 2:
-                frame_uri = f"{parts[0]}:frame:{tail[0]}:{tail[1]}"
-                grouping.append(
-                    f"<{subj}> <{KG}hasFrameGraphURI> <{frame_uri}> .")
+        s_, p_, o_ = m.group(1), m.group(2), m.group(3)
+        if s_ not in seen:
+            seen.add(s_)
+            subjects.append(s_)
+        if o_.startswith("<"):
+            o_ = o_[1:-1]
+            if p_ == f"{VC}vitaltype":
+                vitaltype[s_] = o_.rsplit("#", 1)[-1]
+            elif p_ == f"{VC}hasEdgeSource":
+                src[s_] = o_
+            elif p_ == f"{VC}hasEdgeDestination":
+                dst[s_] = o_
+            elif p_ == f"{KG}hasKGFormType":
+                has_form_type.add(s_)
 
-    # De-duplicate against what nurture_triples already emitted.
-    existing = set(out)
-    out += [g for g in grouping if g not in existing]
+    slot_owner = {dst[e]: src[e] for e, t in vitaltype.items()
+                  if t == "Edge_hasKGSlot" and e in src and e in dst}
+
+    out: list[str] = []
+    for subj in subjects:
+        if not (subj == entity_uri or subj.startswith(entity_uri + ":")):
+            continue                     # shared vocabulary: in no entity's graph
+        out.append(f"<{subj}> <{KG}hasKGGraphURI> <{entity_uri}> .")
+        t = vitaltype.get(subj, "")
+        if t == "KGFrame":
+            group = subj
+            if subj not in has_form_type:
+                out.append(f"<{subj}> <{KG}hasKGFormType> <{KG}KGFormType_Aspect> .")
+        elif t == "Edge_hasKGSlot":
+            group = src.get(subj)
+        elif t.endswith("Slot"):
+            group = slot_owner.get(subj)
+        else:
+            group = None                 # the entity, and both structural edges
+        if group:
+            out.append(f"<{subj}> <{KG}hasFrameGraphURI> <{group}> .")
     return out
 
 

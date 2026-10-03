@@ -1127,26 +1127,24 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
                 _lit(frame, f"{HALEY}hasKGFrameTypeDescription", ftype, f"{XSD}string"),
                 crit.triples(frame),
             ]
-            # An explicit form type on some frames, a frame-graph URI on some
-            # others, and NEITHER on the rest — the three states the Assertion
-            # filter has to tell apart (issues/088). Interleaved by index rather
-            # than drawn, so the split is reproducible from the manifest.
-            if form_type_fraction > 0:
-                _slot = fi % max(1, int(round(1.0 / form_type_fraction)))
-                if _slot == 0:
-                    buf.append(_t(frame, f"{HALEY}hasKGFormType",
-                                  f"{HALEY}{FORM_TYPE_ASSERTION}"))
-                    n_form_type_explicit += 1
-                elif _slot == 1:
-                    buf.append(_t(frame, f"{HALEY}hasKGFormType",
-                                  f"{HALEY}{FORM_TYPE_ASPECT}"))
-                    n_form_type_explicit += 1
-                elif _slot == 2:
-                    # No form type, but a frame graph URI: an Aspect by default,
-                    # and the row the Assertion anti-join must EXCLUDE.
-                    buf.append(_t(frame, f"{HALEY}hasFrameGraphURI",
-                                  f"{BASE}:framegraph:{fi % 97}"))
-                    n_frame_graph_uri += 1
+            # GROUPING AND FORM TYPE ON EVERY FRAME (`issues/257`, decided
+            # 2026-10-03). Every frame is grouped with ITSELF, and carries an
+            # explicit `hasKGFormType`: these frames are standalone, so
+            # Assertion, as the `/kgframes` write sets it. This used to emit a
+            # form type on some frames, an ARBITRARY `:framegraph:N` grouping on
+            # others and neither on the rest, for issues/088's anti-join. The
+            # grouping rule forbids both of those states, and the predicates are
+            # now present in every space this builds, so the fold that
+            # issues/088 wanted defeated cannot apply anyway.
+            # `--form-type-fraction` still makes a share of frames an explicit
+            # Aspect, for the Aspect tab.
+            buf.append(_t(frame, f"{HALEY}hasFrameGraphURI", frame))
+            n_frame_graph_uri += 1
+            _aspect = (form_type_fraction > 0 and
+                       fi % max(1, int(round(1.0 / form_type_fraction))) == 1)
+            buf.append(_t(frame, f"{HALEY}hasKGFormType",
+                          f"{HALEY}{FORM_TYPE_ASPECT if _aspect else FORM_TYPE_ASSERTION}"))
+            n_form_type_explicit += 1
 
             mistyped = (mistyped_role_slot_fraction > 0
                         and _is_rare(fi, mistyped_role_slot_fraction))
@@ -1166,11 +1164,13 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
                     _t(slot, f"{VITAL}URIProp", slot),
                     _t(slot, f"{HALEY}hasKGSlotType", role),
                     _t(slot, f"{HALEY}hasEntitySlotValue", target),
+                    _t(slot, f"{HALEY}hasFrameGraphURI", frame),
                     _t(edge, RDF_TYPE, f"{HALEY}Edge_hasKGSlot"),
                     _t(edge, f"{VITAL}vitaltype", f"{HALEY}Edge_hasKGSlot"),
                     _t(edge, f"{VITAL}URIProp", edge),
                     _t(edge, f"{VITAL}hasEdgeSource", frame),
                     _t(edge, f"{VITAL}hasEdgeDestination", slot),
+                    _t(edge, f"{HALEY}hasFrameGraphURI", frame),
                 ]
 
             # Typed ATTRIBUTE slots beside the two entity slots, on a
@@ -1198,11 +1198,13 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
                         _lit(a_slot, f"{HALEY}{vpred}",
                              str(value).lower() if dt == "boolean" else value,
                              f"{XSD}{dt}"),
+                        _t(a_slot, f"{HALEY}hasFrameGraphURI", frame),
                         _t(a_edge, RDF_TYPE, f"{HALEY}Edge_hasKGSlot"),
                         _t(a_edge, f"{VITAL}vitaltype", f"{HALEY}Edge_hasKGSlot"),
                         _t(a_edge, f"{VITAL}URIProp", a_edge),
                         _t(a_edge, f"{VITAL}hasEdgeSource", frame),
                         _t(a_edge, f"{VITAL}hasEdgeDestination", a_slot),
+                        _t(a_edge, f"{HALEY}hasFrameGraphURI", frame),
                     ]
                 n_attribute_slots += len(ATTRIBUTE_SLOTS)
                 n_attribute_frames += 1
@@ -1232,6 +1234,11 @@ def generate(out_dir: Path, n_entities: int, fanout: int, relation_fanout: int,
                 _lit(child, f"{HALEY}hasKGFrameTypeDescription", ftype,
                      f"{XSD}string"),
                 crit.triples(child),
+                # Grouped with itself and explicitly an Assertion, like every
+                # frame here; the parent -> child edge below carries NO grouping
+                # (`issues/257`).
+                _t(child, f"{HALEY}hasFrameGraphURI", child),
+                _t(child, f"{HALEY}hasKGFormType", f"{HALEY}{FORM_TYPE_ASSERTION}"),
                 _t(nedge, RDF_TYPE, f"{HALEY}Edge_hasKGFrame"),
                 _t(nedge, f"{VITAL}vitaltype", f"{HALEY}Edge_hasKGFrame"),
                 _t(nedge, f"{VITAL}URIProp", nedge),
@@ -1422,12 +1429,12 @@ def main() -> int:
                          "be dropped is never asked to refuse, and one that "
                          "always agreed would pass every test.")
     ap.add_argument("--form-type-fraction", type=float, default=0.0,
-                    help="emit hasKGFormType / hasFrameGraphURI on a "
-                         "share of frames (issues/088). 0 disables it. "
-                         "Without them the predicates are absent from "
-                         "the space, fold_dead_not_exists removes the "
-                         "Assertion filter entirely, and the 9.7 s case "
-                         "that remains open cannot be reproduced.")
+                    help="share of frames made an explicit Aspect; the rest "
+                         "are explicit Assertions. Every frame now carries "
+                         "hasKGFormType and hasFrameGraphURI (issues/257), so "
+                         "the predicates are always present and "
+                         "fold_dead_not_exists never removes the Assertion "
+                         "filter (issues/088). 0 = all Assertions.")
     ap.add_argument("--node-criteria", action="store_true",
                     help="give every ENTITY the same data properties frames and "
                          "relation edges carry (score, weight, occurred, label, "
