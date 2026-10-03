@@ -207,11 +207,22 @@ async def main() -> int:
     ap.add_argument("--space", required=True, action="append",
                     help="space to census/repair; repeat for several")
     ap.add_argument("--apply", action="store_true", help="write; without it, count only")
-    ap.add_argument("--batch", type=int, default=2000)
+    ap.add_argument("--batch", type=int, default=500,
+                    help="subjects per UPDATE. 925 slots in one update took ~90s "
+                         "on a 309k-slot space (the update path re-evaluates its "
+                         "bindings per lock pass)")
+    ap.add_argument("--timeout", type=float, default=600,
+                    help="client read timeout and request budget, seconds. The "
+                         "client's default (30s) gives up on an update the server "
+                         "then COMMITS, and does not retry a write, so a timed-out "
+                         "batch ends the run with the batch applied")
     ap.add_argument("--server", help="server URL (overrides LOCAL_CLIENT_SERVER_URL)")
     a = ap.parse_args()
     if a.server:
         os.environ["LOCAL_CLIENT_SERVER_URL"] = a.server
+    profile = os.environ.get("VITALGRAPH_CLIENT_ENVIRONMENT", "local").upper()
+    os.environ[f"{profile}_CLIENT_TIMEOUT"] = str(a.timeout)
+    os.environ[f"{profile}_CLIENT_REQUEST_BUDGET"] = str(a.timeout)
 
     from vitalgraph.client.vitalgraph_client import VitalGraphClient
     client = VitalGraphClient()
