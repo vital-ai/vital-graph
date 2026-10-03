@@ -1745,8 +1745,15 @@ class KGEntitiesEndpoint:
             # Handle processor result and maintain API compatibility
             if result.success:
                 self.logger.debug(f"Successfully created/updated {result.frame_count} frame objects")
-                # The rest of each replaced frame graph (`issues/256`): their
-                # vector/geo/fuzzy rows go too. FTS went in the transaction.
+                # Keep the derived stores in step with what was WRITTEN
+                # (`issues/256`). This route scheduled no auto-sync at all, so a
+                # slot written or rewritten here was never embedded, geocoded or
+                # indexed; the standalone route always did.
+                if result.created_uris:
+                    self._schedule_auto_sync(backend_impl, space_id, graph_id,
+                                             result.created_uris, "upsert")
+                # The rest of each replaced frame graph: their vector/geo/fuzzy
+                # rows go too. FTS went in the transaction.
                 if result.removed_uris:
                     self._schedule_auto_sync(backend_impl, space_id, graph_id,
                                              result.removed_uris, "delete")
@@ -2016,6 +2023,13 @@ class KGEntitiesEndpoint:
                 )
 
             created_uris = result.created_uris
+
+            # What the replace WROTE, synced (`issues/256`): this route
+            # scheduled no auto-sync, so the replacement's slots were never
+            # embedded, geocoded or indexed.
+            if created_uris:
+                self._schedule_auto_sync(backend_impl, space_id, graph_id,
+                                         created_uris, "upsert")
 
             # Invalidate entity graph cache
             await self._invalidate_entity_cache(space_id, graph_id, entity_uri)
@@ -2409,8 +2423,16 @@ class KGEntitiesEndpoint:
                 update_results.append(result)
                 if result.success:
                     updated_frame_count += 1
-                    # The rest of the replaced frame graph (`issues/256`):
-                    # its vector/geo/fuzzy rows go too. FTS went in the txn.
+                    # What this group WROTE, re-synced (`issues/256`): this
+                    # route scheduled no auto-sync, so a rewritten slot kept its
+                    # old vector/geo/fuzzy/FTS rows.
+                    _written = [str(o.URI) for o in all_frame_components
+                                if getattr(o, 'URI', None)]
+                    if _written:
+                        self._schedule_auto_sync(backend, space_id, graph_id,
+                                                 _written, "upsert")
+                    # The rest of the replaced frame graph: its vector/geo/fuzzy
+                    # rows go too. FTS went in the txn.
                     if result.removed_uris:
                         self._schedule_auto_sync(backend, space_id, graph_id,
                                                  result.removed_uris, "delete")

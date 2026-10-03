@@ -611,10 +611,28 @@ change, all 7 pass. Full `tests/api` 572 tests, 0 failures; `tests/unit` 5,184
 tests, 6 failures, all `test_document_converter` (the env lacks `mammoth` and
 `pdfplumber`).
 
-**Not done here, recorded:** the entity-frame routes schedule no auto-sync for
-the subjects they WRITE (only, now, for those they remove), so a rewritten
-slot's vector row is not re-embedded on that route. That is an existing gap,
-not this change.
+**Tracked item 8 — entity-frame writes did not keep the derived stores in step.
+FIXED 2026-10-03.** Vector, geo, fuzzy and FTS rows for a frame's slots are
+maintained by auto-sync, which a write route schedules after its commit. The
+standalone `/kgframes` route always did. The entity-frame routes
+(`_create_or_update_frames` for create and upsert, `_update_entity_frames`, and
+`_replace_entity_frames`) scheduled NOTHING for the subjects they wrote. So a
+slot written or rewritten through `/kgentities/kgframes` was never embedded,
+geocoded or indexed, and a rewritten one kept its OLD rows, until something
+else touched it. Found while building item 1, which added only the DELETE sync
+for removed members. Fixed by scheduling an `upsert` auto-sync for every
+subject each of the three handlers writes.
+
+Tests: `tests/api/test_entity_frame_auto_sync.py`, through geo (a
+`KGGeoLocationSlot` is geocoded by auto-sync into a slot-keyed row, but only if
+its owning entity resolves). On the parent commit's server code, the entity-frame
+create, update and upsert cases FAIL with no geo row. A CONTROL, the same frame
+written through `POST /kgentities`, which already scheduled auto-sync, passes,
+so the mechanism works and the failures are the gap. A first control through
+standalone `/kgframes` was invalid: the geo handler needs an owning entity, and a
+standalone frame has none. With the fix, 4/4. Full `tests/api` 576, 0 failures;
+`tests/unit` 5,185 with the 6 `test_document_converter` failures (env lacks
+`mammoth`, `pdfplumber`).
 
 ## Open questions
 
