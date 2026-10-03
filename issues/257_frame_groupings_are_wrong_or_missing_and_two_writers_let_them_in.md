@@ -291,6 +291,41 @@ grouped with their frame). The census of the output reports none of the rule's
 violations. Output: `test_data/kgframe-wordnet-0.0.1-vt-grouped.nt`. Not yet
 converted to CSV or loaded.
 
+**DEV REPAIR DONE, 2026-10-03.** All six real-data dev spaces read 0 in every
+step after the repair: archive (22 form types, 925 slots, 232 edges), actions
+(11,399 form types, 1 slot), underwriting (899 edges), main KG (52,700 form
+types, 1 slot edge, 925 slots, 232 edges), main KG newer (52,691, 1, 913, 232),
+lead test (already clean). Recounted after each.
+
+What the dev runs taught, now in the script:
+- whole-space SPARQL counts time out on production-sized spaces; discovery is
+  READ-ONLY SQL (`--discover-sql PREFIX`), set-based, term uuids inlined as
+  literals: a full census of the main copy in 5-7s, of the production actions
+  space in 90s cold. The first SQL version probed per row (~180k buffers per
+  18.7k frames) and ran >10 min on production before it was cancelled. A
+  version reading uuids from a one-row CTE could not use the (predicate,
+  object) index and scanned the table;
+- a 500-row regrouping UPDATE ran past the server's 60s statement timeout, and
+  once proceeded UNSERIALISED after failing to acquire its grouping locks
+  (`issues/174`); it rolled back. Regrouping now runs at `--batch 50` (~30s per
+  batch on dev), form-type inserts at `--form-batch 500`;
+- the client's 30s timeout cut off an update the server then committed;
+  `--timeout` (600s default).
+
+**Production dry run, 2026-10-03** (read-only SQL on the live cluster):
+
+| space | 1a -> Aspect | 4 slots | 5 parent->child edges |
+|---|---:|---:|---:|
+| main KG | 275,577 | 1,740 | 435 |
+| actions | 251,790 | 1,740 | 435 |
+| lead data | 289,920 | 0 | 0 |
+| lead prod | 3 | 0 | 0 |
+| main KG archive | 0 | 0 | 0 |
+| underwriting | 0 | 0 | 0 |
+
+Steps 1b, 2 and 3 are 0 everywhere, so nothing reclassifies. Production is NOT
+yet repaired.
+
 4. **Repair the data, dev first.** Apply the rule above. For the production
    copies, regroup each child frame and its slots under the child. For the
    bulk-loaded spaces, backfill. The rewrite must keep the derived tables in
