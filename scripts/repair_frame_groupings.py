@@ -264,14 +264,72 @@ async def census_sql(conn, space) -> tuple:
     return out, found
 
 
-async def _repair_from_list(client, space, step, rows, batch) -> int:
+async def _current_groupings(conn, space, pairs) -> dict:
+    """{(subject, graph): [hasFrameGraphURI values]} for the given subjects, by URI."""
+    if not pairs:
+        return {}
+    t, q = f"{space}_term", f"{space}_rdf_quad"
+    rows = await conn.fetch(
+        f"""SELECT ts.term_text AS x, tg.term_text AS g, tob.term_text AS o
+            FROM unnest($1::text[], $2::text[]) AS v(x, g)
+            JOIN {t} ts ON ts.term_text = v.x AND ts.term_type = 'U'
+            JOIN {t} tg ON tg.term_text = v.g AND tg.term_type = 'U'
+            JOIN {q} r ON r.subject_uuid = ts.term_uuid AND r.context_uuid = tg.term_uuid
+                      AND r.predicate_uuid = {_uuid(_TERMS["fgu"])}
+            JOIN {t} tob ON tob.term_uuid = r.object_uuid""",
+        [p[0] for p in pairs], [p[1] for p in pairs])
+    out: dict = {}
+    for r in rows:
+        out.setdefault((r["x"], r["g"]), []).append(r["o"])
+    return out
+
+
+def _ground_update(step_key, chunk, current) -> str:
+    """DELETE DATA / INSERT DATA for exactly these subjects: no WHERE clause.
+
+    A DELETE/INSERT ... WHERE { VALUES ... OPTIONAL {...} } of 50 slots took
+    ~30s on a dev copy and exceeded the 60s statement timeout on production,
+    after its lock planning found no groupings and it ran unserialised. The
+    old values are already known from the SQL discovery, so the update names
+    the exact triples."""
+    fgu = f"<{KG}hasFrameGraphURI>"
+    dels, ins = [], []
+    for r in chunk:
+        x, g = r[0], r[1]
+        if step_key in ("1a", "1b"):
+            ft = ASPECT if step_key == "1a" else ASSERTION
+            ins.append((g, f"<{x}> <{KG}hasKGFormType> {ft} ."))
+            continue
+        target = None if step_key == "5" else (x if step_key == "2" else r[2])
+        for old in current.get((x, g), []):
+            if old != target:
+                dels.append((g, f"<{x}> {fgu} <{old}> ."))
+        if target and target not in current.get((x, g), []):
+            ins.append((g, f"<{x}> {fgu} <{target}> ."))
+
+    def block(op, items):
+        if not items:
+            return ""
+        by_g: dict = {}
+        for g, triple in items:
+            by_g.setdefault(g, []).append(triple)
+        return f"{op} DATA {{ " + " ".join(
+            f"GRAPH <{g}> {{ {' '.join(ts)} }}" for g, ts in by_g.items()) + " }"
+    return " ;\n".join(b for b in (block("DELETE", dels), block("INSERT", ins)) if b)
+
+
+async def _repair_from_list(client, space, step, rows, batch, conn=None) -> int:
     from vitalgraph.model.sparql_model import SPARQLUpdateRequest
     fixed = 0
     for i in range(0, len(rows), batch):
         chunk = rows[i:i + batch]
-        values = " ".join("(" + " ".join(f"<{u}>" for u in r) + ")" for r in chunk)
+        current = (await _current_groupings(conn, space, [(r[0], r[1]) for r in chunk])
+                   if step["key"] not in ("1a", "1b") else {})
+        update = _ground_update(step["key"], chunk, current)
+        if not update:
+            continue
         resp = await client.sparql.execute_sparql_update(
-            space, SPARQLUpdateRequest(update=PREFIX + step["update"] % values))
+            space, SPARQLUpdateRequest(update=update))
         if getattr(resp, "error", None) or getattr(resp, "is_success", True) is False:
             raise RuntimeError(f"{step['name']}: update failed: "
                                f"{getattr(resp, 'error', None) or getattr(resp, 'message', resp)}")
@@ -421,7 +479,7 @@ async def main() -> int:
                         # is re-discovered after the earlier ones have run.
                         rows = await _sql_violators(sqlconn, space, step["key"])
                         size = a.form_batch if step["key"] in ("1a", "1b") else a.batch
-                        await _repair_from_list(client, space, step, rows, size)
+                        await _repair_from_list(client, space, step, rows, size, sqlconn)
                     else:
                         await _repair_step(client, space, step,
                                            a.form_batch if step["key"] in ("1a", "1b") else a.batch)
