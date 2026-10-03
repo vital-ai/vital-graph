@@ -345,84 +345,10 @@ class KGFramesEndpoint:
             self.logger.error(f"Frame update failed: {e}")
             raise HTTPException(status_code=500, detail=f"Frame update failed: {e}")
     
-    async def _delete_frames(self, space_id: str, graph_id: str, frame_uris: List[str]):
-        """Delete frames using direct backend storage - no entity dependencies."""
-        try:
-            # Get backend adapter
-            backend_adapter = await self._get_backend_adapter(space_id)
-            
-            # Delete frames directly using backend adapter
-            deleted_count = 0
-            for frame_uri in frame_uris:
-                try:
-                    # Delete frame and its associated slots
-                    result = await backend_adapter.delete_object(space_id, graph_id, frame_uri)
-                    if result:
-                        deleted_count += 1
-                except Exception as e:
-                    self.logger.warning(f"Failed to delete frame {frame_uri}: {e}")
-            
-            return FrameDeleteResponse(
-                status=OperationStatus.DELETED,
-                message=f"Successfully deleted {deleted_count} frames",
-                deleted_count=deleted_count,
-                deleted_uris=frame_uris[:deleted_count]
-            )
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            self.logger.error(f"Frame deletion failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Frame deletion failed: {e}")
-    
-    async def _get_frames(self, space_id: str, graph_id: str, current_user: Dict, page_size: int = 10, offset: int = 0):
-        """Get frames with pagination - wrapper for _list_frames."""
-        return await self._list_frames(space_id, graph_id, page_size, offset, None, current_user)
-    
-    async def _get_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, current_user: Dict, page_size: int = 10, offset: int = 0):
-        """Get frames associated with a specific entity."""
-        try:
-            space_record = await self.space_manager.get_space_or_load(space_id)
-            if not space_record:
-                return QuadResponse(status=OperationStatus.NOT_FOUND, results=[], total_count=0, page_size=page_size, offset=offset)
-
-            space_impl = space_record.space_impl
-            backend = space_impl.get_db_space_impl()
-            if not backend:
-                raise HTTPException(status_code=503, detail="Backend implementation not available")
-
-            sparql_query = f"""
-            PREFIX haley: <{self.haley_prefix}>
-            PREFIX vital: <{self.vital_prefix}>
-
-            SELECT DISTINCT ?frame WHERE {{
-                GRAPH <{graph_id}> {{
-                    ?frame a haley:KGFrame .
-                    ?frame haley:hasKGGraphURI <{entity_uri}> .
-                }}
-            }}
-            ORDER BY ?frame
-            LIMIT {page_size}
-            OFFSET {offset}
-            """
-
-            results = await backend.execute_sparql_query(space_id, sparql_query)
-            frames = await self._sparql_results_to_frames(backend, graph_id, results, space_id)
-
-            quads = await asyncio.to_thread(graphobjects_to_quad_list, frames or [], graph_id)
-            return QuadResponse(
-                status=OperationStatus.FOUND if frames else OperationStatus.EMPTY,
-                results=quads, total_count=len(frames), page_size=page_size, offset=offset)
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            self.logger.error(f"Entity frame retrieval failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Entity frame retrieval failed: {e}")
-    
-    async def _delete_entities(self, space_id: str, graph_id: str, entity_uris: List[str]):
-        """Delegate entity deletion (for test compatibility)."""
-        return await self._delete_frames(space_id, graph_id, entity_uris)
+    # `_delete_frames`, `_get_frames`, `_get_entity_frames` and `_delete_entities`
+    # were DELETED here 2026-10-02 (`issues/256`). Nothing in the service called
+    # them; the routes use `_delete_frame_by_uri` / `_delete_frames_by_uris` and
+    # `_list_frames`. `_delete_frames` reported DELETED whatever happened.
     
     # Slot endpoint methods for /api/graphs/kgframes/kgslots
     

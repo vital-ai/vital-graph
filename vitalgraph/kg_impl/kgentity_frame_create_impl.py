@@ -752,101 +752,11 @@ class KGEntityFrameCreateProcessor:
             self.logger.error(f"Error building insert quads: {e}")
             return []
 
-    async def handle_frame_update_deletion(self, backend_adapter: KGBackendInterface, space_id: str, 
-                                         graph_id: str, frame_objects: List[GraphObject]) -> bool:
-        """
-        Handle UPDATE/UPSERT operations by deleting existing frame members.
-        EXTRACTED FROM: lines 1061-1123 in _create_or_update_frames()
-        
-        Process:
-        1. Find subjects with frameGraphURI pointing to frames being updated
-        2. Delete all triples for those subjects
-        3. Prepare for new frame data insertion
-        
-        Args:
-            backend_adapter: Backend adapter for database operations
-            space_id: Space identifier
-            graph_id: Graph identifier
-            frame_objects: List of frame objects being updated
-            
-        Returns:
-            bool: True if deletion successful, False otherwise
-        """
-        try:
-            # Get frame URIs that are being updated (extracted from lines 1063)
-            frame_uris = [obj.URI for obj in frame_objects if hasattr(obj, 'URI')]
-            
-            if not frame_uris:
-                self.logger.info("🔍 No frame URIs found for update/upsert operation")
-                return True
-            
-            self.logger.info(f"🔍 Processing update/upsert for {len(frame_uris)} frames")
-            
-            # Use graph_id directly as it's already a full URI
-            full_graph_uri = graph_id
-            
-            # Phase 1: Get all subjects that belong to these frames using frameGraphURI (extracted from lines 1068-1096)
-            for frame_uri in frame_uris:
-                # Query to find all subjects that have frameGraphURI pointing to this frame
-                find_subjects_query = f"""
-                SELECT DISTINCT ?subject WHERE {{
-                    GRAPH <{full_graph_uri}> {{
-                        ?subject <http://vital.ai/ontology/haley-ai-kg#frameGraphURI> <{frame_uri}> .
-                    }}
-                }}
-                """
-                
-                self.logger.info(f"🔍 Finding subjects for frame: {frame_uri}")
-                subject_results = await backend_adapter.execute_sparql_query(space_id, find_subjects_query)
-                
-                # Extract subject URIs (extracted from lines 1082-1096)
-                subject_uris = []
-                if isinstance(subject_results, list):
-                    for result in subject_results:
-                        if isinstance(result, dict) and 'subject' in result:
-                            subject_value = result['subject']
-                            if isinstance(subject_value, dict):
-                                subject_uri = subject_value.get('value')
-                            else:
-                                subject_uri = str(subject_value)
-                            if subject_uri:
-                                subject_uris.append(subject_uri)
-                
-                # Also include the frame itself
-                subject_uris.append(frame_uri)
-                
-                if subject_uris:
-                    self.logger.info(f"🔍 Found {len(subject_uris)} subjects to delete for frame {frame_uri}")
-                    
-                    # Phase 2: Delete all triples for these subjects (extracted from lines 1101-1119)
-                    delete_patterns = []
-                    for subject_uri in subject_uris:
-                        # Use URI directly as VitalSigns produces clean URIs
-                        subject_str = str(subject_uri).strip()
-                        delete_patterns.append(f"    <{subject_str}> ?p ?o .")
-                    
-                    delete_query = f"""
-                    DELETE {{
-                        GRAPH <{full_graph_uri}> {{
-                    {chr(10).join(delete_patterns)}
-                        }}
-                    }} WHERE {{
-                        GRAPH <{full_graph_uri}> {{
-                    {chr(10).join(delete_patterns)}
-                        }}
-                    }}
-                    """
-                    
-                    self.logger.info(f"🔍 Deleting existing triples for {len(subject_uris)} subjects of frame {frame_uri}")
-                    await backend_adapter.execute_sparql_update(space_id, delete_query)
-                else:
-                    self.logger.info(f"🔍 No existing subjects found for frame {frame_uri} (new frame)")
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error handling frame update deletion: {e}")
-            return False
+    # `handle_frame_update_deletion` was DELETED here 2026-10-02 (`issues/256`).
+    # Nothing called it, and it could not have done its job: it matched
+    # `haley-ai-kg#frameGraphURI`, but the property is `hasFrameGraphURI`, so it
+    # found no slots and would have deleted only the frame. The frame-graph
+    # replace it was meant to provide is specified in `issues/256`.
     
     async def _build_delete_quads_for_subjects(self, backend_adapter: KGBackendInterface,
                                                space_id: str, graph_id: str,

@@ -27,7 +27,7 @@ from ..model.kgentities_model import (
     EntityLabelCount,
     EntityCountsResponse,
 )
-from ..model.kgframes_model import FrameGraphsResponse, FrameCreateResponse, FrameUpdateResponse, FrameDeleteResponse
+from ..model.kgframes_model import FrameGraphsResponse, FrameUpdateResponse, FrameDeleteResponse
 from ..model.result_status import OperationStatus
 # Import VitalSigns integration patterns from mock
 from ..sparql.grouping_uri_queries import GroupingURIQueryBuilder, GroupingURIGraphRetriever
@@ -46,14 +46,12 @@ from ..kg_impl.kg_validation_utils import KGGroupingURIManager, KGOwnershipValid
 from ..kg_impl.kgentity_delete_impl import KGEntityDeleteProcessor
 from ..kg_impl.kgentity_frame_create_impl import KGEntityFrameCreateProcessor
 from ..kg_impl.kg_backend_utils import GuardUnsatisfiable, StaleWrite
-from ..kg_impl.kgentity_frame_update_impl import KGEntityFrameUpdateProcessor
 import vital_ai_vitalsigns as vitalsigns
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
 
 # KG domain model imports
 from ai_haley_kg_domain.model.KGEntity import KGEntity
-from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.Edge_hasKGFrame import Edge_hasKGFrame
 from ..utils.db_retry import SparqlQueryFailed
 from functools import partial
@@ -1773,157 +1771,8 @@ class KGEntitiesEndpoint:
     # behaviour to preserve. The live path handles NOT_FOUND, INVALID_REQUEST and
     # a real success check, so nothing is lost.
     
-    async def _create_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, 
-                                   quads: List[Quad], operation_mode: OperationMode, current_user: Dict, 
-                                   parent_frame_uri: Optional[str] = None) -> FrameCreateResponse:
-        """Create or update frames within entity context from quads."""
-        graph_objects = quad_list_to_graphobjects(quads)
-        try:
-            mode_str = operation_mode.value if hasattr(operation_mode, 'value') else str(operation_mode)
-            self.logger.debug(f"Processing entity frames for {entity_uri} in space {space_id}, graph {graph_id}, mode '{mode_str}'")
-            
-            space_record = await self.space_manager.get_space_or_load(space_id)
-            if not space_record:
-                return FrameCreateResponse(
-                    status=OperationStatus.NOT_FOUND,
-                    message=f"Space {space_id} not found",
-                    created_count=0,
-                    created_uris=[]
-                )
-
-            space_impl = space_record.space_impl
-            backend = space_impl.get_db_space_impl()
-            if not backend:
-                raise HTTPException(status_code=503, detail="Backend implementation not available")
-
-            
-            processed_frames = []
-            
-            for graph_obj in graph_objects:
-                if isinstance(graph_obj, KGFrame):
-                    frame_uri = graph_obj.URI
-                    if not frame_uri:
-                        return FrameCreateResponse(
-                            status=OperationStatus.INVALID_REQUEST,
-                            message="KGFrame missing URI - required for processing",
-                            created_count=0,
-                            created_uris=[]
-                        )
-                    
-                    # Set grouping URI properties using VitalSigns property setters
-                    # 1. Set frameGraphURI - groups all objects within this frame
-                    graph_obj.frameGraphURI = frame_uri
-                    
-                    # 2. Set kGGraphURI - groups all objects within the entity's complete graph
-                    graph_obj.kGGraphURI = entity_uri
-                    
-                    self.logger.debug(f"Setting grouping URIs for frame {frame_uri}: frameGraphURI={frame_uri}, kgGraphURI={entity_uri}")
-                    
-                    processed_frames.append(graph_obj)
-                else:
-                    # Handle other graph objects (slots, edges, properties, etc.)
-                    if hasattr(graph_obj, 'URI') and graph_obj.URI:
-                        # Set kGGraphURI for entity-level grouping
-                        graph_obj.kGGraphURI = entity_uri
-                        
-                        # Check if this is a slot edge that needs frameGraphURI
-                        from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
-                        if isinstance(graph_obj, Edge_hasKGSlot):
-                            # Slot edges connect frame to slot - they need frameGraphURI set to the frame URI
-                            # The edgeSource should be the frame URI
-                            if hasattr(graph_obj, 'edgeSource') and graph_obj.edgeSource:
-                                frame_uri_for_edge = str(graph_obj.edgeSource)
-                                graph_obj.frameGraphURI = frame_uri_for_edge
-                                self.logger.debug(f"Setting frameGraphURI={frame_uri_for_edge} on Edge_hasKGSlot {graph_obj.URI}")
-                            else:
-                                self.logger.warning(f"Edge_hasKGSlot missing edgeSource: {graph_obj.URI}")
-                        
-                        processed_frames.append(graph_obj)
-            
-            # Validate parent_frame_uri if provided using hierarchical frame processor
-            if parent_frame_uri:
-                from ..kg_impl.kgentity_hierarchical_frame_impl import KGEntityHierarchicalFrameProcessor
-                from ..kg_impl.kg_backend_utils import create_backend_adapter
-                
-                backend_adapter = create_backend_adapter(backend)
-                hierarchical_processor = KGEntityHierarchicalFrameProcessor(backend_adapter, self.logger)
-                
-                parent_frame_valid = await hierarchical_processor.validate_parent_frame(space_id, graph_id, entity_uri, parent_frame_uri)
-                if not parent_frame_valid:
-                    return FrameCreateResponse(
-                        status=OperationStatus.INVALID_REQUEST,
-                        message=f"Parent frame validation failed: {parent_frame_uri} does not exist or does not belong to entity {entity_uri}",
-                        created_count=0,
-                        created_uris=[]
-                    )
-            
-            # Handle different operation modes with validation
-            if operation_mode == OperationMode.CREATE:
-                # For CREATE mode, we'll let the processor handle validation
-                pass
-                    
-            elif operation_mode == OperationMode.UPDATE:
-                # For UPDATE mode, we'll let the processor handle validation
-                pass
-            
-            # Create connection edges using hierarchical frame processor
-            if not 'hierarchical_processor' in locals():
-                from ..kg_impl.kgentity_hierarchical_frame_impl import KGEntityHierarchicalFrameProcessor
-                from ..kg_impl.kg_backend_utils import create_backend_adapter
-                
-                backend_adapter = create_backend_adapter(backend)
-                hierarchical_processor = KGEntityHierarchicalFrameProcessor(backend_adapter, self.logger)
-            
-            connection_edges = hierarchical_processor.create_connection_edges(entity_uri, processed_frames, parent_frame_uri)
-            
-            # Convert VitalSigns graph objects for backend processing
-            all_graph_objects = processed_frames + connection_edges
-            
-            # Create backend adapter for frame operations
-            backend_adapter = create_backend_adapter(backend)
-            
-            # Use KGEntityFrameCreateProcessor for actual backend operations
-            from ..kg_impl.kgentity_frame_create_impl import KGEntityFrameCreateProcessor
-            frame_processor = KGEntityFrameCreateProcessor()
-            
-            # Convert operation mode to processor format
-            processor_mode = "CREATE" if operation_mode == OperationMode.CREATE else "UPDATE"
-            
-            # Execute frame operations using the processor
-            result = await frame_processor.create_entity_frame(
-                backend_adapter=backend_adapter,
-                space_id=space_id,
-                graph_id=graph_id,
-                entity_uri=entity_uri,
-                frame_objects=all_graph_objects,
-                operation_mode=processor_mode
-            )
-            
-            # Convert CreateFrameResult to FrameCreateResponse
-            if result.success:
-                # Invalidate entity graph cache (frame creation changes the entity graph)
-                await self._invalidate_entity_cache(space_id, graph_id, entity_uri)
-                return FrameCreateResponse(
-                    status=OperationStatus.CREATED,
-                    message=result.message,
-                    created_count=len(result.created_uris),
-                    created_uris=result.created_uris,
-                    slots_created=0,
-                )
-            else:
-                return FrameCreateResponse(
-                    status=OperationStatus.STORE_FAILED,
-                    message=result.message,
-                    created_count=0,
-                    created_uris=[],
-                    slots_created=0,
-                )
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            self.logger.error(f"Error processing entity frames: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to process entity frames: {str(e)}")
+    # `_create_entity_frames` was DELETED here 2026-10-02 (`issues/256`): no
+    # caller, and it mapped `upsert` to UPDATE, unlike the live route.
     
     
     async def _replace_entity_frames(self, space_id: str, graph_id: str, entity_uri: str,
@@ -2825,56 +2674,12 @@ class KGEntitiesEndpoint:
             self.logger.error(f"Error listing KGEntities with graphs: {e}")
             raise Exception(f"Failed to list KGEntities with graphs: {str(e)}")
     
-    # Entity-Frame Relationship Methods (from mock implementation)
-    
-    async def create_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, graph_objects: List, operation_mode: str = "create") -> 'FrameCreateResponse':
-        """Create frames within entity context using Edge_hasEntityKGFrame relationships."""
-        try:
-            self.logger.debug(f"Creating entity frames for {entity_uri} in space {space_id}, graph {graph_id}")
-            
-            from vitalgraph.endpoint.kgentities_endpoint import OperationMode
-            
-            if operation_mode.upper() == "UPDATE":
-                op_mode = OperationMode.UPDATE
-            elif operation_mode.upper() == "UPSERT":
-                op_mode = OperationMode.UPSERT
-            else:
-                op_mode = OperationMode.CREATE
-            
-            current_user = {"username": "system", "user_id": "system"}
-            
-            result = await self._create_or_update_frames(
-                space_id=space_id,
-                graph_id=graph_id,
-                graph_objects=graph_objects,
-                operation_mode=op_mode,
-                entity_uri=entity_uri,
-                current_user=current_user
-            )
-            
-            # Convert result to FrameCreateResponse format
-            from ..model.kgframes_model import FrameCreateResponse
-            
-            if hasattr(result, 'created_uris') and result.created_uris:
-                # Convert VitalSigns property objects to strings
-                created_uris_str = [str(uri) for uri in result.created_uris]
-                return FrameCreateResponse(
-                    status=OperationStatus.CREATED,
-                    message=result.message,
-                    created_count=len(result.created_uris),
-                    created_uris=created_uris_str
-                )
-            else:
-                return FrameCreateResponse(
-                    status=OperationStatus.CREATED,
-                    message="Frame creation completed",
-                    created_count=0,
-                    created_uris=[]
-                )
-            
-        except Exception as e:
-            self.logger.error(f"Error creating entity frames: {e}")
-            raise Exception(f"Failed to create entity frames: {str(e)}")
+    # `create_entity_frames`, `update_entity_frames` and `delete_entity_frames`
+    # ("from mock implementation") were DELETED here 2026-10-02 (`issues/256`).
+    # Nothing in the service called them; the routes use `_create_or_update_frames`,
+    # `_update_entity_frames` and `_delete_entity_frames`. `create_entity_frames`
+    # passed `graph_objects=` to a function taking `quads`, so it raised
+    # `TypeError` on every call.
     
     async def _get_all_triples_for_subjects(self, backend, space_id: str, graph_id: str, subject_uris: List[str]) -> List[Dict[str, str]]:
         """Get all triples for the given subject URIs using SPARQL query processor."""
@@ -2893,149 +2698,6 @@ class KGEntitiesEndpoint:
             self.logger.error(f"Error getting triples for subjects: {e}")
             return []
 
-    async def update_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, graph_objects: List) -> 'FrameUpdateResponse':
-        """Update frames within entity context using Edge_hasEntityKGFrame relationships."""
-        try:
-            self.logger.debug(f"Updating entity frames for {entity_uri} in space {space_id}, graph {graph_id}")
-            self.logger.debug(f"Received {len(graph_objects) if graph_objects else 0} VitalSigns objects")
-            
-            space_record = await self.space_manager.get_space_or_load(space_id)
-            if not space_record:
-                from ..model.kgframes_model import FrameUpdateResponse
-                return FrameUpdateResponse(
-                    status=OperationStatus.NOT_FOUND,
-                    message=f"Space {space_id} not found",
-                    updated_uri="",
-                    updated_count=0
-                )
-
-            space_impl = space_record.space_impl
-            backend_impl = space_impl.get_db_space_impl()
-            if not backend_impl:
-                raise HTTPException(status_code=503, detail="Backend implementation not available")
-
-            from vitalgraph.kg_impl.kg_backend_utils import create_backend_adapter
-            backend_adapter = create_backend_adapter(backend_impl)
-
-            if not graph_objects:
-                from ..model.kgframes_model import FrameUpdateResponse
-                return FrameUpdateResponse(
-                    status=OperationStatus.INVALID_REQUEST,
-                    message="No valid objects found in request",
-                    updated_uri="",
-                    updated_count=0
-                )
-            
-            frame_update_processor = KGEntityFrameUpdateProcessor(backend_adapter, self.logger)
-            
-            # Update frames using processor
-            self.logger.debug(f"🔄 Calling frame update processor with {len(graph_objects)} objects")
-            result = await frame_update_processor.update_frames(
-                space_id=space_id,
-                graph_id=graph_id,
-                entity_uri=entity_uri,
-                frame_objects=graph_objects
-            )
-            
-            self.logger.debug(f"🔄 Frame update processor result: success={result.success}, message='{result.message}'")
-            
-            # Convert result to FrameUpdateResponse format
-            from ..model.kgframes_model import FrameUpdateResponse
-            
-            if result.success:
-                self.logger.debug(f"✅ Frame update successful for entity {entity_uri}")
-                return FrameUpdateResponse(
-                    status=OperationStatus.UPDATED,
-                    message=result.message,
-                    updated_uri=entity_uri,
-                )
-            else:
-                self.logger.warning(f"⚠️ Frame update failed for entity {entity_uri}: {result.message}")
-                return FrameUpdateResponse(
-                    status=OperationStatus.STORE_FAILED,
-                    message=f"Frame update failed: {result.message}",
-                    updated_uri=entity_uri,
-                )
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            self.logger.error(f"Error updating entity frames: {e}")
-            raise Exception(f"Failed to update entity frames: {str(e)}")
-    
-    async def delete_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, frame_uris: List[str]) -> 'FrameDeleteResponse':
-        """Delete frames within entity context using Edge_hasEntityKGFrame relationships."""
-        try:
-            self.logger.debug(f"Deleting entity frames for {entity_uri} in space {space_id}, graph {graph_id}")
-            
-            # Get backend implementation
-            space_record = await self.space_manager.get_space_or_load(space_id)
-            if not space_record:
-                from ..model.kgframes_model import FrameDeleteResponse
-                return FrameDeleteResponse(
-                    status=OperationStatus.NOT_FOUND,
-                    message=f"Space {space_id} not found",
-                    deleted_count=0,
-                    deleted_uris=[]
-                )
-
-            space_impl = space_record.space_impl
-            backend_impl = space_impl.get_db_space_impl()
-            if not backend_impl:
-                raise HTTPException(status_code=503, detail="Backend implementation not available")
-
-            # Create backend adapter
-            from vitalgraph.kg_impl.kg_backend_utils import create_backend_adapter
-            backend_adapter = create_backend_adapter(backend_impl)
-            
-            # Use KGEntityFrameDeleteProcessor to handle frame deletion
-            from vitalgraph.kg_impl.kgentity_frame_delete_impl import KGEntityFrameDeleteProcessor
-            
-            frame_delete_processor = KGEntityFrameDeleteProcessor(backend_adapter, self.logger)
-            
-            # Delete frames using processor
-            result = await frame_delete_processor.delete_frames(
-                space_id=space_id,
-                graph_id=graph_id,
-                entity_uri=entity_uri,
-                frame_uris=frame_uris
-            )
-            
-            # Convert result to FrameDeleteResponse format
-            from ..model.kgframes_model import FrameDeleteResponse
-            
-            # `status` FOLLOWS THE RESULT. `issues/242`: this was a hardcoded
-            # `DELETED`, so the processor's `success` was never read and a failed
-            # delete came back as `status=deleted`, `deleted_count=3` and a message
-            # beginning "Successfully deleted". `STORE_FAILED` exists for exactly
-            # this ("write failed for a describable data reason", success=False,
-            # HTTP 200) — and its sibling `QUERY_FAILED` was added because a killed
-            # READ was being reported as EMPTY, a success status (`issues/215`).
-            # Same mistake, write side. `:1356` in this file already does it right.
-            #
-            # `deleted_count` is 0 on failure: `deleted_frame_uris` is the ATTEMPTED
-            # set, and reporting it as deleted is what made the old response wrong
-            # in four fields at once.
-            if not result.success:
-                return FrameDeleteResponse(
-                    status=OperationStatus.STORE_FAILED,
-                    message=result.message,
-                    deleted_count=0,
-                    deleted_uris=[],
-                )
-            return FrameDeleteResponse(
-                status=OperationStatus.DELETED,
-                message=result.message,
-                deleted_count=len(result.deleted_frame_uris),
-                deleted_uris=result.deleted_frame_uris,
-            )
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            self.logger.error(f"Error deleting entity frames: {e}")
-            raise Exception(f"Failed to delete entity frames: {str(e)}")
-    
     # Helper methods for entity CRUD operations
     
     async def _entity_exists_in_backend(self, backend, space_id: str, graph_id: str, entity_uri: str) -> bool:
