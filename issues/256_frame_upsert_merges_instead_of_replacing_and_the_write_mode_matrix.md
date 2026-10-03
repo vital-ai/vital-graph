@@ -515,13 +515,16 @@ Unit suite after removal: 5,247 tests, 1 failure, and that failure is
 `test_every_indexed_issue_is_COMMITTED`: this file indexed in the README before
 it is committed. It clears when the two are committed together.
 
-**Not removed: `test_scripts/test_script_kg_impl/`.** It is the only thing that
-called these methods. It drives endpoint internals directly, has no runner
-outside `archive/`, is excluded in `pyproject.toml`, and was already broken
-against them: it calls `KGEntitiesEndpoint._delete_entities`, which never
-existed, and `create_entity_frames`, which raised. It is the same kind of dead
-code, but it is a whole directory, so it is listed here rather than deleted
-unasked.
+**`test_scripts/test_script_kg_impl/` — REMOVED 2026-10-02**, all 81 tracked
+files. It was the only thing that called these methods. It drove endpoint
+internals directly, had no runner outside `archive/`, and was already broken
+against them: it called `KGEntitiesEndpoint._delete_entities`, which never
+existed, and `create_entity_frames`, which raised. No live file imports any of
+its 69 modules. The same-named `case_*` imports in
+`test_scripts/vitalgraph_client_test/` resolve to that harness's own
+`kgframes/`, `kgqueries/` and `graphs/` folders. Its `pyproject.toml` package
+exclusion went with it. The `archive/` runners that imported it were already
+dead and are left as archive.
 
 ## What the fix is
 

@@ -226,7 +226,6 @@ exclude = [
     "vitalgraph_sparql_sql_dev*",
     "test*",
     "test_scripts*",
-    "test_script_kg_impl*",
     "vitalgraph_client_test*",
     "vitalgraph_mock_client_test*",
     "vitalgraph_service_tests*",
