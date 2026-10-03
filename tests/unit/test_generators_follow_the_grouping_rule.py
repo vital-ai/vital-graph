@@ -134,3 +134,53 @@ def test_lead_generator_end_to_end(tmp_path):
     gen = _load("generate_lead_dataset")
     gen.generate(TEMPLATES, tmp_path, 10, 20260806, False, 5000, 0.5, 5)
     assert violations(_lines(tmp_path)) == {}
+
+
+def test_add_frame_groupings_fixes_an_export(tmp_path):
+    """The wordnet conversion step (`scripts/add_frame_groupings.py`).
+
+    An export with no groupings, plus a WRONG grouping supplied in the input
+    (a child's slot under the root), plus a frame the input already grouped.
+    Every grouping comes out by the rule, and each frame's form type is the
+    classification it had in the input, made explicit: ungrouped -> Assertion,
+    grouped -> Aspect (option 2).
+    """
+    import subprocess
+    import sys
+    E, R, C, S, A, AS = ("urn:t:e", "urn:t:root", "urn:t:child", "urn:t:cslot",
+                         "urn:t:alone", "urn:t:aslot")
+    G = "urn:t:pregrouped"
+
+    def node(u, t):
+        return [f"<{u}> <{VC}vitaltype> <{KG}{t}> ."]
+
+    def edge(u, t, s, d):
+        return node(u, t) + [f"<{u}> <{VC}hasEdgeSource> <{s}> .",
+                             f"<{u}> <{VC}hasEdgeDestination> <{d}> ."]
+    lines = (node(E, "KGEntity") + node(R, "KGFrame") + node(C, "KGFrame")
+             + node(S, "KGTextSlot") + node(A, "KGFrame") + node(AS, "KGEntitySlot")
+             + node(G, "KGFrame")
+             + edge("urn:t:ef", "Edge_hasEntityKGFrame", E, R)
+             + edge("urn:t:pc", "Edge_hasKGFrame", R, C)
+             + edge("urn:t:cs", "Edge_hasKGSlot", C, S)
+             + edge("urn:t:as", "Edge_hasKGSlot", A, AS)
+             + [f"<{S}> <{KG}hasFrameGraphURI> <{R}> .",       # wrong: under the root
+                f"<urn:t:pc> <{KG}hasFrameGraphURI> <{R}> .",  # wrong: a structural edge
+                f"<{G}> <{KG}hasFrameGraphURI> <{G}> .",       # grouped -> Aspect today
+                f'<{A}> <{KG}hasKGFrameTypeDescription> "kept" .'])
+    src, dst = tmp_path / "in.nt", tmp_path / "out.nt"
+    src.write_text("\n".join(lines) + "\n")
+    r = subprocess.run([sys.executable, str(REPO / "scripts" / "add_frame_groupings.py"),
+                        str(src), str(dst)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    out = dst.read_text().splitlines()
+
+    assert violations(out) == {}
+    assert f'<{A}> <{KG}hasKGFrameTypeDescription> "kept" .' in out, "a data line was lost"
+    assert f"<{S}> <{KG}hasFrameGraphURI> <{C}> ." in out
+    assert f"<{A}> <{KG}hasKGFormType> <{KG}KGFormType_Assertion> ." in out
+    assert f"<{G}> <{KG}hasKGFormType> <{KG}KGFormType_Aspect> ." in out
+    for u in (E, R, C, S, "urn:t:ef", "urn:t:pc", "urn:t:cs"):
+        assert f"<{u}> <{KG}hasKGGraphURI> <{E}> ." in out, f"{u} is not in the entity graph"
+    assert not any(ln.startswith(f"<{A}> <{KG}hasKGGraphURI>") for ln in out), (
+        "a standalone frame was put in an entity graph")

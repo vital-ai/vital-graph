@@ -45,13 +45,19 @@ incomplete, so it is not used. Columns:
 edges, every slot and edge ungrouped, as the loader's other spaces. The actions
 copy also has one slot edge pointing at a slot that does not exist.
 
-**The "slot other" rows are subtrees grouped under their ROOT.** Classified on
-the main KG copy: in all 925, the frame the slot names exists and is the PARENT
-of the linking frame (232 child frames under 226 parents), and the child frame
-itself carries the parent's grouping too. They are campaign entities written by
-the API service. The census counts slots only, so **the number of FRAMES grouped
-under another frame is not yet counted**. It is at least the 232 children above.
-Extend the census to frames before repairing.
+**The "slot other" rows: child frames' SLOTS grouped under the parent.**
+CORRECTED 2026-10-03. The first version of this paragraph said the child FRAMES
+carry the parent's grouping, from a misread sample. The repair's dry run (step 2:
+0 frames not self-grouped on every space) and a direct look at one of the 925
+show otherwise: the child frame IS grouped with itself; only its slots are
+grouped under the parent. E.g. the slot
+`…:frame:generated_message:4:frame:schedule:0:slot:days` is linked by
+`…:generated_message:4:frame:schedule:0` (self-grouped) and grouped under
+`…:frame:generated_message:4`. That is the FIRST `:frame:<name>:<n>` segment of
+the slot's own URI, the URI-prefix derivation the old lead generator used, so
+the writer of these campaign entities very likely groups slots by URI text.
+232 child frames under 226 parents, campaign entities written by the API
+service.
 
 **The bulk-loaded spaces have no grouping at all**: no `hasFrameGraphURI` term
 exists in them. `sp_lead_depth1` has no `hasKGGraphURI` either, so its entity
@@ -235,6 +241,55 @@ update is logged as non-critical rather than raised, and under heavy
 concurrent writes the update lock can give up and proceed unlocked
 (`issues/174`'s residual). So production runs in a quiet window, with the
 census before and after.
+
+**Step 4 tooling, written 2026-10-03 (not yet run on dev):
+`scripts/repair_frame_groupings.py`.** Through the server only, by SPARQL
+UPDATE, in bounded batches (SELECT up to `--batch` violators, fix exactly those
+with one `VALUES` UPDATE, repeat). In order: 1a/1b explicit form type by today's
+default (grouped -> Aspect, ungrouped -> Assertion), 2 frames self-grouped,
+3 slot edges -> source frame, 4 slots -> linking frame (a slot linked from two
+frames is skipped and reported), 5 parent -> child edges ungrouped. Dry run by
+default; its per-step counts ARE the census, before and after. **Trial on the
+vg test stack**, on a throwaway space seeded with each defect the census found:
+the dry run counted exactly the seeded defects; `--apply` (batch 2, so the loop
+ran) brought every step to 0; the child, its slot and slot edge regrouped under
+the child, the parent -> child edge lost its grouping, the control frame was
+untouched, and **every frame kept its classification** (Aspect/Assertion by
+the server's own rule, compared before and after).
+
+**Which spaces are repaired (DECIDED 2026-10-03).** Only REAL-DATA spaces are
+repaired: the three production copies, plus the actions, underwriting and lead
+test copies. Every generated or throwaway TEST dataset is RELOADED from the
+fixed generators instead (`sp_lead_*`, `sp_graph_synth_*`, `sp_kg_rel`,
+`sp_lead_types`, `kgquery_perf`, `sp_sql_lead_dataset`, and the API test
+spaces). **Open: `wordnet_frames`.** It is a test dataset but no generator
+builds it; it is loaded from the canonical export (`kgframe-wordnet-0.0.1.vital`
+-> `-vt.nt`), which carries no groupings, so reloading it "with fixed data" first
+needs a conversion step that adds them by the rule.
+
+**Dev dry run, 2026-10-03** (`scripts/repair_frame_groupings.py`, counts only,
+through the dev server), on the real-data spaces:
+
+| space | 1a form type -> Aspect | 1b -> Assertion | 2 frames | 3 slot edges | 4 slots | 5 parent->child edges |
+|---|---:|---:|---:|---:|---:|---:|
+| main KG copy | 52,700 | 0 | 0 | 1 | 925 | 232 |
+| main KG copy, newer | 52,691 | 0 | 0 | 1 | 913 | 232 |
+| main KG archive | 22 | 0 | 0 | 0 | 925 | 232 |
+| actions copy | 11,399 | 0 | 0 | 0 | 1 | 0 |
+| underwriting copy | 0 | 0 | 0 | 0 | 0 | 899 |
+| lead test copy | 0 | 0 | 0 | 0 | 0 | 0 |
+
+No slot is linked from two frames anywhere. Step 1b is 0 everywhere: no frame
+is unset AND ungrouped, so the form-type step reclassifies nothing.
+
+**`wordnet_frames`, the conversion step, DONE 2026-10-03:
+`scripts/add_frame_groupings.py`** (.nt -> .nt), between the `.vital`
+conversion and the CSV. On `kgframe-wordnet-0.0.1-vt.nt` in 18s: all 8,582,356
+lines kept, and 1,712,088 triples added (285,348 frames self-grouped and made
+explicitly Assertion, as they read today; 570,696 slot edges and 570,696 slots
+grouped with their frame). The census of the output reports none of the rule's
+violations. Output: `test_data/kgframe-wordnet-0.0.1-vt-grouped.nt`. Not yet
+converted to CSV or loaded.
 
 4. **Repair the data, dev first.** Apply the rule above. For the production
    copies, regroup each child frame and its slots under the child. For the

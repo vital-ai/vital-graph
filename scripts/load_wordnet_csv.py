@@ -4,8 +4,12 @@
 The second half of the convert-then-load pipeline:
 
     1. scripts/convert_vital_to_ntriples.py   .vital -> .nt   (~31s, one-time)
-    2. test_scripts/import/test_csv_import_process.py  .nt -> CSV  (one-time)
-    3. THIS SCRIPT                            CSV -> space   (seconds)
+    2. scripts/add_frame_groupings.py         .nt -> .nt with frame groupings
+                                              and explicit form types (~18s;
+                                              the export carries none,
+                                              issues/257)
+    3. test_scripts/import/test_csv_import_process.py  .nt -> CSV  (one-time)
+    4. THIS SCRIPT                            CSV -> space   (seconds)
 
 Parsing RDF is what makes the other loaders take minutes; once the CSVs exist
 this step is pure COPY. The archived design doc benchmarked this exact dataset
