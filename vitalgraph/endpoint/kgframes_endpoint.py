@@ -2595,6 +2595,11 @@ class KGFramesEndpoint:
                 )
 
             updated_uris = result.created_uris
+            # The rest of each replaced frame graph (`issues/256`): their
+            # vector/geo/fuzzy rows go too. FTS went in the transaction.
+            if getattr(result, 'removed_uris', None):
+                self._schedule_auto_sync(getattr(backend, 'backend', None), space_id,
+                                         graph_id, result.removed_uris, "delete")
 
             return FrameUpdateResponse(
                 status=OperationStatus.UPDATED,
@@ -2645,6 +2650,11 @@ class KGFramesEndpoint:
                 )
 
             upserted_uris = result.created_uris
+            # The rest of each replaced frame graph (`issues/256`): their
+            # vector/geo/fuzzy rows go too. FTS went in the transaction.
+            if getattr(result, 'removed_uris', None):
+                self._schedule_auto_sync(getattr(backend, 'backend', None), space_id,
+                                         graph_id, result.removed_uris, "delete")
 
             return FrameCreateResponse(
                 status=OperationStatus.UPSERTED,

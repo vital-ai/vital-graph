@@ -11,7 +11,7 @@ Handles frame property updates, slot modifications, and frame graph URI preserva
 import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # VitalSigns imports
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
@@ -32,6 +32,8 @@ class UpdateFrameResult:
     validation_results: Dict[str, Any]
     message: str
     error: Optional[str] = None
+    # Deleted subjects the request did not re-send (`issues/256`).
+    removed_uris: List[str] = field(default_factory=list)
 
 
 class KGEntityFrameUpdateProcessor:
@@ -194,6 +196,7 @@ class KGEntityFrameUpdateProcessor:
                     updated_component_count=create_result.frame_count,
                     validation_results=validation_results,
                     message=message,
+                    removed_uris=list(create_result.removed_uris),
                 )
             else:
                 return UpdateFrameResult(

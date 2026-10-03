@@ -543,7 +543,11 @@ dead and are left as archive.
 
 ## What the fix is
 
-1. **Frame-graph replace for `update` and `upsert` on both frame routes.**
+1. **BUILT 2026-10-03 (see "Item 1, as built" below). DO NOT DEPLOY before
+   `issues/257`'s repair has run on the target database.** On the three
+   production copies, child frames and their slots are grouped under the ROOT;
+   a shallow update of such a root would delete them.
+   **Frame-graph replace for `update` and `upsert` on both frame routes.**
    For each frame the request sends, the delete set becomes the frame plus
    every subject whose `hasFrameGraphURI` is that frame. That restores the
    pre-2026-04-30 scope. Child frames are not included (open question 1).
@@ -574,6 +578,43 @@ dead and are left as archive.
 6. **Client: add an entity upsert.**
 7. **Status strings**: a successful frame upsert or update says UPSERTED or
    UPDATED, not CREATED.
+
+## Item 1, as built (2026-10-03)
+
+`update_subjects_graph` gains `replace_frame_graphs`. For each frame named, it
+resolves every subject whose `hasFrameGraphURI` is that frame, plus the frame
+itself, and deletes them with the request's subjects. That happens INSIDE the
+transaction, after the lock and the guard, so a slot added concurrently cannot
+slip between the read and the delete. Both processors' update/upsert paths
+(`kgentity_frame_create_impl` and `kgframe_create_impl`,
+`execute_atomic_frame_update`) pass the frames they write. `create` passes
+none: it replaces nothing.
+
+**The removed members' derived rows go too.** FTS rows are cleared in the same
+transaction (`sync_fts_before_delete`). The URIs of members deleted and not
+re-sent come back through a new `removed_uris` (on `CreateFrameResult` and
+`UpdateFrameResult`), and the three frame write handlers schedule an auto-sync
+DELETE for them, which clears vector, geo and fuzzy rows.
+
+**Shallow, by the grouping rule.** A parent -> child `Edge_hasKGFrame` carries no
+grouping (`issues/257`), so a child frame, its slots and the link to it are
+never in the parent's frame graph.
+
+**Tests:** `tests/api/test_frame_graph_replace.py`, on the vg test stack
+driven by the `vital-graph` conda env. **This is the first reproduction of this
+issue's defect through the API.** On the parent commit's server code, the four
+slot-left-out cases (update/upsert × entity/standalone) FAIL with "MERGED: the
+slot left out of the request survived", and the derived-row case fails. The two
+guards (a parent update leaves its child, its slot and the link alone; upserting
+one frame leaves another alone) pass, as they must before and after. With the
+change, all 7 pass. Full `tests/api` 572 tests, 0 failures; `tests/unit` 5,184
+tests, 6 failures, all `test_document_converter` (the env lacks `mammoth` and
+`pdfplumber`).
+
+**Not done here, recorded:** the entity-frame routes schedule no auto-sync for
+the subjects they WRITE (only, now, for those they remove), so a rewritten
+slot's vector row is not re-embedded on that route. That is an existing gap,
+not this change.
 
 ## Open questions
 

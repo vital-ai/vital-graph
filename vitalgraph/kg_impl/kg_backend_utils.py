@@ -48,6 +48,7 @@ from ..db.connection_config import require
 
 RDF_TYPE_URI = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
 VITALTYPE_URI = 'http://vital.ai/ontology/vital-core#vitaltype'
+HAS_FRAME_GRAPH_URI = 'http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI'
 
 
 def graph_is_uri(graph_id: Optional[str]) -> bool:
@@ -1437,8 +1438,28 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                                      conn=None,
                                      if_unmodified_since: Optional[str] = None,
                                      guard_subject: Optional[str] = None,
-                                     stamp_subjects: Optional[List[str]] = None) -> bool:
+                                     stamp_subjects: Optional[List[str]] = None,
+                                     replace_frame_graphs: Optional[List[str]] = None,
+                                     removed_uris: Optional[List[str]] = None) -> bool:
         """Atomically replace quads for a list of subject URIs.
+
+        ``replace_frame_graphs`` REPLACES WHOLE FRAME GRAPHS (`issues/256`).
+        For each frame named, every subject whose `hasFrameGraphURI` is that
+        frame, and the frame itself, is deleted along with `subject_uris`, so a
+        slot, slot edge or anything else the frame owns that the caller did not
+        re-send is GONE afterwards. Without it this deletes only the subjects
+        it is given, which made frame update and upsert a MERGE: a slot left
+        out of the request survived, still attached. `hasFrameGraphURI` IS the
+        frame graph (decided 2026-10-03); a parent -> child `Edge_hasKGFrame`
+        carries none, so child frames and their links are never in it and the
+        replace stays shallow. The members are resolved INSIDE the transaction,
+        after the lock, so a slot added concurrently cannot slip between the
+        read and the delete.
+
+        ``removed_uris``, if given, receives after the commit the URI of every
+        subject this deleted that the caller did not re-send, so the caller's
+        auto-sync can clear their vector, geo and fuzzy rows. Their FTS rows are
+        cleared here, in the transaction.
 
         Subject-level delete + insert in a single transaction.  Avoids the
         fragile quad-level UUID matching in ``remove_rdf_quads_batch_bulk``.
@@ -1503,6 +1524,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             g_uuid = _generate_term_uuid(graph_id, 'U')
             s_uuids = [_generate_term_uuid(uri, 'U') for uri in subject_uris]
 
+            _removed: List[str] = []
+
             async with _write_conn(self.backend.db_impl.connection_pool, conn) as conn:
                 _mark("acquire")
 
@@ -1555,7 +1578,36 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                                 if_unmodified_since)
                             _marks["guard"] = _time.monotonic()
 
-                        if s_uuids:
+                        # The FRAME GRAPHS being replaced (`issues/256`). The
+                        # frames themselves are included even without a
+                        # self-grouping, so a frame stored before its grouping
+                        # was set is still replaced, not merged.
+                        _del = list(s_uuids)
+                        if replace_frame_graphs:
+                            _f_uuids = [_generate_term_uuid(u, 'U')
+                                        for u in replace_frame_graphs]
+                            _members = await conn.fetch(
+                                f"SELECT DISTINCT subject_uuid FROM {t['rdf_quad']} "
+                                f"WHERE predicate_uuid = $1 AND object_uuid = ANY($2) "
+                                f"AND context_uuid = $3",
+                                _generate_term_uuid(HAS_FRAME_GRAPH_URI, 'U'),
+                                _f_uuids, g_uuid)
+                            _sent = set(s_uuids)
+                            _extra = list(dict.fromkeys(
+                                [u for u in _f_uuids if u not in _sent]
+                                + [r['subject_uuid'] for r in _members
+                                   if r['subject_uuid'] not in _sent]))
+                            if _extra:
+                                _del += _extra
+                                _removed[:] = [r['term_text'] for r in await conn.fetch(
+                                    f"SELECT term_text FROM {t['term']} "
+                                    f"WHERE term_uuid = ANY($1)", _extra)]
+                                from ..db.sparql_sql.sync_fts_delete import sync_fts_before_delete
+                                await sync_fts_before_delete(
+                                    conn, space_id, _extra, context_uuid=g_uuid)
+                            _marks["resolve"] = _time.monotonic()
+
+                        if _del:
                             # Sync auxiliary tables before delete.
                             #
                             # TIMED INDIVIDUALLY because the aggregate was
@@ -1569,10 +1621,10 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                             # the path that starves the connection pool.
                             _s0 = _time.monotonic()
                             from ..db.sparql_sql.sync_frame_slot_table import sync_frame_slot_before_delete
-                            await sync_frame_slot_before_delete(conn, space_id, s_uuids, context_uuid=g_uuid)
+                            await sync_frame_slot_before_delete(conn, space_id, _del, context_uuid=g_uuid)
                             _s1 = _time.monotonic()
                             from ..db.sparql_sql.sync_edge_table import sync_edge_table_before_delete
-                            await sync_edge_table_before_delete(conn, space_id, s_uuids, context_uuid=g_uuid)
+                            await sync_edge_table_before_delete(conn, space_id, _del, context_uuid=g_uuid)
                             _s2 = _time.monotonic()
                             from ..db.sparql_sql.sync_entity_slot_sort import (
                                 sync_entity_slot_sort_before_delete)
@@ -1587,14 +1639,14 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                             # gone. Timed like its siblings above, for the same
                             # reason: any of these scans can own the latency.
                             await sync_entity_slot_sort_before_delete(
-                                conn, space_id, s_uuids, context_uuid=g_uuid)
+                                conn, space_id, _del, context_uuid=g_uuid)
                             _s3 = _time.monotonic()
 
                             # Delete all quads for these subjects in this graph
                             result = await conn.execute(
                                 f"DELETE FROM {t['rdf_quad']} "
                                 f"WHERE subject_uuid = ANY($1) AND context_uuid = $2",
-                                s_uuids, g_uuid,
+                                _del, g_uuid,
                             )
                             _s4 = _time.monotonic()
                             # AND THE PROP TABLES AFTER IT, because a delete there
@@ -1604,16 +1656,16 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                             # rows. Before the delete it would re-derive the value
                             # being removed.
                             await sync_entity_prop_sort_after_change(
-                                conn, space_id, s_uuids, context_uuid=g_uuid)
+                                conn, space_id, _del, context_uuid=g_uuid)
                             await sync_frame_prop_sort_after_change(
-                                conn, space_id, s_uuids, context_uuid=g_uuid)
+                                conn, space_id, _del, context_uuid=g_uuid)
                             deleted = int(result.split()[-1]) if result else 0
                             self.logger.info(
                                 "⏱️  update_subjects_graph presync: frame_entity=%.3fs "
                                 "edge=%.3fs stats=%.3fs delete=%.3fs "
                                 "(%d subjects, %d quads deleted)",
                                 _s1 - _s0, _s2 - _s1, _s3 - _s2, _s4 - _s3,
-                                len(s_uuids), deleted)
+                                len(_del), deleted)
                         _mark("presync")
 
                         # Insert new quads
@@ -1656,6 +1708,9 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                 # the last statement the database will ever log for this session.
                 _mark("commit")
 
+            # After the commit, so a failed transaction reports nothing removed.
+            if removed_uris is not None:
+                removed_uris.extend(_removed)
             _t1 = _time.monotonic()
             self.logger.info("⏱️  update_subjects_graph: %.3fs (%d subjects) %s",
                              _t1 - _t0, len(subject_uris),

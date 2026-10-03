@@ -93,6 +93,10 @@ class CreateFrameResult:
     frame_count: int
     # Type names present in the payload that were NOT written (`issues/225`).
     unhandled_types: List[str] = field(default_factory=list)
+    # Subjects an update/upsert DELETED that the request did not re-send: the
+    # rest of a replaced frame graph (`issues/256`). The caller clears their
+    # vector/geo/fuzzy rows; their FTS rows were cleared in the transaction.
+    removed_uris: List[str] = field(default_factory=list)
 
 
 class KGFrameCreateProcessor:
@@ -166,11 +170,13 @@ class KGFrameCreateProcessor:
             # Step 3: Execute atomic operation
             mode_upper = str(operation_mode).upper() if operation_mode else "CREATE"
 
+            _removed: List[str] = []
             if mode_upper in ('UPDATE', 'UPSERT'):
                 success = await self.execute_atomic_frame_update(
                     backend_adapter, space_id, graph_id,
                     categories.frame_objects, all_objects, mode_upper,
                     if_unmodified_since=if_unmodified_since,
+                    removed_uris=_removed,
                 )
             else:
                 success = await self.execute_frame_creation(
@@ -193,7 +199,8 @@ class KGFrameCreateProcessor:
                     created_uris=created_uris,
                     message=_msg,
                     frame_count=len(categories.frame_objects),
-                    unhandled_types=_unhandled
+                    unhandled_types=_unhandled,
+                    removed_uris=_removed,
                 )
             else:
                 return CreateFrameResult(
@@ -353,9 +360,15 @@ class KGFrameCreateProcessor:
     async def execute_atomic_frame_update(self, backend_adapter: KGBackendInterface, space_id: str,
                                           graph_id: str, frame_objects: List[GraphObject],
                                           all_objects: List[GraphObject], operation_mode: str,
-                                          if_unmodified_since: Optional[str] = None) -> tuple:
+                                          if_unmodified_since: Optional[str] = None,
+                                          removed_uris: Optional[List[str]] = None) -> tuple:
         """
-        Execute atomic frame UPDATE/UPSERT via subject-level delete + insert.
+        Execute atomic frame UPDATE/UPSERT: each frame's WHOLE graph is replaced.
+
+        `issues/256`: the frames in the request are passed as
+        `replace_frame_graphs`, so everything grouped under them that the
+        request does not re-send is deleted. This deleted only the subjects in
+        the request, which made update and upsert a merge.
         """
         try:
             import time as _time
@@ -399,7 +412,10 @@ class KGFrameCreateProcessor:
                     lock_uris=_lock_uris or None,
                     if_unmodified_since=if_unmodified_since,
                     guard_subject=_lock_uris[0] if if_unmodified_since is not None else None,
-                    stamp_subjects=_lock_uris)
+                    stamp_subjects=_lock_uris,
+                    replace_frame_graphs=[str(f.URI) for f in frame_objects
+                                          if getattr(f, 'URI', None)],
+                    removed_uris=removed_uris)
             else:
                 delete_quads = await self.build_delete_quads_for_frames(
                     backend_adapter, space_id, graph_id, frame_objects)

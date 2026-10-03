@@ -1745,6 +1745,11 @@ class KGEntitiesEndpoint:
             # Handle processor result and maintain API compatibility
             if result.success:
                 self.logger.debug(f"Successfully created/updated {result.frame_count} frame objects")
+                # The rest of each replaced frame graph (`issues/256`): their
+                # vector/geo/fuzzy rows go too. FTS went in the transaction.
+                if result.removed_uris:
+                    self._schedule_auto_sync(backend_impl, space_id, graph_id,
+                                             result.removed_uris, "delete")
                 
                 # The entity stamp is written INSIDE the write transaction and
                 # under the entity lock now, by `update_subjects_graph`'s
@@ -2404,6 +2409,11 @@ class KGEntitiesEndpoint:
                 update_results.append(result)
                 if result.success:
                     updated_frame_count += 1
+                    # The rest of the replaced frame graph (`issues/256`):
+                    # its vector/geo/fuzzy rows go too. FTS went in the txn.
+                    if result.removed_uris:
+                        self._schedule_auto_sync(backend, space_id, graph_id,
+                                                 result.removed_uris, "delete")
             
             # Aggregate results
             successful_updates = [r for r in update_results if r.success]

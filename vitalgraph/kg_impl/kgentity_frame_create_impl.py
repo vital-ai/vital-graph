@@ -103,6 +103,10 @@ class CreateFrameResult:
     # caller's message can say so: reporting plain success for a payload that
     # was partly discarded is `issues/225`.
     unhandled_types: List[str] = field(default_factory=list)
+    # Subjects an update/upsert DELETED that the request did not re-send: the
+    # rest of a replaced frame graph (`issues/256`). The caller clears their
+    # vector/geo/fuzzy rows; their FTS rows were cleared in the transaction.
+    removed_uris: List[str] = field(default_factory=list)
 
 
 class KGEntityFrameCreateProcessor:
@@ -217,11 +221,13 @@ class KGEntityFrameCreateProcessor:
             self.logger.info(f"⏱️ PROCESSOR categorize+grouping+edges: {_p2-_p1:.3f}s")
             
             # Step 6: Execute atomic UPDATE/UPSERT or CREATE operation
+            _removed: List[str] = []
             if operation_mode and str(operation_mode).upper() in ['UPDATE', 'UPSERT']:
                 success = await self.execute_atomic_frame_update(backend_adapter, space_id, graph_id, 
                                                                categories.frame_objects, all_objects, operation_mode,
                                                                  entity_uri=entity_uri,
-                                                                 if_unmodified_since=if_unmodified_since)
+                                                                 if_unmodified_since=if_unmodified_since,
+                                                                 removed_uris=_removed)
             else:
                 # Step 7: Execute atomic creation via backend (extracted from lines 1125-1145)
                 success = await self.execute_frame_creation(backend_adapter, space_id, graph_id, all_objects,
@@ -246,7 +252,8 @@ class KGEntityFrameCreateProcessor:
                     created_uris=created_uris,
                     message=_msg,
                     frame_count=len(categories.frame_objects),
-                    unhandled_types=_unhandled
+                    unhandled_types=_unhandled,
+                    removed_uris=_removed,
                 )
             else:
                 return CreateFrameResult(
@@ -481,9 +488,16 @@ class KGEntityFrameCreateProcessor:
                                         graph_id: str, frame_objects: List[GraphObject], all_objects: List[GraphObject],
                                         operation_mode: str,
                                         entity_uri: Optional[str] = None,
-                                        if_unmodified_since: Optional[str] = None) -> tuple:
+                                        if_unmodified_since: Optional[str] = None,
+                                        removed_uris: Optional[List[str]] = None) -> tuple:
         """
-        Execute atomic frame UPDATE/UPSERT via subject-level delete + insert.
+        Execute atomic frame UPDATE/UPSERT: each frame's WHOLE graph is replaced.
+
+        `issues/256`: the frames in the request are passed as
+        `replace_frame_graphs`, so everything grouped under them that the
+        request does not re-send is deleted. This deleted only the subjects in
+        the request, which made update and upsert a merge: a slot left out
+        survived, still attached.
         
         Collects subject URIs from all objects being written, deletes their
         existing quads via direct SQL, then inserts new quads — all in one
@@ -527,7 +541,10 @@ class KGEntityFrameCreateProcessor:
                     # rather than after the write is what makes the comparison
                     # race-free for the next writer.
                     if_unmodified_since=if_unmodified_since,
-                    guard_subject=entity_uri)
+                    guard_subject=entity_uri,
+                    replace_frame_graphs=[str(f.URI) for f in frame_objects
+                                          if getattr(f, 'URI', None)],
+                    removed_uris=removed_uris)
                 t2 = time.time()
                 self.logger.info(f"⏱️ FRAME_UPDATE step2 update_subjects_graph: {t2-t1:.3f}s "
                                f"({len(subject_uris)} subjects, {len(insert_quads)} quads)")
