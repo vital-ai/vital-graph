@@ -236,6 +236,21 @@ for a target that is absent.
 | `DELETE /kgentities/kgframes` | the frame graph by `hasFrameGraphURI` + `Edge_hasEntityKGFrame` + incoming `Edge_hasKGFrame` (`kgentity_frame_delete_impl.py`); `recursive` for descendants, otherwise refused if there are children | ownership check, SPARQL discovery, then one `DELETE DATA` of the discovered quads. No lock, and discovery is not in the delete's transaction. The entity is stamped AFTER, outside the lock (acknowledged at `kgentities_endpoint.py:2214`). | STORE_FAILED (ownership finds nothing) | Scope correct. **Not atomic with its discovery and not locked**: a frame write landing between discovery and delete leaves its new slots behind. Quad-level delete is again the pattern 2026-04-30 retired. Frames that fail ownership are skipped and the response is still DELETED, with the skip mentioned only in the message. **TO FIX (decided 2026-10-02)**: see "Entity-frame delete fix" below. |
 | `DELETE /kgframes` (single, `uri_list`) | the frame graph by `hasFrameGraphURI` + the frame's own triples + incoming/outgoing `Edge_hasKGFrame` + `Edge_hasEntityKGFrame` (`_delete_frame_from_backend`, `kgframes_endpoint.py:2864`); `recursive` likewise | **five separate SPARQL updates per frame**, frame by frame, no transaction, no lock | single: NOT_FOUND. Batch: counted as not deleted, so PARTIAL or STORE_FAILED | Scope correct. **Not atomic at any level**: a failure part-way through a recursive delete leaves a partial subtree, possibly children whose parent edge is already gone. **It also deletes ENTITY-owned frames with none of the entity route's handling**: no ownership check, no entity lock, no entity stamp, no entity-cache invalidation. A frame deleted this way stays in the cached entity graph, and a caller holding `if_unmodified_since` sees no change. **TO FIX (decided 2026-10-02)**: see "`/kgframes` delete and `replace` fix" below. |
 
+**FIXED 2026-10-03 (uncommitted): entity graph delete — absent is NO_OP, and the
+members' derived rows go with it.** `delete_entity_graph_bulk` resolves the
+member URIs in its transaction and returns them through a new `collected_uris`
+argument, filled after the commit. `delete_entity_graph_direct` and the
+processor RAISE on failure instead of returning 0, so 0 now means absent. The
+single and batch endpoints answer NO_OP for absent and STORE_FAILED only for a
+real failure. The batch reports per URI ("deleted"/"absent"/"failed") and hands
+auto-sync every member. `BaseDeleteResponse` and the client `DeleteResponse`
+gain `absent_uris`, and the client batch delete gains the
+`delete_entity_graph` argument the server always accepted. Verified on the
+rebuilt vg test stack, driven by the `vital-graph` conda env:
+`tests/api/test_delete_contract.py` 8/8 FAIL on HEAD's server code, each for
+its own defect, and 8/8 PASS with the fix. With six neighbouring API modules
+(entities, residue, cache, entity frames, workflows, geo) it is 63/63 pass.
+
 **The entity graph delete's derived-data leak, verified by reading
 2026-10-02.** This corrects the first version of this section, which said FTS.
 FTS is FINE: `delete_entity_graph_bulk` clears the members' FTS rows itself, in
@@ -544,7 +559,12 @@ dead and are left as archive.
    using the deterministic URIs from `kg_impl/edge_uris.py` (`issues/253`) so a
    replay adds nothing.
 3. **`create` refuses an existing frame** with ALREADY_EXISTS, matching entity
-   `create`. Standalone **`update` refuses a missing frame** with NOT_FOUND.
+   `create` (DECIDED 2026-10-02, open question 3). As on the entity route, ANY
+   sub-object URI in the payload that already exists (slot, slot edge, child
+   frame) refuses the request, not only the frame URI. The check runs inside the
+   write transaction, after the lock, so two concurrent creates of one frame
+   cannot both pass it. Standalone **`update` refuses a missing frame** with
+   NOT_FOUND.
 4. **`replace` becomes one transaction, guarded, and scoped to what it names**
    (decided): the named frames plus their descendants, on both routes, with or
    without `parent_frame_uri`. Entity-frame `replace` stops deleting the
@@ -562,14 +582,75 @@ dead and are left as archive.
    shallow; `replace` is the deep, subtree mode. The fix must keep
    `test_update_preserves_children` green. Concretely, the delete set is
    resolved by `hasFrameGraphURI = <frame>` and does NOT follow `Edge_hasKGFrame`.
-2. **Does every slot and slot edge carry `frameGraphURI`?** The fix deletes by
-   it. A slot without it would survive the replace with nothing to show it. Run
-   a census on dev and the vg stack before landing: count subjects reachable
-   from a frame via `Edge_hasKGSlot` whose `frameGraphURI` is missing or names a
-   different frame. If any exist, repair the data first, or include
-   `Edge_hasKGSlot` reachability in the delete set.
-3. **Does any caller rely on `create` overwriting? YES, and `issues/253` is
-   built on it.** The test survey (below) found three tests that create an
+2. **Does every slot and slot edge carry `hasFrameGraphURI`? NO, and the
+   census rules out deleting by it.** Run 2026-10-02/03 on the dev cluster (all
+   44 spaces) from the raw quad table, not the `_edge` projection, which is
+   known to be incomplete. For every `Edge_hasKGSlot` (frame F → slot S) it
+   counts: S missing the grouping, S grouped under a frame other than F, the
+   edge missing `hasFrameGraphURI = F`, and slots linked from more than one
+   frame.
+
+   | spaces | slot edges | finding |
+   |---|---:|---|
+   | API-written test spaces (≈20) | 12–320 each | clean |
+   | production copies: underwriting, lead test, actions | 122k–401k | clean (1 slot edge points at an absent slot) |
+   | **production copies: the main KG space, its newer copy, its archive** | 61k–312k | **913–925 slots grouped under ANOTHER frame**; 1 slot edge missing the grouping |
+   | **bulk-loaded / generated** (`sp_lead_*`, `sp_graph_synth_*`, `sp_kg_rel`, `sp_lead_types`, `kgquery_perf`, `wordnet_frames`, `sp_sql_lead_dataset`) | 220–570k | **no `hasFrameGraphURI` at all**: no term for it exists in the space. `sp_lead_depth1` has no `hasKGGraphURI` either |
+   | `space_client_kgentities_test` | 14 | 9 of 14 slots missing it |
+   | no slot shared between two frames | | in any space |
+
+   (The two 100k-entity synthetic spaces were still running when this was
+   written. They are loaded the same way as the other synthetic spaces.)
+
+   **The 925, classified** (main KG production copy): in ALL of them the frame
+   the slot is grouped under exists and is the PARENT of the linking frame (232
+   child frames under 226 parents). The child frame itself carries
+   `hasFrameGraphURI` = the parent too. So these subtrees are grouped under
+   their ROOT frame, not per frame. They are campaign entities written by the
+   API service.
+
+   **Consequence for fix item 1, which deleted by `hasFrameGraphURI`:**
+   - a shallow `update`/`upsert` of such a PARENT would delete its CHILD
+     frames' slots, and the children themselves. Data loss;
+   - a replace of such a CHILD would miss its own slots. Silent stale data, the
+     defect this issue exists to fix;
+   - on bulk-loaded spaces it would delete nothing but the frame.
+
+   **DECIDED 2026-10-03: `hasFrameGraphURI` IS the definition of a frame
+   graph.** A structure-based delete set (following `Edge_hasKGSlot`) was
+   proposed and REJECTED. The fix deletes by `hasFrameGraphURI`, as the
+   contract says. Data that does not carry a correct grouping is the defect, and
+   the server's writers must never produce it. So before fix item 1 can land
+   safely on these spaces:
+   - the groupings the census found wrong or missing are repaired, as a data
+     task with its own issue. **The rule (DECIDED 2026-10-03): every frame is
+     grouped with ITSELF.** Concretely:
+     - a `KGFrame`'s `hasFrameGraphURI` is its own URI;
+     - a slot's is the frame that links it by `Edge_hasKGSlot`;
+     - an `Edge_hasKGSlot`'s is its source frame.
+
+     So the 913–925 root-grouped child frames and their slots in the three
+     production copies are regrouped under the child, and the bulk-loaded
+     spaces are backfilled by the same rule. Nothing that a frame does not own
+     carries its grouping, which is what keeps `update` shallow and makes
+     `replace` the only subtree operation;
+   - every server path that can store a wrong or missing grouping is closed
+     (below), so the repaired data stays right.
+
+   **How the bad groupings got in — two server-side openings, by reading:**
+   - `_update_entity_frames` (pass 2) TAKES a slot's `hasFrameGraphURI` from the
+     payload when the client sent one (`if graph_obj.frameGraphURI:`), and only
+     infers it otherwise. The doc rule is that clients never set grouping URIs
+     (`frame_hierarchy_consistency_plan.md` §5); this path trusts them.
+   - `validation_utils.analyze_frame_structure_for_grouping`, which the update
+     processor uses through `graph_operations.set_dual_grouping_uris`, knows
+     only six slot classes (text, integer, boolean, double, datetime, entity).
+     Choice, URI, geo, currency and other slots keep whatever grouping they
+     arrived with. `graph_operations.py` also defines `set_dual_grouping_uris`
+     TWICE (`:63` and `:401`); the second silently replaces the first.
+   Which writer produced the 925 is not established.
+3. ~~**Does any caller rely on `create` overwriting?**~~ **DECIDED: create
+   refuses (option a).** It did rely on it, and `issues/253` is built on it. The test survey (below) found three tests that create an
    existing frame URI and assert SUCCESS:
    - `test_a_stale_frame_write_is_refused_over_http.py::test_the_newer_value_survives_the_slower_save`,
      which is literally named for "the reported symptom": the portal's autosave
@@ -584,17 +665,32 @@ dead and are left as archive.
    that landed answers ALREADY_EXISTS, a reported failure for a write that
    succeeded (`issues/253` already names this shape).
 
-   **So item 3 of the fix conflicts with a shipped contract, and probably with
-   the portal's write pattern.** Choose one:
-   - (a) **create refuses**, matching entity create. The portal moves to
-     `upsert`, the three tests are rewritten to `upsert`, and the four client
-     methods lose replay-safe.
-   - (b) **create keeps overwriting** for frames. Then frame `create` IS
-     `upsert`, and the contract table should say so, which is a different rule
-     from entity create.
+   **DECIDED 2026-10-02: (a), create refuses** on every route, so `create`
+   means one thing for entities and frames. Writing a frame that may already
+   exist is `upsert`. What follows from it:
 
-   Decide before the fix, and confirm the portal's mode from its code or the
-   API request logs, not from this repo.
+   - **The portal moves to `upsert` FIRST.** If it re-creates frames today,
+     every autosave after the server change would answer ALREADY_EXISTS. That
+     answer arrives in a 200 body the portal does not read (`issues/253`), so the
+     saves would be lost silently. Confirm the portal's mode from its code or
+     from the API request logs (`POST /kgentities/kgframes` by
+     `operation_mode`), and ship the portal change, deployed and verified, before
+     the server change. The same applies to the API service's frame writes.
+   - **The three `issues/253` tests move to `upsert`.** They keep their purpose
+     (a stale stamp is refused, the newer value survives) under the mode a
+     re-writing caller now uses. A fourth test pins the new rule: create on an
+     existing frame answers ALREADY_EXISTS and changes nothing (F2/S2).
+   - **The four create methods lose replay-safe** in
+     `test_the_client_may_replay_a_safe_write.py`: `create_entity_frames`,
+     `create_kgframes`, `create_child_frames`, `create_kgframes_with_slots`. A
+     retried create that had landed would answer ALREADY_EXISTS, reporting
+     failure for a write that succeeded. The corresponding `upsert` calls are
+     replay-safe (a delete-then-insert replay is a no-op, per `issues/253`).
+     Whether the client marks them so depends on how it distinguishes modes in
+     one method. Today `operation_mode` is an argument, so the marking has to
+     follow the argument, not the method name.
+   - **Clients that retry a create should treat ALREADY_EXISTS on a RETRY as
+     ambiguous**, not as a failure. Out of scope here; noted for the client.
 
 ## Test plan
 
@@ -683,7 +779,7 @@ status-only or incomplete. **vacuous** = passes whatever the server does.
 | id | case | existing | status | action | today |
 |---|---|---|---|---|---|
 | F1 | create new → linked and listed | `case_kgentity_child_frame_update.py::test_create_new_child_frame_creates_edge`; `test_entity_frames_api.py` | ok | keep | pass |
-| F2 | create existing frame | `test_a_stale_frame_write_is_refused_over_http.py` (2 tests) | **CONTRADICTS** | per open question 3 | — |
+| F2 | create existing frame → ALREADY_EXISTS, frame unchanged (raw count + slot value) | `test_a_stale_frame_write_is_refused_over_http.py` (2 tests) | **CONTRADICTS** | move those two to `upsert`; write this one | **fail (overwrites)** |
 | F3 | update missing frame → NOT_FOUND | none | none | write | check |
 | F4 | update with slot omitted → slot and its edge gone | none | none | write | **fail (merge)** |
 | F5 | update keeps child frames | none on this route | none | port `test_update_preserves_children` | pass |
@@ -703,7 +799,7 @@ status-only or incomplete. **vacuous** = passes whatever the server does.
 | id | case | existing | status | action | today |
 |---|---|---|---|---|---|
 | S1 | create new | `test_kgframes_api.py::test_create_frame` | ok | keep | pass |
-| S2 | create existing | `test_a_stale_standalone_frame_write_is_refused.py` (2 tests) | **CONTRADICTS** | per open question 3 | — |
+| S2 | create existing → ALREADY_EXISTS, frame unchanged; also when only a SLOT URI in the payload already exists | `test_a_stale_standalone_frame_write_is_refused.py` (2 tests) | **CONTRADICTS** | move those two to `upsert`; write this one | **fail (overwrites)** |
 | S3 | update missing → NOT_FOUND | `::test_the_batch_still_works_unconditionally` | **CONTRADICTS** (updates a never-created frame, asserts success) | rewrite to create first | **fail (creates it)** |
 | S4 | update with slot omitted → gone | none | none | write | **fail (merge)** |
 | S5 | update keeps child frames | `case_kgframe_hierarchy.py::test_update_preserves_children` | ok, but `case_*` on the dev URL | port to `tests/api` | pass |
@@ -723,11 +819,11 @@ status-only or incomplete. **vacuous** = passes whatever the server does.
 | D1c | entity delete, default flag, racing a frame create: under a held entity lock, start the delete and a frame create, release. Either the create lands first and the delete is refused, or the delete lands first and the create is refused (entity not found). Never an orphaned frame | none | none | write (integration, holds `lock_entities`) | **fail** |
 | D1d | batch delete, default flag, one entity with members → refused per URI, the others deleted, status PARTIAL | none | none | write | **fail** |
 | D2 | entity graph delete removes frames AND slots AND edges | `test_entity_graph_delete_residue.py` (frames only) | weak | extend to slots and edges | pass |
-| D3 | absent entity, graph delete → NO_OP (and entity-only → NO_OP, already) | `case_kgentity_delete.py` Test 4 | vacuous | write | **fail (STORE_FAILED)** |
-| D4 | batch with one absent → DELETED, the absent one in `absent_uris`, the others deleted; all absent → NO_OP | none for absent | none | write | **fail** |
+| D3 | absent entity → NO_OP with `absent_uris`, graph and entity-only | `test_delete_contract.py::test_deleting_an_absent_entity_is_no_op` | **ok — FIXED** | done | old code: graph **STORE_FAILED**, entity-only lacked `absent_uris`; fixed: pass |
+| D4 | batch with one absent → DELETED, the absent one in `absent_uris`; all absent → NO_OP; graph and entity-only | `test_delete_contract.py::test_a_batch_with_an_absent_entity_is_deleted_and_names_it`, `::test_a_batch_where_everything_is_absent_is_no_op` | **ok — FIXED** | done | old code: **PARTIAL** / **STORE_FAILED**; fixed: pass |
 | D5 | graph delete, single: the members' FTS rows are gone, through the API | unit source check only | weak | write | pass |
-| D5b | graph delete, single: a slot's VECTOR row is gone (and geo, where a fixture has geo on a slot) after auto-sync settles | none | none | write | **fail (only the entity URI is synced)** |
-| D5c | graph delete, BATCH: same as D5b | none | none | write | **fail (no `collected_uris` at all)** |
+| D5b | graph delete, single: a slot's derived row is gone after auto-sync (checked through geo, seeded for the slot, geo + auto_sync enabled via the API) | `test_delete_contract.py::test_graph_delete_removes_a_slots_derived_rows` | **ok — FIXED** | done | old code: **row outlived the entity**; fixed: pass |
+| D5c | graph delete, BATCH: same as D5b | `test_delete_contract.py::test_batch_graph_delete_removes_a_slots_derived_rows` | **ok — FIXED** | done | old code: **row outlived the entity**; fixed: pass |
 | D6 | entity-frame delete, recursive refused / cascade | `case_kgentity_frame_hierarchical.py` (2 tests) | ok, `case_*` | port to `tests/api` | pass |
 | D7 | entity-frame delete of another entity's frame → INVALID_REQUEST, frame unchanged (raw count) | `case_kgentity_frame_delete.py::test_frame_deletion_ownership_validation` | NR, broken | write | **fail (STORE_FAILED)** |
 | D7b | mixed request: one own frame + one another entity's → INVALID_REQUEST, NEITHER deleted | none | none | write | **fail (deletes own, says DELETED)** |

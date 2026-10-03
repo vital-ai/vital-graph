@@ -425,6 +425,9 @@ class DeleteResponse(VitalGraphResponse):
     
     deleted_count: int = Field(default=0, description="Number of items deleted")
     deleted_uris: List[str] = Field(default_factory=list, description="URIs of deleted items")
+    absent_uris: List[str] = Field(
+        default_factory=list,
+        description="Requested URIs that were already absent (NO_OP, not a failure)")
     
     space_id: Optional[str] = Field(default=None, description="Space ID from request")
     graph_id: Optional[str] = Field(default=None, description="Graph ID from request")

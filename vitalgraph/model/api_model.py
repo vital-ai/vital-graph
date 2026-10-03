@@ -75,6 +75,11 @@ class BaseDeleteResponse(ResultStatus):
     )
     deleted_count: int = Field(..., description="Number of items deleted")
     deleted_uris: Optional[List[str]] = Field(None, description="URIs of the deleted items (when available)")
+    absent_uris: Optional[List[str]] = Field(
+        None,
+        description=("Requested URIs that were already absent. Not a failure: the "
+                     "delete achieved what was asked, so a replayed delete reads as "
+                     "NO_OP rather than as an error (`issues/256`)."))
 
 
 class BaseOperationResponse(ResultStatus):

@@ -1747,13 +1747,22 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             return []
 
     async def delete_entity_graph_bulk(self, space_id: str, graph_id: str,
-                                       entity_uri: str, conn=None) -> int:
+                                       entity_uri: str, conn=None,
+                                       collected_uris: Optional[List[str]] = None) -> int:
         """Delete all quads belonging to an entity graph in one SQL operation.
 
         Finds all subjects whose ``hasKGGraphURI`` points to *entity_uri*,
         then deletes every quad with those subjects (within the given graph
         context) in a single ``DELETE … WHERE subject_uuid = ANY(…)`` call.
-        Returns the number of deleted quads.
+        Returns the number of deleted quads; 0 means there was nothing to
+        delete. A failure RAISES, so 0 is never a failure.
+
+        ``collected_uris``, if given, receives the URI of every subject this
+        deleted, after the commit. FTS rows are cleaned here, in the
+        transaction, but vector, geo and fuzzy rows are cleaned per subject by
+        the caller's auto-sync, which needs the members and not just the entity
+        (`issues/256`). Without this the caller handed auto-sync
+        ``[entity_uri]`` alone, and every slot's vector row outlived the entity.
         """
         import time as _time
         _t0 = _time.monotonic()
@@ -1844,6 +1853,15 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 )
                 deleted = len(deleted_rows)
 
+                # The members' URIs, for the caller's auto-sync. Resolved from
+                # the term table, which the delete does not touch, and only for
+                # subjects that had rows: a member uuid with nothing deleted was
+                # never in the graph.
+                _had_rows = list({r['subject_uuid'] for r in deleted_rows})
+                member_uris = [r['term_text'] for r in await conn.fetch(
+                    f"SELECT term_text FROM {t['term']} WHERE term_uuid = ANY($1)",
+                    _had_rows)] if _had_rows else []
+
                 # entity_prop_sort re-derives from the SURVIVING quads, so unlike
                 # every sync above it runs AFTER the delete: removing one value
                 # of a multi-valued property moves the stored MIN rather than
@@ -1885,7 +1903,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                         "empty entity graph. See issues/092.",
                         space_id, entity_uri, orphaned)
 
-                return subject_uuids, deleted, edge_deleted
+                return subject_uuids, deleted, edge_deleted, member_uris
 
             # Retry a deadlock victim: this transaction takes stats-table
             # locks alongside a potentially large delete, and losing it
@@ -1907,7 +1925,11 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     what=f"delete_entity_graph_bulk({space_id}, {entity_uri})")
             if _result is None:
                 return 0
-            subject_uuids, deleted, edge_deleted = _result
+            subject_uuids, deleted, edge_deleted, member_uris = _result
+            # After the commit, so a retried transaction cannot report its
+            # members twice.
+            if collected_uris is not None:
+                collected_uris.extend(member_uris)
 
             _t1 = _time.monotonic()
             logger.info(

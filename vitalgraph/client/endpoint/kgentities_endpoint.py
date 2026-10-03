@@ -830,6 +830,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 requested_uris=[uri],
                 deleted_count=deleted_count,
                 deleted_uris=deleted_uris,
+                absent_uris=response_data.get('absent_uris') or [],
                 metadata={'delete_entity_graph': delete_entity_graph}
             )
             
@@ -851,7 +852,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
         self, 
         space_id: str, 
         graph_id: str, 
-        uri_list: List[str]
+        uri_list: List[str],
+        delete_entity_graph: bool = False
     ) -> DeleteResponse:
         """
         Delete multiple KGEntities by URI list.
@@ -860,6 +862,9 @@ class KGEntitiesEndpoint(BaseEndpoint):
             space_id: Space identifier
             graph_id: Graph identifier
             uri_list: List of KGEntity URIs to delete
+            delete_entity_graph: If True, delete each entity's entire graph.
+                The server always accepted this; the client could not send it,
+                so a client batch delete was always entity-only (`issues/256`).
             
         Returns:
             DeleteResponse containing deletion results
@@ -876,7 +881,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
             params = build_query_params(
                 space_id=space_id,
                 graph_id=graph_id,
-                uri_list=",".join(uri_list)
+                uri_list=",".join(uri_list),
+                delete_entity_graph=delete_entity_graph
             )
             
             response = await self._make_request('DELETE', url, params=params)
@@ -894,7 +900,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 graph_id=graph_id,
                 requested_uris=uri_list,
                 deleted_count=deleted_count,
-                deleted_uris=deleted_uris
+                deleted_uris=deleted_uris,
+                absent_uris=response_data.get('absent_uris') or [],
             )
             
         except VitalGraphClientError:

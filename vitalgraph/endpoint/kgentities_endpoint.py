@@ -7,7 +7,7 @@ KG entities represent knowledge graph entities with their associated triples and
 
 import asyncio
 import logging
-from typing import Dict, List, Literal, Optional, Union, Any
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 from fastapi import APIRouter, Query, Depends, Request, Response, Body, HTTPException
 from pydantic import BaseModel, Field, TypeAdapter
 from enum import Enum
@@ -1333,7 +1333,8 @@ class KGEntitiesEndpoint:
                         status=OperationStatus.NO_OP,
                         message=f"Entity {uri} not found - no deletion performed",
                         deleted_count=0,
-                        deleted_uris=[]
+                        deleted_uris=[],
+                        absent_uris=[str(uri)],
                     )
             
             # Every member subject the graph delete removes, so derived data
@@ -1343,15 +1344,37 @@ class KGEntitiesEndpoint:
             # (issues/217).
             removed_uris: List[str] = []
             if delete_entity_graph:
-                # Delete entire entity graph using processor
+                # Delete entire entity graph using processor.
+                #
+                # ABSENT IS NOT A FAILURE (`issues/256`). The processor returns
+                # 0 for an entity graph that was not there and RAISES when the
+                # delete fails; this answered STORE_FAILED for both, so a
+                # replayed delete read as an error. Absent is NO_OP, the status
+                # `BaseDeleteResponse` documents for exactly this.
                 self.logger.info(f"🔥 ENDPOINT: Calling delete_processor.delete_entity_graph() for {uri}")
-                deleted_count = await delete_processor.delete_entity_graph(
-                    backend_adapter, space_id, graph_id, uri,
-                    collected_uris=removed_uris)
+                try:
+                    deleted_count = await delete_processor.delete_entity_graph(
+                        backend_adapter, space_id, graph_id, uri,
+                        collected_uris=removed_uris)
+                except Exception as _de:
+                    self.logger.error("Entity graph delete failed for %s: %s", uri, _de)
+                    return EntityDeleteResponse(
+                        status=OperationStatus.STORE_FAILED,
+                        message=f"Failed to delete KG entity graph '{str(uri)}': {_de}",
+                        deleted_count=0,
+                        deleted_uris=[],
+                    )
                 self.logger.info(f"🔥 ENDPOINT: delete_entity_graph returned: {deleted_count}")
+                if deleted_count == 0:
+                    return EntityDeleteResponse(
+                        status=OperationStatus.NO_OP,
+                        message=f"Entity {uri} not found - no deletion performed",
+                        deleted_count=0,
+                        deleted_uris=[],
+                        absent_uris=[str(uri)],
+                    )
                 deletion_type = "entity graph (via kgGraphURI)"
-                success = deleted_count > 0
-                self.logger.debug(f"🔍 DEBUG: delete_entity_graph returned: {deleted_count} (type: {type(deleted_count)})")
+                success = True
             else:
                 # Delete only the specific entity using processor
                 result = await delete_processor.delete_entity(backend_adapter, space_id, graph_id, uri)
@@ -1422,77 +1445,98 @@ class KGEntitiesEndpoint:
             # Use KGEntityDeleteProcessor
             delete_processor = KGEntityDeleteProcessor()
 
-            async def _delete_one(entity_uri: str) -> bool:
+            # Each URI reports one of three outcomes (`issues/256`):
+            #   "deleted" — and, for a graph delete, the members it removed;
+            #   "absent"  — nothing was there, which is NOT a failure;
+            #   "failed"  — the delete raised.
+            # This returned a bool, so absent and failed were the same False and
+            # the batch could only report "they may be absent, or the deletes may
+            # have failed". It also discarded the members, so the auto-sync below
+            # was handed entity URIs alone and every member's vector, geo and
+            # fuzzy rows outlived the batch.
+            async def _delete_one(entity_uri: str) -> Tuple[str, List[str]]:
                 try:
                     if delete_entity_graph:
+                        members: List[str] = []
                         count = await delete_processor.delete_entity_graph(
-                            backend_adapter, space_id, graph_id, entity_uri
+                            backend_adapter, space_id, graph_id, entity_uri,
+                            collected_uris=members,
                         )
-                        return count > 0
+                        return ("deleted", members) if count > 0 else ("absent", [])
                     else:
+                        if not await delete_processor.entity_exists(
+                                backend_adapter, space_id, graph_id, entity_uri):
+                            return ("absent", [])
                         result = await delete_processor.delete_entity(
                             backend_adapter, space_id, graph_id, entity_uri
                         )
-                        return result.success if hasattr(result, 'success') else bool(result)
+                        ok = result.success if hasattr(result, 'success') else bool(result)
+                        return ("deleted", []) if ok else ("failed", [])
                 except Exception as e:
                     self.logger.error(f"Error deleting entity {entity_uri}: {e}")
-                    return False
+                    return ("failed", [])
             
             # BOUNDED (`issues/231`): this is the site where the archive
             # script's `--batch 10` became 100 concurrent server-side deletes.
             results = await bounded_gather(
                 [partial(_delete_one, u) for u in uris])
             
-            deleted_uris_list = [str(u) for u, ok in zip(uris, results) if ok]
+            deleted_uris_list = [str(u) for u, (o, _) in zip(uris, results) if o == "deleted"]
+            absent_uris_list = [str(u) for u, (o, _) in zip(uris, results) if o == "absent"]
+            failed_count = sum(1 for o, _ in results if o == "failed")
             deleted_count = len(deleted_uris_list)
             
             # Invalidate entity graph cache for all successfully deleted entities
             for _del_uri in deleted_uris_list:
                 await self._invalidate_entity_cache(space_id, graph_id, _del_uri, "deleted")
             
-            # Auto-sync vector/geo data for deleted entities
-            if deleted_uris_list:
-                self._schedule_auto_sync(backend_impl, space_id, graph_id, deleted_uris_list, "delete")
+            # Auto-sync vector/geo/fuzzy data for the deleted entities AND their
+            # members. dict.fromkeys keeps order and drops an entity that is its
+            # own member.
+            _sync_uris = list(dict.fromkeys(
+                deleted_uris_list
+                + [m for o, ms in results if o == "deleted" for m in ms]))
+            if _sync_uris:
+                self._schedule_auto_sync(backend_impl, space_id, graph_id, _sync_uris, "delete")
 
             self.logger.debug(f"Successfully deleted {deleted_count} KG entities")
             
-            # `status` FOLLOWS THE OUTCOME. `issues/243`.
-            #
-            # `deleted_count` here is honest — it counts the URIs whose delete
-            # returned ok — but `status` was a hardcoded `DELETED`, so a batch where
-            # EVERY delete failed came back as `status=deleted` with the message
-            # "Successfully deleted 0 KG entities". `PARTIAL` exists for the mixed
-            # case and was never used.
-            #
-            # The zero case is reported as STORE_FAILED rather than NOT_FOUND, and
-            # that is a KNOWN IMPRECISION rather than a choice: `_delete_one`
-            # returns False both for an exception AND for a legitimately absent
-            # entity (`count > 0` is False when there was nothing to delete), so
-            # failure and absence are indistinguishable at this point. Separating
-            # them means changing what `_delete_one` returns; until then the
-            # stricter of the two is the safer report, because a caller retrying a
-            # STORE_FAILED loses nothing while one trusting a NO_OP stops looking.
+            # `status` FOLLOWS THE OUTCOME (`issues/243`), and ABSENT COUNTS AS
+            # SATISFIED (`issues/256`): a delete of something already gone did
+            # what was asked. So the status turns on FAILURES alone —
+            #   none failed, something deleted  -> DELETED
+            #   none failed, nothing there       -> NO_OP
+            #   some failed, some satisfied      -> PARTIAL
+            #   all failed                       -> STORE_FAILED
+            # and `absent_uris` says which were already gone.
             requested = len(uris)
-            if deleted_count == requested:
+            if failed_count == 0 and deleted_count > 0:
                 status = OperationStatus.DELETED
                 message = (f"Successfully deleted {deleted_count} KG entities from "
-                           f"graph '{graph_id}' in space '{space_id}'")
-            elif deleted_count > 0:
+                           f"graph '{graph_id}' in space '{space_id}'"
+                           + (f"; {len(absent_uris_list)} were already absent"
+                              if absent_uris_list else ""))
+            elif failed_count == 0:
+                status = OperationStatus.NO_OP
+                message = (f"None of the {requested} requested KG entities exist in "
+                           f"graph '{graph_id}' in space '{space_id}' - no deletion performed")
+            elif failed_count < requested:
                 status = OperationStatus.PARTIAL
                 message = (f"Deleted {deleted_count} of {requested} KG entities from "
                            f"graph '{graph_id}' in space '{space_id}'; "
-                           f"{requested - deleted_count} were not deleted")
+                           f"{len(absent_uris_list)} were already absent; "
+                           f"{failed_count} failed")
             else:
                 status = OperationStatus.STORE_FAILED
-                message = (f"None of the {requested} requested KG entities were "
-                           f"deleted from graph '{graph_id}' in space '{space_id}' "
-                           f"(they may be absent, or the deletes may have failed)")
+                message = (f"All {requested} requested KG entity deletes failed in "
+                           f"graph '{graph_id}' in space '{space_id}'")
 
             return EntityDeleteResponse(
                 status=status,
                 message=message,
                 deleted_count=deleted_count,
-                deleted_uris=deleted_uris_list
+                deleted_uris=deleted_uris_list,
+                absent_uris=absent_uris_list,
             )
 
         except HTTPException:

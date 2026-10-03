@@ -127,16 +127,25 @@ class KGEntityDeleteProcessor:
                 and return only a count.
 
         Returns:
-            int: Number of objects deleted (0 if failed)
+            int: non-zero if anything was deleted, 0 if the entity graph was
+            ABSENT. A failure RAISES (`issues/256`): this returned 0 for both,
+            so the endpoint could not tell "already gone" (NO_OP) from "the
+            delete failed" (STORE_FAILED) and reported both as a failure.
         """
         try:
             import time
             start_time = time.time()
             self.logger.info(f"🔥 DELETE ENTITY GRAPH START: {entity_uri} from graph: {graph_id}")
             
-            # Fast path: direct SQL bulk delete (SparqlSQLBackendAdapter)
+            # Fast path: direct SQL bulk delete (SparqlSQLBackendAdapter).
+            # `collected_uris` goes THROUGH: this path used to return without
+            # filling it, so the caller's auto-sync was handed the entity URI
+            # alone and every member's vector, geo and fuzzy rows outlived the
+            # entity (`issues/256`; FTS was already cleaned in the bulk
+            # delete's own transaction).
             if hasattr(backend, 'delete_entity_graph_direct'):
-                deleted_quads = await backend.delete_entity_graph_direct(space_id, graph_id, entity_uri)
+                deleted_quads = await backend.delete_entity_graph_direct(
+                    space_id, graph_id, entity_uri, collected_uris=collected_uris)
                 elapsed = time.time() - start_time
                 self.logger.info(f"🔥 DELETE ENTITY GRAPH DONE (bulk SQL): {deleted_quads} quads in {elapsed:.3f}s")
                 # Return non-zero to indicate success (caller checks > 0)
@@ -208,7 +217,7 @@ class KGEntityDeleteProcessor:
             
         except Exception as e:
             self.logger.error(f"Error deleting entity graph for {entity_uri}: {e}")
-            return 0
+            raise
     
     async def delete_entities_batch(self, backend, space_id: str, graph_id: str, entity_uris: List[str], 
                                   delete_entity_graph: bool = False) -> int:

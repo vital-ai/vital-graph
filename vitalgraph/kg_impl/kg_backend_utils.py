@@ -1694,14 +1694,22 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             return False
 
     async def delete_entity_graph_direct(self, space_id: str, graph_id: str,
-                                          entity_uri: str) -> int:
-        """Delete entire entity graph via direct SQL (no SPARQL pipeline)."""
+                                          entity_uri: str,
+                                          collected_uris: Optional[List[str]] = None) -> int:
+        """Delete entire entity graph via direct SQL (no SPARQL pipeline).
+
+        Returns the quads deleted; 0 means the entity graph was ABSENT. A
+        failure RAISES. This used to log and return 0, which made a failed
+        delete and an absent entity the same answer, so the endpoint could only
+        report both as STORE_FAILED (`issues/256`). `delete_entity_graph_bulk`
+        raises for exactly this reason (its own comment, `issues/100`).
+        """
         try:
             return await self.backend.delete_entity_graph_bulk(
-                space_id, graph_id, entity_uri)
+                space_id, graph_id, entity_uri, collected_uris=collected_uris)
         except Exception as e:
             self.logger.error("delete_entity_graph_direct failed: %s", e)
-            return 0
+            raise
 
     # ------------------------------------------------------------------
     # remove_rdf_quads_batch
