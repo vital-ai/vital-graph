@@ -45,7 +45,8 @@ from ..kg_impl.kgentity_update_impl import KGEntityUpdateProcessor
 from ..kg_impl.kg_validation_utils import KGGroupingURIManager, KGOwnershipValidator
 from ..kg_impl.kgentity_delete_impl import KGEntityDeleteProcessor
 from ..kg_impl.kgentity_frame_create_impl import KGEntityFrameCreateProcessor
-from ..kg_impl.kg_backend_utils import GuardUnsatisfiable, StaleWrite
+from ..kg_impl.kg_backend_utils import (
+    AmbiguousPrecondition, DeleteRefused, GuardUnsatisfiable, StaleWrite)
 from ..kg_impl.frame_grouping import UngroupableSlot, assign_frame_groupings
 import vital_ai_vitalsigns as vitalsigns
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
@@ -57,6 +58,7 @@ from ai_haley_kg_domain.model.Edge_hasKGFrame import Edge_hasKGFrame
 from ..utils.db_retry import SparqlQueryFailed
 from functools import partial
 from ..utils.bounded_gather import bounded_gather
+from ..kg_impl.refusals import RequestRefused
 
 
 class OperationMode(str, Enum):
@@ -278,7 +280,13 @@ class KGEntitiesEndpoint:
             graph_id: Optional[str] = Query(None, description="Graph ID"),
             uri: Optional[str] = Query(None, description="Single entity URI to delete"),
             uri_list: Optional[str] = Query(None, description="Comma-separated list of entity URIs to delete"),
-            delete_entity_graph: bool = Query(False, description="If True, delete complete entity graph including related objects"),
+            delete_entity_graph: bool = Query(False, description="If True, delete complete entity graph including related objects. If False, delete the entity alone, refused while it has members"),
+            if_unmodified_since: Optional[str] = Query(
+                None,
+                description=(
+                    "Delete only if the entity's hasObjectModificationDateTime still "
+                    "equals this value; otherwise status=conflict and nothing is "
+                    "deleted. One entity per request.")),
             current_user: Dict = Depends(self.auth_dependency)
         ):
             """
@@ -286,10 +294,14 @@ class KGEntitiesEndpoint:
             """
             require_space_write(current_user, space_id)
             if uri:
-                return await self._delete_entity_by_uri(space_id, graph_id, uri, delete_entity_graph, current_user)
+                return await self._delete_entity_by_uri(
+                    space_id, graph_id, uri, delete_entity_graph, current_user,
+                    if_unmodified_since=if_unmodified_since)
             elif uri_list:
                 uris = [u.strip() for u in uri_list.split(',') if u.strip()]
-                return await self._delete_entities_by_uris(space_id, graph_id, uris, delete_entity_graph, current_user)
+                return await self._delete_entities_by_uris(
+                    space_id, graph_id, uris, delete_entity_graph, current_user,
+                    if_unmodified_since=if_unmodified_since)
             else:
                 from ..model.kgentities_model import EntityDeleteResponse
                 return EntityDeleteResponse(
@@ -452,15 +464,11 @@ class KGEntitiesEndpoint:
                     space_id, graph_id, entity_uri, quads, current_user,
                     parent_frame_uri, if_unmodified_since=if_unmodified_since)
             elif operation_mode == OperationMode.REPLACE:
-                # `if_unmodified_since` is DELIBERATELY not passed here
-                # (`issues/253`). Replace deletes the existing frames with its
-                # own SPARQL updates BEFORE calling the create path, outside the
-                # transaction the guard runs in — so a refusal would land after
-                # the deletes and leave the entity with neither the old frames
-                # nor the new ones. That is worse than the lost update it would
-                # prevent. Making replace conditional means first making its
-                # delete and insert one transaction.
-                return await self._replace_entity_frames(space_id, graph_id, entity_uri, quads, current_user, parent_frame_uri)
+                # Guarded since `issues/256`: its delete and insert are one
+                # transaction now, so a refusal leaves the old frames in place.
+                return await self._replace_entity_frames(
+                    space_id, graph_id, entity_uri, quads, current_user,
+                    parent_frame_uri, if_unmodified_since=if_unmodified_since)
             else:
                 return await self._create_or_update_frames(
                     space_id, graph_id, quads, operation_mode, entity_uri=entity_uri,
@@ -475,6 +483,12 @@ class KGEntitiesEndpoint:
             frame_uris: str = Query(..., description="Comma-separated list of frame URIs to delete"),
             parent_frame_uri: Optional[str] = Query(None, description="Parent frame URI for validation"),
             recursive: bool = Query(False, description="If true, recursively delete all descendant frames. If false (default), fail if any frame has children."),
+            if_unmodified_since: Optional[str] = Query(
+                None,
+                description=(
+                    "Delete only if the ENTITY's hasObjectModificationDateTime still "
+                    "equals this value; otherwise status=conflict and nothing is "
+                    "deleted. A successful delete advances it.")),
             current_user: Dict = Depends(self.auth_dependency)
         ):
             """
@@ -486,7 +500,9 @@ class KGEntitiesEndpoint:
             """
             require_space_write(current_user, space_id)
             frame_uri_list = [uri.strip() for uri in frame_uris.split(',') if uri.strip()]
-            return await self._delete_entity_frames(space_id, graph_id, entity_uri, frame_uri_list, current_user, parent_frame_uri, recursive)
+            return await self._delete_entity_frames(
+                space_id, graph_id, entity_uri, frame_uri_list, current_user,
+                parent_frame_uri, recursive, if_unmodified_since=if_unmodified_since)
         
         @self.router.post("/kgentities/query", response_model=QuadResponse, tags=["KG Entities"])
         async def query_entities(
@@ -989,6 +1005,16 @@ class KGEntitiesEndpoint:
             if operation_mode == OperationMode.ENTITY_ONLY:
                 return await self._handle_entity_only_update(backend_adapter, space_id, graph_id, vitalsigns_objects, current_user)
 
+            # `replace` does not apply to an entity (`issues/256`, decided
+            # 2026-10-02): `upsert` already replaces the whole entity graph.
+            # It reached `_convert_operation_mode`, which raised, so it was a 500.
+            if operation_mode == OperationMode.REPLACE:
+                return EntityUpdateResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message=("operation_mode=replace does not apply to entities; "
+                             "use upsert, which replaces the whole entity graph"),
+                    updated_uri="", updated_count=0)
+
             impl_operation_mode = self._convert_operation_mode(operation_mode)
 
             if operation_mode == OperationMode.UPDATE:
@@ -1165,7 +1191,7 @@ class KGEntitiesEndpoint:
 
         except HTTPException:
             raise
-        except UngroupableSlot as e:
+        except RequestRefused as e:
             # A caller error in a 200, not a server error (`issues/257`).
             return EntityUpdateResponse(
                 status=OperationStatus.INVALID_REQUEST, message=str(e), updated_uri="")
@@ -1293,7 +1319,8 @@ class KGEntitiesEndpoint:
             raise ValueError(f"Unknown operation mode: {operation_mode}")
     
     
-    async def _delete_entity_by_uri(self, space_id: str, graph_id: Optional[str], uri: str, delete_entity_graph: bool, current_user: Dict) -> EntityDeleteResponse:
+    async def _delete_entity_by_uri(self, space_id: str, graph_id: Optional[str], uri: str, delete_entity_graph: bool, current_user: Dict,
+                                    if_unmodified_since: Optional[str] = None) -> EntityDeleteResponse:
         """Delete single KG entity by URI using KGEntityDeleteProcessor."""
         from ..model.kgentities_model import EntityDeleteResponse
         try:
@@ -1325,87 +1352,71 @@ class KGEntitiesEndpoint:
 
             backend_adapter = create_backend_adapter(backend_impl)
 
-            # Use KGEntityDeleteProcessor
             delete_processor = KGEntityDeleteProcessor()
 
-            # Check if entity exists before deletion (skip check for entity graph deletion)
-            entity_exists = True
-            if not delete_entity_graph:
-                entity_exists = await delete_processor.entity_exists(backend_adapter, space_id, graph_id, uri)
-                if not entity_exists:
-                    # Return graceful response for non-existent entity instead of HTTP exception
-                    return EntityDeleteResponse(
-                        status=OperationStatus.NO_OP,
-                        message=f"Entity {uri} not found - no deletion performed",
-                        deleted_count=0,
-                        deleted_uris=[],
-                        absent_uris=[str(uri)],
-                    )
-            
-            # Every member subject the graph delete removes, so derived data
-            # keyed on the SUBJECT can be cleaned up too. Without this the FTS
-            # and vector rows for an entity's slots outlive the entity, keep
-            # matching searches, and resolve to something deleted
-            # (issues/217).
+            # BOTH FORMS ARE ONE LOCKED TRANSACTION (`issues/256`). Without the
+            # graph flag this was a SPARQL read and a quad-level delete with no
+            # lock, which removed the entity and left every frame, slot and edge
+            # pointing at it. It now deletes the entity alone and is REFUSED while
+            # the entity has members — decided under the entity lock, so a frame
+            # create cannot slip in between. Absent is NO_OP for both
+            # (`BaseDeleteResponse`), and `if_unmodified_since` is compared under
+            # the same lock (`issues/253`).
             removed_uris: List[str] = []
-            if delete_entity_graph:
-                # Delete entire entity graph using processor.
-                #
-                # ABSENT IS NOT A FAILURE (`issues/256`). The processor returns
-                # 0 for an entity graph that was not there and RAISES when the
-                # delete fails; this answered STORE_FAILED for both, so a
-                # replayed delete read as an error. Absent is NO_OP, the status
-                # `BaseDeleteResponse` documents for exactly this.
-                self.logger.info(f"🔥 ENDPOINT: Calling delete_processor.delete_entity_graph() for {uri}")
-                try:
-                    deleted_count = await delete_processor.delete_entity_graph(
-                        backend_adapter, space_id, graph_id, uri,
-                        collected_uris=removed_uris)
-                except Exception as _de:
-                    self.logger.error("Entity graph delete failed for %s: %s", uri, _de)
-                    return EntityDeleteResponse(
-                        status=OperationStatus.STORE_FAILED,
-                        message=f"Failed to delete KG entity graph '{str(uri)}': {_de}",
-                        deleted_count=0,
-                        deleted_uris=[],
-                    )
-                self.logger.info(f"🔥 ENDPOINT: delete_entity_graph returned: {deleted_count}")
-                if deleted_count == 0:
-                    return EntityDeleteResponse(
-                        status=OperationStatus.NO_OP,
-                        message=f"Entity {uri} not found - no deletion performed",
-                        deleted_count=0,
-                        deleted_uris=[],
-                        absent_uris=[str(uri)],
-                    )
-                deletion_type = "entity graph (via kgGraphURI)"
-                success = True
-            else:
-                # Delete only the specific entity using processor
-                result = await delete_processor.delete_entity(backend_adapter, space_id, graph_id, uri)
-                deletion_type = "entity only"
-                # Handle BackendOperationResult object
-                success = result.success if hasattr(result, 'success') else bool(result)
-                deleted_count = 1 if success else 0
-                self.logger.debug(f"🔍 DEBUG: delete_entity returned: {result} (type: {type(result)})")
-            
-            # Always return response with actual deletion results
-            self.logger.debug(f"Deletion result - {deletion_type}: {uri}, success: {success}, deleted_count: {deleted_count}")
-            
-            # Invalidate entity graph cache after successful deletion
-            if success:
-                await self._invalidate_entity_cache(space_id, graph_id, uri, "deleted")
-                # The entity AND its members. dict.fromkeys keeps order and
-                # drops the duplicate when the entity is its own member.
-                _del_uris = list(dict.fromkeys([str(uri)] + removed_uris))
-                self._schedule_auto_sync(backend_impl, space_id, graph_id,
-                                         _del_uris, "delete")
-            
+            deletion_type = ("entity graph (via kgGraphURI)" if delete_entity_graph
+                             else "entity only")
+            try:
+                deleted_count = await delete_processor.delete_entity_graph(
+                    backend_adapter, space_id, graph_id, uri,
+                    collected_uris=removed_uris,
+                    if_unmodified_since=if_unmodified_since,
+                    entity_only=not delete_entity_graph)
+            except RequestRefused as _r:
+                # `UngroupableSlot` cannot arise from a delete; listed so every
+                # refusal path lets the family past
+                # (`test_a_refusal_reaches_the_caller.py`).
+                return EntityDeleteResponse(
+                    status=OperationStatus.INVALID_REQUEST, message=str(_r),
+                    deleted_count=0, deleted_uris=[])
+            except StaleWrite as _s:
+                self.logger.warning("Entity delete refused as stale: %s", _s)
+                return EntityDeleteResponse(
+                    status=OperationStatus.CONFLICT, message=str(_s),
+                    deleted_count=0, deleted_uris=[])
+            except GuardUnsatisfiable as _g:
+                return EntityDeleteResponse(
+                    status=OperationStatus.STORE_FAILED, message=str(_g),
+                    deleted_count=0, deleted_uris=[])
+            except Exception as _de:
+                self.logger.error("Entity delete failed for %s: %s", uri, _de)
+                return EntityDeleteResponse(
+                    status=OperationStatus.STORE_FAILED,
+                    message=f"Failed to delete KG {deletion_type} '{str(uri)}': {_de}",
+                    deleted_count=0,
+                    deleted_uris=[],
+                )
+            if deleted_count == 0:
+                return EntityDeleteResponse(
+                    status=OperationStatus.NO_OP,
+                    message=f"Entity {uri} not found - no deletion performed",
+                    deleted_count=0,
+                    deleted_uris=[],
+                    absent_uris=[str(uri)],
+                )
+
+            await self._invalidate_entity_cache(space_id, graph_id, uri, "deleted")
+            # The entity AND its members. dict.fromkeys keeps order and drops the
+            # duplicate when the entity is its own member.
+            _del_uris = list(dict.fromkeys([str(uri)] + removed_uris))
+            self._schedule_auto_sync(backend_impl, space_id, graph_id,
+                                     _del_uris, "delete")
+
             return EntityDeleteResponse(
-                status=OperationStatus.DELETED if success else OperationStatus.STORE_FAILED,
-                message=f"Successfully deleted KG {deletion_type} '{str(uri)}' from graph '{graph_id}' in space '{space_id}' ({deleted_count} objects)" if success else f"Failed to delete KGEntity '{str(uri)}'",
-                deleted_count=deleted_count,
-                deleted_uris=[str(uri)] if success else []
+                status=OperationStatus.DELETED,
+                message=(f"Successfully deleted KG {deletion_type} '{str(uri)}' from "
+                         f"graph '{graph_id}' in space '{space_id}'"),
+                deleted_count=1,
+                deleted_uris=[str(uri)],
             )
 
         except HTTPException:
@@ -1414,13 +1425,21 @@ class KGEntitiesEndpoint:
             self.logger.error(f"Error deleting KG entity: {e}")
             raise HTTPException(status_code=500, detail=f"Error deleting KG entity: {str(e)}")
     
-    async def _delete_entities_by_uris(self, space_id: str, graph_id: Optional[str], uris: List[str], delete_entity_graph: bool, current_user: Dict) -> EntityDeleteResponse:
+    async def _delete_entities_by_uris(self, space_id: str, graph_id: Optional[str], uris: List[str], delete_entity_graph: bool, current_user: Dict,
+                                       if_unmodified_since: Optional[str] = None) -> EntityDeleteResponse:
         """Delete multiple KG entities by URI list using KGEntityDeleteProcessor."""
         from ..model.kgentities_model import EntityDeleteResponse
         
         try:
             self.logger.debug(f"Deleting {len(uris)} KG entities from space '{space_id}', graph '{graph_id}'")
             
+            # One precondition names one version of ONE entity (`issues/253`).
+            if if_unmodified_since is not None and len(set(uris)) > 1:
+                return EntityDeleteResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message=str(AmbiguousPrecondition(len(set(uris)))),
+                    deleted_count=0, deleted_uris=[])
+
             # Validate graph_id is provided (required for CRUD operations)
             if not graph_id:
                 return EntityDeleteResponse(
@@ -1450,33 +1469,41 @@ class KGEntitiesEndpoint:
             # Use KGEntityDeleteProcessor
             delete_processor = KGEntityDeleteProcessor()
 
-            # Each URI reports one of three outcomes (`issues/256`):
-            #   "deleted" — and, for a graph delete, the members it removed;
-            #   "absent"  — nothing was there, which is NOT a failure;
-            #   "failed"  — the delete raised.
+            # Each URI reports one of five outcomes (`issues/256`):
+            #   "deleted"  — and, for a graph delete, the members it removed;
+            #   "absent"   — nothing was there, which is NOT a failure;
+            #   "refused"  — an entity-only delete of an entity with members;
+            #   "conflict" — the guard's stamp had moved;
+            #   "failed"   — the delete raised.
             # This returned a bool, so absent and failed were the same False and
             # the batch could only report "they may be absent, or the deletes may
             # have failed". It also discarded the members, so the auto-sync below
             # was handed entity URIs alone and every member's vector, geo and
             # fuzzy rows outlived the batch.
+            # Both forms are the locked delete; see `_delete_entity_by_uri`.
+            reasons: Dict[str, str] = {}
+
             async def _delete_one(entity_uri: str) -> Tuple[str, List[str]]:
                 try:
-                    if delete_entity_graph:
-                        members: List[str] = []
-                        count = await delete_processor.delete_entity_graph(
-                            backend_adapter, space_id, graph_id, entity_uri,
-                            collected_uris=members,
-                        )
-                        return ("deleted", members) if count > 0 else ("absent", [])
-                    else:
-                        if not await delete_processor.entity_exists(
-                                backend_adapter, space_id, graph_id, entity_uri):
-                            return ("absent", [])
-                        result = await delete_processor.delete_entity(
-                            backend_adapter, space_id, graph_id, entity_uri
-                        )
-                        ok = result.success if hasattr(result, 'success') else bool(result)
-                        return ("deleted", []) if ok else ("failed", [])
+                    members: List[str] = []
+                    count = await delete_processor.delete_entity_graph(
+                        backend_adapter, space_id, graph_id, entity_uri,
+                        collected_uris=members,
+                        if_unmodified_since=if_unmodified_since,
+                        entity_only=not delete_entity_graph,
+                    )
+                    return ("deleted", members) if count > 0 else ("absent", [])
+                except RequestRefused as e:
+                    reasons[entity_uri] = str(e)
+                    return ("refused", [])
+                except StaleWrite as e:
+                    reasons[entity_uri] = str(e)
+                    return ("conflict", [])
+                except GuardUnsatisfiable as e:
+                    # A failure, but a DESCRIBED one: without this it fell to the
+                    # broad handler and the reason stayed in the log.
+                    reasons[entity_uri] = str(e)
+                    return ("failed", [])
                 except Exception as e:
                     self.logger.error(f"Error deleting entity {entity_uri}: {e}")
                     return ("failed", [])
@@ -1489,6 +1516,8 @@ class KGEntitiesEndpoint:
             deleted_uris_list = [str(u) for u, (o, _) in zip(uris, results) if o == "deleted"]
             absent_uris_list = [str(u) for u, (o, _) in zip(uris, results) if o == "absent"]
             failed_count = sum(1 for o, _ in results if o == "failed")
+            refused = [str(u) for u, (o, _) in zip(uris, results) if o == "refused"]
+            conflicted = [str(u) for u, (o, _) in zip(uris, results) if o == "conflict"]
             deleted_count = len(deleted_uris_list)
             
             # Invalidate entity graph cache for all successfully deleted entities
@@ -1515,7 +1544,24 @@ class KGEntitiesEndpoint:
             #   all failed                       -> STORE_FAILED
             # and `absent_uris` says which were already gone.
             requested = len(uris)
-            if failed_count == 0 and deleted_count > 0:
+            # A refusal or a conflict is the CALLER's to act on, so it is not
+            # counted as a store failure; it is not satisfied either. A request
+            # with nothing else in it answers with that status.
+            if refused or conflicted:
+                satisfied = deleted_count + len(absent_uris_list)
+                why = "; ".join(reasons[u] for u in (refused + conflicted)[:3])
+                if satisfied == 0 and failed_count == 0:
+                    status = (OperationStatus.CONFLICT if conflicted and not refused
+                              else OperationStatus.INVALID_REQUEST)
+                elif satisfied == 0:
+                    status = OperationStatus.STORE_FAILED
+                else:
+                    status = OperationStatus.PARTIAL
+                message = (f"Deleted {deleted_count} of {requested} KG entities; "
+                           f"{len(absent_uris_list)} were already absent; "
+                           f"{len(refused)} refused; {len(conflicted)} conflicted; "
+                           f"{failed_count} failed: {why}")
+            elif failed_count == 0 and deleted_count > 0:
                 status = OperationStatus.DELETED
                 message = (f"Successfully deleted {deleted_count} KG entities from "
                            f"graph '{graph_id}' in space '{space_id}'"
@@ -1797,7 +1843,7 @@ class KGEntitiesEndpoint:
 
         except HTTPException:
             raise
-        except UngroupableSlot as e:
+        except RequestRefused as e:
             # A caller error in a 200 (`issues/257`): the request did not say
             # which frame a slot belongs to, so nothing was written.
             from ..model.kgframes_model import FrameCreateResponse
@@ -1845,222 +1891,95 @@ class KGEntitiesEndpoint:
     
     async def _replace_entity_frames(self, space_id: str, graph_id: str, entity_uri: str,
                                      quads: List[Quad], current_user: Dict,
-                                     parent_frame_uri: Optional[str] = None) -> FrameUpdateResponse:
-        """Replace frame subtree within entity context.
-        
-        Determines the delete scope from EXISTING frames in the DB:
-        - If parent_frame_uri: deletes children of parent + their descendants
-        - If no parent_frame_uri: deletes all top-level frames under the entity + descendants
-        
-        Then inserts the replacement graph via CREATE.
-        
-        Args:
-            parent_frame_uri: If provided, scopes replacement to children of this parent.
+                                     parent_frame_uri: Optional[str] = None,
+                                     if_unmodified_since: Optional[str] = None) -> FrameUpdateResponse:
+        """Replace the named frames and their descendants, in one locked transaction.
+
+        `issues/256` item 4. Scope is what the request NAMES. This deleted every
+        top-level frame of the entity (or every child of `parent_frame_uri`) with
+        five SPARQL updates per frame, then created — no lock, no guard, and a
+        failure between the two left neither the old frames nor the new. See
+        `KGEntityFrameCreateProcessor.replace_entity_frames`.
         """
         from ..model.kgframes_model import FrameUpdateResponse
+
+        def _no(status, message):
+            return FrameUpdateResponse(status=status, message=message,
+                                       updated_uri="", updated_count=0)
+
         graph_objects = quad_list_to_graphobjects(quads)
-        
         try:
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                return FrameUpdateResponse(status=OperationStatus.NOT_FOUND, message=f"Space {space_id} not found", updated_uri="", updated_count=0)
+                return _no(OperationStatus.NOT_FOUND, f"Space {space_id} not found")
 
             space_impl = space_record.space_impl
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
                 raise HTTPException(status_code=503, detail="Backend implementation not available")
-
             backend_adapter = create_backend_adapter(backend_impl)
 
-            # Extract KGFrame objects from the replacement graph (for re-creation)
-            from ai_haley_kg_domain.model.KGFrame import KGFrame
-            replacement_frame_uris = [str(obj.URI) for obj in graph_objects if isinstance(obj, KGFrame) and hasattr(obj, 'URI')]
-            if not replacement_frame_uris:
-                return FrameUpdateResponse(status=OperationStatus.INVALID_REQUEST, message="No KGFrame objects found in replacement graph", updated_uri="", updated_count=0)
-
-            # Decide the groupings BEFORE anything is deleted (`issues/257`).
-            # This route deletes the old frames with separate statements and
-            # then creates, so a slot refused at create time would leave the
-            # entity with neither the old frames nor the new ones.
-            try:
-                assign_frame_groupings(graph_objects)
-            except UngroupableSlot as e:
-                return FrameUpdateResponse(status=OperationStatus.INVALID_REQUEST, message=str(e), updated_uri="", updated_count=0)
-            
-            # Phase 1: Determine delete scope from EXISTING frames in the DB
-            from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
-            sparql_processor = KGSparqlQueryProcessor(backend_adapter, self.logger)
-            
-            if parent_frame_uri:
-                # Scoped replace: delete children of the given parent
-                existing_children = await sparql_processor.find_child_frames(
-                    space_id, graph_id, parent_frame_uri
-                )
-                root_frames_to_delete = existing_children
-            else:
-                # Full entity replace: delete all top-level frames under the entity
-                entity_frames_result = await sparql_processor.get_entity_frames(
-                    space_id, graph_id, entity_uri, page_size=10000
-                )
-                root_frames_to_delete = entity_frames_result.get('frame_uris', [])
-            
-            # Collect all descendants of the root frames being deleted
-            all_uris_to_delete = list(root_frames_to_delete)
-            if root_frames_to_delete:
-                descendants = await sparql_processor.collect_all_descendants(
-                    space_id, graph_id, root_frames_to_delete
-                )
-                if descendants:
-                    self.logger.info(f"🔄 REPLACE: found {len(descendants)} descendant frames to remove")
-                    all_uris_to_delete.extend(descendants)
-            
-            # Phase 2: Delete existing subtree using frameGraphURI grouping
-            if not all_uris_to_delete:
-                self.logger.info(f"🔄 REPLACE: no existing frames to delete, proceeding to create")
-            else:
-                self.logger.info(f"🔄 REPLACE: deleting {len(all_uris_to_delete)} existing frames")
-            
-            haley_prefix = "http://vital.ai/ontology/haley-ai-kg#"
-            vital_prefix = "http://vital.ai/ontology/vital-core#"
-            for uri in all_uris_to_delete:
-                # Delete all subjects in the frame graph (frame, slots, slot edges)
-                delete_frame_graph = f"""
-                DELETE {{
-                    GRAPH <{graph_id}> {{
-                        ?s ?p ?o .
-                    }}
-                }}
-                WHERE {{
-                    GRAPH <{graph_id}> {{
-                        ?s <{haley_prefix}hasFrameGraphURI> <{uri}> .
-                        ?s ?p ?o .
-                    }}
-                }}
-                """
-                await backend_adapter.execute_sparql_update(space_id, delete_frame_graph)
-                # Also delete the frame's own triples (may not have frameGraphURI → itself)
-                delete_frame_self = f"""
-                DELETE {{
-                    GRAPH <{graph_id}> {{
-                        <{uri}> ?p ?o .
-                    }}
-                }}
-                WHERE {{
-                    GRAPH <{graph_id}> {{
-                        <{uri}> ?p ?o .
-                    }}
-                }}
-                """
-                await backend_adapter.execute_sparql_update(space_id, delete_frame_self)
-                # Clean up structural edges: Edge_hasKGFrame (both directions)
-                delete_incoming_frame_edges = f"""
-                DELETE {{
-                    GRAPH <{graph_id}> {{
-                        ?edge ?ep ?eo .
-                    }}
-                }}
-                WHERE {{
-                    GRAPH <{graph_id}> {{
-                        ?edge a <{haley_prefix}Edge_hasKGFrame> ;
-                              <{vital_prefix}hasEdgeDestination> <{uri}> .
-                        ?edge ?ep ?eo .
-                    }}
-                }}
-                """
-                await backend_adapter.execute_sparql_update(space_id, delete_incoming_frame_edges)
-                delete_outgoing_frame_edges = f"""
-                DELETE {{
-                    GRAPH <{graph_id}> {{
-                        ?edge ?ep ?eo .
-                    }}
-                }}
-                WHERE {{
-                    GRAPH <{graph_id}> {{
-                        ?edge a <{haley_prefix}Edge_hasKGFrame> ;
-                              <{vital_prefix}hasEdgeSource> <{uri}> .
-                        ?edge ?ep ?eo .
-                    }}
-                }}
-                """
-                await backend_adapter.execute_sparql_update(space_id, delete_outgoing_frame_edges)
-                # Clean up Edge_hasEntityKGFrame (entity→frame)
-                delete_entity_frame_edges = f"""
-                DELETE {{
-                    GRAPH <{graph_id}> {{
-                        ?edge ?ep ?eo .
-                    }}
-                }}
-                WHERE {{
-                    GRAPH <{graph_id}> {{
-                        ?edge a <{haley_prefix}Edge_hasEntityKGFrame> ;
-                              <{vital_prefix}hasEdgeDestination> <{uri}> .
-                        ?edge ?ep ?eo .
-                    }}
-                }}
-                """
-                await backend_adapter.execute_sparql_update(space_id, delete_entity_frame_edges)
-            
-            self.logger.info(f"🗑️ REPLACE: deleted {len(all_uris_to_delete)} existing frames")
-            
-            # Phase 3: Insert replacement graph via CREATE
             from ..kg_impl.kgentity_frame_create_impl import KGEntityFrameCreateProcessor
-            frame_processor = KGEntityFrameCreateProcessor()
-            result = await frame_processor.create_entity_frame(
-                backend_adapter=backend_adapter,
-                space_id=space_id,
-                graph_id=graph_id,
-                entity_uri=entity_uri,
-                frame_objects=graph_objects,
-                operation_mode="CREATE",
-                parent_frame_uri=parent_frame_uri
-            )
-            
+            result = await KGEntityFrameCreateProcessor().replace_entity_frames(
+                backend_adapter, space_id, graph_id, entity_uri, graph_objects,
+                parent_frame_uri=parent_frame_uri,
+                if_unmodified_since=if_unmodified_since)
             if not result.success:
-                return FrameUpdateResponse(
-                    status=OperationStatus.STORE_FAILED,
-                    message=f"Replace failed during re-creation: {result.message}",
-                    updated_uri="", updated_count=0
-                )
+                return _no(OperationStatus.INVALID_REQUEST, result.message)
 
-            created_uris = result.created_uris
-
-            # What the replace WROTE, synced (`issues/256`): this route
-            # scheduled no auto-sync, so the replacement's slots were never
-            # embedded, geocoded or indexed.
-            if created_uris:
+            # After the commit: what was written, and what was removed.
+            if result.created_uris:
                 self._schedule_auto_sync(backend_impl, space_id, graph_id,
-                                         created_uris, "upsert")
-
-            # Invalidate entity graph cache
+                                         result.created_uris, "upsert")
+            if result.removed_uris:
+                self._schedule_auto_sync(backend_impl, space_id, graph_id,
+                                         result.removed_uris, "delete")
             await self._invalidate_entity_cache(space_id, graph_id, entity_uri)
 
             return FrameUpdateResponse(
                 status=OperationStatus.UPDATED,
-                message=f"Successfully replaced {len(all_uris_to_delete)} frames with {len(created_uris)} new frames",
+                message=result.message,
                 updated_uri=entity_uri,
-                updated_count=len(created_uris),
+                updated_count=len(result.created_uris),
             )
 
         except HTTPException:
             raise
+        except RequestRefused as e:
+            return _no(OperationStatus.INVALID_REQUEST, str(e))
+        except StaleWrite as e:
+            self.logger.warning("Frame replace refused as stale: %s", e)
+            return _no(OperationStatus.CONFLICT, str(e))
+        except GuardUnsatisfiable as e:
+            return _no(OperationStatus.STORE_FAILED, str(e))
         except Exception as e:
             self.logger.error(f"Error in _replace_entity_frames: {e}")
-            raise HTTPException(status_code=500, detail=f"Replace operation failed: {str(e)}")
+            return _no(OperationStatus.STORE_FAILED,
+                       f"Replace failed, nothing was changed: {e}")
     
-    async def _delete_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, frame_uris: List[str], current_user: Dict, parent_frame_uri: Optional[str] = None, recursive: bool = False):
-        """Delete frames within entity context using Edge_hasEntityKGFrame relationships.
-        
+    async def _delete_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, frame_uris: List[str], current_user: Dict, parent_frame_uri: Optional[str] = None, recursive: bool = False,
+                                    if_unmodified_since: Optional[str] = None):
+        """Delete an entity's frames, and everything they own, in one locked transaction.
+
+        `issues/256`. This was SPARQL discovery, then a quad-level `DELETE DATA`,
+        with no lock and the entity stamped after the commit — so a frame write
+        landing in between left its new slots behind. Ownership, the children
+        check, the delete and the stamp now all happen under the ENTITY lock, the
+        key every entity-frame write takes; see `delete_frame_subtrees`. A frame
+        that belongs to another entity refuses the whole request instead of
+        being skipped under a DELETED status.
+
         Args:
             recursive: If True, recursively delete all descendant frames.
                        If False (default), fail if any frame has children.
+            if_unmodified_since: Refuse (CONFLICT) if the entity moved.
         """
+        from ..model.kgframes_model import FrameDeleteResponse
         try:
             self.logger.debug(f"Deleting entity frames for {entity_uri} in space {space_id}, graph {graph_id}, parent_frame_uri {parent_frame_uri}, recursive={recursive}")
             
-            # Get backend implementation via generic interface
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                from ..model.kgframes_model import FrameDeleteResponse
                 return FrameDeleteResponse(
                     status=OperationStatus.NOT_FOUND,
                     message=f"Space {space_id} not found",
@@ -2073,121 +1992,39 @@ class KGEntitiesEndpoint:
             if not backend:
                 raise HTTPException(status_code=503, detail="Backend implementation not available")
 
-
-            # Get the proper space-specific graph URI
-            if hasattr(backend, '_get_space_graph_uri'):
-                full_graph_uri = backend._get_space_graph_uri(space_id, graph_id)
-            else:
-                full_graph_uri = graph_id
-            
-            # Get the actual backend adapter for SPARQL operations
             from ..kg_impl.kg_backend_utils import create_backend_adapter
             backend_adapter = create_backend_adapter(backend)
             
-            from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
-            sparql_processor = KGSparqlQueryProcessor(backend_adapter, self.logger)
-            
-            # Validate parent-child relationships if parent_frame_uri is provided
+            # A check on the REQUEST, not on what the delete decides, so it can
+            # run before the transaction: it says whether the caller named the
+            # frames it meant to.
             if parent_frame_uri:
+                from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
+                sparql_processor = KGSparqlQueryProcessor(backend_adapter, self.logger)
                 validation_map = await sparql_processor.validate_frame_parent_relationship(
-                    space_id, full_graph_uri, parent_frame_uri, frame_uris
+                    space_id, graph_id, parent_frame_uri, frame_uris
                 )
-                
-                # Check if all frames are valid children
                 invalid_frames = [uri for uri, is_valid in validation_map.items() if not is_valid]
                 if invalid_frames:
-                    from ..model.kgframes_model import FrameDeleteResponse
                     return FrameDeleteResponse(
                         status=OperationStatus.INVALID_REQUEST,
                         message=f"Frames are not children of parent {parent_frame_uri}: {', '.join(invalid_frames)}",
                         deleted_count=0,
                         deleted_uris=[]
                     )
-            
-            # Check for child frames and handle recursive vs fail mode
-            frames_with_children = {}
-            for frame_uri in frame_uris:
-                children = await sparql_processor.find_child_frames(space_id, full_graph_uri, frame_uri)
-                if children:
-                    frames_with_children[frame_uri] = children
-            
-            if frames_with_children:
-                if not recursive:
-                    # Fail mode: reject deletion if any frame has children
-                    child_summary = "; ".join(
-                        f"{uri} has {len(kids)} child(ren)" 
-                        for uri, kids in frames_with_children.items()
-                    )
-                    from ..model.kgframes_model import FrameDeleteResponse
-                    return FrameDeleteResponse(
-                        status=OperationStatus.INVALID_REQUEST,
-                        message=f"Cannot delete frames with children (use recursive=true to cascade): {child_summary}",
-                        deleted_count=0,
-                        deleted_uris=[]
-                    )
-                else:
-                    # Recursive mode: collect all descendants and add to delete list
-                    descendants = await sparql_processor.collect_all_descendants(
-                        space_id, full_graph_uri, frame_uris
-                    )
-                    if descendants:
-                        self.logger.info(f"🔄 Recursive delete: adding {len(descendants)} descendant frames to deletion")
-                        frame_uris = frame_uris + descendants
-            
-            # Use KGEntityFrameDeleteProcessor for deletion
-            from ..kg_impl.kgentity_frame_delete_impl import KGEntityFrameDeleteProcessor
-            processor = KGEntityFrameDeleteProcessor(backend_adapter, self.logger)
-            
-            # Execute frame deletion
-            result = await processor.delete_frames(space_id, full_graph_uri, entity_uri, frame_uris)
-            
-            # Touch entity modification time and invalidate cache after frame deletion (T6)
-            #
-            # THIS ONE STAYS, unlike the two on the write paths (`issues/253`).
-            # Deletion does not go through `update_subjects_graph`, so nothing
-            # stamps the entity inside a transaction here — removing this by
-            # symmetry with the write paths would leave a frame deletion
-            # invisible to a caller watching the entity's version.
-            if result.deleted_frame_uris:
-                try:
-                    from datetime import datetime, timezone
-                    from ..kg_impl.kg_server_properties import touch_entity_modification_time
-                    await touch_entity_modification_time(
-                        backend_adapter, space_id, full_graph_uri, entity_uri,
-                        datetime.now(timezone.utc),
-                    )
-                except Exception as _te:
-                    self.logger.warning(f"touch_entity_modification_time failed (non-critical): {_te}")
+
+            from ..kg_impl.frame_delete import delete_frames
+            response, removed = await delete_frames(
+                backend_adapter, space_id, graph_id, frame_uris,
+                recursive=recursive, owner_entity_uri=entity_uri,
+                if_unmodified_since=if_unmodified_since)
+
+            # After the commit, and only if something went. The entity's stamp
+            # was advanced inside the transaction.
+            if removed:
                 await self._invalidate_entity_cache(space_id, graph_id, entity_uri)
-            
-            # Convert to response model
-            from ..model.kgframes_model import FrameDeleteResponse
-            
-            # `status` FOLLOWS THE RESULT. `issues/242`: this was a hardcoded
-            # `DELETED`, so the processor's `success` was never read and a failed
-            # delete came back as `status=deleted`, `deleted_count=3` and a message
-            # beginning "Successfully deleted". `STORE_FAILED` exists for exactly
-            # this ("write failed for a describable data reason", success=False,
-            # HTTP 200) — and its sibling `QUERY_FAILED` was added because a killed
-            # READ was being reported as EMPTY, a success status (`issues/215`).
-            # Same mistake, write side. `:1356` in this file already does it right.
-            #
-            # `deleted_count` is 0 on failure: `deleted_frame_uris` is the ATTEMPTED
-            # set, and reporting it as deleted is what made the old response wrong
-            # in four fields at once.
-            if not result.success:
-                return FrameDeleteResponse(
-                    status=OperationStatus.STORE_FAILED,
-                    message=result.message,
-                    deleted_count=0,
-                    deleted_uris=[],
-                )
-            return FrameDeleteResponse(
-                status=OperationStatus.DELETED,
-                message=result.message,
-                deleted_count=len(result.deleted_frame_uris),
-                deleted_uris=result.deleted_frame_uris,
-            )
+                self._schedule_auto_sync(backend, space_id, graph_id, removed, "delete")
+            return response
 
         except HTTPException:
             raise
@@ -2487,7 +2324,7 @@ class KGEntitiesEndpoint:
 
         except HTTPException:
             raise
-        except UngroupableSlot as e:
+        except RequestRefused as e:
             # A caller error in a 200 (`issues/257`).
             from ..model.kgframes_model import FrameUpdateResponse
             return FrameUpdateResponse(

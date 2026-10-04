@@ -29,6 +29,7 @@ from vitalgraph.kg_impl.kg_backend_utils import (
     BackendOperationResult
 )
 from vitalgraph.kg_impl.frame_grouping import UngroupableSlot, assign_frame_groupings
+from .refusals import RequestRefused
 
 
 @dataclass
@@ -151,7 +152,7 @@ class KGFrameHierarchicalProcessor:
                     error=result.error
                 )
                 
-        except UngroupableSlot:
+        except RequestRefused:
             raise                     # a caller error, answered INVALID_REQUEST
         except Exception as e:
             self.logger.error(f"Child frame creation failed: {e}", exc_info=True)

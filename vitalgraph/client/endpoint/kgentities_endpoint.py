@@ -12,7 +12,7 @@ from typing import Dict, Any, Literal, Optional, List, Union, overload
 
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 
-from .base_endpoint import BaseEndpoint, http_status_of
+from .base_endpoint import BaseEndpoint, http_status_of, replay_safe_mode
 from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
 from ..utils.format_helpers import (
     ClientWireFormat,
@@ -703,7 +703,80 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 space_id=space_id,
                 graph_id=graph_id
             )
-    
+
+    async def upsert_kgentities(
+        self,
+        space_id: str,
+        graph_id: str,
+        objects: List,
+        parent_uri: Optional[str] = None,
+        preserve_object_properties: bool = False
+    ) -> UpdateEntityResponse:
+        """
+        Create or replace KGEntities from GraphObjects.
+
+        An entity that exists has its WHOLE entity graph replaced by `objects`,
+        atomically and under the entity lock; one that does not is created. Its
+        stored creation time is kept either way. Until this method the client
+        had no way to send entity upsert (`issues/256` item 6).
+
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            objects: List of GraphObject instances: each entity's whole graph
+            parent_uri: Optional parent URI for relationships
+            preserve_object_properties: As for `create_kgentities`.
+
+        Returns:
+            UpdateEntityResponse; `status` is "upserted" on success
+
+        Raises:
+            VitalGraphClientError: If request fails
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, graph_id=graph_id, objects=objects)
+
+        try:
+            url = f"{self._get_server_url()}/api/graphs/kgentities"
+
+            params = build_query_params(
+                space_id=space_id,
+                graph_id=graph_id,
+                operation_mode="upsert",
+                parent_uri=parent_uri,
+                preserve_object_properties=(
+                    "true" if preserve_object_properties else None),
+            )
+
+            body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            # idempotent=True below: replay-safe, see `_make_request`. The server
+            # path is a locked delete-then-insert of the named entities' graphs,
+            # so a replay that lands writes the same graph again.
+            response = await self._make_request('POST', url, params=params, json=body,
+                                                headers={'Content-Type': content_type}, idempotent=True)
+            response_data = response.json()
+
+            return build_success_response(
+                UpdateEntityResponse,
+                status_code=response.status_code,
+                status=response_data.get('status'),
+                message=response_data.get('message', 'Upserted entities'),
+                updated_uri=response_data.get('updated_uri')
+            )
+
+        except VitalGraphClientError:
+            raise
+        except Exception as e:
+            logger.error(f"Error upserting entities: {e}")
+            return build_error_response(
+                UpdateEntityResponse,
+                error_code=5,
+                error_message=str(e),
+                status_code=http_status_of(e),
+                space_id=space_id,
+                graph_id=graph_id
+            )
+
     async def update_entity_only(
         self,
         space_id: str,
@@ -784,7 +857,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
         space_id: str, 
         graph_id: str, 
         uri: str, 
-        delete_entity_graph: bool = False
+        delete_entity_graph: bool = False,
+        if_unmodified_since: Optional[str] = None
     ) -> DeleteResponse:
         """
         Delete a KGEntity by URI with optional complete graph deletion.
@@ -793,7 +867,12 @@ class KGEntitiesEndpoint(BaseEndpoint):
             space_id: Space identifier
             graph_id: Graph identifier
             uri: KGEntity URI to delete
-            delete_entity_graph: If True, delete entire entity graph
+            delete_entity_graph: If True, delete entire entity graph. If False,
+                delete the entity alone; refused while it has members.
+            if_unmodified_since: The entity's `hasObjectModificationDateTime` as
+                you read it (`modification_stamp`). If it has moved, nothing is
+                deleted and the response `is_conflict`: re-read before retrying.
+                One entity per request.
             
         Returns:
             DeleteResponse containing deletion results
@@ -811,20 +890,26 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 space_id=space_id,
                 graph_id=graph_id,
                 uri=uri,
-                delete_entity_graph=delete_entity_graph
+                delete_entity_graph=delete_entity_graph,
+                if_unmodified_since=if_unmodified_since
             )
             
             response = await self._make_request('DELETE', url, params=params)
             response_data = response.json()
             
-            deleted_count = response_data.get('deleted_count', 1)
-            deleted_uris = response_data.get('deleted_uris', [uri])
+            # The SERVER's count, list and message. Defaulting the count to 1
+            # and the list to the requested URI reported a delete that never
+            # happened, and "Deleted N items" was the message even for a NO_OP
+            # (`issues/256`). `or`, not a `get` default: the server sends null.
+            deleted_count = response_data.get('deleted_count') or 0
+            deleted_uris = response_data.get('deleted_uris') or []
             
             return build_success_response(
                 DeleteResponse,
                 status_code=response.status_code,
                 status=response_data.get('status'),
-                message=f"Deleted {deleted_count} items",
+                message=(response_data.get('message')
+                         or f"Deleted {deleted_count} items"),
                 space_id=space_id,
                 graph_id=graph_id,
                 requested_uris=[uri],
@@ -853,7 +938,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
         space_id: str, 
         graph_id: str, 
         uri_list: List[str],
-        delete_entity_graph: bool = False
+        delete_entity_graph: bool = False,
+        if_unmodified_since: Optional[str] = None
     ) -> DeleteResponse:
         """
         Delete multiple KGEntities by URI list.
@@ -865,6 +951,10 @@ class KGEntitiesEndpoint(BaseEndpoint):
             delete_entity_graph: If True, delete each entity's entire graph.
                 The server always accepted this; the client could not send it,
                 so a client batch delete was always entity-only (`issues/256`).
+            if_unmodified_since: The entity's `hasObjectModificationDateTime` as
+                you read it (`modification_stamp`). If it has moved, nothing is
+                deleted and the response `is_conflict`: re-read before retrying.
+                One entity per request.
             
         Returns:
             DeleteResponse containing deletion results
@@ -882,20 +972,23 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 space_id=space_id,
                 graph_id=graph_id,
                 uri_list=",".join(uri_list),
-                delete_entity_graph=delete_entity_graph
+                delete_entity_graph=delete_entity_graph,
+                if_unmodified_since=if_unmodified_since
             )
             
             response = await self._make_request('DELETE', url, params=params)
             response_data = response.json()
             
-            deleted_count = response_data.get('deleted_count', len(uri_list))
-            deleted_uris = response_data.get('deleted_uris', uri_list)
+            # The server's count, list and message, as in `delete_kgentity`.
+            deleted_count = response_data.get('deleted_count') or 0
+            deleted_uris = response_data.get('deleted_uris') or []
             
             return build_success_response(
                 DeleteResponse,
                 status_code=response.status_code,
                 status=response_data.get('status'),
-                message=f"Deleted {deleted_count} entities",
+                message=(response_data.get('message')
+                         or f"Deleted {deleted_count} entities"),
                 space_id=space_id,
                 graph_id=graph_id,
                 requested_uris=uri_list,
@@ -1141,9 +1234,10 @@ class KGEntitiesEndpoint(BaseEndpoint):
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
-            # idempotent=True below: replay-safe, see `_make_request`.
+            # Replay-safe unless it is a create: see `replay_safe_mode`.
             response = await self._make_request('POST', url, params=params, json=body,
-                                                headers={'Content-Type': content_type}, idempotent=True)
+                                                headers={'Content-Type': content_type},
+                                                idempotent=replay_safe_mode(operation_mode))
             response_data = response.json()
             
             # Parse created frames from response
@@ -1286,7 +1380,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
         entity_uri: str,
         frame_uris: List[str],
         parent_frame_uri: Optional[str] = None,
-        recursive: bool = False
+        recursive: bool = False,
+        if_unmodified_since: Optional[str] = None
     ) -> DeleteResponse:
         """
         Delete specific frames from an entity.
@@ -1299,6 +1394,9 @@ class KGEntitiesEndpoint(BaseEndpoint):
             parent_frame_uri: Optional parent frame URI for validation
             recursive: If True, recursively delete all descendant frames.
                        If False (default), fail if any frame has children.
+            if_unmodified_since: The ENTITY's `hasObjectModificationDateTime` as
+                you read it (`modification_stamp`). If it has moved, nothing is
+                deleted and the response `is_conflict`. A delete advances it.
             
         Returns:
             DeleteResponse containing deletion results
@@ -1317,7 +1415,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 entity_uri=entity_uri,
                 frame_uris=','.join(frame_uris),
                 parent_frame_uri=parent_frame_uri,
-                recursive=recursive
+                recursive=recursive,
+                if_unmodified_since=if_unmodified_since
             )
             
             response = await self._make_request('DELETE', url, params=params)
@@ -1343,19 +1442,22 @@ class KGEntitiesEndpoint(BaseEndpoint):
                     requested_uris=frame_uris
                 )
             
-            deleted_count = response_data.get('deleted_count', len(frame_uris))
-            deleted_uris = response_data.get('deleted_uris', frame_uris)
+            # The server's count, list and message, as in `delete_kgentity`.
+            deleted_count = response_data.get('deleted_count') or 0
+            deleted_uris = response_data.get('deleted_uris') or []
             
             return build_success_response(
                 DeleteResponse,
                 status_code=response.status_code,
                 status=response_data.get('status'),
-                message=f"Deleted {deleted_count} frames",
+                message=(response_data.get('message')
+                         or f"Deleted {deleted_count} frames"),
                 space_id=space_id,
                 graph_id=graph_id,
                 requested_uris=frame_uris,
                 deleted_count=deleted_count,
                 deleted_uris=deleted_uris,
+                absent_uris=response_data.get('absent_uris') or [],
                 metadata={'entity_uri': entity_uri},
             )
             

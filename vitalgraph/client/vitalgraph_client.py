@@ -1595,7 +1595,21 @@ class VitalGraphClient(VitalGraphClientInterface):
             EntityUpdateResponse containing operation result
         """
         return await self.kgentities.update_kgentities(space_id, graph_id, objects)
-    
+
+    async def upsert_kgentities(self, space_id: str, graph_id: str, objects: List) -> UpdateEntityResponse:
+        """
+        Create or replace KGEntities from GraphObjects.
+
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            objects: List of GraphObject instances: each entity's whole graph
+
+        Returns:
+            UpdateEntityResponse containing operation result
+        """
+        return await self.kgentities.upsert_kgentities(space_id, graph_id, objects)
+
     async def delete_kgentity(self, space_id: str, graph_id: str, uri: str) -> DeleteResponse:
         """
         Delete a KGEntity by URI.

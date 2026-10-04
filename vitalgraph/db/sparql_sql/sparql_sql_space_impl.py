@@ -1748,7 +1748,9 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
     async def delete_entity_graph_bulk(self, space_id: str, graph_id: str,
                                        entity_uri: str, conn=None,
-                                       collected_uris: Optional[List[str]] = None) -> int:
+                                       collected_uris: Optional[List[str]] = None,
+                                       if_unmodified_since: Optional[str] = None,
+                                       entity_only: bool = False) -> int:
         """Delete all quads belonging to an entity graph in one SQL operation.
 
         Finds all subjects whose ``hasKGGraphURI`` points to *entity_uri*,
@@ -1763,6 +1765,20 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         the caller's auto-sync, which needs the members and not just the entity
         (`issues/256`). Without this the caller handed auto-sync
         ``[entity_uri]`` alone, and every slot's vector row outlived the entity.
+
+        ``entity_only`` deletes the ENTITY SUBJECT alone, and REFUSES
+        (`DeleteRefused`) when anything else names it in `hasKGGraphURI`
+        (`issues/256`, delete decision 1). That form used to be a SPARQL read
+        plus a quad-level delete with no lock, and it left every frame, slot and
+        edge behind pointing at a deleted entity. The member check runs here,
+        after the lock, because a frame create takes the same lock: checked
+        anywhere earlier, a create landing in between would be orphaned by the
+        delete the check had just allowed.
+
+        ``if_unmodified_since`` refuses the delete (`StaleWrite`) if the entity's
+        modification time has moved since the caller read it, compared after the
+        lock as the writes do (`issues/253`). An entity that is not there is not
+        compared: deleting what is already gone is a NO_OP, not a conflict.
         """
         import time as _time
         _t0 = _time.monotonic()
@@ -1793,13 +1809,39 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 from .entity_lock import lock_entities
                 await lock_entities(conn, [entity_uri])
 
+                from ...kg_impl.kg_backend_utils import _compare_stamp, DeleteRefused
+                present = await conn.fetchval(
+                    f"SELECT 1 FROM {t['rdf_quad']} "
+                    f"WHERE subject_uuid = $1 AND context_uuid = $2 LIMIT 1",
+                    entity_uuid, g_uuid)
+                if entity_only:
+                    if not present:
+                        return None
+                    members = await conn.fetchval(
+                        f"SELECT count(DISTINCT subject_uuid) FROM {t['rdf_quad']} "
+                        f"WHERE predicate_uuid = $1 AND object_uuid = $2 "
+                        f"AND context_uuid = $3 AND subject_uuid <> $2",
+                        p_uuid, entity_uuid, g_uuid)
+                    if members:
+                        raise DeleteRefused(
+                            f"Entity {entity_uri} has {members} member(s) (frames, "
+                            f"slots, edges) that would be left pointing at a "
+                            f"deleted entity; nothing was deleted. Delete it with "
+                            f"delete_entity_graph=true.")
+                if if_unmodified_since is not None and present:
+                    await _compare_stamp(conn, space_id, graph_id, entity_uri,
+                                         if_unmodified_since)
+
                 # Step 1: Find all subject UUIDs with hasKGGraphURI = entity_uri
-                subject_rows = await conn.fetch(
-                    f"SELECT DISTINCT subject_uuid FROM {t['rdf_quad']} "
-                    f"WHERE predicate_uuid = $1 AND object_uuid = $2 AND context_uuid = $3",
-                    p_uuid, entity_uuid, g_uuid,
-                )
-                subject_uuids = [row['subject_uuid'] for row in subject_rows]
+                if entity_only:
+                    subject_uuids = [entity_uuid]
+                else:
+                    subject_rows = await conn.fetch(
+                        f"SELECT DISTINCT subject_uuid FROM {t['rdf_quad']} "
+                        f"WHERE predicate_uuid = $1 AND object_uuid = $2 AND context_uuid = $3",
+                        p_uuid, entity_uuid, g_uuid,
+                    )
+                    subject_uuids = [row['subject_uuid'] for row in subject_rows]
 
                 # THE ENTITY ITSELF, unconditionally. Membership above is a
                 # snapshot of ONE mutable predicate, and the entity appears
@@ -1966,6 +2008,11 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                                    pg_config=self.postgresql_config)
             return deleted
         except Exception as e:
+            from ...kg_impl.kg_backend_utils import (
+                DeleteRefused, GuardUnsatisfiable, StaleWrite)
+            if isinstance(e, (DeleteRefused, GuardUnsatisfiable, StaleWrite)):
+                # Refusals, not failures: the caller reports them as such.
+                raise
             logger.error("delete_entity_graph_bulk(%s, %s) failed: %s", space_id, entity_uri, e)
             # RAISE, do not return 0. A count of 0 is a truthful answer to
             # "how many were written" only when nothing was ASKED for; on a

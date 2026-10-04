@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional, Union, List
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 
-from .base_endpoint import BaseEndpoint, http_status_of
+from .base_endpoint import BaseEndpoint, http_status_of, replay_safe_mode
 from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
 from ..utils.format_helpers import (
     ClientWireFormat,
@@ -381,9 +381,10 @@ class KGFramesEndpoint(BaseEndpoint):
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
-            # idempotent=True below: replay-safe, see `_make_request`.
+            # Replay-safe unless it is a create: see `replay_safe_mode`.
             response = await self._make_request('POST', url, params=params, json=body,
-                                                headers={'Content-Type': content_type}, idempotent=True)
+                                                headers={'Content-Type': content_type},
+                                                idempotent=replay_safe_mode(operation_mode))
             response_data = response.json()
             
             # Check if response indicates failure (success=false)
@@ -503,7 +504,8 @@ class KGFramesEndpoint(BaseEndpoint):
                 error_code=4, error_message=str(e), status_code=http_status_of(e)
             )
     
-    async def delete_kgframe(self, space_id: str, graph_id: str, uri: str, recursive: bool = False) -> DeleteResponse:
+    async def delete_kgframe(self, space_id: str, graph_id: str, uri: str, recursive: bool = False,
+                             if_unmodified_since: Optional[str] = None) -> DeleteResponse:
         """
         Delete a KGFrame by URI.
         
@@ -513,6 +515,9 @@ class KGFramesEndpoint(BaseEndpoint):
             uri: KGFrame URI to delete
             recursive: If True, recursively delete all descendant frames.
                        If False (default), fail if frame has children.
+            if_unmodified_since: The ROOT frame's `hasObjectModificationDateTime`
+                as you read it (`modification_stamp`). If it has moved, nothing
+                is deleted and the response `is_conflict`. One root per request.
             
         Returns:
             DeleteResponse containing operation result
@@ -525,7 +530,8 @@ class KGFramesEndpoint(BaseEndpoint):
         
         try:
             url = f"{self._get_server_url()}/api/graphs/kgframes"
-            params = build_query_params(space_id=space_id, graph_id=graph_id, uri=uri, recursive=recursive)
+            params = build_query_params(space_id=space_id, graph_id=graph_id, uri=uri, recursive=recursive,
+                                        if_unmodified_since=if_unmodified_since)
             
             response = await self._make_request('DELETE', url, params=params)
             response_data = response.json()
@@ -549,7 +555,7 @@ class KGFramesEndpoint(BaseEndpoint):
                 )
             
             deleted_count = response_data.get('deleted_count', response_data.get('affected_count', 0))
-            deleted_uris = response_data.get('deleted_uris', [uri] if deleted_count else [])
+            deleted_uris = response_data.get('deleted_uris') or ([uri] if deleted_count else [])
             
             return build_success_response(
                 DeleteResponse,
@@ -558,6 +564,7 @@ class KGFramesEndpoint(BaseEndpoint):
                 message=response_data.get('message', f"Deleted {deleted_count} frames"),
                 deleted_count=deleted_count,
                 deleted_uris=deleted_uris,
+                absent_uris=response_data.get('absent_uris') or [],
                 space_id=space_id, graph_id=graph_id,
                 requested_uris=[uri]
             )
@@ -570,7 +577,8 @@ class KGFramesEndpoint(BaseEndpoint):
                 space_id=space_id, graph_id=graph_id, requested_uris=[uri]
             )
     
-    async def delete_kgframes_batch(self, space_id: str, graph_id: str, uri_list: str, recursive: bool = False) -> DeleteResponse:
+    async def delete_kgframes_batch(self, space_id: str, graph_id: str, uri_list: str, recursive: bool = False,
+                                    if_unmodified_since: Optional[str] = None) -> DeleteResponse:
         """
         Delete multiple KGFrames by URI list.
         
@@ -580,6 +588,9 @@ class KGFramesEndpoint(BaseEndpoint):
             uri_list: Comma-separated list of KGFrame URIs
             recursive: If True, recursively delete all descendant frames.
                        If False (default), fail if any frame has children.
+            if_unmodified_since: The ROOT frame's `hasObjectModificationDateTime`
+                as you read it (`modification_stamp`). If it has moved, nothing
+                is deleted and the response `is_conflict`. One root per request.
             
         Returns:
             DeleteResponse containing operation result
@@ -592,7 +603,8 @@ class KGFramesEndpoint(BaseEndpoint):
         
         try:
             url = f"{self._get_server_url()}/api/graphs/kgframes"
-            params = build_query_params(space_id=space_id, graph_id=graph_id, uri_list=uri_list, recursive=recursive)
+            params = build_query_params(space_id=space_id, graph_id=graph_id, uri_list=uri_list, recursive=recursive,
+                                        if_unmodified_since=if_unmodified_since)
             
             response = await self._make_request('DELETE', url, params=params)
             response_data = response.json()
@@ -616,7 +628,7 @@ class KGFramesEndpoint(BaseEndpoint):
                 )
             
             deleted_count = response_data.get('deleted_count', response_data.get('affected_count', 0))
-            deleted_uris = response_data.get('deleted_uris', [])
+            deleted_uris = response_data.get('deleted_uris') or []
             
             return build_success_response(
                 DeleteResponse,
@@ -625,6 +637,7 @@ class KGFramesEndpoint(BaseEndpoint):
                 message=response_data.get('message', f"Deleted {deleted_count} frames"),
                 deleted_count=deleted_count,
                 deleted_uris=deleted_uris,
+                absent_uris=response_data.get('absent_uris') or [],
                 space_id=space_id, graph_id=graph_id,
                 requested_uris=uri_list.split(',')
             )
@@ -721,9 +734,10 @@ class KGFramesEndpoint(BaseEndpoint):
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
-            # idempotent=True below: replay-safe, see `_make_request`.
+            # Replay-safe unless it is a create: see `replay_safe_mode`.
             response = await self._make_request('POST', url, params=params, json=body,
-                                                headers={'Content-Type': content_type}, idempotent=True)
+                                                headers={'Content-Type': content_type},
+                                                idempotent=replay_safe_mode(operation_mode))
             response_data = response.json()
             created_count = response_data.get('created_count', 0)
             created_uris = response_data.get('created_uris', [])
@@ -795,7 +809,8 @@ class KGFramesEndpoint(BaseEndpoint):
             logger.error(f"Error updating frames with slots: {e}")
             return build_error_response(UpdateEntityResponse, error_code=4, error_message=str(e), status_code=http_status_of(e))
     
-    async def delete_kgframes_with_slots(self, space_id: str, graph_id: str, uri_list: str, recursive: bool = False) -> DeleteResponse:
+    async def delete_kgframes_with_slots(self, space_id: str, graph_id: str, uri_list: str, recursive: bool = False,
+            if_unmodified_since: Optional[str] = None) -> DeleteResponse:
         """
         Delete KGFrames with their associated slots by URI list.
         
@@ -806,15 +821,19 @@ class KGFramesEndpoint(BaseEndpoint):
             recursive: If True, recursively delete all descendant frames.
                        If False (default), fail if any frame has children.
             
+            if_unmodified_since: As for `delete_kgframes_batch`.
+            
         Returns:
             DeleteResponse containing operation result
             
         Raises:
             VitalGraphClientError: If request fails
         """
-        return await self.delete_kgframes_batch(space_id, graph_id, uri_list, recursive=recursive)
+        return await self.delete_kgframes_batch(space_id, graph_id, uri_list, recursive=recursive,
+            if_unmodified_since=if_unmodified_since)
     
-    async def delete_kgframes(self, space_id: str, graph_id: str, uri_list: str, recursive: bool = False) -> DeleteResponse:
+    async def delete_kgframes(self, space_id: str, graph_id: str, uri_list: str, recursive: bool = False,
+            if_unmodified_since: Optional[str] = None) -> DeleteResponse:
         """
         Delete KGFrames by URI list.
         
@@ -825,13 +844,16 @@ class KGFramesEndpoint(BaseEndpoint):
             recursive: If True, recursively delete all descendant frames.
                        If False (default), fail if any frame has children.
             
+            if_unmodified_since: As for `delete_kgframes_batch`.
+            
         Returns:
             DeleteResponse containing operation result
             
         Raises:
             VitalGraphClientError: If request fails
         """
-        return await self.delete_kgframes_batch(space_id, graph_id, uri_list, recursive=recursive)
+        return await self.delete_kgframes_batch(space_id, graph_id, uri_list, recursive=recursive,
+            if_unmodified_since=if_unmodified_since)
 
     # Frame-Slot Sub-Endpoint Operations
     
@@ -865,9 +887,10 @@ class KGFramesEndpoint(BaseEndpoint):
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
-            # idempotent=True below: replay-safe, see `_make_request`.
+            # Replay-safe unless it is a create: see `replay_safe_mode`.
             response = await self._make_request('POST', url, params=params, json=body,
-                                                headers={'Content-Type': content_type}, idempotent=True)
+                                                headers={'Content-Type': content_type},
+                                                idempotent=replay_safe_mode(operation_mode))
             response_data = response.json()
             created_count = response_data.get('created_count', 0)
             created_uris = response_data.get('created_uris', [])
@@ -967,7 +990,7 @@ class KGFramesEndpoint(BaseEndpoint):
             response = await self._make_request('DELETE', url, params=params)
             response_data = response.json()
             deleted_count = response_data.get('deleted_count', response_data.get('affected_count', 0))
-            deleted_uris = response_data.get('deleted_uris', [])
+            deleted_uris = response_data.get('deleted_uris') or []
             
             return build_success_response(
                 DeleteResponse, status_code=response.status_code,
@@ -1138,9 +1161,10 @@ class KGFramesEndpoint(BaseEndpoint):
                                         if_unmodified_since=if_unmodified_since)
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
-            # idempotent=True below: replay-safe, see `_make_request`.
+            # NOT replay-safe: this always sends the default mode, create, and a
+            # replayed create answers ALREADY_EXISTS (`replay_safe_mode`).
             response = await self._make_request('POST', url, params=params, json=body,
-                                                headers={'Content-Type': content_type}, idempotent=True)
+                                                headers={'Content-Type': content_type}, idempotent=False)
             response_data = response.json()
             created_count = response_data.get('created_count', 0)
             created_uris = response_data.get('created_uris', [])
@@ -1473,7 +1497,8 @@ class KGFramesEndpoint(BaseEndpoint):
         """
         return await self.get_kgframe(space_id, graph_id, uri, include_frame_graph=True)
     
-    async def delete_kgframe_graph(self, space_id: str, graph_id: str, uri: str, recursive: bool = False) -> DeleteResponse:
+    async def delete_kgframe_graph(self, space_id: str, graph_id: str, uri: str, recursive: bool = False,
+            if_unmodified_since: Optional[str] = None) -> DeleteResponse:
         """
         Delete a KGFrame and its complete graph including all connected objects.
         
@@ -1484,15 +1509,19 @@ class KGFramesEndpoint(BaseEndpoint):
             recursive: If True, recursively delete all descendant frames.
                        If False (default), fail if frame has children.
             
+            if_unmodified_since: As for `delete_kgframe`.
+            
         Returns:
             DeleteResponse containing deletion result
             
         Raises:
             VitalGraphClientError: If request fails
         """
-        return await self.delete_kgframe(space_id, graph_id, uri, recursive=recursive)
+        return await self.delete_kgframe(space_id, graph_id, uri, recursive=recursive,
+            if_unmodified_since=if_unmodified_since)
     
-    async def delete_kgframe_graphs(self, space_id: str, graph_id: str, uri_list: str, recursive: bool = False) -> DeleteResponse:
+    async def delete_kgframe_graphs(self, space_id: str, graph_id: str, uri_list: str, recursive: bool = False,
+            if_unmodified_since: Optional[str] = None) -> DeleteResponse:
         """
         Delete multiple KGFrames and their complete graphs.
         
@@ -1503,10 +1532,13 @@ class KGFramesEndpoint(BaseEndpoint):
             recursive: If True, recursively delete all descendant frames.
                        If False (default), fail if any frame has children.
             
+            if_unmodified_since: As for `delete_kgframes_batch`.
+            
         Returns:
             DeleteResponse containing deletion result
             
         Raises:
             VitalGraphClientError: If request fails
         """
-        return await self.delete_kgframes_batch(space_id, graph_id, uri_list, recursive=recursive)
+        return await self.delete_kgframes_batch(space_id, graph_id, uri_list, recursive=recursive,
+            if_unmodified_since=if_unmodified_since)

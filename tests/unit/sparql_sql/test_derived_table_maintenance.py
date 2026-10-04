@@ -95,6 +95,10 @@ WRITE_PATHS = [
     ("kg_backend", "update_entity_graph"),
     ("kg_backend", "update_entity_subject_only"),
     ("kg_backend", "update_subjects_graph"),
+    # `issues/256`. The subject-level delete with its aux-table syncs, shared by
+    # `update_subjects_graph` and the frame deletes, and the frame delete itself.
+    ("kg_backend", "_delete_subjects_synced"),
+    ("kg_backend", "delete_frame_subtrees"),
 
     # The import paths. `import_ntriples_bulk` COPYs and then resyncs
     # wholesale; the three incremental ones INSERT and DELETE per batch.
@@ -127,13 +131,21 @@ WRITE_PATHS = [
 # until this was added.
 _REBUILD = "resync_all_auxiliary_tables"
 
+# Accepted for EVERY table: the shared subject-level delete (`issues/256`). It is
+# a write path in WRITE_PATHS itself, so it must pass every cell on its own
+# markers, and a caller that delegates to it inherits exactly what it proves —
+# no more. Without this a caller would have to repeat the calls it delegated,
+# which is how the four frame delete paths drifted apart in the first place.
+_SYNCED_DELETE = "_delete_subjects_synced"
+
 DERIVED = {
     # `resync_all_auxiliary_tables` is accepted for every table below. It
     # REBUILDS all of them from the quads, which is strictly stronger than an
     # incremental delta — the same reasoning that accepts
     # `resync_stats_for_predicates` above. `import_ntriples_bulk` maintains
     # everything this way and read as a triple gap until this was added.
-    "edge": (("sync_edge_table", "delete_edges_for_context", _REBUILD),
+    "edge": (("sync_edge_table", "delete_edges_for_context", _REBUILD,
+              _SYNCED_DELETE),
              "denormalised edge mirror; the edge-table rewrite is the default "
              "plan for entity/frame/relation queries"),
     # `frame_entity` was RETIRED (`issues/183`): it named two `hasKGSlotType`
@@ -143,7 +155,7 @@ DERIVED = {
     # mirror on exactly the same terms: the collapse READS it, so a stale row
     # is a wrong answer rather than a slow query.
     "frame_slot": (("sync_frame_slot", "resync_frame_slot",
-                    "delete_frame_slot_for_context", _REBUILD),
+                    "delete_frame_slot_for_context", _REBUILD, _SYNCED_DELETE),
                    "derived from edge; collapses each slot arm of a hop"),
     # issues/096. A stale row here is a WRONG SORT ORDER, not a slow query —
     # the sort reads the value straight off this table — so it is a structural
@@ -157,7 +169,8 @@ DERIVED = {
     # (the search finds it at offset 2) and `rebuild_...` does not.
     "entity_slot_sort": (("sync_entity_slot_sort",
                           "rebuild_entity_slot_sort",
-                          "delete_entity_slot_sort_for_context", _REBUILD),
+                          "delete_entity_slot_sort_for_context", _REBUILD,
+                          _SYNCED_DELETE),
                          "denormalised entity->frame->slot sort values; a slot "
                          "sort reads its ORDER from this table"),
     # ADDED 2026-09-12. These were absent while `entity_slot_sort` was present,
@@ -170,11 +183,13 @@ DERIVED = {
     # absence means SERVE — so a short table is not declined, it answers with a
     # plausible SUBSET and a count that agrees with it.
     "entity_prop_sort": (("sync_entity_prop_sort",
-                          "delete_entity_prop_sort_for_context", _REBUILD),
+                          "delete_entity_prop_sort_for_context", _REBUILD,
+                          _SYNCED_DELETE),
                          "denormalised direct entity properties; a property "
                          "sort or FILTER reads this table"),
     "frame_prop_sort": (("sync_frame_prop_sort",
-                         "delete_frame_prop_sort_for_context", _REBUILD),
+                         "delete_frame_prop_sort_for_context", _REBUILD,
+                         _SYNCED_DELETE),
                         "the same for top-level (Assertion) frames"),
     # STATS IS DELIBERATELY NOT IN THIS MATRIX ANY MORE.
     #
@@ -673,10 +688,14 @@ def test_every_sync_called_is_also_IMPORTABLE_in_that_scope():
                     imported |= {a.name for a in node.names}
                 elif isinstance(node, ast.Import):
                     imported |= {(a.asname or a.name).split(".")[0] for a in node.names}
-            # A module-level import satisfies it too.
+            # A module-level import satisfies it too, and so does a function
+            # DEFINED at module level: `_delete_subjects_synced` is called from
+            # the module it lives in (`issues/256`).
             for node in tree.body:
                 if isinstance(node, ast.ImportFrom):
                     imported |= {a.name for a in node.names}
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    imported.add(node.name)
             missing = called - imported
             if missing:
                 problems.append(f"{label}.{fn.name}: {sorted(missing)}")

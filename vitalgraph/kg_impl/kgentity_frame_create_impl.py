@@ -29,9 +29,11 @@ from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
 
 # Backend adapter import
 from vitalgraph.kg_impl.kg_backend_utils import (
-    GuardUnsatisfiable, KGBackendInterface, StaleWrite)
+    EntityAbsent, GuardUnsatisfiable, KGBackendInterface, StaleWrite,
+    entity_present_precheck)
 from vitalgraph.kg_impl.edge_uris import edge_uri
 from vitalgraph.kg_impl.frame_grouping import UngroupableSlot, assign_frame_groupings
+from .refusals import RequestRefused
 
 
 def _sparql_binding_to_rdflib(binding) -> Any:
@@ -172,25 +174,17 @@ class KGEntityFrameCreateProcessor:
             else:
                 self.logger.debug(f"Creating/updating TOP-LEVEL frames for entity {entity_uri} in space {space_id}, graph {graph_id}, operation_mode={operation_mode}")
             
-            # Step 1: Validate entity exists (extracted from lines 957-959)
-            # Skip for UPDATE/UPSERT — validate_frame_ownership already confirmed entity exists upstream
-            if not operation_mode or str(operation_mode).upper() not in ['UPDATE', 'UPSERT']:
-                entity_exists = await self.validate_entity_exists(backend_adapter, space_id, graph_id, entity_uri)
-                if not entity_exists:
-                    return CreateFrameResult(
-                        success=False,
-                        created_uris=[],
-                        message=f"Target entity {entity_uri} not found in space {space_id}",
-                        frame_count=0
-                    )
-            
+            # Step 1, THE ENTITY EXISTS, is no longer checked here (`issues/256`):
+            # a create passes it to the write as a `precheck`, decided under the
+            # entity lock. Checked here, a create could pass, wait on the lock
+            # while the entity was deleted, and then write frames onto nothing.
+            # UPDATE/UPSERT rely on the ownership check upstream, as before.
             _p1 = _time.time()
-            self.logger.info(f"⏱️ PROCESSOR validate_entity: {_p1-_p0:.3f}s")
-            
-            # Step 2: Categorize frame objects (extracted from lines 980-993)
-            categories = await self.categorize_frame_objects(frame_objects)
-            
-            # Step 3: Validate frame structure
+
+            # Steps 2-5: categorise, group, link.
+            creating = not operation_mode or str(operation_mode).upper() not in ['UPDATE', 'UPSERT']
+            categories, all_objects = await self.prepare_entity_frame_objects(
+                entity_uri, frame_objects, parent_frame_uri, create_links=creating)
             if not categories.frame_objects:
                 return CreateFrameResult(
                     success=False,
@@ -198,24 +192,6 @@ class KGEntityFrameCreateProcessor:
                     message="Request must contain at least one KGFrame object",
                     frame_count=0
                 )
-            
-            # Step 4: Set dual grouping URIs (extracted from lines 995-1011)
-            # CRITICAL: Pass ALL objects (not just frame_objects) to ensure hierarchical child frames get kGGraphURI set
-            all_input_objects = categories.frame_objects + categories.slot_objects + categories.edge_objects
-            all_objects = await self.assign_grouping_uris(all_input_objects, entity_uri)
-            
-            # Step 5: Create linking edges
-            # Only create edges during CREATE operations, not during UPDATE
-            # During UPDATE, the edges already exist and should not be recreated
-            if not operation_mode or str(operation_mode).upper() not in ['UPDATE', 'UPSERT']:
-                if parent_frame_uri:
-                    # Create Edge_hasKGFrame for parent→child frame relationships
-                    parent_child_edges = self._create_parent_child_edges(parent_frame_uri, entity_uri, categories.frame_objects)
-                    all_objects.extend(parent_child_edges)
-                else:
-                    # Create Edge_hasEntityKGFrame for entity→frame relationships (root frames)
-                    entity_frame_edges = await self.create_entity_frame_edges(entity_uri, categories.frame_objects)
-                    all_objects.extend(entity_frame_edges)
             
             _p2 = _time.time()
             self.logger.info(f"⏱️ PROCESSOR categorize+grouping+edges: {_p2-_p1:.3f}s")
@@ -232,7 +208,9 @@ class KGEntityFrameCreateProcessor:
                 # Step 7: Execute atomic creation via backend (extracted from lines 1125-1145)
                 success = await self.execute_frame_creation(backend_adapter, space_id, graph_id, all_objects,
                                                                             entity_uri=entity_uri,
-                                                                            if_unmodified_since=if_unmodified_since)
+                                                                            if_unmodified_since=if_unmodified_since,
+                                                                            precheck=entity_present_precheck(
+                                                                                space_id, graph_id, entity_uri))
             
             if success:
                 created_uris = [str(obj.URI) for obj in all_objects if hasattr(obj, 'URI')]
@@ -263,7 +241,12 @@ class KGEntityFrameCreateProcessor:
                     frame_count=0,
                 )
                 
-        except (StaleWrite, GuardUnsatisfiable, UngroupableSlot):
+        except EntityAbsent as e:
+            # The same answer the pre-lock check gave, so the route's status for
+            # a missing entity does not change: only WHEN it is decided does.
+            return CreateFrameResult(
+                success=False, created_uris=[], message=str(e), frame_count=0)
+        except (StaleWrite, GuardUnsatisfiable, RequestRefused):
             # A REFUSAL, not a failure, and the difference is the whole point
             # (`issues/253`): the caller must be told its entity moved so it can
             # re-read and merge, where a generic failure tells it to give up or
@@ -280,33 +263,80 @@ class KGEntityFrameCreateProcessor:
                 frame_count=0,
             )
     
-    async def validate_entity_exists(self, backend_adapter: KGBackendInterface, space_id: str, 
-                                   graph_id: str, entity_uri: str) -> bool:
+    async def prepare_entity_frame_objects(self, entity_uri: str, frame_objects: List[GraphObject],
+                                           parent_frame_uri: Optional[str] = None,
+                                           create_links: bool = True):
+        """Categorise, group and (for a create or replace) link a request's objects.
+
+        Returns (categories, all_objects). Nothing is written. Shared by
+        `create_entity_frame` and `replace_entity_frames`, so a replace writes
+        exactly what a create would.
         """
-        Validate target entity exists before frame creation.
-        EXTRACTED FROM: lines 957-959 in _create_or_update_frames()
-        
-        Args:
-            backend_adapter: Backend adapter for database operations
-            space_id: Space identifier
-            graph_id: Graph identifier
-            entity_uri: URI of the entity to validate
-            
-        Returns:
-            bool: True if entity exists, False otherwise
+        categories = await self.categorize_frame_objects(frame_objects)
+        if not categories.frame_objects:
+            return categories, []
+        # ALL objects, not just frames, so hierarchical child frames get
+        # kGGraphURI set.
+        all_input_objects = categories.frame_objects + categories.slot_objects + categories.edge_objects
+        all_objects = await self.assign_grouping_uris(all_input_objects, entity_uri)
+        # Linking edges only on create/replace: on UPDATE/UPSERT they exist.
+        if create_links:
+            if parent_frame_uri:
+                all_objects.extend(self._create_parent_child_edges(
+                    parent_frame_uri, entity_uri, categories.frame_objects))
+            else:
+                all_objects.extend(await self.create_entity_frame_edges(
+                    entity_uri, categories.frame_objects))
+        return categories, all_objects
+
+    async def replace_entity_frames(self, backend_adapter: KGBackendInterface, space_id: str,
+                                    graph_id: str, entity_uri: str,
+                                    frame_objects: List[GraphObject],
+                                    parent_frame_uri: Optional[str] = None,
+                                    if_unmodified_since: Optional[str] = None) -> CreateFrameResult:
+        """Replace the named frames and their descendants, in ONE locked transaction.
+
+        `issues/256` item 4. Scope is what the request NAMES: each frame in it,
+        plus its descendants in the store. The entity's other frames, and a
+        parent's other children, are untouched — this used to delete every
+        top-level frame of the entity, or every child of the parent, whatever
+        the request named. Deep: a descendant the request does not re-send is
+        gone. A frame not there yet is created.
+
+        Ownership, the entity's existence, the guard (on the entity), the delete,
+        the insert and the entity stamp are one transaction under the entity lock
+        (`delete_frame_subtrees`), so a refused or failed replace leaves the old
+        frames as they were. The links are re-created by the request, so the old
+        ones into the subtree go.
         """
-        try:
-            # Use the existing entity existence check pattern from the endpoint
-            # This delegates to KGEntityDeleteProcessor.entity_exists()
-            from vitalgraph.kg_impl.kgentity_delete_impl import KGEntityDeleteProcessor
-            
-            delete_processor = KGEntityDeleteProcessor()
-            return await delete_processor.entity_exists(backend_adapter, space_id, graph_id, entity_uri)
-            
-        except Exception as e:
-            self.logger.error(f"Error checking entity existence: {e}")
-            return False
-    
+        categories, all_objects = await self.prepare_entity_frame_objects(
+            entity_uri, frame_objects, parent_frame_uri, create_links=True)
+        if not categories.frame_objects:
+            return CreateFrameResult(
+                success=False, created_uris=[], frame_count=0,
+                message="Request must contain at least one KGFrame object")
+        insert_quads = await self.build_insert_quads_for_objects(all_objects, graph_id)
+        written = list(dict.fromkeys(str(o.URI) for o in all_objects
+                                     if getattr(o, 'URI', None)))
+        result = await backend_adapter.delete_frame_subtrees(
+            space_id, graph_id, [str(f.URI) for f in categories.frame_objects],
+            recursive=True, owner_entity_uri=entity_uri,
+            if_unmodified_since=if_unmodified_since,
+            insert_quads=insert_quads, insert_subjects=written,
+            keep_outside_links=False,
+            precheck=entity_present_precheck(space_id, graph_id, entity_uri))
+        _written = set(written)
+        return CreateFrameResult(
+            success=True, created_uris=written,
+            message=(f"Replaced {len(result.deleted_frames)} frame(s) with "
+                     f"{len(categories.frame_objects)}"),
+            frame_count=len(categories.frame_objects),
+            unhandled_types=sorted({type(o).__name__ for o in categories.unhandled}),
+            removed_uris=[u for u in result.member_uris if u not in _written])
+
+    # `validate_entity_exists` was DELETED 2026-10-04 (`issues/256`): the check
+    # runs inside the write transaction now (`entity_present_precheck`).
+
     async def categorize_frame_objects(self, graph_objects: List[GraphObject]) -> FrameObjectCategories:
         """
         Categorize objects by type: frames, slots, edges.
@@ -579,7 +609,7 @@ class KGEntityFrameCreateProcessor:
                 self.logger.error(f"❌ Atomic frame {operation_mode} failed")
                 return False
                 
-        except (StaleWrite, GuardUnsatisfiable, UngroupableSlot):
+        except (StaleWrite, GuardUnsatisfiable, RequestRefused):
             raise                     # a refusal must reach the caller as one
         except Exception as e:
             self.logger.error(f"Error in atomic frame {operation_mode}: {e}")
@@ -813,7 +843,8 @@ class KGEntityFrameCreateProcessor:
     async def execute_frame_creation(self, backend_adapter: KGBackendInterface, space_id: str, 
                                    graph_id: str, all_objects: List[GraphObject],
                                    entity_uri: Optional[str] = None,
-                                   if_unmodified_since: Optional[str] = None) -> bool:
+                                   if_unmodified_since: Optional[str] = None,
+                                   precheck=None) -> bool:
         """
         Execute atomic frame creation via subject-level delete + insert.
         
@@ -862,7 +893,8 @@ class KGEntityFrameCreateProcessor:
                     # rather than after the write is what makes the comparison
                     # race-free for the next writer.
                     if_unmodified_since=if_unmodified_since,
-                    guard_subject=entity_uri)
+                    guard_subject=entity_uri,
+                    precheck=precheck)
                 _t2 = _time.time()
                 self.logger.info(f"⏱️ FRAME_CREATE step2 update_subjects_graph: {_t2-_t1:.3f}s "
                                f"({len(subject_uris)} subjects, {len(insert_quads)} quads)")
@@ -884,7 +916,7 @@ class KGEntityFrameCreateProcessor:
                 self.logger.error(f"❌ Atomic frame creation failed")
                 return False
             
-        except (StaleWrite, GuardUnsatisfiable, UngroupableSlot):
+        except (StaleWrite, GuardUnsatisfiable, RequestRefused):
             raise                     # a refusal must reach the caller as one
         except Exception as e:
             self.logger.error(f"Error executing frame creation: {e}")

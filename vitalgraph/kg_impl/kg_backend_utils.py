@@ -49,6 +49,11 @@ from ..db.connection_config import require
 RDF_TYPE_URI = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
 VITALTYPE_URI = 'http://vital.ai/ontology/vital-core#vitaltype'
 HAS_FRAME_GRAPH_URI = 'http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI'
+HAS_KG_GRAPH_URI = 'http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI'
+HAS_EDGE_SOURCE = 'http://vital.ai/ontology/vital-core#hasEdgeSource'
+HAS_EDGE_DESTINATION = 'http://vital.ai/ontology/vital-core#hasEdgeDestination'
+EDGE_HAS_KG_FRAME = 'http://vital.ai/ontology/haley-ai-kg#Edge_hasKGFrame'
+EDGE_HAS_ENTITY_KG_FRAME = 'http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame'
 
 
 def graph_is_uri(graph_id: Optional[str]) -> bool:
@@ -146,6 +151,8 @@ from ..db.sparql_sql.conn_scope import write_conn as _write_conn
 from ..db.sparql_sql.entity_lock import EntityLockTimeout
 from ..utils.exception_detail import describe_exception
 from ..utils.background import BackgroundTasks
+# For the re-raises below. Imports nothing from vitalgraph, so this cannot cycle.
+from .refusals import RequestRefused
 
 # Post-write aux-table ANALYZE, scheduled per space (`issues/253`).
 _AUX_ANALYZE_TASKS = BackgroundTasks("aux-table ANALYZE")
@@ -263,6 +270,55 @@ async def _stamp_subject(conn, space_id: str, graph_id: str,
     await _insert_stamp(conn, t, s_uuid, p_uuid, g_uuid, now,
                         subject_uri=subject_uri)
     return now
+
+
+async def _delete_subjects_synced(conn, space_id: str, t, del_uuids,
+                                  g_uuid) -> Tuple[int, Tuple[float, ...]]:
+    """Delete every quad of `del_uuids` in one graph, keeping the aux tables in step.
+
+    ONE implementation for the subject-level writes and the frame deletes
+    (`issues/256`): four delete paths that each did this their own way is how
+    they drifted apart. The caller owns the transaction and the lock.
+
+    Returns the quads deleted and how long each step took (frame_slot, edge,
+    entity_slot_sort, delete), which the write path logs.
+    """
+    import time as _time
+    from ..db.sparql_sql.sync_frame_slot_table import sync_frame_slot_before_delete
+    from ..db.sparql_sql.sync_edge_table import sync_edge_table_before_delete
+    from ..db.sparql_sql.sync_entity_slot_sort import sync_entity_slot_sort_before_delete
+    from ..db.sparql_sql.sync_entity_prop_sort import sync_entity_prop_sort_after_change
+    from ..db.sparql_sql.sync_frame_prop_sort import sync_frame_prop_sort_after_change
+
+    # TIMED INDIVIDUALLY because the aggregate was misleading: `FRAME_CREATE
+    # step2` is 7.52s mean / 22.8s max on production for FOURTEEN subjects, of
+    # which the insert is ~0.3s, and the caller's log attributed the whole thing
+    # to "update_subjects_graph" with no way to tell which of these statements
+    # owned it. Each one scans for the affected quads before the DELETE, so any
+    # of them could.
+    _s0 = _time.monotonic()
+    await sync_frame_slot_before_delete(conn, space_id, del_uuids, context_uuid=g_uuid)
+    _s1 = _time.monotonic()
+    await sync_edge_table_before_delete(conn, space_id, del_uuids, context_uuid=g_uuid)
+    _s2 = _time.monotonic()
+    # `entity_slot_sort` BEFORE the delete (`issues/194`): its rows are reached
+    # through the edge table the delete invalidates, so afterwards they cannot be
+    # found — and a stale row makes a sort order by a value that is gone.
+    await sync_entity_slot_sort_before_delete(conn, space_id, del_uuids, context_uuid=g_uuid)
+    _s3 = _time.monotonic()
+    result = await conn.execute(
+        f"DELETE FROM {t['rdf_quad']} "
+        f"WHERE subject_uuid = ANY($1) AND context_uuid = $2",
+        del_uuids, g_uuid)
+    _s4 = _time.monotonic()
+    # AND THE PROP TABLES AFTER IT, because a delete there is a RECOMPUTE against
+    # the survivors rather than a row drop: they store the MIN of a multi-valued
+    # property, and for a subject deleted outright this empties its rows. Before
+    # the delete it would re-derive the value being removed.
+    await sync_entity_prop_sort_after_change(conn, space_id, del_uuids, context_uuid=g_uuid)
+    await sync_frame_prop_sort_after_change(conn, space_id, del_uuids, context_uuid=g_uuid)
+    deleted = int(result.split()[-1]) if result else 0
+    return deleted, (_s1 - _s0, _s2 - _s1, _s3 - _s2, _s4 - _s3)
 
 
 async def _insert_stamp(conn, t, s_uuid, p_uuid, g_uuid, value: str,
@@ -441,6 +497,92 @@ class AmbiguousPrecondition(Exception):
             f"conditionally, or omit it to keep last-writer-wins.")
 
 
+class DeleteRefused(RequestRefused):
+    """A delete the CALLER asked for that the contract does not allow.
+
+    `issues/256`. Decided inside the delete's transaction, after the lock, so
+    what it says was true when the delete would have run: an entity that has
+    members (delete it with its graph), a frame that belongs to another entity or
+    to none, a frame with children and no `recursive`, an entity's frame named
+    on `/kgframes`. Nothing is deleted. INVALID_REQUEST in a 200, with `str(e)`
+    as the message, because the request is what has to change.
+    """
+
+
+class EntityAbsent(RequestRefused):
+    """The entity a frame is being written onto does not exist (`issues/256`).
+
+    Decided under the entity lock, because a delete takes the same lock: checked
+    before it, a create could pass, wait while the entity was deleted, and then
+    write frames onto nothing.
+    """
+
+    def __init__(self, entity_uri: str, space_id: str):
+        self.entity_uri = entity_uri
+        super().__init__(f"Target entity {entity_uri} not found in space {space_id}")
+
+
+class FrameOwnedByEntity(RequestRefused):
+    """`/kgframes` named a frame that belongs to an entity (`issues/256`, decision 3).
+
+    That route does not take the entity's lock, so it may not write, replace or
+    delete an entity's frame, nor attach a frame under one: one frame has one
+    route, one lock and one stamp.
+    """
+
+
+async def refuse_entity_frames(conn, space_id: str, graph_id: str,
+                               uris: List[str], what: str = "named") -> None:
+    """Raise `FrameOwnedByEntity` if any of *uris* carries a `hasKGGraphURI`.
+
+    For `/kgframes`, inside its transaction and after its lock.
+    """
+    if not uris:
+        return
+    from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+    from ..db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+    t = SparqlSQLSchema.get_table_names(space_id)
+    rows = await conn.fetch(
+        f"SELECT ts.term_text AS frame, tt.term_text AS entity "
+        f"FROM {t['rdf_quad']} k "
+        f"JOIN {t['term']} ts ON ts.term_uuid = k.subject_uuid "
+        f"JOIN {t['term']} tt ON tt.term_uuid = k.object_uuid "
+        f"WHERE k.subject_uuid = ANY($1) AND k.predicate_uuid = $2 "
+        f"AND k.context_uuid = $3 LIMIT 5",
+        [_generate_term_uuid(u, 'U') for u in uris],
+        _generate_term_uuid(HAS_KG_GRAPH_URI, 'U'),
+        _generate_term_uuid(graph_id, 'U'))
+    if rows:
+        raise FrameOwnedByEntity(
+            f"/kgframes does not take an entity's lock, so the frames of an entity "
+            f"are written, replaced and deleted through /kgentities/kgframes; "
+            f"nothing was written. The {what} frame(s) belong to an entity: "
+            + ", ".join(f"{r['frame']} (entity {r['entity']})" for r in rows))
+
+
+def standalone_precheck(space_id: str, graph_id: str, frame_uris: List[str],
+                        parent_uri: Optional[str] = None):
+    """The `/kgframes` write precondition: no entity's frame, as target or parent."""
+    async def _check(conn):
+        await refuse_entity_frames(conn, space_id, graph_id, list(frame_uris))
+        if parent_uri:
+            await refuse_entity_frames(conn, space_id, graph_id, [parent_uri],
+                                       what="parent")
+    return _check
+
+
+def entity_present_precheck(space_id: str, graph_id: str, entity_uri: str):
+    """The entity-frame write precondition: the entity still exists."""
+    async def _check(conn):
+        t, s_uuid, _p, g_uuid = _stamp_keys(space_id, graph_id, entity_uri)
+        if not await conn.fetchval(
+                f"SELECT 1 FROM {t['rdf_quad']} "
+                f"WHERE subject_uuid = $1 AND context_uuid = $2 LIMIT 1",
+                s_uuid, g_uuid):
+            raise EntityAbsent(entity_uri, space_id)
+    return _check
+
+
 class WriteDeadlineExceeded(Exception):
     """A subject-level write ran past its budget and was rolled back.
 
@@ -489,6 +631,19 @@ def _phase_breakdown(started: float, marks: Dict[str, float]) -> str:
         out.append(f"{name}={at - prev:.3f}s")
         prev = at
     return "phases " + " ".join(out)
+
+
+@dataclass
+class FrameSubtreeDelete:
+    """What `delete_frame_subtrees` did.
+
+    `deleted_frames`: every frame removed, descendants included.
+    `absent_frames`: requested frames that were not there (NO_OP, not failure).
+    `member_uris`: every subject removed, for auto-sync.
+    """
+    deleted_frames: List[str]
+    absent_frames: List[str]
+    member_uris: List[str]
 
 
 @dataclass
@@ -1440,8 +1595,18 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                                      guard_subject: Optional[str] = None,
                                      stamp_subjects: Optional[List[str]] = None,
                                      replace_frame_graphs: Optional[List[str]] = None,
-                                     removed_uris: Optional[List[str]] = None) -> bool:
+                                     removed_uris: Optional[List[str]] = None,
+                                     precheck=None) -> bool:
         """Atomically replace quads for a list of subject URIs.
+
+        ``precheck``, if given, is awaited as ``precheck(conn)`` right after the
+        lock and before the guard, on this transaction's connection. It raises a
+        `RequestRefused` to refuse the write, and that reaches the caller as
+        itself. It exists for the checks that are only TRUE under the lock
+        (`issues/256`): that the entity a frame is written onto still exists, and
+        that a `/kgframes` write does not touch an entity's frame. Checked before
+        the lock, a delete or an entity-frame write landing in between makes the
+        answer stale by the time the write runs.
 
         ``replace_frame_graphs`` REPLACES WHOLE FRAME GRAPHS (`issues/256`).
         For each frame named, every subject whose `hasFrameGraphURI` is that
@@ -1536,6 +1701,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                             from ..db.sparql_sql.entity_lock import lock_entities
                             await lock_entities(conn, lock_uris)
                         _mark("lock")
+                        if precheck is not None:
+                            await precheck(conn)
 
                         # COMPARE-AND-SET, under the lock and in this
                         # transaction (`issues/253`). Anywhere else is a race:
@@ -1608,64 +1775,13 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                             _marks["resolve"] = _time.monotonic()
 
                         if _del:
-                            # Sync auxiliary tables before delete.
-                            #
-                            # TIMED INDIVIDUALLY because the aggregate was
-                            # misleading: `FRAME_CREATE step2` is 7.52s mean / 22.8s
-                            # max on production for FOURTEEN subjects, of which the
-                            # insert is ~0.3s, and the caller's log attributed the
-                            # whole thing to "update_subjects_graph" with no way to
-                            # tell which of these four statements owned it. Each one
-                            # scans for the affected quads before the DELETE, so any
-                            # of them could. Sub-millisecond to emit, and it runs on
-                            # the path that starves the connection pool.
-                            _s0 = _time.monotonic()
-                            from ..db.sparql_sql.sync_frame_slot_table import sync_frame_slot_before_delete
-                            await sync_frame_slot_before_delete(conn, space_id, _del, context_uuid=g_uuid)
-                            _s1 = _time.monotonic()
-                            from ..db.sparql_sql.sync_edge_table import sync_edge_table_before_delete
-                            await sync_edge_table_before_delete(conn, space_id, _del, context_uuid=g_uuid)
-                            _s2 = _time.monotonic()
-                            from ..db.sparql_sql.sync_entity_slot_sort import (
-                                sync_entity_slot_sort_before_delete)
-                            from ..db.sparql_sql.sync_entity_prop_sort import (
-                                sync_entity_prop_sort_after_change)
-                            from ..db.sparql_sql.sync_frame_prop_sort import (
-                                sync_frame_prop_sort_after_change)
-                            # `entity_slot_sort` BEFORE the delete (`issues/194`):
-                            # its rows are reached through the edge table the delete
-                            # invalidates, so afterwards they cannot be found — and
-                            # a stale row makes a sort order by a value that is
-                            # gone. Timed like its siblings above, for the same
-                            # reason: any of these scans can own the latency.
-                            await sync_entity_slot_sort_before_delete(
-                                conn, space_id, _del, context_uuid=g_uuid)
-                            _s3 = _time.monotonic()
-
-                            # Delete all quads for these subjects in this graph
-                            result = await conn.execute(
-                                f"DELETE FROM {t['rdf_quad']} "
-                                f"WHERE subject_uuid = ANY($1) AND context_uuid = $2",
-                                _del, g_uuid,
-                            )
-                            _s4 = _time.monotonic()
-                            # AND THE PROP TABLES AFTER IT, because a delete there
-                            # is a RECOMPUTE against the survivors rather than a row
-                            # drop: they store the MIN of a multi-valued property,
-                            # and for a subject deleted outright this empties its
-                            # rows. Before the delete it would re-derive the value
-                            # being removed.
-                            await sync_entity_prop_sort_after_change(
-                                conn, space_id, _del, context_uuid=g_uuid)
-                            await sync_frame_prop_sort_after_change(
-                                conn, space_id, _del, context_uuid=g_uuid)
-                            deleted = int(result.split()[-1]) if result else 0
+                            deleted, (_tf, _te, _ts, _td) = await _delete_subjects_synced(
+                                conn, space_id, t, _del, g_uuid)
                             self.logger.info(
                                 "⏱️  update_subjects_graph presync: frame_entity=%.3fs "
                                 "edge=%.3fs stats=%.3fs delete=%.3fs "
                                 "(%d subjects, %d quads deleted)",
-                                _s1 - _s0, _s2 - _s1, _s3 - _s2, _s4 - _s3,
-                                len(_del), deleted)
+                                _tf, _te, _ts, _td, len(_del), deleted)
                         _mark("presync")
 
                         # Insert new quads
@@ -1721,6 +1837,12 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             # act on: re-read, re-merge, retry.
             self.logger.warning("update_subjects_graph REFUSED (stale): %s", e)
             raise
+        except RequestRefused:
+            # A `precheck` refusal (`issues/256`), or an `UngroupableSlot` the
+            # day a caller assigns groupings closer in. Either way the caller's
+            # to fix, so it leaves as itself: the broad handler below would turn
+            # it into a generic failure with the reason in the log.
+            raise
         except GuardUnsatisfiable as e:
             # UNDECIDABLE, so nothing was written. Re-raised rather than
             # collapsed into the `False` below, because these carry the only
@@ -1750,8 +1872,15 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
 
     async def delete_entity_graph_direct(self, space_id: str, graph_id: str,
                                           entity_uri: str,
-                                          collected_uris: Optional[List[str]] = None) -> int:
+                                          collected_uris: Optional[List[str]] = None,
+                                          if_unmodified_since: Optional[str] = None,
+                                          entity_only: bool = False) -> int:
         """Delete entire entity graph via direct SQL (no SPARQL pipeline).
+
+        `entity_only` deletes the entity subject alone and REFUSES
+        (`DeleteRefused`) when the entity has members; `if_unmodified_since`
+        guards on the entity's stamp. Both are decided in the delete's own
+        transaction, under the entity lock — see `delete_entity_graph_bulk`.
 
         Returns the quads deleted; 0 means the entity graph was ABSENT. A
         failure RAISES. This used to log and return 0, which made a failed
@@ -1761,10 +1890,297 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         """
         try:
             return await self.backend.delete_entity_graph_bulk(
-                space_id, graph_id, entity_uri, collected_uris=collected_uris)
+                space_id, graph_id, entity_uri, collected_uris=collected_uris,
+                if_unmodified_since=if_unmodified_since, entity_only=entity_only)
+        except (StaleWrite, GuardUnsatisfiable, RequestRefused):
+            raise
         except Exception as e:
             self.logger.error("delete_entity_graph_direct failed: %s", e)
             raise
+
+    async def delete_frame_subtrees(self, space_id: str, graph_id: str,
+                                    frame_uris: List[str], *,
+                                    recursive: bool = False,
+                                    owner_entity_uri: Optional[str] = None,
+                                    if_unmodified_since: Optional[str] = None,
+                                    guard_subject: Optional[str] = None,
+                                    conn=None,
+                                    insert_quads: Optional[list] = None,
+                                    insert_subjects: Optional[List[str]] = None,
+                                    keep_outside_links: bool = False,
+                                    lock_extra: Optional[List[str]] = None,
+                                    stamp_subjects: Optional[List[str]] = None,
+                                    precheck=None) -> "FrameSubtreeDelete":
+        """Delete frames and everything they own, in ONE locked transaction.
+
+        REPLACE IS THIS WITH SOMETHING TO INSERT (`issues/256` item 4). Given
+        `insert_quads`, the same transaction then writes them, so a refused or
+        failed replace leaves the old subtree exactly as it was — the two replace
+        routes deleted with separate statements first and could leave neither the
+        old frames nor the new. For a replace:
+        - `insert_subjects` are deleted too, so nothing stale survives a rewrite;
+        - frames that do not exist yet are not ABSENT but created, and a guard is
+          compared whenever something is written, as the writes do;
+        - `keep_outside_links` keeps a link into a root from a frame or entity
+          OUTSIDE the subtree, so a replace that does not re-send its parent link
+          stays attached. A request that re-creates the link passes False;
+        - `lock_extra` adds lock keys (the frames being written), and
+          `stamp_subjects` the subjects whose version the write advances.
+        `precheck(conn)` runs after the lock, as in `update_subjects_graph`.
+
+        `issues/256`. Both frame delete routes come here. They were two
+        implementations — SPARQL discovery then a quad-level `DELETE DATA` on
+        the entity route, five SPARQL updates per frame on `/kgframes` — with no
+        lock, and discovery outside the delete, so a frame write landing in
+        between left its new slots behind, and a failure part-way through a
+        recursive delete left half a subtree.
+
+        Everything is decided INSIDE the transaction, after the lock:
+
+        - which requested frames exist. One that does not is ABSENT, which is
+          not a failure (NO_OP);
+        - ownership. On the entity route (`owner_entity_uri` given) every
+          existing requested frame must belong to that entity — a root through
+          `Edge_hasEntityKGFrame`, a child through `hasKGGraphURI`. On
+          `/kgframes` (no owner) NO frame in the subtree may belong to an entity:
+          that route does not take the entity's lock, so it cannot safely touch
+          one. Either violation refuses the WHOLE request (`DeleteRefused`), so
+          the outcome cannot depend on the order the frames were named in;
+        - children. Without `recursive`, a frame with a child frame refuses the
+          request; with it, every descendant is in the subtree;
+        - the guard, compared after the lock as the writes do. Only when
+          something requested exists: deleting what is already gone has done
+          what was asked, even if someone else did it (NO_OP, not CONFLICT).
+
+        THE LOCK. The entity route locks the ENTITY, the key every entity-frame
+        write takes (`issues/174`). `/kgframes` locks every frame in the
+        subtree, because a write to a descendant locks on its own grouping and
+        must be excluded too. That set is only known by reading, so it is read,
+        locked, and read again until no new frame appears.
+
+        THE DELETE SET: every subtree frame, every subject grouped with one
+        (`hasFrameGraphURI`), every edge out of one, and every
+        `Edge_hasKGFrame` / `Edge_hasEntityKGFrame` into one — including the
+        link from a parent outside the subtree, which would otherwise point at
+        nothing. Subject-level, with the aux tables and FTS kept in step, as
+        `update_subjects_graph` does.
+
+        On the entity route the entity's modification time is advanced in the
+        same transaction, so the next guarded writer sees the delete. It was
+        stamped after the commit, outside the lock.
+
+        Returns what was deleted, what was absent, and the URI of every subject
+        removed, so the caller's auto-sync can clear vector, geo and fuzzy rows
+        for the slots too and not only the frames.
+        """
+        from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+        from ..db.sparql_sql.entity_lock import lock_entities
+        from ..db.sparql_sql.sync_fts_delete import sync_fts_before_delete
+
+        def U(uri):
+            return _generate_term_uuid(uri, 'U')
+
+        t = self.backend.schema.get_table_names(space_id)
+        q = t['rdf_quad']
+        g = U(graph_id)
+        p_vt, p_src, p_dst = U(VITALTYPE_URI), U(HAS_EDGE_SOURCE), U(HAS_EDGE_DESTINATION)
+        p_kgg, p_fg = U(HAS_KG_GRAPH_URI), U(HAS_FRAME_GRAPH_URI)
+        t_child, t_link = U(EDGE_HAS_KG_FRAME), U(EDGE_HAS_ENTITY_KG_FRAME)
+        roots = list(dict.fromkeys(str(u) for u in frame_uris))
+        uri_of = {U(u): u for u in roots}
+        guard = guard_subject or owner_entity_uri
+
+        async def _texts(c, uuids) -> Dict[Any, str]:
+            if not uuids:
+                return {}
+            rows = await c.fetch(
+                f"SELECT term_uuid, term_text FROM {t['term']} WHERE term_uuid = ANY($1)",
+                list(uuids))
+            return {r['term_uuid']: r['term_text'] for r in rows}
+
+        # EVERY QUERY BELOW STARTS FROM THE FRAMES BEING DELETED and looks each
+        # candidate edge up by SUBJECT. Written as plain joins, the planner hashed
+        # every `Edge_hasKGFrame` / `Edge_hasEntityKGFrame` type row in the space
+        # instead — ~570,000 on the dev wordnet space — on every delete. The
+        # MATERIALIZED candidate set and the LATERAL ... LIMIT 1 type checks are
+        # what hold the plan to index lookups (checked with GENERIC_PLAN on the
+        # largest dev space, 2026-10-04).
+
+        async def _children(c, frontier) -> Dict[Any, List[Any]]:
+            """{frame -> its child frames}, through `Edge_hasKGFrame`."""
+            rows = await c.fetch(
+                f"WITH s AS MATERIALIZED ("
+                f" SELECT subject_uuid, object_uuid AS parent FROM {q} "
+                f" WHERE predicate_uuid = $1 AND object_uuid = ANY($2) "
+                f" AND context_uuid = $6) "
+                f"SELECT DISTINCT s.parent, d.object_uuid AS child FROM s "
+                f"CROSS JOIN LATERAL (SELECT 1 FROM {q} vt "
+                f" WHERE vt.subject_uuid = s.subject_uuid AND vt.context_uuid = $6 "
+                f" AND vt.predicate_uuid = $3 AND vt.object_uuid = $4 LIMIT 1) is_child "
+                f"JOIN {q} d ON d.subject_uuid = s.subject_uuid "
+                f" AND d.context_uuid = $6 AND d.predicate_uuid = $5",
+                p_src, list(frontier), p_vt, t_child, p_dst, g)
+            out: Dict[Any, List[Any]] = {}
+            for r in rows:
+                out.setdefault(r['parent'], []).append(r['child'])
+            return out
+
+        async def _resolve(c):
+            """(present roots, subtree) as they stand now."""
+            present = {r['subject_uuid'] for r in await c.fetch(
+                f"SELECT DISTINCT subject_uuid FROM {q} "
+                f"WHERE subject_uuid = ANY($1) AND context_uuid = $2",
+                list(uri_of), g)}
+            subtree = list(present)
+            if present:
+                kids = await _children(c, present)
+                if kids and not recursive:
+                    raise DeleteRefused(
+                        "Cannot delete frames with children (use recursive=true "
+                        "to cascade): " + "; ".join(
+                            f"{uri_of[f]} has {len(k)} child(ren)"
+                            for f, k in kids.items()))
+                seen = set(subtree)
+                frontier = [k for ks in kids.values() for k in ks if k not in seen]
+                while frontier:
+                    seen.update(frontier)
+                    subtree.extend(frontier)
+                    nxt = await _children(c, frontier)
+                    frontier = list(dict.fromkeys(
+                        k for ks in nxt.values() for k in ks if k not in seen))
+            return present, subtree
+
+        async def _do(c) -> "FrameSubtreeDelete":
+            if owner_entity_uri is not None:
+                await lock_entities(c, [owner_entity_uri])
+                present, subtree = await _resolve(c)
+            else:
+                # Read, lock, read again until the subtree stops growing. Locks
+                # are only ever added, and `lock_entities` orders each batch.
+                # The first batch carries `lock_extra` too, so a replace takes
+                # every key it knows of in one ordered call.
+                locked: set = set()
+                extra = [U(u) for u in (lock_extra or [])]
+                extra_names = {U(u): u for u in (lock_extra or [])}
+                present, subtree = await _resolve(c)
+                while True:
+                    todo = list(dict.fromkeys(
+                        [s for s in list(subtree) + extra if s not in locked]))
+                    if not todo:
+                        break
+                    names = await _texts(c, todo)
+                    await lock_entities(c, [names.get(s) or uri_of.get(s)
+                                            or extra_names.get(s) or str(s)
+                                            for s in todo])
+                    locked.update(todo)
+                    present, subtree = await _resolve(c)
+            if precheck is not None:
+                await precheck(c)
+
+            absent = [u for u in roots if U(u) not in present]
+            if not present and not insert_quads:
+                return FrameSubtreeDelete([], absent, [])
+
+            if owner_entity_uri is not None:
+                e = U(owner_entity_uri)
+                # A root through `Edge_hasEntityKGFrame` from the entity, or any
+                # frame through `hasKGGraphURI` = the entity.
+                owned = {r['f'] for r in await c.fetch(
+                    f"WITH d AS MATERIALIZED ("
+                    f" SELECT subject_uuid, object_uuid AS f FROM {q} "
+                    f" WHERE context_uuid = $4 AND predicate_uuid = $8 "
+                    f" AND object_uuid = ANY($1::uuid[])) "
+                    f"SELECT d.f FROM d "
+                    f"CROSS JOIN LATERAL (SELECT 1 FROM {q} s "
+                    f" WHERE s.subject_uuid = d.subject_uuid AND s.context_uuid = $4 "
+                    f" AND s.predicate_uuid = $5 AND s.object_uuid = $3 LIMIT 1) src "
+                    f"CROSS JOIN LATERAL (SELECT 1 FROM {q} vt "
+                    f" WHERE vt.subject_uuid = d.subject_uuid AND vt.context_uuid = $4 "
+                    f" AND vt.predicate_uuid = $6 AND vt.object_uuid = $7 LIMIT 1) typ "
+                    f"UNION "
+                    f"SELECT f FROM unnest($1::uuid[]) AS f "
+                    f"CROSS JOIN LATERAL (SELECT 1 FROM {q} k "
+                    f" WHERE k.subject_uuid = f AND k.predicate_uuid = $2 "
+                    f" AND k.object_uuid = $3 AND k.context_uuid = $4 LIMIT 1) member",
+                    list(present), p_kgg, e, g, p_src, p_vt, t_link, p_dst)}
+                foreign = [uri_of[f] for f in present if f not in owned]
+                if foreign:
+                    raise DeleteRefused(
+                        f"{len(foreign)} frame(s) do not belong to entity "
+                        f"{owner_entity_uri}; nothing was deleted: "
+                        + ", ".join(foreign[:5]))
+            else:
+                # Every frame in the subtree, not only the roots: a recursive
+                # delete or replace would otherwise reach an entity's frame
+                # through a standalone parent.
+                names = await _texts(c, subtree)
+                await refuse_entity_frames(
+                    c, space_id, graph_id,
+                    [names.get(f) or uri_of.get(f) for f in subtree
+                     if names.get(f) or uri_of.get(f)])
+
+            if if_unmodified_since is not None and (present or insert_quads):
+                if not guard:
+                    raise UnguardableWrite(roots)
+                await _compare_stamp(c, space_id, graph_id, guard,
+                                     if_unmodified_since)
+
+            # The delete set. Grouped members, edges out of a subtree frame, and
+            # the frame links INTO one.
+            members = await c.fetch(
+                f"SELECT DISTINCT subject_uuid FROM {q} "
+                f"WHERE predicate_uuid = $1 AND object_uuid = ANY($2) "
+                f"AND context_uuid = $3",
+                p_fg, subtree, g)
+            edges = await c.fetch(
+                f"WITH e AS MATERIALIZED ("
+                f" SELECT subject_uuid, predicate_uuid FROM {q} "
+                f" WHERE context_uuid = $3 AND object_uuid = ANY($2) "
+                f" AND predicate_uuid IN ($1, $4)) "
+                f"SELECT DISTINCT e.subject_uuid FROM e "
+                f"LEFT JOIN LATERAL (SELECT 1 AS ok FROM {q} vt "
+                f" WHERE vt.subject_uuid = e.subject_uuid AND vt.context_uuid = $3 "
+                f" AND vt.predicate_uuid = $5 AND vt.object_uuid = ANY($6) LIMIT 1) link "
+                f" ON true "
+                f"WHERE e.predicate_uuid = $1 OR link.ok IS NOT NULL",
+                p_src, subtree, g, p_dst, p_vt, [t_child, t_link])
+            ins = [U(u) for u in (insert_subjects or [])]
+            edge_uuids = [r['subject_uuid'] for r in edges]
+            if keep_outside_links and edge_uuids:
+                # A link INTO the subtree from outside it: its source is not a
+                # subtree frame. Kept unless the request rewrites it.
+                outside = {r['subject_uuid'] for r in await c.fetch(
+                    f"SELECT subject_uuid FROM {q} WHERE subject_uuid = ANY($1) "
+                    f"AND predicate_uuid = $2 AND context_uuid = $3 "
+                    f"AND NOT (object_uuid = ANY($4))",
+                    edge_uuids, p_src, g, list(subtree))}
+                keep = outside - set(ins)
+                edge_uuids = [e for e in edge_uuids if e not in keep]
+            _del = list(dict.fromkeys(
+                list(subtree) + [r['subject_uuid'] for r in members]
+                + edge_uuids + ins))
+            names = await _texts(c, _del)
+
+            deleted = 0
+            if _del:
+                await sync_fts_before_delete(c, space_id, _del, context_uuid=g)
+                deleted, _ = await _delete_subjects_synced(c, space_id, t, _del, g)
+            if insert_quads:
+                await self.backend.add_rdf_quads_batch_bulk(
+                    space_id, insert_quads, connection=c)
+            for _s in (stamp_subjects if stamp_subjects is not None
+                       else ([owner_entity_uri] if owner_entity_uri else [])):
+                await _stamp_subject(c, space_id, graph_id, _s)
+            self.logger.info(
+                "delete_frame_subtrees: %d frame(s), %d subject(s), %d quad(s)",
+                len(subtree), len(_del), deleted)
+            return FrameSubtreeDelete(
+                [names.get(f) or uri_of.get(f) for f in subtree], absent,
+                [names[s] for s in _del if s in names])
+
+        async with _write_conn(self.backend.db_impl.connection_pool, conn) as c:
+            async with c.transaction():
+                return await _do(c)
 
     # ------------------------------------------------------------------
     # remove_rdf_quads_batch

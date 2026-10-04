@@ -5,7 +5,6 @@ This module provides the implementation for deleting KG entities from the backen
 supporting both single entity deletion and entity graph deletion with related objects.
 """
 
-from rdflib import URIRef
 import logging
 from typing import List, Optional, Dict, Any, Union
 
@@ -31,80 +30,15 @@ class KGEntityDeleteProcessor:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
     
-    async def delete_entity(self, backend, space_id: str, graph_id: str, entity_uri: str) -> bool:
-        """
-        Delete a single KGEntity from the backend.
-        
-        Args:
-            backend: Backend adapter instance
-            space_id: Space identifier
-            graph_id: Graph identifier (complete URI)
-            entity_uri: URI of the entity to delete
-            
-        Returns:
-            bool: True if deletion was successful, False otherwise
-        """
-        try:
-            self.logger.debug(f"Deleting single entity: {entity_uri} from graph: {graph_id}")
-            
-            # Use the proper graph URI for backend operations
-            full_graph_uri = graph_id
-            
-            # Query to get all triples for this entity
-            triples_query = f"""
-            SELECT ?p ?o WHERE {{
-                GRAPH <{full_graph_uri}> {{
-                    <{entity_uri}> ?p ?o .
-                }}
-            }}
-            """
-            
-            triples_result = await backend.execute_sparql_query(space_id, triples_query)
-            
-            # Extract quads with proper RDFLib objects to preserve datatype/language
-            delete_quads = []
-            if isinstance(triples_result, dict) and 'results' in triples_result:
-                bindings = triples_result['results'].get('bindings', [])
-                for binding in bindings:
-                    if 'p' in binding and 'o' in binding:
-                        p_value = binding['p'].get('value', '') if isinstance(binding['p'], dict) else str(binding['p'])
-                        # Reconstruct RDFLib object from full binding to preserve datatype/language
-                        o_rdflib = _sparql_binding_to_rdflib(binding.get('o', ''))
-                        
-                        if p_value and o_rdflib is not None:
-                            # rdflib terms in every position. The object was
-                            # already reconstructed above "to preserve
-                            # datatype/language"; the other three were left as
-                            # strings, and a bare string cannot say whether it
-                            # is a URI, a literal or a blank node label
-                            # (`issues/135`).
-                            delete_quads.append(
-                                (URIRef(entity_uri), URIRef(p_value),
-                                 o_rdflib, URIRef(full_graph_uri)))
-            
-            if not delete_quads:
-                self.logger.warning(f"No triples found for entity {entity_uri}")
-                return False
-            
-            self.logger.debug(f"Deleting entity {entity_uri} with {len(delete_quads)} quads")
-            
-            # Use remove_rdf_quads_batch for proper dual-write with typed literals
-            deleted_count = await backend.remove_rdf_quads_batch(space_id, delete_quads)
-            success = deleted_count > 0 if isinstance(deleted_count, int) else bool(deleted_count)
-            
-            if success:
-                self.logger.debug(f"Successfully deleted entity: {entity_uri}")
-            else:
-                self.logger.warning(f"Failed to delete entity: {entity_uri}")
-                
-            return success
-            
-        except Exception as e:
-            self.logger.error(f"Error deleting entity {entity_uri}: {e}")
-            return False
-    
+    # `delete_entity` (a SPARQL read then a quad-level delete, no lock) and
+    # `delete_entities_batch` were DELETED 2026-10-04 (`issues/256`): the
+    # entity-only form is `delete_entity_graph(..., entity_only=True)` now, one
+    # locked transaction, refused while the entity has members.
+
     async def delete_entity_graph(self, backend, space_id: str, graph_id: str, entity_uri: str,
-                                  collected_uris: Optional[List[str]] = None) -> int:
+                                  collected_uris: Optional[List[str]] = None,
+                                  if_unmodified_since: Optional[str] = None,
+                                  entity_only: bool = False) -> int:
         """
         Delete an entity graph (entity plus all related objects) from the backend.
         
@@ -125,6 +59,10 @@ class KGEntityDeleteProcessor:
                 search and resolve to a deleted entity (issues/217).
                 This method already computes the list; it used to discard it
                 and return only a count.
+            if_unmodified_since: Refuse (`StaleWrite`) if the entity's
+                modification time has moved since the caller read it.
+            entity_only: Delete the entity subject alone, and refuse
+                (`DeleteRefused`) if it has members (`issues/256`).
 
         Returns:
             int: non-zero if anything was deleted, 0 if the entity graph was
@@ -145,13 +83,20 @@ class KGEntityDeleteProcessor:
             # delete's own transaction).
             if hasattr(backend, 'delete_entity_graph_direct'):
                 deleted_quads = await backend.delete_entity_graph_direct(
-                    space_id, graph_id, entity_uri, collected_uris=collected_uris)
+                    space_id, graph_id, entity_uri, collected_uris=collected_uris,
+                    if_unmodified_since=if_unmodified_since, entity_only=entity_only)
                 elapsed = time.time() - start_time
                 self.logger.info(f"🔥 DELETE ENTITY GRAPH DONE (bulk SQL): {deleted_quads} quads in {elapsed:.3f}s")
                 # Return non-zero to indicate success (caller checks > 0)
                 return 1 if deleted_quads > 0 else 0
 
-            # Slow path: SPARQL-based delete (other backends)
+            # Slow path: SPARQL-based delete (other backends). It has no lock and
+            # no transaction, so it cannot honour a guard or a member check;
+            # refusing is better than silently ignoring them.
+            if entity_only or if_unmodified_since is not None:
+                raise RuntimeError(
+                    "entity_only and if_unmodified_since need a backend with "
+                    "delete_entity_graph_direct")
             full_graph_uri = graph_id
             kg_graph_uri = entity_uri
             
@@ -218,133 +163,6 @@ class KGEntityDeleteProcessor:
         except Exception as e:
             self.logger.error(f"Error deleting entity graph for {entity_uri}: {e}")
             raise
-    
-    async def delete_entities_batch(self, backend, space_id: str, graph_id: str, entity_uris: List[str], 
-                                  delete_entity_graph: bool = False) -> int:
-        """
-        Delete multiple entities from the backend.
-        
-        Args:
-            backend: Backend adapter instance
-            space_id: Space identifier
-            graph_id: Graph identifier (complete URI)
-            entity_uris: List of entity URIs to delete
-            delete_entity_graph: If True, delete entity graphs instead of just entities
-            
-        Returns:
-            int: Number of entities successfully deleted
-        """
-        try:
-            self.logger.debug(f"Deleting {len(entity_uris)} entities (entity_graph={delete_entity_graph})")
-            
-            deleted_count = 0
-            
-            for entity_uri in entity_uris:
-                try:
-                    if delete_entity_graph:
-                        # Delete entity graph (returns count of deleted objects)
-                        graph_deleted_count = await self.delete_entity_graph(backend, space_id, graph_id, entity_uri)
-                        if graph_deleted_count > 0:
-                            deleted_count += 1  # Count as 1 entity deletion regardless of graph size
-                    else:
-                        # Delete single entity
-                        success = await self.delete_entity(backend, space_id, graph_id, entity_uri)
-                        if success:
-                            deleted_count += 1
-                            
-                except Exception as e:
-                    self.logger.error(f"Error deleting entity {entity_uri}: {e}")
-                    continue
-            
-            self.logger.debug(f"Successfully deleted {deleted_count} out of {len(entity_uris)} entities")
-            return deleted_count
-            
-        except Exception as e:
-            self.logger.error(f"Error in batch delete operation: {e}")
-            return 0
-    
-    async def _get_entity_kg_graph_uri(self, backend, space_id: str, graph_id: str, entity_uri: str) -> Optional[str]:
-        """
-        Get the kgGraphURI property value for an entity.
-        
-        Args:
-            backend: Backend adapter instance
-            space_id: Space identifier
-            graph_id: Graph identifier (complete URI)
-            entity_uri: URI of the entity
-            
-        Returns:
-            Optional[str]: The kgGraphURI value, or None if not found
-        """
-        try:
-            # Get the entity object and extract kGGraphURI from it
-            if hasattr(backend, 'get_entity'):
-                try:
-                    result = await backend.get_entity(space_id, graph_id, entity_uri)
-                    if result and result.success and result.objects:
-                        entity_obj = result.objects[0]  # Get first object
-                        if hasattr(entity_obj, 'kGGraphURI'):
-                            kg_graph_uri = getattr(entity_obj, 'kGGraphURI', None)
-                            if kg_graph_uri:
-                                return str(kg_graph_uri)
-                except Exception as e:
-                    self.logger.debug(f"Could not get kGGraphURI from entity object: {e}")
-            
-            # Fallback: return None (will fall back to single entity delete)
-            self.logger.warning(f"Cannot get kGGraphURI for entity {entity_uri} - backend method not available")
-            return None
-            
-        except Exception as e:
-            self.logger.error(f"Error getting kGGraphURI for entity {entity_uri}: {e}")
-            return None
-    
-    async def _find_objects_by_kg_graph_uri(self, backend, space_id: str, graph_id: str, kg_graph_uri: str) -> List[str]:
-        """
-        Find all object URIs that have the specified kgGraphURI.
-        
-        Args:
-            backend: Backend adapter instance
-            space_id: Space identifier
-            graph_id: Graph identifier (complete URI)
-            kg_graph_uri: The kgGraphURI to search for
-            
-        Returns:
-            List[str]: List of object URIs with the specified kgGraphURI
-        """
-        try:
-            # Use SPARQL query to find all objects with the specified kGGraphURI
-            sparql_query = f"""
-            SELECT DISTINCT ?uri WHERE {{
-                GRAPH <{graph_id}> {{
-                    ?uri <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> <{kg_graph_uri}> .
-                }}
-            }}
-            """
-            
-            result = await backend.execute_sparql_query(space_id, sparql_query)
-            self.logger.debug(f"SPARQL query result: {result}")
-            
-            # Extract URIs from SPARQL results
-            object_uris = []
-            if isinstance(result, dict) and 'results' in result:
-                bindings = result.get('results', {}).get('bindings', [])
-                for binding in bindings:
-                    if 'uri' in binding:
-                        uri_value = binding['uri']['value']
-                        object_uris.append(uri_value)
-            elif isinstance(result, list):
-                # Handle case where result is directly a list of bindings
-                for binding in result:
-                    if isinstance(binding, dict) and 'uri' in binding:
-                        uri_value = binding['uri']['value']
-                        object_uris.append(uri_value)
-            
-            self.logger.info(f"Found {len(object_uris)} objects with kGGraphURI {kg_graph_uri}")
-            return object_uris
-            
-        except Exception as e:
-            self.logger.error(f"Error finding objects by kgGraphURI {kg_graph_uri}: {e}")
-            return []
     
     async def entity_exists(self, backend, space_id: str, graph_id: str, entity_uri: str) -> bool:
         """

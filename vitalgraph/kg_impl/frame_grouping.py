@@ -39,8 +39,10 @@ from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.KGSlot import KGSlot
 from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
 
+from .refusals import RequestRefused
 
-class UngroupableSlot(ValueError):
+
+class UngroupableSlot(RequestRefused):
     """A slot's owning frame cannot be determined, so nothing was written.
 
     A caller error, answered INVALID_REQUEST in a 200: the request must carry

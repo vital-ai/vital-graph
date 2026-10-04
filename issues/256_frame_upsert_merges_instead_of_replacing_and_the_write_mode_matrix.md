@@ -1,8 +1,11 @@
 # 256 — Frame upsert MERGES instead of replacing, and the rest of the write-mode matrix
 
-## Status: OPEN, filed 2026-10-02. Nothing here is fixed. Every finding is by
-## READING the code at `v0.0.43-8-g523dd0c2`; none is reproduced yet. Each
-## needs the test named under "Reproduce" before its fix lands.
+## Status: OPEN, filed 2026-10-02. PARTLY BUILT: fix items 1 and 8 and the
+## entity graph delete (2026-10-03); the delete contract, client entity upsert,
+## client retry marking by mode, item 4 (`replace`), decision 3 on writes and
+## the in-transaction entity check (2026-10-04, uncommitted). See "As built".
+## Still open: items 2, 3 (server), 5, 7; the slot routes. Orphan census:
+## production 0, dev 1.
 
 ## The rule (decided 2026-10-02)
 
@@ -221,6 +224,14 @@ Also on this route: a successful upsert or update answers `status=CREATED`,
   that already behaves correctly.
 - `create_entity_frames` and the standalone frame methods pass
   `operation_mode` through, so they reach every defective cell in B and C.
+- **`delete_kgentity` reported deletes that did not happen** (found
+  2026-10-03). It defaulted `deleted_count` to 1 and `deleted_uris` to the
+  requested URI when the server omitted them, and its message was always
+  "Deleted N items", including on a NO_OP. `delete_kgentities_batch` and
+  `delete_entity_frames` defaulted both to everything requested. And
+  `deleted_uris` is optional on the server model, so a `null` would have failed
+  the client's `List[str]` validation. FIXED 2026-10-04: the server's count,
+  list and message, `or []` for a null.
 
 ### E. Deletes
 
@@ -633,6 +644,161 @@ standalone `/kgframes` was invalid: the geo handler needs an owning entity, and 
 standalone frame has none. With the fix, 4/4. Full `tests/api` 576, 0 failures;
 `tests/unit` 5,185 with the 6 `test_document_converter` failures (env lacks
 `mammoth`, `pdfplumber`).
+
+## As built, 2026-10-04 (uncommitted)
+
+**Client.**
+- `upsert_kgentities` (item 6), on the endpoint and the client facade. Marked
+  replay-safe: the server path is `upsert_objects_atomic`, a locked
+  delete-then-insert.
+- The `delete_kgentity` message and defaults (section D).
+- **Retry marking follows the mode (the client half of item 3).**
+  `replay_safe_mode(operation_mode)` in `client/endpoint/base_endpoint.py`: update,
+  upsert and replace may be replayed after a post-send failure; create may not.
+  `create_entity_frames`, `create_kgframes`, `create_kgframes_with_slots` and
+  `create_frame_slots` follow their argument; `create_child_frames`, which
+  always sends create, is not marked. **Shipped ahead of the server half**, so
+  until a create refuses an existing frame, a create that times out is no
+  longer retried by the client even though the replay would be harmless. A
+  caller that autosaves through `create` gets more uncertain writes until it
+  moves to `upsert`, which is the move item 3 needs anyway.
+- `if_unmodified_since` on `delete_kgentity`, `delete_kgentities_batch`,
+  `delete_entity_frames`, `delete_kgframe`, `delete_kgframes_batch`, and the
+  methods that delegate to them. `absent_uris` on the frame deletes.
+
+**Server, the delete contract (delete decisions 1-4, both delete fixes).**
+- **`/kgentities`, both forms, one locked transaction.**
+  `delete_entity_graph_bulk` gains `entity_only` and `if_unmodified_since`.
+  Entity-only deletes the entity subject alone and is REFUSED
+  (`DeleteRefused` -> INVALID_REQUEST) while anything else names it in
+  `hasKGGraphURI`; the member check runs after the entity lock. The SPARQL read
+  plus quad-level `delete_entity` is gone, with `delete_entities_batch` and two
+  lookups nothing called. The batch reports refused and conflicted entities
+  apart from failures: PARTIAL if anything else was satisfied, otherwise
+  INVALID_REQUEST / CONFLICT, or STORE_FAILED if something also failed.
+- **One frame delete primitive, both routes.**
+  `SparqlSQLBackendAdapter.delete_frame_subtrees`: lock, existence, ownership,
+  children, guard, delete set, aux-table and FTS sync, subject-level delete,
+  stamp, all in one transaction. The entity route locks the entity and stamps it
+  in the transaction (the post-commit `touch_entity_modification_time` is gone);
+  `/kgframes` locks every frame in the subtree, read-lock-reread until it stops
+  growing. `kg_impl/frame_delete.py` maps the outcome to the response for both
+  routes. `KGEntityFrameDeleteProcessor` is deleted. The subject-level delete with
+  its syncs is extracted to `_delete_subjects_synced`, shared with
+  `update_subjects_graph`.
+- **Statuses.** A frame owned by another entity refuses the whole entity-route
+  request (it was skipped under DELETED). `/kgframes` refuses any subtree holding
+  an entity's frame (decision 3, DELETES ONLY so far). Absent is NO_OP on both
+  frame routes (`/kgframes` single said NOT_FOUND), with `absent_uris`.
+- **Guards (decision 4).** Stale -> CONFLICT, nothing deleted. Absent target ->
+  NO_OP, not compared. One stamp for several entities or several `/kgframes`
+  roots -> INVALID_REQUEST before anything runs. **One deviation from the
+  decision as written:** a present guard subject with NO stamp answers CONFLICT,
+  not STORE_FAILED, because the deletes use the writes' own `_compare_stamp`,
+  and that is what the writes do. "As for writes" was the intent; the text was
+  wrong about what the writes do.
+
+**Refusals reach the caller.** `tests/unit/test_a_refusal_reaches_the_caller.py`
+(from the deploy session, which had run the check by hand on three releases):
+every `try` under `endpoint/` and `kg_impl/` that catches `StaleWrite` must also
+catch `GuardUnsatisfiable` and `UngroupableSlot`, or a refusal falls to the broad
+`except Exception` and arrives as a generic failure. It failed on this tree at
+the three sites the deploy session named, all left by `issues/257` and
+unreachable today: `_create_frame_slots`, `_update_frame_slots` (now
+INVALID_REQUEST) and `update_subjects_graph` (re-raise). It also failed at five
+sites in the delete code above, one of them REAL: the batch entity delete did
+not catch `GuardUnsatisfiable`, so an undecidable guard was counted as a plain
+failure with its reason only in the log. All eight are fixed. Their patch added
+the create-route handler twice, the second copy returning `SlotUpdateResponse`;
+it was applied by hand with one handler per site.
+
+**Not built in that round** (all built in the next one, below): `replace`,
+`/kgframes` refusing entity frames on writes, the entity-existence check inside
+the frame-create transaction, the production orphan count.
+
+## As built, 2026-10-04, second round (uncommitted)
+
+**`replace` (item 4) is `delete_frame_subtrees` with an insert.** One
+transaction, under the entity lock (entity route) or the locks of every frame in
+the subtree plus the frames written (`/kgframes`). Scope is what the request
+NAMES: each frame in it and its descendants in the store; a frame not there yet
+is created. Guarded (on the entity; on `/kgframes`, on the request's one top
+frame — several with a guard is AmbiguousPrecondition). A refused or failed
+replace changes nothing. Parent links: the entity route re-creates its links, so
+the old ones into the subtree go; `/kgframes` keeps a link into the subtree from
+outside it unless `parent_uri` re-creates it. Both used to delete with separate
+SPARQL updates and then create, with no lock and no guard. Found against the
+previous code by the new tests, beyond the scope:
+- entity-route replace OVERWROTE ANOTHER ENTITY'S FRAME without complaint;
+- `/kgframes` replace of a child without `parent_uri` DETACHED it from its
+  parent;
+- both deleted every top-level frame of the entity, or every child of the
+  parent, whatever the request named.
+Entity `replace` on `/kgentities` answers INVALID_REQUEST (was a 500).
+`_delete_frame_from_backend` is deleted; nothing calls it.
+
+**Decision 3 on writes.** `/kgframes` refuses, INVALID_REQUEST, nothing written:
+create, update, upsert or replace over an entity's frame; `parent_uri` naming an
+entity's frame; `parent_uri` naming an ENTITY, which attached the frame with an
+`Edge_hasEntityKGFrame` without the entity's lock (not in the decision's list,
+same hazard). The frame checks run in the write's transaction after its lock
+(`standalone_precheck`, through a new `precheck` hook on
+`update_subjects_graph` and `delete_frame_subtrees`); "is the parent an entity"
+runs before it, the type of an object not being something a concurrent write
+changes. The slot routes (`/kgframes/kgslots`) are still out of scope.
+
+**The entity check under the lock (decision 1, create half).** Entity-frame
+create checks the entity exists in its write transaction, after the entity lock
+(`entity_present_precheck`), not before it. Same answer for a missing entity as
+before (STORE_FAILED, "Target entity ... not found"); only when it is decided
+changed. `validate_entity_exists` is deleted.
+
+**One refusal base.** `kg_impl/refusals.RequestRefused`, INVALID_REQUEST.
+`UngroupableSlot`, `DeleteRefused`, `FrameOwnedByEntity` and `EntityAbsent`
+derive from it, every handler that caught `UngroupableSlot` catches the base, and
+`test_a_refusal_reaches_the_caller.py` now requires the base on every refusal
+path.
+
+**Also fixed, found by these tests:** every early `_fail` in
+`KGFramesEndpoint._create_frames` was a 500. Local imports of the response
+models in its `except` blocks made the names local to the whole function, so the
+helpers raised "cannot access free variable" — "space not found" and "no KGFrame
+objects" included.
+
+**Tests.** `tests/api/test_replace_and_ownership_contract.py`, 16 cases. Against
+HEAD's server code 14 FAIL, each on its defect; 2 pass on both (a deep replace,
+and a frame onto a missing entity — kept behaviour). With the change 16/16.
+`tests/unit` 5,200 passed.
+
+**Orphan census (2026-10-04).** `scripts/census_entity_orphans.py`, read-only
+SQL: an orphan root is a `hasKGGraphURI` value that is not the subject of any
+quad in its graph; its members are classified by `vitaltype`. It reports the
+total roots too, because a space with no `hasKGGraphURI` at all also reads 0.
+- **Production: 0 orphans.** 302,195 roots across the four spaces that have
+  entity graphs (main KG 88,469; actions 86,685; lead data 79,142; lead prod
+  47,899), none orphaned. The archive, underwriting, types, wordnet and test
+  spaces carry no `hasKGGraphURI`. Every space under 3s.
+- **Dev: 1**, in the actions space — a nurture action whose entity is gone,
+  leaving 1 frame, 3 slots and 9 edges. Every other space 0. Slowest space 34s.
+So the old entity-only default did not, in practice, leave orphans in
+production; the refusal is prevention, and there is nothing to clean up there.
+The dev orphan is left in place as a known case for whoever writes the cleanup,
+if one is ever wanted.
+
+**Tests.** `tests/api/test_delete_guards_and_scope.py`, 21 cases (D11-D12e among
+them), on the vg test stack driven by the `vital-graph` conda env. Against the
+previous server code 13 FAIL, each on its own defect (entity-only deleted an
+entity with a frame; every guard ignored; another entity's frame deleted
+without complaint; absent entity frame STORE_FAILED; A deleted B's save;
+`/kgframes` deleted an entity's frame; absent frame NOT_FOUND; one stamp for two
+roots accepted). 8 pass on both: the unguarded deletes, a current stamp, the
+client upsert. With the change, 21/21. `tests/unit/test_frame_delete_contract.py`
+drives the response mapping with a stub. Unit tests that pinned the replaced
+code were rewritten, not deleted: the frame-delete success guarantee
+(`issues/242`) moved to the new module, the derived-table matrix lists the shared
+delete and the frame delete as write paths, and the entity stamp test now
+asserts the stamp in the transaction instead of the touch after it. `tests/unit`
+5,196 passed.
 
 ## Open questions
 

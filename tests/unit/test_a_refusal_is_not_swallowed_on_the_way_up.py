@@ -178,11 +178,17 @@ class TestTheRefusalSurvivesTheClimb:
         # client's `is_success` is False on a 200.
         from vitalgraph.model.result_status import OperationStatus
 
-        for module, n in ((kgentities_endpoint, 2), (kgframes_endpoint, 3)):
+        # kgentities: the two frame write entry points, and since `issues/256`
+        # the single and batch entity deletes and the entity-frame replace. The
+        # frame deletes map it in `kg_impl/frame_delete.py`, asserted below.
+        for module, n in ((kgentities_endpoint, 5), (kgframes_endpoint, 3)):
             src = inspect.getsource(module)
             assert src.count("except StaleWrite") == n, (
                 f"{module.__name__}: every frame entry point must map the refusal")
             assert src.count("OperationStatus.CONFLICT") >= n
+        from vitalgraph.kg_impl import frame_delete
+        src = inspect.getsource(frame_delete)
+        assert "except StaleWrite" in src and "OperationStatus.CONFLICT" in src
         assert OperationStatus.CONFLICT.value == "conflict"
 
     def test_an_ambiguous_precondition_is_not_a_conflict(self):
@@ -201,7 +207,7 @@ class TestTheRefusalSurvivesTheClimb:
 
 
 class TestTheEntityIsStampedOnceAndInTheTransaction:
-    """The post-write touch is gone from the WRITE paths and kept on the DELETE.
+    """The post-write touch is gone from the write paths AND the frame delete.
 
     `issues/253`. Once `update_subjects_graph` stamps the entity inside the write
     transaction and under the entity lock, the old touch is not merely duplicate
@@ -212,10 +218,12 @@ class TestTheEntityIsStampedOnceAndInTheTransaction:
     written. A spurious conflict, and the autosave that prompted this issue sends
     tens of writes a minute for one lead.
 
-    Deletion is the opposite case and is asserted here too, because the obvious
-    tidy-up is to remove all three: a frame DELETE does not go through the
-    guarded write, so nothing else stamps the entity, and dropping its touch
-    would make a deletion invisible to a caller watching the version.
+    Deletion was the exception until `issues/256`: a frame DELETE did not go
+    through a guarded transaction, so its post-commit touch was the only thing
+    that moved the entity's version. It now does — `delete_frame_subtrees` stamps
+    the owning entity inside its transaction, under the entity lock — so the
+    touch went for the same reason, and the stamp it replaced is asserted below
+    so that removing it cannot pass on its own.
     """
 
     def _calls_touch(self, func):
@@ -233,10 +241,17 @@ class TestTheEntityIsStampedOnceAndInTheTransaction:
             f"afterwards, outside the lock — the second one can refuse a write "
             f"nobody raced")
 
-    def test_the_delete_path_still_does(self):
-        assert self._calls_touch("_delete_entity_frames"), (
-            "frame deletion does not go through the guarded write, so without "
-            "this the entity version does not move when a frame is removed")
+    def test_the_delete_path_stamps_in_the_transaction_instead(self):
+        assert not self._calls_touch("_delete_entity_frames"), (
+            "the frame delete stamps the entity in its transaction AND touches it "
+            "afterwards, outside the lock")
+        from vitalgraph.kg_impl import kg_backend_utils
+        src = inspect.getsource(
+            kg_backend_utils.SparqlSQLBackendAdapter.delete_frame_subtrees)
+        assert ("[owner_entity_uri] if owner_entity_uri" in src
+                and "await _stamp_subject(c, space_id, graph_id, _s)" in src), (
+            "the frame delete no longer advances the entity's version, so a "
+            "deletion is invisible to a caller watching it")
 
     @pytest.mark.parametrize("func", ["_create_or_update_frames",
                                       "_update_entity_frames"])

@@ -52,6 +52,26 @@ def http_status_of(exc, default: int = 500) -> int:
         return v
     return default
 
+
+def replay_safe_mode(operation_mode) -> bool:
+    """Whether a frame write in this mode may be replayed after a post-send failure.
+
+    `issues/256` item 3. Update, upsert and replace delete what they are about to
+    write and write it, so a replay that lands writes the same graph again and
+    answers the same. A CREATE refuses an existing frame (ALREADY_EXISTS) — the
+    slot route already does — so a replay of a create that had in fact landed
+    reports a FAILURE for a write that succeeded. That is the reason
+    `create_kgentities` was never marked (`issues/253`), and it now applies to
+    every create. The marking follows the MODE, not the method name, because one
+    method sends whichever mode its caller passes.
+
+    A caller that retries a create itself should read ALREADY_EXISTS on a retry
+    as "possibly mine", not as a failure.
+    """
+    mode = getattr(operation_mode, "value", operation_mode)
+    return str(mode).lower() != "create"
+
+
 class BaseEndpoint:
     """Base class for VitalGraph client endpoints."""
     

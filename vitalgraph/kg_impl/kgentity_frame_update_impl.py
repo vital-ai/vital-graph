@@ -21,6 +21,7 @@ from vital_ai_vitalsigns.vitalsigns import VitalSigns
 from vitalgraph.kg_impl.kg_backend_utils import (
     GuardUnsatisfiable, KGBackendInterface, StaleWrite)
 from vitalgraph.kg_impl.frame_grouping import UngroupableSlot, assign_frame_groupings
+from .refusals import RequestRefused
 
 
 @dataclass
@@ -208,7 +209,7 @@ class KGEntityFrameUpdateProcessor:
                     error=create_result.message,
                 )
             
-        except (StaleWrite, GuardUnsatisfiable, UngroupableSlot):
+        except (StaleWrite, GuardUnsatisfiable, RequestRefused):
             raise                     # a refusal must reach the caller as one
         except Exception as e:
             self.logger.error(f"❌ Error in frame update process: {e}")

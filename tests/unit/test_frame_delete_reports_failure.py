@@ -20,61 +20,20 @@ the same response. `OperationStatus.STORE_FAILED` already existed for the write
 case, and `kgentities_endpoint.py:1356` already used it correctly — this path was
 the outlier, twice.
 
-These tests drive the processor directly with a stubbed batch delete, because the
-question is the CONTRACT between phases, not anything about SPARQL or a database.
+What remains here is the status vocabulary and the entity batch delete; the frame
+delete's half moved to `test_frame_delete_contract.py` with the code (see below).
 """
 
 from __future__ import annotations
 
 import pytest
 
-from vitalgraph.kg_impl.kgentity_frame_delete_impl import DeleteFrameResult
-
-
-def test_the_result_carries_an_error_field_for_this():
-    """The dataclass must be able to SAY it failed.
-
-    Asserted because the fix relies on it: a result type with no error channel
-    forces the caller to infer failure from a count, which is how the original
-    defect was written.
-    """
-    r = DeleteFrameResult(success=False, deleted_frame_uris=[],
-                          deleted_component_count=0, validation_results={},
-                          message="x", error="batch delete reported failure")
-    assert r.error == "batch delete reported failure"
-    assert r.success is False
-
-
-def test_success_is_not_derivable_from_the_discovered_uri_list():
-    """The heart of it: a populated `deleted_frame_uris` with `success=False` must
-    be a representable state.
-
-    If it is not — if anything downstream re-derives success from that list — the
-    defect comes straight back, because the list is populated during discovery and
-    says nothing about whether the delete ran.
-    """
-    r = DeleteFrameResult(success=False, deleted_frame_uris=["urn:f1", "urn:f2"],
-                          deleted_component_count=7, validation_results={},
-                          message="Delete FAILED: ...", error="batch delete reported failure")
-    assert r.deleted_frame_uris, "the attempted set is still reported"
-    assert r.success is False, "but it was not a success"
-
-
-def test_the_failure_message_does_not_claim_a_deletion():
-    """`message` is user-facing (`http 200 for domain outcomes`: the outcome lives
-    in the body), so a message beginning "Successfully deleted" on a failed delete
-    is the wrong answer even when `success` is correct. Both were wrong before."""
-    from vitalgraph.kg_impl import kgentity_frame_delete_impl as mod
-    src = mod.__file__
-    with open(src) as fh:
-        text = fh.read()
-    # The success branch may say "Successfully deleted"; the failure branch must not.
-    fail_branch = text.split("elif batch_delete_failed:", 1)
-    assert len(fail_branch) == 2, "the failure branch is gone — did the fix regress?"
-    upto_else = fail_branch[1].split("else:", 1)[0]
-    assert "Successfully deleted" not in upto_else, (
-        "the batch-delete failure branch claims a successful deletion")
-    assert "FAILED" in upto_else, "the failure branch does not say it failed"
+# The processor these tests drove, `KGEntityFrameDeleteProcessor`, and the
+# per-handler status code they pinned were REPLACED 2026-10-04 (`issues/256`):
+# both frame routes now delete through `kg_impl/frame_delete.py`, one locked
+# transaction whose outcome cannot be "discovered but not deleted". The same
+# guarantee — a failed delete never reports success — is asserted there,
+# behaviourally, in `test_frame_delete_contract.py`.
 
 
 @pytest.mark.parametrize("status_name", ["STORE_FAILED", "QUERY_FAILED"])
@@ -87,32 +46,6 @@ def test_the_failure_statuses_exist_and_are_not_successes(status_name):
     assert status not in _SUCCESS_STATUSES, (
         f"{status_name} maps to success=True, which would make a failed "
         f"operation read as a successful one")
-
-
-def test_the_endpoint_does_not_hardcode_deleted_for_this_path():
-    """Guards the second half of the fix.
-
-    Making `success` correct changed nothing on its own: both endpoint call sites
-    hardcoded `status=OperationStatus.DELETED` and never read it. A future edit that
-    reverts to a single unconditional response would be invisible to every test
-    above, so this asserts on the source of the mapping itself.
-    """
-    from vitalgraph.endpoint import kgentities_endpoint as mod
-    lines = open(mod.__file__).read().split("\n")
-
-    # Every site that reports the DISCOVERED set as deleted...
-    sites = [i for i, l in enumerate(lines)
-             if "deleted_count=len(result.deleted_frame_uris)," in l]
-    assert sites, "the frame-delete success response is gone — did the fix regress?"
-
-    # ...must have a STORE_FAILED response guarding it just above, so a failed
-    # delete cannot fall through to it.
-    for i in sites:
-        window = "\n".join(lines[max(0, i - 25):i])
-        assert "OperationStatus.STORE_FAILED" in window, (
-            f"{mod.__file__}:{i + 1} reports deleted_count from the DISCOVERED "
-            f"uri list with no STORE_FAILED guard above it — a failed delete "
-            f"would be reported as deleted (`issues/242`)")
 
 
 # ---------------------------------------------------------------------------
@@ -185,36 +118,6 @@ def test_the_unreachable_frame_delete_is_gone_not_repaired():
         "carried the issues/242 defect twice (`issues/243`)")
 
     # and the live one is still there, so the capability was not lost with it
+    # (single and batch are one handler since `issues/256`)
     from vitalgraph.endpoint.kgframes_endpoint import KGFramesEndpoint
-    assert hasattr(KGFramesEndpoint, "_delete_frame_by_uri")
-
-
-def test_the_kgframes_delete_handlers_also_follow_the_outcome():
-    """`issues/243`: the frame ENDPOINT had the same defect as the entity one.
-
-    `_delete_frame_by_uri` and `_delete_frames_by_uris` in `kgframes_endpoint` both
-    built an honest `deleted_uris` (appended only when the backend delete returned
-    True) and then returned a hardcoded `status=DELETED` with "Successfully deleted
-    N frame(s)". A request where every delete failed came back as a success with
-    N=0. Verified fixed against a running server: two non-existent frames now
-    return `success=false`, `status=store_failed`, `deleted_count=0`.
-
-    Structural for the same reason as the cells above, and scoped to the two
-    handlers rather than the whole file so an unrelated `DELETED` elsewhere cannot
-    make it pass.
-    """
-    from vitalgraph.endpoint import kgframes_endpoint as mod
-    lines = open(mod.__file__).read().split("\n")
-
-    for name in ("_delete_frame_by_uri", "_delete_frames_by_uris"):
-        start = next(i for i, l in enumerate(lines) if f"async def {name}(" in l)
-        end = next(i for i in range(start + 1, len(lines))
-                   if lines[i].startswith("    async def ") or lines[i].startswith("    def "))
-        body = "\n".join(lines[start:end])
-        assert "OperationStatus.PARTIAL" in body, (
-            f"{name} cannot report a partial delete — some-failed reads as "
-            f"success (`issues/243`)")
-        assert "OperationStatus.STORE_FAILED" in body, (
-            f"{name} cannot report an all-failed delete (`issues/243`)")
-        assert "status=status" in body, (
-            f"{name} returns a literal status again rather than the computed one")
+    assert hasattr(KGFramesEndpoint, "_delete_frames_by_uris")

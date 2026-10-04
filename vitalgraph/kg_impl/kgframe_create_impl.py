@@ -36,6 +36,7 @@ from vitalgraph.kg_impl.kg_backend_utils import (
     AmbiguousPrecondition, GuardUnsatisfiable, KGBackendInterface,
     StaleWrite)
 from vitalgraph.kg_impl.frame_grouping import UngroupableSlot, assign_frame_groupings
+from .refusals import RequestRefused
 
 
 def _sparql_binding_to_rdflib(binding):
@@ -123,9 +124,14 @@ class KGFrameCreateProcessor:
         frame_objects: List[GraphObject],
         operation_mode: str = "CREATE",
         if_unmodified_since: Optional[str] = None,
+        precheck=None,
     ) -> CreateFrameResult:
         """
         Create/update standalone frames.
+
+        `precheck` runs inside the write transaction after the lock: the
+        `/kgframes` route passes `standalone_precheck`, which refuses an entity's
+        frame (`issues/256`, decision 3).
 
         Process:
         1. Categorize frame objects (frames, slots, edges)
@@ -177,11 +183,13 @@ class KGFrameCreateProcessor:
                     categories.frame_objects, all_objects, mode_upper,
                     if_unmodified_since=if_unmodified_since,
                     removed_uris=_removed,
+                    precheck=precheck,
                 )
             else:
                 success = await self.execute_frame_creation(
                     backend_adapter, space_id, graph_id, all_objects,
                     if_unmodified_since=if_unmodified_since,
+                    precheck=precheck,
                 )
 
             _t2 = _time.time()
@@ -211,7 +219,7 @@ class KGFrameCreateProcessor:
                 )
 
         except (StaleWrite, AmbiguousPrecondition,
-                GuardUnsatisfiable, UngroupableSlot):
+                GuardUnsatisfiable, RequestRefused):
             # A REFUSAL, not a failure: the caller must be told its frame moved
             # (re-read and merge) or that its precondition was ambiguous (send
             # one frame). A generic failure tells it to give up (`issues/253`).
@@ -224,6 +232,63 @@ class KGFrameCreateProcessor:
                 message=f"Error: {str(e)}",
                 frame_count=0,
             )
+
+    async def replace_frames(self, backend_adapter: KGBackendInterface, space_id: str,
+                             graph_id: str, frame_objects: List[GraphObject],
+                             parent_uri: Optional[str] = None,
+                             if_unmodified_since: Optional[str] = None,
+                             precheck=None) -> CreateFrameResult:
+        """Replace the named standalone frames and their descendants, atomically.
+
+        `issues/256` item 4. Scope is what the request NAMES — each frame in it
+        and its descendants in the store — not every child of `parent_uri`, which
+        is what this route deleted before. Deep, and a frame not there yet is
+        created. Delete and insert are one transaction (`delete_frame_subtrees`)
+        under the locks of every frame involved, so a refused or failed replace
+        changes nothing.
+
+        The guard is the request's ONE top frame (one not linked from another
+        frame in the request); several top frames with a guard is ambiguous. A
+        link into the subtree from outside it is kept unless the request re-sends
+        it, i.e. unless `parent_uri` is given — so a child replaced without its
+        parent stays attached.
+        """
+        categories = await self.categorize_frame_objects(frame_objects)
+        if not categories.frame_objects:
+            return CreateFrameResult(
+                success=False, created_uris=[], frame_count=0,
+                message="Request must contain at least one KGFrame object")
+        all_objects = self.assign_frame_grouping_uris(
+            categories.frame_objects + categories.slot_objects + categories.edge_objects)
+        frames = [str(f.URI) for f in categories.frame_objects]
+        frame_set = set(frames)
+        linked = {str(getattr(e, 'edgeDestination', '') or '')
+                  for e in categories.edge_objects
+                  if type(e).__name__ == 'Edge_hasKGFrame'
+                  and str(getattr(e, 'edgeSource', '') or '') in frame_set}
+        top = [f for f in frames if f not in linked]
+        if if_unmodified_since is not None and len(top) != 1:
+            raise AmbiguousPrecondition(len(top))
+
+        insert_quads = await self.build_insert_quads_for_objects(all_objects, graph_id)
+        written = list(dict.fromkeys(str(o.URI) for o in all_objects
+                                     if getattr(o, 'URI', None)))
+        result = await backend_adapter.delete_frame_subtrees(
+            space_id, graph_id, frames, recursive=True,
+            if_unmodified_since=if_unmodified_since,
+            guard_subject=top[0] if if_unmodified_since is not None else None,
+            insert_quads=insert_quads, insert_subjects=written,
+            keep_outside_links=not parent_uri,
+            lock_extra=frames, stamp_subjects=frames,
+            precheck=precheck)
+        _written = set(written)
+        return CreateFrameResult(
+            success=True, created_uris=written,
+            message=(f"Replaced {len(result.deleted_frames)} frame(s) with "
+                     f"{len(frames)}"),
+            frame_count=len(frames),
+            unhandled_types=sorted({type(o).__name__ for o in categories.unhandled}),
+            removed_uris=[u for u in result.member_uris if u not in _written])
 
     async def categorize_frame_objects(self, graph_objects: List[GraphObject]) -> FrameObjectCategories:
         """Categorize objects by type: frames, slots, edges."""
@@ -290,7 +355,8 @@ class KGFrameCreateProcessor:
 
     async def execute_frame_creation(self, backend_adapter: KGBackendInterface, space_id: str,
                                      graph_id: str, all_objects: List[GraphObject],
-                                     if_unmodified_since: Optional[str] = None) -> tuple:
+                                     if_unmodified_since: Optional[str] = None,
+                                     precheck=None) -> tuple:
         """
         Execute atomic frame creation via subject-level delete + insert.
         """
@@ -337,7 +403,8 @@ class KGFrameCreateProcessor:
                     lock_uris=_lock_uris or None,
                     if_unmodified_since=if_unmodified_since,
                     guard_subject=_lock_uris[0] if if_unmodified_since is not None else None,
-                    stamp_subjects=_lock_uris)
+                    stamp_subjects=_lock_uris,
+                    precheck=precheck)
                 _t2 = _time.time()
                 self.logger.info(f"⏱️ FRAME_CREATE step2 update_subjects_graph: {_t2-_t1:.3f}s")
             else:
@@ -351,7 +418,7 @@ class KGFrameCreateProcessor:
             return success
 
         except (StaleWrite, AmbiguousPrecondition,
-                GuardUnsatisfiable, UngroupableSlot):
+                GuardUnsatisfiable, RequestRefused):
             raise                     # a refusal must reach the caller as one
         except Exception as e:
             self.logger.error(f"Error executing frame creation: {e}")
@@ -361,7 +428,8 @@ class KGFrameCreateProcessor:
                                           graph_id: str, frame_objects: List[GraphObject],
                                           all_objects: List[GraphObject], operation_mode: str,
                                           if_unmodified_since: Optional[str] = None,
-                                          removed_uris: Optional[List[str]] = None) -> tuple:
+                                          removed_uris: Optional[List[str]] = None,
+                                          precheck=None) -> tuple:
         """
         Execute atomic frame UPDATE/UPSERT: each frame's WHOLE graph is replaced.
 
@@ -415,7 +483,8 @@ class KGFrameCreateProcessor:
                     stamp_subjects=_lock_uris,
                     replace_frame_graphs=[str(f.URI) for f in frame_objects
                                           if getattr(f, 'URI', None)],
-                    removed_uris=removed_uris)
+                    removed_uris=removed_uris,
+                    precheck=precheck)
             else:
                 delete_quads = await self.build_delete_quads_for_frames(
                     backend_adapter, space_id, graph_id, frame_objects)
@@ -436,7 +505,7 @@ class KGFrameCreateProcessor:
             return success
 
         except (StaleWrite, AmbiguousPrecondition,
-                GuardUnsatisfiable, UngroupableSlot):
+                GuardUnsatisfiable, RequestRefused):
             raise                     # a refusal must reach the caller as one
         except Exception as e:
             self.logger.error(f"Error in atomic frame update: {e}")

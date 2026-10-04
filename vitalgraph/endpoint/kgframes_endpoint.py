@@ -62,7 +62,7 @@ from ..kg_impl.kgframe_graph_impl import KGFrameGraphProcessor
 from ..kg_impl.kgframe_query_impl import KGFrameQueryProcessor
 
 # Import backend utilities
-from ..kg_impl.kg_backend_utils import create_backend_adapter
+from ..kg_impl.kg_backend_utils import create_backend_adapter, standalone_precheck
 from ..cache.count_cache import _count_cache
 from ..auth.role_dependencies import require_space_read, require_space_write
 from .impl.impl_utils import SubjectWriteFailed
@@ -71,6 +71,7 @@ from ..kg_impl.kg_backend_utils import (
 from ..kg_impl.frame_grouping import UngroupableSlot, assign_frame_groupings
 from functools import partial
 from ..utils.bounded_gather import bounded_gather
+from ..kg_impl.refusals import RequestRefused
 
 
 
@@ -204,6 +205,21 @@ class KGFramesEndpoint:
             if not validation_result.get("valid", False):
                 return _fail(f"Frame validation failed: {validation_result.get('error')}", OperationStatus.INVALID_REQUEST)
 
+            # --- no entity's frame, as target or parent (`issues/256`, decision 3) ---
+            # An ENTITY as the parent is refused here: this route would attach the
+            # frame with an `Edge_hasEntityKGFrame` without the entity's lock. An
+            # entity's FRAME, as target or parent, is refused by `precheck` inside
+            # the write's transaction, after its lock.
+            if parent_uri:
+                _parent = await self._validate_parent_object(backend, space_id, graph_id, parent_uri)
+                if _parent.get("type") == "entity":
+                    return _fail(
+                        f"parent_uri {parent_uri} is an entity: an entity's frames are "
+                        f"written through /kgentities/kgframes, which takes its lock",
+                        OperationStatus.INVALID_REQUEST)
+            precheck = standalone_precheck(
+                space_id, graph_id, [str(f.URI) for f in frames], parent_uri)
+
             # --- parent / entity relationships ---
             enhanced_objects = await self._handle_parent_relationships(
                 backend, space_id, graph_id, frames, vitalsigns_objects, parent_uri
@@ -212,16 +228,16 @@ class KGFramesEndpoint:
             # --- dispatch by mode ---
             if op_mode == OperationMode.CREATE:
                 _result = await self._handle_create_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri,
-                                                         if_unmodified_since=if_unmodified_since)
+                                                         if_unmodified_since=if_unmodified_since, precheck=precheck)
             elif op_mode == OperationMode.UPDATE:
                 _result = await self._handle_update_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri,
-                                                         if_unmodified_since=if_unmodified_since)
+                                                         if_unmodified_since=if_unmodified_since, precheck=precheck)
             elif op_mode == OperationMode.UPSERT:
                 _result = await self._handle_upsert_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri,
-                                                         if_unmodified_since=if_unmodified_since)
+                                                         if_unmodified_since=if_unmodified_since, precheck=precheck)
             elif op_mode == OperationMode.REPLACE:
                 _result = await self._handle_replace_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri,
-                                                         if_unmodified_since=if_unmodified_since)
+                                                         if_unmodified_since=if_unmodified_since, precheck=precheck)
             else:
                 return _fail(f"Invalid operation_mode: {op_mode}", OperationStatus.INVALID_REQUEST)
 
@@ -233,10 +249,9 @@ class KGFramesEndpoint:
 
         except HTTPException:
             raise
-        except UngroupableSlot as e:
+        except RequestRefused as e:
             # A caller error in a 200 (`issues/257`): the request did not say
             # which frame a slot belongs to, so nothing was written.
-            from ..model.kgframes_model import FrameCreateResponse, FrameUpdateResponse
             if str(operation_mode).lower() == "update":
                 return FrameUpdateResponse(
                     status=OperationStatus.INVALID_REQUEST, message=str(e),
@@ -248,7 +263,6 @@ class KGFramesEndpoint:
             # REFUSED because the FRAME moved (`issues/253`). A domain outcome in
             # a 200 body, per this codebase's convention: the caller re-reads,
             # re-merges and retries. Nothing is broken and nothing was written.
-            from ..model.kgframes_model import FrameCreateResponse, FrameUpdateResponse
             self.logger.warning("Frame write refused as stale: %s", e)
             if str(operation_mode).lower() == "update":
                 return FrameUpdateResponse(
@@ -262,7 +276,6 @@ class KGFramesEndpoint:
             # 500 that an unhandled exception becomes (`issues/253`; see
             # `GuardUnsatisfiable` and `model/result_status.py`). `str(e)` is
             # the point: it names the subjects, or the conflicting stamps.
-            from ..model.kgframes_model import FrameCreateResponse, FrameUpdateResponse
             self.logger.error("Frame write undecidable: %s", e)
             if str(operation_mode).lower() == "update":
                 return FrameUpdateResponse(
@@ -275,7 +288,10 @@ class KGFramesEndpoint:
             # The caller's request, not the data: one stamp cannot cover several
             # frames. INVALID_REQUEST so it is not mistaken for a conflict and
             # retried unchanged.
-            from ..model.kgframes_model import FrameCreateResponse, FrameUpdateResponse
+            # NO local import of the response models in this function: one made
+            # the names LOCAL to all of it, so `_fail` above raised "cannot access
+            # free variable" on every early return, and each became a 500. The
+            # module imports them.
             self.logger.warning("Frame write precondition is ambiguous: %s", e)
             if str(operation_mode).lower() == "update":
                 return FrameUpdateResponse(
@@ -359,8 +375,9 @@ class KGFramesEndpoint:
     
     # `_delete_frames`, `_get_frames`, `_get_entity_frames` and `_delete_entities`
     # were DELETED here 2026-10-02 (`issues/256`). Nothing in the service called
-    # them; the routes use `_delete_frame_by_uri` / `_delete_frames_by_uris` and
-    # `_list_frames`. `_delete_frames` reported DELETED whatever happened.
+    # them; the routes use `_delete_frames_by_uris` and `_list_frames`.
+    # `_delete_frames` reported DELETED whatever happened. `_delete_frame_by_uri`
+    # went 2026-10-04: single and batch are one locked delete now.
     
     # Slot endpoint methods for /api/graphs/kgframes/kgslots
     
@@ -714,20 +731,30 @@ class KGFramesEndpoint:
             uri: Optional[str] = Query(None, description="Single frame URI to delete"),
             uri_list: Optional[str] = Query(None, description="Comma-separated list of frame URIs to delete"),
             recursive: bool = Query(False, description="If true, recursively delete all descendant frames. If false (default), fail if any frame has children."),
+            if_unmodified_since: Optional[str] = Query(
+                None,
+                description=(
+                    "Delete only if the ROOT frame's hasObjectModificationDateTime "
+                    "still equals this value; otherwise status=conflict and nothing "
+                    "is deleted. One root frame per request.")),
             current_user: Dict = Depends(self.auth_dependency)
         ):
             """
-            Delete frames by URI or URI list.
+            Delete standalone frames by URI or URI list.
             
             Args:
                 recursive: If true, cascade-delete all descendant frames. If false, fail if children exist.
             """
             require_space_write(current_user, space_id)
             if uri:
-                return await self._delete_frame_by_uri(space_id, graph_id, uri, current_user, recursive=recursive)
+                return await self._delete_frames_by_uris(
+                    space_id, graph_id, [uri], current_user, recursive=recursive,
+                    if_unmodified_since=if_unmodified_since)
             elif uri_list:
                 uris = [u.strip() for u in uri_list.split(',') if u.strip()]
-                return await self._delete_frames_by_uris(space_id, graph_id, uris, current_user, recursive=recursive)
+                return await self._delete_frames_by_uris(
+                    space_id, graph_id, uris, current_user, recursive=recursive,
+                    if_unmodified_since=if_unmodified_since)
             else:
                 from ..model.kgframes_model import FrameDeleteResponse
                 return FrameDeleteResponse(
@@ -1500,128 +1527,28 @@ class KGFramesEndpoint:
             self.logger.error(f"Error querying frames: {e}")
             raise HTTPException(status_code=500, detail=f"Error querying frames: {e}")
     
-    async def _delete_frame_by_uri(self, space_id: str, graph_id: str, uri: str, current_user: Dict, recursive: bool = False) -> FrameDeleteResponse:
-        """Delete single frame by URI.
-        
-        Args:
-            recursive: If True, recursively delete all descendant frames.
-                       If False (default), fail if frame has children.
-        """
-        from ..model.kgframes_model import FrameDeleteResponse
-        
-        try:
-            self.logger.info(f"Deleting frame {uri} from space {space_id}, graph {graph_id}, recursive={recursive}")
-            
-            # Get backend implementation via generic interface
-            space_record = await self.space_manager.get_space_or_load(space_id)
-            if not space_record:
-                return FrameDeleteResponse(
-                    status=OperationStatus.NOT_FOUND,
-                    message=f"Space {space_id} not found",
-                    deleted_count=0,
-                    deleted_uris=[]
-                )
+    async def _delete_frames_by_uris(self, space_id: str, graph_id: str, uris: List[str], current_user: Dict, recursive: bool = False,
+                                     if_unmodified_since: Optional[str] = None) -> FrameDeleteResponse:
+        """Delete standalone frames, and everything they own, in one locked transaction.
 
-            space_impl = space_record.space_impl
-            backend_impl = space_impl.get_db_space_impl()
-            if not backend_impl:
-                raise HTTPException(status_code=503, detail="Backend implementation not available")
+        `issues/256`. This was five separate SPARQL updates per frame, frame by
+        frame, with no transaction and no lock: a failure part-way through a
+        recursive delete left half a subtree. It also deleted ENTITY frames with
+        none of the entity route's handling, so the frame stayed in the cached
+        entity graph and the entity's version did not move. Those are now
+        refused (use `/kgentities/kgframes`); see `delete_frame_subtrees`. An
+        absent frame is NO_OP, where the single form said NOT_FOUND.
 
-            # Wrap backend with adapter for consistency
-            backend = create_backend_adapter(backend_impl)
-
-            # Check if frame exists
-            if not await self._frame_exists_in_backend(backend, space_id, graph_id, uri):
-                return FrameDeleteResponse(
-                    status=OperationStatus.NOT_FOUND,
-                    message=f"Frame {uri} not found",
-                    deleted_count=0,
-                    deleted_uris=[]
-                )
-
-            # Check for child frames and handle recursive vs fail mode
-            from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
-            sparql_processor = KGSparqlQueryProcessor(backend, self.logger)
-            children = await sparql_processor.find_child_frames(space_id, graph_id, uri)
-
-            uris_to_delete = [uri]
-            if children:
-                if not recursive:
-                    return FrameDeleteResponse(
-                        status=OperationStatus.INVALID_REQUEST,
-                        message=f"Cannot delete frame with children (use recursive=true to cascade): {uri} has {len(children)} child(ren)",
-                        deleted_count=0,
-                        deleted_uris=[]
-                    )
-                else:
-                    descendants = await sparql_processor.collect_all_descendants(space_id, graph_id, [uri])
-                    if descendants:
-                        self.logger.info(f"🔄 Recursive delete: adding {len(descendants)} descendant frames to deletion")
-                        uris_to_delete.extend(descendants)
-            
-            # Delete all frames (original + descendants)
-            deleted_uris = []
-            for frame_uri in uris_to_delete:
-                success = await self._delete_frame_from_backend(backend, space_id, graph_id, frame_uri)
-                if success:
-                    deleted_uris.append(frame_uri)
-            
-            # Auto-sync vector/geo data for deleted frames
-            if deleted_uris:
-                self._schedule_auto_sync(backend_impl, space_id, graph_id, deleted_uris, "delete")
-
-            # `status` FOLLOWS THE OUTCOME. `issues/243`.
-            #
-            # `deleted_uris` is honest here — a frame is appended only when
-            # `_delete_frame_from_backend` returned True — but `status` was a
-            # hardcoded `DELETED`, so a request where every delete failed came back
-            # `status=deleted` with "Successfully deleted 0 frame(s)". Same defect
-            # the entity paths had, on the frame endpoint.
-            #
-            # `_delete_frames_by_uris` also swallows a per-frame exception with
-            # `continue`, so a frame can drop out of this list on a logged WARNING
-            # alone — which is exactly the case that used to report success.
-            requested = len(uris_to_delete)
-            deleted = len(deleted_uris)
-            if deleted == requested:
-                status = OperationStatus.DELETED
-                message = f"Successfully deleted {deleted} frame(s)"
-            elif deleted > 0:
-                status = OperationStatus.PARTIAL
-                message = (f"Deleted {deleted} of {requested} frame(s); "
-                           f"{requested - deleted} were not deleted")
-            else:
-                status = OperationStatus.STORE_FAILED
-                message = (f"None of the {requested} requested frame(s) were "
-                           f"deleted (they may be absent, or the deletes may "
-                           f"have failed)")
-
-            return FrameDeleteResponse(
-                status=status,
-                message=message,
-                deleted_count=deleted,
-                deleted_uris=deleted_uris
-            )
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            self.logger.error(f"Error deleting frame: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to delete frame: {e}")
-    
-    async def _delete_frames_by_uris(self, space_id: str, graph_id: str, uris: List[str], current_user: Dict, recursive: bool = False) -> FrameDeleteResponse:
-        """Delete multiple frames by URI list.
-        
         Args:
             recursive: If True, recursively delete all descendant frames.
                        If False (default), fail if any frame has children.
+            if_unmodified_since: Refuse (CONFLICT) if the one root frame moved.
         """
         from ..model.kgframes_model import FrameDeleteResponse
         
         try:
             self.logger.info(f"Deleting {len(uris)} frames from space {space_id}, graph {graph_id}, recursive={recursive}")
             
-            # Get backend implementation via generic interface
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return FrameDeleteResponse(
@@ -1636,84 +1563,15 @@ class KGFramesEndpoint:
             if not backend_impl:
                 raise HTTPException(status_code=503, detail="Backend implementation not available")
 
-            # Wrap backend with adapter for consistency
             backend = create_backend_adapter(backend_impl)
 
-            # Check for child frames and handle recursive vs fail mode
-            from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
-            sparql_processor = KGSparqlQueryProcessor(backend, self.logger)
-
-            frames_with_children = {}
-            for uri in uris:
-                children = await sparql_processor.find_child_frames(space_id, graph_id, uri)
-                if children:
-                    frames_with_children[uri] = children
-            
-            if frames_with_children:
-                if not recursive:
-                    child_summary = "; ".join(
-                        f"{uri} has {len(kids)} child(ren)"
-                        for uri, kids in frames_with_children.items()
-                    )
-                    return FrameDeleteResponse(
-                        status=OperationStatus.INVALID_REQUEST,
-                        message=f"Cannot delete frames with children (use recursive=true to cascade): {child_summary}",
-                        deleted_count=0,
-                        deleted_uris=[]
-                    )
-                else:
-                    descendants = await sparql_processor.collect_all_descendants(space_id, graph_id, uris)
-                    if descendants:
-                        self.logger.info(f"🔄 Recursive delete: adding {len(descendants)} descendant frames to deletion")
-                        uris = uris + descendants
-            
-            deleted_uris = []
-            for uri in uris:
-                try:
-                    if await self._frame_exists_in_backend(backend, space_id, graph_id, uri):
-                        success = await self._delete_frame_from_backend(backend, space_id, graph_id, uri)
-                        if success:
-                            deleted_uris.append(uri)
-                except Exception as e:
-                    self.logger.warning(f"Failed to delete frame {uri}: {e}")
-                    continue
-            
-            # Auto-sync vector/geo data for deleted frames
-            if deleted_uris:
-                self._schedule_auto_sync(backend_impl, space_id, graph_id, deleted_uris, "delete")
-
-            # `status` FOLLOWS THE OUTCOME. `issues/243`.
-            #
-            # `deleted_uris` is honest here — a frame is appended only when
-            # `_delete_frame_from_backend` returned True — but `status` was a
-            # hardcoded `DELETED`, so a request where every delete failed came back
-            # `status=deleted` with "Successfully deleted 0 frame(s)". Same defect
-            # the entity paths had, on the frame endpoint.
-            #
-            # `_delete_frames_by_uris` also swallows a per-frame exception with
-            # `continue`, so a frame can drop out of this list on a logged WARNING
-            # alone — which is exactly the case that used to report success.
-            requested = len(uris)
-            deleted = len(deleted_uris)
-            if deleted == requested:
-                status = OperationStatus.DELETED
-                message = f"Successfully deleted {deleted} frame(s)"
-            elif deleted > 0:
-                status = OperationStatus.PARTIAL
-                message = (f"Deleted {deleted} of {requested} frame(s); "
-                           f"{requested - deleted} were not deleted")
-            else:
-                status = OperationStatus.STORE_FAILED
-                message = (f"None of the {requested} requested frame(s) were "
-                           f"deleted (they may be absent, or the deletes may "
-                           f"have failed)")
-
-            return FrameDeleteResponse(
-                status=status,
-                message=message,
-                deleted_count=deleted,
-                deleted_uris=deleted_uris
-            )
+            from ..kg_impl.frame_delete import delete_frames
+            response, removed = await delete_frames(
+                backend, space_id, graph_id, uris, recursive=recursive,
+                if_unmodified_since=if_unmodified_since)
+            if removed:
+                self._schedule_auto_sync(backend_impl, space_id, graph_id, removed, "delete")
+            return response
 
         except HTTPException:
             raise
@@ -1839,6 +1697,17 @@ class KGFramesEndpoint:
             return SlotCreateResponse(
                 status=OperationStatus.CONFLICT, message=str(e),
                 created_count=0, created_uris=[])
+        except RequestRefused as e:
+            # A CALLER ERROR, so INVALID_REQUEST — not the STORE_FAILED below and
+            # not the 500 an unhandled exception becomes. Unreachable while this
+            # route passes `owning_frame_uri` from a required path parameter, which
+            # is why it is pinned: the day that changes, the refusal
+            # `frame_grouping` documents as a 200 would arrive as a server error
+            # (`issues/257`; `test_a_refusal_reaches_the_caller.py`).
+            self.logger.warning("Slot create refused, ungroupable: %s", e)
+            return SlotCreateResponse(
+                status=OperationStatus.INVALID_REQUEST, message=str(e),
+                created_count=0, created_uris=[])
         except (SubjectWriteFailed, GuardUnsatisfiable) as e:
             # A REFUSED write is a domain fault, not a server fault: HTTP 200 with
             # `STORE_FAILED`, which derives `success=false`. `issues/253` decided
@@ -1934,6 +1803,17 @@ class KGFramesEndpoint:
             self.logger.warning("Frame slot update refused as stale: %s", e)
             return SlotUpdateResponse(
                 status=OperationStatus.CONFLICT, message=str(e),
+                updated_count=0, updated_uris=[])
+        except RequestRefused as e:
+            # A CALLER ERROR, so INVALID_REQUEST — not the STORE_FAILED below and
+            # not the 500 an unhandled exception becomes. Unreachable while this
+            # route passes `owning_frame_uri` from a required path parameter, which
+            # is why it is pinned: the day that changes, the refusal
+            # `frame_grouping` documents as a 200 would arrive as a server error
+            # (`issues/257`; `test_a_refusal_reaches_the_caller.py`).
+            self.logger.warning("Slot update refused, ungroupable: %s", e)
+            return SlotUpdateResponse(
+                status=OperationStatus.INVALID_REQUEST, message=str(e),
                 updated_count=0, updated_uris=[])
         except (SubjectWriteFailed, GuardUnsatisfiable) as e:
             # Domain fault, HTTP 200, `success=false` (`issues/253`).
@@ -2487,7 +2367,7 @@ class KGFramesEndpoint:
             return {"valid": False, "error": str(e)}
     
     async def _handle_create_mode(self, backend, space_id: str, graph_id: str, frames: List[KGFrame], objects: List[GraphObject], parent_uri: Optional[str],
-                                  if_unmodified_since: Optional[str] = None):
+                                  if_unmodified_since: Optional[str] = None, precheck=None):
         """Handle CREATE mode: create frames using standalone frame processor."""
         try:
             # Initialize standalone frame processor if needed
@@ -2502,6 +2382,7 @@ class KGFramesEndpoint:
                 frame_objects=objects,
                 operation_mode="CREATE",
                 if_unmodified_since=if_unmodified_since,
+                precheck=precheck,
             )
             
             if not result.success:
@@ -2534,7 +2415,7 @@ class KGFramesEndpoint:
         except HTTPException:
             raise
         except (StaleWrite, AmbiguousPrecondition,
-                GuardUnsatisfiable, UngroupableSlot):
+                GuardUnsatisfiable, RequestRefused):
             # Past the mode handler, to be answered by `_create_frames`
             # (`issues/253`). This handler turns anything else into a 500, and
             # it turned the refusal into one too — a caller cannot tell a
@@ -2546,7 +2427,7 @@ class KGFramesEndpoint:
             raise HTTPException(status_code=500, detail=f"Failed to create frames: {e}")
     
     async def _handle_update_mode(self, backend, space_id: str, graph_id: str, frames: List[KGFrame], objects: List[GraphObject], parent_uri: Optional[str],
-                                  if_unmodified_since: Optional[str] = None):
+                                  if_unmodified_since: Optional[str] = None, precheck=None):
         """Handle UPDATE mode: verify frames exist, then update using standalone processor.
         
         Args:
@@ -2585,6 +2466,7 @@ class KGFramesEndpoint:
                 frame_objects=objects,
                 operation_mode="UPDATE",
                 if_unmodified_since=if_unmodified_since,
+                precheck=precheck,
             )
             
             if not result.success:
@@ -2612,7 +2494,7 @@ class KGFramesEndpoint:
         except HTTPException:
             raise
         except (StaleWrite, AmbiguousPrecondition,
-                GuardUnsatisfiable, UngroupableSlot):
+                GuardUnsatisfiable, RequestRefused):
             # Past the mode handler, to be answered by `_create_frames`
             # (`issues/253`). This handler turns anything else into a 500, and
             # it turned the refusal into one too — a caller cannot tell a
@@ -2624,7 +2506,7 @@ class KGFramesEndpoint:
             raise HTTPException(status_code=500, detail=f"Update operation failed: {e}")
     
     async def _handle_upsert_mode(self, backend, space_id: str, graph_id: str, frames: List[KGFrame], objects: List[GraphObject], parent_uri: Optional[str],
-                                  if_unmodified_since: Optional[str] = None):
+                                  if_unmodified_since: Optional[str] = None, precheck=None):
         """Handle UPSERT mode: create or update frames as needed using standalone processor."""
         try:
             # Initialize standalone frame processor if needed
@@ -2639,6 +2521,7 @@ class KGFramesEndpoint:
                 frame_objects=objects,
                 operation_mode="UPSERT",
                 if_unmodified_since=if_unmodified_since,
+                precheck=precheck,
             )
             
             if not result.success:
@@ -2666,7 +2549,7 @@ class KGFramesEndpoint:
         except HTTPException:
             raise
         except (StaleWrite, AmbiguousPrecondition,
-                GuardUnsatisfiable, UngroupableSlot):
+                GuardUnsatisfiable, RequestRefused):
             # Past the mode handler, to be answered by `_create_frames`
             # (`issues/253`). This handler turns anything else into a 500, and
             # it turned the refusal into one too — a caller cannot tell a
@@ -2678,116 +2561,46 @@ class KGFramesEndpoint:
             raise HTTPException(status_code=500, detail=f"Upsert operation failed: {e}")
     
     async def _handle_replace_mode(self, backend, space_id: str, graph_id: str, frames: List[KGFrame], objects: List[GraphObject], parent_uri: Optional[str],
-                                  if_unmodified_since: Optional[str] = None):
-        """Handle REPLACE mode: delete the existing frame subtree, then insert the new frame graph.
-        
-        Determines the delete scope from EXISTING frames in the DB:
-        - If parent_uri is a KGFrame: deletes its children + their descendants
-        - Otherwise: falls back to deleting the replacement graph's frame URIs + descendants
-        
-        Then inserts the replacement graph via CREATE.
-        
-        Args:
-            parent_uri: If provided and is a KGFrame, scopes replacement to children of this parent.
+                                  if_unmodified_since: Optional[str] = None, precheck=None):
+        """Handle REPLACE mode: the named frames and their descendants, atomically.
+
+        `issues/256` item 4; see `KGFrameCreateProcessor.replace_frames`. This
+        deleted every child of `parent_uri` (or the named frames) frame by frame
+        with SPARQL updates, then created — no lock, no guard, and a failure in
+        between left neither the old frames nor the new. Now guarded: the
+        delete and the insert are one transaction.
         """
         try:
-            replacement_frame_uris = [str(f.URI) for f in frames if hasattr(f, 'URI')]
-            if not replacement_frame_uris:
-                return FrameUpdateResponse(
-                    status=OperationStatus.INVALID_REQUEST,
-                    message="No frame URIs found in replacement graph",
-                    updated_uri="",
-                    updated_count=0
-                )
-
-            # Decide the groupings BEFORE anything is deleted (`issues/257`):
-            # the deletes below are separate statements, so a slot refused at
-            # create time would leave neither the old frames nor the new ones.
-            try:
-                assign_frame_groupings(objects)
-            except UngroupableSlot as e:
-                return FrameUpdateResponse(
-                    status=OperationStatus.INVALID_REQUEST, message=str(e),
-                    updated_uri="", updated_count=0)
-            
-            # Phase 1: Determine delete scope from EXISTING frames in the DB
-            from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
-            sparql_processor = KGSparqlQueryProcessor(backend, self.logger)
-            
-            if parent_uri:
-                parent_is_frame = await self._frame_exists_in_backend(backend, space_id, graph_id, parent_uri)
-                if parent_is_frame:
-                    # Scoped replace: delete children of the given parent
-                    existing_children = await sparql_processor.find_child_frames(
-                        space_id, graph_id, parent_uri
-                    )
-                    root_frames_to_delete = existing_children
-                else:
-                    # parent_uri is not a frame (e.g. entity URI) — use replacement URIs as fallback
-                    root_frames_to_delete = replacement_frame_uris
-            else:
-                # No parent scope — use replacement URIs as fallback
-                root_frames_to_delete = replacement_frame_uris
-            
-            # Collect all descendants of the root frames being deleted
-            all_uris_to_delete = list(root_frames_to_delete)
-            if root_frames_to_delete:
-                descendants = await sparql_processor.collect_all_descendants(space_id, graph_id, root_frames_to_delete)
-                if descendants:
-                    self.logger.info(f"🔄 REPLACE mode: found {len(descendants)} descendant frames to remove")
-                    all_uris_to_delete.extend(descendants)
-            
-            # Phase 2: Delete existing subtree (frames + slots + edges) but NOT parent→root edges
-            for uri in all_uris_to_delete:
-                await self._delete_frame_from_backend(backend, space_id, graph_id, uri)
-            self.logger.info(f"🗑️ REPLACE mode: deleted {len(all_uris_to_delete)} existing frames")
-            
-            # Phase 3: Insert replacement graph using standalone CREATE mode
             if not self.frame_processor:
                 from ..kg_impl.kgframe_create_impl import KGFrameCreateProcessor
                 self.frame_processor = KGFrameCreateProcessor()
-            
-            result = await self.frame_processor.create_frame(
-                backend_adapter=backend,
-                space_id=space_id,
-                graph_id=graph_id,
-                frame_objects=objects,
-                operation_mode="CREATE",
-                # `if_unmodified_since` is DELIBERATELY not passed here
-                # (`issues/253`). Replace DELETES the existing frames before
-                # this call, so a refusal would land after the deletes and
-                # leave neither the old frames nor the new ones. Worse than
-                # the lost update it would prevent, exactly as on the entity
-                # route. Making replace conditional means first making its
-                # delete and insert one transaction.
-            )
-            
+
+            result = await self.frame_processor.replace_frames(
+                backend, space_id, graph_id, objects, parent_uri=parent_uri,
+                if_unmodified_since=if_unmodified_since, precheck=precheck)
             if not result.success:
                 return FrameUpdateResponse(
-                    status=OperationStatus.STORE_FAILED,
-                    message=f"Replace failed during re-creation: {result.message}",
-                    updated_uri="",
-                    updated_count=0
-                )
+                    status=OperationStatus.INVALID_REQUEST, message=result.message,
+                    updated_uri="", updated_count=0)
 
+            if result.removed_uris:
+                self._schedule_auto_sync(getattr(backend, 'backend', None), space_id,
+                                         graph_id, result.removed_uris, "delete")
             created_uris = result.created_uris
             return FrameUpdateResponse(
                 status=OperationStatus.UPDATED,
-                message=f"Successfully replaced {len(all_uris_to_delete)} frames with {len(created_uris)} new frames",
+                message=result.message,
                 updated_uri=created_uris[0] if created_uris else "unknown",
                 updated_count=len(created_uris),
-                frames_updated=len(created_uris),
+                frames_updated=result.frame_count,
             )
 
         except HTTPException:
             raise
         except (StaleWrite, AmbiguousPrecondition,
-                GuardUnsatisfiable, UngroupableSlot):
+                GuardUnsatisfiable, RequestRefused):
             # Past the mode handler, to be answered by `_create_frames`
-            # (`issues/253`). This handler turns anything else into a 500, and
-            # it turned the refusal into one too — a caller cannot tell a
-            # refused write from a broken server, and the client's retry policy
-            # treats the two oppositely.
+            # (`issues/253`).
             raise
         except Exception as e:
             self.logger.error(f"Error in REPLACE mode: {e}")
@@ -2824,106 +2637,10 @@ class KGFramesEndpoint:
     
     
     
-    async def _delete_frame_from_backend(self, backend, space_id: str, graph_id: str, frame_uri: str) -> bool:
-        """Delete frame and all objects in its frame graph using frameGraphURI grouping.
-        
-        Uses the frameGraphURI pattern to find every subject that belongs to
-        this frame (the frame itself, its slots, and slot edges) and deletes
-        all their triples in a single pass.  Then removes structural edges
-        (Edge_hasKGFrame, Edge_hasEntityKGFrame) that reference this frame.
-        """
-        try:
-            # Phase 1: Delete all subjects in the frame graph (frame, slots, slot edges)
-            # Every object created under a frame has hasFrameGraphURI = frame_uri
-            delete_frame_graph = f"""
-            DELETE {{
-                GRAPH <{graph_id}> {{
-                    ?s ?p ?o .
-                }}
-            }}
-            WHERE {{
-                GRAPH <{graph_id}> {{
-                    ?s <{self.haley_prefix}hasFrameGraphURI> <{frame_uri}> .
-                    ?s ?p ?o .
-                }}
-            }}
-            """
-            await backend.execute_sparql_update(space_id, delete_frame_graph)
-            
-            # Also delete the frame's own triples (in case it does not have
-            # hasFrameGraphURI pointing to itself)
-            delete_frame_self = f"""
-            DELETE {{
-                GRAPH <{graph_id}> {{
-                    <{frame_uri}> ?p ?o .
-                }}
-            }}
-            WHERE {{
-                GRAPH <{graph_id}> {{
-                    <{frame_uri}> ?p ?o .
-                }}
-            }}
-            """
-            await backend.execute_sparql_update(space_id, delete_frame_self)
-            
-            # Phase 2: Clean up structural edges that reference this frame
-            # Edge_hasKGFrame where this frame is destination (parent→this)
-            delete_incoming_frame_edges = f"""
-            DELETE {{
-                GRAPH <{graph_id}> {{
-                    ?edge ?ep ?eo .
-                }}
-            }}
-            WHERE {{
-                GRAPH <{graph_id}> {{
-                    ?edge a <{self.haley_prefix}Edge_hasKGFrame> ;
-                          <{self.vital_prefix}hasEdgeDestination> <{frame_uri}> .
-                    ?edge ?ep ?eo .
-                }}
-            }}
-            """
-            await backend.execute_sparql_update(space_id, delete_incoming_frame_edges)
-            
-            # Edge_hasKGFrame where this frame is source (this→children)
-            delete_outgoing_frame_edges = f"""
-            DELETE {{
-                GRAPH <{graph_id}> {{
-                    ?edge ?ep ?eo .
-                }}
-            }}
-            WHERE {{
-                GRAPH <{graph_id}> {{
-                    ?edge a <{self.haley_prefix}Edge_hasKGFrame> ;
-                          <{self.vital_prefix}hasEdgeSource> <{frame_uri}> .
-                    ?edge ?ep ?eo .
-                }}
-            }}
-            """
-            await backend.execute_sparql_update(space_id, delete_outgoing_frame_edges)
-            
-            # Edge_hasEntityKGFrame where this frame is destination (entity→this)
-            delete_entity_frame_edges = f"""
-            DELETE {{
-                GRAPH <{graph_id}> {{
-                    ?edge ?ep ?eo .
-                }}
-            }}
-            WHERE {{
-                GRAPH <{graph_id}> {{
-                    ?edge a <{self.haley_prefix}Edge_hasEntityKGFrame> ;
-                          <{self.vital_prefix}hasEdgeDestination> <{frame_uri}> .
-                    ?edge ?ep ?eo .
-                }}
-            }}
-            """
-            await backend.execute_sparql_update(space_id, delete_entity_frame_edges)
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error deleting frame from backend: {e}")
-            return False
-    
+    # `_delete_frame_from_backend` (five SPARQL updates per frame, no
+    # transaction, no lock) was DELETED 2026-10-04 (`issues/256`): delete and
+    # replace go through `delete_frame_subtrees` now.
+
     async def _get_all_triples_for_subjects(self, backend, graph_id: str, subject_uris: List[str], space_id: str) -> List[Dict[str, str]]:
         """Get all triples for the given subject URIs."""
         try:
@@ -3039,7 +2756,6 @@ class KGFramesEndpoint:
     # which the note that used to live here described as deliberate overrides.
 
 
-    # Removed duplicate _delete_frame_from_backend method - using the implementation above
     # Removed duplicate _get_all_triples_for_subjects method - using the implementation above
     # Removed duplicate _convert_triples_to_vitalsigns_frames method - using the implementation above
 
@@ -3743,7 +3459,7 @@ class KGFramesEndpoint:
 
         except HTTPException:
             raise
-        except UngroupableSlot as e:
+        except RequestRefused as e:
             # A caller error in a 200 (`issues/257`).
             return FrameCreateResponse(
                 status=OperationStatus.INVALID_REQUEST, message=str(e),

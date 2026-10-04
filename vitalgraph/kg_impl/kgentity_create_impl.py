@@ -26,6 +26,7 @@ from .kg_backend_utils import KGBackendInterface, BackendOperationResult
 from .edge_uris import edge_uri
 from .kg_validation_utils import KGEntityValidator, KGGroupingURIManager, KGOwnershipValidator, ValidationResult
 from .frame_grouping import UngroupableSlot, assign_frame_groupings
+from .refusals import RequestRefused
 
 
 class OperationMode(str, Enum):
@@ -188,7 +189,7 @@ class KGEntityCreateProcessor:
             else:
                 return self._create_error_response(operation_mode, f"Invalid operation_mode: {operation_mode}")
                 
-        except UngroupableSlot as e:
+        except RequestRefused as e:
             # A caller error, not a server one (`issues/257`).
             resp = self._create_error_response(operation_mode, str(e))
             resp.status = OperationStatus.INVALID_REQUEST
