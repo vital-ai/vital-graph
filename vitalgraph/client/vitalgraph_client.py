@@ -74,6 +74,10 @@ from .response.client_response import (
 
 if TYPE_CHECKING:
     from ..model.quad_model import QuadRequest
+    from ..model.kgframes_model import FrameQueryRequest, FrameQueryResponse
+    from .response.client_response import (
+        FrameResponse, QueryResponse, MultiFrameGraphResponse,
+    )
     from ..model.sparql_model import (
         SPARQLQueryRequest, SPARQLQueryResponse, SPARQLUpdateRequest, SPARQLUpdateResponse,
         SPARQLInsertRequest, SPARQLInsertResponse, SPARQLDeleteRequest, SPARQLDeleteResponse,
@@ -1369,9 +1373,15 @@ class VitalGraphClient(VitalGraphClientInterface):
     # KGFrame CRUD Methods - Delegated to KGFramesEndpoint
     
     async def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0,
-                            search: Optional[str] = None, **kwargs) -> PaginatedGraphObjectResponse:
+            search: Optional[str] = None, parent_uri: Optional[str] = None,
+            sort_by: Optional[str] = None, sort_order: str = "asc",
+            form_type: Optional[str] = None, frame_type_uri: Optional[str] = None,
+            status: Optional[str] = None, exclude_status: Optional[str] = None,
+            created_after: Optional[str] = None, created_before: Optional[str] = None,
+            modified_after: Optional[str] = None,
+            modified_before: Optional[str] = None) -> PaginatedGraphObjectResponse:
         """
-        List KGFrames with pagination, filtering, and sorting.
+        List KGFrames with pagination, filtering and sorting.
         
         Args:
             space_id: Space identifier
@@ -1379,14 +1389,27 @@ class VitalGraphClient(VitalGraphClientInterface):
             page_size: Number of items per page
             offset: Offset for pagination
             search: Optional search term
-            **kwargs: Additional filter params (sort_by, sort_order, form_type, etc.)
+            parent_uri: Return only the child frames of this parent frame
+            sort_by: Property URI to sort by (see KGFramesEndpoint.list_kgframes)
+            sort_order: 'asc' or 'desc'
+            form_type, frame_type_uri, status, exclude_status, created_after,
+            created_before, modified_after, modified_before: Filters, as for
+                KGFramesEndpoint.list_kgframes
             
         Returns:
             PaginatedGraphObjectResponse containing KGFrame GraphObjects
         """
-        return await self.kgframes.list_kgframes(space_id, graph_id, page_size, offset, search=search, **kwargs)
+        return await self.kgframes.list_kgframes(
+            space_id, graph_id, page_size=page_size, offset=offset, search=search,
+            parent_uri=parent_uri, sort_by=sort_by, sort_order=sort_order,
+            form_type=form_type, frame_type_uri=frame_type_uri, status=status,
+            exclude_status=exclude_status, created_after=created_after,
+            created_before=created_before, modified_after=modified_after,
+            modified_before=modified_before)
+
     
-    async def get_kgframe(self, space_id: str, graph_id: str, uri: str) -> FrameGraphResponse:
+    async def get_kgframe(self, space_id: str, graph_id: str, uri: str,
+            include_frame_graph: bool = False) -> FrameGraphResponse:
         """
         Get a specific KGFrame by URI.
         
@@ -1394,39 +1417,61 @@ class VitalGraphClient(VitalGraphClientInterface):
             space_id: Space identifier
             graph_id: Graph identifier
             uri: KGFrame URI
+            include_frame_graph: Include the complete frame graph (slots, edges)
             
         Returns:
-            FramesResponse containing KGFrame data
+            FrameGraphResponse containing KGFrame data
         """
-        return await self.kgframes.get_kgframe(space_id, graph_id, uri)
+        return await self.kgframes.get_kgframe(
+            space_id, graph_id, uri, include_frame_graph=include_frame_graph)
+
     
-    async def create_kgframes(self, space_id: str, graph_id: str, objects: List) -> CreateEntityResponse:
+    async def create_kgframes(self, space_id: str, graph_id: str, objects: List,
+            parent_uri: Optional[str] = None, operation_mode: str = "create",
+            if_unmodified_since: Optional[str] = None) -> CreateEntityResponse:
         """
         Create KGFrames from GraphObjects.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            objects: List of GraphObject instances (KGFrames)
+            objects: The frames, each whole: frame, slots, `Edge_hasKGSlot`s
+            parent_uri: Optional parent URI for frame relationships
+            operation_mode: create, update or upsert. update and upsert REPLACE
+                each named frame's graph. An entity's frame is refused; use
+                create_entity_frames.
+            if_unmodified_since: The frame's modification stamp as read; if it
+                has moved nothing is written and the response `is_conflict`.
             
         Returns:
-            FrameCreateResponse containing operation result
+            CreateEntityResponse containing operation result
         """
-        return await self.kgframes.create_kgframes(space_id, graph_id, objects)
+        return await self.kgframes.create_kgframes(
+            space_id, graph_id, objects, parent_uri=parent_uri,
+            operation_mode=operation_mode, if_unmodified_since=if_unmodified_since)
+
     
-    async def update_kgframes(self, space_id: str, graph_id: str, objects: List) -> UpdateEntityResponse:
+    async def update_kgframes(self, space_id: str, graph_id: str, objects: List,
+            parent_uri: Optional[str] = None,
+            if_unmodified_since: Optional[str] = None) -> UpdateEntityResponse:
         """
-        Update KGFrames from GraphObjects.
+        Update KGFrames; each named frame's graph is replaced.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            objects: List of GraphObject instances (KGFrames)
+            objects: The frames, each whole: frame, slots, `Edge_hasKGSlot`s
+            parent_uri: Optional parent URI for frame relationships
+            if_unmodified_since: The frame's modification stamp as read; if it
+                has moved nothing is written and the response `is_conflict`.
             
         Returns:
-            FrameUpdateResponse containing operation result
+            UpdateEntityResponse containing operation result
         """
-        return await self.kgframes.update_kgframes(space_id, graph_id, objects)
+        return await self.kgframes.update_kgframes(
+            space_id, graph_id, objects, parent_uri=parent_uri,
+            if_unmodified_since=if_unmodified_since)
+
     
     async def delete_kgframe(self, space_id: str, graph_id: str, uri: str,
             recursive: bool = False,
@@ -1474,7 +1519,10 @@ class VitalGraphClient(VitalGraphClientInterface):
     
     # KGFrames with Slots Methods - Delegated to KGFramesEndpoint
     
-    async def get_kgframes_with_slots(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> PaginatedGraphObjectResponse:
+    async def get_kgframes_with_slots(self, space_id: str, graph_id: str, page_size: int = 10,
+            offset: int = 0, search: Optional[str] = None,
+            frame_uri: Optional[str] = None,
+            parent_uri: Optional[str] = None) -> PaginatedGraphObjectResponse:
         """
         Get KGFrames with their associated slots using pagination.
         
@@ -1484,11 +1532,19 @@ class VitalGraphClient(VitalGraphClientInterface):
             page_size: Number of items per page
             offset: Offset for pagination
             search: Optional search term
+            frame_uri: Optional single frame to return
+            parent_uri: Optional parent URI for filtering frames
             
         Returns:
-            FramesResponse containing KGFrames with slots data and pagination info
+            PaginatedGraphObjectResponse containing KGFrames with slots
         """
-        return await self.kgframes.get_kgframes_with_slots(space_id, graph_id, page_size, offset, search)
+        # Keyword args: the endpoint takes frame_uri before page_size, so the
+        # positional call this used to make put page_size in frame_uri,
+        # offset in page_size and search in offset.
+        return await self.kgframes.get_kgframes_with_slots(
+            space_id, graph_id, frame_uri=frame_uri, page_size=page_size,
+            offset=offset, parent_uri=parent_uri, search=search)
+
 
     async def get_entity_frame_slots(self, space_id: str, graph_id: str, frame_uri: str,
                                      entity_uri: Optional[str] = None,
@@ -1510,33 +1566,52 @@ class VitalGraphClient(VitalGraphClientInterface):
             sort_by=sort_by, sort_order=sort_order,
             page_size=page_size, offset=offset)
     
-    async def create_kgframes_with_slots(self, space_id: str, graph_id: str, objects: List) -> CreateEntityResponse:
+    async def create_kgframes_with_slots(self, space_id: str, graph_id: str, objects: List,
+            parent_uri: Optional[str] = None, operation_mode: str = "create",
+            if_unmodified_since: Optional[str] = None) -> CreateEntityResponse:
         """
         Create KGFrames with their associated slots from GraphObjects.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            objects: List of GraphObject instances (KGFrames with slots)
+            objects: The frames, each whole: frame, slots, `Edge_hasKGSlot`s
+            parent_uri: Optional parent URI for frame relationships
+            operation_mode: create, update or upsert. update and upsert REPLACE
+                each named frame's graph. An entity's frame is refused; use
+                create_entity_frames.
+            if_unmodified_since: The frame's modification stamp as read; if it
+                has moved nothing is written and the response `is_conflict`.
             
         Returns:
-            FrameCreateResponse containing operation result
+            CreateEntityResponse containing operation result
         """
-        return await self.kgframes.create_kgframes_with_slots(space_id, graph_id, objects)
+        return await self.kgframes.create_kgframes_with_slots(
+            space_id, graph_id, objects, parent_uri=parent_uri,
+            operation_mode=operation_mode, if_unmodified_since=if_unmodified_since)
+
     
-    async def update_kgframes_with_slots(self, space_id: str, graph_id: str, objects: List) -> UpdateEntityResponse:
+    async def update_kgframes_with_slots(self, space_id: str, graph_id: str, objects: List,
+            parent_uri: Optional[str] = None,
+            if_unmodified_since: Optional[str] = None) -> UpdateEntityResponse:
         """
-        Update KGFrames with their associated slots from GraphObjects.
+        Update KGFrames with their associated slots; each named frame's graph is replaced.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            objects: List of GraphObject instances (KGFrames with slots)
+            objects: The frames, each whole: frame, slots, `Edge_hasKGSlot`s
+            parent_uri: Optional parent URI for frame relationships
+            if_unmodified_since: The frame's modification stamp as read; if it
+                has moved nothing is written and the response `is_conflict`.
             
         Returns:
-            FrameUpdateResponse containing operation result
+            UpdateEntityResponse containing operation result
         """
-        return await self.kgframes.update_kgframes_with_slots(space_id, graph_id, objects)
+        return await self.kgframes.update_kgframes_with_slots(
+            space_id, graph_id, objects, parent_uri=parent_uri,
+            if_unmodified_since=if_unmodified_since)
+
     
     async def delete_kgframes_with_slots(self, space_id: str, graph_id: str, uri_list: str,
             recursive: bool = False,
@@ -1560,11 +1635,51 @@ class VitalGraphClient(VitalGraphClientInterface):
             space_id, graph_id, uri_list, recursive=recursive,
             if_unmodified_since=if_unmodified_since)
     
-    # KGEntity CRUD Methods - Delegated to KGEntitiesEndpoint
-    
-    async def list_kgentities(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> PaginatedGraphObjectResponse:
+    async def delete_kgframes(self, space_id: str, graph_id: str, uri_list: str,
+            recursive: bool = False,
+            if_unmodified_since: Optional[str] = None) -> DeleteResponse:
         """
-        List KGEntities with pagination and optional search.
+        Delete KGFrames by URI list (same request as delete_kgframes_batch).
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            uri_list: Comma-separated list of KGFrame URIs
+            recursive: Also delete descendant frames; without it a frame with
+                children is refused.
+            if_unmodified_since: The root frame's modification stamp as read;
+                if it has moved nothing is deleted and the response `is_conflict`.
+            
+        Returns:
+            DeleteResponse containing operation result
+        """
+        return await self.kgframes.delete_kgframes(
+            space_id, graph_id, uri_list, recursive=recursive,
+            if_unmodified_since=if_unmodified_since)
+    
+    async def get_kgframes_by_uris(self, space_id: str, graph_id: str, uris: List[str],
+            include_frame_graph: bool = False):
+        """
+        Get multiple KGFrames by URI list.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            uris: List of frame URIs
+            include_frame_graph: Include each frame's complete graph (slots, edges)
+            
+        Returns:
+            PaginatedGraphObjectResponse, or MultiFrameGraphResponse with
+            include_frame_graph=True
+        """
+        return await self.kgframes.get_kgframes_by_uris(
+            space_id, graph_id, uris, include_frame_graph=include_frame_graph)
+    
+    async def list_kgframes_with_graphs(self, space_id: str, graph_id: str, page_size: int = 10,
+            offset: int = 0, search: Optional[str] = None,
+            include_frame_graphs: bool = False) -> MultiFrameGraphResponse:
+        """
+        List KGFrames, optionally with their complete graphs.
         
         Args:
             space_id: Space identifier
@@ -1572,27 +1687,355 @@ class VitalGraphClient(VitalGraphClientInterface):
             page_size: Number of items per page
             offset: Offset for pagination
             search: Optional search term
+            include_frame_graphs: Include each frame's complete graph
             
         Returns:
-            EntityListResponse containing KGEntities data and pagination info
+            MultiFrameGraphResponse containing frames and pagination info
         """
-        return await self.kgentities.list_kgentities(space_id, graph_id, page_size, offset, search)
+        return await self.kgframes.list_kgframes_with_graphs(
+            space_id, graph_id, page_size=page_size, offset=offset, search=search,
+            include_frame_graphs=include_frame_graphs)
     
-    async def get_kgentity(self, space_id: str, graph_id: str, uri: str) -> EntityResponse:
+    async def get_kgframe_graph(self, space_id: str, graph_id: str, uri: str) -> FrameGraphResponse:
         """
-        Get a specific KGEntity by URI.
+        Get the complete graph of a KGFrame: the frame, its slots and edges.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            uri: KGEntity URI
+            uri: KGFrame URI
             
         Returns:
-            EntityResponse containing KGEntity data
+            FrameGraphResponse containing the frame graph
         """
-        return await self.kgentities.get_kgentity(space_id, graph_id, uri)
+        return await self.kgframes.get_kgframe_graph(space_id, graph_id, uri)
     
-    async def create_kgentities(self, space_id: str, graph_id: str, objects: List) -> CreateEntityResponse:
+    async def delete_kgframe_graph(self, space_id: str, graph_id: str, uri: str,
+            recursive: bool = False,
+            if_unmodified_since: Optional[str] = None) -> DeleteResponse:
+        """
+        Delete a KGFrame with its complete graph.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            uri: KGFrame URI
+            recursive: Also delete descendant frames; without it a frame with
+                children is refused.
+            if_unmodified_since: The frame's modification stamp as read; if it
+                has moved nothing is deleted and the response `is_conflict`.
+            
+        Returns:
+            DeleteResponse containing operation result
+        """
+        return await self.kgframes.delete_kgframe_graph(
+            space_id, graph_id, uri, recursive=recursive,
+            if_unmodified_since=if_unmodified_since)
+    
+    async def delete_kgframe_graphs(self, space_id: str, graph_id: str, uri_list: str,
+            recursive: bool = False,
+            if_unmodified_since: Optional[str] = None) -> DeleteResponse:
+        """
+        Delete multiple KGFrames with their complete graphs.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            uri_list: Comma-separated list of KGFrame URIs
+            recursive: Also delete descendant frames; without it a frame with
+                children is refused.
+            if_unmodified_since: The root frame's modification stamp as read;
+                if it has moved nothing is deleted and the response `is_conflict`.
+            
+        Returns:
+            DeleteResponse containing operation result
+        """
+        return await self.kgframes.delete_kgframe_graphs(
+            space_id, graph_id, uri_list, recursive=recursive,
+            if_unmodified_since=if_unmodified_since)
+    
+    async def query_frames(self, space_id: str, graph_id: str,
+            query_request: FrameQueryRequest) -> FrameQueryResponse:
+        """
+        Query KGFrames using criteria-based search.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            query_request: FrameQueryRequest with criteria and pagination
+            
+        Returns:
+            FrameQueryResponse containing matching frames and pagination info
+        """
+        return await self.kgframes.query_frames(space_id, graph_id, query_request)
+    
+    # KGFrame Slot Methods - Delegated to KGFramesEndpoint
+    #
+    # These are for STANDALONE frames: the server refuses an entity's frame on
+    # them (`issues/256`). For an entity's frame use create_entity_frame_slots /
+    # delete_entity_frame_slots, which lock on the entity.
+    
+    async def get_frame_slots(self, space_id: str, graph_id: str, frame_uri: str,
+            slot_type: Optional[str] = None, parent_uri: Optional[str] = None,
+            search: Optional[str] = None, page_size: int = 10,
+            offset: int = 0) -> PaginatedGraphObjectResponse:
+        """
+        Get the slots of a frame, optionally filtered by slot type.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            frame_uri: Frame URI
+            slot_type: Optional slot type URI to filter by
+            parent_uri: Optional parent URI
+            search: Optional search term
+            page_size: Number of items per page
+            offset: Offset for pagination
+            
+        Returns:
+            PaginatedGraphObjectResponse containing the slots
+        """
+        return await self.kgframes.get_frame_slots(
+            space_id, graph_id, frame_uri, slot_type=slot_type, parent_uri=parent_uri,
+            search=search, page_size=page_size, offset=offset)
+    
+    async def create_frame_slots(self, space_id: str, graph_id: str, frame_uri: str,
+            objects: List, parent_uri: Optional[str] = None,
+            operation_mode: str = "create",
+            if_unmodified_since: Optional[str] = None) -> CreateEntityResponse:
+        """
+        Create, update or upsert slots of a standalone frame.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            frame_uri: The frame whose slots are written
+            objects: The slots (an `Edge_hasKGSlot` is added for a new slot)
+            parent_uri: Optional parent URI for slot relationships
+            operation_mode: create (refuses an existing slot), update (refuses
+                a missing one) or upsert
+            if_unmodified_since: The FRAME's modification stamp as read; if it
+                has moved nothing is written and the response `is_conflict`.
+            
+        Returns:
+            CreateEntityResponse containing operation result
+        """
+        return await self.kgframes.create_frame_slots(
+            space_id, graph_id, frame_uri, objects, parent_uri=parent_uri,
+            operation_mode=operation_mode, if_unmodified_since=if_unmodified_since)
+    
+    async def update_frame_slots(self, space_id: str, graph_id: str, frame_uri: str,
+            objects: List, parent_uri: Optional[str] = None,
+            if_unmodified_since: Optional[str] = None) -> UpdateEntityResponse:
+        """
+        Update slots of a standalone frame; a missing slot is refused.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            frame_uri: The frame whose slots are updated
+            objects: The slots
+            parent_uri: Optional parent URI for slot relationships
+            if_unmodified_since: The FRAME's modification stamp as read.
+            
+        Returns:
+            UpdateEntityResponse containing operation result
+        """
+        return await self.kgframes.update_frame_slots(
+            space_id, graph_id, frame_uri, objects, parent_uri=parent_uri,
+            if_unmodified_since=if_unmodified_since)
+    
+    async def delete_frame_slots(self, space_id: str, graph_id: str, frame_uri: str,
+            slot_uris: List[str],
+            if_unmodified_since: Optional[str] = None) -> DeleteResponse:
+        """
+        Delete slots of a standalone frame, with their edges.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            frame_uri: The frame to delete slots from
+            slot_uris: Slot URIs to delete; one already gone is reported in
+                `absent_uris`, a slot of another frame refuses the request
+            if_unmodified_since: The FRAME's modification stamp as read.
+            
+        Returns:
+            DeleteResponse containing operation result
+        """
+        return await self.kgframes.delete_frame_slots(
+            space_id, graph_id, frame_uri, slot_uris,
+            if_unmodified_since=if_unmodified_since)
+    
+    # KGFrame Child Frame Methods - Delegated to KGFramesEndpoint
+    
+    async def get_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str,
+            frame_type: Optional[str] = None, page_size: int = 10,
+            offset: int = 0) -> PaginatedGraphObjectResponse:
+        """
+        Get the child frames of a parent frame, optionally filtered by frame type.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            parent_frame_uri: Parent frame URI
+            frame_type: Optional frame type URI (`hasKGFrameType`)
+            page_size: Number of children per page (server default 10, max 1000)
+            offset: Offset for pagination
+            
+        Returns:
+            PaginatedGraphObjectResponse containing the child frames
+        """
+        return await self.kgframes.get_child_frames(
+            space_id, graph_id, parent_frame_uri, frame_type=frame_type,
+            page_size=page_size, offset=offset)
+    
+    async def list_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str,
+            frame_type: Optional[str] = None, page_size: int = 10,
+            offset: int = 0) -> PaginatedGraphObjectResponse:
+        """
+        List the child frames of a parent frame with pagination.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            parent_frame_uri: Parent frame URI
+            frame_type: Optional frame type URI
+            page_size: Number of items per page
+            offset: Offset for pagination
+            
+        Returns:
+            PaginatedGraphObjectResponse containing the child frames
+        """
+        return await self.kgframes.list_child_frames(
+            space_id, graph_id, parent_frame_uri, frame_type=frame_type,
+            page_size=page_size, offset=offset)
+    
+    async def create_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str,
+            objects: List,
+            if_unmodified_since: Optional[str] = None) -> CreateEntityResponse:
+        """
+        Create child frames under a parent frame.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            parent_frame_uri: Parent frame URI
+            objects: The child frames with their slots and edges
+            if_unmodified_since: The parent frame's modification stamp as read.
+            
+        Returns:
+            CreateEntityResponse containing operation result
+        """
+        return await self.kgframes.create_child_frames(
+            space_id, graph_id, parent_frame_uri, objects,
+            if_unmodified_since=if_unmodified_since)
+    
+    async def update_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str,
+            objects: List,
+            if_unmodified_since: Optional[str] = None) -> UpdateEntityResponse:
+        """
+        Update child frames under a parent frame.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            parent_frame_uri: Parent frame URI
+            objects: The child frames with their slots and edges
+            if_unmodified_since: The parent frame's modification stamp as read.
+            
+        Returns:
+            UpdateEntityResponse containing operation result
+        """
+        return await self.kgframes.update_child_frames(
+            space_id, graph_id, parent_frame_uri, objects,
+            if_unmodified_since=if_unmodified_since)
+    
+    async def delete_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str,
+            frame_uris: List[str], recursive: bool = False) -> DeleteResponse:
+        """
+        Delete child frames of a parent frame.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            parent_frame_uri: Parent frame URI
+            frame_uris: Child frame URIs to delete
+            recursive: Also delete descendant frames; without it a frame with
+                children is refused.
+            
+        Returns:
+            DeleteResponse containing operation result
+        """
+        return await self.kgframes.delete_child_frames(
+            space_id, graph_id, parent_frame_uri, frame_uris, recursive=recursive)
+    
+    # KGEntity CRUD Methods - Delegated to KGEntitiesEndpoint
+    
+    async def list_kgentities(self, space_id: str, graph_id: str, page_size: int = 10,
+            offset: int = 0, search: Optional[str] = None,
+            entity_type_uri: Optional[str] = None, include_entity_graph: bool = False,
+            sort_by: Optional[str] = None, sort_order: str = "asc",
+            status: Optional[str] = None, exclude_status: Optional[str] = None,
+            created_after: Optional[str] = None, created_before: Optional[str] = None,
+            modified_after: Optional[str] = None, modified_before: Optional[str] = None,
+            action_type: Optional[str] = None, provenance_type: Optional[str] = None):
+        """
+        List KGEntities with pagination, filtering and sorting.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            page_size: Number of items per page
+            offset: Offset for pagination
+            search: Optional search term
+            entity_type_uri: Optional entity type URI to filter by
+            include_entity_graph: Include each entity's complete graph
+            sort_by: Optional property URI to sort by
+            sort_order: 'asc' or 'desc'
+            status, exclude_status, created_after, created_before,
+            modified_after, modified_before, action_type, provenance_type:
+                Filters, as for KGEntitiesEndpoint.list_kgentities
+            
+        Returns:
+            PaginatedGraphObjectResponse, or MultiEntityGraphResponse with
+            include_entity_graph=True
+        """
+        # Keyword args: the endpoint takes entity_type_uri before search, so
+        # the positional call this used to make sent a SEARCH TERM as the
+        # entity type filter.
+        return await self.kgentities.list_kgentities(
+            space_id, graph_id, page_size=page_size, offset=offset,
+            entity_type_uri=entity_type_uri, search=search,
+            include_entity_graph=include_entity_graph, sort_by=sort_by,
+            sort_order=sort_order, status=status, exclude_status=exclude_status,
+            created_after=created_after, created_before=created_before,
+            modified_after=modified_after, modified_before=modified_before,
+            action_type=action_type, provenance_type=provenance_type)
+
+    
+    async def get_kgentity(self, space_id: str, graph_id: str, uri: Optional[str] = None,
+            reference_id: Optional[str] = None, include_entity_graph: bool = False):
+        """
+        Get a specific KGEntity by URI or by reference ID.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            uri: KGEntity URI (mutually exclusive with reference_id)
+            reference_id: Reference ID (mutually exclusive with uri)
+            include_entity_graph: Include the complete entity graph
+            
+        Returns:
+            EntityResponse, or EntityGraphResponse with include_entity_graph=True
+        """
+        return await self.kgentities.get_kgentity(
+            space_id, graph_id, uri=uri, reference_id=reference_id,
+            include_entity_graph=include_entity_graph)
+
+    
+    async def create_kgentities(self, space_id: str, graph_id: str, objects: List,
+            parent_uri: Optional[str] = None,
+            preserve_object_properties: bool = False) -> CreateEntityResponse:
         """
         Create KGEntities from GraphObjects.
         
@@ -1600,13 +2043,20 @@ class VitalGraphClient(VitalGraphClientInterface):
             space_id: Space identifier
             graph_id: Graph identifier
             objects: List of GraphObject instances (KGEntities)
+            parent_uri: Optional parent URI for relationships
+            preserve_object_properties: Keep the timestamps the objects carry
+                instead of stamping them now (for copying between spaces).
             
         Returns:
-            EntityCreateResponse containing operation result
+            CreateEntityResponse containing operation result
         """
-        return await self.kgentities.create_kgentities(space_id, graph_id, objects)
+        return await self.kgentities.create_kgentities(
+            space_id, graph_id, objects, parent_uri=parent_uri,
+            preserve_object_properties=preserve_object_properties)
+
     
-    async def update_kgentities(self, space_id: str, graph_id: str, objects: List) -> UpdateEntityResponse:
+    async def update_kgentities(self, space_id: str, graph_id: str, objects: List,
+            parent_uri: Optional[str] = None) -> UpdateEntityResponse:
         """
         Update KGEntities from GraphObjects.
         
@@ -1614,13 +2064,18 @@ class VitalGraphClient(VitalGraphClientInterface):
             space_id: Space identifier
             graph_id: Graph identifier
             objects: List of GraphObject instances (KGEntities)
+            parent_uri: Optional parent URI for relationships
             
         Returns:
-            EntityUpdateResponse containing operation result
+            UpdateEntityResponse containing operation result
         """
-        return await self.kgentities.update_kgentities(space_id, graph_id, objects)
+        return await self.kgentities.update_kgentities(
+            space_id, graph_id, objects, parent_uri=parent_uri)
 
-    async def upsert_kgentities(self, space_id: str, graph_id: str, objects: List) -> UpdateEntityResponse:
+
+    async def upsert_kgentities(self, space_id: str, graph_id: str, objects: List,
+            parent_uri: Optional[str] = None,
+            preserve_object_properties: bool = False) -> UpdateEntityResponse:
         """
         Create or replace KGEntities from GraphObjects.
 
@@ -1628,11 +2083,17 @@ class VitalGraphClient(VitalGraphClientInterface):
             space_id: Space identifier
             graph_id: Graph identifier
             objects: List of GraphObject instances: each entity's whole graph
+            parent_uri: Optional parent URI for relationships
+            preserve_object_properties: Keep the timestamps the objects carry
+                instead of stamping them now (for copying between spaces).
 
         Returns:
             UpdateEntityResponse containing operation result
         """
-        return await self.kgentities.upsert_kgentities(space_id, graph_id, objects)
+        return await self.kgentities.upsert_kgentities(
+            space_id, graph_id, objects, parent_uri=parent_uri,
+            preserve_object_properties=preserve_object_properties)
+
 
     async def delete_kgentity(self, space_id: str, graph_id: str, uri: str,
                              delete_entity_graph: bool = False,
@@ -1683,7 +2144,9 @@ class VitalGraphClient(VitalGraphClientInterface):
     async def get_kgentity_frames(self, space_id: str, graph_id: str, entity_uri: Optional[str] = None,
                            page_size: int = 10, offset: int = 0, search: Optional[str] = None,
                            sort_by: Optional[str] = None, sort_order: str = "asc",
-                           include_slot_counts: bool = False) -> Dict[str, Any]:
+                           include_slot_counts: bool = False,
+                           frame_uris: Optional[List[str]] = None,
+                           parent_frame_uri: Optional[str] = None) -> Dict[str, Any]:
         """
         Get frames associated with KGEntities.
 
@@ -1697,6 +2160,9 @@ class VitalGraphClient(VitalGraphClientInterface):
             sort_by: Optional property URI to order frames by, e.g.
                 haley-ai-kg#hasFrameSequence
             sort_order: 'asc' or 'desc'
+            include_slot_counts: Also return a slot_counts map for the page
+            frame_uris: Specific frame URIs to retrieve
+            parent_frame_uri: Parent frame URI for hierarchical filtering
 
         Returns:
             Dictionary containing entity frames data and pagination info
@@ -1708,7 +2174,238 @@ class VitalGraphClient(VitalGraphClientInterface):
             space_id=space_id, graph_id=graph_id, entity_uri=entity_uri,
             page_size=page_size, offset=offset, search=search,
             sort_by=sort_by, sort_order=sort_order,
-            include_slot_counts=include_slot_counts)
+            include_slot_counts=include_slot_counts,
+            frame_uris=frame_uris, parent_frame_uri=parent_frame_uri)
+    
+    async def get_kgentities_by_uris(self, space_id: str, graph_id: str, uris: List[str],
+            include_entity_graph: bool = False):
+        """
+        Get multiple KGEntities by URI list.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            uris: List of entity URIs
+            include_entity_graph: Include each entity's complete graph
+            
+        Returns:
+            PaginatedGraphObjectResponse, or MultiEntityGraphResponse with
+            include_entity_graph=True
+        """
+        return await self.kgentities.get_kgentities_by_uris(
+            space_id, graph_id, uris, include_entity_graph=include_entity_graph)
+    
+    async def get_kgentities_by_reference_ids(self, space_id: str, graph_id: str,
+            reference_ids: List[str], include_entity_graph: bool = False):
+        """
+        Get multiple KGEntities by reference ID list.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            reference_ids: List of reference IDs
+            include_entity_graph: Include each entity's complete graph
+            
+        Returns:
+            PaginatedGraphObjectResponse, or MultiEntityGraphResponse with
+            include_entity_graph=True
+        """
+        return await self.kgentities.get_kgentities_by_reference_ids(
+            space_id, graph_id, reference_ids, include_entity_graph=include_entity_graph)
+    
+    async def update_entity_only(self, space_id: str, graph_id: str,
+            objects: List) -> UpdateEntityResponse:
+        """
+        Update an entity's own properties, leaving its frames, slots and edges.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            objects: A list holding exactly one KGEntity
+            
+        Returns:
+            UpdateEntityResponse containing operation result
+        """
+        return await self.kgentities.update_entity_only(space_id, graph_id, objects)
+    
+    async def query_entities(self, space_id: str, graph_id: str,
+            query_criteria: Dict[str, Any]) -> QueryResponse:
+        """
+        Query KGEntities using criteria-based search.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            query_criteria: Query criteria dictionary
+            
+        Returns:
+            QueryResponse containing matching entities
+        """
+        return await self.kgentities.query_entities(space_id, graph_id, query_criteria)
+    
+    async def count_kgentities(self, space_id: str, graph_id: str,
+            entity_type_uri: Optional[str] = None, search: Optional[str] = None,
+            sort_by: Optional[str] = None, status: Optional[str] = None,
+            exclude_status: Optional[str] = None,
+            created_after: Optional[str] = None, created_before: Optional[str] = None,
+            modified_after: Optional[str] = None,
+            modified_before: Optional[str] = None) -> int:
+        """
+        Count the entities matching the given filters.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            entity_type_uri, search, sort_by, status, exclude_status,
+            created_after, created_before, modified_after, modified_before:
+                The same filters as list_kgentities
+            
+        Returns:
+            The count
+        """
+        return await self.kgentities.count_kgentities(
+            space_id, graph_id, entity_type_uri=entity_type_uri, search=search,
+            sort_by=sort_by, status=status, exclude_status=exclude_status,
+            created_after=created_after, created_before=created_before,
+            modified_after=modified_after, modified_before=modified_before)
+    
+    async def batch_count_kgentities(self, space_id: str, graph_id: str,
+            count_requests: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Count entities for several filter combinations in one call.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            count_requests: Dicts each with a 'label' and optional filter keys
+                (as count_kgentities)
+            
+        Returns:
+            A list of {'label': str, 'count': int}
+        """
+        return await self.kgentities.batch_count_kgentities(space_id, graph_id, count_requests)
+    
+    # KGEntity Frame and Slot Methods - Delegated to KGEntitiesEndpoint
+    #
+    # Writes to an ENTITY's frames: locked, guarded and stamped on the entity,
+    # and the frame must be the entity's (`issues/256`).
+    
+    async def create_entity_frames(self, space_id: str, graph_id: str, entity_uri: str,
+            objects: List, parent_frame_uri: Optional[str] = None,
+            operation_mode: str = "create",
+            if_unmodified_since: Optional[str] = None) -> FrameResponse:
+        """
+        Write frames of an entity.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            entity_uri: The entity that owns the frames
+            objects: The frames, each whole: frame, slots, `Edge_hasKGSlot`s
+            parent_frame_uri: Optional parent frame URI
+            operation_mode: create, update, upsert or replace. update and
+                upsert REPLACE each named frame's graph; replace also removes
+                the named frames' descendants.
+            if_unmodified_since: The ENTITY's `modification_stamp` as read; if
+                it has moved nothing is written and the response `is_conflict`.
+            
+        Returns:
+            FrameResponse containing operation result
+        """
+        return await self.kgentities.create_entity_frames(
+            space_id, graph_id, entity_uri, objects, parent_frame_uri=parent_frame_uri,
+            operation_mode=operation_mode, if_unmodified_since=if_unmodified_since)
+    
+    async def update_entity_frames(self, space_id: str, graph_id: str, entity_uri: str,
+            objects: List, parent_frame_uri: Optional[str] = None,
+            if_unmodified_since: Optional[str] = None) -> FrameResponse:
+        """
+        Update frames of an entity; each named frame's graph is replaced.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            entity_uri: The entity that owns the frames
+            objects: The frames, each whole: frame, slots, `Edge_hasKGSlot`s
+            parent_frame_uri: Optional parent frame URI
+            if_unmodified_since: The ENTITY's `modification_stamp` as read.
+            
+        Returns:
+            FrameResponse containing operation result
+        """
+        return await self.kgentities.update_entity_frames(
+            space_id, graph_id, entity_uri, objects, parent_frame_uri=parent_frame_uri,
+            if_unmodified_since=if_unmodified_since)
+    
+    async def delete_entity_frames(self, space_id: str, graph_id: str, entity_uri: str,
+            frame_uris: List[str], parent_frame_uri: Optional[str] = None,
+            recursive: bool = False,
+            if_unmodified_since: Optional[str] = None) -> DeleteResponse:
+        """
+        Delete frames of an entity.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            entity_uri: The entity that owns the frames
+            frame_uris: Frame URIs to delete
+            parent_frame_uri: Optional parent frame URI for validation
+            recursive: Also delete descendant frames; without it a frame with
+                children is refused.
+            if_unmodified_since: The ENTITY's `modification_stamp` as read.
+            
+        Returns:
+            DeleteResponse containing operation result
+        """
+        return await self.kgentities.delete_entity_frames(
+            space_id, graph_id, entity_uri, frame_uris, parent_frame_uri=parent_frame_uri,
+            recursive=recursive, if_unmodified_since=if_unmodified_since)
+    
+    async def create_entity_frame_slots(self, space_id: str, graph_id: str, entity_uri: str,
+            frame_uri: str, objects: List, operation_mode: str = "create",
+            if_unmodified_since: Optional[str] = None) -> CreateEntityResponse:
+        """
+        Create, update or upsert slots of one of an entity's frames.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            entity_uri: The entity that owns the frame
+            frame_uri: The frame whose slots are written
+            objects: The slots (an `Edge_hasKGSlot` is added for a new slot)
+            operation_mode: create (refuses an existing slot), update (refuses
+                a missing one) or upsert
+            if_unmodified_since: The ENTITY's `modification_stamp` as read; if
+                it has moved nothing is written and the response `is_conflict`.
+            
+        Returns:
+            CreateEntityResponse; `created_uris` holds the slot URIs written
+        """
+        return await self.kgentities.create_entity_frame_slots(
+            space_id, graph_id, entity_uri, frame_uri, objects,
+            operation_mode=operation_mode, if_unmodified_since=if_unmodified_since)
+    
+    async def delete_entity_frame_slots(self, space_id: str, graph_id: str, entity_uri: str,
+            frame_uri: str, slot_uris: List[str],
+            if_unmodified_since: Optional[str] = None) -> DeleteResponse:
+        """
+        Delete slots of one of an entity's frames, with their edges.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            entity_uri: The entity that owns the frame
+            frame_uri: The frame to delete slots from
+            slot_uris: Slot URIs to delete; one already gone is reported in
+                `absent_uris`, a slot of another frame refuses the request
+            if_unmodified_since: The ENTITY's `modification_stamp` as read.
+            
+        Returns:
+            DeleteResponse containing operation result
+        """
+        return await self.kgentities.delete_entity_frame_slots(
+            space_id, graph_id, entity_uri, frame_uri, slot_uris,
+            if_unmodified_since=if_unmodified_since)
     
     # Object CRUD Methods - Delegated to ObjectsEndpoint
     

@@ -304,13 +304,61 @@ class VitalGraphClientInterface(ABC):
         pass
     
     @abstractmethod
-    async def delete_kgframe(self, space_id: str, graph_id: str, uri: str) -> DeleteResponse:
+    async def delete_kgframe(self, space_id: str, graph_id: str, uri: str,
+                             recursive: bool = False,
+                             if_unmodified_since: Optional[str] = None) -> DeleteResponse:
         """Delete a KGFrame by URI."""
         pass
     
     @abstractmethod
-    async def delete_kgframes_batch(self, space_id: str, graph_id: str, uri_list: str) -> DeleteResponse:
+    async def delete_kgframes_batch(self, space_id: str, graph_id: str, uri_list: str,
+                                    recursive: bool = False,
+                                    if_unmodified_since: Optional[str] = None) -> DeleteResponse:
         """Delete multiple KGFrames by URI list."""
+        pass
+
+    @abstractmethod
+    async def delete_kgframes(self, space_id: str, graph_id: str, uri_list: str,
+                              recursive: bool = False,
+                              if_unmodified_since: Optional[str] = None) -> DeleteResponse:
+        """Delete KGFrames by URI list."""
+        pass
+
+    @abstractmethod
+    async def get_kgframes_by_uris(self, space_id: str, graph_id: str, uris: List[str],
+                                   include_frame_graph: bool = False):
+        """Get multiple KGFrames by URI list, optionally with their graphs."""
+        pass
+
+    @abstractmethod
+    async def list_kgframes_with_graphs(self, space_id: str, graph_id: str, page_size: int = 10,
+                                        offset: int = 0, search: Optional[str] = None,
+                                        include_frame_graphs: bool = False):
+        """List KGFrames, optionally with their complete graphs."""
+        pass
+
+    @abstractmethod
+    async def get_kgframe_graph(self, space_id: str, graph_id: str, uri: str) -> FrameGraphResponse:
+        """Get the complete graph of a KGFrame."""
+        pass
+
+    @abstractmethod
+    async def delete_kgframe_graph(self, space_id: str, graph_id: str, uri: str,
+                                   recursive: bool = False,
+                                   if_unmodified_since: Optional[str] = None) -> DeleteResponse:
+        """Delete a KGFrame with its complete graph."""
+        pass
+
+    @abstractmethod
+    async def delete_kgframe_graphs(self, space_id: str, graph_id: str, uri_list: str,
+                                    recursive: bool = False,
+                                    if_unmodified_since: Optional[str] = None) -> DeleteResponse:
+        """Delete multiple KGFrames with their complete graphs."""
+        pass
+
+    @abstractmethod
+    async def query_frames(self, space_id: str, graph_id: str, query_request):
+        """Query KGFrames using criteria-based search (FrameQueryRequest)."""
         pass
     
     # KGFrames with Slots Methods
@@ -342,8 +390,78 @@ class VitalGraphClientInterface(ABC):
         pass
 
     @abstractmethod
-    async def delete_kgframes_with_slots(self, space_id: str, graph_id: str, uri_list: str):
+    async def delete_kgframes_with_slots(self, space_id: str, graph_id: str, uri_list: str,
+                                         recursive: bool = False,
+                                         if_unmodified_since: Optional[str] = None):
         """Delete KGFrames with their associated slots by URI list."""
+        pass
+
+    # KGFrame Slot Methods (standalone frames; an entity's frame is refused)
+
+    @abstractmethod
+    async def get_frame_slots(self, space_id: str, graph_id: str, frame_uri: str,
+                              slot_type: Optional[str] = None, parent_uri: Optional[str] = None,
+                              search: Optional[str] = None, page_size: int = 10,
+                              offset: int = 0) -> PaginatedGraphObjectResponse:
+        """Get the slots of a frame, optionally filtered by slot type."""
+        pass
+
+    @abstractmethod
+    async def create_frame_slots(self, space_id: str, graph_id: str, frame_uri: str,
+                                 objects: List[GraphObject], parent_uri: Optional[str] = None,
+                                 operation_mode: str = "create",
+                                 if_unmodified_since: Optional[str] = None) -> CreateEntityResponse:
+        """Create, update or upsert slots of a standalone frame."""
+        pass
+
+    @abstractmethod
+    async def update_frame_slots(self, space_id: str, graph_id: str, frame_uri: str,
+                                 objects: List[GraphObject], parent_uri: Optional[str] = None,
+                                 if_unmodified_since: Optional[str] = None) -> UpdateEntityResponse:
+        """Update slots of a standalone frame."""
+        pass
+
+    @abstractmethod
+    async def delete_frame_slots(self, space_id: str, graph_id: str, frame_uri: str,
+                                 slot_uris: List[str],
+                                 if_unmodified_since: Optional[str] = None) -> DeleteResponse:
+        """Delete slots of a standalone frame, with their edges."""
+        pass
+
+    # KGFrame Child Frame Methods
+
+    @abstractmethod
+    async def get_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str,
+                               frame_type: Optional[str] = None, page_size: int = 10,
+                               offset: int = 0) -> PaginatedGraphObjectResponse:
+        """Get the child frames of a parent frame."""
+        pass
+
+    @abstractmethod
+    async def list_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str,
+                                frame_type: Optional[str] = None, page_size: int = 10,
+                                offset: int = 0) -> PaginatedGraphObjectResponse:
+        """List the child frames of a parent frame with pagination."""
+        pass
+
+    @abstractmethod
+    async def create_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str,
+                                  objects: List[GraphObject],
+                                  if_unmodified_since: Optional[str] = None) -> CreateEntityResponse:
+        """Create child frames under a parent frame."""
+        pass
+
+    @abstractmethod
+    async def update_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str,
+                                  objects: List[GraphObject],
+                                  if_unmodified_since: Optional[str] = None) -> UpdateEntityResponse:
+        """Update child frames under a parent frame."""
+        pass
+
+    @abstractmethod
+    async def delete_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str,
+                                  frame_uris: List[str], recursive: bool = False) -> DeleteResponse:
+        """Delete child frames of a parent frame."""
         pass
 
     # KGEntity CRUD Methods
@@ -370,13 +488,103 @@ class VitalGraphClientInterface(ABC):
         pass
 
     @abstractmethod
-    async def delete_kgentity(self, space_id: str, graph_id: str, uri: str):
+    async def upsert_kgentities(self, space_id: str, graph_id: str, objects: List[GraphObject]):
+        """Create or replace KGEntities from GraphObjects."""
+        pass
+
+    @abstractmethod
+    async def update_entity_only(self, space_id: str, graph_id: str, objects: List[GraphObject]):
+        """Update an entity's own properties, leaving its frames, slots and edges."""
+        pass
+
+    @abstractmethod
+    async def delete_kgentity(self, space_id: str, graph_id: str, uri: str,
+                              delete_entity_graph: bool = False,
+                              if_unmodified_since: Optional[str] = None):
         """Delete a KGEntity by URI."""
         pass
 
     @abstractmethod
-    async def delete_kgentities_batch(self, space_id: str, graph_id: str, uri_list: str):
+    async def delete_kgentities_batch(self, space_id: str, graph_id: str, uri_list: str,
+                                      delete_entity_graph: bool = False,
+                                      if_unmodified_since: Optional[str] = None):
         """Delete multiple KGEntities by URI list."""
+        pass
+
+    @abstractmethod
+    async def get_kgentities_by_uris(self, space_id: str, graph_id: str, uris: List[str],
+                                     include_entity_graph: bool = False):
+        """Get multiple KGEntities by URI list, optionally with their graphs."""
+        pass
+
+    @abstractmethod
+    async def get_kgentities_by_reference_ids(self, space_id: str, graph_id: str,
+                                              reference_ids: List[str],
+                                              include_entity_graph: bool = False):
+        """Get multiple KGEntities by reference ID list, optionally with their graphs."""
+        pass
+
+    @abstractmethod
+    async def query_entities(self, space_id: str, graph_id: str, query_criteria: Dict[str, Any]):
+        """Query KGEntities using criteria-based search."""
+        pass
+
+    @abstractmethod
+    async def count_kgentities(self, space_id: str, graph_id: str,
+                               entity_type_uri: Optional[str] = None, search: Optional[str] = None,
+                               sort_by: Optional[str] = None, status: Optional[str] = None,
+                               exclude_status: Optional[str] = None,
+                               created_after: Optional[str] = None,
+                               created_before: Optional[str] = None,
+                               modified_after: Optional[str] = None,
+                               modified_before: Optional[str] = None) -> int:
+        """Count the entities matching the given filters."""
+        pass
+
+    @abstractmethod
+    async def batch_count_kgentities(self, space_id: str, graph_id: str,
+                                     count_requests: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Count entities for several filter combinations in one call."""
+        pass
+
+    # KGEntity Frame and Slot Methods (locked on the entity)
+
+    @abstractmethod
+    async def create_entity_frames(self, space_id: str, graph_id: str, entity_uri: str,
+                                   objects: List[GraphObject], parent_frame_uri: Optional[str] = None,
+                                   operation_mode: str = "create",
+                                   if_unmodified_since: Optional[str] = None):
+        """Write frames of an entity (create, update, upsert or replace)."""
+        pass
+
+    @abstractmethod
+    async def update_entity_frames(self, space_id: str, graph_id: str, entity_uri: str,
+                                   objects: List[GraphObject], parent_frame_uri: Optional[str] = None,
+                                   if_unmodified_since: Optional[str] = None):
+        """Update frames of an entity; each named frame's graph is replaced."""
+        pass
+
+    @abstractmethod
+    async def delete_entity_frames(self, space_id: str, graph_id: str, entity_uri: str,
+                                   frame_uris: List[str], parent_frame_uri: Optional[str] = None,
+                                   recursive: bool = False,
+                                   if_unmodified_since: Optional[str] = None) -> DeleteResponse:
+        """Delete frames of an entity."""
+        pass
+
+    @abstractmethod
+    async def create_entity_frame_slots(self, space_id: str, graph_id: str, entity_uri: str,
+                                        frame_uri: str, objects: List[GraphObject],
+                                        operation_mode: str = "create",
+                                        if_unmodified_since: Optional[str] = None) -> CreateEntityResponse:
+        """Create, update or upsert slots of one of an entity's frames."""
+        pass
+
+    @abstractmethod
+    async def delete_entity_frame_slots(self, space_id: str, graph_id: str, entity_uri: str,
+                                        frame_uri: str, slot_uris: List[str],
+                                        if_unmodified_since: Optional[str] = None) -> DeleteResponse:
+        """Delete slots of one of an entity's frames, with their edges."""
         pass
 
     @abstractmethod
