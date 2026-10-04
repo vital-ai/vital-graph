@@ -8,8 +8,11 @@
 ## VITALGRAPH_FRAME_CREATE_REFUSES_EXISTING (default off), and the slot routes'
 ## contract with `/kgentities/kgframes/kgslots`. Deploying to production is
 ## separate, per planning/planning_deploy.
-## Still open: the Resource API moving entity-frame slot edits to the new route
-## and frame writes to `upsert`; then switching that setting on.
+## Still open (re-checked 2026-10-04, "Callers, re-checked"): the entity route's
+## `update` answers SUCCESS for a frame it did not write (a defect, below); the
+## Resource API's already_exists fallback moving from `update` to `upsert`; then
+## switching that setting on. The slot routes need NO caller change — nothing
+## calls the slot write or delete routes.
 
 ## The rule (decided 2026-10-02)
 
@@ -894,6 +897,53 @@ frames.
 modes, foreign slot, foreign frame, stale guard, delete with absent and stale,
 edge not duplicated, entity graph shows the slot). Unit tests of the replaced
 handlers were rewritten against `_write_frame_slots`.
+
+## Callers, re-checked 2026-10-04 — two claims above were stale, and a defect
+
+The fourth round named the Resource API as not ready, on a reading that
+predated its own changes. Re-checked against it at its `7d80c6e2` (already on
+0.0.45) and every portal, client and agent repo beside it:
+
+- **The slot routes need no caller change.** "The Resource API passes
+  `/kgframes/kgslots` through ... it needs routes onto
+  `/kgentities/kgframes/kgslots`" is true of the pass-through, but NO code
+  anywhere calls the slot write or delete routes — not the portals, not the
+  Node or Python clients (they define the methods, nothing calls them), not the
+  agents. Slots are written inside whole frames through `/kgentities/kgframes`.
+  The 0.0.45 refusal breaks nothing; the entity slot route is available, not
+  required.
+- **The create flag does not depend on `lead_sync` / `write_or_update_frame` /
+  the route default.** All three reach VitalGraph through the Resource API's
+  `create_entity_frames`, which already catches `already_exists` and re-sends
+  the objects. The other direct frame writers (`retention/kg_write.py`,
+  `underwriting/uw_decision_kg.py`) already send `upsert`.
+- **But the re-send is `update`, and that has a hole — a VitalGraph defect.**
+  Measured on the vg test stack at 0.0.45, entity route, one batch holding an
+  EXISTING frame A and a NEW frame B:
+
+  | mode | answer | B written? | A's old slot |
+  |---|---|---|---|
+  | `update` | `updated`, `is_success` TRUE — "Successfully updated 1 complete frame(s), 1 frame(s) failed: No valid frames found for update" | **NO** | replaced |
+  | `upsert` | `upserted` | yes | replaced |
+  | `create`, flag off | `created` | yes | **survives** — create MERGES |
+
+  **OPEN DEFECT: entity-route `update` reports success for a frame it did not
+  write.** Item 3's update half made `/kgframes` update of a missing frame
+  `not_found`; the entity route still skips it inside a success. It should
+  refuse the request (nothing written) or answer a partial status naming the
+  frame — not `updated`. Not fixed.
+
+  With the flag on, the Resource API's create → `update` fallback would write A
+  and drop B behind a success. Its fallback must be `upsert`; until then the
+  flag stays off.
+- **Today, with the flag off, `create` of an existing frame MERGES** (the old
+  slot survives beside the new one), so any caller re-saving a frame through
+  `create` accumulates stale slots. Callers that mean create-or-refresh should
+  send `upsert`.
+
+Instructions for the Resource API: `planning/planning_deploy/
+resource_service_frame_writes_20261004.md` (local). Probe: a throwaway API test
+of the three modes above, not kept.
 
 ## Open questions
 
