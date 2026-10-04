@@ -88,3 +88,69 @@ def test_the_client_implements_its_interface():
     assert not missing, f"VitalGraphClient leaves abstract: {missing}"
     for name in VitalGraphClientInterface.__abstractmethods__:
         assert getattr(VitalGraphClient, name) is not getattr(VitalGraphClientInterface, name)
+
+
+# ── Every OTHER wrapper: forwards to a method that exists, under the right names ──
+#
+# The same positional drift had broken wrappers outside KG entities and frames:
+# the six KGType wrappers still passed `graph_id` after KGTypes became
+# space-scoped (five raised TypeError, list_kgtypes sent the graph id as
+# page_size); upload_file_content sent the file URI as the graph and the graph
+# as the data; search_triples and execute_graph_operation called endpoint
+# methods that do not exist.
+
+import re  # noqa: E402
+
+import vitalgraph.client.vitalgraph_client as _client_module  # noqa: E402
+
+# Wrapper parameter -> endpoint parameter, where the names differ on purpose.
+RENAMED = {
+    "upload_file_content": {"uri": "file_uri", "file_path": "source"},
+    "search_triples": {"limit": "page_size", "object_value": "object"},
+}
+# Wrapper parameters accepted and deliberately NOT forwarded.
+IGNORED = {n: {"graph_id"} for n in (
+    "list_kgtypes", "get_kgtype", "create_kgtypes", "update_kgtypes",
+    "delete_kgtype", "delete_kgtypes_batch")}
+_CLIENT_SRC = inspect.getsource(VitalGraphClient)
+
+
+def _delegations():
+    out = []
+    for name, fn in inspect.getmembers(VitalGraphClient, inspect.iscoroutinefunction):
+        if name.startswith("_"):
+            continue
+        calls = set(re.findall(r"self\.(\w+)\.(\w+)\(", inspect.getsource(fn)))
+        if len(calls) != 1:
+            continue
+        attr, target = calls.pop()
+        assigned = re.search(rf"self\.{attr}\s*=\s*(\w+)\(", _CLIENT_SRC)
+        cls = getattr(_client_module, assigned.group(1), None) if assigned else None
+        if isinstance(cls, type) and cls.__name__.endswith("Endpoint"):
+            out.append((name, attr, cls, target))
+    return out
+
+
+DELEGATIONS = _delegations()
+
+
+def test_the_delegations_were_found():
+    assert len(DELEGATIONS) > 100, len(DELEGATIONS)
+
+
+@pytest.mark.parametrize("name,attr,cls,target", DELEGATIONS,
+                         ids=[d[0] for d in DELEGATIONS])
+async def test_every_wrapper_reaches_its_endpoint_with_the_right_arguments(name, attr, cls, target):
+    assert hasattr(cls, target), f"{name} calls {attr}.{target}, which does not exist"
+    client = VitalGraphClient.__new__(VitalGraphClient)
+    mock = AsyncMock(return_value="result")
+    setattr(client, attr, type("E", (), {target: mock})())
+    sent = {p: f"<{p}>" for p, _ in _params(getattr(VitalGraphClient, name))}
+    await getattr(client, name)(**sent)
+    got = inspect.signature(getattr(cls, target)).bind(
+        None, *mock.call_args.args, **mock.call_args.kwargs).arguments
+    got.pop("self")
+    got.update(got.pop("kwargs", {}) or {})
+    rename = RENAMED.get(name, {})
+    expected = {rename.get(p, p): v for p, v in sent.items() if p not in IGNORED.get(name, set())}
+    assert got == expected

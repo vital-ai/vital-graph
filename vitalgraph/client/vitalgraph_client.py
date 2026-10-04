@@ -1214,91 +1214,103 @@ class VitalGraphClient(VitalGraphClientInterface):
     
     # KGType CRUD Methods - Delegated to KGTypesEndpoint
     
-    async def list_kgtypes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> KGTypesListResponse:
+    async def list_kgtypes(self, space_id: str, graph_id: Optional[str] = None, page_size: int = 10,
+            offset: int = 0, search: Optional[str] = None,
+            type_uri: Optional[str] = None) -> KGTypesListResponse:
         """
         List KGTypes with pagination and optional search.
         
         Args:
             space_id: Space identifier
-            graph_id: Graph identifier
+            graph_id: IGNORED. KGTypes are space-scoped; the endpoint takes no
+                graph. Kept so calls written against this signature work.
             page_size: Number of items per page
             offset: Offset for pagination
             search: Optional search term
+            type_uri: Optional KGType URI to filter by
             
         Returns:
             KGTypeListResponse containing KGTypes data and pagination info
         """
-        return await self.kgtypes.list_kgtypes(space_id, graph_id, page_size, offset, search)
+        # The endpoint takes no graph_id. Passing it positionally (as this
+        # did) sent the graph id as page_size and shifted every argument.
+        return await self.kgtypes.list_kgtypes(
+            space_id, page_size=page_size, offset=offset, search=search, type_uri=type_uri)
     
-    async def get_kgtype(self, space_id: str, graph_id: str, uri: str) -> KGTypeResponse:
+    async def get_kgtype(self, space_id: str, graph_id: Optional[str], uri: str) -> KGTypeResponse:
         """
         Get a specific KGType by URI.
         
         Args:
             space_id: Space identifier
-            graph_id: Graph identifier
+            graph_id: IGNORED. KGTypes are space-scoped; the endpoint takes no
+                graph. Kept so calls written against this signature work.
             uri: KGType URI
             
         Returns:
             KGTypeListResponse containing KGType data
         """
-        return await self.kgtypes.get_kgtype(space_id, graph_id, uri)
+        return await self.kgtypes.get_kgtype(space_id, uri)
     
-    async def create_kgtypes(self, space_id: str, graph_id: str, objects: List) -> KGTypeCreateResponse:
+    async def create_kgtypes(self, space_id: str, graph_id: Optional[str], objects: List) -> KGTypeCreateResponse:
         """
         Create KGTypes from GraphObjects.
         
         Args:
             space_id: Space identifier
-            graph_id: Graph identifier
+            graph_id: IGNORED. KGTypes are space-scoped; the endpoint takes no
+                graph. Kept so calls written against this signature work.
             objects: List of GraphObject instances to create
             
         Returns:
             KGTypeCreateResponse containing operation result
         """
-        return await self.kgtypes.create_kgtypes(space_id, graph_id, objects)
+        return await self.kgtypes.create_kgtypes(space_id, objects)
     
-    async def update_kgtypes(self, space_id: str, graph_id: str, objects: List) -> KGTypeUpdateResponse:
+    async def update_kgtypes(self, space_id: str, graph_id: Optional[str], objects: List) -> KGTypeUpdateResponse:
         """
         Update KGTypes from GraphObjects.
         
         Args:
             space_id: Space identifier
-            graph_id: Graph identifier
+            graph_id: IGNORED. KGTypes are space-scoped; the endpoint takes no
+                graph. Kept so calls written against this signature work.
             objects: List of GraphObject instances to update
             
         Returns:
             KGTypeUpdateResponse containing operation result
         """
-        return await self.kgtypes.update_kgtypes(space_id, graph_id, objects)
+        return await self.kgtypes.update_kgtypes(space_id, objects)
     
-    async def delete_kgtype(self, space_id: str, graph_id: str, uri: str) -> KGTypeDeleteResponse:
+    async def delete_kgtype(self, space_id: str, graph_id: Optional[str], uri: str) -> KGTypeDeleteResponse:
         """
         Delete a KGType by URI.
         
         Args:
             space_id: Space identifier
-            graph_id: Graph identifier
+            graph_id: IGNORED. KGTypes are space-scoped; the endpoint takes no
+                graph. Kept so calls written against this signature work.
             uri: KGType URI to delete
             
         Returns:
             KGTypeDeleteResponse containing operation result
         """
-        return await self.kgtypes.delete_kgtype(space_id, graph_id, uri)
+        return await self.kgtypes.delete_kgtype(space_id, uri)
     
-    async def delete_kgtypes_batch(self, space_id: str, graph_id: str, uri_list: str) -> KGTypeDeleteResponse:
+    async def delete_kgtypes_batch(self, space_id: str, graph_id: Optional[str], uri_list: str) -> KGTypeDeleteResponse:
         """
         Delete multiple KGTypes by URI list.
         
         Args:
             space_id: Space identifier
-            graph_id: Graph identifier
+            graph_id: IGNORED. KGTypes are space-scoped; the endpoint takes no
+                graph. Kept so calls written against this signature work.
             uri_list: Comma-separated list of KGType URIs
             
         Returns:
             KGTypeDeleteResponse containing operation result
         """
-        return await self.kgtypes.delete_kgtypes_batch(space_id, graph_id, uri_list)
+        return await self.kgtypes.delete_kgtypes_batch(space_id, uri_list)
     
     # KGDocument CRUD Methods - Delegated to KGDocumentsEndpoint
     
@@ -2583,20 +2595,31 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.files.get_files_by_uris(space_id, uri_list, graph_id)
     
-    async def upload_file_content(self, space_id: str, uri: str, file_path: str, graph_id: Optional[str] = None) -> FileUploadResponse:
+    async def upload_file_content(self, space_id: str, uri: str, file_path: str,
+            graph_id: Optional[str] = None, filename: Optional[str] = None,
+            content_type: Optional[str] = None,
+            chunk_size: int = 8192) -> FileUploadResponse:
         """
         Upload binary file content to existing file node.
         
         Args:
             space_id: Space identifier
             uri: File node URI
-            file_path: Path to file to upload
-            graph_id: Graph identifier (optional)
+            file_path: Data to upload: a path, bytes, file object or BinaryGenerator
+            graph_id: Graph identifier (required by the server)
+            filename: Original filename (inferred from the source if omitted)
+            content_type: MIME type (inferred if omitted)
+            chunk_size: Streaming chunk size
             
         Returns:
             FileUploadResponse containing upload result
         """
-        return await self.files.upload_file_content(space_id, uri, file_path, graph_id)
+        # Keyword args: the endpoint's order is (space_id, graph_id, file_uri,
+        # source), so the positional call this made sent the file URI as the
+        # graph, the path as the file URI, and the graph as the data.
+        return await self.files.upload_file_content(
+            space_id, graph_id=graph_id, file_uri=uri, source=file_path,
+            filename=filename, content_type=content_type, chunk_size=chunk_size)
     
     async def download_file_content(self, space_id: str, graph_id: str, file_uri: str, 
                              destination=None, chunk_size: int = 8192):
@@ -2786,20 +2809,6 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.graphs.clear_graph(space_id, graph_uri)
     
-    async def execute_graph_operation(self, space_id: str, operation: str, **kwargs) -> Dict[str, Any]:
-        """
-        Execute a graph management operation.
-        
-        Args:
-            space_id: Space identifier
-            operation: Graph operation (CREATE, DROP, CLEAR, etc.)
-            **kwargs: Additional operation parameters
-            
-        Returns:
-            Operation result dictionary
-        """
-        return await self.graphs.execute_graph_operation(space_id, operation, **kwargs)
-    
     # Triples Management Methods - Delegated to TriplesEndpoint
     
     async def list_triples(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, 
@@ -2821,11 +2830,13 @@ class VitalGraphClient(VitalGraphClientInterface):
         Returns:
             TripleListResponse containing triples data and pagination info
         """
-        return await self.triples.list_triples(space_id, graph_id, page_size, offset, subject, predicate, object, object_filter)
+        return await self.triples.list_triples(
+            space_id, graph_id, page_size=page_size, offset=offset, subject=subject,
+            predicate=predicate, object=object, object_filter=object_filter)
     
     async def search_triples(self, space_id: str, graph_id: Optional[str] = None, subject: Optional[str] = None, 
                       predicate: Optional[str] = None, object_value: Optional[str] = None, 
-                      limit: Optional[int] = None, offset: Optional[int] = None) -> Dict[str, Any]:
+                      limit: Optional[int] = None, offset: Optional[int] = None) -> 'TripleListResponse':
         """
         Search triples with filtering (alias for list_triples for clarity).
         
@@ -2835,13 +2846,18 @@ class VitalGraphClient(VitalGraphClientInterface):
             subject: Subject URI filter (optional)
             predicate: Predicate URI filter (optional)
             object_value: Object value filter (optional)
-            limit: Maximum number of triples to return (optional)
-            offset: Offset for pagination (optional)
+            limit: Maximum number of triples to return (default 10)
+            offset: Offset for pagination (default 0)
             
         Returns:
-            Dictionary containing matching triples data and pagination info
+            TripleListResponse containing matching triples and pagination info
         """
-        return await self.triples.search_triples(space_id, graph_id, subject, predicate, object_value, limit, offset)
+        # There is no triples.search_triples: this raised AttributeError on
+        # every call. list_triples is the search.
+        return await self.triples.list_triples(
+            space_id, graph_id, page_size=10 if limit is None else limit,
+            offset=0 if offset is None else offset, subject=subject,
+            predicate=predicate, object=object_value)
     
     async def add_triples(self, space_id: str, graph_id: str, quad_request: 'QuadRequest') -> 'TripleOperationResponse':
         """

@@ -171,33 +171,34 @@ class VitalGraphClientInterface(ABC):
     # KGType CRUD Methods
     
     @abstractmethod
-    async def list_kgtypes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> KGTypesListResponse:
-        """List KGTypes with pagination and optional search."""
+    async def list_kgtypes(self, space_id: str, graph_id: Optional[str] = None, page_size: int = 10, offset: int = 0,
+                           search: Optional[str] = None, type_uri: Optional[str] = None) -> KGTypesListResponse:
+        """List KGTypes with pagination and optional search. graph_id is ignored: KGTypes are space-scoped."""
         pass
     
     @abstractmethod
-    async def get_kgtype(self, space_id: str, graph_id: str, uri: str) -> KGTypeResponse:
+    async def get_kgtype(self, space_id: str, graph_id: Optional[str], uri: str) -> KGTypeResponse:
         """Get a specific KGType by URI."""
         pass
     
     @abstractmethod
-    async def create_kgtypes(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> KGTypeCreateResponse:
+    async def create_kgtypes(self, space_id: str, graph_id: Optional[str], objects: List[GraphObject]) -> KGTypeCreateResponse:
 
         """Create KGTypes from GraphObjects."""
         pass
     
     @abstractmethod
-    async def update_kgtypes(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> KGTypeUpdateResponse:
+    async def update_kgtypes(self, space_id: str, graph_id: Optional[str], objects: List[GraphObject]) -> KGTypeUpdateResponse:
         """Update KGTypes from GraphObjects."""
         pass
     
     @abstractmethod
-    async def delete_kgtype(self, space_id: str, graph_id: str, uri: str) -> KGTypeDeleteResponse:
+    async def delete_kgtype(self, space_id: str, graph_id: Optional[str], uri: str) -> KGTypeDeleteResponse:
         """Delete a KGType by URI."""
         pass
     
     @abstractmethod
-    async def delete_kgtypes_batch(self, space_id: str, graph_id: str, uri_list: str) -> KGTypeDeleteResponse:
+    async def delete_kgtypes_batch(self, space_id: str, graph_id: Optional[str], uri_list: str) -> KGTypeDeleteResponse:
         """Delete multiple KGTypes by URI list."""
         pass
     
@@ -728,7 +729,10 @@ class VitalGraphClientInterface(ABC):
         pass
     
     @abstractmethod
-    async def upload_file_content(self, space_id: str, uri: str, file_path: str, graph_id: Optional[str] = None) -> FileUploadResponse:
+    async def upload_file_content(self, space_id: str, uri: str, file_path: str,
+                                  graph_id: Optional[str] = None, filename: Optional[str] = None,
+                                  content_type: Optional[str] = None,
+                                  chunk_size: int = 8192) -> FileUploadResponse:
         """Upload binary file content to existing file node."""
         pass
     
