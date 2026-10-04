@@ -8,11 +8,12 @@
 ## VITALGRAPH_FRAME_CREATE_REFUSES_EXISTING (default off), and the slot routes'
 ## contract with `/kgentities/kgframes/kgslots`. Deploying to production is
 ## separate, per planning/planning_deploy.
-## Still open (re-checked 2026-10-04, "Callers, re-checked"): the entity route's
-## `update` answers SUCCESS for a frame it did not write (a defect, below); the
-## Resource API's already_exists fallback moving from `update` to `upsert`; then
-## switching that setting on. The slot routes need NO caller change — nothing
-## calls the slot write or delete routes.
+## FIXED 2026-10-04 (uncommitted), for the next release — see "Fifth round":
+## the switch is REMOVED, `create` always refuses an existing frame (VitalGraph
+## does not wait on its callers); the entity route's `update` decides the whole
+## request first and no longer reports success for a frame it did not write.
+## The slot routes need no caller change. What the Resource API should change
+## for its own writes is advice, not a dependency.
 
 ## The rule (decided 2026-10-02)
 
@@ -927,15 +928,10 @@ predated its own changes. Re-checked against it at its `7d80c6e2` (already on
   | `upsert` | `upserted` | yes | replaced |
   | `create`, flag off | `created` | yes | **survives** — create MERGES |
 
-  **OPEN DEFECT: entity-route `update` reports success for a frame it did not
+  **DEFECT: entity-route `update` reported success for a frame it did not
   write.** Item 3's update half made `/kgframes` update of a missing frame
-  `not_found`; the entity route still skips it inside a success. It should
-  refuse the request (nothing written) or answer a partial status naming the
-  frame — not `updated`. Not fixed.
-
-  With the flag on, the Resource API's create → `update` fallback would write A
-  and drop B behind a success. Its fallback must be `upsert`; until then the
-  flag stays off.
+  `not_found`; the entity route still skipped it inside a success. FIXED in the
+  fifth round, below.
 - **Today, with the flag off, `create` of an existing frame MERGES** (the old
   slot survives beside the new one), so any caller re-saving a frame through
   `create` accumulates stale slots. Callers that mean create-or-refresh should
@@ -944,6 +940,49 @@ predated its own changes. Re-checked against it at its `7d80c6e2` (already on
 Instructions for the Resource API: `planning/planning_deploy/
 resource_service_frame_writes_20261004.md` (local). Probe: a throwaway API test
 of the three modes above, not kept.
+
+## As built, 2026-10-04, fifth round (uncommitted) — no switch, and update is all or nothing
+
+Decided 2026-10-04: **no dependency on callers — VitalGraph gets the correct
+implementation.** The switch is gone.
+
+- **`create` always refuses an existing frame**, on both routes: anything the
+  client sent (frame, slot, slot edge) that exists answers `already_exists`,
+  nothing written (`refuse_existing_precheck`, under the lock). It MERGED into
+  the frame, keeping its old slots. `VITALGRAPH_FRAME_CREATE_REFUSES_EXISTING`
+  and `create_refuses_existing()` are removed; `tests/api/test_frame_create_
+  refuses_existing.py` always runs.
+- **Entity-route `update` decides the whole request before writing any of it.**
+  Each frame group is its own transaction, so the check runs first over every
+  frame the request touches (`run_precheck` with `entity_frames_precheck(...,
+  require_existing=True)`), and again under the lock in each group's write:
+  a missing frame → `not_found`; another entity's → `invalid_request`
+  (`FrameNotOwned`, raised by the update processor too, which used to skip it);
+  slots or edges sent without their frame → `invalid_request` (an update
+  replaces the frame graph and would drop the frame). Nothing written in each
+  case. Groups that commit before a later one fails answer `partial`
+  (`is_success` false), not `updated`. Refusals carry their own status
+  (`not_found` was answered `invalid_request`).
+
+The table in "Callers, re-checked" is the before. After:
+
+| batch: existing A + new B | answer | written |
+|---|---|---|
+| `create` | `already_exists` | nothing |
+| `update` | `not_found`, naming B | nothing |
+| `upsert` | `upserted` | both |
+
+**Tests.** `tests/api/test_entity_frame_update_is_all_or_nothing.py` (5: missing
+frame, another entity's frame, frameless slots, an update of two existing
+frames, the mixed batch as upsert). The "before" is the probe above on the 0.0.45
+stack; the stack was rebuilt from the working tree by someone else mid-change, so
+the new file's first run was already against the fix. `tests/api/test_frame_create_
+refuses_existing.py` (3) now unconditional. Full `tests/api`: 640 passed, 9
+skipped; `tests/unit`: 5,513 passed.
+
+What the Resource API should change for its OWN writes (its `already_exists`
+fallback re-sending as `upsert`, and `upsert` where it means create-or-refresh):
+`planning/planning_deploy/resource_service_frame_writes_20261004.md`.
 
 ## Open questions
 

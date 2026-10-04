@@ -31,7 +31,7 @@ from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
 from vitalgraph.kg_impl.kg_backend_utils import (
     EDGE_HAS_ENTITY_KG_FRAME, EDGE_HAS_KG_FRAME, EntityAbsent,
     GuardUnsatisfiable, KGBackendInterface, StaleWrite,
-    all_prechecks, create_refuses_existing, entity_frames_precheck,
+    all_prechecks, entity_frames_precheck,
     entity_present_precheck, refuse_existing_precheck)
 from vitalgraph.kg_impl.edge_uris import edge_uri
 from vitalgraph.kg_impl.frame_grouping import UngroupableSlot, assign_frame_groupings
@@ -223,9 +223,10 @@ class KGEntityFrameCreateProcessor:
             # Step 6: Execute atomic UPDATE/UPSERT or CREATE operation
             _removed: List[str] = []
             if operation_mode and str(operation_mode).upper() in ['UPDATE', 'UPSERT']:
-                # Upsert: the entity exists and every frame named that exists is
-                # its own, decided under the entity lock (`issues/256` item 2).
-                # Update keeps its ownership check upstream.
+                # The entity exists and every frame named that exists is its own,
+                # decided under the entity lock (`issues/256` item 2). Update
+                # also requires every named frame to EXIST (item 3): it skipped
+                # a missing one and still reported success.
                 success = await self.execute_atomic_frame_update(backend_adapter, space_id, graph_id, 
                                                                categories.frame_objects, all_objects, operation_mode,
                                                                  entity_uri=entity_uri,
@@ -233,8 +234,8 @@ class KGEntityFrameCreateProcessor:
                                                                  removed_uris=_removed,
                                                                  precheck=entity_frames_precheck(
                                                                      space_id, graph_id, entity_uri,
-                                                                     [str(f.URI) for f in categories.frame_objects])
-                                                                 if upserting else None)
+                                                                     [str(f.URI) for f in categories.frame_objects],
+                                                                     require_existing=not upserting))
             else:
                 # Step 7: Execute atomic creation via backend (extracted from lines 1125-1145)
                 success = await self.execute_frame_creation(backend_adapter, space_id, graph_id, all_objects,
@@ -243,18 +244,18 @@ class KGEntityFrameCreateProcessor:
                                                                             precheck=all_prechecks(
                                                                                 entity_present_precheck(
                                                                                     space_id, graph_id, entity_uri),
-                                                                                # `create` refuses an existing frame
-                                                                                # (`issues/256` item 3), when switched
-                                                                                # on — the objects the CLIENT sent, not
-                                                                                # the links this adds.
+                                                                                # `create` refuses anything that
+                                                                                # already exists (`issues/256` item 3):
+                                                                                # the objects the CLIENT sent, not the
+                                                                                # links this adds. It MERGED into an
+                                                                                # existing frame, keeping its old slots.
                                                                                 refuse_existing_precheck(
                                                                                     space_id, graph_id,
                                                                                     [str(o.URI) for o in
                                                                                      categories.frame_objects
                                                                                      + categories.slot_objects
                                                                                      + categories.edge_objects
-                                                                                     if getattr(o, 'URI', None)])
-                                                                                if create_refuses_existing() else None))
+                                                                                     if getattr(o, 'URI', None)])))
             
             if success:
                 created_uris = [str(obj.URI) for obj in all_objects if hasattr(obj, 'URI')]

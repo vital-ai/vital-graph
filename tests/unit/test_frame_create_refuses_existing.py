@@ -1,7 +1,8 @@
-"""Frame `create` refuses an existing frame — when switched on (`issues/256` item 3).
+"""Frame `create` refuses an existing frame (`issues/256` item 3).
 
-Decided, and gated by `VITALGRAPH_FRAME_CREATE_REFUSES_EXISTING` (default off)
-until the callers that rely on create overwriting move to upsert.
+Always: it was briefly behind a switch, default off, which left VitalGraph's
+behaviour waiting on its callers. A create of an existing frame MERGED into it,
+keeping its old slots; a caller meaning create-or-replace sends `upsert`.
 """
 
 import asyncio
@@ -10,17 +11,6 @@ import uuid
 import pytest
 
 from vitalgraph.kg_impl import kg_backend_utils as kbu
-
-
-@pytest.mark.parametrize("value,expected", [
-    (None, False), ("", False), ("0", False), ("false", False),
-    ("1", True), ("true", True), ("TRUE", True), ("yes", True), ("on", True)])
-def test_the_switch(monkeypatch, value, expected):
-    if value is None:
-        monkeypatch.delenv("VITALGRAPH_FRAME_CREATE_REFUSES_EXISTING", raising=False)
-    else:
-        monkeypatch.setenv("VITALGRAPH_FRAME_CREATE_REFUSES_EXISTING", value)
-    assert kbu.create_refuses_existing() is expected
 
 
 class _Conn:

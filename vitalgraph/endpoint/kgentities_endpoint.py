@@ -2218,6 +2218,32 @@ class KGEntitiesEndpoint:
                     updated_uri="",
                     updated_count=0
                 )
+
+            # THE WHOLE REQUEST IS DECIDED BEFORE ANY OF IT IS WRITTEN
+            # (`issues/256`). Each frame group below is its own transaction, and
+            # a frame that was missing or another entity's was SKIPPED inside a
+            # success: an existing frame and a new one in one update wrote the
+            # first, dropped the second, and answered `updated`. Now every frame
+            # the request touches must exist and be this entity's, or nothing is
+            # written. Each group re-checks under the entity lock as it writes.
+            _sent_frames = {str(o.URI) for o in graph_objects if isinstance(o, KGFrame)}
+            _frameless = sorted(set(frame_groups) - _sent_frames)
+            if _frameless:
+                # An update REPLACES each frame's graph, so slots sent without
+                # their frame would replace it without the frame.
+                from ..model.kgframes_model import FrameUpdateResponse
+                return FrameUpdateResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message=(f"{len(_frameless)} frame(s) have slots or edges in this update "
+                             f"but not the frame itself; an update replaces the whole frame "
+                             f"graph, so send each frame whole. Nothing was written: "
+                             + ", ".join(_frameless[:5])),
+                    updated_uri="", updated_count=0)
+            from ..kg_impl.kg_backend_utils import entity_frames_precheck
+            if hasattr(backend_adapter, 'run_precheck'):
+                await backend_adapter.run_precheck(entity_frames_precheck(
+                    space_id, graph_id, entity_uri, sorted(frame_groups),
+                    require_existing=True))
             
             # Use KGEntityFrameUpdateProcessor for actual backend operations
             from ..kg_impl.kgentity_frame_update_impl import KGEntityFrameUpdateProcessor
@@ -2289,6 +2315,10 @@ class KGEntitiesEndpoint:
                 message = f"Successfully updated {len(successful_updates)} complete frame(s)"
                 if failure_messages:
                     message += f", {len(failed_updates)} frame(s) failed: {'; '.join(failure_messages)}"
+                # Some groups committed and some did not: PARTIAL, which is not
+                # a success (`issues/256`). It answered UPDATED, and a caller
+                # checking `is_success` never learned that part was not written.
+                _status = OperationStatus.PARTIAL if failed_updates else OperationStatus.UPDATED
                 
                 # The entity stamp is written INSIDE the write transaction and
                 # under the entity lock now, by `update_subjects_graph`'s
@@ -2311,7 +2341,7 @@ class KGEntitiesEndpoint:
                 
                 from ..model.kgframes_model import FrameUpdateResponse
                 return FrameUpdateResponse(
-                    status=OperationStatus.UPDATED,
+                    status=_status,
                     message=message,
                     updated_uri=entity_uri,
                     updated_count=len(successful_updates),
@@ -2329,10 +2359,11 @@ class KGEntitiesEndpoint:
         except HTTPException:
             raise
         except RequestRefused as e:
-            # A caller error in a 200 (`issues/257`).
+            # A caller error in a 200 (`issues/257`), with the refusal's own
+            # status: NOT_FOUND for a frame that does not exist (`issues/256`).
             from ..model.kgframes_model import FrameUpdateResponse
             return FrameUpdateResponse(
-                status=OperationStatus.INVALID_REQUEST, message=str(e),
+                status=OperationStatus(e.status), message=str(e),
                 updated_uri="", updated_count=0)
         except GuardUnsatisfiable as e:
             # A DESCRIBABLE DATA REASON, so STORE_FAILED in a 200 — not the

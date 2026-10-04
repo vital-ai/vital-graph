@@ -56,7 +56,7 @@ from ..kg_impl.kgframe_graph_impl import KGFrameGraphProcessor
 
 # Import backend utilities
 from ..kg_impl.kg_backend_utils import (
-    all_prechecks, create_backend_adapter, create_refuses_existing,
+    all_prechecks, create_backend_adapter,
     refuse_existing_precheck, standalone_precheck)
 from ..cache.count_cache import _count_cache
 from ..auth.role_dependencies import require_space_read, require_space_write
@@ -215,10 +215,10 @@ class KGFramesEndpoint:
             precheck = standalone_precheck(
                 space_id, graph_id, [str(f.URI) for f in frames], parent_uri,
                 require_existing=(op_mode == OperationMode.UPDATE))
-            # `create` refuses an existing frame (`issues/256` item 3), when
-            # switched on: anything the CLIENT sent, not the parent links added
-            # below.
-            if op_mode == OperationMode.CREATE and create_refuses_existing():
+            # `create` refuses anything that already exists (`issues/256` item
+            # 3): what the CLIENT sent, not the parent links added below. It
+            # merged into an existing frame, keeping its old slots.
+            if op_mode == OperationMode.CREATE:
                 precheck = all_prechecks(precheck, refuse_existing_precheck(
                     space_id, graph_id,
                     [str(o.URI) for o in vitalsigns_objects if getattr(o, 'URI', None)]))

@@ -1,15 +1,12 @@
 """Frame `create` refuses an existing frame, through the API (`issues/256` item 3).
 
-ONLY MEANINGFUL WITH THE SERVER SWITCH ON: `VITALGRAPH_FRAME_CREATE_REFUSES_EXISTING`
-is read by the SERVER, and a test cannot set the server's environment. So this
-module runs only when `VG_TEST_FRAME_CREATE_REFUSES_EXISTING=1` says the stack
-under test was started with it. With the switch off, create still overwrites,
-and the existing suites pin that.
+Always on: the switch it was briefly behind is gone. A create naming any object
+that already exists — frame, slot, slot edge — answers `already_exists` and
+writes nothing; `upsert` is the create-or-replace.
 """
 
 from __future__ import annotations
 
-import os
 import uuid
 
 import pytest
@@ -19,13 +16,7 @@ from ai_haley_kg_domain.model.KGEntity import KGEntity
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
 
-pytestmark = [
-    pytest.mark.api, pytest.mark.asyncio(loop_scope="session"),
-    pytest.mark.skipif(
-        os.getenv("VG_TEST_FRAME_CREATE_REFUSES_EXISTING", "") not in ("1", "true"),
-        reason="the server under test must run with VITALGRAPH_FRAME_CREATE_REFUSES_EXISTING=1; "
-               "set VG_TEST_FRAME_CREATE_REFUSES_EXISTING=1 when it does"),
-]
+pytestmark = [pytest.mark.api, pytest.mark.asyncio(loop_scope="session")]
 
 NS = "http://vital.ai/test/create_refuses/"
 

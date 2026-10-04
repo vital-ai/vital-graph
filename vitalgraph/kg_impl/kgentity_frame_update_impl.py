@@ -19,7 +19,7 @@ from vital_ai_vitalsigns.vitalsigns import VitalSigns
 
 # Backend adapter import
 from vitalgraph.kg_impl.kg_backend_utils import (
-    GuardUnsatisfiable, KGBackendInterface, StaleWrite)
+    FrameNotOwned, GuardUnsatisfiable, KGBackendInterface, StaleWrite)
 from vitalgraph.kg_impl.frame_grouping import UngroupableSlot, assign_frame_groupings
 from .refusals import RequestRefused
 
@@ -113,19 +113,17 @@ class KGEntityFrameUpdateProcessor:
             from ai_haley_kg_domain.model.KGFrame import KGFrame
             frame_uris = [str(obj.URI) for obj in frame_objects if isinstance(obj, KGFrame) and hasattr(obj, 'URI')]
             validated_frame_uris = await self.validate_frame_ownership(space_id, graph_id, entity_uri, frame_uris)
-            
-            if not validated_frame_uris:
-                return UpdateFrameResult(
-                    success=False,
-                    updated_frame_uris=[],
-                    updated_component_count=0,
-                    validation_results={"valid_frames": 0, "invalid_frames": len(frame_uris)},
-                    message="No valid frames found for update",
-                    error="Frame ownership validation failed"
-                )
-            
-            # Track invalid frames for reporting
+
+            # A frame that is not this entity's REFUSES the request (`issues/256`).
+            # It was skipped: the rest was written and the endpoint still said
+            # `updated`, so a frame that did not exist — or was another
+            # entity's — vanished from a successful response.
             invalid_frames = set(frame_uris) - set(validated_frame_uris)
+            if invalid_frames or not frame_uris:
+                raise FrameNotOwned(
+                    f"{len(invalid_frames) or 'no'} frame(s) in this update are not frames "
+                    f"of {entity_uri} (missing, or another entity's); nothing was written"
+                    + (": " + ", ".join(sorted(invalid_frames)[:5]) if invalid_frames else ""))
             
             self.logger.info(f"🔍 Frame ownership validation: {len(validated_frame_uris)} valid, {len(invalid_frames)} invalid")
             
@@ -171,9 +169,6 @@ class KGEntityFrameUpdateProcessor:
             
             if create_result.success:
                 message = f"Successfully updated {len(validated_frame_uris)} frame graphs"
-
-                if invalid_frames:
-                    message += f", {len(invalid_frames)} frames skipped (ownership validation failed)"
 
                 # A payload can be PARTLY discarded and still succeed: anything
                 # that is not a frame, slot or edge is not written. Say so here,

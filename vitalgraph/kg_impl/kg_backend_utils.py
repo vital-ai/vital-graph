@@ -632,18 +632,6 @@ class AlreadyExists(RequestRefused):
     status = "already_exists"
 
 
-def create_refuses_existing() -> bool:
-    """Does a frame `create` refuse an existing frame? (`issues/256` item 3)
-
-    DECIDED, and OFF by default until the callers that still rely on `create`
-    overwriting an existing frame move to `upsert` — the Resource API's lead
-    sync and its `write_or_update_frame` fallback among them. Read on every
-    request, so it is switched by the environment without a code change.
-    """
-    return os.environ.get("VITALGRAPH_FRAME_CREATE_REFUSES_EXISTING", "").strip().lower() in (
-        "1", "true", "yes", "on")
-
-
 def refuse_existing_precheck(space_id: str, graph_id: str, uris: List[str]):
     """Refuse a create naming ANY subject that already exists, as entity create does.
 
@@ -766,12 +754,17 @@ def slot_write_precheck(space_id: str, graph_id: str, frame_uri: str,
 
 
 def entity_frames_precheck(space_id: str, graph_id: str, entity_uri: str,
-                           frame_uris: List[str]):
-    """The entity-frame UPSERT precondition (`issues/256` item 2).
+                           frame_uris: List[str], require_existing: bool = False):
+    """The entity-frame UPSERT and UPDATE precondition (`issues/256` items 2, 3).
 
     The entity exists, and every frame named that already exists belongs to it.
     Upsert skipped both: it overwrote another entity's frame and re-stamped its
     `hasKGGraphURI`, and wrote frames onto an entity that did not exist.
+
+    `require_existing` for `update`, which refuses a missing frame with
+    NOT_FOUND, as `/kgframes` update does. The entity route's update SKIPPED a
+    missing frame and still answered `updated` — a batch of an existing frame
+    and a new one wrote the first, dropped the second, and reported success.
     """
     present_check = entity_present_precheck(space_id, graph_id, entity_uri)
 
@@ -779,6 +772,12 @@ def entity_frames_precheck(space_id: str, graph_id: str, entity_uri: str,
         await present_check(conn)
         from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
         existing = await _present(conn, space_id, graph_id, list(frame_uris))
+        if require_existing:
+            missing = sorted(set(frame_uris) - existing)
+            if missing:
+                raise FrameAbsent(
+                    f"{len(missing)} frame(s) do not exist; update does not create "
+                    f"(use upsert); nothing was written: " + ", ".join(missing[:5]))
         if not existing:
             return
         owned = await owned_by_entity(
@@ -1254,6 +1253,16 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         """Which of *uris* are the subject of some quad in the graph (a plain read)."""
         async with self.backend.db_impl.connection_pool.acquire() as conn:
             return await _present(conn, space_id, graph_id, list(uris))
+
+    async def run_precheck(self, precheck) -> None:
+        """Run a write precondition on a plain read connection, outside any write.
+
+        For a request written as SEVERAL transactions: checking every part first
+        refuses it before any part commits. Each write still re-checks under its
+        own lock, so this is the early answer, not the guarantee.
+        """
+        async with self.backend.db_impl.connection_pool.acquire() as conn:
+            await precheck(conn)
 
     async def delete_frame_slots(self, space_id: str, graph_id: str, frame_uri: str,
                                  slot_uris: List[str], *, entity_uri: Optional[str] = None,
