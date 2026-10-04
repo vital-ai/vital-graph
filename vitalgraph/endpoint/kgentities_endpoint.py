@@ -1825,9 +1825,13 @@ class KGEntitiesEndpoint:
                     await self._invalidate_entity_cache(space_id, graph_id, entity_uri)
                 
                 from ..model.kgframes_model import FrameCreateResponse
+                # The status says what HAPPENED (`issues/256` item 7): an upsert
+                # answered CREATED and "Successfully created N frames".
+                _upsert = operation_mode_str == "UPSERT"
                 return FrameCreateResponse(
-                    status=OperationStatus.CREATED,
-                    message=f"Successfully created {len(result.created_uris)} frames",
+                    status=OperationStatus.UPSERTED if _upsert else OperationStatus.CREATED,
+                    message=(f"Successfully {'upserted' if _upsert else 'created'} "
+                             f"{len(result.created_uris)} frames"),
                     created_count=len(result.created_uris),
                     created_uris=result.created_uris,
                 )
@@ -1844,11 +1848,11 @@ class KGEntitiesEndpoint:
         except HTTPException:
             raise
         except RequestRefused as e:
-            # A caller error in a 200 (`issues/257`): the request did not say
-            # which frame a slot belongs to, so nothing was written.
+            # A caller error in a 200 (`issues/257`, `issues/256`): a slot with
+            # no frame to belong to, a frame of another entity. Nothing written.
             from ..model.kgframes_model import FrameCreateResponse
             return FrameCreateResponse(
-                status=OperationStatus.INVALID_REQUEST, message=str(e),
+                status=OperationStatus(e.status), message=str(e),
                 created_count=0, created_uris=[])
         except GuardUnsatisfiable as e:
             # A DESCRIBABLE DATA REASON, so STORE_FAILED in a 200 — not the

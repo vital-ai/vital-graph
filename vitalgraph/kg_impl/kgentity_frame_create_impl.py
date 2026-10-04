@@ -29,8 +29,9 @@ from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
 
 # Backend adapter import
 from vitalgraph.kg_impl.kg_backend_utils import (
-    EntityAbsent, GuardUnsatisfiable, KGBackendInterface, StaleWrite,
-    entity_present_precheck)
+    EDGE_HAS_ENTITY_KG_FRAME, EDGE_HAS_KG_FRAME, EntityAbsent,
+    GuardUnsatisfiable, KGBackendInterface, StaleWrite,
+    entity_frames_precheck, entity_present_precheck)
 from vitalgraph.kg_impl.edge_uris import edge_uri
 from vitalgraph.kg_impl.frame_grouping import UngroupableSlot, assign_frame_groupings
 from .refusals import RequestRefused
@@ -183,6 +184,7 @@ class KGEntityFrameCreateProcessor:
 
             # Steps 2-5: categorise, group, link.
             creating = not operation_mode or str(operation_mode).upper() not in ['UPDATE', 'UPSERT']
+            upserting = str(operation_mode or '').upper() == 'UPSERT'
             categories, all_objects = await self.prepare_entity_frame_objects(
                 entity_uri, frame_objects, parent_frame_uri, create_links=creating)
             if not categories.frame_objects:
@@ -192,6 +194,27 @@ class KGEntityFrameCreateProcessor:
                     message="Request must contain at least one KGFrame object",
                     frame_count=0
                 )
+
+            # UPSERT LINKS WHAT IT CREATES (`issues/256` item 2). Links were
+            # made only for CREATE, so an upsert that created a frame left it
+            # unlinked: found by reads grouping on `hasKGGraphURI`, missing from
+            # reads walking `Edge_hasEntityKGFrame`. Each frame that lacks its
+            # link gets the deterministic one — new frames, and any an earlier
+            # upsert left unlinked.
+            if upserting and hasattr(backend_adapter, 'frames_lacking_link'):
+                frame_uris = [str(f.URI) for f in categories.frame_objects]
+                if parent_frame_uri:
+                    unlinked = set(await backend_adapter.frames_lacking_link(
+                        space_id, graph_id, frame_uris, parent_frame_uri, EDGE_HAS_KG_FRAME))
+                    all_objects.extend(self._create_parent_child_edges(
+                        parent_frame_uri, entity_uri,
+                        [f for f in categories.frame_objects if str(f.URI) in unlinked]))
+                else:
+                    unlinked = set(await backend_adapter.frames_lacking_link(
+                        space_id, graph_id, frame_uris, entity_uri, EDGE_HAS_ENTITY_KG_FRAME))
+                    all_objects.extend(await self.create_entity_frame_edges(
+                        entity_uri,
+                        [f for f in categories.frame_objects if str(f.URI) in unlinked]))
             
             _p2 = _time.time()
             self.logger.info(f"⏱️ PROCESSOR categorize+grouping+edges: {_p2-_p1:.3f}s")
@@ -199,11 +222,18 @@ class KGEntityFrameCreateProcessor:
             # Step 6: Execute atomic UPDATE/UPSERT or CREATE operation
             _removed: List[str] = []
             if operation_mode and str(operation_mode).upper() in ['UPDATE', 'UPSERT']:
+                # Upsert: the entity exists and every frame named that exists is
+                # its own, decided under the entity lock (`issues/256` item 2).
+                # Update keeps its ownership check upstream.
                 success = await self.execute_atomic_frame_update(backend_adapter, space_id, graph_id, 
                                                                categories.frame_objects, all_objects, operation_mode,
                                                                  entity_uri=entity_uri,
                                                                  if_unmodified_since=if_unmodified_since,
-                                                                 removed_uris=_removed)
+                                                                 removed_uris=_removed,
+                                                                 precheck=entity_frames_precheck(
+                                                                     space_id, graph_id, entity_uri,
+                                                                     [str(f.URI) for f in categories.frame_objects])
+                                                                 if upserting else None)
             else:
                 # Step 7: Execute atomic creation via backend (extracted from lines 1125-1145)
                 success = await self.execute_frame_creation(backend_adapter, space_id, graph_id, all_objects,
@@ -519,7 +549,8 @@ class KGEntityFrameCreateProcessor:
                                         operation_mode: str,
                                         entity_uri: Optional[str] = None,
                                         if_unmodified_since: Optional[str] = None,
-                                        removed_uris: Optional[List[str]] = None) -> tuple:
+                                        removed_uris: Optional[List[str]] = None,
+                                        precheck=None) -> tuple:
         """
         Execute atomic frame UPDATE/UPSERT: each frame's WHOLE graph is replaced.
 
@@ -574,7 +605,8 @@ class KGEntityFrameCreateProcessor:
                     guard_subject=entity_uri,
                     replace_frame_graphs=[str(f.URI) for f in frame_objects
                                           if getattr(f, 'URI', None)],
-                    removed_uris=removed_uris)
+                    removed_uris=removed_uris,
+                    precheck=precheck)
                 t2 = time.time()
                 self.logger.info(f"⏱️ FRAME_UPDATE step2 update_subjects_graph: {t2-t1:.3f}s "
                                f"({len(subject_uris)} subjects, {len(insert_quads)} quads)")

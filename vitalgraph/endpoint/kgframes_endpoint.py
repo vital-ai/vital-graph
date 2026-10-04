@@ -166,10 +166,16 @@ class KGFramesEndpoint:
         Standalone frames have no entity dependency.
         """
         vitalsigns_objects = quad_list_to_graphobjects(quads)
+        # AN UNKNOWN MODE IS REFUSED (`issues/256` item 5). It became CREATE, so
+        # a misspelt `upsert` silently wrote a create.
         try:
-            op_mode = OperationMode(operation_mode.lower())
+            op_mode = OperationMode(str(operation_mode).lower())
         except ValueError:
-            op_mode = OperationMode.CREATE
+            return FrameCreateResponse(
+                status=OperationStatus.INVALID_REQUEST,
+                message=(f"Unknown operation_mode {operation_mode!r}: expected "
+                         f"create, update, upsert or replace"),
+                created_count=0, created_uris=[], slots_created=0)
 
         def _fail_create(msg, status=OperationStatus.ERROR):
             return FrameCreateResponse(status=status, message=msg, created_count=0, created_uris=[], slots_created=0)
@@ -217,8 +223,11 @@ class KGFramesEndpoint:
                         f"parent_uri {parent_uri} is an entity: an entity's frames are "
                         f"written through /kgentities/kgframes, which takes its lock",
                         OperationStatus.INVALID_REQUEST)
+            # `update` refuses a missing frame with NOT_FOUND instead of
+            # creating it (`issues/256` item 3) — decided under the lock too.
             precheck = standalone_precheck(
-                space_id, graph_id, [str(f.URI) for f in frames], parent_uri)
+                space_id, graph_id, [str(f.URI) for f in frames], parent_uri,
+                require_existing=(op_mode == OperationMode.UPDATE))
 
             # --- parent / entity relationships ---
             enhanced_objects = await self._handle_parent_relationships(
@@ -254,10 +263,10 @@ class KGFramesEndpoint:
             # which frame a slot belongs to, so nothing was written.
             if str(operation_mode).lower() == "update":
                 return FrameUpdateResponse(
-                    status=OperationStatus.INVALID_REQUEST, message=str(e),
+                    status=OperationStatus(e.status), message=str(e),
                     updated_uri="", updated_count=0)
             return FrameCreateResponse(
-                status=OperationStatus.INVALID_REQUEST, message=str(e),
+                status=OperationStatus(e.status), message=str(e),
                 created_count=0, created_uris=[], slots_created=0)
         except StaleWrite as e:
             # REFUSED because the FRAME moved (`issues/253`). A domain outcome in

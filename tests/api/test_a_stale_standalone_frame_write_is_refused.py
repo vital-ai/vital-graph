@@ -183,8 +183,15 @@ class TestOneStampCannotCoverManyFrames:
     async def test_the_batch_still_works_unconditionally(
             self, vg_client, test_space, test_graph, frame):
         # The refusal is about the PRECONDITION, not about writing many frames.
+        # `b` is created first: an update of a frame that does not exist is
+        # NOT_FOUND since `issues/256` item 3, and this test was relying on
+        # update creating it.
         _, a = _frame("a", uri=frame)
-        _, b = _frame("b")
+        b_uri, b = _frame("b")
+        r = await vg_client.kgframes.create_kgframes(
+            space_id=test_space, graph_id=test_graph, objects=b)
+        assert r.is_success, r.error_message or r.message
+        _, b = _frame("b2", uri=b_uri)
         r = await vg_client.kgframes.update_kgframes(
             space_id=test_space, graph_id=test_graph, objects=a + b)
         assert r.is_success, r.error_message or r.message

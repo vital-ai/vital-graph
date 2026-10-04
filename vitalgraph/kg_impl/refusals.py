@@ -16,4 +16,11 @@ Imports nothing from vitalgraph, so any module can import it without a cycle.
 
 
 class RequestRefused(ValueError):
-    """A request the contract does not allow; nothing was written."""
+    """A request the contract does not allow; nothing was written.
+
+    `status` is the `OperationStatus` value the caller is answered with:
+    INVALID_REQUEST unless a subclass says otherwise (a missing target is
+    NOT_FOUND).
+    """
+
+    status = "invalid_request"

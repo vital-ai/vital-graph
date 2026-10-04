@@ -560,10 +560,115 @@ async def refuse_entity_frames(conn, space_id: str, graph_id: str,
             + ", ".join(f"{r['frame']} (entity {r['entity']})" for r in rows))
 
 
-def standalone_precheck(space_id: str, graph_id: str, frame_uris: List[str],
-                        parent_uri: Optional[str] = None):
-    """The `/kgframes` write precondition: no entity's frame, as target or parent."""
+class FrameNotOwned(RequestRefused):
+    """An entity-frame write named a frame of another entity, or of none (`issues/256`)."""
+
+
+class FrameAbsent(RequestRefused):
+    """An `update` named a frame that does not exist (`issues/256` item 3)."""
+
+    status = "not_found"
+
+
+async def owned_by_entity(conn, space_id: str, graph_id: str, entity_uri: str,
+                          frame_uuids) -> set:
+    """The subset of *frame_uuids* that belongs to *entity_uri*.
+
+    A root through an `Edge_hasEntityKGFrame` from the entity, or any frame
+    through `hasKGGraphURI` = the entity — the rule `validate_frame_ownership`
+    applied. Shared by the frame delete and the entity-frame upsert, so the two
+    cannot disagree about what an entity owns.
+
+    Starts from the frames and looks each candidate edge up by SUBJECT: as plain
+    joins the planner hashed every `Edge_hasEntityKGFrame` in the space instead.
+    """
+    if not frame_uuids:
+        return set()
+    from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+    from ..db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+    U = lambda u: _generate_term_uuid(u, 'U')  # noqa: E731
+    q = SparqlSQLSchema.get_table_names(space_id)['rdf_quad']
+    rows = await conn.fetch(
+        f"WITH d AS MATERIALIZED ("
+        f" SELECT subject_uuid, object_uuid AS f FROM {q} "
+        f" WHERE context_uuid = $4 AND predicate_uuid = $8 "
+        f" AND object_uuid = ANY($1::uuid[])) "
+        f"SELECT d.f FROM d "
+        f"CROSS JOIN LATERAL (SELECT 1 FROM {q} s "
+        f" WHERE s.subject_uuid = d.subject_uuid AND s.context_uuid = $4 "
+        f" AND s.predicate_uuid = $5 AND s.object_uuid = $3 LIMIT 1) src "
+        f"CROSS JOIN LATERAL (SELECT 1 FROM {q} vt "
+        f" WHERE vt.subject_uuid = d.subject_uuid AND vt.context_uuid = $4 "
+        f" AND vt.predicate_uuid = $6 AND vt.object_uuid = $7 LIMIT 1) typ "
+        f"UNION "
+        f"SELECT f FROM unnest($1::uuid[]) AS f "
+        f"CROSS JOIN LATERAL (SELECT 1 FROM {q} k "
+        f" WHERE k.subject_uuid = f AND k.predicate_uuid = $2 "
+        f" AND k.object_uuid = $3 AND k.context_uuid = $4 LIMIT 1) member",
+        list(frame_uuids), U(HAS_KG_GRAPH_URI), U(entity_uri), U(graph_id),
+        U(HAS_EDGE_SOURCE), U(VITALTYPE_URI), U(EDGE_HAS_ENTITY_KG_FRAME),
+        U(HAS_EDGE_DESTINATION))
+    return {r['f'] for r in rows}
+
+
+async def _present(conn, space_id: str, graph_id: str, uris: List[str]) -> set:
+    """Which of *uris* are the subject of some quad in the graph."""
+    if not uris:
+        return set()
+    from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+    from ..db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+    q = SparqlSQLSchema.get_table_names(space_id)['rdf_quad']
+    by_uuid = {_generate_term_uuid(u, 'U'): u for u in uris}
+    rows = await conn.fetch(
+        f"SELECT DISTINCT subject_uuid FROM {q} "
+        f"WHERE subject_uuid = ANY($1) AND context_uuid = $2",
+        list(by_uuid), _generate_term_uuid(graph_id, 'U'))
+    return {by_uuid[r['subject_uuid']] for r in rows}
+
+
+def entity_frames_precheck(space_id: str, graph_id: str, entity_uri: str,
+                           frame_uris: List[str]):
+    """The entity-frame UPSERT precondition (`issues/256` item 2).
+
+    The entity exists, and every frame named that already exists belongs to it.
+    Upsert skipped both: it overwrote another entity's frame and re-stamped its
+    `hasKGGraphURI`, and wrote frames onto an entity that did not exist.
+    """
+    present_check = entity_present_precheck(space_id, graph_id, entity_uri)
+
     async def _check(conn):
+        await present_check(conn)
+        from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+        existing = await _present(conn, space_id, graph_id, list(frame_uris))
+        if not existing:
+            return
+        owned = await owned_by_entity(
+            conn, space_id, graph_id, entity_uri,
+            [_generate_term_uuid(u, 'U') for u in existing])
+        foreign = [u for u in existing if _generate_term_uuid(u, 'U') not in owned]
+        if foreign:
+            raise FrameNotOwned(
+                f"{len(foreign)} frame(s) belong to another entity or to none, not "
+                f"{entity_uri}; nothing was written: " + ", ".join(sorted(foreign)[:5]))
+    return _check
+
+
+def standalone_precheck(space_id: str, graph_id: str, frame_uris: List[str],
+                        parent_uri: Optional[str] = None,
+                        require_existing: bool = False):
+    """The `/kgframes` write precondition: no entity's frame, as target or parent.
+
+    `require_existing` for `update`, which refuses a missing frame with
+    NOT_FOUND rather than creating it (`issues/256` item 3).
+    """
+    async def _check(conn):
+        if require_existing:
+            missing = sorted(set(frame_uris) - await _present(
+                conn, space_id, graph_id, list(frame_uris)))
+            if missing:
+                raise FrameAbsent(
+                    f"{len(missing)} frame(s) do not exist; update does not create "
+                    f"(use upsert): " + ", ".join(missing[:5]))
         await refuse_entity_frames(conn, space_id, graph_id, list(frame_uris))
         if parent_uri:
             await refuse_entity_frames(conn, space_id, graph_id, [parent_uri],
@@ -1004,6 +1109,41 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         except Exception as e:
             self.logger.error("batch_check_uris_exist failed: %s", e)
             return []
+
+    async def frames_lacking_link(self, space_id: str, graph_id: str,
+                                  frame_uris: List[str], source_uri: str,
+                                  edge_class_uri: str) -> List[str]:
+        """The frames in *frame_uris* with no *edge_class_uri* edge from *source_uri*.
+
+        For the entity-frame upsert (`issues/256` item 2), which writes the link
+        a frame lacks. Read outside the write's transaction on purpose: the link
+        URIs are deterministic (`edge_uris`), so a concurrent writer adding the
+        same link writes the same subject, and nothing is duplicated.
+        """
+        if not frame_uris:
+            return []
+        from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+        U = lambda u: _generate_term_uuid(u, 'U')  # noqa: E731
+        q = self.backend.schema.get_table_names(space_id)['rdf_quad']
+        by_uuid = {U(u): u for u in frame_uris}
+        async with self.backend.db_impl.connection_pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"WITH d AS MATERIALIZED ("
+                f" SELECT subject_uuid, object_uuid AS f FROM {q} "
+                f" WHERE context_uuid = $2 AND predicate_uuid = $3 "
+                f" AND object_uuid = ANY($1::uuid[])) "
+                f"SELECT DISTINCT d.f FROM d "
+                f"CROSS JOIN LATERAL (SELECT 1 FROM {q} s "
+                f" WHERE s.subject_uuid = d.subject_uuid AND s.context_uuid = $2 "
+                f" AND s.predicate_uuid = $4 AND s.object_uuid = $5 LIMIT 1) src "
+                f"CROSS JOIN LATERAL (SELECT 1 FROM {q} vt "
+                f" WHERE vt.subject_uuid = d.subject_uuid AND vt.context_uuid = $2 "
+                f" AND vt.predicate_uuid = $6 AND vt.object_uuid = $7 LIMIT 1) typ",
+                list(by_uuid), U(graph_id), U(HAS_EDGE_DESTINATION),
+                U(HAS_EDGE_SOURCE), U(source_uri), U(VITALTYPE_URI),
+                U(edge_class_uri))
+        linked = {r['f'] for r in rows}
+        return [u for k, u in by_uuid.items() if k not in linked]
 
     # ------------------------------------------------------------------
     # get_object / get_entity / get_entity_graph
@@ -2083,26 +2223,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
 
             if owner_entity_uri is not None:
                 e = U(owner_entity_uri)
-                # A root through `Edge_hasEntityKGFrame` from the entity, or any
-                # frame through `hasKGGraphURI` = the entity.
-                owned = {r['f'] for r in await c.fetch(
-                    f"WITH d AS MATERIALIZED ("
-                    f" SELECT subject_uuid, object_uuid AS f FROM {q} "
-                    f" WHERE context_uuid = $4 AND predicate_uuid = $8 "
-                    f" AND object_uuid = ANY($1::uuid[])) "
-                    f"SELECT d.f FROM d "
-                    f"CROSS JOIN LATERAL (SELECT 1 FROM {q} s "
-                    f" WHERE s.subject_uuid = d.subject_uuid AND s.context_uuid = $4 "
-                    f" AND s.predicate_uuid = $5 AND s.object_uuid = $3 LIMIT 1) src "
-                    f"CROSS JOIN LATERAL (SELECT 1 FROM {q} vt "
-                    f" WHERE vt.subject_uuid = d.subject_uuid AND vt.context_uuid = $4 "
-                    f" AND vt.predicate_uuid = $6 AND vt.object_uuid = $7 LIMIT 1) typ "
-                    f"UNION "
-                    f"SELECT f FROM unnest($1::uuid[]) AS f "
-                    f"CROSS JOIN LATERAL (SELECT 1 FROM {q} k "
-                    f" WHERE k.subject_uuid = f AND k.predicate_uuid = $2 "
-                    f" AND k.object_uuid = $3 AND k.context_uuid = $4 LIMIT 1) member",
-                    list(present), p_kgg, e, g, p_src, p_vt, t_link, p_dst)}
+                owned = await owned_by_entity(c, space_id, graph_id,
+                                              owner_entity_uri, list(present))
                 foreign = [uri_of[f] for f in present if f not in owned]
                 if foreign:
                     raise DeleteRefused(

@@ -4,8 +4,9 @@
 ## entity graph delete (2026-10-03); the delete contract, client entity upsert,
 ## client retry marking by mode, item 4 (`replace`), decision 3 on writes and
 ## the in-transaction entity check (2026-10-04, uncommitted). See "As built".
-## Still open: items 2, 3 (server), 5, 7; the slot routes. Orphan census:
-## production 0, dev 1.
+## Third round 2026-10-04 (uncommitted): items 2, 5, 7 and item 3's update half.
+## Still open: item 3's create half (waits for the portal to move to upsert);
+## the slot routes. Orphan census: production 0, dev 1.
 
 ## The rule (decided 2026-10-02)
 
@@ -799,6 +800,39 @@ code were rewritten, not deleted: the frame-delete success guarantee
 delete and the frame delete as write paths, and the entity stamp test now
 asserts the stamp in the transaction instead of the touch after it. `tests/unit`
 5,196 passed.
+
+## As built, 2026-10-04, third round (uncommitted)
+
+**Item 2 — entity-frame upsert gets update's checks.** Under the entity lock,
+in the write's transaction (`entity_frames_precheck`): the entity exists (a
+missing one answers as `create` does, STORE_FAILED "not found"), and every frame
+named that already exists belongs to it (`owned_by_entity`, the rule the frame
+delete uses, now shared) — one of another entity's, or of none, refuses the
+request (`FrameNotOwned`, INVALID_REQUEST). Each frame without its link gets the
+deterministic one (`Edge_hasEntityKGFrame`, or `Edge_hasKGFrame` under
+`parent_frame_uri`): new frames, and any an earlier upsert left unlinked. Which
+frames lack a link is read before the transaction; safe because the link URI is
+deterministic, so a concurrent writer writes the same subject.
+
+**Item 3, update half.** `/kgframes` update of a frame that does not exist
+answers NOT_FOUND (`FrameAbsent`, decided under the lock) instead of creating
+it. `RequestRefused` carries the status it is answered with, so the handlers
+map each refusal to its own. The CREATE half (create refuses an existing frame)
+still waits for the portal and the API service to autosave through `upsert`.
+
+**Item 5.** An unknown `/kgframes` mode answers INVALID_REQUEST; it became a
+create. (The entity routes take the mode as an enum, which FastAPI rejects
+before the handler.)
+
+**Item 7.** A successful entity-frame upsert answers UPSERTED, "Successfully
+upserted N frames". The standalone route already did.
+
+**Tests.** `tests/api/test_upsert_and_mode_contract.py`, 7 cases: against the
+previous server code all 7 FAIL (CREATED for an upsert; a created frame
+unlinked, twice; another entity's frame overwritten; frames written onto a
+missing entity; update creating a missing frame; a typo becoming a create).
+With the change 7/7. One existing test relied on update creating a frame
+(`test_the_batch_still_works_unconditionally`); it now creates it first.
 
 ## Open questions
 
