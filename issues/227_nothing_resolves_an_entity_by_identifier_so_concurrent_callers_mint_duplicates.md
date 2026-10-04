@@ -1,8 +1,10 @@
 # 227 — Nothing resolves an entity by identifier, so concurrent callers mint duplicates
 
-## Status: OPEN — mechanism BUILT 2026-10-04 (uncommitted); NOTHING DECLARED
-## yet. Declaring a pair needs its duplicates merged first, by decision. See
-## "As built" at the end, and the production counts there.
+## Status: OPEN — mechanism BUILT 2026-10-04 (`03a4afa6`, released in 0.0.45);
+## NOTHING DECLARED yet. Production needs `migrate.py` BEFORE the 0.0.45 server
+## deploy and the backfill after it; then business SF_ACCOUNT_ID can be the first
+## declaration. Every other pair needs its duplicates merged first, by decision.
+## See "As built" at the end, and the production counts there.
 
 **Related:** `issues/173` (the same check-then-act race one layer up, in the KG
 entity upsert — and the source of this repo's concurrency primitive),
@@ -297,7 +299,7 @@ exactly this constraint as `uq_entity_category` with an
 `ON CONFLICT ... DO UPDATE SET status='active'` write path to match. It is
 worth doing. It has nothing to do with duplicate entities.
 
-## As built, 2026-10-04 (uncommitted)
+## As built, 2026-10-04 (`03a4afa6`, 0.0.45)
 
 The design above, as written, with these specifics.
 

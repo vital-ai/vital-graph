@@ -1,6 +1,6 @@
 # 259 — A query that times out leaves no SQL and no plan, so the worst case is the least diagnosable
 
-## Status: FIXED 2026-10-04 (uncommitted). A query that fails now leaves one
+## Status: FIXED 2026-10-04 (`027a07d1`, released in 0.0.44). A query that fails now leaves one
 ## WARNING `failed_query` line with its SPARQL, its whole generated SQL, the
 ## SQL fingerprint, the stage it stopped in, the timing of every completed phase
 ## and the plan decisions with their `stage_ms`. See "As built" at the end.
@@ -127,7 +127,7 @@ deliberately afterwards, which is what had to be done by hand here.
   would miss every one of them". The read path has not had that correction
   applied, and the reasoning transfers verbatim.
 
-## As built (2026-10-04, uncommitted)
+## As built (2026-10-04, `027a07d1`, 0.0.44)
 
 `plan_shape.report_failed_query`, called from the `except` of
 `SparqlSQLSpaceImpl.execute_sparql_query`, so it covers EVERY caller of the

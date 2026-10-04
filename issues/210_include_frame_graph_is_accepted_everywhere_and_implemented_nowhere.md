@@ -1,6 +1,6 @@
 # `include_frame_graph` Is Accepted On `/kgqueries` And Implemented Nowhere
 
-## Status: FIXED 2026-10-04 (uncommitted) — OPTION 1, implemented. A
+## Status: FIXED 2026-10-04 (`2807ad3d`, released in 0.0.44) — OPTION 1. A
 ## `/kgqueries` frame query with `include_frame_graph=true` returns each frame's
 ## graph in `frame_graph`, and the client hydrates it. The option-2 message is
 ## gone. See "As built" at the end. The history below is kept as it was.
@@ -188,7 +188,7 @@ quads above are `?s haley:hasFrameGraphURI <frame>` plus the frame, i.e. the
 shape `_build_get_frame_query` already answers, not a decision that the query
 surface should answer it the same way.
 
-## As built, 2026-10-04 (uncommitted) — option 1
+## As built, 2026-10-04 (`2807ad3d`, 0.0.44) — option 1
 
 - **Server** (`kgquery_endpoint._execute_frame_query_case`): when the flag is
   set, ONE batched fetch for the page through

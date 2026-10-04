@@ -1,13 +1,15 @@
 # 256 — Frame upsert MERGES instead of replacing, and the rest of the write-mode matrix
 
-## Status: OPEN, filed 2026-10-02. PARTLY BUILT: fix items 1 and 8 and the
+## Status: OPEN, filed 2026-10-02. BUILT AND RELEASED: items 1 and 8 and the
 ## entity graph delete (2026-10-03); the delete contract, client entity upsert,
 ## client retry marking by mode, item 4 (`replace`), decision 3 on writes and
-## the in-transaction entity check (2026-10-04, uncommitted). See "As built".
-## Fourth round 2026-10-04 (uncommitted): item 3's create half, built behind
-## VITALGRAPH_FRAME_CREATE_REFUSES_EXISTING (default off until the Resource API
-## stops relying on create overwriting); the slot routes' contract.
-## Still open: switching that setting on.
+## the in-transaction entity check — all in 0.0.44 (`cfb9cc5a`). Fourth round in
+## 0.0.45 (`ed186757`): item 3's create half, behind
+## VITALGRAPH_FRAME_CREATE_REFUSES_EXISTING (default off), and the slot routes'
+## contract with `/kgentities/kgframes/kgslots`. Deploying to production is
+## separate, per planning/planning_deploy.
+## Still open: the Resource API moving entity-frame slot edits to the new route
+## and frame writes to `upsert`; then switching that setting on.
 
 ## The rule (decided 2026-10-02)
 
@@ -249,7 +251,7 @@ for a target that is absent.
 | `DELETE /kgentities/kgframes` | the frame graph by `hasFrameGraphURI` + `Edge_hasEntityKGFrame` + incoming `Edge_hasKGFrame` (`kgentity_frame_delete_impl.py`); `recursive` for descendants, otherwise refused if there are children | ownership check, SPARQL discovery, then one `DELETE DATA` of the discovered quads. No lock, and discovery is not in the delete's transaction. The entity is stamped AFTER, outside the lock (acknowledged at `kgentities_endpoint.py:2214`). | STORE_FAILED (ownership finds nothing) | Scope correct. **Not atomic with its discovery and not locked**: a frame write landing between discovery and delete leaves its new slots behind. Quad-level delete is again the pattern 2026-04-30 retired. Frames that fail ownership are skipped and the response is still DELETED, with the skip mentioned only in the message. **TO FIX (decided 2026-10-02)**: see "Entity-frame delete fix" below. |
 | `DELETE /kgframes` (single, `uri_list`) | the frame graph by `hasFrameGraphURI` + the frame's own triples + incoming/outgoing `Edge_hasKGFrame` + `Edge_hasEntityKGFrame` (`_delete_frame_from_backend`, `kgframes_endpoint.py:2864`); `recursive` likewise | **five separate SPARQL updates per frame**, frame by frame, no transaction, no lock | single: NOT_FOUND. Batch: counted as not deleted, so PARTIAL or STORE_FAILED | Scope correct. **Not atomic at any level**: a failure part-way through a recursive delete leaves a partial subtree, possibly children whose parent edge is already gone. **It also deletes ENTITY-owned frames with none of the entity route's handling**: no ownership check, no entity lock, no entity stamp, no entity-cache invalidation. A frame deleted this way stays in the cached entity graph, and a caller holding `if_unmodified_since` sees no change. **TO FIX (decided 2026-10-02)**: see "`/kgframes` delete and `replace` fix" below. |
 
-**FIXED 2026-10-03 (uncommitted): entity graph delete — absent is NO_OP, and the
+**FIXED 2026-10-03 (released in 0.0.44): entity graph delete — absent is NO_OP, and the
 members' derived rows go with it.** `delete_entity_graph_bulk` resolves the
 member URIs in its transaction and returns them through a new `collected_uris`
 argument, filled after the commit. `delete_entity_graph_direct` and the
@@ -423,10 +425,9 @@ happen after commit and only on success.
      DELETED / PARTIAL / STORE_FAILED logic, with refusals counted separately
      from failures.
 
-   **Still to do:** count the orphans production already holds from the old
-   default: frames, slots and edges whose `hasKGGraphURI` names an entity that
-   no longer exists. A refusing delete stops new orphans, and does nothing for
-   those.
+   **Done 2026-10-04:** the count of orphans production already held from the
+   old default (frames, slots and edges whose `hasKGGraphURI` names an entity
+   that no longer exists) is **0** — see "Orphan census" under the second round.
 2. **The status for an absent target. DECIDED 2026-10-02: NO_OP on every
    delete route.** A delete of something already gone has achieved what was
    asked, and a replayed delete (`issues/253`'s retry work) must not read as a
@@ -647,7 +648,7 @@ standalone frame has none. With the fix, 4/4. Full `tests/api` 576, 0 failures;
 `tests/unit` 5,185 with the 6 `test_document_converter` failures (env lacks
 `mammoth`, `pdfplumber`).
 
-## As built, 2026-10-04 (uncommitted)
+## As built, 2026-10-04 (released in 0.0.44)
 
 **Client.**
 - `upsert_kgentities` (item 6), on the endpoint and the client facade. Marked
@@ -718,7 +719,7 @@ it was applied by hand with one handler per site.
 `/kgframes` refusing entity frames on writes, the entity-existence check inside
 the frame-create transaction, the production orphan count.
 
-## As built, 2026-10-04, second round (uncommitted)
+## As built, 2026-10-04, second round (released in 0.0.44)
 
 **`replace` (item 4) is `delete_frame_subtrees` with an insert.** One
 transaction, under the entity lock (entity route) or the locks of every frame in
@@ -784,8 +785,8 @@ total roots too, because a space with no `hasKGGraphURI` at all also reads 0.
   leaving 1 frame, 3 slots and 9 edges. Every other space 0. Slowest space 34s.
 So the old entity-only default did not, in practice, leave orphans in
 production; the refusal is prevention, and there is nothing to clean up there.
-The dev orphan is left in place as a known case for whoever writes the cleanup,
-if one is ever wanted.
+The dev orphan was deleted afterwards (2026-10-04), through the API, with its
+entity graph; dev now also counts 0.
 
 **Tests.** `tests/api/test_delete_guards_and_scope.py`, 21 cases (D11-D12e among
 them), on the vg test stack driven by the `vital-graph` conda env. Against the
@@ -802,7 +803,7 @@ delete and the frame delete as write paths, and the entity stamp test now
 asserts the stamp in the transaction instead of the touch after it. `tests/unit`
 5,196 passed.
 
-## As built, 2026-10-04, third round (uncommitted)
+## As built, 2026-10-04, third round (released in 0.0.44)
 
 **Item 2 — entity-frame upsert gets update's checks.** Under the entity lock,
 in the write's transaction (`entity_frames_precheck`): the entity exists (a
@@ -835,7 +836,7 @@ missing entity; update creating a missing frame; a typo becoming a create).
 With the change 7/7. One existing test relied on update creating a frame
 (`test_the_batch_still_works_unconditionally`); it now creates it first.
 
-## As built, 2026-10-04, fourth round (uncommitted)
+## As built, 2026-10-04, fourth round (`ed186757`, released in 0.0.45)
 
 **Item 3, create half — built, OFF by default.** With
 `VITALGRAPH_FRAME_CREATE_REFUSES_EXISTING=1`, a frame `create` on either route is

@@ -3,7 +3,7 @@
 ## Status: OPEN, filed 2026-10-03. The writers are CLOSED and the real data is
 ## REPAIRED: dev's six real-data spaces and production's (2026-10-03), census 0,
 ## no frame reclassified. No longer blocks `issues/256`. What remains belongs to
-## the deploy and is listed under "STILL TO DO": (1) deploy `main`; (2) straight
+## the deploy and is listed under "STILL TO DO": (1) deploy 0.0.44 or later; (2) straight
 ## after, re-run `scripts/repair_frame_groupings.py --apply` on production for
 ## anything the old code wrote in between, and confirm the census reads 0;
 ## (3) DEFERRED: reload the generated test datasets in both test databases from
@@ -71,7 +71,7 @@ operations.
 
 ## How it got in — the server-side openings
 
-**STEP 1 DONE 2026-10-03 (uncommitted; see "Step 1, as built" below).** The two
+**STEP 1 DONE 2026-10-03 (released in 0.0.44; see "Step 1, as built" below).** The two
 openings first listed here were found by reading. Testing found the list was
 both short and partly wrong: five live openings in all, one of them in the
 server's OWN slot edges, and one listed opening sat on a path nothing calls.
@@ -177,13 +177,13 @@ failures, all `test_document_converter` (the env lacks `mammoth` and
 
 ## What to do, in order
 
-1. **Close the openings. DONE (uncommitted), above.** All of the following are on every frame write path,
+1. **Close the openings. DONE (released in 0.0.44), above.** All of the following are on every frame write path,
    both routes, and each needs a test that fails on today's code:
    - the server sets every grouping and ignores any the client sent;
    - grouping is derived from `Edge_hasKGSlot` for every `KGSlot` subclass, not
      a list of six;
    - the dead `set_dual_grouping_uris` is deleted.
-2. **Fix the generators. DONE 2026-10-03 (uncommitted).** The bulk-loaded
+2. **Fix the generators. DONE 2026-10-03 (released in 0.0.44).** The bulk-loaded
    spaces lack groupings because the generators that built them were WRONG.
    Every generator now emits both groupings by the rule, AND an explicit
    `hasKGFormType` on every frame (the decision recorded under "Form type"
@@ -340,8 +340,8 @@ archive and underwriting included, reads 0 in every step. On the way, a
 60s statement timeout on production after running unserialised (lock plan
 resolved no groupings); it rolled back. Ground updates run ~1.25s per batch.
 
-**STILL TO DO.** (1) Deploy `main` (the grouping writers closed, `issues/256`
-frame-graph replace), done separately. (2) Then run the repair again, to catch
+**STILL TO DO.** (1) Deploy 0.0.44 or later (the grouping writers closed,
+`issues/256` frame-graph replace), done separately. (2) Then run the repair again, to catch
 anything the old writers wrote in between (`scripts/repair_frame_groupings.py
 --discover-sql ... --apply`). (3) Reload the generated test datasets in both
 test databases from the fixed generators, and repair the real `sp_sql_lead_dataset`

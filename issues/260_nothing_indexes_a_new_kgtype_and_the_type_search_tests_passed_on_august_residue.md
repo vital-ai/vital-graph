@@ -1,6 +1,6 @@
 # 260 — Nothing indexes a new KGType, and the type search tests passed on August residue
 
-## Status: FIXED 2026-10-04 (uncommitted). Found by the deploy session running
+## Status: FIXED 2026-10-04 (`a4f76a83`, released in 0.0.44). Found by the deploy session running
 ## `tests/api` against the test deployment; cause established and fixed here.
 
 ## What was seen

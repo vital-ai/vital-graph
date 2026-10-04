@@ -1,6 +1,6 @@
 # 258 — An unbound `GRAPH ?g` estimates one row, so the planner nested-loops a hundred thousand of them
 
-## Status: FIXED 2026-10-04 (uncommitted at time of writing); production
+## Status: FIXED 2026-10-04 (`f8998d73`, released in 0.0.45); production
 ## verification (Q1/Q2 on `the_actions_space` inside the 60 s cap) is the
 ## deploy's. The estimate was ONE row because the generator excluded the default
 ## graph through a subquery the planner cannot see into. It is now a literal, and
