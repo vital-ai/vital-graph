@@ -937,7 +937,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
         self, 
         space_id: str, 
         graph_id: str, 
-        uri_list: List[str],
+        uri_list: Union[List[str], str],
         delete_entity_graph: bool = False,
         if_unmodified_since: Optional[str] = None
     ) -> DeleteResponse:
@@ -947,7 +947,9 @@ class KGEntitiesEndpoint(BaseEndpoint):
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            uri_list: List of KGEntity URIs to delete
+            uri_list: KGEntity URIs to delete, as a list or a comma-separated
+                string (the form `VitalGraphClient.delete_kgentities_batch`
+                and the frame batch delete take).
             delete_entity_graph: If True, delete each entity's entire graph.
                 The server always accepted this; the client could not send it,
                 so a client batch delete was always entity-only (`issues/256`).
@@ -963,7 +965,14 @@ class KGEntitiesEndpoint(BaseEndpoint):
             VitalGraphClientError: If request fails
         """
         self._check_connection()
-        uri_list = [str(u) for u in uri_list]
+        # A STRING IS SPLIT, not iterated. `VitalGraphClient.delete_kgentities_batch`
+        # passes a comma-separated string, and iterating one joined it back
+        # character by character — "h,t,t,p,:,..." — so the server matched no
+        # entity, answered NO_OP (a success), and nothing was deleted.
+        if isinstance(uri_list, str):
+            uri_list = [u.strip() for u in uri_list.split(",") if u.strip()]
+        else:
+            uri_list = [str(u) for u in uri_list]
         validate_required_params(space_id=space_id, graph_id=graph_id, uri_list=uri_list)
         
         try:

@@ -447,3 +447,31 @@ async def test_the_client_can_upsert_an_entity(vg_client, test_space, test_graph
     assert got.is_success
     names = {str(o.name) for o in got.objects if str(o.URI) == uri}
     assert names == {"second"}, f"upsert did not replace the entity: {names}"
+
+
+# ---------------------------------------------------------------------------
+# Through the VitalGraphClient wrappers, which the tests above never used
+# ---------------------------------------------------------------------------
+
+async def test_the_wrapper_batch_delete_deletes(vg_client, test_space, test_graph, pg_conn):
+    """It passed a comma-separated string to a method that iterated it, so the
+    URIs went out a character at a time; the server answered NO_OP and nothing
+    was deleted."""
+    a = await _entity(vg_client, test_space, test_graph)
+    b = await _entity(vg_client, test_space, test_graph)
+    r = await vg_client.delete_kgentities_batch(test_space, test_graph, f"{a},{b}")
+    assert r.status == "deleted", f"answered {r.status!r}: {r.message}"
+    assert sorted(r.deleted_uris) == sorted([a, b])
+    assert await _quads(pg_conn, test_space, a, b) == 0
+
+
+async def test_the_wrapper_can_delete_an_entity_with_its_graph(
+        vg_client, test_space, test_graph, pg_conn):
+    """Without `delete_entity_graph` the wrapper could only send the entity-only
+    delete, which the server now refuses for an entity with frames."""
+    entity = await _entity(vg_client, test_space, test_graph)
+    frame, slot = await _entity_frame(vg_client, test_space, test_graph, entity)
+    r = await vg_client.delete_kgentity(test_space, test_graph, entity,
+                                        delete_entity_graph=True)
+    assert r.status == "deleted", f"answered {r.status!r}: {r.message}"
+    assert await _quads(pg_conn, test_space, entity, frame, slot) == 0

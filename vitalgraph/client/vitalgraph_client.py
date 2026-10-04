@@ -1428,7 +1428,9 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgframes.update_kgframes(space_id, graph_id, objects)
     
-    async def delete_kgframe(self, space_id: str, graph_id: str, uri: str) -> DeleteResponse:
+    async def delete_kgframe(self, space_id: str, graph_id: str, uri: str,
+            recursive: bool = False,
+            if_unmodified_since: Optional[str] = None) -> DeleteResponse:
         """
         Delete a KGFrame by URI.
         
@@ -1436,13 +1438,21 @@ class VitalGraphClient(VitalGraphClientInterface):
             space_id: Space identifier
             graph_id: Graph identifier
             uri: KGFrame URI to delete
+            recursive: Also delete descendant frames; without it a frame with
+                children is refused.
+            if_unmodified_since: The root frame's modification stamp as read;
+                if it has moved nothing is deleted and the response `is_conflict`.
             
         Returns:
             FrameDeleteResponse containing operation result
         """
-        return await self.kgframes.delete_kgframe(space_id, graph_id, uri)
+        return await self.kgframes.delete_kgframe(
+            space_id, graph_id, uri, recursive=recursive,
+            if_unmodified_since=if_unmodified_since)
     
-    async def delete_kgframes_batch(self, space_id: str, graph_id: str, uri_list: str) -> DeleteResponse:
+    async def delete_kgframes_batch(self, space_id: str, graph_id: str, uri_list: str,
+            recursive: bool = False,
+            if_unmodified_since: Optional[str] = None) -> DeleteResponse:
         """
         Delete multiple KGFrames by URI list.
         
@@ -1450,11 +1460,17 @@ class VitalGraphClient(VitalGraphClientInterface):
             space_id: Space identifier
             graph_id: Graph identifier
             uri_list: Comma-separated list of KGFrame URIs
+            recursive: Also delete descendant frames; without it a frame with
+                children is refused.
+            if_unmodified_since: The root frame's modification stamp as read;
+                if it has moved nothing is deleted and the response `is_conflict`.
             
         Returns:
             FrameDeleteResponse containing operation result
         """
-        return await self.kgframes.delete_kgframes_batch(space_id, graph_id, uri_list)
+        return await self.kgframes.delete_kgframes_batch(
+            space_id, graph_id, uri_list, recursive=recursive,
+            if_unmodified_since=if_unmodified_since)
     
     # KGFrames with Slots Methods - Delegated to KGFramesEndpoint
     
@@ -1522,7 +1538,9 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgframes.update_kgframes_with_slots(space_id, graph_id, objects)
     
-    async def delete_kgframes_with_slots(self, space_id: str, graph_id: str, uri_list: str) -> DeleteResponse:
+    async def delete_kgframes_with_slots(self, space_id: str, graph_id: str, uri_list: str,
+            recursive: bool = False,
+            if_unmodified_since: Optional[str] = None) -> DeleteResponse:
         """
         Delete KGFrames with their associated slots by URI list.
         
@@ -1530,11 +1548,17 @@ class VitalGraphClient(VitalGraphClientInterface):
             space_id: Space identifier
             graph_id: Graph identifier
             uri_list: Comma-separated list of KGFrame URIs
+            recursive: Also delete descendant frames; without it a frame with
+                children is refused.
+            if_unmodified_since: The root frame's modification stamp as read;
+                if it has moved nothing is deleted and the response `is_conflict`.
             
         Returns:
             FrameDeleteResponse containing operation result
         """
-        return await self.kgframes.delete_kgframes_with_slots(space_id, graph_id, uri_list)
+        return await self.kgframes.delete_kgframes_with_slots(
+            space_id, graph_id, uri_list, recursive=recursive,
+            if_unmodified_since=if_unmodified_since)
     
     # KGEntity CRUD Methods - Delegated to KGEntitiesEndpoint
     
@@ -1610,7 +1634,9 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgentities.upsert_kgentities(space_id, graph_id, objects)
 
-    async def delete_kgentity(self, space_id: str, graph_id: str, uri: str) -> DeleteResponse:
+    async def delete_kgentity(self, space_id: str, graph_id: str, uri: str,
+                             delete_entity_graph: bool = False,
+                             if_unmodified_since: Optional[str] = None) -> DeleteResponse:
         """
         Delete a KGEntity by URI.
         
@@ -1618,13 +1644,23 @@ class VitalGraphClient(VitalGraphClientInterface):
             space_id: Space identifier
             graph_id: Graph identifier
             uri: KGEntity URI to delete
+            delete_entity_graph: Delete the entity with its frames, slots and
+                edges. Without it the entity alone is deleted, and the server
+                REFUSES while the entity has any (`issues/256`).
+            if_unmodified_since: The entity's modification stamp as read
+                (`modification_stamp`); if it has moved nothing is deleted and
+                the response `is_conflict`.
             
         Returns:
             EntityDeleteResponse containing operation result
         """
-        return await self.kgentities.delete_kgentity(space_id, graph_id, uri)
+        return await self.kgentities.delete_kgentity(
+            space_id, graph_id, uri, delete_entity_graph=delete_entity_graph,
+            if_unmodified_since=if_unmodified_since)
     
-    async def delete_kgentities_batch(self, space_id: str, graph_id: str, uri_list: str) -> DeleteResponse:
+    async def delete_kgentities_batch(self, space_id: str, graph_id: str, uri_list: str,
+                                      delete_entity_graph: bool = False,
+                                      if_unmodified_since: Optional[str] = None) -> DeleteResponse:
         """
         Delete multiple KGEntities by URI list.
         
@@ -1632,11 +1668,17 @@ class VitalGraphClient(VitalGraphClientInterface):
             space_id: Space identifier
             graph_id: Graph identifier
             uri_list: Comma-separated list of KGEntity URIs
+            delete_entity_graph: As for `delete_kgentity`.
+            if_unmodified_since: The entity's modification stamp as read
+                (`modification_stamp`); if it has moved nothing is deleted and
+                the response `is_conflict`.
             
         Returns:
             EntityDeleteResponse containing operation result
         """
-        return await self.kgentities.delete_kgentities_batch(space_id, graph_id, uri_list)
+        return await self.kgentities.delete_kgentities_batch(
+            space_id, graph_id, uri_list, delete_entity_graph=delete_entity_graph,
+            if_unmodified_since=if_unmodified_since)
     
     async def get_kgentity_frames(self, space_id: str, graph_id: str, entity_uri: Optional[str] = None,
                            page_size: int = 10, offset: int = 0, search: Optional[str] = None,
