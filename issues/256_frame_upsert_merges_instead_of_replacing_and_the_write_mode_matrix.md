@@ -8,7 +8,7 @@
 ## VITALGRAPH_FRAME_CREATE_REFUSES_EXISTING (default off), and the slot routes'
 ## contract with `/kgentities/kgframes/kgslots`. Deploying to production is
 ## separate, per planning/planning_deploy.
-## FIXED 2026-10-04 (uncommitted), for the next release — see "Fifth round":
+## FIXED 2026-10-04 (`81e718db`), for the next release — see "Fifth round":
 ## the switch is REMOVED, `create` always refuses an existing frame (VitalGraph
 ## does not wait on its callers); the entity route's `update` decides the whole
 ## request first and no longer reports success for a frame it did not write.
@@ -941,7 +941,7 @@ Instructions for the Resource API: `planning/planning_deploy/
 resource_service_frame_writes_20261004.md` (local). Probe: a throwaway API test
 of the three modes above, not kept.
 
-## As built, 2026-10-04, fifth round (uncommitted) — no switch, and update is all or nothing
+## As built, 2026-10-04, fifth round (`81e718db`) — no switch, and update is all or nothing
 
 Decided 2026-10-04: **no dependency on callers — VitalGraph gets the correct
 implementation.** The switch is gone.
