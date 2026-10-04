@@ -226,16 +226,34 @@ async def search_env(vg_client):
             # measures how many indexes are configured, not how many types were
             # indexed, and warns on perfectly healthy data. The rows live in the
             # per-index tables named after them.
+            # COUNT THESE THREE, NOT THE TABLE. The original counted rows
+            # and compared against 3, which a table holding ANY three rows
+            # satisfies — including rows for types that no longer exist.
+            #
+            # Measured 2026-10-04: the local stack's
+            # `sp_kg_types_vec_kgtype_default` held 6 rows stamped
+            # `2026-08-18 20:07`, seven weeks old, for URIs long deleted. The
+            # fixture mints fresh random URIs every run, so those rows describe
+            # nothing this test created — yet 6 >= 3 kept the guard quiet while
+            # all five index-backed searches passed against August residue.
+            # The same five FAIL against a deployment whose table is empty,
+            # which is the honest answer, and the stale pass is what made it
+            # look like an environment difference.
+            uris = [str(person.URI), str(business.URI), str(restaurant.URI)]
             fts = await _c.fetchval(
-                f"SELECT count(*) FROM {SP_KG_TYPES}_fts_kgtype_default")
+                f"SELECT count(*) FROM {SP_KG_TYPES}_fts_kgtype_default f "
+                f"JOIN {SP_KG_TYPES}_term t ON t.term_uuid = f.subject_uuid "
+                f"WHERE t.term_text = ANY($1)", uris)
             vec = await _c.fetchval(
-                f"SELECT count(*) FROM {SP_KG_TYPES}_vec_kgtype_default")
+                f"SELECT count(*) FROM {SP_KG_TYPES}_vec_kgtype_default v "
+                f"JOIN {SP_KG_TYPES}_term t ON t.term_uuid = v.subject_uuid "
+                f"WHERE t.term_text = ANY($1)", uris)
             if fts < 3 or vec < 3:
                 logging.getLogger(__name__).warning(
                     "kgtype search fixture: after %.1fs the indexes hold "
-                    "fts=%s vector=%s for 3 created types. A search returning "
-                    "zero below is the SYNC not having run, not the search "
-                    "(issues/100).", 3.0, fts, vec)
+                    "fts=%s vector=%s FOR THE THREE TYPES JUST CREATED. A "
+                    "search returning zero below is the SYNC not having run, "
+                    "not the search (issues/100).", 3.0, fts, vec)
         finally:
             await _c.close()
     except Exception as _exc:      # never fail the fixture for a diagnostic
@@ -257,7 +275,14 @@ async def search_env(vg_client):
 
 
 class TestKGTypeSearch:
-    """Search KGTypes across all 4 modes: keyword, fts, vector, hybrid."""
+    """Search KGTypes across all 4 modes: keyword, fts, vector, hybrid.
+
+    MATCHED BY THE URI THE FIXTURE CREATED, not by name. Every run creates types
+    with the same three names, and a run whose teardown did not finish leaves its
+    types — and their index rows — behind. Matched by name, these tests passed
+    against those: five index-backed searches stayed green on the local stack
+    while nothing indexed a new KGType at all (`issues/256`, 2026-10-04).
+    """
 
     # ── Keyword ───────────────────────────────────────────────────
 
@@ -269,7 +294,8 @@ class TestKGTypeSearch:
         assert resp.is_success, f"keyword search failed: {resp.error_message}"
         assert resp.count >= 1
         names = [t.get("name", "") for t in resp.types]
-        assert any("PersonSearchTest" in n for n in names), (
+        uris = [t.get("uri", "") for t in resp.types]
+        assert search_env["person_uri"] in uris, (
             f"Expected PersonSearchTest in results, got: {names}"
         )
 
@@ -298,7 +324,8 @@ class TestKGTypeSearch:
             f"Expected >=1 FTS result for 'human individual', got {resp.count}"
         )
         names = [t.get("name", "") for t in resp.types]
-        assert any("PersonSearchTest" in n for n in names), (
+        uris = [t.get("uri", "") for t in resp.types]
+        assert search_env["person_uri"] in uris, (
             f"Expected PersonSearchTest in FTS results, got: {names}"
         )
 
@@ -320,9 +347,10 @@ class TestKGTypeSearch:
 
         # Find positions of our test types in results
         names = [t.get("name", "") for t in resp.types]
-        person_idx = next((i for i, n in enumerate(names) if "PersonSearchTest" in n), None)
-        business_idx = next((i for i, n in enumerate(names) if "BusinessSearchTest" in n), None)
-        restaurant_idx = next((i for i, n in enumerate(names) if "RestaurantSearchTest" in n), None)
+        uris = [t.get("uri", "") for t in resp.types]
+        person_idx = next((i for i, u in enumerate(uris) if u == search_env["person_uri"]), None)
+        business_idx = next((i for i, u in enumerate(uris) if u == search_env["business_uri"]), None)
+        restaurant_idx = next((i for i, u in enumerate(uris) if u == search_env["restaurant_uri"]), None)
 
         assert person_idx is not None, (
             f"PersonSearchTest not found in vector search for 'man'. Results: {names}"
@@ -347,8 +375,9 @@ class TestKGTypeSearch:
         assert resp.count >= 1
 
         names = [t.get("name", "") for t in resp.types]
-        restaurant_idx = next((i for i, n in enumerate(names) if "RestaurantSearchTest" in n), None)
-        person_idx = next((i for i, n in enumerate(names) if "PersonSearchTest" in n), None)
+        uris = [t.get("uri", "") for t in resp.types]
+        restaurant_idx = next((i for i, u in enumerate(uris) if u == search_env["restaurant_uri"]), None)
+        person_idx = next((i for i, u in enumerate(uris) if u == search_env["person_uri"]), None)
 
         assert restaurant_idx is not None, (
             f"RestaurantSearchTest not found in vector search for 'dining'. Results: {names}"
@@ -368,7 +397,8 @@ class TestKGTypeSearch:
         assert resp.count >= 1
 
         names = [t.get("name", "") for t in resp.types]
-        business_idx = next((i for i, n in enumerate(names) if "BusinessSearchTest" in n), None)
+        uris = [t.get("uri", "") for t in resp.types]
+        business_idx = next((i for i, u in enumerate(uris) if u == search_env["business_uri"]), None)
         assert business_idx is not None, (
             f"BusinessSearchTest not found in vector search for 'company'. Results: {names}"
         )
@@ -385,7 +415,8 @@ class TestKGTypeSearch:
         assert resp.count >= 1
 
         names = [t.get("name", "") for t in resp.types]
-        person_idx = next((i for i, n in enumerate(names) if "PersonSearchTest" in n), None)
+        uris = [t.get("uri", "") for t in resp.types]
+        person_idx = next((i for i, u in enumerate(uris) if u == search_env["person_uri"]), None)
         assert person_idx is not None, (
             f"PersonSearchTest not found in hybrid search. Results: {names}"
         )

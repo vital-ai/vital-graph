@@ -171,6 +171,13 @@ async def _sync_vectors_for_subjects(
                 continue
             to_embed.append((subj_uuid, text))
 
+        if to_delete:
+            # Said at DEBUG, because a subject the index does not cover is the
+            # normal case — but it is also exactly how a missing scope looks, and
+            # with no line at all that took a day to find (`issues/256`).
+            logger.debug("auto_sync vector %s/%s: %d of %d subject(s) out of "
+                         "scope or without text", space_id, idx_name,
+                         len(to_delete), len(subject_uuids))
         # Delete subjects with no embeddable text
         for subj_uuid in to_delete:
             try:
@@ -403,7 +410,9 @@ async def _sync_fts_for_subjects(
                 if rule is None or not rule.enabled:
                     # Out of scope for this index. Remove any row a previous
                     # (unscoped) sync left behind, so the fix also repairs
-                    # what the defect wrote.
+                    # what the defect wrote. Said at DEBUG: see the vector path.
+                    logger.debug("auto_sync fts %s/%s: %s out of scope (%s, %s)",
+                                 space_id, idx_name, subj_uuid, mapping_type, type_uri)
                     await delete_subject_fts(conn, space_id, idx_name,
                                              subj_uuid, context_uuid)
                     continue
@@ -458,10 +467,21 @@ async def _subject_scopes(conn, space_id: str, subject_uuids, context_uuid):
         f"{HALEY}hasKGDocumentSegmentIndex", f"{HALEY}hasKGDocumentType",
     )
     KGDOC = f"{HALEY}KGDocument"
+    # A KGTYPE is classified by its CLASS, before anything else. With no branch
+    # for it, a type fell through to the `kgentity` fallback below, matched no
+    # mapping in an index whose mappings are all `kgtype`, and was skipped — so
+    # NOTHING indexed a new or changed KGType after `issues/219` made this
+    # scoped (`issues/256`, found 2026-10-04: six index-backed type searches
+    # passed locally only against rows written in August). Resolved the way the
+    # bulk populator resolves it: `KGType` and its subclasses, from VitalSigns.
+    from .vector_populator import _resolve_vitaltype_filter
+    kgtype_classes = set(_resolve_vitaltype_filter("kgtype") or ())
     out = {}
     for r in rows:
         key = str(r["subject_uuid"])   # see the lookup in the caller
-        if r["slot_type"]:
+        if r["rdf_type"] and r["rdf_type"] in kgtype_classes:
+            out[key] = ("kgtype", r["rdf_type"])
+        elif r["slot_type"]:
             out[key] = ("kgslot", r["slot_type"])
         elif r["entity_type"]:
             out[key] = ("kgentity", r["entity_type"])
