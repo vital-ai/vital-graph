@@ -2,6 +2,92 @@
 
 Notable changes per release. Dates are the release date, not the first commit.
 
+## 0.0.45 — 2026-10-04
+
+5 commits since 0.0.44 (same day). Slot writes to an entity's frame move to
+their own route, locked on the entity; the entity registry gains get-or-create
+by an identifier declared unique (`issues/227`); an unbound `GRAPH ?g` stops
+being planned for one row (`issues/258`); and `VitalGraphClient` wraps every
+KG entity and frame method — which found eleven wrappers that were broken.
+
+**Deploy the server first, and run the registry migration BEFORE it.** The new
+code writes `entity_identifier.entity_type_id`; deployed before
+`apps/entity_registry/migrate.py` adds the column, every identifier insert
+fails. The new client methods call routes only the new server has.
+
+### Changed — behaviour a caller will see (server)
+
+- **`/kgframes/kgslots` refuses an entity's frame** (write and delete),
+  `invalid_request`, pointing to the new `/kgentities/kgframes/kgslots`. A
+  caller editing an entity frame's slots through `/kgframes/kgslots` breaks on
+  deploy until it moves (`issues/256`).
+- **Slot routes:** `update` of a missing slot is `not_found`; a slot of another
+  frame refuses the request; deleting a slot already gone is `no_op` (was
+  `not_found`), with the URI in `absent_uris`.
+
+### Added — server
+
+- **`POST /kgentities/kgframes/kgslots`, `DELETE /kgentities/kgframes/kgslots`**
+  — slot writes and deletes on an entity's frame: one transaction under the
+  entity lock, the frame must be the entity's, `if_unmodified_since` is the
+  entity's stamp, and `hasKGGraphURI` is set on what is written.
+- **`POST /api/registry/entities/resolve`** — get-or-create by an identifier
+  DECLARED unique for an entity type: `created` or `found`, and concurrent
+  callers converge on one entity. A pair not declared is refused. `create` and
+  `add_identifier` answer `already_exists`, naming the holder, when a declared
+  value is taken (`issues/227`). Nothing is declared in this release.
+- **Frame `create` can refuse an existing frame** —
+  `VITALGRAPH_FRAME_CREATE_REFUSES_EXISTING=1`, default OFF: callers that rely
+  on `create` overwriting must move to `upsert` first.
+
+### Added — client
+
+- `kgentities.create_entity_frame_slots` / `delete_entity_frame_slots`;
+  `kgframes.delete_frame_slots(if_unmodified_since=...)` and `absent_uris`;
+  `entity_registry.resolve_or_create_entity`.
+- **`VitalGraphClient` wraps every `kgentities` and `kgframes` method** — 28
+  added (slot routes, entity-frame writes, child frames, frame graphs, queries,
+  counts), and the existing wrappers take every parameter their endpoint does.
+  `VitalGraphClientInterface` declares them all.
+
+### Fixed — client (behaviour changes)
+
+- **`list_kgentities(..., search=...)` sent the search term as the entity TYPE
+  filter.** It is a search now.
+- **`get_kgframes_with_slots`** put `page_size` in `frame_uri`, `offset` in
+  `page_size` and `search` in `offset`.
+- **The six KGType wrappers** passed `graph_id` after KGTypes became
+  space-scoped: five raised `TypeError`, `list_kgtypes` sent the graph id as
+  `page_size`. They accept `graph_id` and ignore it; `list_kgtypes` gains
+  `type_uri`.
+- **`upload_file_content`** sent the file URI as the graph and the graph as the
+  data.
+- **`search_triples`** called a method that does not exist; it uses
+  `list_triples`.
+- **`execute_graph_operation` is REMOVED** — it called a method that does not
+  exist and never worked. Use `create_graph` / `drop_graph` / `clear_graph`.
+
+A caller that worked around any of these gets different results after
+upgrading.
+
+### Fixed — server
+
+- **An unbound `GRAPH ?g` was estimated at ONE row** and planned as nested
+  loops — the two `statement_timeout` cancellations on production
+  (`issues/258`). The default graph was excluded through a subquery the planner
+  cannot estimate; it is now a literal uuid, and the unbound plan is the bound
+  plan. Locally 2.0 s → 156 ms median on the reported shape; results unchanged.
+
+### Data
+
+- `apps/entity_registry/migrate.py` adds `entity_identifier.entity_type_id` —
+  run BEFORE deploying.
+- `apps/entity_registry/backfill_identifier_entity_type.py` fills it for
+  existing rows (batched, re-runnable) — run after deploying.
+- `apps/entity_registry/declare_unique_identifiers.py --report` (read-only)
+  shows, per type and namespace, the duplicates that block a declaration;
+  `--apply` builds the declared indexes.
+
 ## 0.0.44 — 2026-10-04
 
 31 commits since 0.0.43 (2026-10-01). A frame write now means what it says:
