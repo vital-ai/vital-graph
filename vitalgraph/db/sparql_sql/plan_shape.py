@@ -313,6 +313,56 @@ async def report_slow_query(conn, *, space_id: str, sparql: str, sql: str,
         logger.debug("slow-query report skipped: %s", exc)
 
 
+# The WHOLE SQL of a failed query, up to a cap far above the slow-query excerpt:
+# a failure is rare, and the point of the record is that the plan can be
+# obtained afterwards from it (`issues/259`).
+_FAILED_SQL_CHARS = int(os.environ.get("VG_FAILED_QUERY_SQL_CHARS", "100000"))
+_FAILED_SPARQL_CHARS = 20000
+
+
+def report_failed_query(*, space_id: str, sparql: str, sql: Optional[str],
+                        timing: Dict[str, Any], stage: str, error: BaseException,
+                        timed_out: bool,
+                        plan_decisions: Optional[Dict] = None) -> None:
+    """One WARNING line for a query that did not complete — `issues/259`.
+
+    `report_slow_query` is reached only when a query FINISHES, so a statement
+    cancelled by `statement_timeout` — the case that most needs it — left three
+    lines naming the space and nothing about the query: no SPARQL, no SQL, no
+    timings. `issues/258` had to be diagnosed from text supplied by hand and SQL
+    regenerated on a local space.
+
+    Same shape as `slow_query` (space, sql_fingerprint, timing, sparql, sql,
+    plan_decisions with its `stage_ms`) so one parser reads both, plus `stage`
+    (where it stopped), `timed_out` and `error`. No plan: the statement never
+    finished, and asking for one would run it again — `sql_fingerprint` and the
+    SQL are what it takes to get one deliberately afterwards.
+
+    Synchronous and never raises: it runs on the failure path, before the error
+    is returned, and a diagnostic must not change the outcome it describes.
+    """
+    try:
+        payload: Dict[str, Any] = {
+            "space": space_id,
+            "stage": stage,
+            "timed_out": bool(timed_out),
+            "error": f"{type(error).__name__}: {error}",
+            "timing": timing,
+            "sparql": (sparql or "")[:_FAILED_SPARQL_CHARS],
+            "sparql_chars": len(sparql or ""),
+        }
+        if sql:
+            payload["sql_fingerprint"] = sql_fingerprint(sql)
+            payload["sql"] = sql[:_FAILED_SQL_CHARS]
+            payload["sql_chars"] = len(sql)
+        if plan_decisions:
+            payload["plan_decisions"] = plan_decisions
+        logger.warning("failed_query %s", json.dumps(payload, default=str,
+                                                     sort_keys=True))
+    except Exception as exc:  # pragma: no cover - diagnostics must not throw
+        logger.debug("failed-query report skipped: %s", exc)
+
+
 def schedule_slow_query_report(*, space_id: str, sparql: str, sql: str,
                                timing: Dict[str, Any],
                                plan_decisions: Optional[Dict] = None,

@@ -2319,15 +2319,26 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 'ok': True
             }
         """
+        # KEPT OUTSIDE THE `try` (`issues/259`), for the reason the write path
+        # gives for its own phase marks (`issues/253`): the queries this has to
+        # explain END IN AN EXCEPTION, so what is known about them must survive
+        # into the `except`. A cancelled statement used to leave the space name
+        # and nothing else.
+        import time as _time
+        t0 = _time.monotonic()
+        _stage = "compile"
+        _marks: Dict[str, float] = {}
+        sql: Optional[str] = None
+        gen = None
         try:
-            import time as _time
             from ..jena_sparql.jena_ast_mapper import map_compile_response
             from .generator import generate_sql
 
-            t0 = _time.monotonic()
             client = self._get_sidecar_client()
             raw = await _compile_cache.compile(query, client)
             t_sidecar = _time.monotonic()
+            _marks["sidecar"] = t_sidecar
+            _stage = "acquire"
 
             cr = map_compile_response(raw)
             if not cr.ok:
@@ -2342,6 +2353,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             # changes.
             async with write_conn(self._db._pool, kwargs.get('conn')) as conn:
                 t_acquired = _time.monotonic()
+                _marks["acquire"] = t_acquired
+                _stage = "generate"
                 gen = await generate_sql(
                     cr, space_id, conn=conn,
                     multi_vector_config=kwargs.get('multi_vector_config'),
@@ -2360,6 +2373,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 sql = gen.sql
                 var_map = gen.var_map or {}
                 t_gen = _time.monotonic()
+                _marks["generate"] = t_gen
+                _stage = "resolve"
 
                 # Resolve vector placeholders (vg:vectorSimilarity)
                 if gen.vector_requests:
@@ -2383,6 +2398,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 # LIMIT/OFFSET/ORDER BY in the inner SQL to disturb.
                 if cr.meta.query_type == 'ASK':
                     sql = f"SELECT EXISTS (SELECT 1 FROM ({sql}) _ask_sub) AS _ask_result"
+                _stage = "execute"
 
                 if gen.needs_ordered_scan:
                     # This plan is O(page) only while PostgreSQL drives it from
@@ -2415,6 +2431,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                         await _apply_read_fence(conn)
                         rows = await conn.fetch(sql)
                 t_exec = _time.monotonic()
+                _marks["execute"] = t_exec
+                _stage = "convert"
                 result_rows = [dict(r) for r in rows]
 
             t_convert_rows = _time.monotonic()
@@ -2519,8 +2537,29 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             # `timed_out` survives the flattening to a string. Callers decide the
             # HTTP status from it: a timeout is a domain outcome, an outage is not.
             from ...utils.db_retry import is_query_timeout
+            timed_out = is_query_timeout(e)
+            # WHAT IT WAS, not only that it failed (`issues/259`): the SPARQL,
+            # the generated SQL if it got that far, the plan decisions with
+            # their `stage_ms`, and how long each completed phase took.
+            try:
+                from .plan_shape import report_failed_query
+                _now = _time.monotonic()
+                _timing: Dict[str, Any] = {
+                    "failed_after_ms": round((_now - t0) * 1000, 2)}
+                _prev = t0
+                for _name in ("sidecar", "acquire", "generate", "execute"):
+                    if _name in _marks:
+                        _timing[f"{_name}_ms"] = round((_marks[_name] - _prev) * 1000, 2)
+                        _prev = _marks[_name]
+                _timing[f"{_stage}_ms_until_failure"] = round((_now - _prev) * 1000, 2)
+                report_failed_query(
+                    space_id=space_id, sparql=query, sql=sql, timing=_timing,
+                    stage=_stage, error=e, timed_out=timed_out,
+                    plan_decisions=getattr(gen, 'plan_decisions', None))
+            except Exception:
+                pass
             return {'results': {'bindings': []}, 'success': False, 'error': str(e),
-                    'timed_out': is_query_timeout(e)}
+                    'timed_out': timed_out}
 
     async def _describe_triples(self, space_id: str,
                                 targets: List[str]) -> List[Dict[str, Any]]:

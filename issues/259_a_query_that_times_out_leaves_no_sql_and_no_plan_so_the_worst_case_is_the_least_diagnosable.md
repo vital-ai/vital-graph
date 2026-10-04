@@ -1,10 +1,9 @@
 # 259 — A query that times out leaves no SQL and no plan, so the worst case is the least diagnosable
 
-## Status: OPEN, filed 2026-10-03. The instrumentation is inverted relative to
-## severity: a query that is merely SLOW is recorded in full — timings per stage,
-## plan shape, SQL excerpt, fingerprint — and a query that CROSSES the timeout is
-## recorded in three lines with no content. Nothing is lost silently; a timeout
-## IS detectable. It is not diagnosable.
+## Status: FIXED 2026-10-04 (uncommitted). A query that fails now leaves one
+## WARNING `failed_query` line with its SPARQL, its whole generated SQL, the
+## SQL fingerprint, the stage it stopped in, the timing of every completed phase
+## and the plan decisions with their `stage_ms`. See "As built" at the end.
 
 ## What is and is not recorded
 
@@ -127,3 +126,35 @@ deliberately afterwards, which is what had to be done by hand here.
   explain all END IN AN EXCEPTION, so a breakdown logged only on the happy path
   would miss every one of them". The read path has not had that correction
   applied, and the reasoning transfers verbatim.
+
+## As built (2026-10-04, uncommitted)
+
+`plan_shape.report_failed_query`, called from the `except` of
+`SparqlSQLSpaceImpl.execute_sparql_query`, so it covers EVERY caller of the
+query path — the SPARQL endpoint, the KG endpoints, internal reads — not only
+`sparql_query_endpoint`. That is why change 1 above (log the query text at INFO
+in the endpoint's failure path) was not made separately: the backend record
+carries the text, untruncated to 20,000 characters, for all of them.
+
+- Same JSON shape as `slow_query` — `space`, `sql_fingerprint`, `timing`,
+  `sparql`, `plan_decisions` — so one parser reads both; plus `stage`
+  (compile / acquire / generate / resolve / execute / convert), `timed_out`,
+  `error`, and the SQL itself up to `VG_FAILED_QUERY_SQL_CHARS` (default
+  100,000), not the slow-query excerpt: the point is to obtain the plan
+  afterwards.
+- The phase marks live OUTSIDE the `try`, as `issues/253` did for the write
+  path, so a failure reports the phases that completed and how long the failing
+  one ran (`<stage>_ms_until_failure`, `failed_after_ms`).
+- Any failure, not only a timeout; `timed_out` says which.
+- No plan, as decided: the statement never finished.
+- Successful queries are unchanged: nothing new is logged for them.
+
+**Verified live** on the vg test stack: the app restarted with
+`VITALGRAPH_READ_STATEMENT_TIMEOUT_MS=1`, a SPARQL query sent through the API,
+and the container log carried `failed_query` with the probe's SPARQL, the full
+10,973-character SQL, `sql_fingerprint`, `stage=execute`, `timed_out=true`,
+per-phase timings and `stage_ms`; then restored. Unit:
+`tests/unit/test_a_failed_query_leaves_its_sql.py` drives `execute_sparql_query`
+with a connection that raises `QueryCanceledError`: 2 of 3 FAIL without the fix
+(the third is the guard that a successful query logs no text).
+
