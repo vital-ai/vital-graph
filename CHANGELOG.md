@@ -2,6 +2,34 @@
 
 Notable changes per release. Dates are the release date, not the first commit.
 
+## 0.0.46 — 2026-10-04
+
+4 commits since 0.0.45 (same day), one of them code. Frame `create` and entity-
+frame `update` now mean what they say, with no switch (`issues/256`). **Server
+only — the client is unchanged from 0.0.45**; upgrading the package changes
+nothing for a caller until the server is deployed.
+
+### Changed — behaviour a caller will see (server)
+
+- **Frame `create` refuses anything that already exists**, on both
+  `/kgentities/kgframes` and `/kgframes`: if any object sent (frame, slot, slot
+  edge) exists, it answers `already_exists` and writes nothing. It was accepted —
+  and on the entity route MERGED into the frame, keeping its old slots beside the
+  new. **A caller that re-saves a frame through `create` must send `upsert`.**
+  `VITALGRAPH_FRAME_CREATE_REFUSES_EXISTING` (0.0.45, default off) is REMOVED.
+- **Entity-frame `update` is all or nothing.** It SKIPPED a frame that was
+  missing or another entity's and still answered `updated`: a batch of an
+  existing frame and a new one wrote the first, dropped the second, and reported
+  success. Now the whole request is decided before any of it is written: a
+  missing frame → `not_found`; another entity's frame → `invalid_request`;
+  slots or edges sent without their frame → `invalid_request` (an update
+  replaces the frame graph and would drop the frame). Nothing written. Frames
+  that commit before a later one fails answer `partial` (not a success), not
+  `updated`.
+
+A caller meaning create-or-replace sends `upsert`, which is unchanged: it
+replaces an existing frame's graph and creates a missing one.
+
 ## 0.0.45 — 2026-10-04
 
 5 commits since 0.0.44 (same day). Slot writes to an entity's frame move to
