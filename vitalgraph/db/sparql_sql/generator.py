@@ -557,10 +557,10 @@ def required_missing_constants(plan, unresolved):
         thousands of rows through the types that DO exist, and the caller
         emitted `1 = 0`.
       * THE OPERATOR MAKES ABSENCE HARMLESS. `col = <missing>` can never hold;
-        `col IS DISTINCT FROM <missing>` always holds. `collect` emits the
-        second for every `GRAPH ?g`, so reading it as fatal returns zero rows
-        for any such query with an empty default graph -- `issues/093`, found
-        and fixed once already. `_dead_constant_is_required` is that fix, and is
+        `col IS DISTINCT FROM <missing>` always holds. `collect` emitted the
+        second for every `GRAPH ?g` (a literal uuid since `issues/258`), and
+        reading it as fatal returned zero rows for any such query with an empty
+        default graph -- `issues/093`, found and fixed once already. `_dead_constant_is_required` is that fix, and is
         reused here rather than re-decided.
     """
     from .prune_union import _dead_constant_is_required

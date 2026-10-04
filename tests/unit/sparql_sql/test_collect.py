@@ -163,7 +163,12 @@ class TestCollectBGP:
         assert any("__CONST_" in c for c in ctx_constraints)
 
     def test_graph_var_scope_excludes_default(self):
-        """GRAPH ?g → IS DISTINCT FROM default graph."""
+        """GRAPH ?g → excludes the default graph by its uuid as a LITERAL.
+
+        Not a `_const` subquery: the planner cannot estimate one, and an unbound
+        `GRAPH ?g` was estimated at one row and nested-looped (`issues/258`).
+        """
+        from vitalgraph.db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
         aliases = _aliases()
         aliases.default_graph = "http://ex.org/default"
         op = OpBGP(triples=[TriplePattern(
@@ -172,7 +177,10 @@ class TestCollectBGP:
             object=VarNode(name="o"),
         )])
         plan = collect(op, SPACE, aliases, graph_uri=GRAPH_VAR_SCOPE)
-        assert any("IS DISTINCT FROM" in c for c in plan.constraints)
+        uuid = _generate_term_uuid("http://ex.org/default", 'U')
+        ctx = [c for c in plan.constraints if "context_uuid" in c]
+        assert len(ctx) == 1 and ctx[0].endswith(f".context_uuid <> '{uuid}'::uuid"), ctx
+        assert not any("_const" in c or "__CONST_" in c for c in ctx), ctx
 
     def test_graph_uri_constraint(self):
         """GRAPH <uri> → context_uuid = const."""

@@ -1,9 +1,11 @@
 # 258 — An unbound `GRAPH ?g` estimates one row, so the planner nested-loops a hundred thousand of them
 
-## Status: OPEN, filed 2026-10-03, measured and reproduced locally. Nothing is
-## fixed. Two production queries were cancelled by `statement_timeout` against
-## `the_actions_space`; the same shape is 15-19x slower than its graph-BOUND
-## equivalent on a local space, and `ANALYZE` does not fix it.
+## Status: FIXED 2026-10-04 (uncommitted at time of writing); production
+## verification (Q1/Q2 on `the_actions_space` inside the 60 s cap) is the
+## deploy's. The estimate was ONE row because the generator excluded the default
+## graph through a subquery the planner cannot see into. It is now a literal, and
+## the unbound plan is the bound plan: the same parallel hash anti-join, the same
+## estimates, the same counts. See "The cause" and "The fix" at the end.
 ##
 ## **IT IS NOT THE `FILTER EXISTS` / `FILTER NOT EXISTS`.** That was the reported
 ## cause and it is wrong — see "The hypothesis this refutes". The anti-join is
@@ -119,7 +121,10 @@ claims made while chasing it were also wrong:
 
 ## Why the estimate is 1
 
-NOT ESTABLISHED. The `rows=1` comes from PostgreSQL, not from the generator's own
+ESTABLISHED 2026-10-04 — see "The cause" below. What follows was the hypothesis
+before it was; its direction (a subquery the planner cannot read, `issues/183`'s
+mechanism) was right.
+ The `rows=1` comes from PostgreSQL, not from the generator's own
 statistics layer — the generator emits SQL and the planner estimates it. The
 working hypothesis is that an unbound context leaves the term-uuid joins to be
 resolved through subqueries whose selectivity the planner cannot see, which is
@@ -177,3 +182,93 @@ across a space should name the graph rather than leaving `?g` free.
 - The cold `load_pair_stats` cost (7,710 ms of a 7,923 ms generation; 22,269 ms
   worst case on production, and a `lock timeout` cancellation in
   `_load_missing_pair_stats` on 2026-10-02) is UNFILED and is not this issue.
+
+## The cause
+
+Diffing the generated SQL for the unbound (Q2) and bound (Q3) forms leaves ONE
+difference in the quad constraints. Bound:
+
+    q0.context_uuid = '<graph uuid>'::uuid
+
+Unbound — `collect.py`, for `GRAPH ?g`, excluding the default graph so that
+`GRAPH ?g` enumerates named graphs only:
+
+    q0.context_uuid IS DISTINCT FROM
+        (SELECT term_uuid FROM _const WHERE term_text = 'urn:default' AND term_type = 'U')
+
+Constants are normally inlined as literals once resolved, but `urn:default` is
+almost always ABSENT from a space's term table, so this one stayed a reference to
+the `_const` CTE. PostgreSQL cannot know what that subquery returns and applies a
+default selectivity to `IS DISTINCT FROM (subquery)`; it applies it to EVERY quad
+alias of the BGP, and the product reaches one row. Fresh statistics cannot help,
+which is why `ANALYZE` never moved it.
+
+Proof by substitution, `sp_graph_forms_20k`, Q2, nothing else changed — the
+subquery replaced with the uuid it would return (`<> '<uuid>'::uuid`):
+
+| form | estimate | plan | min / med / max (5 runs) | count |
+|---|---|---|---|---|
+| subquery (before) | 1 | Nested Loop Anti | 281 / 373 / 21,101 ms | 30,543 |
+| literal | 7,756 | Hash Anti | 181 / 200 / 409 ms | 30,543 |
+| bound graph | 7,756 | Hash Anti | 132 / 157 / 188 ms | 30,543 |
+
+## The fix
+
+`collect.py` (BGPs) and `emit_path.py` (property paths, the same clause) emit
+
+    q.context_uuid <> '<uuid of the default graph>'::uuid
+
+A term's uuid is a pure function of its text (`_generate_term_uuid`), so the
+literal is exactly what the subquery returned whenever the term exists. When it
+does NOT exist, no quad can carry that uuid, so `<>` holds for every row — the
+same "no exclusion" `IS DISTINCT FROM NULL` gave, which is what `issues/093`
+required. `context_uuid` is never NULL, so `<>` and `IS DISTINCT FROM` agree on
+every row. With no `_const` reference left, the CTE is no longer emitted for this
+shape, and `prune_union`'s / `required_missing_constants`' handling of
+`IS DISTINCT FROM <missing>` (still correct, still tested) has nothing to see.
+
+Not done, and not needed: enumerating the graphs (fix option 1) or
+`enable_nestloop = off` (option 3, rejected above).
+
+## Verified after the fix
+
+The generator's own SQL, before (reconstructed exactly: the subquery and its
+`_const` CTE put back) and after, against the graph-BOUND form. Five runs per
+cell; the first is cold, so max is the cold run.
+
+`sp_graph_forms_20k` (vg test DB, 5.06M quads), `EXPLAIN ANALYZE`:
+
+| | anti-join | estimate vs actual | median |
+|---|---|---|---|
+| Q1 before | Nested Loop Anti (+ NL Semi) | **1** vs 94,983 | 2,002 ms (max 6,378) |
+| Q1 after | Parallel Hash Right Anti (+ Hash Semi) | 3,232 vs 10,181 ×3 | **156 ms** |
+| Q2 before | Nested Loop Anti | **1** vs 30,543 | 448 ms (max 5,227) |
+| Q2 after | Parallel Hash Right Anti | 3,232 vs 10,181 ×3 | 405 ms (max 761) |
+| Q3 bound | Parallel Hash Right Anti | 3,232 vs 10,181 ×3 | 181 ms |
+
+All five count 30,543. Unbound and bound now get the SAME plan with the SAME
+estimates — the target this issue set.
+
+Dev, at production scale, read-only: the dev copy of the actions space (2.0M
+quads) and `wordnet_frames` (10.6M quads, 285k frames):
+
+| space | query | before (min/med/max) | after | bound |
+|---|---|---|---|---|
+| actions | Q1 | 99 / 120 / 4,012 | 47 / 88 / 166 | 29 / 31 / 46 |
+| actions | Q2 | 130 / 161 / 7,313 | 35 / 37 / 203 | 11 / 11 / 21 |
+| wordnet_frames | Q1 | 1,870 / 2,743 / **48,351** | 337 / 442 / 5,318 | 270 / 303 / 381 |
+| wordnet_frames | Q2 | 1,126 / 1,506 / 23,546 | 345 / 596 / 10,909 | 366 / 428 / 784 |
+
+Every "before" estimate was 1; every "after" estimate matches the bound form's
+(6,860 / 93,738 / 100,365). The cold `wordnet_frames` Q1 at 48 s is the
+production failure in miniature: one cold cache away from the 60 s cap.
+
+Every dev frame carries `hasKGFormType`, so Q1/Q2 count 0 there — too weak a
+check on results. With the filter inverted (`FILTER EXISTS`), before and after
+agree: 18,743 (actions) and 285,348 (`wordnet_frames`), Q1 and Q2 alike.
+
+Tests: `tests/unit/sparql_sql/test_collect.py` and `test_emit_path.py` pin the
+literal and that no `_const` reference remains.
+
+Still for the deploy: Q1 and Q2 on production's `the_actions_space` inside the
+cap, counts equal to the bound form summed over its graphs.

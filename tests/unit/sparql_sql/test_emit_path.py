@@ -281,8 +281,9 @@ class TestEmitPath:
         assert "ex.org/default" in sql
 
     def test_graph_var_scope_excludes_default(self):
-        """GRAPH ?g → IS DISTINCT FROM default graph."""
+        """GRAPH ?g → excludes the default graph by a literal uuid (`issues/258`)."""
         from vitalgraph.db.sparql_sql.collect import GRAPH_VAR_SCOPE
+        from vitalgraph.db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
         from vitalgraph.db.sparql_sql.emit_path import emit_path
         ctx = _make_ctx({})
         ctx.aliases.default_graph = "http://ex.org/default"
@@ -292,7 +293,8 @@ class TestEmitPath:
             graph_var="g",
         )
         sql = emit_path(plan, ctx)
-        assert "IS DISTINCT FROM" in sql
+        uuid = _generate_term_uuid("http://ex.org/default", 'U')
+        assert f"q.context_uuid <> '{uuid}'::uuid" in sql
 
     # --- Graph variable binding ---
 

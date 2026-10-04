@@ -130,20 +130,19 @@ def emit_path(plan: PlanV2, ctx: EmitContext) -> str:
             f"WHERE term_text = '{_esc(ctx.aliases.default_graph)}' AND term_type = 'U' LIMIT 1)"
         )
 
-    # Rule 3: IS DISTINCT FROM for negative comparisons (§10.5).
     # GRAPH ?g — exclude default graph (named graphs only).
-    # Use IS DISTINCT FROM (not !=) so NULL from a missing default graph
-    # term is treated as "no exclusion" rather than filtering all rows.
     #
     # Same fallback as collect.py: without it this fired only when a caller
     # passed an explicit default_graph, leaving `urn:default` enumerable by
-    # `GRAPH ?g` on every production query (§4.2).
+    # `GRAPH ?g` on every production query (§4.2). And, as there, the uuid
+    # is a LITERAL rather than a term-table subquery the planner cannot
+    # estimate (`issues/258`); an absent default graph term means no quad
+    # carries that uuid, so `<>` excludes nothing, as `IS DISTINCT FROM NULL` did.
     if graph_uri == GRAPH_VAR_SCOPE:
+        from .sparql_sql_space_impl import _generate_term_uuid
         _dg = ctx.aliases.default_graph or DEFAULT_GRAPH_URI
         graph_clauses.append(
-            f"q.context_uuid IS DISTINCT FROM (SELECT term_uuid FROM {term_table} "
-            f"WHERE term_text = '{_esc(_dg)}' AND term_type = 'U' LIMIT 1)"
-        )
+            f"q.context_uuid <> '{_generate_term_uuid(_dg, 'U')}'::uuid")
 
     graph_clause = ""
     if graph_clauses:

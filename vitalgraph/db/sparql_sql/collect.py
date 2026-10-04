@@ -259,10 +259,26 @@ def _collect_bgp(op: OpBGP, space_id: str, aliases: AliasGenerator,
         # `urn:default` was enumerated by `GRAPH ?g` as though a user had
         # created it, and the same triples were reachable as the default graph
         # AND as a named one (§4.2).
+        #
+        # A LITERAL, NOT A SUBQUERY (`issues/258`). This read
+        # `context_uuid IS DISTINCT FROM (SELECT term_uuid FROM _const ...)`, and
+        # the planner cannot see through a subquery's result: it guessed the
+        # selectivity, the guesses multiplied across the BGP's quads, and an
+        # unbound `GRAPH ?g` was estimated at ONE row — nested loops and ~156,000
+        # index probes where the graph-bound form gets a parallel hash join
+        # (production cancellations on the actions space; 15-19x locally, and
+        # ANALYZE did not move the estimate). Constants are normally inlined
+        # once resolved, but `urn:default` is usually ABSENT from a space, so
+        # this one stayed a subquery. A term's uuid is a pure function of its
+        # text, so the literal is exactly what the subquery returns when the
+        # term exists — and when it does not, no quad can carry that uuid, so
+        # `<>` holds for every row, as `IS DISTINCT FROM NULL` did. Same rows,
+        # an estimate the planner can make.
         if graph_uri == GRAPH_VAR_SCOPE:
-            subq = _const_subquery(
-                aliases.default_graph or DEFAULT_GRAPH_URI, 'U', aliases)
-            constraint = f"{q_id}.context_uuid IS DISTINCT FROM {subq}"
+            from .sparql_sql_space_impl import _generate_term_uuid
+            default_uuid = _generate_term_uuid(
+                aliases.default_graph or DEFAULT_GRAPH_URI, 'U')
+            constraint = f"{q_id}.context_uuid <> '{default_uuid}'::uuid"
             plan.constraints.append(constraint)
             plan.tagged_constraints.append((q_id, constraint))
 
