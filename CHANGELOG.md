@@ -2,6 +2,104 @@
 
 Notable changes per release. Dates are the release date, not the first commit.
 
+## 0.0.44 — 2026-10-04
+
+31 commits since 0.0.43 (2026-10-01). A frame write now means what it says:
+`update` and `upsert` REPLACE the frame graph instead of merging into it, and
+every delete and `replace` is one locked, guarded transaction scoped to what the
+request names (`issues/256`, `issues/257`). Several of these are **behaviour
+changes a caller will see** — read the first section before upgrading.
+
+**Release the client after the server.** An older server ignores
+`if_unmodified_since` on deletes, so a guarded delete against it runs
+unguarded. Everything else in the client works against either.
+
+### Changed — behaviour a caller will see (server)
+
+- **Frame `update` and `upsert` replace the whole frame graph.** A slot or slot
+  edge left out of the request is DELETED; it used to survive, still attached
+  (a merge reported as success). Send each frame you update whole: the frame,
+  every slot, every `Edge_hasKGSlot`. Other frames, and child frames, are not
+  touched.
+- **The server decides every `hasFrameGraphURI`**; whatever a client sends is
+  discarded. A request with several frames and a slot whose owning frame cannot
+  be determined (no `Edge_hasKGSlot` naming it) is refused, `invalid_request`,
+  nothing written.
+- **Deleting an entity WITHOUT `delete_entity_graph=true` is refused** while
+  the entity has frames, slots or edges (`invalid_request`). It used to delete
+  the entity alone and leave them pointing at nothing.
+- **`replace` is scoped to the frames it names** and their descendants, on both
+  routes. It used to delete every root frame of the entity, or every child of
+  the parent. It is one transaction now, guarded, and a refused or failed
+  replace changes nothing.
+- **`/kgframes` refuses an entity's frames** — create, update, upsert, replace
+  or delete over one, or `parent_uri` naming one or naming an entity. Entity
+  frames go through `/kgentities/kgframes`.
+- **Entity-frame upsert** refuses a frame that belongs to another entity, and
+  writes nothing onto a missing entity; a frame it creates is now linked from
+  the entity. It answers `upserted` (was `created`).
+- **`/kgframes` update of a frame that does not exist** answers `not_found`
+  (it created it). **An unknown `operation_mode`** answers `invalid_request`
+  (it became a create). **`/kgentities?operation_mode=replace`** answers
+  `invalid_request` (was a 500).
+- **Deleting something already gone answers `no_op`** on every route, with
+  `absent_uris` naming it (was `store_failed` or `not_found`).
+
+### Added — client
+
+- **`upsert_kgentities`** — entity upsert, which the client could not send.
+- **`if_unmodified_since` on the deletes** — `delete_kgentity`,
+  `delete_kgentities_batch`, `delete_entity_frames`, `delete_kgframe`,
+  `delete_kgframes_batch` and the methods that delegate to them. Stale ->
+  `is_conflict`, nothing deleted. One stamp per request.
+- **`delete_kgentities_batch(delete_entity_graph=...)`**, and the
+  `VitalGraphClient` delete wrappers pass `delete_entity_graph`, `recursive`
+  and `if_unmodified_since`.
+- **`DeleteResponse.absent_uris`.**
+- **`query_frames(include_frame_graph=True)` returns each frame's graph** —
+  `frame_graph` as JSON quads, hydrated into `frame_graph_objects`
+  (`issues/210`). It was accepted and never implemented.
+
+### Changed — client
+
+- **A `create` is no longer replayed after a post-send failure** (a timeout).
+  The retry marking follows the mode: update, upsert and replace are replayed;
+  create is not, because a replayed create that had landed answers
+  ALREADY_EXISTS. A caller autosaving through `create` should move to `upsert`.
+- **Delete responses report the server's count, list and message**;
+  `delete_kgentity` said "Deleted 1 items" for a no-op.
+
+### Fixed — client
+
+- **`VitalGraphClient.delete_kgentities_batch` deleted nothing.** It passed a
+  comma-separated string to a method that iterated it, so the URIs went out a
+  character at a time and the server answered `no_op` — a success. Takes a
+  list or a string now.
+
+### Fixed — server
+
+- **New KGTypes are indexed again** (`issues/260`). Auto-sync had no `kgtype`
+  scope, so nothing indexed a new or changed type after 2026-09-21; re-populate
+  `kgtype_default` after deploying.
+- **Entity-frame writes keep vector, geo, fuzzy and FTS rows in step** — they
+  scheduled no auto-sync — and an entity graph delete clears its members' rows.
+- **A failed or cancelled query logs its SPARQL, its SQL and its timings**
+  (`issues/259`): one WARNING `failed_query` line, the `slow_query` shape.
+- Every early error in `/kgframes` create ("space not found", "no KGFrame
+  objects") was a 500.
+- Refused writes answer in the body with their reason; three latent ways a
+  guarded write could go unguarded are closed (`issues/253`).
+- Entity registry: the postgresql backend, and band rows are all deleted
+  (`issues/251`, `issues/252`).
+
+### Data
+
+- `scripts/repair_frame_groupings.py`: the one-time repair of frame form types
+  and groupings (`issues/257`), run on production before this release; re-run
+  it after deploying.
+- `scripts/census_entity_orphans.py`: read-only count of entity graphs whose
+  entity is gone.
+
 ## 0.0.43 — 2026-10-01
 
 73 commits since 0.0.42 (2026-09-24). THE CLIENT CHANGES, and that is why this
