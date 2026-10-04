@@ -61,6 +61,17 @@ PG_PASSWORD = os.getenv("VG_TEST_PG_PASSWORD", "testpass")
 
 TEST_SPACE_PREFIX = "apitest_"
 
+
+def _is_local_target() -> bool:
+    """Is SERVER_URL the local docker stack rather than a deployed one?
+
+    Some suites can only pass against a stack whose fixture data they own.
+    They say so with `skipif(not _is_local_target())` rather than failing
+    everywhere else — see `test_users_api.py` for the worked case.
+    """
+    from tests.shared.db_target import is_local_url
+    return is_local_url(SERVER_URL)
+
 pytestmark = pytest.mark.api
 
 
@@ -157,14 +168,42 @@ async def test_graph(vg_client, test_space):
 async def pg_conn():
     """Direct asyncpg connection for verifying database state.
 
-    Skips the test module if PostgreSQL is unreachable.
+    THE SERVER AND THIS CONNECTION MUST BE THE SAME DEPLOYMENT. These suites
+    write through the API and assert against the database directly, so the two
+    halves have to meet. Pointing `LOCAL_CLIENT_SERVER_URL` at a deployed stack
+    while leaving `VG_TEST_PG_*` at its localhost default sends the writes one
+    way and the assertions the other: measured 2026-10-04 against the test
+    deployment, 24 tests failed with `relation "apitest_xxxxxxxx_rdf_quad" does
+    not exist`, which reads as a broken release and is a misconfigured run.
+
+    `image_freshness` exempts a non-localhost target deliberately — "there the
+    image is built from the commit under test" — but it says nothing about
+    WHICH DATABASE this fixture then interrogates. That gap is this check.
+
+    It is a FAILURE, not a skip, for the same reason `image_freshness` fails:
+    a skip inside a suite that is read as coverage is the original defect
+    wearing a different hat. The unreachable-PostgreSQL skip below is kept only
+    for the all-local case, where "no docker stack running" is an ordinary
+    state; against a REMOTE server an unreachable database would silently
+    withdraw every assertion that makes these suites worth running.
     """
+    from tests.shared.db_target import is_local_url, mismatch
+    remote_server = not is_local_url(SERVER_URL)
+    problem = mismatch(SERVER_URL, PG_HOST, PG_PORT, PG_DATABASE)
+    if problem:
+        pytest.fail(problem)
+
     try:
         conn = await asyncpg.connect(
             host=PG_HOST, port=PG_PORT,
             database=PG_DATABASE, user=PG_USER, password=PG_PASSWORD,
         )
-    except Exception:
+    except Exception as e:
+        if remote_server:
+            pytest.fail(
+                f"DB verification cannot reach {PG_HOST}:{PG_PORT}/{PG_DATABASE} "
+                f"({type(e).__name__}: {e}). Skipping here would report a remote "
+                f"run as green with its assertions silently withdrawn.")
         pytest.skip("PostgreSQL not reachable for DB verification")
         return
     yield conn

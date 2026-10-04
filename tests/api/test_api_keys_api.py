@@ -9,9 +9,25 @@ from __future__ import annotations
 
 import pytest
 
+from .conftest import _is_local_target
+
 pytestmark = [
     pytest.mark.api,
     pytest.mark.asyncio(loop_scope="session"),
+    # SKIP, NOT FAIL, OFF THE LOCAL STACK (decided 2026-10-04).
+    #
+    # Run against the test deployment these produced 8 failures, every one
+    # `404: User with ID admin not found`. That is not a defect: the deployed
+    # service authenticates through the bootstrap root credential, so its users
+    # table is empty, and no amount of bootstrap auth creates the `admin` ROW
+    # these assert on. Provisioning one was considered and rejected — it is a
+    # security-relevant change to shared infrastructure.
+    #
+    # Failing everywhere but one stack trains people to read a red suite as
+    # normal, which is how the real failures in it would be missed.
+    pytest.mark.skipif(
+        not _is_local_target(),
+        reason="needs a provisioned user store. A deployed environment authenticates through the BOOTSTRAP credential — the users table is empty (verified 0 rows on test, 2026-10-04) — and these assert a built-in `admin` ROW. Decided 2026-10-04: no admin user will be created on deployed environments, so this is local-stack-only by design, not a gap."),
 ]
 
 
