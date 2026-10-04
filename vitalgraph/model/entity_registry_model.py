@@ -359,6 +359,30 @@ class EntityResponse(BaseModel):
         from_attributes = True
 
 
+class EntityResolveRequest(BaseModel):
+    """Get-or-create an entity by a DECLARED-unique identifier (`issues/227`).
+
+    GET-OR-CREATE, NOT UPSERT: if an entity already holds the identifier it is
+    returned unchanged, and every creation field below is IGNORED.
+    """
+    identifier_namespace: str = Field(..., description="Namespace, e.g. 'EIN'; the (type_key, namespace) pair must be declared unique")
+    identifier_value: str
+    type_key: str = Field(..., description="Entity type, e.g. 'business'")
+    primary_name: str = Field(..., description="Used ONLY when a new entity is created")
+    description: Optional[str] = None
+    country: Optional[str] = None
+    region: Optional[str] = None
+    locality: Optional[str] = None
+    website: Optional[str] = None
+    latitude: Optional[float] = Field(default=None, ge=-90, le=90)
+    longitude: Optional[float] = Field(default=None, ge=-180, le=180)
+    metadata: Optional[Dict[str, Any]] = None
+    created_by: Optional[str] = None
+    notes: Optional[str] = None
+    aliases: Optional[List[AliasCreateRequest]] = None
+    identifiers: Optional[List[IdentifierCreateRequest]] = None
+
+
 class EntityCreateResponse(ResultStatus):
     status: OperationStatus = OperationStatus.CREATED
     entity_id: Optional[str] = None

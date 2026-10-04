@@ -501,11 +501,15 @@ async def insert_entities(
 
                     # Identifiers
                     for ident in obj.get('identifiers', []):
+                        # With the entity's TYPE, as `_insert_identifier` does
+                        # (`issues/227`): a row without it sits outside every
+                        # declared-unique index and escapes the declaration.
                         await conn.execute(
                             "INSERT INTO entity_identifier "
                             "(entity_id, identifier_namespace, identifier_value, "
-                            "is_primary, created_by, notes) "
-                            "VALUES ($1,$2,$3,$4,$5,$6)",
+                            "is_primary, created_by, notes, entity_type_id) "
+                            "VALUES ($1,$2,$3,$4,$5,$6,(SELECT entity_type_id "
+                            "FROM entity WHERE entity_id = $1::varchar))",
                             eid, ident['namespace'], ident['value'],
                             ident.get('is_primary', False),
                             obj.get('created_by', created_by),

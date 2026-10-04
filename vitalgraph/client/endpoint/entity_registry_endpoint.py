@@ -31,6 +31,7 @@ from ...model.entity_registry_model import (
     EntityCategoryRequest,
     EntityCategoryResponse,
     EntityCreateRequest,
+    EntityResolveRequest,
     EntityCreateResponse,
     EntityEnvelope,
     EntityListResponse,
@@ -90,6 +91,23 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
         return await self._make_typed_request(
             "POST", self._url("/entities"), EntityCreateResponse,
             json=request.model_dump(exclude_none=True),
+        )
+
+    async def resolve_or_create_entity(self, request: EntityResolveRequest) -> EntityCreateResponse:
+        """The entity holding a declared-unique identifier, or a new one (`issues/227`).
+
+        Not `resolve_entity`, which is the same-as resolution further down.
+        `status` is "created" when this call made it and "found" when an entity
+        already held the identifier — then every creation field is IGNORED, not
+        merged (get-or-create, not upsert). Concurrent calls for one identifier
+        all answer the same entity. "invalid_request" when the
+        (type_key, namespace) pair is not declared unique. Safe to replay: a
+        repeat finds the entity the first call made.
+        """
+        self._check_connection()
+        return await self._make_typed_request(
+            "POST", self._url("/entities/resolve"), EntityCreateResponse,
+            json=request.model_dump(exclude_none=True), idempotent=True,
         )
 
     async def get_entity(self, entity_id: str) -> EntityEnvelope:

@@ -5,7 +5,7 @@ Global tables (not per-space) for tracking real-world entities
 with unique identifiers, aliases, external identifiers, and same-as mappings.
 """
 
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from .entity_status import STATUS_SETS
 
@@ -91,7 +91,8 @@ class EntityRegistrySchema:
                 status VARCHAR(20) NOT NULL DEFAULT 'active',
                 created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 created_by VARCHAR(255),
-                notes TEXT
+                notes TEXT,
+                entity_type_id INTEGER REFERENCES entity_type(type_id)
             )
         ''',
 
@@ -479,7 +480,70 @@ class EntityRegistrySchema:
         "THEN ALTER TABLE relationship_type ADD CONSTRAINT fk_relationship_inverse "
         "FOREIGN KEY (inverse_key) REFERENCES relationship_type(type_key) "
         "DEFERRABLE INITIALLY DEFERRED; END IF; END $$",
+
+        # `issues/227`: the entity's TYPE on the identifier row, so uniqueness
+        # can be declared per (namespace, entity_type). Safe to denormalise
+        # because an entity's type is immutable (`update_entity` never writes
+        # it). Only the column here: filling it for existing rows is
+        # `apps/entity_registry/backfill_identifier_entity_type.py`, batched,
+        # because one UPDATE over the table outlasts a 60 s statement_timeout.
+        # New rows get it from `_insert_identifier`.
+        "ALTER TABLE entity_identifier ADD COLUMN IF NOT EXISTS entity_type_id INTEGER "
+        "REFERENCES entity_type(type_id)",
     ]
+
+    # ------------------------------------------------------------------
+    # DECLARED UNIQUE IDENTIFIERS (`issues/227`)
+    # ------------------------------------------------------------------
+    #
+    # A (type_key, namespace) pair listed here is declared UNIQUE: at most one
+    # ACTIVE identifier row per value for entities of that type. The declaration
+    # IS a partial unique index on `entity_identifier`, so every write path —
+    # `create_entity`, `add_identifier`, `resolve_or_create_entity` — is held to
+    # it, and `resolve_or_create_entity` works only for a declared pair.
+    #
+    # Everything NOT listed keeps today's semantics: identifiers are pointers,
+    # not identity, and `lookup_by_identifier` returns a list. A blanket unique
+    # constraint would reject legitimate data (one Salesforce lead is a person
+    # AND a business; a contact and its company share a phone).
+    #
+    # EMPTY ON PURPOSE. A pair can be declared only when no existing row
+    # contradicts it — the index build refuses otherwise, and that refusal IS the
+    # precondition check. On the data measured for `issues/227` every
+    # identity-bearing pair still holds duplicates, each to be MERGED by a
+    # decision, not by picking the oldest. Run
+    # `apps/entity_registry/declare_unique_identifiers.py --report` to see what
+    # blocks each pair; add a pair here once it reports clean.
+    DECLARED_UNIQUE_IDENTIFIERS: List[Tuple[str, str]] = []
+
+    @staticmethod
+    def declared_index_name(type_key: str, namespace: str) -> str:
+        """The partial unique index that IS the declaration for this pair."""
+        import hashlib
+        import re
+        base = re.sub(r'[^a-z0-9]+', '_', f"uq_ident_{namespace}_{type_key}".lower()).strip('_')
+        if len(base) <= 63:
+            return base
+        return base[:54] + '_' + hashlib.sha1(base.encode()).hexdigest()[:8]
+
+    @classmethod
+    def declared_index_sql(cls, type_key: str, namespace: str, type_id: int) -> str:
+        """The DDL for one declaration, with THIS database's type id.
+
+        A partial-index predicate must be immutable, so it cannot join
+        `entity_type` to look up `type_key`; the surrogate `type_id` is a
+        literal. It is SERIAL, seeded in whatever order each database happened
+        to be seeded in (on dev `person` is 1 and `business` 2), so it is
+        resolved per database at emit time — a hardcoded id builds a perfectly
+        valid index over the WRONG type, and nothing reports it.
+        """
+        ns = namespace.replace("'", "''")
+        return (
+            f"CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "
+            f"{cls.declared_index_name(type_key, namespace)} "
+            f"ON entity_identifier (identifier_namespace, identifier_value, entity_type_id) "
+            f"WHERE identifier_namespace = '{ns}' AND entity_type_id = {int(type_id)} "
+            f"AND status = 'active'")
 
     VIEWS = [
         """CREATE OR REPLACE VIEW entity_location_view AS

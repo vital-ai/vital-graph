@@ -22,6 +22,7 @@ from ..model.entity_registry_model import (
     EntityCategoryRequest,
     EntityCategoryResponse,
     EntityCreateRequest,
+    EntityResolveRequest,
     EntityCreateResponse,
     EntityListResponse,
     EntityResponse,
@@ -86,6 +87,7 @@ from ..model.entity_registry_model import (
     MetadataListResponse,
 )
 from ..entity_registry.entity_registry_id import entity_id_to_uri
+from ..entity_registry.entity_identifier_ops import IdentifierClaimed
 from ..entity_registry.entity_registry_search import EntityRegistrySearch
 
 
@@ -206,12 +208,52 @@ class EntityRegistryEndpoint:
                     status=OperationStatus.CREATED, entity_id=entity['entity_id'],
                     entity_uri=entity['entity_uri'], entity=_entity_to_response(full),
                 )
+            except IdentifierClaimed as e:
+                # A declared identifier already held: name the holder, so the
+                # caller uses it rather than minting a duplicate (`issues/227`).
+                return EntityCreateResponse(status=OperationStatus.ALREADY_EXISTS,
+                                            message=str(e), entity_id=e.holder)
             except ValueError as e:
                 return EntityCreateResponse(status=OperationStatus.INVALID_REQUEST, message=str(e))
             except HTTPException:
                 raise
             except Exception as e:
                 self.logger.error(f"Error creating entity: {e}")
+                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+        @self.router.post("/entities/resolve", response_model=EntityCreateResponse, tags=["Entity Registry"])
+        async def resolve_entity_route(request: EntityResolveRequest, current_user: Dict = Depends(auth)):
+            """The entity holding a DECLARED-unique identifier, or a new one (`issues/227`).
+
+            CREATED when this call minted it, FOUND when an entity already held
+            the identifier — in which case every creation field is IGNORED, not
+            merged. Concurrent calls for one identifier all answer the same
+            entity. INVALID_REQUEST if the (type_key, namespace) pair is not
+            declared unique.
+            """
+            try:
+                kwargs = request.model_dump(exclude={'identifier_namespace', 'identifier_value',
+                                                     'type_key', 'primary_name'})
+                kwargs['aliases'] = [a.model_dump() for a in request.aliases] if request.aliases else None
+                kwargs['identifiers'] = ([i.model_dump() for i in request.identifiers]
+                                         if request.identifiers else None)
+                entity, created = await self.registry.resolve_or_create_entity(
+                    request.identifier_namespace, request.identifier_value,
+                    request.type_key, request.primary_name, **kwargs)
+                return EntityCreateResponse(
+                    status=OperationStatus.CREATED if created else OperationStatus.FOUND,
+                    entity_id=entity['entity_id'], entity_uri=entity.get('entity_uri'),
+                    entity=_entity_to_response(entity))
+            except IdentifierClaimed as e:
+                # One of the EXTRA identifiers is held by another entity.
+                return EntityCreateResponse(status=OperationStatus.ALREADY_EXISTS,
+                                            message=str(e), entity_id=e.holder)
+            except ValueError as e:     # IdentifierNotDeclared, unknown type
+                return EntityCreateResponse(status=OperationStatus.INVALID_REQUEST, message=str(e))
+            except HTTPException:
+                raise
+            except Exception as e:
+                self.logger.error(f"Error resolving entity: {e}")
                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
         @self.router.get("/entities", response_model=EntityListResponse, tags=["Entity Registry"])
@@ -299,6 +341,9 @@ class EntityRegistryEndpoint:
                     created_by=request.created_by, notes=request.notes,
                 )
                 return IdentifierEnvelope(status=OperationStatus.CREATED, identifier=IdentifierResponse(**ident))
+            except IdentifierClaimed as e:
+                return IdentifierEnvelope(status=OperationStatus.ALREADY_EXISTS,
+                                          message=str(e), identifier=None)
             except ValueError as e:
                 return IdentifierEnvelope(status=OperationStatus.INVALID_REQUEST, message=str(e), identifier=None)
 

@@ -30,7 +30,9 @@ from .entity_changelog_ops import ChangeLogMixin
 from .entity_fuzzy import EntityFuzzyIndex, compute_entity_hash
 from .entity_fuzzy_pg import EntityFuzzyIndexPG
 from .entity_fuzzy_ops import FuzzyMixin
-from .entity_identifier_ops import IdentifierMixin
+from .entity_identifier_ops import (
+    IdentifierClaimed, IdentifierMixin, IdentifierNotDeclared, holder_of,
+    is_declared_violation)
 from .entity_location_ops import LocationMixin
 from .entity_metadata_ops import MetadataMixin
 from .entity_registry_id import generate_entity_id, entity_id_to_uri, uri_to_entity_id
@@ -224,90 +226,209 @@ class EntityRegistryImpl(
 
         Raises:
             ValueError: If type_key is invalid.
+            IdentifierClaimed: If an identifier is DECLARED unique and another
+                entity already holds its value (`issues/227`).
+        """
+        create_kwargs = dict(
+            description=description, country=country, region=region,
+            locality=locality, website=website, latitude=latitude,
+            longitude=longitude, created_by=created_by, notes=notes,
+            metadata=metadata, aliases=aliases, identifiers=identifiers,
+            locations=locations)
+        type_id = None
+        async with self.pool.acquire() as conn:
+            try:
+                async with conn.transaction():
+                    type_id = await self._get_entity_type_id(conn, type_key)
+                    if type_id is None:
+                        raise ValueError(f"Unknown entity type: {type_key}")
+                    entity, alias_list = await self._insert_entity_rows(
+                        conn, type_id, type_key, primary_name, **create_kwargs)
+                    # Inside the transaction, as before `issues/227` split this
+                    # out: a fuzzy-index failure still rolls the entity back.
+                    await self._after_entity_created(entity, type_key, alias_list)
+                    return entity
+            except Exception as e:
+                if not is_declared_violation(e):
+                    raise
+                raise await self._claimed_from(conn, identifiers, type_id) from None
+
+    async def _claimed_from(self, conn, identifiers, type_id) -> IdentifierClaimed:
+        """Which of a create's identifiers lost to a declaration, and to whom."""
+        for ident in identifiers or []:
+            ns = ident.get('identifier_namespace')
+            val = ident.get('identifier_value')
+            holder = await holder_of(conn, ns, val, type_id)
+            if holder:
+                return IdentifierClaimed(ns, val, holder)
+        return IdentifierClaimed("?", "?", None)
+
+    async def _insert_entity_rows(
+        self, conn, type_id: int, type_key: str, primary_name: str, *,
+        description=None, country=None, region=None, locality=None,
+        website=None, latitude=None, longitude=None, created_by=None,
+        notes=None, metadata=None, aliases=None, identifiers=None,
+        locations=None,
+    ):
+        """The entity's ROWS, on the caller's connection and transaction.
+
+        Everything a rollback undoes — and nothing else. The fuzzy index, the
+        NOTIFY and the vector sync are `_after_entity_created`, so a caller that
+        may still roll back (`resolve_or_create_entity`'s losers) never leaves
+        them describing an entity that does not exist. Returns
+        (entity, alias_list).
         """
         metadata_json = json.dumps(metadata) if metadata else '{}'
 
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                type_id = await self._get_entity_type_id(conn, type_key)
-                if type_id is None:
-                    raise ValueError(f"Unknown entity type: {type_key}")
+        # Generate unique ID with retry on collision
+        entity_id = None
+        for _ in range(5):
+            candidate = generate_entity_id()
+            exists = await conn.fetchval(
+                "SELECT 1 FROM entity WHERE entity_id = $1", candidate
+            )
+            if not exists:
+                entity_id = candidate
+                break
+        if entity_id is None:
+            raise RuntimeError("Failed to generate unique entity ID after 5 attempts")
 
-                # Generate unique ID with retry on collision
-                entity_id = None
-                for _ in range(5):
-                    candidate = generate_entity_id()
-                    exists = await conn.fetchval(
-                        "SELECT 1 FROM entity WHERE entity_id = $1", candidate
+        # Compute fuzzy hash from the fields that will be indexed
+        alias_list = [
+            {'alias_name': a.get('alias_name', a.get('name', ''))} for a in (aliases or [])
+        ]
+        fuzzy_hash = compute_entity_hash({
+            'type_key': type_key, 'primary_name': primary_name,
+            'country': country, 'region': region, 'locality': locality,
+            'aliases': alias_list,
+        })
+
+        row = await conn.fetchrow(
+            "INSERT INTO entity (entity_id, entity_type_id, primary_name, description, "
+            "country, region, locality, website, latitude, longitude, "
+            "metadata, created_by, notes, fuzzy_hash) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14) "
+            "RETURNING *",
+            entity_id, type_id, primary_name, description,
+            country, region, locality, website, latitude, longitude,
+            metadata_json, created_by, notes, fuzzy_hash
+        )
+        entity = dict(row)
+        entity['entity_uri'] = entity_id_to_uri(entity_id)
+
+        await self._log_change(conn, entity_id, 'entity_created', {
+            'type_key': type_key, 'primary_name': primary_name
+        }, changed_by=created_by)
+
+        # Create initial aliases
+        if aliases:
+            for alias_data in aliases:
+                await self._insert_alias(conn, entity_id, **alias_data)
+
+        # Create initial identifiers
+        if identifiers:
+            for ident_data in identifiers:
+                await self._insert_identifier(conn, entity_id, **ident_data)
+
+        # Create initial locations
+        if locations:
+            for loc_data in locations:
+                loc_type_key = loc_data.pop('location_type_key', None)
+                if loc_type_key:
+                    await self._insert_location(
+                        conn, entity_id, loc_type_key,
+                        created_by=created_by, **loc_data,
                     )
-                    if not exists:
-                        entity_id = candidate
-                        break
-                if entity_id is None:
-                    raise RuntimeError("Failed to generate unique entity ID after 5 attempts")
+        return entity, alias_list
 
-                # Compute fuzzy hash from the fields that will be indexed
-                alias_list = [
-                    {'alias_name': a.get('alias_name', a.get('name', ''))} for a in (aliases or [])
-                ]
-                fuzzy_hash = compute_entity_hash({
-                    'type_key': type_key, 'primary_name': primary_name,
-                    'country': country, 'region': region, 'locality': locality,
-                    'aliases': alias_list,
-                })
+    async def _after_entity_created(self, entity: Dict[str, Any], type_key: str,
+                                    alias_list: List[Dict[str, Any]]) -> None:
+        """Fuzzy index, the change NOTIFY, and the PG vector/FTS/geo sync."""
+        entity_id = entity['entity_id']
+        if self.fuzzy_index:
+            entity_for_index = dict(entity)
+            entity_for_index['type_key'] = type_key
+            entity_for_index['aliases'] = alias_list
+            if isinstance(self.fuzzy_index, EntityFuzzyIndexPG):
+                await self.fuzzy_index.add_entity(entity_id, entity_for_index)
+            else:
+                await self.fuzzy_index.async_add_entity(entity_id, entity_for_index)
+            await self._notify_fuzzy_change('add', entity_id)
 
-                row = await conn.fetchrow(
-                    "INSERT INTO entity (entity_id, entity_type_id, primary_name, description, "
-                    "country, region, locality, website, latitude, longitude, "
-                    "metadata, created_by, notes, fuzzy_hash) "
-                    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14) "
-                    "RETURNING *",
-                    entity_id, type_id, primary_name, description,
-                    country, region, locality, website, latitude, longitude,
-                    metadata_json, created_by, notes, fuzzy_hash
-                )
-                entity = dict(row)
-                entity['entity_uri'] = entity_id_to_uri(entity_id)
+        # Sync to PG vector/FTS/geo tables
+        await self._pg_sync_entity(entity_id)
 
-                await self._log_change(conn, entity_id, 'entity_created', {
-                    'type_key': type_key, 'primary_name': primary_name
-                }, changed_by=created_by)
+    async def is_identifier_declared(self, conn, namespace: str, type_id: int) -> bool:
+        """Is (namespace, type) DECLARED unique — i.e. does its VALID index exist?
 
-                # Create initial aliases
-                if aliases:
-                    for alias_data in aliases:
-                        await self._insert_alias(conn, entity_id, **alias_data)
+        The index, not the schema list, is the authority: a declaration is in
+        force exactly when the database enforces it. A failed CONCURRENTLY build
+        leaves an INVALID index, which enforces nothing, so validity is checked.
+        """
+        type_key = await conn.fetchval(
+            "SELECT type_key FROM entity_type WHERE type_id = $1", type_id)
+        if type_key is None:
+            return False
+        name = EntityRegistrySchema.declared_index_name(type_key, namespace)
+        return bool(await conn.fetchval(
+            "SELECT i.indisvalid FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid "
+            "WHERE c.relname = $1", name))
 
-                # Create initial identifiers
-                if identifiers:
-                    for ident_data in identifiers:
-                        await self._insert_identifier(conn, entity_id, **ident_data)
+    async def resolve_or_create_entity(
+        self, namespace: str, value: str, type_key: str, primary_name: str,
+        **create_kwargs,
+    ):
+        """The entity holding `namespace:value`, or a new one holding it (`issues/227`).
 
-                # Create initial locations
-                if locations:
-                    for loc_data in locations:
-                        loc_type_key = loc_data.pop('location_type_key', None)
-                        if loc_type_key:
-                            await self._insert_location(
-                                conn, entity_id, loc_type_key,
-                                created_by=created_by, **loc_data,
-                            )
+        Returns (entity, created). GET-OR-CREATE, NOT UPSERT: when the entity
+        exists, every creation argument — `primary_name`, `country`, `website`,
+        aliases, the rest — is IGNORED, not merged. The pair must be DECLARED
+        unique (`IdentifierNotDeclared` otherwise): for an undeclared pair an
+        identifier legitimately names several entities, and choosing one is
+        the defect this exists to stop.
 
-                # Update fuzzy index and notify other workers
-                if self.fuzzy_index:
-                    entity_for_index = dict(entity)
-                    entity_for_index['type_key'] = type_key
-                    entity_for_index['aliases'] = alias_list
-                    if isinstance(self.fuzzy_index, EntityFuzzyIndexPG):
-                        await self.fuzzy_index.add_entity(entity_id, entity_for_index)
-                    else:
-                        await self.fuzzy_index.async_add_entity(entity_id, entity_for_index)
-                    await self._notify_fuzzy_change('add', entity_id)
-
-                # Sync to PG vector/FTS/geo tables
-                await self._pg_sync_entity(entity_id)
-
-                return entity
+        CONCURRENT CALLERS CONVERGE ON ONE ENTITY, with no lock: the declaration
+        is a unique index, so of N callers that all miss the lookup and insert,
+        N-1 BLOCK inside their identifier INSERT until the first commits, then
+        fail with a unique violation; their transactions roll back their minted
+        entity, and they read the winner's. If the winner rolls back instead, a
+        waiter's insert succeeds and it becomes the winner. Relies on READ
+        COMMITTED, the default. The fuzzy index and vector sync run only for the
+        entity that won (`_after_entity_created`).
+        """
+        identifiers = [dict(i) for i in (create_kwargs.pop('identifiers', None) or [])]
+        if not any(i.get('identifier_namespace') == namespace
+                   and i.get('identifier_value') == value for i in identifiers):
+            identifiers.insert(0, {'identifier_namespace': namespace,
+                                   'identifier_value': value, 'is_primary': True})
+        async with self.pool.acquire() as conn:
+            type_id = await self._get_entity_type_id(conn, type_key)
+            if type_id is None:
+                raise ValueError(f"Unknown entity type: {type_key}")
+            if not await self.is_identifier_declared(conn, namespace, type_id):
+                raise IdentifierNotDeclared(
+                    f"({type_key}, {namespace}) is not declared unique, so an "
+                    f"identifier can name several entities and there is nothing to "
+                    f"resolve to. Declare it (EntityRegistrySchema."
+                    f"DECLARED_UNIQUE_IDENTIFIERS) once its duplicates are merged.")
+            holder = await holder_of(conn, namespace, value, type_id)
+            if holder:
+                return await self.get_entity(holder), False
+            try:
+                async with conn.transaction():
+                    entity, alias_list = await self._insert_entity_rows(
+                        conn, type_id, type_key, primary_name,
+                        identifiers=identifiers, **create_kwargs)
+            except Exception as e:
+                if not is_declared_violation(e):
+                    raise
+                # Lost the race: our entity never existed. Read the winner's.
+                holder = await holder_of(conn, namespace, value, type_id)
+                if holder is None:      # pragma: no cover - the winner rolled back too
+                    raise
+                return await self.get_entity(holder), False
+        await self._after_entity_created(entity, type_key, alias_list)
+        return await self.get_entity(entity['entity_id']), True
 
     @with_db_retry()
     async def get_entity(self, entity_id: str) -> Optional[Dict[str, Any]]:

@@ -1,9 +1,8 @@
 # 227 — Nothing resolves an entity by identifier, so concurrent callers mint duplicates
 
-## Status: OPEN — capability request, raised 2026-09-22. Design settled in
-## discussion, NOTHING BUILT. Revised 2026-09-23: uniqueness is **declared** per
-## `(namespace, entity_type)` and enforced by a partial unique index, replacing
-## the `entity_identity_claim` table of the first draft.
+## Status: OPEN — mechanism BUILT 2026-10-04 (uncommitted); NOTHING DECLARED
+## yet. Declaring a pair needs its duplicates merged first, by decision. See
+## "As built" at the end, and the production counts there.
 
 **Related:** `issues/173` (the same check-then-act race one layer up, in the KG
 entity upsert — and the source of this repo's concurrency primitive),
@@ -297,3 +296,75 @@ collapse, and `entity_category_map` already carries
 exactly this constraint as `uq_entity_category` with an
 `ON CONFLICT ... DO UPDATE SET status='active'` write path to match. It is
 worth doing. It has nothing to do with duplicate entities.
+
+## As built, 2026-10-04 (uncommitted)
+
+The design above, as written, with these specifics.
+
+- **`entity_identifier.entity_type_id`**: in the table definition, and added by
+  `migrate.py` (column only). `apps/entity_registry/backfill_identifier_entity_type.py`
+  fills existing rows in `identifier_id` batches — one UPDATE over the table
+  would outlast production's 60 s `statement_timeout`. Written by
+  `_insert_identifier` and by the JSONL importer (`entity_import_jsonl.py`), the
+  only direct insert outside it.
+- **Declarations**: `EntityRegistrySchema.DECLARED_UNIQUE_IDENTIFIERS`, a list of
+  `(type_key, namespace)` — **EMPTY**. `declared_index_sql` emits the partial
+  unique index with THIS database's `type_id`, resolved by the caller, never
+  defaulted. `apps/entity_registry/declare_unique_identifiers.py`: `--report`
+  (read-only, `--db PREFIX --ssl` for another database) shows per pair the rows,
+  rows still untyped, and values held by more than one active entity — what
+  blocks it; `--apply` builds each declared pair CONCURRENTLY, refuses while any
+  row in the namespace is untyped, and on a failed build drops the invalid index
+  and lists the values in the way. No force option, no bypass.
+- **In force = the index exists and is VALID** (`is_identifier_declared`, from
+  `pg_index.indisvalid`): a failed CONCURRENTLY build leaves an invalid index
+  that enforces nothing.
+- **Every write path**: a declared value held by another entity raises
+  `IdentifierClaimed` from `create_entity` and `add_identifier`, answered
+  ALREADY_EXISTS in a 200 naming the holder; nothing written.
+- **`resolve_or_create_entity`** and `POST /entities/resolve` (CREATED / FOUND;
+  INVALID_REQUEST for an undeclared pair). Client:
+  `entity_registry.resolve_or_create_entity(EntityResolveRequest)` — NOT
+  `resolve_entity`, which already exists for same-as resolution and silently
+  shadowed the first version of this method. Marked replay-safe.
+- **`create_entity` split** into `_insert_entity_rows` (the rows, rolled back with
+  the transaction) and `_after_entity_created` (fuzzy index, NOTIFY, vector/FTS/
+  geo sync). `create_entity` still runs both inside its transaction, as before;
+  `resolve` runs the side effects only for the entity that WON, so a loser's
+  rolled-back entity never reaches the fuzzy or vector indexes.
+
+**Tests.** `tests/api/test_entity_resolve_contract.py` (6), declaring a
+namespace unique for `business` by building the same index, dropped afterwards:
+undeclared refused; created then found, creation fields ignored; **10 concurrent
+calls converge on ONE entity, one `entity_created` row, 9 FOUND**; add_identifier
+and create refused naming the holder (and the refused create leaves no entity);
+a `person` may still share the value. `tests/unit/test_declared_unique_identifiers.py`.
+The first API run caught a 500 of mine — `$1` used as both a VARCHAR insert
+value and a comparison made PostgreSQL deduce two types — before anything
+shipped.
+
+**Measured, 2026-10-04** (`--report`, read-only; active rows; values held by >1
+active entity of that type):
+
+| pair | production rows | production dup values | dev dup values |
+|---|---:|---:|---:|
+| business SF_ACCOUNT_ID | 99,708 | **0 — declarable now** | 19 |
+| business SF_OPPORTUNITY_ID | 123,134 | 3 | 18 |
+| business SF_LEAD_ID | 632,050 | 17 | 34 |
+| person SF_LEAD_PERSON_ID | 557,483 | 5 | 6 |
+| person SF_CONTACT_ID | 14,013 | 63 | 6 |
+| business EIN | 246,989 | **5,390** | 27 |
+
+Production is the first measurement this issue has had; the table above it was
+dev only. EIN is two orders of magnitude worse than dev, and this issue already
+found placeholder EINs shared by unrelated companies, so many of the 5,390 may
+be junk values, not duplicate businesses — that needs looking at before any
+merge. EMAIL and PHONE collide by design (contact and company share them) and are
+not candidates.
+
+**To put it in force:** (1) `migrate.py` then `backfill_identifier_entity_type.py`
+on the database; (2) merge a pair's duplicates via `entity_same_as` (decided
+per group, not `MIN(created_time)`), retracting the merged entity's identifiers;
+(3) add the pair to `DECLARED_UNIQUE_IDENTIFIERS`; (4) `--apply`. Business
+SF_ACCOUNT_ID needs only (1), (3), (4).
+
