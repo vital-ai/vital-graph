@@ -302,7 +302,10 @@ class KGQueriesEndpoint(BaseEndpoint):
             frame_type: Optional frame type URI to filter by
             entity_type: Optional entity type URI (frames must belong to entity of this type)
             slot_criteria: Optional list of SlotCriteria for filtering by slot values
-            include_frame_graph: Include structured frame graph data in results (default: False)
+            include_frame_graph: Include each frame's graph (the frame and every
+                subject grouped with it) as `frame_graph` JSON quads, hydrated
+                into `frame_graph_objects` (default: False). One batched query
+                per page on the server; offered, not defaulted (`issues/210`).
             page_size: Number of results per page (default: 10)
             offset: Offset for pagination (default: 0)
             
@@ -371,7 +374,17 @@ class KGQueriesEndpoint(BaseEndpoint):
             count_only=count_only,
             include_total_count=include_total_count,
         )
-        return FrameQueryResponse.from_raw(raw)
+        response = FrameQueryResponse.from_raw(raw)
+
+        # Hydrate frame_graph quads -> GraphObjects, as query_entities does for
+        # entity graphs (`issues/210`).
+        from ..utils.format_helpers import deserialize_response_to_graphobjects, ClientWireFormat
+        for fr in response.results:
+            if fr.frame_graph is not None:
+                fr.frame_graph_objects = deserialize_response_to_graphobjects(
+                    {"results": fr.frame_graph}, ClientWireFormat.JSON_QUADS
+                ) if fr.frame_graph else []
+        return response
     
     async def query_entities(
         self,

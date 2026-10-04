@@ -336,7 +336,8 @@ class FrameQueryResult(BaseModel):
     frame_uri: str = Field(..., description="URI of the matching frame")
     frame_type_uri: str = Field(..., description="Frame type URI")
     entity_refs: List[EntitySlotRef] = Field(default_factory=list, description="Entities connected via entity slots, with their slot roles")
-    frame_graph: Optional[Any] = Field(default=None, description="Structured frame graph data (when include_frame_graph=True)")
+    frame_graph: Optional[List[Dict[str, Any]]] = Field(default=None, description="The frame graph as JSON quads ({s,p,o,g}) — the frame and every subject grouped with it — when include_frame_graph=True")
+    frame_graph_objects: Optional[List[Any]] = Field(None, exclude=True, description="Hydrated GraphObjects of frame_graph (populated client-side only)")
     fts_matches: List[FTSMatch] = Field(default_factory=list, description="Indexed slots that matched the FTS criterion")
 
 

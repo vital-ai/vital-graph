@@ -1609,6 +1609,7 @@ class KGQueriesEndpoint:
                         frame_uris.append(uri)
             
             frame_results = []
+            frame_graph_error: Optional[str] = None
             if frame_uris:
                 refs_by_frame: Dict[str, List[EntitySlotRef]] = {
                     uri: [] for uri in frame_uris}
@@ -1678,53 +1679,67 @@ class KGQueriesEndpoint:
                                 entity_uri=entity_uri
                             ))
 
+                # FRAME GRAPHS, when asked (`issues/210` option 1). One query
+                # for the whole page through `get_frame_graphs` — the batched
+                # fetch `issues/240` built for `/kgframes?uris=` so this could
+                # reuse it — not one per frame. Priced in 210 at ~12k buffers
+                # for a 25-frame page: offered, never defaulted. Each graph is
+                # the frame plus every subject grouped with it
+                # (`hasFrameGraphURI`), as JSON quads ({s,p,o,g}): the shape
+                # `entity_graphs` uses, so the client hydrates both alike.
+                frame_graphs: Dict[str, List[Dict[str, Any]]] = {}
+                if getattr(query_request, "include_frame_graph", False):
+                    try:
+                        from ..kg_impl.kgframe_graph_impl import KGFrameGraphProcessor
+                        from ..kg_impl.kg_backend_utils import create_backend_adapter
+                        from ..utils.quad_format_utils import graphobjects_to_quad_list
+                        t_fg0 = _time.monotonic()
+                        graphs = await KGFrameGraphProcessor().get_frame_graphs(
+                            backend_adapter=create_backend_adapter(backend),
+                            space_id=space_id, graph_id=graph_id,
+                            frame_uris=list(frame_uris))
+                        for f_uri, objs in (graphs or {}).items():
+                            quads = await asyncio.to_thread(
+                                graphobjects_to_quad_list, objs, graph_id)
+                            frame_graphs[f_uri] = [q.model_dump() for q in quads]
+                        self.logger.info(
+                            "Frame graph fetch: %d frames, %.0fms", len(frame_uris),
+                            (_time.monotonic() - t_fg0) * 1000)
+                    except Exception as e:
+                        # SAID, not a silent null: a null `frame_graph` is the
+                        # defect this issue exists for. The frames themselves are
+                        # correct, so the query still succeeds.
+                        frame_graph_error = f"{type(e).__name__}: {e}"
+                        self.logger.error(
+                            "frame_query: frame graphs failed for %d frame(s) in "
+                            "%s: %s", len(frame_uris), space_id, frame_graph_error)
+
                 for uri in frame_uris:
                     frame_results.append(FrameQueryResult(
                         frame_uri=uri,
                         frame_type_uri=frame_types.get(uri, ""),
                         entity_refs=refs_by_frame.get(uri, []),
                         fts_matches=fts_matches_by_frame.get(uri, []),
-                        # include_frame_graph is ACCEPTED and NOT implemented
-                        # (`issues/210`). Left None, and now SAID so in the
-                        # response below rather than returned as a silent null —
-                        # the request model documents this field as populating
-                        # `frame_graph`, and the official client sends it, so a
-                        # caller reading nulls has no way to tell "no graph" from
-                        # "this endpoint ignores your flag".
-                        frame_graph=None
+                        # A list (possibly empty) when asked and fetched; None
+                        # when not asked, or when the fetch failed — which the
+                        # message below then says.
+                        frame_graph=(frame_graphs.get(uri, [])
+                                     if getattr(query_request, "include_frame_graph", False)
+                                     and frame_graph_error is None else None),
                     ))
             
             self.logger.info(f"Frame query: {len(frame_results)} frames (total={total_count}), {(t_query - t0)*1000:.0f}ms")
             
-            # SAY that the flag did nothing. 200 with the outcome in the body
-            # is the house rule for a domain outcome, and the results ARE
-            # correct — only `frame_graph` is absent. Honest in one line and
-            # immediately actionable, where a null is neither (`issues/210`).
-            #
-            # NOT an error status: the query succeeded. `success` stays true
-            # because the caller's frames are all there.
-            # "" and not None: `message` is a non-Optional str on ResultStatus,
-            # so None fails validation and the endpoint 500s. Caught by the
-            # control cell asserting a request that did NOT ask gets no
-            # message — the cell that existed to stop an unconditional message
-            # found an unconditional crash instead.
+            # The flag is IMPLEMENTED since 2026-10-04 (`issues/210`); the
+            # message it used to carry ("accepted but NOT implemented") is gone.
+            # What remains to say is a FAILED fetch: the frames are correct, so
+            # the status stays a success, and the message is the one place the
+            # caller learns why `frame_graph` is null when it asked for it.
             _msg = ""
-            if getattr(query_request, "include_frame_graph", False):
-                # "the URI lookups" was too broad and is corrected here
-                # (`issues/240`): only the SINGLE-uri form honours the flag. The
-                # `uris=` form accepted and dropped it, so this message was
-                # sending callers from one silent no-op to another.
-                _msg = ("include_frame_graph is accepted but NOT implemented on "
-                        "/kgqueries: frame_graph is null on every result. Use "
-                        "/kgframes?uri= for a single frame, where the flag IS "
-                        "implemented, or slot_projection/property_projection to "
-                        "name the columns you need. The /kgframes?uris= form "
-                        "does not implement it either. See issues/210, "
-                        "issues/240.")
-                self.logger.warning(
-                    "frame_query: include_frame_graph=True requested on %s and "
-                    "is not implemented; returning frame_graph=None with a "
-                    "message (issues/210)", space_id)
+            if frame_graph_error is not None:
+                _msg = ("include_frame_graph: the frame graphs could not be "
+                        f"fetched ({frame_graph_error}); frame_graph is null on "
+                        "every result. The frames themselves are complete.")
             return KGQueryResponse(
                 status=_read_status(frame_results),
                 query_type="frame_query",

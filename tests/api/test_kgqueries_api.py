@@ -249,70 +249,95 @@ class TestKGQueryFrame:
 
 
 # ---------------------------------------------------------------------------
-# include_frame_graph: accepted, not implemented, and now SAYS so (issues/210)
+# include_frame_graph: IMPLEMENTED 2026-10-04 (issues/210 option 1)
 # ---------------------------------------------------------------------------
 
-class TestIncludeFrameGraphIsHonest:
-    """`/kgqueries` offers `include_frame_graph` and implements it nowhere.
+@pytest_asyncio.fixture(loop_scope="session")
+async def two_frames(vg_client, test_space, test_graph):
+    """An entity with two frames of a fresh type, each with one slot."""
+    from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
+    from ai_haley_kg_domain.model.KGFrame import KGFrame
+    from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
 
-    The request model documents it, the response model documents `frame_graph`
-    as populated by it, and the official client puts it in `query_frames`'s
-    signature and sends it. The server hardcoded `frame_graph=None`, so True and
-    False returned byte-identical results with `status=FOUND` and no error —
-    a documented parameter that lies.
+    frame_type = f"{NS}frametype_{uuid.uuid4().hex[:8]}"
+    entity = KGEntity()
+    entity.URI = f"{NS}fg_entity_{uuid.uuid4().hex[:8]}"
+    entity.name = "Frame Graph Probe"
+    r = await vg_client.kgentities.create_kgentities(
+        space_id=test_space, graph_id=test_graph, objects=[entity])
+    assert r.is_success, r.error_message
+    frames = {}
+    for label in ("a", "b"):
+        frame = KGFrame()
+        frame.URI = f"{NS}fg_frame_{label}_{uuid.uuid4().hex[:8]}"
+        frame.name = f"Frame {label}"
+        frame.kGFrameType = frame_type
+        slot = KGTextSlot()
+        slot.URI = f"{NS}fg_slot_{label}_{uuid.uuid4().hex[:8]}"
+        slot.name = "Value"
+        slot.textSlotValue = label
+        edge = Edge_hasKGSlot()
+        edge.URI = f"{NS}fg_edge_{label}_{uuid.uuid4().hex[:8]}"
+        edge.edgeSource = str(frame.URI)
+        edge.edgeDestination = str(slot.URI)
+        r = await vg_client.kgentities.create_entity_frames(
+            space_id=test_space, graph_id=test_graph, entity_uri=str(entity.URI),
+            objects=[frame, slot, edge])
+        assert r.is_success, r.error_message or r.message
+        frames[str(frame.URI)] = str(slot.URI)
+    return frame_type, frames
 
-    Implementing it is the eventual fix and is deferred deliberately: hydrating
-    after the page measured 3.5-5.1 s for 25 entities on the entity side, so it
-    should land with `issues/208`'s projections rather than repeat that cost.
-    Until then the honest thing is to SAY the flag did nothing, which is what
-    these cells pin.
 
-    Both directions matter. Asserting only that the message appears would pass
-    against an endpoint that returns it unconditionally, which would be noise on
-    every response that never asked.
+class TestIncludeFrameGraph:
+    """`include_frame_graph` on `/kgqueries` frame queries (`issues/210`).
+
+    It was accepted and implemented nowhere — `frame_graph` null on every result
+    — and then, from 2026-09-18, SAID so in `message`. Implemented 2026-10-04:
+    each result's `frame_graph` is the frame and every subject grouped with it,
+    as JSON quads, fetched in one batched query per page, and the client
+    hydrates it into `frame_graph_objects`.
+
+    Paired, as before: what the flag ADDS (each frame's own graph, not another
+    frame's) and what it must not change (no graph and no message when not
+    asked; the same frames either way).
     """
 
-    async def test_requesting_it_says_it_is_not_implemented(
-            self, vg_client, test_space, test_graph):
+    async def test_each_frame_carries_its_own_graph(
+            self, vg_client, test_space, test_graph, two_frames):
+        frame_type, frames = two_frames
         resp = await vg_client.kgqueries.query_frames(
-            space_id=test_space, graph_id=test_graph,
-            include_frame_graph=True, page_size=5,
-        )
-        assert resp.message, (
-            "asking for frame_graph must not return silent nulls — the caller "
-            "cannot tell 'no graph' from 'flag ignored'")
-        assert "include_frame_graph" in resp.message, (
-            f"the message must NAME the flag that did nothing: {resp.message!r}")
-        assert resp.success is not False, (
-            "the query itself succeeded; only the flag was ignored, so this is "
-            "not a failure status")
+            space_id=test_space, graph_id=test_graph, frame_type=frame_type,
+            include_frame_graph=True, page_size=10)
+        assert resp.success, resp.message
+        assert not resp.message, f"no message when the graphs were fetched: {resp.message!r}"
+        got = {r.frame_uri: r for r in resp.results}
+        assert set(got) == set(frames), f"expected the two frames, got {sorted(got)}"
+        for frame_uri, slot_uri in frames.items():
+            r = got[frame_uri]
+            assert r.frame_graph, f"{frame_uri}: frame_graph is empty"
+            uris = {str(o.URI) for o in (r.frame_graph_objects or [])}
+            assert frame_uri in uris and slot_uri in uris, (
+                f"{frame_uri}: the graph must hold the frame and its slot: {sorted(uris)}")
+            other = [s for f, s in frames.items() if f != frame_uri]
+            assert not (uris & set(other)), "a frame's graph holds another frame's slot"
 
-    async def test_not_requesting_it_says_nothing(
-            self, vg_client, test_space, test_graph):
-        """The control: no message on a request that never asked."""
+    async def test_not_asking_returns_no_graph_and_no_message(
+            self, vg_client, test_space, test_graph, two_frames):
+        frame_type, _ = two_frames
         resp = await vg_client.kgqueries.query_frames(
-            space_id=test_space, graph_id=test_graph,
-            include_frame_graph=False, page_size=5,
-        )
-        assert not resp.message, (
-            f"a caller who did not ask must not be told about the flag: "
-            f"{resp.message!r}")
+            space_id=test_space, graph_id=test_graph, frame_type=frame_type,
+            include_frame_graph=False, page_size=10)
+        assert not resp.message, resp.message
+        for r in resp.results:
+            assert r.frame_graph is None and r.frame_graph_objects is None
 
-    async def test_the_results_are_unaffected(
-            self, vg_client, test_space, test_graph):
-        """The flag changes the MESSAGE and nothing else — frame_graph stays None."""
+    async def test_the_flag_does_not_change_which_frames(
+            self, vg_client, test_space, test_graph, two_frames):
+        frame_type, _ = two_frames
         on = await vg_client.kgqueries.query_frames(
-            space_id=test_space, graph_id=test_graph,
-            include_frame_graph=True, page_size=5)
+            space_id=test_space, graph_id=test_graph, frame_type=frame_type,
+            include_frame_graph=True, page_size=10)
         off = await vg_client.kgqueries.query_frames(
-            space_id=test_space, graph_id=test_graph,
-            include_frame_graph=False, page_size=5)
-        assert on.total_count == off.total_count
-        # `results`, not `frame_results`: `query_frames` returns
-        # FrameQueryResponse, a different model from the KGQueryResponse the
-        # connection queries above use. Worth naming, because the two live in
-        # one module and only one of them carries `frame_results`.
-        for r in (on.results or []):
-            assert getattr(r, "frame_graph", None) is None, (
-                "frame_graph is still not implemented; if this fails the flag "
-                "now works and the message must be removed")
+            space_id=test_space, graph_id=test_graph, frame_type=frame_type,
+            include_frame_graph=False, page_size=10)
+        assert [r.frame_uri for r in on.results] == [r.frame_uri for r in off.results]

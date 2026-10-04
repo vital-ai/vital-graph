@@ -1,15 +1,9 @@
 # `include_frame_graph` Is Accepted On `/kgqueries` And Implemented Nowhere
 
-## Status: OPTION 2 DONE 2026-09-18 — the flag now SAYS it is not implemented,
-## in the response `message`, HTTP 200. Still OPEN for option 1: `frame_graph`
-## is null on every result and implementing it belongs with `issues/208`.
-##
-## CARRIES A RETRACTION, 2026-09-25. This file's claim that "`/kgframes`
-## implements it where it offers it" is FALSE for the `uris=` form —
-## `_get_frames_by_uris` takes the flag and drops it (`issues/240`), which also
-## invalidates the route OPTION 1 recommends. Option 1 is now PRICED and is much
-## cheaper than this file assumed: ~11,924 buffers for a 25-frame page, not
-## anything near `issues/209`'s 3.5-5.1 s. See the two sections at the end.
+## Status: FIXED 2026-10-04 (uncommitted) — OPTION 1, implemented. A
+## `/kgqueries` frame query with `include_frame_graph=true` returns each frame's
+## graph in `frame_graph`, and the client hydrates it. The option-2 message is
+## gone. See "As built" at the end. The history below is kept as it was.
 
 **Related:** `issues/209` (the same silent-null symptom from the opposite
 cause — implemented, then bypassed), `issues/182` (why a frame query on a large
@@ -193,3 +187,32 @@ this file's own open question of what a `frame_graph` should CONTAIN; the 2,567
 quads above are `?s haley:hasFrameGraphURI <frame>` plus the frame, i.e. the
 shape `_build_get_frame_query` already answers, not a decision that the query
 surface should answer it the same way.
+
+## As built, 2026-10-04 (uncommitted) — option 1
+
+- **Server** (`kgquery_endpoint._execute_frame_query_case`): when the flag is
+  set, ONE batched fetch for the page through
+  `KGFrameGraphProcessor.get_frame_graphs` — the query `issues/240` built for
+  `/kgframes?uris=` so this could reuse it — not one per frame. Offered, never
+  defaulted, on 210's price of ~12k buffers for a 25-frame page.
+- **What a `frame_graph` contains** (this file's open question): the frame and
+  every subject grouped with it by `hasFrameGraphURI` — its slots and slot
+  edges. Not child frames: since `issues/257` a child frame is its own frame
+  graph, and a link to it carries no grouping, so this is the same shallow
+  answer `/kgframes` gives and the frame update/upsert replace.
+- **Shape:** JSON quads (`{s,p,o,g}`), the shape `entity_graphs` uses, so the
+  client hydrates both the same way. `FrameQueryResult.frame_graph` is typed
+  `List[Dict]` (was `Any`), with a client-only `frame_graph_objects` holding the
+  hydrated GraphObjects.
+- **A failed fetch is SAID:** the frames are correct, so the query still
+  succeeds, `frame_graph` is null, and `message` names the failure — never the
+  silent null this issue is about.
+- The option-2 message is removed; a request that did not ask still gets no
+  message and no graph.
+
+**Tests.** `tests/api/test_kgqueries_api.py::TestIncludeFrameGraph` replaces the
+three option-2 cells, keeping their pairing: each frame carries its OWN graph
+(frame and slot, not the other frame's slot); not asking returns no graph and no
+message; the flag does not change which frames come back. Against the previous
+handler the first FAILS (the not-implemented message) and the two guards pass.
+
