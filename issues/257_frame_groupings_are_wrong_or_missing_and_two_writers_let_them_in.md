@@ -323,8 +323,24 @@ What the dev runs taught, now in the script:
 | main KG archive | 0 | 0 | 0 |
 | underwriting | 0 | 0 | 0 |
 
-Steps 1b, 2 and 3 are 0 everywhere, so nothing reclassifies. Production is NOT
-yet repaired.
+Steps 1b, 2 and 3 are 0 everywhere, so nothing reclassifies.
+
+**PRODUCTION REPAIR DONE, 2026-10-03.** Read-only SQL discovery, writes by
+ground `DELETE DATA` / `INSERT DATA` through the production server: lead prod
+(3 form types), actions (251,790 form types, 1,740 slots, 435 edges), lead data
+(289,920 form types, 27 min), main KG (275,577 form types, 1,740 slots, 435
+edges, 89 min). A final independent census of all six real-data spaces, the
+archive and underwriting included, reads 0 in every step. On the way, a
+`DELETE/INSERT ... WHERE { VALUES ... OPTIONAL }` regrouping batch of 50 hit the
+60s statement timeout on production after running unserialised (lock plan
+resolved no groupings); it rolled back. Ground updates run ~1.25s per batch.
+
+**STILL TO DO.** (1) Deploy `main` (the grouping writers closed, `issues/256`
+frame-graph replace), done separately. (2) Then run the repair again, to catch
+anything the old writers wrote in between (`scripts/repair_frame_groupings.py
+--discover-sql ... --apply`). (3) Reload the generated test datasets in both
+test databases from the fixed generators, and repair the real `sp_sql_lead_dataset`
+fixture there; deferred.
 
 4. **Repair the data, dev first.** Apply the rule above. For the production
    copies, regroup each child frame and its slots under the child. For the
