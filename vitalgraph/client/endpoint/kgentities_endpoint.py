@@ -1382,6 +1382,119 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 graph_id=graph_id
             )
     
+    async def create_entity_frame_slots(
+        self,
+        space_id: str,
+        graph_id: str,
+        entity_uri: str,
+        frame_uri: str,
+        objects: List,
+        operation_mode: str = "create",
+        if_unmodified_since: Optional[str] = None,
+    ) -> CreateEntityResponse:
+        """
+        Create, update or upsert slots of one of an entity's frames.
+
+        `POST /kgentities/kgframes/kgslots` (`issues/256`): locked, guarded and
+        stamped on the ENTITY, and the frame must be the entity's. Use this, not
+        `kgframes.create_frame_slots`, for an entity's frame — the standalone
+        route refuses those.
+
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            entity_uri: The entity that owns the frame
+            frame_uri: The frame whose slots are written
+            objects: The slots (an `Edge_hasKGSlot` is added for a new slot)
+            operation_mode: create (refuses an existing slot), update (refuses
+                a missing one) or upsert
+            if_unmodified_since: The ENTITY's `modification_stamp` as read; if it
+                has moved nothing is written and the response `is_conflict`.
+
+        Returns:
+            CreateEntityResponse; `created_uris` holds the slot URIs written
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, graph_id=graph_id,
+                                 entity_uri=entity_uri, frame_uri=frame_uri, objects=objects)
+        try:
+            url = f"{self._get_server_url()}/api/graphs/kgentities/kgframes/kgslots"
+            params = build_query_params(
+                space_id=space_id, graph_id=graph_id, entity_uri=entity_uri,
+                frame_uri=frame_uri, operation_mode=operation_mode,
+                if_unmodified_since=if_unmodified_since)
+            body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            # Replay-safe unless it is a create: see `replay_safe_mode`.
+            response = await self._make_request('POST', url, params=params, json=body,
+                                                headers={'Content-Type': content_type},
+                                                idempotent=replay_safe_mode(operation_mode))
+            data = response.json()
+            uris = data.get('created_uris') or data.get('updated_uris') or []
+            return build_success_response(
+                CreateEntityResponse, status_code=response.status_code,
+                status=data.get('status'),
+                message=data.get('message') or f"Wrote {len(uris)} slots",
+                created_count=len(uris), created_uris=uris)
+        except VitalGraphClientError:
+            raise
+        except Exception as e:
+            logger.error(f"Error writing entity frame slots: {e}")
+            return build_error_response(CreateEntityResponse, error_code=3,
+                                        error_message=str(e), status_code=http_status_of(e))
+
+    async def delete_entity_frame_slots(
+        self,
+        space_id: str,
+        graph_id: str,
+        entity_uri: str,
+        frame_uri: str,
+        slot_uris: List[str],
+        if_unmodified_since: Optional[str] = None,
+    ) -> DeleteResponse:
+        """
+        Delete slots of one of an entity's frames, with their edges.
+
+        `DELETE /kgentities/kgframes/kgslots` (`issues/256`): one transaction
+        under the entity lock. A slot already gone is reported in
+        `absent_uris` (NO_OP); a slot of another frame refuses the request.
+
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            entity_uri: The entity that owns the frame
+            frame_uri: The frame to delete slots from
+            slot_uris: Slot URIs to delete
+            if_unmodified_since: The ENTITY's `modification_stamp` as read.
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, graph_id=graph_id,
+                                 entity_uri=entity_uri, frame_uri=frame_uri, slot_uris=slot_uris)
+        try:
+            url = f"{self._get_server_url()}/api/graphs/kgentities/kgframes/kgslots"
+            params = build_query_params(
+                space_id=space_id, graph_id=graph_id, entity_uri=entity_uri,
+                frame_uri=frame_uri, slot_uris=','.join(slot_uris),
+                if_unmodified_since=if_unmodified_since)
+            response = await self._make_request('DELETE', url, params=params)
+            data = response.json()
+            deleted_count = data.get('deleted_count') or 0
+            return build_success_response(
+                DeleteResponse, status_code=response.status_code,
+                status=data.get('status'),
+                message=data.get('message') or f"Deleted {deleted_count} slots",
+                deleted_count=deleted_count,
+                deleted_uris=data.get('deleted_uris') or [],
+                absent_uris=data.get('absent_uris') or [],
+                space_id=space_id, graph_id=graph_id, requested_uris=slot_uris)
+        except VitalGraphClientError:
+            raise
+        except Exception as e:
+            logger.error(f"Error deleting entity frame slots: {e}")
+            return build_error_response(
+                DeleteResponse, error_code=5, error_message=str(e),
+                status_code=http_status_of(e), space_id=space_id, graph_id=graph_id,
+                requested_uris=slot_uris)
+
     async def delete_entity_frames(
         self,
         space_id: str,

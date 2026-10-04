@@ -99,6 +99,7 @@ WRITE_PATHS = [
     # `update_subjects_graph` and the frame deletes, and the frame delete itself.
     ("kg_backend", "_delete_subjects_synced"),
     ("kg_backend", "delete_frame_subtrees"),
+    ("kg_backend", "delete_frame_slots"),
 
     # The import paths. `import_ntriples_bulk` COPYs and then resyncs
     # wholesale; the three incremental ones INSERT and DELETE per batch.

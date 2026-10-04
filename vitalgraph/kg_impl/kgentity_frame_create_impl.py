@@ -31,7 +31,8 @@ from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
 from vitalgraph.kg_impl.kg_backend_utils import (
     EDGE_HAS_ENTITY_KG_FRAME, EDGE_HAS_KG_FRAME, EntityAbsent,
     GuardUnsatisfiable, KGBackendInterface, StaleWrite,
-    entity_frames_precheck, entity_present_precheck)
+    all_prechecks, create_refuses_existing, entity_frames_precheck,
+    entity_present_precheck, refuse_existing_precheck)
 from vitalgraph.kg_impl.edge_uris import edge_uri
 from vitalgraph.kg_impl.frame_grouping import UngroupableSlot, assign_frame_groupings
 from .refusals import RequestRefused
@@ -239,8 +240,21 @@ class KGEntityFrameCreateProcessor:
                 success = await self.execute_frame_creation(backend_adapter, space_id, graph_id, all_objects,
                                                                             entity_uri=entity_uri,
                                                                             if_unmodified_since=if_unmodified_since,
-                                                                            precheck=entity_present_precheck(
-                                                                                space_id, graph_id, entity_uri))
+                                                                            precheck=all_prechecks(
+                                                                                entity_present_precheck(
+                                                                                    space_id, graph_id, entity_uri),
+                                                                                # `create` refuses an existing frame
+                                                                                # (`issues/256` item 3), when switched
+                                                                                # on — the objects the CLIENT sent, not
+                                                                                # the links this adds.
+                                                                                refuse_existing_precheck(
+                                                                                    space_id, graph_id,
+                                                                                    [str(o.URI) for o in
+                                                                                     categories.frame_objects
+                                                                                     + categories.slot_objects
+                                                                                     + categories.edge_objects
+                                                                                     if getattr(o, 'URI', None)])
+                                                                                if create_refuses_existing() else None))
             
             if success:
                 created_uris = [str(obj.URI) for obj in all_objects if hasattr(obj, 'URI')]

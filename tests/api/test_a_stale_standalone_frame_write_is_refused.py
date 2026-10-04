@@ -271,18 +271,20 @@ class TestTheOtherWritesToTheSameRoute:
         # update halves (`_handle_create_mode` vs `_handle_update_mode`), each
         # with its own broad `except`, so passing on one says nothing about the
         # other — that is exactly how the 500 on the update path survived a green
-        # create path earlier in this issue.
+        # create path earlier in this issue. Through UPSERT, the create-path mode
+        # that rewrites an existing frame: a CREATE of one is refused once
+        # `issues/256` item 3 is switched on.
         stamp = await _stamp(vg_client, test_space, test_graph, frame)
         _, objs = _frame("winner", uri=frame)
         r = await vg_client.kgframes.create_kgframes_with_slots(
             space_id=test_space, graph_id=test_graph, objects=objs,
-            if_unmodified_since=stamp)
+            if_unmodified_since=stamp, operation_mode="upsert")
         assert r.is_success, r.error_message or r.message
 
         _, objs = _frame("loser", uri=frame)
         r = await vg_client.kgframes.create_kgframes_with_slots(
             space_id=test_space, graph_id=test_graph, objects=objs,
-            if_unmodified_since=stamp)
+            if_unmodified_since=stamp, operation_mode="upsert")
         assert r.is_conflict is True, (
             f"status={r.status!r} message={r.message or r.error_message!r}")
 
@@ -296,15 +298,23 @@ class TestTheOtherWritesToTheSameRoute:
 
         stamp = await _stamp(vg_client, test_space, test_graph, child_uri)
         _, objs = _frame("winner", uri=child_uri)
-        r = await vg_client.kgframes.create_child_frames(
-            space_id=test_space, graph_id=test_graph,
-            parent_frame_uri=frame, objects=objs, if_unmodified_since=stamp)
+        # Rewrites of the existing child through UPSERT under the parent: the
+        # same `POST /kgframes?parent_uri=` route `create_child_frames` uses,
+        # which always sends create — refused for an existing frame once
+        # `issues/256` item 3 is switched on.
+        r = await vg_client.kgframes.create_kgframes(
+            space_id=test_space, graph_id=test_graph, parent_uri=frame,
+            objects=objs, if_unmodified_since=stamp, operation_mode="upsert")
         assert r.is_success, r.error_message or r.message
 
         _, objs = _frame("loser", uri=child_uri)
-        r = await vg_client.kgframes.create_child_frames(
-            space_id=test_space, graph_id=test_graph,
-            parent_frame_uri=frame, objects=objs, if_unmodified_since=stamp)
+        # Rewrites of the existing child through UPSERT under the parent: the
+        # same `POST /kgframes?parent_uri=` route `create_child_frames` uses,
+        # which always sends create — refused for an existing frame once
+        # `issues/256` item 3 is switched on.
+        r = await vg_client.kgframes.create_kgframes(
+            space_id=test_space, graph_id=test_graph, parent_uri=frame,
+            objects=objs, if_unmodified_since=stamp, operation_mode="upsert")
         assert r.is_conflict is True, (
             f"status={r.status!r} message={r.message or r.error_message!r}")
 

@@ -41,7 +41,7 @@ REPLAY_SAFE = {
 # Marked by the mode they send: replayable for update/upsert/replace, not for
 # create (`issues/256` item 3).
 BY_MODE = {
-    "kgentities_endpoint": {"create_entity_frames"},
+    "kgentities_endpoint": {"create_entity_frames", "create_entity_frame_slots"},
     "kgframes_endpoint": {
         "create_kgframes", "create_kgframes_with_slots", "create_frame_slots"},
 }

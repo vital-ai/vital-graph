@@ -275,9 +275,13 @@ class TestTheReportedSymptom:
         # Both read here.
         shared = await _stamp(vg_client, test_space, test_graph, host)
 
+        # UPSERT for the rewrites, not create: a create of an existing frame is
+        # refused once `issues/256` item 3 is switched on, and re-writing is
+        # what upsert is for. The guard is the same either way.
         r = await vg_client.kgentities.create_entity_frames(
             space_id=test_space, graph_id=test_graph, entity_uri=host,
-            objects=save("Acme Corporation"), if_unmodified_since=shared)
+            objects=save("Acme Corporation"), if_unmodified_since=shared,
+            operation_mode="upsert")
         assert r.is_success, r.message
         assert await value() == "Acme Corporation"
 
@@ -286,7 +290,8 @@ class TestTheReportedSymptom:
         # nobody could see, because both requests were 200.
         r = await vg_client.kgentities.create_entity_frames(
             space_id=test_space, graph_id=test_graph, entity_uri=host,
-            objects=save("Acme"), if_unmodified_since=shared)
+            objects=save("Acme"), if_unmodified_since=shared,
+            operation_mode="upsert")
         assert r.is_conflict is True, f"status={r.status!r}"
         assert await value() == "Acme Corporation", (
             "the slower save overwrote the newer one — the lost update")

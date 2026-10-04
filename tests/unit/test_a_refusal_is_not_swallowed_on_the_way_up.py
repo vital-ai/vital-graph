@@ -41,8 +41,8 @@ ON_THE_PATH = [
     (kgframe_create_impl, "execute_atomic_frame_update"),
     (kgframe_create_impl, "create_frame"),
     (kgframes_endpoint, "_create_frames"),
-    (kgframes_endpoint, "_create_frame_slots"),
-    (kgframes_endpoint, "_update_frame_slots"),
+    (kgframes_endpoint, "_write_frame_slots"),
+    (kgframes_endpoint, "_delete_frame_slots"),
     # The mode handlers sit BETWEEN the processor and `_create_frames`, and each
     # turns anything it catches into a 500. They turned the refusal into one too.
     (kgframes_endpoint, "_handle_create_mode"),
@@ -79,8 +79,7 @@ WRITE_CALLS = {
     "create_entity_frame", "update_frames",
     "_create_or_update_frames", "_update_entity_frames",
     # standalone-frame path
-    "create_frame", "_store_frame_slots_in_backend",
-    "_update_frame_slots_in_backend",
+    "create_frame", "delete_frame_slots",
     "_handle_create_mode", "_handle_update_mode", "_handle_upsert_mode",
 }
 
@@ -122,7 +121,7 @@ class TestTheRefusalSurvivesTheClimb:
         # the entity URI and both stamps live on the exception, and the endpoint
         # puts them in the message a caller reads.
         ANSWERS = {"_create_or_update_frames", "_update_entity_frames",
-                   "_create_frames", "_create_frame_slots", "_update_frame_slots"}
+                   "_create_frames", "_write_frame_slots", "_delete_frame_slots"}
         for module, func in ON_THE_PATH:
             if func in ANSWERS:
                 continue            # the top of the path — it ANSWERS, by design

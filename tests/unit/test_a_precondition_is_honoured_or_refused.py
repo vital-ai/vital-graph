@@ -25,15 +25,18 @@ from vitalgraph.kg_impl.kg_backend_utils import (
     AmbiguousStamp, StaleWrite, UnguardableWrite, _compare_stamp)
 
 
-# The five functions that ANSWER a refused conditional write. Each already maps
+# The functions that ANSWER a refused conditional write. Each already maps
 # `StaleWrite`; each must map `GuardUnsatisfiable` too, or it reaches a broad
 # handler and becomes the 500 the convention forbids.
 ENTRY_POINTS = [
     ("vitalgraph.endpoint.kgentities_endpoint", "_create_or_update_frames"),
     ("vitalgraph.endpoint.kgentities_endpoint", "_update_entity_frames"),
     ("vitalgraph.endpoint.kgframes_endpoint", "_create_frames"),
-    ("vitalgraph.endpoint.kgframes_endpoint", "_create_frame_slots"),
-    ("vitalgraph.endpoint.kgframes_endpoint", "_update_frame_slots"),
+    # One handler for create, update and upsert on both slot routes since
+    # `issues/256` (2026-10-04); it replaced `_create_frame_slots` and
+    # `_update_frame_slots`.
+    ("vitalgraph.endpoint.kgframes_endpoint", "_write_frame_slots"),
+    ("vitalgraph.endpoint.kgframes_endpoint", "_delete_frame_slots"),
 ]
 
 

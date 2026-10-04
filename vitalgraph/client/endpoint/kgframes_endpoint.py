@@ -961,9 +961,14 @@ class KGFramesEndpoint(BaseEndpoint):
             logger.error(f"Error updating frame slots: {e}")
             return build_error_response(UpdateEntityResponse, error_code=4, error_message=str(e), status_code=http_status_of(e))
     
-    async def delete_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, slot_uris: list[str]) -> DeleteResponse:
+    async def delete_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, slot_uris: list[str],
+                                 if_unmodified_since: Optional[str] = None) -> DeleteResponse:
         """
-        Delete specific slots from a frame.
+        Delete specific slots from a STANDALONE frame.
+
+        An entity's frame is refused (`issues/256`); use
+        `kgentities.delete_entity_frame_slots`. `if_unmodified_since` is the
+        FRAME's stamp; a slot already gone is reported in `absent_uris`.
         
         Args:
             space_id: Space identifier
@@ -984,7 +989,7 @@ class KGFramesEndpoint(BaseEndpoint):
             url = f"{self._get_server_url()}/api/graphs/kgframes/kgslots"
             params = build_query_params(
                 space_id=space_id, graph_id=graph_id, frame_uri=frame_uri,
-                slot_uris=','.join(slot_uris)
+                slot_uris=','.join(slot_uris), if_unmodified_since=if_unmodified_since
             )
             
             response = await self._make_request('DELETE', url, params=params)
@@ -997,6 +1002,7 @@ class KGFramesEndpoint(BaseEndpoint):
                 status=response_data.get('status'),
                 message=response_data.get('message', f"Deleted {deleted_count} slots"),
                 deleted_count=deleted_count, deleted_uris=deleted_uris,
+                absent_uris=response_data.get('absent_uris') or [],
                 space_id=space_id, graph_id=graph_id, requested_uris=slot_uris
             )
         except VitalGraphClientError:

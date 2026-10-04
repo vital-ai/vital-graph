@@ -19,8 +19,10 @@ through the API.
 
 This file used to test all three, and the docstring it gave them admitted they
 were "reachable only through helpers nothing calls today" — which was the moment
-to delete them rather than pin their behaviour. What remains covers the two live
-slot paths.
+to delete them rather than pin their behaviour. What remains covers the slot
+paths — since 2026-10-04 (`issues/256`) ONE handler, `_write_frame_slots`, for
+create, update and upsert on both slot routes; the two write helpers it replaced
+are gone, so the guarantee is pinned on the handler itself.
 
 AND IT STAYS A 200, DELIBERATELY. `issues/253` weighed 503 + `Retry-After` —
 which the client's own retry policy would have retried unaided — and chose to
@@ -47,33 +49,29 @@ FRAME = "http://vital.ai/haley.ai/domain/KGFrame/frame-1"
 SLOT = "http://vital.ai/haley.ai/domain/KGSlot/slot-1"
 
 
-class RefusingBackend:
-    """Stands in for the backend after a lock timeout: the write did not happen,
-    and `update_subjects_graph` says so the only way it can."""
+class FakeAdapter:
+    """The backend after a lock timeout (`accept=False`) or a write that lands.
 
-    def __init__(self):
+    `update_subjects_graph` reports failure the only way it can, by returning
+    False. Nothing exists yet, so create's precondition has nothing to refuse
+    (the precondition runs inside the real transaction, not here)."""
+
+    def __init__(self, accept):
+        self.accept = accept
         self.calls = 0
 
-    async def update_subjects_graph(self, space_id, graph_id, subject_uris,
-                                    insert_quads, lock_uris=None, conn=None,
-                                    if_unmodified_since=None,
-                                    guard_subject=None, stamp_subjects=None):
-        self.calls += 1
-        return False
+    async def existing_subjects(self, space_id, graph_id, uris):
+        return set()
 
-
-class AcceptingBackend(RefusingBackend):
     async def update_subjects_graph(self, space_id, graph_id, subject_uris,
-                                    insert_quads, lock_uris=None, conn=None,
-                                    if_unmodified_since=None,
-                                    guard_subject=None, stamp_subjects=None):
+                                    insert_quads, **kw):
         self.calls += 1
-        return True
+        return self.accept
 
 
 @pytest.fixture
 def endpoint():
-    # The write helpers use neither the space manager nor auth.
+    # The write path uses neither the space manager's real backend nor auth.
     return KGFramesEndpoint(space_manager=None, auth_dependency=None)
 
 
@@ -84,44 +82,7 @@ def slot():
     return s
 
 
-class TestTheHelpersRaise:
-    """Where the result was being dropped."""
-
-    @pytest.mark.asyncio
-    async def test_a_refused_slot_store_raises(self, endpoint, slot):
-        backend = RefusingBackend()
-        with pytest.raises(SubjectWriteFailed, match="slot write"):
-            await endpoint._store_frame_slots_in_backend(
-                backend, "sp", GRAPH, [slot])
-        assert backend.calls == 1
-
-    @pytest.mark.asyncio
-    async def test_a_refused_slot_update_raises(self, endpoint, slot):
-        backend = RefusingBackend()
-        with pytest.raises(SubjectWriteFailed, match="slot update"):
-            await endpoint._update_frame_slots_in_backend(
-                backend, "sp", GRAPH, [slot])
-        assert backend.calls == 1
-
-    @pytest.mark.asyncio
-    async def test_the_happy_path_still_returns_the_uris(self, endpoint, slot):
-        # The check must not cost the success case its answer.
-        backend = AcceptingBackend()
-        assert await endpoint._store_frame_slots_in_backend(
-            backend, "sp", GRAPH, [slot]) == [SLOT]
-        assert await endpoint._update_frame_slots_in_backend(
-            backend, "sp", GRAPH, [slot]) == [SLOT]
-
-
-def _stub_handler(endpoint, monkeypatch, *, store_raises, slot_exists=False):
-    """Wire the two slot handlers up to a refusing (or accepting) write.
-
-    Everything stubbed here is a round trip the mapping under test does not
-    depend on; the write itself is the subject. `slot_exists` differs by handler
-    and is not incidental — CREATE refuses a slot that exists, UPDATE refuses one
-    that does not, so a single value would make one of the two tests assert a
-    precondition instead of the mapping.
-    """
+def _wire(endpoint, monkeypatch, adapter):
     from vitalgraph.endpoint import kgframes_endpoint as module
 
     class FakeSpaceImpl:
@@ -136,27 +97,8 @@ def _stub_handler(endpoint, monkeypatch, *, store_raises, slot_exists=False):
             return FakeRecord()
 
     endpoint.space_manager = FakeSpaceManager()
-    monkeypatch.setattr(module, "create_backend_adapter", lambda impl: object())
-
-    async def _frame_exists(*a, **k):
-        return True
-
-    async def _slot_exists(*a, **k):
-        return slot_exists
-
-    async def _write(*a, **k):
-        if store_raises:
-            raise SubjectWriteFailed("slot write", 1)
-        return [SLOT]
-
-    monkeypatch.setattr(endpoint, "_frame_exists_in_backend", _frame_exists)
-    monkeypatch.setattr(endpoint, "_slot_exists_in_backend", _slot_exists)
-    monkeypatch.setattr(endpoint, "_store_frame_slots_in_backend", _write)
-    monkeypatch.setattr(endpoint, "_update_frame_slots_in_backend", _write)
+    monkeypatch.setattr(module, "create_backend_adapter", lambda impl: adapter)
     monkeypatch.setattr(endpoint, "_schedule_auto_sync", lambda *a, **k: None)
-    monkeypatch.setattr(endpoint, "_set_slot_frame_relationships", lambda *a, **k: None)
-    monkeypatch.setattr(endpoint, "_create_frame_slot_edges",
-                        lambda frame_uri, slots, objs: list(objs))
 
 
 def _quads_for(slot):
@@ -168,42 +110,34 @@ class TestTheHandlerReportsItAsADomainFault:
     """The decision: HTTP 200, `STORE_FAILED`, `success=false` — not a 500."""
 
     @pytest.mark.asyncio
-    async def test_create_returns_store_failed_and_no_uris(
-            self, endpoint, slot, monkeypatch):
-        from vitalgraph.endpoint.kgframes_endpoint import OperationMode
+    @pytest.mark.parametrize("mode", ["create", "upsert", "update"])
+    async def test_a_refused_write_is_store_failed_with_no_uris(
+            self, endpoint, slot, monkeypatch, mode):
+        adapter = FakeAdapter(accept=False)
+        _wire(endpoint, monkeypatch, adapter)
+        response = await endpoint._write_frame_slots(
+            "sp", GRAPH, FRAME, _quads_for(slot), mode)
 
-        _stub_handler(endpoint, monkeypatch, store_raises=True)
-        response = await endpoint._create_frame_slots(
-            "sp", GRAPH, FRAME, _quads_for(slot), OperationMode.CREATE, {})
-
+        assert adapter.calls == 1
         # No HTTPException: the handler must not let this become a 500.
         assert response.status == OperationStatus.STORE_FAILED
         # `success` is DERIVED from `status`, so this cannot drift.
         assert response.success is False
-        assert response.created_count == 0
-        assert not response.created_uris
+        if mode == "update":
+            assert response.updated_count == 0 and not response.updated_uris
+        else:
+            assert response.created_count == 0 and not response.created_uris
 
     @pytest.mark.asyncio
-    async def test_update_returns_store_failed_and_no_uris(
-            self, endpoint, slot, monkeypatch):
-        _stub_handler(endpoint, monkeypatch, store_raises=True,
-                      slot_exists=True)
-        response = await endpoint._update_frame_slots(
-            "sp", GRAPH, FRAME, _quads_for(slot), {})
-
-        assert response.status == OperationStatus.STORE_FAILED
-        assert response.success is False
-        assert response.updated_count == 0
-
-    @pytest.mark.asyncio
-    async def test_a_write_that_lands_still_reports_created(
-            self, endpoint, slot, monkeypatch):
-        from vitalgraph.endpoint.kgframes_endpoint import OperationMode
-
-        _stub_handler(endpoint, monkeypatch, store_raises=False)
-        response = await endpoint._create_frame_slots(
-            "sp", GRAPH, FRAME, _quads_for(slot), OperationMode.CREATE, {})
-
-        assert response.status == OperationStatus.CREATED
-        assert response.success is True
-        assert response.created_uris == [SLOT]
+    @pytest.mark.parametrize("mode,status", [
+        ("create", OperationStatus.CREATED), ("upsert", OperationStatus.UPSERTED),
+        ("update", OperationStatus.UPDATED)])
+    async def test_a_write_that_lands_reports_what_it_wrote(
+            self, endpoint, slot, monkeypatch, mode, status):
+        # The check must not cost the success case its answer.
+        _wire(endpoint, monkeypatch, FakeAdapter(accept=True))
+        response = await endpoint._write_frame_slots(
+            "sp", GRAPH, FRAME, _quads_for(slot), mode)
+        assert response.status == status and response.success is True
+        uris = response.updated_uris if mode == "update" else response.created_uris
+        assert uris == [SLOT]

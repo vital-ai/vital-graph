@@ -107,7 +107,7 @@ class TestTheRealCreatePath:
 
 
 class TestNoRandomnessLeftOnTheWritePaths:
-    def test_the_three_live_mint_sites_are_deterministic(self):
+    def test_the_live_mint_sites_are_deterministic(self):
         # A guard, not a style check: any of these regaining a uuid4 restores
         # ~190 uncertain writes a week. Named per site so a failure says which.
         #
@@ -117,9 +117,11 @@ class TestNoRandomnessLeftOnTheWritePaths:
         import ast
         import inspect
 
+        # `kgslot_create_impl` was the third site, and was deleted 2026-10-04
+        # (`issues/256`): its only route was `KGFramesEndpoint._create_slots`,
+        # which nothing called. The live slot route mints through the endpoint.
         from vitalgraph.kg_impl import (kgentity_create_impl,
-                                        kgentity_frame_create_impl,
-                                        kgslot_create_impl)
+                                        kgentity_frame_create_impl)
 
         def randomness_in(mod):
             tree = ast.parse(inspect.getsource(mod))
@@ -130,7 +132,6 @@ class TestNoRandomnessLeftOnTheWritePaths:
                      or getattr(node.func, "id", None) == "uuid4")
             ]
 
-        for mod in (kgentity_frame_create_impl, kgentity_create_impl,
-                    kgslot_create_impl):
+        for mod in (kgentity_frame_create_impl, kgentity_create_impl):
             lines = randomness_in(mod)
             assert not lines, f"{mod.__name__} mints a random URI at {lines}"

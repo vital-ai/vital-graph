@@ -4,9 +4,10 @@
 ## entity graph delete (2026-10-03); the delete contract, client entity upsert,
 ## client retry marking by mode, item 4 (`replace`), decision 3 on writes and
 ## the in-transaction entity check (2026-10-04, uncommitted). See "As built".
-## Third round 2026-10-04 (uncommitted): items 2, 5, 7 and item 3's update half.
-## Still open: item 3's create half (waits for the portal to move to upsert);
-## the slot routes. Orphan census: production 0, dev 1.
+## Fourth round 2026-10-04 (uncommitted): item 3's create half, built behind
+## VITALGRAPH_FRAME_CREATE_REFUSES_EXISTING (default off until the Resource API
+## stops relying on create overwriting); the slot routes' contract.
+## Still open: switching that setting on.
 
 ## The rule (decided 2026-10-02)
 
@@ -833,6 +834,65 @@ unlinked, twice; another entity's frame overwritten; frames written onto a
 missing entity; update creating a missing frame; a typo becoming a create).
 With the change 7/7. One existing test relied on update creating a frame
 (`test_the_batch_still_works_unconditionally`); it now creates it first.
+
+## As built, 2026-10-04, fourth round (uncommitted)
+
+**Item 3, create half — built, OFF by default.** With
+`VITALGRAPH_FRAME_CREATE_REFUSES_EXISTING=1`, a frame `create` on either route is
+refused ALREADY_EXISTS when ANY object the client sent (frame, slot, slot edge,
+child frame) already exists — decided in the write's transaction, after the lock
+(`refuse_existing_precheck`). Off by default because the callers are NOT ready,
+checked in the Resource API's code: `lead_sync` adds SF-mapped frames to an
+existing entity with `create`; `kg_utils.write_or_update_frame` falls through to
+`create` when its existence check fails and counts on the overwrite; the Resource
+API's own `/kgentities/kgframes` route defaults to `create`. Switch it on after
+those move to `upsert`. The three tests that asserted create-overwrites (F2, S2,
+S3) now rewrite through `upsert`, keeping their stale-stamp purpose, so they pass
+either way. `tests/api/test_frame_create_refuses_existing.py` (3) runs only when
+`VG_TEST_FRAME_CREATE_REFUSES_EXISTING=1` says the server has it on: verified on
+the vg test stack with it on (3/3; and with it on, the full frame suites pass
+except the three tests named above, before they moved), and with it off (skips).
+
+**The slot routes (decided 2026-10-04): two routes, one contract**, mirroring the
+frame routes.
+- `/kgframes/kgslots` writes and deletes a STANDALONE frame's slots, locked,
+  guarded and stamped on the frame, and REFUSES an entity's frame
+  (`FrameOwnedByEntity`), as `/kgframes` does for frames.
+- NEW `POST`/`DELETE /kgentities/kgframes/kgslots` do it for an entity's frame,
+  locked, guarded and stamped on the ENTITY, and refuse a frame that is not that
+  entity's. The entity graph cache is invalidated. Client:
+  `kgentities.create_entity_frame_slots` (create/update/upsert) and
+  `delete_entity_frame_slots`.
+- The contract, decided under the lock (`slot_write_precheck`,
+  `delete_frame_slots`): `create` refuses an existing slot, `update` a missing
+  one, `upsert` takes either; a slot of another frame is refused (update used to
+  rewrite it and move it under this frame); an `Edge_hasKGSlot` is minted only
+  for a NEW slot (an upsert of a slot written by the entity route added a second
+  edge); an unknown mode is refused; delete is one transaction (it was two SPARQL
+  updates per slot, no lock), an absent slot is NO_OP (was NOT_FOUND), and it
+  accepts `if_unmodified_since`.
+- **Found by the read-back test: the slot route never set `hasKGGraphURI`.** A
+  slot added to an entity's frame through it was missing from the entity graph
+  and would outlive the entity's graph delete (only a handler nothing called set
+  it). The entity route now sets it; the standalone route drops a client-sent
+  one. Census of existing data (members of an entity's frame without
+  `hasKGGraphURI`): **production 0**; dev 2, both slot edges on test-dispatch
+  data, left in place.
+- Removed with the old handlers: `_store_frame_slots_in_backend`,
+  `_update_frame_slots_in_backend`, `_delete_frame_slots_from_backend`,
+  `_slot_exists_in_backend`, `_slot_connected_to_frame`,
+  `_set_slot_frame_relationships`.
+
+**Behaviour change for callers:** anything writing or deleting an ENTITY's
+frame's slots through `/kgframes/kgslots` is refused after the deploy. The
+Resource API passes `/kgframes/kgslots` through to this route as is; it needs
+routes onto `/kgentities/kgframes/kgslots`, and the portal to use them for entity
+frames.
+
+**Tests.** `tests/api/test_slot_routes_contract.py`, 9 cases (both routes, the
+modes, foreign slot, foreign frame, stale guard, delete with absent and stale,
+edge not duplicated, entity graph shows the slot). Unit tests of the replaced
+handlers were rewritten against `_write_frame_slots`.
 
 ## Open questions
 

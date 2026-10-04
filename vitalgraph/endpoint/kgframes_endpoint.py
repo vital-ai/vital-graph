@@ -51,18 +51,13 @@ import vital_ai_vitalsigns as vitalsigns
 
 # KGFrames endpoint is independent of entity processors - uses direct backend storage
 
-# Import slot processors
-from ..kg_impl.kgslot_create_impl import KGSlotCreateProcessor
-from ..kg_impl.kgslot_delete_impl import KGSlotDeleteProcessor
-from ..kg_impl.kgslot_update_impl import KGSlotUpdateProcessor
-
 # Import new frame processors
-from ..kg_impl.kgframe_hierarchical_impl import KGFrameHierarchicalProcessor
 from ..kg_impl.kgframe_graph_impl import KGFrameGraphProcessor
-from ..kg_impl.kgframe_query_impl import KGFrameQueryProcessor
 
 # Import backend utilities
-from ..kg_impl.kg_backend_utils import create_backend_adapter, standalone_precheck
+from ..kg_impl.kg_backend_utils import (
+    all_prechecks, create_backend_adapter, create_refuses_existing,
+    refuse_existing_precheck, standalone_precheck)
 from ..cache.count_cache import _count_cache
 from ..auth.role_dependencies import require_space_read, require_space_write
 from .impl.impl_utils import SubjectWriteFailed
@@ -102,16 +97,8 @@ class KGFramesEndpoint:
         self.frame_validator = FrameGraphValidator()
         
         # Initialize frame processors (these don't require backend in __init__)
-        self.frame_hierarchical_processor = KGFrameHierarchicalProcessor()
         self.frame_graph_processor = KGFrameGraphProcessor()
-        self.frame_query_processor = KGFrameQueryProcessor()
-        
-        # Slot processors will be initialized when needed with backend adapter
-        # (they require backend parameter in __init__)
-        self.slot_create_processor = None
-        self.slot_update_processor = None
-        self.slot_delete_processor = None
-        
+
         # Standalone frame processor (initialized when needed, no entity dependency)
         self.frame_processor = None
         
@@ -228,6 +215,13 @@ class KGFramesEndpoint:
             precheck = standalone_precheck(
                 space_id, graph_id, [str(f.URI) for f in frames], parent_uri,
                 require_existing=(op_mode == OperationMode.UPDATE))
+            # `create` refuses an existing frame (`issues/256` item 3), when
+            # switched on: anything the CLIENT sent, not the parent links added
+            # below.
+            if op_mode == OperationMode.CREATE and create_refuses_existing():
+                precheck = all_prechecks(precheck, refuse_existing_precheck(
+                    space_id, graph_id,
+                    [str(o.URI) for o in vitalsigns_objects if getattr(o, 'URI', None)]))
 
             # --- parent / entity relationships ---
             enhanced_objects = await self._handle_parent_relationships(
@@ -313,75 +307,6 @@ class KGFramesEndpoint:
             self.logger.error(f"Frame operation from objects failed: {e}")
             raise HTTPException(status_code=500, detail=f"Frame operation failed: {e}")
 
-    async def _create_standalone_frames(self, backend_adapter, space_id: str, graph_id: str, frame_objects: List, operation_mode: str):
-        """Create standalone frames without entity dependencies."""
-        try:
-            # Store frames directly using backend adapter
-            from vitalgraph.model.kgframes_model import FrameCreateResponse
-            
-            # Convert frame objects to storage format and store them
-            result = await backend_adapter.store_objects(space_id, graph_id, frame_objects)
-            
-            if result and hasattr(result, 'success') and result.success:
-                # Extract frame URIs from the objects
-                frame_uris = [str(obj.URI) for obj in frame_objects if hasattr(obj, 'URI')]
-                
-                return FrameCreateResponse(
-                    status=OperationStatus.CREATED,
-                    message=f"Successfully created {len(frame_uris)} standalone frames",
-                    created_count=len(frame_uris),
-                    created_uris=frame_uris,
-                    slots_created=0
-                )
-            else:
-                return FrameCreateResponse(
-                    status=OperationStatus.STORE_FAILED,
-                    message="Failed to create standalone frames",
-                    created_count=0,
-                    created_uris=[],
-                    slots_created=0
-                )
-
-        except Exception as e:
-            self.logger.error(f"Standalone frame creation failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Standalone frame creation failed: {e}")
-    
-    async def _update_frames(self, space_id: str, graph_id: str, vitalsigns_objects: List, operation_mode: str):
-        """Update frames using direct backend storage - no entity dependencies."""
-        try:
-            backend_adapter = await self._get_backend_adapter(space_id)
-            
-            # Update frames using backend storage
-            frames = [obj for obj in vitalsigns_objects if hasattr(obj, 'URI') and 'KGFrame' in str(type(obj))]
-            if not frames:
-                return FrameUpdateResponse(
-                    status=OperationStatus.INVALID_REQUEST,
-                    message="No frames found in update request",
-                    updated_uri=""
-                )
-
-            # Update frames directly using backend adapter
-            result = await backend_adapter.store_objects(space_id, graph_id, vitalsigns_objects)
-
-            if result and hasattr(result, 'success') and result.success:
-                return FrameUpdateResponse(
-                    status=OperationStatus.UPDATED,
-                    message=f"Successfully updated frame {frames[0].URI}",
-                    updated_uri=str(frames[0].URI)
-                )
-            else:
-                return FrameUpdateResponse(
-                    status=OperationStatus.STORE_FAILED,
-                    message="Failed to update frame",
-                    updated_uri=""
-                )
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            self.logger.error(f"Frame update failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Frame update failed: {e}")
-    
     # `_delete_frames`, `_get_frames`, `_get_entity_frames` and `_delete_entities`
     # were DELETED here 2026-10-02 (`issues/256`). Nothing in the service called
     # them; the routes use `_delete_frames_by_uris` and `_list_frames`.
@@ -389,189 +314,6 @@ class KGFramesEndpoint:
     # went 2026-10-04: single and batch are one locked delete now.
     
     # Slot endpoint methods for /api/graphs/kgframes/kgslots
-    
-    async def _create_slots(self, space_id: str, graph_id: str, vitalsigns_objects: List, operation_mode: str, parent_uri: Optional[str] = None, entity_uri: Optional[str] = None):
-        """Delegate slot creation to KGSlotCreateProcessor."""
-        try:
-            backend_adapter = await self._get_backend_adapter(space_id)
-            
-            if not self.slot_create_processor:
-                self.slot_create_processor = KGSlotCreateProcessor(backend_adapter)
-            
-            # Set entity graph URI and parent URI on objects if provided
-            if entity_uri or parent_uri:
-                for obj in vitalsigns_objects:
-                    if entity_uri and hasattr(obj, 'kGGraphURI'):
-                        obj.kGGraphURI = entity_uri
-                    if parent_uri and hasattr(obj, 'parentURI'):
-                        obj.parentURI = parent_uri
-            
-            # Delegate to slot processor
-            from ..kg_impl.kgslot_create_impl import OperationMode as SlotOperationMode
-            # operation_mode is already a string, convert directly to enum (enum values are lowercase)
-            op_mode = SlotOperationMode(operation_mode.lower() if isinstance(operation_mode, str) else operation_mode.value)
-            
-            result = await self.slot_create_processor.create_or_update_slots(
-                space_id, graph_id, vitalsigns_objects, op_mode
-            )
-            
-            # Handle different response types based on operation mode
-            if op_mode == SlotOperationMode.UPSERT:
-                # For UPSERT, convert SlotUpdateResponse to SlotCreateResponse format
-                created_count = 1 if hasattr(result, 'updated_uri') and result.updated_uri else 0
-                created_uris = [str(result.updated_uri)] if hasattr(result, 'updated_uri') and result.updated_uri else []
-                return SlotCreateResponse(
-                    status=OperationStatus.UPSERTED,
-                    message=result.message,
-                    created_count=created_count,
-                    created_uris=created_uris,
-                    slots_created=created_count
-                )
-            else:
-                # For CREATE mode, use normal response handling
-                created_count = getattr(result, 'created_count', 0)
-                return SlotCreateResponse(
-                    status=OperationStatus.CREATED,
-                    message=result.message,
-                    created_count=created_count,
-                    created_uris=[str(uri) for uri in getattr(result, 'created_uris', [])],
-                    slots_created=created_count
-                )
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            self.logger.error(f"Slot creation failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Slot creation failed: {e}")
-    
-    async def _update_slots(self, space_id: str, graph_id: str, vitalsigns_objects: List, operation_mode: str, parent_uri: Optional[str] = None, entity_uri: Optional[str] = None):
-        """Delegate slot updates to KGSlotUpdateProcessor."""
-        try:
-            backend_adapter = await self._get_backend_adapter(space_id)
-            
-            # Set entity graph URI and parent URI on objects if provided
-            if entity_uri or parent_uri:
-                for obj in vitalsigns_objects:
-                    if entity_uri and hasattr(obj, 'kGGraphURI'):
-                        obj.kGGraphURI = entity_uri
-                    if parent_uri and hasattr(obj, 'parentURI'):
-                        obj.parentURI = parent_uri
-            
-            # Extract slot URIs
-            slots = [obj for obj in vitalsigns_objects if isinstance(obj, KGSlot)]
-            if not slots:
-                return SlotUpdateResponse(
-                    status=OperationStatus.INVALID_REQUEST,
-                    message="No slots found in request",
-                    updated_uri=""
-                )
-
-            # Delegate to slot processor
-            result = await self.slot_update_processor.update_slot(
-                backend_adapter, space_id, graph_id, str(slots[0].URI), vitalsigns_objects
-            )
-
-            return SlotUpdateResponse(
-                status=OperationStatus.UPDATED,
-                message=result.message,
-                updated_uri=result.updated_uri
-            )
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            self.logger.error(f"Slot update failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Slot update failed: {e}")
-    
-    async def _delete_slots(self, space_id: str, graph_id: str, slot_uris: List[str]):
-        """Delegate slot deletion to KGSlotDeleteProcessor."""
-        try:
-            # Get backend adapter
-            backend_adapter = await self._get_backend_adapter(space_id)
-            
-            # Delegate to slot processor
-            deleted_count = await self.slot_delete_processor.delete_slots_batch(
-                backend_adapter, space_id, graph_id, slot_uris, delete_slot_graph=True
-            )
-            
-            return SlotDeleteResponse(
-                status=OperationStatus.DELETED,
-                message=f"Successfully deleted {deleted_count} slots",
-                deleted_count=deleted_count,
-                deleted_uris=slot_uris[:deleted_count]
-            )
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            self.logger.error(f"Slot deletion failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Slot deletion failed: {e}")
-    
-    async def _list_slots(self, space_id: str, graph_id: str, frame_uri: str = None, page_size: int = 10, offset: int = 0):
-        """List slots with optional frame filtering."""
-        try:
-            backend = self.backend_adapter
-            
-            query = self._build_list_slots_query(backend, space_id, graph_id, frame_uri, page_size, offset)
-            self.logger.debug(f"Executing slot list query: {query}")
-            
-            query_result = backend.execute_sparql_query(query)
-            slot_uris = []
-            
-            if query_result and 'results' in query_result and 'bindings' in query_result['results']:
-                for binding in query_result['results']['bindings']:
-                    if 'slot' in binding:
-                        slot_uri = binding['slot']['value']
-                        slot_uris.append(slot_uri)
-            
-            self.logger.debug(f"Found {len(slot_uris)} slots")
-            
-            slot_objects = []
-            for slot_uri in slot_uris:
-                try:
-                    slot_obj = backend.get_object(slot_uri)
-                    if slot_obj:
-                        slot_objects.append(slot_obj)
-                except Exception as e:
-                    self.logger.warning(f"Failed to retrieve slot {slot_uri}: {e}")
-            
-            count_query = self._build_count_slots_query(backend, space_id, graph_id, frame_uri)
-            count_result = backend.execute_sparql_query(count_query)
-            total_count = 0
-            
-            if count_result and 'results' in count_result and 'bindings' in count_result['results']:
-                bindings = count_result['results']['bindings']
-                if bindings and 'count' in bindings[0]:
-                    total_count = int(bindings[0]['count']['value'])
-            
-            self.logger.info(f"Listed {len(slot_objects)} slots (total: {total_count}) in graph '{graph_id}' in space '{space_id}'")
-            
-            quads = await asyncio.to_thread(graphobjects_to_quad_list, slot_objects, graph_id)
-            return QuadResponse(
-                status=OperationStatus.FOUND if slot_objects else OperationStatus.EMPTY,
-                results=quads, total_count=total_count, page_size=page_size, offset=offset)
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            self.logger.error(f"Slot listing failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Slot listing failed: {e}")
-    
-    async def _get_slot_by_uri(self, space_id: str, graph_id: str, slot_uri: str, parent_uri: Optional[str] = None, entity_uri: Optional[str] = None):
-        """Get single slot by URI."""
-        try:
-            backend_adapter = await self._get_backend_adapter(space_id)
-            
-            if await backend_adapter.object_exists(space_id, graph_id, slot_uri):
-                return QuadResultsResponse(status=OperationStatus.FOUND, results=[], total_count=1)
-            else:
-                return QuadResultsResponse(status=OperationStatus.NOT_FOUND, results=[], total_count=0)
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            self.logger.error(f"Slot retrieval failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Slot retrieval failed: {e}")
     
     def _setup_routes(self):
         """Setup FastAPI routes for KG frames management."""
@@ -813,6 +555,49 @@ class KGFramesEndpoint:
                 )
             return await self._get_kgframes_with_slots(space_id, graph_id, frame_uri, page_size, offset, entity_uri, parent_uri, search, kGSlotType, current_user)
         
+        # SLOT WRITES ON AN ENTITY'S FRAME (`issues/256`, decided 2026-10-04).
+        # `/kgframes/kgslots` refuses an entity's frame, as `/kgframes` does for
+        # frames; these are its entity-scoped counterparts, locked, guarded and
+        # stamped on the ENTITY — the key every entity-frame write takes.
+        @self.router.post("/kgentities/kgframes/kgslots", response_model=None, tags=["KG Frame Slots"])
+        async def write_entity_frame_slots(
+            space_id: str = Query(..., description="Space ID"),
+            graph_id: str = Query(..., description="Graph ID"),
+            entity_uri: str = Query(..., description="The entity that owns the frame"),
+            frame_uri: str = Query(..., description="Frame URI whose slots are written"),
+            operation_mode: str = Query("create", description="Operation mode: create, update, or upsert"),
+            if_unmodified_since: Optional[str] = Query(
+                None,
+                description=(
+                    "The ENTITY's hasObjectModificationDateTime as read; if it has "
+                    "moved the write is refused with status=conflict.")),
+            body: QuadRequest = Body(..., description="GraphObjects serialized as JSON Quads"),
+            current_user: Dict = Depends(self.auth_dependency),
+        ):
+            """Create, update or upsert slots of one of an entity's frames."""
+            require_space_write(current_user, space_id)
+            return await self._write_frame_slots(
+                space_id, graph_id, frame_uri, body.quads, str(operation_mode).lower(),
+                if_unmodified_since=if_unmodified_since, entity_uri=entity_uri)
+
+        @self.router.delete("/kgentities/kgframes/kgslots", response_model=SlotDeleteResponse, tags=["KG Frame Slots"])
+        async def delete_entity_frame_slots(
+            space_id: str = Query(..., description="Space ID"),
+            graph_id: str = Query(..., description="Graph ID"),
+            entity_uri: str = Query(..., description="The entity that owns the frame"),
+            frame_uri: str = Query(..., description="Frame URI to delete slots from"),
+            slot_uris: str = Query(..., description="Comma-separated list of slot URIs to delete"),
+            if_unmodified_since: Optional[str] = Query(
+                None, description="The ENTITY's hasObjectModificationDateTime as read."),
+            current_user: Dict = Depends(self.auth_dependency),
+        ):
+            """Delete slots of one of an entity's frames, in one transaction under the entity lock."""
+            require_space_write(current_user, space_id)
+            slot_uri_list = [u.strip() for u in slot_uris.split(',') if u.strip()]
+            return await self._delete_frame_slots(
+                space_id, graph_id, frame_uri, slot_uri_list, current_user,
+                if_unmodified_since=if_unmodified_since, entity_uri=entity_uri)
+
         # Registered on the KGFrames router but served under /kgentities/... so
         # it mirrors GET /kgentities/kgframes: page frames of an entity, then
         # page the slots of one of those frames. Both routers mount under
@@ -874,15 +659,9 @@ class KGFramesEndpoint:
             Operation mode determines behavior: 'create' (fail if exists), 'update' (fail if not exists), 'upsert' (create or update).
             """
             require_space_write(current_user, space_id)
-            quads = body.quads
-            if operation_mode == "update":
-                return await self._update_frame_slots(
-                    space_id, graph_id, frame_uri, quads, current_user,
-                    if_unmodified_since=if_unmodified_since)
-            else:
-                return await self._create_frame_slots(
-                    space_id, graph_id, frame_uri, quads, operation_mode, current_user,
-                    entity_uri, parent_uri, if_unmodified_since=if_unmodified_since)
+            return await self._write_frame_slots(
+                space_id, graph_id, frame_uri, body.quads, str(operation_mode).lower(),
+                if_unmodified_since=if_unmodified_since)
         
         @self.router.delete("/kgframes/kgslots", response_model=SlotDeleteResponse, tags=["KG Frame Slots"])
         async def delete_frame_slots(
@@ -890,14 +669,22 @@ class KGFramesEndpoint:
             graph_id: str = Query(..., description="Graph ID"),
             frame_uri: str = Query(..., description="Frame URI to delete slots from"),
             slot_uris: str = Query(..., description="Comma-separated list of slot URIs to delete"),
+            if_unmodified_since: Optional[str] = Query(
+                None,
+                description=(
+                    "Delete only if the frame's owner — the ENTITY for an entity's "
+                    "frame, else the frame — still has this "
+                    "hasObjectModificationDateTime; otherwise status=conflict.")),
             current_user: Dict = Depends(self.auth_dependency)
         ):
             """
-            Delete specific slots from a frame using Edge_hasKGSlot relationships.
+            Delete specific slots from a frame, with their Edge_hasKGSlot, in one locked transaction.
             """
             require_space_write(current_user, space_id)
             slot_uri_list = [uri.strip() for uri in slot_uris.split(',') if uri.strip()]
-            return await self._delete_frame_slots(space_id, graph_id, frame_uri, slot_uri_list, current_user)
+            return await self._delete_frame_slots(
+                space_id, graph_id, frame_uri, slot_uri_list, current_user,
+                if_unmodified_since=if_unmodified_since)
     
     # Implementation methods following MockKGFramesEndpoint patterns with VitalSigns integration
 
@@ -1614,302 +1401,196 @@ class KGFramesEndpoint:
             self.logger.error(f"Error getting frame slots: {e}")
             return []
     
-    async def _create_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, quads: List[Quad], operation_mode: OperationMode, current_user: Dict, entity_uri: Optional[str] = None, parent_uri: Optional[str] = None, if_unmodified_since: Optional[str] = None) -> SlotCreateResponse:
-        """Create slots for a specific frame from quads."""
-        from ..model.kgframes_model import SlotCreateResponse
+    async def _write_frame_slots(self, space_id: str, graph_id: str, frame_uri: str,
+                                 quads: List[Quad], mode: str,
+                                 if_unmodified_since: Optional[str] = None,
+                                 entity_uri: Optional[str] = None):
+        """Write slots of one frame: create, update or upsert (`issues/256`).
+
+        TWO ROUTES, one contract (decided 2026-10-04). `/kgframes/kgslots`
+        (`entity_uri` None) writes a STANDALONE frame's slots, locked, guarded
+        and stamped on the frame, and refuses an entity's frame.
+        `/kgentities/kgframes/kgslots` writes an entity's frame's slots, locked,
+        guarded and stamped on the ENTITY, and the frame must be the entity's.
+
+        Decided under the lock (`slot_write_precheck`):
+        - the frame side above;
+        - a slot of another frame is refused — `update` rewrote it and moved it;
+        - `create` refuses an existing slot, `update` a missing one, `upsert`
+          takes either;
+        - an `Edge_hasKGSlot` is minted only for a NEW slot. An existing slot
+          has its edge, possibly written by the entity route under another URI,
+          and minting a second one duplicated it.
+        An unknown mode is refused.
+        """
+        from ..model.kgframes_model import SlotCreateResponse, SlotUpdateResponse
+        from ..kg_impl.kg_backend_utils import slot_write_precheck
+
+        def _answer(status, message, uris=()):
+            uris = list(uris)
+            if mode == "update":
+                return SlotUpdateResponse(status=status, message=message,
+                                          updated_count=len(uris), updated_uris=uris)
+            return SlotCreateResponse(status=status, message=message,
+                                      created_count=len(uris), created_uris=uris)
+
+        if mode not in ("create", "update", "upsert"):
+            return _answer(OperationStatus.INVALID_REQUEST,
+                           f"Unknown operation_mode {mode!r}: expected create, update or upsert")
         vitalsigns_objects = quad_list_to_graphobjects(quads)
-        
         try:
-            self.logger.info(f"Creating slots for frame {frame_uri} with operation_mode {operation_mode}")
-            
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                return SlotCreateResponse(
-                    status=OperationStatus.NOT_FOUND,
-                    message=f"Space {space_id} not found",
-                    created_count=0,
-                    created_uris=[]
-                )
-
-            space_impl = space_record.space_impl
-            backend_impl = space_impl.get_db_space_impl()
+                return _answer(OperationStatus.NOT_FOUND, f"Space {space_id} not found")
+            backend_impl = space_record.space_impl.get_db_space_impl()
             if not backend_impl:
                 raise HTTPException(status_code=503, detail="Backend implementation not available")
             backend = create_backend_adapter(backend_impl)
 
-            if not await self._frame_exists_in_backend(backend, space_id, graph_id, frame_uri):
-                return SlotCreateResponse(
-                    status=OperationStatus.NOT_FOUND,
-                    message=f"Frame {frame_uri} not found",
-                    created_count=0,
-                    created_uris=[]
-                )
-
-            # Extract slots and validate
-            slots = [obj for obj in vitalsigns_objects if isinstance(obj, KGSlot)]
+            slots = [o for o in vitalsigns_objects if isinstance(o, KGSlot)]
             if not slots:
-                return SlotCreateResponse(
-                    status=OperationStatus.INVALID_REQUEST,
-                    message="No valid KGSlot objects found in request",
-                    created_count=0,
-                    created_uris=[]
-                )
-            
-            # Create Edge_hasKGSlot relationships
-            enhanced_objects = self._create_frame_slot_edges(frame_uri, slots, vitalsigns_objects)
+                return _answer(OperationStatus.INVALID_REQUEST,
+                               "No valid KGSlot objects found in request")
+            slot_uris = [str(sl.URI) for sl in slots]
 
-            # Groupings for the WHOLE payload, edges included (`issues/257`).
-            # This set them on the slots only, so the Edge_hasKGSlot edges this
-            # route creates itself were stored with no hasFrameGraphURI, and any
-            # edge the client sent kept the client's value. The URL's frame is
-            # the owning frame; the server's own edges are appended last, so
-            # they decide each slot.
-            assign_frame_groupings(enhanced_objects, owning_frame_uri=frame_uri)
+            key = entity_uri or frame_uri
+            objects = list(vitalsigns_objects)
+            if mode != "update":
+                existing = await backend.existing_subjects(space_id, graph_id, slot_uris)
+                objects = self._create_frame_slot_edges(
+                    frame_uri, [sl for sl in slots if str(sl.URI) not in existing], objects)
+            # The URL's frame owns every slot (`issues/257`).
+            assign_frame_groupings(objects, owning_frame_uri=frame_uri)
+            # And the ENTITY owns them on the entity route: `hasKGGraphURI` is
+            # what makes an object part of the entity graph — what reads return
+            # and what the entity's graph delete removes. Decided here, not by
+            # the client, as the groupings are. The slot route never set it
+            # (only a handler nothing called did), so a slot added this way was
+            # missing from the entity graph and would outlive the entity. On the
+            # standalone route a client-sent value is dropped: a standalone
+            # frame's slots belong to no entity.
+            for o in objects:
+                if hasattr(o, 'kGGraphURI'):
+                    o.kGGraphURI = entity_uri if entity_uri else None
 
-            # Handle operation mode
-            if operation_mode == OperationMode.CREATE:
-                # Verify slots don't already exist
-                for slot in slots:
-                    slot_uri = str(slot.URI)
-                    if await self._slot_exists_in_backend(backend, space_id, graph_id, slot_uri):
-                        return SlotCreateResponse(
-                            status=OperationStatus.ALREADY_EXISTS,
-                            message=f"Slot {slot_uri} already exists",
-                            created_count=0,
-                            created_uris=[]
-                        )
-            
-            # Store slots and edges in backend
-            created_uris = await self._store_frame_slots_in_backend(
-                backend, space_id, graph_id, enhanced_objects,
-                guard_frame_uri=frame_uri,
-                if_unmodified_since=if_unmodified_since)
-            
-            # Auto-sync vector/geo data for created slots
-            _sync_uris = [str(o.URI) for o in enhanced_objects if hasattr(o, 'URI') and o.URI]
-            self._schedule_auto_sync(backend_impl, space_id, graph_id, _sync_uris)
+            triples = await asyncio.to_thread(GraphObject.to_triples_list, objects)
+            insert_quads = [(str(a), str(b), c, graph_id) for a, b, c in triples]
+            subject_uris = list(dict.fromkeys(str(o.URI) for o in objects
+                                              if getattr(o, 'URI', None)))
+            if not await backend.update_subjects_graph(
+                    space_id, graph_id, subject_uris, insert_quads,
+                    lock_uris=[key], if_unmodified_since=if_unmodified_since,
+                    guard_subject=key, stamp_subjects=[key],
+                    precheck=slot_write_precheck(space_id, graph_id, frame_uri,
+                                                 slot_uris, mode, entity_uri)):
+                raise SubjectWriteFailed(f"slot {mode}", len(subject_uris))
 
-            return SlotCreateResponse(
-                status=OperationStatus.CREATED,
-                message=f"Successfully created {len(created_uris)} slots for frame {frame_uri}",
-                created_count=len(created_uris),
-                created_uris=created_uris
-            )
+            if entity_uri:
+                await self._invalidate_entity_graph(space_id, graph_id, entity_uri)
+            self._schedule_auto_sync(backend_impl, space_id, graph_id, subject_uris)
+            status = {"create": OperationStatus.CREATED, "update": OperationStatus.UPDATED,
+                      "upsert": OperationStatus.UPSERTED}[mode]
+            verb = {"create": "created", "update": "updated", "upsert": "upserted"}[mode]
+            return _answer(status, f"Successfully {verb} {len(slot_uris)} slot(s) of frame {frame_uri}",
+                           slot_uris)
 
         except HTTPException:
             raise
         except StaleWrite as e:
-            # REFUSED because the frame moved (`issues/253`). Distinct from the
-            # STORE_FAILED below: a conflict means re-read and retry, a store
-            # failure means retrying will not change the outcome.
-            self.logger.warning("Frame slot create refused as stale: %s", e)
-            return SlotCreateResponse(
-                status=OperationStatus.CONFLICT, message=str(e),
-                created_count=0, created_uris=[])
+            # The owner moved (`issues/253`): re-read, re-merge, retry.
+            self.logger.warning("Slot %s refused as stale: %s", mode, e)
+            return _answer(OperationStatus.CONFLICT, message=str(e))
         except RequestRefused as e:
-            # A CALLER ERROR, so INVALID_REQUEST — not the STORE_FAILED below and
-            # not the 500 an unhandled exception becomes. Unreachable while this
-            # route passes `owning_frame_uri` from a required path parameter, which
-            # is why it is pinned: the day that changes, the refusal
-            # `frame_grouping` documents as a 200 would arrive as a server error
-            # (`issues/257`; `test_a_refusal_reaches_the_caller.py`).
-            self.logger.warning("Slot create refused, ungroupable: %s", e)
-            return SlotCreateResponse(
-                status=OperationStatus.INVALID_REQUEST, message=str(e),
-                created_count=0, created_uris=[])
+            # The caller's to fix, with the refusal's own status: ALREADY_EXISTS,
+            # NOT_FOUND, or INVALID_REQUEST (`issues/256`).
+            return _answer(OperationStatus(e.status), message=str(e))
         except (SubjectWriteFailed, GuardUnsatisfiable) as e:
-            # A REFUSED write is a domain fault, not a server fault: HTTP 200 with
-            # `STORE_FAILED`, which derives `success=false`. `issues/253` decided
-            # this deliberately over a 503 — see `model/result_status.py` for the
-            # vocabulary and the reason 500 is wrong here.
-            self.logger.error("Frame slot create did not happen: %s", e)
-            return SlotCreateResponse(
-                status=OperationStatus.STORE_FAILED,
-                message=str(e),
-                created_count=0,
-                created_uris=[],
-            )
+            # A describable failure: STORE_FAILED in a 200 (`issues/253`).
+            self.logger.error("Slot %s did not happen: %s", mode, e)
+            return _answer(OperationStatus.STORE_FAILED, message=str(e))
         except Exception as e:
-            self.logger.error(f"Error creating frame slots: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to create frame slots: {e}")
-    
-    async def _update_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, quads: List[Quad], current_user: Dict, if_unmodified_since: Optional[str] = None) -> SlotUpdateResponse:
-        """Update slots for a specific frame from quads."""
-        from ..model.kgframes_model import SlotUpdateResponse
-        vitalsigns_objects = quad_list_to_graphobjects(quads)
-        
+            self.logger.error(f"Error writing frame slots: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to write frame slots: {e}")
+
+    async def _invalidate_entity_graph(self, space_id: str, graph_id: str,
+                                       entity_uri: str) -> None:
+        """Drop the cached entity graph after a slot write on one of its frames.
+
+        The same invalidation `KGEntitiesEndpoint._invalidate_entity_cache`
+        does — local cache, count cache, and the cross-instance NOTIFY — which
+        this router needs now that it writes entity frames' slots. Never raises.
+        """
+        from ..cache.entity_graph_cache import _entity_graph_cache
+        _g = graph_id or "default"
         try:
-            self.logger.info(f"Updating slots for frame {frame_uri} in space {space_id}, graph {graph_id}")
-            
-            space_record = await self.space_manager.get_space_or_load(space_id)
-            if not space_record:
-                return SlotUpdateResponse(
-                    status=OperationStatus.NOT_FOUND,
-                    message=f"Space {space_id} not found",
-                    updated_count=0,
-                    updated_uris=[]
-                )
-
-            space_impl = space_record.space_impl
-            backend_impl = space_impl.get_db_space_impl()
-            if not backend_impl:
-                raise HTTPException(status_code=503, detail="Backend implementation not available")
-            backend = create_backend_adapter(backend_impl)
-
-            if not await self._frame_exists_in_backend(backend, space_id, graph_id, frame_uri):
-                return SlotUpdateResponse(
-                    status=OperationStatus.NOT_FOUND,
-                    message=f"Frame {frame_uri} not found",
-                    updated_count=0,
-                    updated_uris=[]
-                )
-
-            # Extract slots and validate
-            slots = [obj for obj in vitalsigns_objects if isinstance(obj, KGSlot)]
-            if not slots:
-                return SlotUpdateResponse(
-                    status=OperationStatus.INVALID_REQUEST,
-                    message="No valid KGSlot objects found in request",
-                    updated_count=0,
-                    updated_uris=[]
-                )
-
-            # Validate all slots exist before updating
-            for slot in slots:
-                slot_uri = str(slot.URI)
-                if not await self._slot_exists_in_backend(backend, space_id, graph_id, slot_uri):
-                    return SlotUpdateResponse(
-                        status=OperationStatus.NOT_FOUND,
-                        message=f"Slot {slot_uri} not found",
-                        updated_count=0,
-                        updated_uris=[]
-                    )
-            
-            # Set frameGraphURI on slots to maintain frame relationships
-            self._set_slot_frame_relationships(slots, frame_uri)
-            
-            # Update slots in backend (delete existing and insert updated)
-            updated_uris = await self._update_frame_slots_in_backend(
-                backend, space_id, graph_id, slots,
-                guard_frame_uri=frame_uri,
-                if_unmodified_since=if_unmodified_since)
-            
-            # Auto-sync vector/geo data for updated slots
-            _sync_uris = [str(s.URI) for s in slots if hasattr(s, 'URI') and s.URI]
-            self._schedule_auto_sync(backend_impl, space_id, graph_id, _sync_uris)
-
-            return SlotUpdateResponse(
-                status=OperationStatus.UPDATED,
-                message=f"Successfully updated {len(updated_uris)} slots for frame {frame_uri}",
-                updated_count=len(updated_uris),
-                updated_uris=updated_uris
-            )
-
-        except HTTPException:
-            raise
-        except StaleWrite as e:
-            # REFUSED because the frame moved (`issues/253`).
-            self.logger.warning("Frame slot update refused as stale: %s", e)
-            return SlotUpdateResponse(
-                status=OperationStatus.CONFLICT, message=str(e),
-                updated_count=0, updated_uris=[])
-        except RequestRefused as e:
-            # A CALLER ERROR, so INVALID_REQUEST — not the STORE_FAILED below and
-            # not the 500 an unhandled exception becomes. Unreachable while this
-            # route passes `owning_frame_uri` from a required path parameter, which
-            # is why it is pinned: the day that changes, the refusal
-            # `frame_grouping` documents as a 200 would arrive as a server error
-            # (`issues/257`; `test_a_refusal_reaches_the_caller.py`).
-            self.logger.warning("Slot update refused, ungroupable: %s", e)
-            return SlotUpdateResponse(
-                status=OperationStatus.INVALID_REQUEST, message=str(e),
-                updated_count=0, updated_uris=[])
-        except (SubjectWriteFailed, GuardUnsatisfiable) as e:
-            # Domain fault, HTTP 200, `success=false` (`issues/253`).
-            self.logger.error("Frame slot update did not happen: %s", e)
-            return SlotUpdateResponse(
-                status=OperationStatus.STORE_FAILED,
-                message=str(e),
-                updated_count=0,
-                updated_uris=[],
-            )
+            _entity_graph_cache.invalidate(space_id, _g, entity_uri)
+            _count_cache.invalidate_graph(space_id, _g)
         except Exception as e:
-            self.logger.error(f"Error updating frame slots: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to update frame slots: {e}")
-    
-    async def _delete_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, slot_uris: List[str], current_user: Dict) -> SlotDeleteResponse:
-        """Delete specific slots from a frame using Edge_hasKGSlot relationships."""
+            self.logger.warning("entity cache invalidation failed: %s", e)
+        try:
+            space_record = await self.space_manager.get_space_or_load(space_id)
+            backend = space_record.space_impl.get_db_space_impl() if space_record else None
+            sm = getattr(backend, 'get_signal_manager', lambda: None)() if backend else None
+            if sm:
+                await sm.notify_entity_graph_changed(space_id, _g, entity_uri, "updated")
+        except Exception as e:
+            self.logger.warning("entity cache NOTIFY failed: %s", e)
+
+    async def _delete_frame_slots(self, space_id: str, graph_id: str, frame_uri: str,
+                                  slot_uris: List[str], current_user: Dict,
+                                  if_unmodified_since: Optional[str] = None,
+                                  entity_uri: Optional[str] = None) -> SlotDeleteResponse:
+        """Delete slots of one frame in one locked transaction (`issues/256`).
+
+        See `delete_frame_slots`: the owner's lock, guard and stamp; a slot of
+        another frame refuses the request; a slot already gone is NO_OP. This
+        was two SPARQL updates per slot with no lock, NOT_FOUND for an absent
+        slot, and a slot whose delete failed silently dropped from the count.
+        """
         from ..model.kgframes_model import SlotDeleteResponse
-        
+
+        def _no(status, message):
+            return SlotDeleteResponse(status=status, message=message,
+                                      deleted_count=0, deleted_uris=[])
         try:
-            self.logger.info(f"Deleting {len(slot_uris)} slots from frame {frame_uri} in space {space_id}, graph {graph_id}")
-            
-            # Get backend implementation via generic interface
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                return SlotDeleteResponse(
-                    status=OperationStatus.NOT_FOUND,
-                    message=f"Space {space_id} not found",
-                    deleted_count=0,
-                    deleted_uris=[]
-                )
-
-            space_impl = space_record.space_impl
-            backend_impl = space_impl.get_db_space_impl()
+                return _no(OperationStatus.NOT_FOUND, f"Space {space_id} not found")
+            backend_impl = space_record.space_impl.get_db_space_impl()
             if not backend_impl:
                 raise HTTPException(status_code=503, detail="Backend implementation not available")
             backend = create_backend_adapter(backend_impl)
 
-            # Validate that frame exists
-            if not await self._frame_exists_in_backend(backend, space_id, graph_id, frame_uri):
+            result = await backend.delete_frame_slots(
+                space_id, graph_id, frame_uri, slot_uris, entity_uri=entity_uri,
+                if_unmodified_since=if_unmodified_since)
+            deleted, absent = result["deleted"], result["absent"]
+            if deleted:
+                if entity_uri:
+                    await self._invalidate_entity_graph(space_id, graph_id, entity_uri)
+                self._schedule_auto_sync(backend_impl, space_id, graph_id, deleted, "delete")
                 return SlotDeleteResponse(
-                    status=OperationStatus.NOT_FOUND,
-                    message=f"Frame {frame_uri} not found",
-                    deleted_count=0,
-                    deleted_uris=[]
-                )
-
-            # Validate all slots exist and are connected to this frame
-            validated_slots = []
-            for slot_uri in slot_uris:
-                if not await self._slot_exists_in_backend(backend, space_id, graph_id, slot_uri):
-                    return SlotDeleteResponse(
-                        status=OperationStatus.NOT_FOUND,
-                        message=f"Slot {slot_uri} not found",
-                        deleted_count=0,
-                        deleted_uris=[]
-                    )
-
-                # Verify slot is connected to this frame via Edge_hasKGSlot
-                if not await self._slot_connected_to_frame(backend, space_id, graph_id, frame_uri, slot_uri):
-                    return SlotDeleteResponse(
-                        status=OperationStatus.INVALID_REQUEST,
-                        message=f"Slot {slot_uri} is not connected to frame {frame_uri}",
-                        deleted_count=0,
-                        deleted_uris=[]
-                    )
-                
-                validated_slots.append(slot_uri)
-            
-            # Delete slots and their edges from backend
-            deleted_count = await self._delete_frame_slots_from_backend(backend, space_id, graph_id, frame_uri, validated_slots)
-            
-            # Auto-sync vector/geo data for deleted slots
-            if deleted_count > 0:
-                self._schedule_auto_sync(backend_impl, space_id, graph_id, validated_slots[:deleted_count], "delete")
-
+                    status=OperationStatus.DELETED,
+                    message=(f"Successfully deleted {len(deleted)} slot(s) from frame {frame_uri}"
+                             + (f"; {len(absent)} were already absent" if absent else "")),
+                    deleted_count=len(deleted), deleted_uris=deleted, absent_uris=absent)
             return SlotDeleteResponse(
-                status=OperationStatus.DELETED,
-                message=f"Successfully deleted {deleted_count} slots from frame {frame_uri}",
-                deleted_count=deleted_count,
-                deleted_uris=validated_slots[:deleted_count]
-            )
+                status=OperationStatus.NO_OP,
+                message=f"None of the {len(slot_uris)} slot(s) exist - no deletion performed",
+                deleted_count=0, deleted_uris=[], absent_uris=absent)
 
         except HTTPException:
             raise
+        except StaleWrite as e:
+            return _no(OperationStatus.CONFLICT, message=str(e))
+        except RequestRefused as e:
+            return _no(OperationStatus(e.status), message=str(e))
+        except GuardUnsatisfiable as e:
+            return _no(OperationStatus.STORE_FAILED, message=str(e))
         except Exception as e:
             self.logger.error(f"Error deleting frame slots: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to delete frame slots: {e}")
+            return _no(OperationStatus.STORE_FAILED,
+                       f"Slot delete failed, nothing was deleted: {e}")
     
     # Helper methods for SPARQL query building and VitalSigns conversion
 
@@ -3076,13 +2757,6 @@ class KGFramesEndpoint:
     
     
     
-    def _set_slot_frame_relationships(self, slots: List[KGSlot], frame_uri: str):
-        """Set frameGraphURI on slots to connect them to the frame."""
-        for slot in slots:
-            if isinstance(slot, KGSlot):
-                # Set frameGraphURI to connect slot to frame
-                slot.frameGraphURI = frame_uri
-    
     def _create_frame_slot_edges(self, frame_uri: str, slots: List[KGSlot], objects: List[GraphObject]) -> List[GraphObject]:
         """Create Edge_hasKGSlot relationships between frame and slots."""
         enhanced_objects = list(objects)  # Copy the objects list
@@ -3101,284 +2775,6 @@ class KGFramesEndpoint:
             self.logger.info(f"Created frame → slot edge: {frame_uri} → {slot_uri}")
         
         return enhanced_objects
-    
-    async def _slot_exists_in_backend(self, backend, space_id: str, graph_id: str, slot_uri: str) -> bool:
-        """Check whether the given slot URI exists in the graph.
-
-        Plain subject-existence check — no type constraint. Slots are always
-        reached through Edge_hasKGSlot, which already establishes that a
-        subject is a slot, so re-deriving the type here adds nothing. It used
-        to match vitaltype against
-        ``STRSTARTS(...,"…KG") && STRENDS(...,"Slot")``, which is the same
-        string-scan pattern removed from the slot and frame queries in step 7.
-        """
-        try:
-            query = f"""
-            SELECT ?s WHERE {{
-                GRAPH <{graph_id}> {{
-                    <{slot_uri}> ?p ?o .
-                    BIND(<{slot_uri}> as ?s)
-                }}
-            }}
-            LIMIT 1
-            """
-            result = await backend.execute_sparql_query(space_id, query)
-            
-            # Check if we got any results
-            if isinstance(result, dict):
-                bindings = result.get("bindings") or result.get("results", {}).get("bindings")
-                return bool(bindings and len(bindings) > 0)
-            elif isinstance(result, list):
-                return len(result) > 0
-            
-            return False
-            
-        except Exception as e:
-            self.logger.error(f"Error checking slot existence: {e}")
-            return False
-    
-    async def _slot_connected_to_frame(self, backend, space_id: str, graph_id: str, frame_uri: str, slot_uri: str) -> bool:
-        """Check if slot is connected to frame via Edge_hasKGSlot."""
-        try:
-            query = f"""
-            PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
-            SELECT ?edge WHERE {{
-                GRAPH <{graph_id}> {{
-                    ?edge vital-core:vitaltype <{self.haley_prefix}Edge_hasKGSlot> .
-                    ?edge vital-core:hasEdgeSource <{frame_uri}> .
-                    ?edge vital-core:hasEdgeDestination <{slot_uri}> .
-                }}
-            }}
-            LIMIT 1
-            """
-            result = await backend.execute_sparql_query(space_id, query)
-            if isinstance(result, dict):
-                bindings = result.get("bindings") or result.get("results", {}).get("bindings")
-                return bool(bindings and len(bindings) > 0)
-            return False
-            
-        except Exception as e:
-            self.logger.error(f"Error checking slot-frame connection: {e}")
-            return False
-    
-    async def _update_frame_slots_in_backend(self, backend, space_id: str, graph_id: str,
-                                             slots: List[KGSlot],
-                                             guard_frame_uri: Optional[str] = None,
-                                             if_unmodified_since: Optional[str] = None) -> List[str]:
-        """
-        Update VitalSigns slot objects in backend using atomic update_quads.
-        
-        Joins DELETE and INSERT into a single PostgreSQL transaction and a
-        single request, preventing triple accumulation if the delete
-        phase succeeds but the insert fails (or vice versa).
-
-        THE FRAME IS THE KEY (`issues/253`). These routes have no owning entity
-        to key on — `_create_frames` says so in its own docstring, and
-        `_update_frame_slots` is not even given one — so both the advisory lock
-        and the `if_unmodified_since` comparison key on the frame. Passing
-        `frame_uri` also closes a gap that predates the conditional write: these
-        paths took NO lock at all, so two concurrent writers to one frame were
-        atomic but not exclusive (`issues/174`).
-
-        A DIFFERENT KEY BECAUSE IT IS A DIFFERENT OBJECT, not a weaker version of
-        the entity-scoped one. A frame inside an entity and a top-level frame are
-        distinct things in this model, reached through distinct routes, and the
-        unit of concurrency follows the object: the entity for the first, the
-        frame for the second. `/kgentities/kgframes` keying on the entity and
-        this keying on the frame is therefore correct and not a gap — the two
-        families do not write the same frames.
-        """
-        try:
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            
-            slot_uris = [str(slot.URI) for slot in slots]
-            
-            # Step 1: Build insert quads from VitalSigns objects (preserve RDFLib objects)
-            triples = await asyncio.to_thread(GraphObject.to_triples_list, slots)
-            insert_quads = [(str(s), str(p), o, graph_id) for s, p, o in triples]
-            
-            # Step 2: Subject-level delete + insert (safe path)
-            if hasattr(backend, 'update_subjects_graph'):
-                # Checked, not discarded (`issues/253`).
-                if not await backend.update_subjects_graph(
-                        space_id, graph_id, slot_uris, insert_quads,
-                        lock_uris=[guard_frame_uri] if guard_frame_uri else None,
-                        if_unmodified_since=if_unmodified_since,
-                        guard_subject=guard_frame_uri):
-                    raise SubjectWriteFailed("slot update", len(slot_uris))
-            else:
-                subject_values = " ".join(f"<{uri}>" for uri in slot_uris)
-                query = f"""SELECT ?subject ?predicate ?object WHERE {{
-                    GRAPH <{graph_id}> {{
-                        VALUES ?subject {{ {subject_values} }}
-                        ?subject ?predicate ?object .
-                    }}
-                }}"""
-                results = await backend.execute_sparql_query(space_id, query)
-                
-                delete_quads = []
-                bindings = []
-                if isinstance(results, dict) and 'results' in results and isinstance(results['results'], dict):
-                    bindings = results['results'].get('bindings', [])
-                elif isinstance(results, list):
-                    bindings = results
-                
-                from vitalgraph.kg_impl.kgentity_frame_create_impl import _sparql_binding_to_rdflib
-                for row in bindings:
-                    if isinstance(row, dict):
-                        s = str(row['subject'].get('value', '')) if isinstance(row.get('subject'), dict) else str(row.get('subject', ''))
-                        p = str(row['predicate'].get('value', '')) if isinstance(row.get('predicate'), dict) else str(row.get('predicate', ''))
-                        o = _sparql_binding_to_rdflib(row.get('object', ''))
-                        if s and p and o is not None:
-                            delete_quads.append((s, p, o, graph_id))
-                
-                await backend.update_quads(space_id, graph_id, delete_quads, insert_quads)
-            
-            return slot_uris
-            
-        except Exception as e:
-            self.logger.error(f"Error updating frame slots in backend: {e}")
-            raise
-    
-    async def _delete_frame_slots_from_backend(self, backend, space_id: str, graph_id: str, frame_uri: str, slot_uris: List[str]) -> int:
-        """Delete slots and their Edge_hasKGSlot relationships from backend."""
-        try:
-            deleted_count = 0
-            
-            for slot_uri in slot_uris:
-                try:
-                    # Delete the slot itself
-                    delete_slot_query = f"""
-                    DELETE {{
-                        GRAPH <{graph_id}> {{
-                            <{slot_uri}> ?p ?o .
-                        }}
-                    }}
-                    WHERE {{
-                        GRAPH <{graph_id}> {{
-                            <{slot_uri}> ?p ?o .
-                        }}
-                    }}
-                    """
-                    await backend.execute_sparql_update(space_id, delete_slot_query)
-                    
-                    # Delete the Edge_hasKGSlot connecting frame to slot
-                    delete_edge_query = f"""
-                    PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
-                    DELETE {{
-                        GRAPH <{graph_id}> {{
-                            ?edge ?ep ?eo .
-                        }}
-                    }}
-                    WHERE {{
-                        GRAPH <{graph_id}> {{
-                            ?edge vital-core:vitaltype <{self.haley_prefix}Edge_hasKGSlot> .
-                            ?edge vital-core:hasEdgeSource <{frame_uri}> .
-                            ?edge vital-core:hasEdgeDestination <{slot_uri}> .
-                            ?edge ?ep ?eo .
-                        }}
-                    }}
-                    """
-                    await backend.execute_sparql_update(space_id, delete_edge_query)
-                    
-                    deleted_count += 1
-                    self.logger.info(f"Deleted slot {slot_uri} and its edge from frame {frame_uri}")
-                    
-                except Exception as e:
-                    self.logger.error(f"Error deleting slot {slot_uri}: {e}")
-                    continue
-            
-            return deleted_count
-            
-        except Exception as e:
-            self.logger.error(f"Error deleting frame slots from backend: {e}")
-            raise
-    
-    async def _store_frame_slots_in_backend(self, backend, space_id: str, graph_id: str,
-                                            objects: List[GraphObject],
-                                            guard_frame_uri: Optional[str] = None,
-                                            if_unmodified_since: Optional[str] = None) -> List[str]:
-        """
-        Store VitalSigns slot objects and edges in backend using atomic update_quads.
-        
-        Queries existing triples for all subject URIs first, then uses a single
-        transaction for delete + insert to prevent triple accumulation.
-
-        THE FRAME IS THE KEY (`issues/253`). These routes have no owning entity
-        to key on — `_create_frames` says so in its own docstring, and
-        `_update_frame_slots` is not even given one — so both the advisory lock
-        and the `if_unmodified_since` comparison key on the frame. Passing
-        `frame_uri` also closes a gap that predates the conditional write: these
-        paths took NO lock at all, so two concurrent writers to one frame were
-        atomic but not exclusive (`issues/174`).
-
-        A DIFFERENT KEY BECAUSE IT IS A DIFFERENT OBJECT, not a weaker version of
-        the entity-scoped one. A frame inside an entity and a top-level frame are
-        distinct things in this model, reached through distinct routes, and the
-        unit of concurrency follows the object: the entity for the first, the
-        frame for the second. `/kgentities/kgframes` keying on the entity and
-        this keying on the frame is therefore correct and not a gap — the two
-        families do not write the same frames.
-        """
-        try:
-            slot_uris = []
-            for obj in objects:
-                if isinstance(obj, KGSlot):
-                    slot_uris.append(str(obj.URI))
-            
-            # Step 1: Build insert quads from VitalSigns objects (preserve RDFLib objects)
-            triples = await asyncio.to_thread(GraphObject.to_triples_list, objects)
-            insert_quads = [(str(s), str(p), o, graph_id) for s, p, o in triples]
-            
-            if not insert_quads:
-                return slot_uris
-            
-            # Step 2: Subject-level delete + insert (safe path)
-            subject_uris = list({str(obj.URI) for obj in objects
-                                 if hasattr(obj, 'URI') and obj.URI})
-            
-            if hasattr(backend, 'update_subjects_graph'):
-                # Checked, not discarded (`issues/253`).
-                if not await backend.update_subjects_graph(
-                        space_id, graph_id, subject_uris, insert_quads,
-                        lock_uris=[guard_frame_uri] if guard_frame_uri else None,
-                        if_unmodified_since=if_unmodified_since,
-                        guard_subject=guard_frame_uri):
-                    raise SubjectWriteFailed("slot write", len(subject_uris))
-            else:
-                delete_quads = []
-                if subject_uris:
-                    subject_values = " ".join(f"<{uri}>" for uri in subject_uris)
-                    query = f"""SELECT ?subject ?predicate ?object WHERE {{
-                        GRAPH <{graph_id}> {{
-                            VALUES ?subject {{ {subject_values} }}
-                            ?subject ?predicate ?object .
-                        }}
-                    }}"""
-                    results = await backend.execute_sparql_query(space_id, query)
-                    
-                    bindings = []
-                    if isinstance(results, dict) and 'results' in results and isinstance(results['results'], dict):
-                        bindings = results['results'].get('bindings', [])
-                    elif isinstance(results, list):
-                        bindings = results
-                    
-                    from vitalgraph.kg_impl.kgentity_frame_create_impl import _sparql_binding_to_rdflib
-                    for row in bindings:
-                        if isinstance(row, dict):
-                            s = str(row['subject'].get('value', '')) if isinstance(row.get('subject'), dict) else str(row.get('subject', ''))
-                            p = str(row['predicate'].get('value', '')) if isinstance(row.get('predicate'), dict) else str(row.get('predicate', ''))
-                            o = _sparql_binding_to_rdflib(row.get('object', ''))
-                            if s and p and o is not None:
-                                delete_quads.append((s, p, o, graph_id))
-                
-                await backend.update_quads(space_id, graph_id, delete_quads, insert_quads)
-            
-            return slot_uris
-            
-        except Exception as e:
-            self.logger.error(f"Error storing frame slots in backend: {e}")
-            raise
     
     # Helper methods for frame query operations
     
@@ -3425,57 +2821,6 @@ class KGFramesEndpoint:
             }}
         }}
         """
-    
-    async def _create_child_frames(
-        self,
-        space_id: str,
-        graph_id: str,
-        parent_frame_uri: str,
-        frame_objects: List,
-        operation_mode: str,
-        current_user: Dict
-    ) -> FrameCreateResponse:
-        """Create child frames linked to parent frame using processor."""
-        try:
-            backend_adapter = await self._get_backend_adapter(space_id)
-            
-            # Delegate to hierarchical processor
-            result = await self.frame_hierarchical_processor.create_child_frames(
-                backend_adapter=backend_adapter,
-                space_id=space_id,
-                graph_id=graph_id,
-                parent_frame_uri=parent_frame_uri,
-                child_frame_objects=frame_objects,
-                operation_mode=operation_mode
-            )
-            
-            if result.success:
-                return FrameCreateResponse(
-                    status=OperationStatus.CREATED,
-                    message=result.message,
-                    created_count=result.frame_count,
-                    created_uris=result.created_uris,
-                    frames_created=result.frame_count
-                )
-            else:
-                return FrameCreateResponse(
-                    status=OperationStatus.STORE_FAILED,
-                    message=result.message,
-                    created_count=0,
-                    created_uris=[],
-                    frames_created=0
-                )
-
-        except HTTPException:
-            raise
-        except RequestRefused as e:
-            # A caller error in a 200 (`issues/257`).
-            return FrameCreateResponse(
-                status=OperationStatus.INVALID_REQUEST, message=str(e),
-                created_count=0, created_uris=[], frames_created=0)
-        except Exception as e:
-            self.logger.error(f"Child frame creation failed: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Child frame creation failed: {e}")
     
     async def _get_frame_graph(
         self,

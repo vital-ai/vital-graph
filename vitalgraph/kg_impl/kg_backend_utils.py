@@ -626,6 +626,145 @@ async def _present(conn, space_id: str, graph_id: str, uris: List[str]) -> set:
     return {by_uuid[r['subject_uuid']] for r in rows}
 
 
+class AlreadyExists(RequestRefused):
+    """A frame `create` named something that already exists (`issues/256` item 3)."""
+
+    status = "already_exists"
+
+
+def create_refuses_existing() -> bool:
+    """Does a frame `create` refuse an existing frame? (`issues/256` item 3)
+
+    DECIDED, and OFF by default until the callers that still rely on `create`
+    overwriting an existing frame move to `upsert` — the Resource API's lead
+    sync and its `write_or_update_frame` fallback among them. Read on every
+    request, so it is switched by the environment without a code change.
+    """
+    return os.environ.get("VITALGRAPH_FRAME_CREATE_REFUSES_EXISTING", "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def refuse_existing_precheck(space_id: str, graph_id: str, uris: List[str]):
+    """Refuse a create naming ANY subject that already exists, as entity create does.
+
+    Not only the frame: a slot, slot edge or child frame that exists refuses the
+    request too, so a create cannot overwrite part of something. Under the lock.
+    """
+    async def _check(conn):
+        existing = sorted(await _present(conn, space_id, graph_id, list(uris)))
+        if existing:
+            raise AlreadyExists(
+                f"{len(existing)} object(s) in this create already exist; nothing "
+                f"was written. Use upsert to replace them: " + ", ".join(existing[:5]))
+    return _check
+
+
+def all_prechecks(*checks):
+    """One precheck running each given one in turn (None entries skipped)."""
+    checks = [c for c in checks if c is not None]
+
+    async def _check(conn):
+        for c in checks:
+            await c(conn)
+    return _check if checks else None
+
+
+class SlotAbsent(RequestRefused):
+    """A slot `update` named a slot that does not exist (`issues/256`)."""
+
+    status = "not_found"
+
+
+async def _frame_graph_of(conn, space_id: str, graph_id: str, uris: List[str]) -> Dict[str, Optional[str]]:
+    """{uri -> its hasFrameGraphURI} for those that have one."""
+    if not uris:
+        return {}
+    from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+    from ..db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+    t = SparqlSQLSchema.get_table_names(space_id)
+    rows = await conn.fetch(
+        f"SELECT ts.term_text AS s, tg.term_text AS g FROM {t['rdf_quad']} k "
+        f"JOIN {t['term']} ts ON ts.term_uuid = k.subject_uuid "
+        f"JOIN {t['term']} tg ON tg.term_uuid = k.object_uuid "
+        f"WHERE k.subject_uuid = ANY($1) AND k.predicate_uuid = $2 AND k.context_uuid = $3",
+        [_generate_term_uuid(u, 'U') for u in uris],
+        _generate_term_uuid(HAS_FRAME_GRAPH_URI, 'U'), _generate_term_uuid(graph_id, 'U'))
+    return {r['s']: r['g'] for r in rows}
+
+
+async def _owner_entity_of(conn, space_id: str, graph_id: str, frame_uri: str) -> Optional[str]:
+    """The entity a frame belongs to (`hasKGGraphURI`), or None for a standalone one."""
+    from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+    from ..db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+    t = SparqlSQLSchema.get_table_names(space_id)
+    return await conn.fetchval(
+        f"SELECT tt.term_text FROM {t['rdf_quad']} k "
+        f"JOIN {t['term']} tt ON tt.term_uuid = k.object_uuid "
+        f"WHERE k.subject_uuid = $1 AND k.predicate_uuid = $2 AND k.context_uuid = $3 LIMIT 1",
+        _generate_term_uuid(frame_uri, 'U'), _generate_term_uuid(HAS_KG_GRAPH_URI, 'U'),
+        _generate_term_uuid(graph_id, 'U'))
+
+
+async def _check_slot_frame(conn, space_id: str, graph_id: str, frame_uri: str,
+                           entity_uri: Optional[str]) -> None:
+    """The frame side of the slot contract, under the lock (`issues/256`).
+
+    The frame exists. On `/kgframes/kgslots` (`entity_uri` None) it is NOT an
+    entity's frame — that route does not take the entity's lock, the decision
+    `/kgframes` already applies to frames. On `/kgentities/kgframes/kgslots` the
+    entity exists and the frame is ITS frame.
+    """
+    from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+    if not await _present(conn, space_id, graph_id, [frame_uri]):
+        raise FrameAbsent(f"Frame {frame_uri} not found")
+    if entity_uri is None:
+        owner = await _owner_entity_of(conn, space_id, graph_id, frame_uri)
+        if owner:
+            raise FrameOwnedByEntity(
+                f"Frame {frame_uri} belongs to entity {owner}: its slots are written "
+                f"and deleted through /kgentities/kgframes/kgslots, which takes the "
+                f"entity's lock; nothing was changed.")
+    else:
+        await entity_present_precheck(space_id, graph_id, entity_uri)(conn)
+        if not await owned_by_entity(conn, space_id, graph_id, entity_uri,
+                                     [_generate_term_uuid(frame_uri, 'U')]):
+            raise FrameNotOwned(
+                f"Frame {frame_uri} does not belong to entity {entity_uri}; "
+                f"nothing was changed.")
+
+
+def slot_write_precheck(space_id: str, graph_id: str, frame_uri: str,
+                        slot_uris: List[str], mode: str, entity_uri: Optional[str]):
+    """The slot-route write contract, decided under the lock (`issues/256`).
+
+    - the frame side (`_check_slot_frame`);
+    - every slot that exists belongs to THIS frame (`hasFrameGraphURI`) — a
+      slot of another frame is refused, where `update` rewrote it and moved it;
+    - `create` refuses a slot that exists (ALREADY_EXISTS), `update` one that
+      does not (NOT_FOUND); `upsert` takes either.
+    """
+    async def _check(conn):
+        await _check_slot_frame(conn, space_id, graph_id, frame_uri, entity_uri)
+        existing = await _present(conn, space_id, graph_id, list(slot_uris))
+        groups = await _frame_graph_of(conn, space_id, graph_id, sorted(existing))
+        foreign = sorted(u for u in existing if groups.get(u) not in (None, frame_uri))
+        if foreign:
+            raise RequestRefused(
+                f"{len(foreign)} slot(s) belong to another frame, not {frame_uri}; "
+                f"nothing was written: " + ", ".join(foreign[:5]))
+        if mode == "create" and existing:
+            raise AlreadyExists(
+                f"{len(existing)} slot(s) already exist; nothing was written. Use "
+                f"upsert to replace them: " + ", ".join(sorted(existing)[:5]))
+        if mode == "update":
+            missing = sorted(set(slot_uris) - existing)
+            if missing:
+                raise SlotAbsent(
+                    f"{len(missing)} slot(s) do not exist; update does not create "
+                    f"(use upsert): " + ", ".join(missing[:5]))
+    return _check
+
+
 def entity_frames_precheck(space_id: str, graph_id: str, entity_uri: str,
                            frame_uris: List[str]):
     """The entity-frame UPSERT precondition (`issues/256` item 2).
@@ -1109,6 +1248,67 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         except Exception as e:
             self.logger.error("batch_check_uris_exist failed: %s", e)
             return []
+
+    async def existing_subjects(self, space_id: str, graph_id: str,
+                                uris: List[str]) -> set:
+        """Which of *uris* are the subject of some quad in the graph (a plain read)."""
+        async with self.backend.db_impl.connection_pool.acquire() as conn:
+            return await _present(conn, space_id, graph_id, list(uris))
+
+    async def delete_frame_slots(self, space_id: str, graph_id: str, frame_uri: str,
+                                 slot_uris: List[str], *, entity_uri: Optional[str] = None,
+                                 if_unmodified_since: Optional[str] = None) -> Dict[str, List[str]]:
+        """Delete slots of one frame with their `Edge_hasKGSlot`, in ONE locked transaction.
+
+        `issues/256`. This was two SPARQL updates per slot, slot by slot, with no
+        lock: a failure part-way left some slots without edges or edges without
+        slots, and nothing excluded a concurrent frame write. `entity_uri` given
+        (`/kgentities/kgframes/kgslots`): the ENTITY's lock, guard and stamp, and
+        the frame must be its own. Not given (`/kgframes/kgslots`): the frame's,
+        and an entity's frame is refused. A slot that is not there is ABSENT
+        (NO_OP); a slot of another frame refuses the request.
+
+        Returns {"deleted": [...], "absent": [...]}.
+        """
+        from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+        from ..db.sparql_sql.entity_lock import lock_entities
+        from ..db.sparql_sql.sync_fts_delete import sync_fts_before_delete
+        U = lambda u: _generate_term_uuid(u, 'U')  # noqa: E731
+        t = self.backend.schema.get_table_names(space_id)
+        q = t['rdf_quad']
+        g = U(graph_id)
+        key = entity_uri or frame_uri
+        async with _write_conn(self.backend.db_impl.connection_pool, None) as c:
+            async with c.transaction():
+                await lock_entities(c, [key])
+                await _check_slot_frame(c, space_id, graph_id, frame_uri, entity_uri)
+                present = await _present(c, space_id, graph_id, list(slot_uris))
+                absent = [u for u in slot_uris if u not in present]
+                if not present:
+                    return {"deleted": [], "absent": absent}
+                groups = await _frame_graph_of(c, space_id, graph_id, sorted(present))
+                foreign = sorted(u for u in present if groups.get(u) not in (None, frame_uri))
+                if foreign:
+                    raise RequestRefused(
+                        f"{len(foreign)} slot(s) are not slots of {frame_uri}; nothing "
+                        f"was deleted: " + ", ".join(foreign[:5]))
+                if if_unmodified_since is not None:
+                    await _compare_stamp(c, space_id, graph_id, key, if_unmodified_since)
+                slot_uuids = [U(u) for u in present]
+                edges = await c.fetch(
+                    f"WITH e AS MATERIALIZED (SELECT subject_uuid FROM {q} "
+                    f" WHERE context_uuid = $3 AND predicate_uuid = $1 "
+                    f" AND object_uuid = ANY($2)) "
+                    f"SELECT e.subject_uuid FROM e "
+                    f"CROSS JOIN LATERAL (SELECT 1 FROM {q} s WHERE s.subject_uuid = e.subject_uuid "
+                    f" AND s.context_uuid = $3 AND s.predicate_uuid = $4 AND s.object_uuid = $5 "
+                    f" LIMIT 1) src",
+                    U(HAS_EDGE_DESTINATION), slot_uuids, g, U(HAS_EDGE_SOURCE), U(frame_uri))
+                _del = list(dict.fromkeys(slot_uuids + [r['subject_uuid'] for r in edges]))
+                await sync_fts_before_delete(c, space_id, _del, context_uuid=g)
+                await _delete_subjects_synced(c, space_id, t, _del, g)
+                await _stamp_subject(c, space_id, graph_id, key)
+        return {"deleted": [u for u in slot_uris if u in present], "absent": absent}
 
     async def frames_lacking_link(self, space_id: str, graph_id: str,
                                   frame_uris: List[str], source_uri: str,
