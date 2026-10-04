@@ -74,6 +74,15 @@ wrong.** The search path returns results whenever rows are present, and the rows
 appear almost immediately. That exonerates the query side and puts the failure in
 the sync that populates `_fts_kgtype_default` / `_vec_kgtype_default`.
 
+**Not answered by `issues/260` (2026-10-04)**, though it looks like it should be.
+260 found a sync defect that leaves new KGTypes unindexed — auto-sync had no
+`kgtype` scope — but that defect arrived with the scoped sync on 2026-09-21
+(FTS) and 2026-09-24 (vector), five weeks AFTER the failure below. It is a later,
+different cause of the same symptom. 260 also made the fixture's index check
+count the three types it creates rather than the table, and the tests match
+results by URI, so a recurrence of EITHER cause now shows as a failure instead
+of a pass against old rows.
+
 What is still unknown is why the sync would not have run on 2026-08-16. Worth
 noting alongside: the app container was logging `_poll_space` errors for spaces
 that had been deleted, repeatedly and with tracebacks, and that worker was given

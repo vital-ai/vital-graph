@@ -1,8 +1,13 @@
 # 257 — Frame groupings are wrong or missing in real data, and two writers let them in
 
-## Status: OPEN, filed 2026-10-03. Nothing is repaired. BLOCKS `issues/256`'s
-## frame-graph fix, which deletes by `hasFrameGraphURI` and would lose or
-## miss data on every space listed below until this is done.
+## Status: OPEN, filed 2026-10-03. The writers are CLOSED and the real data is
+## REPAIRED: dev's six real-data spaces and production's (2026-10-03), census 0,
+## no frame reclassified. No longer blocks `issues/256`. What remains belongs to
+## the deploy and is listed under "STILL TO DO": (1) deploy `main`; (2) straight
+## after, re-run `scripts/repair_frame_groupings.py --apply` on production for
+## anything the old code wrote in between, and confirm the census reads 0;
+## (3) DEFERRED: reload the generated test datasets in both test databases from
+## the fixed generators, and repair the real `sp_sql_lead_dataset` fixture there.
 
 ## The rule (decided 2026-10-03, `issues/256`)
 

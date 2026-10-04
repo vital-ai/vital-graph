@@ -26,11 +26,16 @@ so the index's mapping can be resolved for it. It had branches for a slot, an
 entity, a document segment and a document, and a fallback of
 `("kgentity", rdf:type)`. **No branch for a KGType.** A new type fell to the
 fallback; `sp_kg_types`'s `kgtype_default` index has only `kgtype` mappings, so
-nothing resolved; and since `issues/219` ("no mapping now means skip") the sync
+nothing resolved; and since auto-sync was scoped ("no mapping now means skip":
+`13f32268`, 2026-09-21, for FTS; `b254a898`, 2026-09-24, for vectors) the sync
 skipped the subject — deleting any row it had, logging nothing.
 
-So nothing has indexed a new or changed KGType since `issues/219`
-(2026-08-18 is the newest row on both local stacks). The deploy session's
+So nothing has indexed a new or changed KGType since 2026-09-21 (FTS) and
+2026-09-24 (vector). **Corrected 2026-10-04**: the first version of this issue,
+and the message of `a4f76a83`, dated it from 2026-08-18 — the newest index row
+on the local stacks. That date only says when the oldest SURVIVING test types
+were created: every later fixture run deleted its own types and their rows at
+teardown, so the newest row dates nothing. The deploy session's
 suspicion — `db_impl` None in `kgtypes_endpoint._schedule_auto_sync` — does not
 hold: the entity routes use the identical helper and their auto-sync works; the
 task ran and found nothing in scope. Same shape as `issues/245`, where document
@@ -59,6 +64,8 @@ paths: it is the normal case, and also exactly how a missing scope looks.
 
 ## Deploy note
 
-Types created on production since 2026-08-18 are not in `sp_kg_types`'s indexes.
+Types created or changed on production since the release carrying `13f32268` /
+`b254a898` was deployed (no earlier than 2026-09-21) are not in `sp_kg_types`'s
+indexes.
 After deploying, re-populate `kgtype_default` there (the bulk populator handles
 the `kgtype` scope correctly) and check that the residue is gone.
