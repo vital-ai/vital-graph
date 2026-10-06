@@ -211,6 +211,14 @@ services:
       - DB_NAME=sparql_sql_graph
       - DB_USERNAME=postgres
       - DB_PASSWORD=testpass
+      # Mirror production's fuzzy backend. Unset, this defaults to 'memory',
+      # which meant the test stack never exercised EntityFuzzyIndexPG at all —
+      # the band tables, the write-path deletes and the startup
+      # skip_if_populated path were all untested here while production ran on
+      # them (`issues/251`, `issues/252`). Startup is safe on a populated
+      # index: ensure_tables passes skip_if_populated=True, so it builds only
+      # when the band tables are empty.
+      - ENTITY_FUZZY_BACKEND=${ENTITY_FUZZY_BACKEND:-postgresql}
       - SIDECAR_URL=http://sparql-compiler:7070
       # Connection pools (`issues/231`). Overridable so the bulkhead can be
       # exercised locally: contention is only reachable at a SMALL request
