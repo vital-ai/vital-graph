@@ -34,7 +34,10 @@ import time
 from pathlib import Path
 
 # Ensure project root on path
-project_root = Path(__file__).parent.parent
+# Three levels up, not two: this file is at <root>/apps/<group>/, so
+# parent.parent is apps/ — which left `vitalgraph` unimportable unless it
+# happened to be pip-installed, and `.env` unfound.
+project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
 
 import asyncpg

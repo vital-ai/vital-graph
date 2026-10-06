@@ -22,7 +22,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # Add project root to Python path and load .env
-project_root = Path(__file__).parent.parent
+# Three levels up, not two: this file is at <root>/apps/<group>/, so
+# parent.parent is apps/ — which left `vitalgraph` unimportable unless it
+# happened to be pip-installed, and `.env` unfound.
+project_root = Path(__file__).resolve().parents[2]
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
