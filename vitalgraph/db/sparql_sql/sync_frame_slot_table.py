@@ -352,6 +352,15 @@ async def cleanup_stale_frame_slot(conn, space_id: str,
 
     Bounded and a plain DELETE, so it takes ROW EXCLUSIVE and does not block
     readers the way the resync's TRUNCATE does.
+
+    THE ENTITY COMPARISON IS NULL-SAFE (`issues/265`). `entity_uuid` is NULL by
+    design for a value slot — the builders LEFT JOIN `hasEntitySlotValue` — and
+    this used to INNER JOIN it with `=`, which no NULL satisfies. So every
+    value-slot row was "stale": production lost 50,000 valid rows per pass from
+    `prod_kg_actions` on 2026-09-28, restored minutes later only because the
+    backfill threshold happened to be cleared. `IS NOT DISTINCT FROM` keeps a
+    value-slot row and still rejects one whose slot gained, lost or changed its
+    entity.
     """
     t_fs = f"{space_id}_frame_slot"
     t_edge = f"{space_id}_edge"
@@ -366,12 +375,13 @@ async def cleanup_stale_frame_slot(conn, space_id: str,
                     JOIN {t_quad} st ON st.subject_uuid = emv.dest_node_uuid
                         AND st.predicate_uuid = $1
                         AND st.object_uuid = fs.role_uuid
-                    JOIN {t_quad} sv ON sv.subject_uuid = emv.dest_node_uuid
+                    LEFT JOIN {t_quad} sv ON sv.subject_uuid = emv.dest_node_uuid
                         AND sv.predicate_uuid = $2
-                        AND sv.object_uuid = fs.entity_uuid
                     WHERE emv.source_node_uuid = fs.frame_uuid
                       AND emv.dest_node_uuid = fs.slot_uuid
-                      AND emv.context_uuid = fs.context_uuid)) AS stale
+                      AND emv.context_uuid = fs.context_uuid
+                      AND sv.object_uuid IS NOT DISTINCT FROM fs.entity_uuid))
+                   AS stale
         FROM (
             SELECT ctid, frame_uuid, slot_uuid, role_uuid, entity_uuid,
                    context_uuid

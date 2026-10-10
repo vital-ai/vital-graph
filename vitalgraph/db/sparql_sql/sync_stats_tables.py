@@ -243,14 +243,25 @@ async def recompute_stats_tables(conn, space_id: str,
     t_pred = f"{space_id}_rdf_pred_stats"
     t_stats = f"{space_id}_rdf_stats"
 
-    # ONE transaction. A TRUNCATE that commits without its INSERT leaves the
+    # ONE transaction. A DELETE that commits without its INSERT leaves the
     # table EMPTY, and absence means "not in the top N" to every consumer --
     # so a half-finished rebuild is read as a confident "no selective pairs
     # exist" rather than as missing data (`issues/103`).
     #
-    # The aggregate runs BEFORE the TRUNCATE: locks are taken per statement,
-    # not at BEGIN, so staging first keeps the exclusive lock to the truncate
-    # and a bulk insert rather than spanning the scan (`issues/145`).
+    # The aggregate runs BEFORE the swap: locks are taken per statement, not at
+    # BEGIN, so staging first keeps the write to a delete and a bulk insert
+    # rather than spanning the scan (`issues/145`).
+    #
+    # DELETE, NOT TRUNCATE (`issues/264`). TRUNCATE takes ACCESS EXCLUSIVE,
+    # which conflicts with a plain SELECT, so even the short swap window that
+    # 145 left failed the planner's 100 ms-fenced stats reads: every one of
+    # production's 8 `pair stats lookup failed ... lock timeout` lines between
+    # 2026-10-01 and 10-10 landed inside it, and each planned a query with
+    # every leaf unmeasured. DELETE takes ROW EXCLUSIVE, which readers do not
+    # wait on; MVCC serves them the old contents until COMMIT. Measured on a
+    # 50,000-row table: 7-8 failed reads per rewrite with TRUNCATE, 0 with
+    # DELETE, at about the same rewrite cost. The cost is 50k dead tuples per
+    # recompute, which autovacuum takes.
     async with conn.transaction():
         # STREAM THE PAIR AGGREGATE, do not hash it.
         #
@@ -316,7 +327,7 @@ async def recompute_stats_tables(conn, space_id: str,
              GROUP BY predicate_uuid
         """, timeout=timeout)
 
-        await conn.execute(f"TRUNCATE {t_stats}", timeout=timeout)
+        await conn.execute(f"DELETE FROM {t_stats}", timeout=timeout)
         res = await conn.execute(
             f"INSERT INTO {t_stats} "
             f"(predicate_uuid, object_uuid, context_uuid, row_count) "
@@ -325,7 +336,7 @@ async def recompute_stats_tables(conn, space_id: str,
             timeout=timeout)
         stats_count = int(res.split()[-1]) if res else 0
 
-        await conn.execute(f"TRUNCATE {t_pred}", timeout=timeout)
+        await conn.execute(f"DELETE FROM {t_pred}", timeout=timeout)
         res = await conn.execute(
             f"INSERT INTO {t_pred} (predicate_uuid, row_count) "
             f"SELECT predicate_uuid, row_count FROM _new_pred_stats",

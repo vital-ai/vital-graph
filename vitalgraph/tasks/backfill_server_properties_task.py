@@ -27,7 +27,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 
 from vitalgraph.tasks import backfill_state
 from vitalgraph.kg_impl.kg_server_properties import (
@@ -110,6 +110,7 @@ class BackfillServerPropertiesTask:
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._cursor = BackfillCursor()
+        self._last_logged_targets: Optional[Set[Tuple[str, str]]] = None
 
         # Nudge event — set by nudge() or NOTIFY listener
         self._nudge_event = asyncio.Event()
@@ -252,7 +253,7 @@ class BackfillServerPropertiesTask:
 
     def _on_notify(self, conn, pid, channel, payload) -> None:
         """asyncpg notification callback — sets the nudge event."""
-        logger.info("Backfill: NOTIFY received on %s", channel)
+        logger.debug("Backfill: NOTIFY received on %s", channel)
         self._nudge_event.set()
 
     # ------------------------------------------------------------------
@@ -288,8 +289,10 @@ class BackfillServerPropertiesTask:
                         sleep_time,
                     )
                 else:
-                    # Full cycle with no work — go idle until nudged.
-                    logger.info(
+                    # Full cycle with no work — go idle until nudged. DEBUG:
+                    # writes nudge every few seconds, so at INFO this and the
+                    # wake below were most of the task's log output.
+                    logger.debug(
                         "Backfill: cycle complete (no work), waiting for nudge (timeout=%.0fs)",
                         self.idle_timeout,
                     )
@@ -299,7 +302,7 @@ class BackfillServerPropertiesTask:
                             self._nudge_event.wait(),
                             timeout=self.idle_timeout,
                         )
-                        logger.info("Backfill: woken by nudge")
+                        logger.debug("Backfill: woken by nudge")
                     except asyncio.TimeoutError:
                         logger.info("Backfill: safety-net poll (timeout=%.0fs)", self.idle_timeout)
                     except asyncio.CancelledError:
@@ -416,13 +419,16 @@ class BackfillServerPropertiesTask:
                     targets.append((space_id, gid))
             except Exception as e:
                 logger.warning("Failed to discover graphs for space %s: %s", space_id, e)
-        logger.info(
-            "Backfill: discovered %d graph(s) across %d space(s)",
-            len(targets), len(spaces),
-        )
-        if targets:
-            for sid, gid in targets:
-                logger.info("  target: %s / %s", sid, gid)
+        # INFO only when the target set changes: discovery runs on every wake,
+        # and an unchanged list repeated every few seconds says nothing.
+        # Compared as a set: the same targets come back in varying order.
+        changed = set(targets) != self._last_logged_targets
+        log = logger.info if changed else logger.debug
+        log("Backfill: discovered %d graph(s) across %d space(s)",
+            len(targets), len(spaces))
+        for sid, gid in targets:
+            log("  target: %s / %s", sid, gid)
+        self._last_logged_targets = set(targets)
         return targets
 
     async def _iteration(self) -> bool:
@@ -479,7 +485,8 @@ class BackfillServerPropertiesTask:
                 await backfill_state.mark_complete(self.pool, space_id, graph_id)
                 return False
         except Exception as e:
-            logger.error("Backfill [%d/%d] failed for %s/%s: %s", idx, total, space_id, graph_id, e)
+            logger.error("Backfill [%d/%d] failed for %s/%s: %r",
+                         idx, total, space_id, graph_id, e, exc_info=True)
             return False
 
 

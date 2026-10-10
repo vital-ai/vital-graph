@@ -136,6 +136,38 @@ class ProcessLockManager:
             logger.debug("ProcessLockManager: lock busy for %s (key=%d)", desc, key)
         return bool(acquired)
 
+    async def holds(
+        self, process_type: str, process_subtype: Optional[str] = None
+    ) -> bool:
+        """True if this instance still holds the lock, checked against the server.
+
+        For a lock kept across many uses (`ProcessScheduler`'s single-runner
+        jobs, `issues/264`). Re-acquiring instead would be wrong:
+        `pg_try_advisory_lock` is RE-ENTRANT within a session, so it answers
+        true and stacks another hold that one unlock no longer releases.
+
+        A session-level advisory lock lives exactly as long as its session, so
+        "held" means "in `_held_locks` AND the connection still answers". A dead
+        connection means the server has already released the lock, possibly to
+        another instance, so the local record is cleared.
+        """
+        key = process_lock_key(process_type, process_subtype)
+        if key not in self._held_locks:
+            return False
+        if self._conn is None or self._conn.is_closed():
+            self._held_locks.clear()
+            return False
+        async with self._conn_lock:
+            try:
+                await self._conn.fetchval("SELECT 1")
+            except Exception as e:
+                logger.warning("ProcessLockManager: lock connection failed its "
+                               "liveness check (%s); every held lock is gone", e)
+                self._conn = None
+                self._held_locks.clear()
+                return False
+        return True
+
     async def release(
         self, process_type: str, process_subtype: Optional[str] = None
     ) -> None:

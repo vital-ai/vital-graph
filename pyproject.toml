@@ -96,6 +96,10 @@ server = [
     "pytidb[models]",
     "pytidb",
     "weaviate-client>=4.19.2",
+    # Imported by entity_registry/entity_weaviate.py. It arrived only
+    # transitively (via vital-ai-vitalsigns), and environment.yml listed it by
+    # hand; declared here now that environment.yml installs from this file.
+    "requests>=2.28.0",
     # datasketch: bound in [project] dependencies — one place only.
     "redis>=5.0.0",
     "rapidfuzz>=3.0.0",

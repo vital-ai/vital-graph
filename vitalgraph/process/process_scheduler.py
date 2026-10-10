@@ -35,6 +35,9 @@ class _RegisteredJob:
     # Whether the handler exposes `trigger_<process_type>(space_id)`. Decided at
     # registration so a scoped request gets an answer rather than a full sweep.
     supports_scope: bool = False
+    # Keep the lock between cycles, so ONE instance runs every cycle rather
+    # than the instances taking turns. See `register_job`.
+    single_runner: bool = False
     task: Optional[asyncio.Task] = field(default=None, repr=False)
     run_count: int = 0
     last_run: Optional[float] = None
@@ -82,6 +85,7 @@ class ProcessScheduler:
         interval_seconds: float,
         handler: Any,
         process_type: str = "maintenance",
+        single_runner: bool = False,
     ) -> None:
         """Register a periodic job.
 
@@ -90,6 +94,22 @@ class ProcessScheduler:
             interval_seconds: How often to run (e.g. 300 = every 5 min).
             handler: Async callable to invoke each cycle.
             process_type: Process type string for advisory lock namespace.
+            single_runner: Keep the lock between cycles (`issues/264`).
+
+        WHY single_runner EXISTS. The per-cycle lock gives MUTUAL EXCLUSION, not
+        DEDUPLICATION: it stops two instances running a cycle at the same
+        moment, but each instance still runs on its own interval, so N instances
+        run the job N times as often. Production's two tasks did exactly that
+        to the maintenance job — ANALYZE 216 vs 215, VACUUM 10 vs 11, stats
+        recompute 199 vs 197 over 2026-10-02..09. And a job that keeps
+        schedules in process memory (the maintenance job's recompute slots,
+        watches, residue counters) cannot dedupe itself, because each instance
+        has its own copy.
+
+        With single_runner, the instance that gets the lock keeps it, so it runs
+        every cycle and the others find it busy and skip. A session-level
+        advisory lock dies with its connection, so if that instance stops, the
+        server releases the lock and the next instance to try takes over.
         """
         if name in self._jobs:
             raise ValueError(f"Job '{name}' already registered")
@@ -121,6 +141,7 @@ class ProcessScheduler:
             handler=handler,
             process_type=process_type,
             supports_scope=supports_scope,
+            single_runner=single_runner,
         )
         logger.info("ProcessScheduler: registered job '%s' (every %ds)", name, interval_seconds)
 
@@ -281,7 +302,21 @@ class ProcessScheduler:
 
     async def _run_once(self, job: _RegisteredJob) -> None:
         """Attempt to acquire lock and run a single job cycle."""
-        acquired = await self._lock_manager.try_acquire(job.process_type, job.name)
+        # A single runner that already holds its lock must NOT try_acquire it
+        # again: advisory locks are re-entrant per session, so that would stack
+        # holds. `holds` checks the connection is still alive, because a dead
+        # one means the server has already handed the lock on.
+        if job.single_runner and await self._lock_manager.holds(
+                job.process_type, job.name):
+            acquired = True
+        else:
+            acquired = await self._lock_manager.try_acquire(
+                job.process_type, job.name)
+            if acquired and job.single_runner:
+                logger.info(
+                    "ProcessScheduler: this instance is now the single runner "
+                    "for '%s' and keeps the lock between cycles; other "
+                    "instances skip it until this one stops", job.name)
         if not acquired:
             logger.debug(
                 "ProcessScheduler: skipping '%s' — another instance holds the lock",
@@ -308,7 +343,8 @@ class ProcessScheduler:
             logger.error("ProcessScheduler: '%s' failed: %s", job.name, e, exc_info=True)
 
         finally:
-            await self._lock_manager.release(job.process_type, job.name)
+            if not job.single_runner:
+                await self._lock_manager.release(job.process_type, job.name)
 
     # ------------------------------------------------------------------
     # Info

@@ -126,6 +126,13 @@ CACHE_INVALIDATORS: List[Tuple[str, Callable[[str], int]]] = [
      _pop("vitalgraph.db.sparql_sql.auto_analyze", "_last_analyze_time")),
     ("maintenance_job._recompute_slot",
      _pop("vitalgraph.process.maintenance_job", "_recompute_slot")),
+    # issues/263: a residue's cycle count and its "already tried at this drift"
+    # mark describe one space's table; carried to a renamed id they would delay
+    # or suppress its repair.
+    ("maintenance_job._frame_slot_residue_cycles",
+     _pop("vitalgraph.process.maintenance_job", "_frame_slot_residue_cycles")),
+    ("maintenance_job._frame_slot_residue_futile",
+     _pop("vitalgraph.process.maintenance_job", "_frame_slot_residue_futile")),
     ("ensure_frame_slot_table._frame_slot_ready",
      _pop("vitalgraph.db.sparql_sql.ensure_frame_slot_table", "_frame_slot_ready")),
     ("sync_frame_slot_table._frame_slot_present",

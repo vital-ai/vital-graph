@@ -113,10 +113,20 @@ class VitalGraphAuth:
             # Fallback to bootstrap admin, but only while no real admin exists.
             if await self._bootstrap_available(username):
                 if verify_password(password, self._bootstrap_admin["password_hash"]):
-                    emit_audit_event("auth.bootstrap.used", username, level="WARN")
+                    emit_audit_event("auth.bootstrap.used", username, level="DEBUG")
                     return self._bootstrap_admin
+                emit_audit_event("auth.login.failure", username, level="WARN",
+                                 reason="invalid_credentials", method="bootstrap")
+                return None
+            if self._bootstrap_admin and self._bootstrap_admin["username"] == username:
+                # The bootstrap name, refused before the password was checked:
+                # either a real admin exists, or the admin-count query failed.
+                reason = ("bootstrap_retired" if self._bootstrap_retired
+                          else "bootstrap_unavailable")
+            else:
+                reason = "user_not_found"
             emit_audit_event("auth.login.failure", username, level="WARN",
-                             reason="user_not_found")
+                             reason=reason)
             return None
 
         # Check active status
@@ -361,7 +371,7 @@ class VitalGraphAuth:
                     # No DB row: honor the first-run bootstrap admin while no real
                     # admin exists yet, so a fresh deployment can provision one.
                     if await self._bootstrap_available(username):
-                        emit_audit_event("auth.bootstrap.used", username, level="WARN")
+                        emit_audit_event("auth.bootstrap.used", username, level="DEBUG")
                         return {
                             "username": self._bootstrap_admin["username"],
                             "full_name": self._bootstrap_admin["full_name"],

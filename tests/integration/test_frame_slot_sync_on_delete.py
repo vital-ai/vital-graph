@@ -25,7 +25,7 @@ See planning/planning_performance/edge_table_integrity_bug.md
 from __future__ import annotations
 
 import pytest
-from rdflib import URIRef
+from rdflib import Literal, URIRef
 
 from .conftest import skip_no_infra
 
@@ -47,6 +47,9 @@ HAS_SLOT_TYPE = URIRef(f"{KG}hasKGSlotType")
 HAS_ENTITY_SLOT_VALUE = URIRef(f"{KG}hasEntitySlotValue")
 SOURCE_ENTITY = URIRef("urn:hasSourceEntity")
 DEST_ENTITY = URIRef("urn:hasDestinationEntity")
+HAS_TEXT_SLOT_VALUE = URIRef(f"{KG}hasTextSlotValue")
+EMAIL_SLOT = URIRef("urn:test:email")
+KG_FRAME = URIRef(f"{KG}KGFrame")
 
 GRAPH = URIRef("urn:test:frame_slot_delete_graph")
 
@@ -68,6 +71,11 @@ async def _stale_fe_rows(conn, space_id: str) -> int:
     named `urn:hasSourceEntity` in its SQL, which is a DATA value in this
     dataset and not part of any schema (`issues/183`); `frame_slot` carries the
     role as `role_uuid`, so the row supplies it and the query does not.
+
+    NULL-safe on the entity, as the builders are: a value slot has no
+    `hasEntitySlotValue`, so its valid row has `entity_uuid` NULL. An inner
+    join with `=` called every such row stale — the sweep's bug (`issues/265`),
+    which this helper shared and so could not have caught.
     """
     return await conn.fetchval(
         f"""
@@ -80,14 +88,14 @@ async def _stale_fe_rows(conn, space_id: str) -> int:
              AND st.object_uuid = fs.role_uuid
              AND st.predicate_uuid = (SELECT term_uuid FROM {space_id}_term
                                       WHERE term_text = $1)
-            JOIN {space_id}_rdf_quad sv
+            LEFT JOIN {space_id}_rdf_quad sv
               ON sv.subject_uuid = fs.slot_uuid
-             AND sv.object_uuid = fs.entity_uuid
              AND sv.predicate_uuid = (SELECT term_uuid FROM {space_id}_term
                                       WHERE term_text = $2)
             WHERE e.source_node_uuid = fs.frame_uuid
               AND e.dest_node_uuid = fs.slot_uuid
-              AND e.context_uuid = fs.context_uuid)
+              AND e.context_uuid = fs.context_uuid
+              AND sv.object_uuid IS NOT DISTINCT FROM fs.entity_uuid)
         """,
         str(HAS_SLOT_TYPE), str(HAS_ENTITY_SLOT_VALUE),
     )
@@ -113,6 +121,28 @@ async def _seed_relation_frames(space_impl, space_id: str, n: int, tag: str):
                 (slot, HAS_SLOT_TYPE, slot_type, GRAPH),
                 (slot, HAS_ENTITY_SLOT_VALUE, entity, GRAPH),
             ]
+    await space_impl.add_rdf_quads_batch(space_id, quads)
+
+
+async def _seed_value_frames(space_impl, space_id: str, n: int, tag: str):
+    """Frames with one VALUE slot each: a slot type and a text value, no entity.
+
+    The shape of most production frames (contact details, amounts, dates), and
+    the one whose `frame_slot` row has `entity_uuid` NULL.
+    """
+    quads = []
+    for i in range(n):
+        frame = URIRef(f"urn:test:{tag}:frame:{i}")
+        slot = URIRef(f"urn:test:{tag}:slot:{i}")
+        edge = URIRef(f"urn:test:{tag}:edge:{i}")
+        quads += [
+            (frame, VITALTYPE, KG_FRAME, GRAPH),
+            (edge, VITALTYPE, EDGE_HAS_SLOT, GRAPH),
+            (edge, HAS_EDGE_SOURCE, frame, GRAPH),
+            (edge, HAS_EDGE_DEST, slot, GRAPH),
+            (slot, HAS_SLOT_TYPE, EMAIL_SLOT, GRAPH),
+            (slot, HAS_TEXT_SLOT_VALUE, Literal(f"user{i}@example.com"), GRAPH),
+        ]
     await space_impl.add_rdf_quads_batch(space_id, quads)
 
 
@@ -181,6 +211,47 @@ class TestFrameSlotSyncOnDelete:
             f"return those entities as related when they no longer are, and no "
             f"count-based check can see it — a stale row is an EXTRA row. "
             f"See issues/064.")
+
+    async def test_sweep_keeps_value_slot_rows(
+        self, test_space, space_impl, pg_conn
+    ):
+        """The sweep must not delete a valid row whose slot holds a VALUE.
+
+        A text/date/number slot has no `hasEntitySlotValue`, so its row's
+        `entity_uuid` is NULL — by design, the builders LEFT JOIN it. The sweep
+        used to INNER JOIN it with `=`, so it judged every such row stale and
+        deleted it: 50,000 valid rows per pass from `prod_kg_actions` on
+        production, 2026-09-28 (`issues/265`). Every other test in this file
+        seeds entity slots, where the inner join is harmless, which is why none
+        of them saw it.
+        """
+        from vitalgraph.db.sparql_sql.sync_frame_slot_table import (
+            cleanup_stale_frame_slot)
+
+        await _seed_value_frames(space_impl, test_space, 6, "valueslot")
+        before = await pg_conn.fetchval(
+            f"""
+            SELECT count(*) FROM {test_space}_frame_slot fs
+            JOIN {test_space}_term t ON t.term_uuid = fs.frame_uuid
+            WHERE t.term_text LIKE 'urn:test:valueslot:%'
+              AND fs.entity_uuid IS NULL""")
+        assert before == 6, (
+            f"seed produced {before} value-slot rows with NULL entity_uuid, "
+            f"expected 6; the assertion below would pass vacuously")
+        assert await _stale_fe_rows(pg_conn, test_space) == 0
+
+        removed = await cleanup_stale_frame_slot(pg_conn, test_space)
+
+        after = await pg_conn.fetchval(
+            f"""
+            SELECT count(*) FROM {test_space}_frame_slot fs
+            JOIN {test_space}_term t ON t.term_uuid = fs.frame_uuid
+            WHERE t.term_text LIKE 'urn:test:valueslot:%'""")
+        assert after == before, (
+            f"the sweep removed {before - after} valid value-slot row(s) "
+            f"({removed} in total). A slot with no entity is still a slot of "
+            f"its frame; deleting it drops the frame from every frame-slot "
+            f"query until a backfill restores it (issues/265).")
 
     async def test_drop_graph_leaves_no_frame_slot_rows(
         self, test_space, space_impl, pg_conn

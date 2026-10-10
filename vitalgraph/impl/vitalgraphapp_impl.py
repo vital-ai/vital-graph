@@ -556,6 +556,10 @@ class VitalGraphAppImpl:
                                 interval_seconds=interval,
                                 handler=maintenance_job,
                                 process_type="maintenance",
+                                # One instance runs every cycle; the others
+                                # stand by. Taking turns ran it once per
+                                # instance per interval (issues/264).
+                                single_runner=True,
                             )
                             
                             # Register analytics job (default: once per day)

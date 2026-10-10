@@ -172,6 +172,15 @@ def log_probe_failure(probe: str, space_id: str, exc: BaseException) -> None:
 EDGE_DRIFT_MIN_ABS = 1_000           # ignore drift below this many edges
 EDGE_DRIFT_MIN_PCT = 0.01            # ...and below this fraction of edges
 
+# frame_slot drift BELOW those floors is still backfilled once it has persisted
+# this many consecutive cycles (`issues/263`): rows a write is still deriving
+# clear within a cycle, a residue does not. Per process, like the schedules.
+FRAME_SLOT_RESIDUE_CYCLES = 3
+_frame_slot_residue_cycles: Dict[str, int] = {}
+# Space -> the drift at which a backfill inserted nothing. Not retried until the
+# drift changes, so an unrepairable gap costs one scan, not one per cycle.
+_frame_slot_residue_futile: Dict[str, int] = {}
+
 # Value histograms: rebuild a space once a predicate's row count has moved this
 # far from the count its histogram was built at.
 #
@@ -2259,12 +2268,26 @@ class MaintenanceJob:
         if not findings:
             return None
         for sp, f in findings.items():
+            # The repair depends on WHAT is wrong (`issues/263`). Missing rows
+            # with no orphans are the backfill's job — non-blocking, and run by
+            # the next step automatically. Only orphans need the rebuild, which
+            # TRUNCATEs under ACCESS EXCLUSIVE; recommending it for a handful
+            # of missing rows offered an outage as the fix.
+            if f["orphan_rate"] == 0.0:
+                repair = ("Missing rows only: the frame_slot backfill repairs "
+                          "this (above the drift floor at once, below it after "
+                          f"{FRAME_SLOT_RESIDUE_CYCLES} cycles). If it persists, "
+                          "run `backfill_frame_slot_table` for the space — not "
+                          "the rebuild, which blocks frame-slot queries.")
+            else:
+                repair = ("Orphaned rows need the rebuild, which blocks "
+                          "frame-slot queries while it runs: "
+                          f"`scripts/migrate_frame_slot_table.py --space {sp} --apply`.")
             logger.warning(
                 "frame_slot integrity: %s expected %d rows, has %d, orphan rate "
                 "%.2f%% — the frame-slot collapse is serving from a table that "
-                "does not match the data. Repair with "
-                "`scripts/migrate_frame_slot_table.py --space %s --apply`.",
-                sp, f["expected"], f["actual"], f["orphan_rate"] * 100, sp)
+                "does not match the data. %s",
+                sp, f["expected"], f["actual"], f["orphan_rate"] * 100, repair)
         return {"spaces": findings}
 
     async def _run_frame_slot_backfill(self, space_ids: List[str]) -> Optional[Dict]:
@@ -2288,6 +2311,8 @@ class MaintenanceJob:
 
         worst_space = None
         worst_drift = 0
+        residue_space = None
+        residue_drift = 0
         stale_space = None
         for space_id in space_ids:
             try:
@@ -2298,9 +2323,15 @@ class MaintenanceJob:
                             continue
                         expected, actual = await frame_slot_drift(
                             conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
+                        # Converged only when nothing is missing, or when what
+                        # is missing has already proved unrepairable at this
+                        # exact size. It used to be "drift <= 1000", which
+                        # declared a quiet space with a residue converged and
+                        # stopped looking at it for good (`issues/263`).
+                        _d = expected - actual
                         mark_probe_converged(
                             space_id, "frame_entity_drift",
-                            (expected - actual) <= EDGE_DRIFT_MIN_ABS)
+                            _d <= 0 or _frame_slot_residue_futile.get(space_id) == _d)
                     # Counts agreeing does not mean the rows are RIGHT. A space
                     # reloaded in place — or under a new graph URI — leaves this
                     # table a faithful materialisation of the PREVIOUS contents:
@@ -2318,8 +2349,28 @@ class MaintenanceJob:
                 continue
             drift = expected - actual
             if drift > max(EDGE_DRIFT_MIN_ABS, int(EDGE_DRIFT_MIN_PCT * expected)):
+                _frame_slot_residue_cycles.pop(space_id, None)
                 if drift > worst_drift:
                     worst_drift, worst_space = drift, space_id
+            elif drift > 0:
+                # BELOW THE THRESHOLD, BUT PERSISTENT (`issues/263`). The
+                # threshold keeps a full-scan backfill from chasing rows a
+                # write has not finished deriving — but those resolve within a
+                # cycle, and a residue does not. `lead_prod` carried 921
+                # missing rows for a month under a threshold of ~11,200, warned
+                # about 3,402 times, and was never repaired. So a gap that
+                # survives FRAME_SLOT_RESIDUE_CYCLES cycles is backfilled
+                # anyway, unless a backfill at this exact drift already
+                # inserted nothing (then retrying would just repeat the scan).
+                n = _frame_slot_residue_cycles.get(space_id, 0) + 1
+                _frame_slot_residue_cycles[space_id] = n
+                if (n >= FRAME_SLOT_RESIDUE_CYCLES
+                        and _frame_slot_residue_futile.get(space_id) != drift
+                        and residue_space is None):
+                    residue_space, residue_drift = space_id, drift
+            else:
+                _frame_slot_residue_cycles.pop(space_id, None)
+                _frame_slot_residue_futile.pop(space_id, None)
 
         if stale_space:
             # Backfill only ADDS rows, so it cannot repair a table whose rows are
@@ -2337,6 +2388,10 @@ class MaintenanceJob:
                 "    python scripts/repair_derived_tables.py --space %s\n"
                 "See issues/041.", sid, rate * 100, sid)
 
+        # A drift above the threshold outranks a persistent residue: it is the
+        # bigger hole, and the residue is still there next cycle.
+        if not worst_space and residue_space:
+            worst_space, worst_drift = residue_space, residue_drift
         if not worst_space:
             return None
 
@@ -2351,6 +2406,14 @@ class MaintenanceJob:
                 async with maintenance_timeouts(conn):
                     inserted = await backfill_frame_slot_table(
                         conn, worst_space, timeout=PROBE_CLIENT_TIMEOUT_S)
+            _frame_slot_residue_cycles.pop(worst_space, None)
+            if inserted:
+                _frame_slot_residue_futile.pop(worst_space, None)
+            else:
+                # Nothing insertable at this drift: the gap is not a missing
+                # row the builder's join can produce. Do not rescan for it
+                # until the drift changes.
+                _frame_slot_residue_futile[worst_space] = worst_drift
             result = {"space_id": worst_space, "drift": worst_drift, "rows_added": inserted}
             if self._tracker and process_id:
                 await self._tracker.mark_completed(process_id, result_details=result)

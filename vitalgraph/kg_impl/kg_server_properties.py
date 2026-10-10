@@ -680,8 +680,10 @@ async def backfill_entity_server_properties_sql(
                         pool, space_id, graph_id, batch_size, now
                     )
                 except Exception as e:
-                    logger.error("backfill batch %d for %s/%s failed: %s",
-                                 batch_num, space_id, graph_id, e)
+                    # %r, not %s: a timeout's str() is empty, which left
+                    # production logging "failed: " and nothing else.
+                    logger.error("backfill batch %d for %s/%s failed: %r",
+                                 batch_num, space_id, graph_id, e, exc_info=True)
                     result.errors += 1
                     break
 
