@@ -1,6 +1,9 @@
 # 248 — Folding geo into the name shingles loses the match it is meant to help find
 
-## Status: OPEN, measured 2026-09-29. The dedup question itself is ANSWERED AND
+## Status: FIXED IN CODE 2026-10-11 (uncommitted, not yet released), option 1. Needs a
+## full fuzzy rebuild straight after deploy — the bands change.
+##
+## Found: measured 2026-09-29. The dedup question itself is ANSWERED AND
 ## GOOD: 8 of 8 real duplicate-name clusters pulled from production were fully
 ## recovered, both members every time. A new record for an existing business
 ## would be caught. Three misses were run down rather than left as noise, and
@@ -235,3 +238,38 @@ Discovery also keeps customer names out of the checker.
 Verified on 2026-10-01 to reproduce the jaccard values (0.000 and 0.333), both
 head-to-head scores (83.3 and 90.0) and both omission-variant shingle counts
 (1 and 5) exactly as recorded above.
+
+## Fix, 2026-10-11 — option 1
+
+- **Geo is out of `_name_shingles`** in both backends: shingles are the
+  name's characters only.
+- **Geo breaks ties at scoring.** `fuzzy_core.geo_agreement(query, candidate)`
+  counts the location fields both records state AND agree on; a field missing on
+  either side is no signal. Results sort by `(score, geo_agreement)`, and the
+  count is reported in `score_detail`. It never changes a score, a match level or
+  the `min_score` cut, so no caller sees a different number. Note that the scorer
+  caps at 100 with the phonetic bonus, so an exact name and a one-letter typo can
+  both score 100; between those geo now decides, which is the tie it should break.
+
+Tests: `tests/unit/test_fuzzy_geo_is_a_tie_break.py` (10) pin this issue's own
+measurements in both backends: the true pair is 0.556 whether geo agrees,
+disagrees or is absent (was 0.619 / 0.478); an identical name with patchy
+location is 1.000 (was 0.870); two unrelated same-city businesses get no lift
+(was +133%); geo breaks a tie and never outvotes a better name. Integration
+(`test_fuzzy_placeholder_names.py::test_a_typo_query_with_geo_finds_its_target_first`):
+`'Aur Trdaing Corp'` with Tampa geo returns `'Aur Trading Corp'` first among ten
+same-city businesses, through the real PG index.
+
+## Rollout
+
+Every band changes, so stored bands and query bands disagree from deploy until a
+rebuild finishes. **Run the full fuzzy rebuild straight after the deploy**, as
+one rebuild shared with `249` (its Rollout has the steps and the 20-25 minute
+estimate; the index is empty during it). The 8-cluster recall check this issue
+requires runs against the REBUILT index; running
+`test_scripts/entity_registry/test_fuzzy_prod_check.py` with the new code before
+then would compare new query shingles against old bands and mean nothing. The
+same applies to `254`'s early-stop threshold, which waits on that check.
+
+**The test stack's own index** still has bands built with geo for its existing
+entities; rebuild it before relying on fuzzy results there.

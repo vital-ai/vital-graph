@@ -200,3 +200,19 @@ the lock exactly once.
 Not changed: `space_analytics` and `metrics_rollup` are registered the same way
 and presumably also run once per instance. They are now one keyword argument
 away from the same fix, but were not measured here.
+
+## The other scheduled jobs, measured 2026-10-11 (uncommitted, not yet released)
+
+Production, 2026-10-01 to 10-11:
+
+- **`space_analytics` was NOT duplicated.** It ran exactly once a day, the two
+  tasks alternating days (001d, e0e5, 001d, ...). The per-cycle lock is enough
+  here only because a run lasts minutes and both tasks started within 20 s, so
+  whichever tries second finds it busy. A staggered deploy would break that.
+- **`metrics_rollup` WAS duplicated, and cheap.** Both tasks ran it every hour
+  (234 runs each); the first did the work (1,018 hour rows over the period) and
+  the second found nothing (0 rows, 3 s in total).
+
+Both are now `single_runner=True`, making the once-per-interval property
+deterministic rather than a matter of start-time luck. `import_export_cleanup`
+is registered the same way and was not measured or changed.

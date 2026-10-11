@@ -483,3 +483,25 @@ def make_phonetic_lsh_key(entity_id: str, variant_idx: int) -> str:
 def entity_id_from_lsh_key(lsh_key: str) -> str:
     """Extract entity_id from a compound LSH key."""
     return lsh_key.rsplit('::', 1)[0]
+
+
+GEO_FIELDS = ('country', 'region', 'locality')
+
+
+def geo_agreement(query: Dict[str, Any], candidate: Dict[str, Any]) -> int:
+    """How many location fields both records state AND agree on.
+
+    A TIE-BREAK between equal name scores, never part of the score or of
+    candidate generation (`issues/248`). Folded into the name shingles it raised
+    every same-city pair's Jaccard by the same ~0.065 — +11% for a true pair,
+    +133% for two unrelated businesses — so it crowded true matches out of the
+    candidate set (`'Aur Trdaing Corp'`: rank 1 by name, ABSENT with geo) and
+    penalised a true pair whose location was merely incomplete. A field missing
+    on either side is no signal, not a disagreement.
+    """
+    n = 0
+    for field in GEO_FIELDS:
+        a, b = query.get(field), candidate.get(field)
+        if a and b and str(a).strip().lower() == str(b).strip().lower():
+            n += 1
+    return n

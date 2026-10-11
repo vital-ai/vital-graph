@@ -120,7 +120,20 @@ class BackfillServerPropertiesTask:
         # so a marker checked immediately after a nudge can still read as
         # unchanged. Trusting the caller here removes that race entirely, and
         # costs one cycle of the scans the markers exist to avoid.
-        self._force_full_check = True
+        #
+        # PENDING vs ACTIVE, COALESCED, SCOPED (`issues/266`). It was one flag,
+        # set per nudge and cleared at the end of every cycle, so a burst of
+        # SPARQL writes forced a full unmarked cycle per write — 1,639 of them,
+        # 2,516 s, on production 2026-10-03 — and a nudge landing MID-cycle was
+        # wiped by that cycle's clear. Now nudges accumulate in `_pending_*`; a
+        # cycle snapshots them into `_cycle_*` when it starts, at most once per
+        # `nudge_min_interval_s`; and a nudge naming a space forces only that
+        # space. Startup forces everything, as before.
+        self._pending_force_all = True
+        self._pending_force_spaces: Set[str] = set()
+        self._cycle_force_all = False
+        self._cycle_force_spaces: Set[str] = set()
+        self._last_forced_cycle_at = float("-inf")
 
         # Dedicated LISTEN connection for out-of-process nudges
         self._listen_conn = None
@@ -165,21 +178,65 @@ class BackfillServerPropertiesTask:
             'BACKFILL_DISCOVERY_RECHECK_S', 3600.0)
         #: space_id -> (graph_uris, quad_inserts, stats_reset, cached_at)
         self._discovery_cache: dict = {}
+        # At most one forced cycle per window (`issues/266`). Stamping is
+        # already eventually consistent against a 30-minute safety net, so
+        # waiting up to this long after a write costs nothing a caller sees.
+        self.nudge_min_interval_s = _env_float('BACKFILL_NUDGE_MIN_INTERVAL_S', 30.0)
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def nudge(self) -> None:
+    def nudge(self, space_id: Optional[str] = None) -> None:
         """Signal that new un-stamped data may exist.
 
         Wakes the task from its idle sleep so it enters the fast polling
         cadence.  Safe to call from any coroutine in the same event loop.
         Calling multiple times before the task wakes is harmless — the
-        event is level-triggered.
+        event is level-triggered, and the force is coalesced (`issues/266`).
+
+        Pass the space that was written: only that space's discovery cache and
+        completion markers are bypassed. With no space, every space is forced.
         """
-        self._force_full_check = True
+        if space_id:
+            self._pending_force_spaces.add(space_id)
+        else:
+            self._pending_force_all = True
         self._nudge_event.set()
+
+    # ------------------------------------------------------------------
+    # Forcing (`issues/266`)
+    # ------------------------------------------------------------------
+
+    def _force_pending(self) -> bool:
+        return self._pending_force_all or bool(self._pending_force_spaces)
+
+    def _force_delay(self) -> float:
+        """Seconds until a pending force may be taken; 0 if it may be now."""
+        return max(0.0, self._last_forced_cycle_at + self.nudge_min_interval_s
+                   - time.monotonic())
+
+    def _begin_cycle(self) -> None:
+        """Snapshot the pending force for the cycle that is starting.
+
+        Taken only when the window has passed. Otherwise it stays pending and
+        this cycle runs with its gates, so every nudge inside the window is
+        honoured by ONE forced cycle at its end. A nudge arriving during the
+        cycle goes to pending and is never lost to this cycle's end.
+        """
+        if self._force_pending() and self._force_delay() == 0.0:
+            self._cycle_force_all = self._pending_force_all
+            self._cycle_force_spaces = set(self._pending_force_spaces)
+            self._pending_force_all = False
+            self._pending_force_spaces.clear()
+            self._last_forced_cycle_at = time.monotonic()
+        else:
+            self._cycle_force_all = False
+            self._cycle_force_spaces = set()
+
+    def _forced(self, space_id: str) -> bool:
+        """Does the current cycle bypass the cache and markers for this space?"""
+        return self._cycle_force_all or space_id in self._cycle_force_spaces
 
     def start(self) -> None:
         """Start the backfill task."""
@@ -252,9 +309,9 @@ class BackfillServerPropertiesTask:
             self._listen_conn = None
 
     def _on_notify(self, conn, pid, channel, payload) -> None:
-        """asyncpg notification callback — sets the nudge event."""
+        """asyncpg notification callback — nudges, scoped if the payload names a space."""
         logger.debug("Backfill: NOTIFY received on %s", channel)
-        self._nudge_event.set()
+        self.nudge((payload or "").strip() or None)
 
     # ------------------------------------------------------------------
     # Main loop
@@ -296,24 +353,29 @@ class BackfillServerPropertiesTask:
                         "Backfill: cycle complete (no work), waiting for nudge (timeout=%.0fs)",
                         self.idle_timeout,
                     )
-                    self._nudge_event.clear()
-                    try:
-                        await asyncio.wait_for(
-                            self._nudge_event.wait(),
-                            timeout=self.idle_timeout,
-                        )
-                        logger.debug("Backfill: woken by nudge")
-                    except asyncio.TimeoutError:
-                        logger.info("Backfill: safety-net poll (timeout=%.0fs)", self.idle_timeout)
-                    except asyncio.CancelledError:
-                        break
-                    sleep_time = 0  # proceed immediately after wake
+                    # A nudge already pending (it arrived during the cycle, or
+                    # was held back by the window) needs no wait for another.
+                    if not self._force_pending():
+                        self._nudge_event.clear()
+                        try:
+                            await asyncio.wait_for(
+                                self._nudge_event.wait(),
+                                timeout=self.idle_timeout,
+                            )
+                            logger.debug("Backfill: woken by nudge")
+                        except asyncio.TimeoutError:
+                            logger.info("Backfill: safety-net poll (timeout=%.0fs)", self.idle_timeout)
+                        except asyncio.CancelledError:
+                            break
+                    # COALESCE (`issues/266`): a pending force waits out the
+                    # rest of the window, and every nudge in that wait joins it.
+                    # Waiting for the next nudge instead would leave the last
+                    # write of a burst to the 30-minute safety net.
+                    sleep_time = self._force_delay() if self._force_pending() else 0
+                    if sleep_time > 0:
+                        logger.debug("Backfill: nudge coalesced, forced cycle in %.1fs",
+                                     sleep_time)
                 cycle_had_work = False
-                # A full cycle has now run; if it was forced by a nudge, that
-                # obligation is discharged and later cycles may use markers
-                # again. A nudge arriving mid-cycle re-arms this, so the worst
-                # case is one extra forced cycle, never a skipped one.
-                self._force_full_check = False
             else:
                 # Mid-cycle — short delay between targets
                 sleep_time = self.active_interval if did_work else 0.1
@@ -350,7 +412,7 @@ class BackfillServerPropertiesTask:
         THREE WAYS IT RE-DERIVES ANYWAY, because a missed graph means entities
         that never get stamped:
 
-        * a nudge (`_force_full_check`) ignores the cache entirely — the caller
+        * a nudge for this space (`_forced`) ignores the cache entirely — the caller
           said data arrived, and the statistics view lags commits by design;
         * a cache entry older than `discovery_recheck_s` is ignored;
         * any failure to read the signal re-derives.
@@ -361,7 +423,7 @@ class BackfillServerPropertiesTask:
         recheck exists rather than being optional.
         """
         cached = self._discovery_cache.get(space_id)
-        if cached is not None and not self._force_full_check:
+        if cached is not None and not self._forced(space_id):
             graphs, ins, reset, at = cached
             if (time.monotonic() - at) < self.discovery_recheck_s:
                 try:
@@ -435,6 +497,7 @@ class BackfillServerPropertiesTask:
         """Run one backfill iteration.  Returns True if work was done."""
         # Refresh targets periodically (at the start of each cycle)
         if self._cursor.is_complete_cycle() or not self._cursor.targets:
+            self._begin_cycle()     # snapshot the pending force (issues/266)
             self._cursor.targets = await self._refresh_targets()
             self._cursor.index = 0
             if not self._cursor.targets:
@@ -451,7 +514,7 @@ class BackfillServerPropertiesTask:
         # A graph already marked complete, whose space has had no inserts since,
         # needs no scan at all. Proving it idle costs 2,593 ms on the 100k
         # fixture (`backfill_state`), and that is the cost this skips.
-        if not self._force_full_check:
+        if not self._forced(space_id):
             try:
                 if await backfill_state.is_complete(self.pool, space_id, graph_id):
                     logger.debug("Backfill [%d/%d]: %s/%s — complete, skipped",
@@ -503,13 +566,15 @@ def set_backfill_task(task: BackfillServerPropertiesTask) -> None:
     _backfill_task_ref = task
 
 
-def nudge_backfill() -> None:
+def nudge_backfill(space_id: Optional[str] = None) -> None:
     """Convenience: nudge the backfill task if one is registered.
 
     Safe to call even when no task exists (e.g. during tests or when
     the backfill task is disabled).  This is the recommended entry
     point for SPARQL insert endpoints and other in-process callers
     that don't have a direct reference to the task instance.
+
+    Pass the space written, so only it is forced (`issues/266`).
     """
     if _backfill_task_ref is not None:
-        _backfill_task_ref.nudge()
+        _backfill_task_ref.nudge(space_id)

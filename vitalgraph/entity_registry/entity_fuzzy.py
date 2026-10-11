@@ -26,6 +26,8 @@ from rapidfuzz import fuzz
 
 from vitalgraph.entity_registry.datasketch_cluster import register_cluster_storage, distribute_lsh_hash_tags
 from .entity_status import DELETED, RETRACTED
+from .placeholder_names import indexable_names, placeholder_hash_suffix
+from ..vectorization.fuzzy_core import geo_agreement
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +118,9 @@ def compute_entity_hash(entity: Dict[str, Any]) -> str:
             aliases.append(name.lower().strip())
     aliases.sort()
     parts.append(','.join(aliases))
-    return hashlib.md5('|'.join(parts).encode('utf-8')).hexdigest()
+    # Empty unless a name is a placeholder, so no other entity's hash moves (`issues/249`).
+    joined = '|'.join(parts) + placeholder_hash_suffix(entity)
+    return hashlib.md5(joined.encode('utf-8')).hexdigest()
 
 
 class EntityFuzzyIndex:
@@ -573,7 +577,8 @@ class EntityFuzzyIndex:
                 if since is not None:
                     page_sql = (
                         "SELECT e.entity_id, e.primary_name, et.type_key, "
-                        "e.country, e.region, e.locality, ea.alias_name "
+                        "e.country, e.region, e.locality, ea.alias_name, "
+                        "e.is_placeholder_name, ea.is_placeholder_name AS alias_is_placeholder "
                         "FROM entity e "
                         "JOIN entity_type et ON et.type_id = e.entity_type_id "
                         "LEFT JOIN entity_alias ea ON ea.entity_id = e.entity_id "
@@ -586,7 +591,8 @@ class EntityFuzzyIndex:
                 else:
                     page_sql = (
                         "SELECT e.entity_id, e.primary_name, et.type_key, "
-                        "e.country, e.region, e.locality, ea.alias_name "
+                        "e.country, e.region, e.locality, ea.alias_name, "
+                        "e.is_placeholder_name, ea.is_placeholder_name AS alias_is_placeholder "
                         "FROM entity e "
                         "JOIN entity_type et ON et.type_id = e.entity_type_id "
                         "LEFT JOIN entity_alias ea ON ea.entity_id = e.entity_id "
@@ -640,12 +646,15 @@ class EntityFuzzyIndex:
                             'region': row['region'],
                             'locality': row['locality'],
                             'aliases': [],
+                            'is_placeholder_name': row['is_placeholder_name'],
                         }
 
                     # Append alias (LEFT JOIN may produce NULL)
                     alias_name = row['alias_name']
                     if alias_name and current_entity is not None:
-                        current_entity['aliases'].append({'alias_name': alias_name})
+                        current_entity['aliases'].append({
+                            'alias_name': alias_name,
+                            'is_placeholder_name': row['alias_is_placeholder']})
 
                 # Advance keyset cursor to last entity_id seen in this page
                 last_entity_id = rows[-1]['entity_id']
@@ -718,7 +727,7 @@ class EntityFuzzyIndex:
             all_names.extend(alias_names)
 
             variant_count = 0
-            for idx, name in enumerate(all_names):
+            for idx, name in indexable_names(entity):  # placeholders skipped, not renumbered (issues/249)
                 shingles = self._name_shingles(name, entity)
                 if not shingles:
                     continue
@@ -741,7 +750,7 @@ class EntityFuzzyIndex:
                 '_variant_count': len(all_names),
             }
 
-            for idx_p, name in enumerate(all_names):
+            for idx_p, name in indexable_names(entity):  # placeholders skipped (issues/249)
                 codes = self._phonetic_codes(name)
                 if not codes:
                     continue
@@ -777,7 +786,10 @@ class EntityFuzzyIndex:
                 hash_key = self._fuzzy_hash_key()
                 pipe = client.pipeline()
                 for entity_id, entity in batch:
-                    if entity_id in self._entity_cache:  # only if actually indexed
+                    # Indexed, or deliberately unindexable (every name a
+                    # placeholder, `issues/249`) — the latter still needs its hash
+                    # or the sync path re-indexes it on every pass.
+                    if entity_id in self._entity_cache or not indexable_names(entity):
                         h = compute_entity_hash(entity)
                         pipe.hset(hash_key, entity_id, h)  # type: ignore[arg-type]
                 pipe.execute()
@@ -814,7 +826,7 @@ class EntityFuzzyIndex:
         pipe.execute()
 
     def _name_shingles(self, name: str, entity: Dict[str, Any]) -> set:
-        """Build shingles for a single name variant, including location tokens."""
+        """Character shingles of a single name variant — name only (`issues/248`)."""
         shingles = set()
         normalized = name.lower().strip()
         if not normalized:
@@ -824,11 +836,9 @@ class EntityFuzzyIndex:
         else:
             for i in range(len(normalized) - self.shingle_k + 1):
                 shingles.add(normalized[i:i + self.shingle_k])
-        # Include location tokens so same-name different-location gets lower Jaccard
-        for field in ('country', 'region', 'locality'):
-            val = entity.get(field)
-            if val:
-                shingles.add(f"{field}:{val.lower().strip()}")
+        # NO location tokens (`issues/248`): they compressed every same-city
+        # pair's Jaccard toward 1 and crowded true matches out of the candidate
+        # set. Geo is a tie-break at scoring (`fuzzy_core.geo_agreement`).
         return shingles
 
     def _lsh_key(self, entity_id: str, idx: int) -> str:
@@ -905,7 +915,7 @@ class EntityFuzzyIndex:
 
         # Insert one LSH entry per name variant
         variant_count = 0
-        for idx, name in enumerate(all_names):
+        for idx, name in indexable_names(entity):  # placeholders skipped, not renumbered (issues/249)
             shingles = self._name_shingles(name, entity)
             if not shingles:
                 continue
@@ -918,6 +928,16 @@ class EntityFuzzyIndex:
                 pass  # duplicate key, skip
 
         if variant_count == 0:
+            if not indexable_names(entity):
+                # Every name a placeholder (`issues/249`): no bands, but store
+                # the hash so the sync path sees the entity as current.
+                client = self._get_redis_client()
+                if client:
+                    try:
+                        client.hset(self._fuzzy_hash_key(), entity_id,  # type: ignore[arg-type]
+                                    compute_entity_hash(entity))
+                    except Exception as e:
+                        logger.warning(f"Error storing fuzzy hash for {entity_id}: {e}")
             return
 
         # Cache for scoring
@@ -941,7 +961,7 @@ class EntityFuzzyIndex:
                 logger.warning(f"Error storing fuzzy hash for {entity_id}: {e}")
 
         # Insert into phonetic LSH (one entry per name variant, phonetic codes as shingles)
-        for idx_p, name in enumerate(all_names):
+        for idx_p, name in indexable_names(entity):  # placeholders skipped (issues/249)
             codes = self._phonetic_codes(name)
             if not codes:
                 continue
@@ -1112,6 +1132,7 @@ class EntityFuzzyIndex:
             if is_phonetic and self.phonetic_bonus > 0:
                 score = min(score + self.phonetic_bonus, 100.0)
             score_info['detail']['phonetic_match'] = is_phonetic
+            score_info['detail']['geo_agreement'] = geo_agreement(entity, cached)
 
             if score >= min_score:
                 results.append({
@@ -1123,7 +1144,10 @@ class EntityFuzzyIndex:
                     'score_detail': score_info['detail'],
                 })
 
-        results.sort(key=lambda x: x['score'], reverse=True)
+        # Geo breaks ties between equal name scores; it no longer decides which
+        # names are candidates (`issues/248`).
+        results.sort(key=lambda x: (x['score'], x['score_detail']['geo_agreement']),
+                     reverse=True)
         return results[:limit]
 
     def find_similar(
@@ -1188,6 +1212,7 @@ class EntityFuzzyIndex:
             if is_phonetic and self.phonetic_bonus > 0:
                 score = min(score + self.phonetic_bonus, 100.0)
             score_info['detail']['phonetic_match'] = is_phonetic
+            score_info['detail']['geo_agreement'] = geo_agreement(entity, cached)
 
             if score >= min_score:
                 results.append({
@@ -1199,7 +1224,10 @@ class EntityFuzzyIndex:
                     'score_detail': score_info['detail'],
                 })
 
-        results.sort(key=lambda x: x['score'], reverse=True)
+        # Geo breaks ties between equal name scores; it no longer decides which
+        # names are candidates (`issues/248`).
+        results.sort(key=lambda x: (x['score'], x['score_detail']['geo_agreement']),
+                     reverse=True)
         return results[:limit]
 
     def find_similar_by_name(
@@ -1413,16 +1441,15 @@ class EntityFuzzyIndex:
         return entity_ids
 
     def _get_name_variants(self, entity: Dict[str, Any]) -> List[str]:
-        """Extract all name variants from an entity dict."""
-        names = []
-        primary = entity.get('primary_name')
-        if primary:
-            names.append(primary)
-        for alias in (entity.get('aliases') or []):
-            name = alias.get('alias_name') if isinstance(alias, dict) else None
-            if name:
-                names.append(name)
-        return names
+        """The entity's names that may be QUERIED — placeholders excluded.
+
+        A placeholder name matches every other placeholder above `min_score`,
+        so querying it only produces confident wrong answers; a dedup sweep now
+        skips a third of its queries outright instead of computing and
+        discarding them (`issues/249`). A query dict with no stored flag is
+        judged by the same known-format policy the indexers use.
+        """
+        return [name for _, name in indexable_names(entity)]
 
     def _score_pair(
         self, query_names: List[str], candidate: Dict[str, Any]

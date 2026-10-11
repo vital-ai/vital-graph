@@ -570,6 +570,25 @@ class EntityAdmin:
                 "WHERE a.status <> $1 AND e.status <> $2",
                 RETRACTED, DELETED,
             )
+            # Placeholder names are deliberately NOT banded (`issues/249`), so
+            # the expected counts are of INDEXABLE names. Without this the check
+            # reported ~212k "missing" and advised a rebuild that cannot fix an
+            # intentional gap — turning the monitor into a permanent false alarm.
+            skipped_primary = await conn.fetchval(
+                "SELECT COUNT(*) FROM entity WHERE status <> $1 AND is_placeholder_name",
+                DELETED)
+            skipped_alias = await conn.fetchval(
+                "SELECT COUNT(*) FROM entity_alias a JOIN entity e "
+                "ON e.entity_id = a.entity_id "
+                "WHERE a.status <> $1 AND e.status <> $2 AND a.is_placeholder_name",
+                RETRACTED, DELETED)
+            # Entities left with NO indexable name have no band rows at all.
+            unindexable = await conn.fetchval(
+                "SELECT COUNT(*) FROM entity e WHERE e.status <> $1 "
+                "AND e.is_placeholder_name AND NOT EXISTS ("
+                "  SELECT 1 FROM entity_alias a WHERE a.entity_id = e.entity_id "
+                "  AND a.status <> $2 AND NOT a.is_placeholder_name)",
+                DELETED, RETRACTED)
         hashed = await self.fuzzy.get_entity_count_db()
         banded_variants, banded_entities = \
             await self.fuzzy.storage.get_indexed_counts(TABLE_PRIMARY)
@@ -579,10 +598,15 @@ class EntityAdmin:
         # One key per name variant: the primary name plus each active alias.
         # Comparing variants against entities reports a false gap of exactly
         # the alias count, which is why the two are counted separately.
-        expected_variants = pg_count + alias_count
+        expected_variants = pg_count + alias_count - skipped_primary - skipped_alias
+        expected_entities = pg_count - unindexable
 
         print(f"  PostgreSQL active entities: {pg_count:,}")
         print(f"  Active aliases:             {alias_count:,}")
+        print(f"  Placeholder names skipped:  {skipped_primary + skipped_alias:,} "
+              f"({skipped_primary:,} primary, {skipped_alias:,} alias) — deliberate, issues/249")
+        print(f"  Entities with no indexable name: {unindexable:,}")
+        print(f"  Expected banded entities:   {expected_entities:,}")
         print(f"  Expected name variants:     {expected_variants:,}")
         print(LINE)
         print(f"  Entities hashed:            {hashed:,}")
@@ -597,11 +621,11 @@ class EntityAdmin:
                 f"hash table is {abs(hashed - pg_count):,} "
                 f"{'short of' if hashed < pg_count else 'ahead of'} the entity table"
             )
-        if banded_entities != pg_count:
+        if banded_entities != expected_entities:
             problems.append(
-                f"band tables cover {abs(banded_entities - pg_count):,} "
-                f"{'fewer' if banded_entities < pg_count else 'more'} entities "
-                f"than the entity table"
+                f"band tables cover {abs(banded_entities - expected_entities):,} "
+                f"{'fewer' if banded_entities < expected_entities else 'more'} entities "
+                f"than have an indexable name"
             )
         if banded_variants != expected_variants:
             problems.append(

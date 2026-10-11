@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .entity_fuzzy import compute_entity_hash, EntityFuzzyIndex
+from .placeholder_names import resolve_placeholder_flag
 from .entity_fuzzy_pg import EntityFuzzyIndexPG
 from .entity_status import DELETED, RETRACTED
 
@@ -36,8 +37,13 @@ class AliasMixin:
         alias_name: str, alias_type: str = 'aka',
         is_primary: bool = False, created_by: Optional[str] = None,
         notes: Optional[str] = None,
+        is_placeholder_name: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        """Insert an alias within an existing connection/transaction."""
+        """Insert an alias within an existing connection/transaction.
+
+        `is_placeholder_name` keeps the alias out of the fuzzy index
+        (`issues/249`); None lets the known-format policy decide, and the
+        resolved value is stored."""
         # Auto-register the alias type in alias_type on first use (see
         # _insert_identifier for rationale). Idempotent; label defaults to key.
         await conn.execute(
@@ -46,9 +52,11 @@ class AliasMixin:
             alias_type
         )
         row = await conn.fetchrow(
-            "INSERT INTO entity_alias (entity_id, alias_name, alias_type, is_primary, created_by, notes) "
-            "VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
-            entity_id, alias_name, alias_type, is_primary, created_by, notes
+            "INSERT INTO entity_alias (entity_id, alias_name, alias_type, is_primary, "
+            "created_by, notes, is_placeholder_name) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *",
+            entity_id, alias_name, alias_type, is_primary, created_by, notes,
+            resolve_placeholder_flag(alias_name, is_placeholder_name)
         )
         await self._log_change(conn, entity_id, 'alias_added', {
             'alias_name': alias_name, 'alias_type': alias_type
@@ -60,6 +68,7 @@ class AliasMixin:
         alias_name: str, alias_type: str = 'aka',
         is_primary: bool = False, created_by: Optional[str] = None,
         notes: Optional[str] = None,
+        is_placeholder_name: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Add an alias to an entity."""
         async with self.pool.acquire() as conn:
@@ -72,7 +81,8 @@ class AliasMixin:
 
                 alias = await self._insert_alias(
                     conn, entity_id, alias_name, alias_type,
-                    is_primary, created_by, notes
+                    is_primary, created_by, notes,
+                    is_placeholder_name=is_placeholder_name,
                 )
 
                 # Recompute fuzzy hash (aliases changed) and refresh index

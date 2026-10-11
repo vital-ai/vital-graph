@@ -113,7 +113,7 @@ class SPARQLUpdateEndpoint:
                 # Nudge the backfill task — SPARQL updates may insert
                 # quads that bypass inline server-property stamping.
                 from vitalgraph.tasks.backfill_server_properties_task import nudge_backfill
-                nudge_backfill()
+                nudge_backfill(space_id)
 
                 return SPARQLUpdateResponse(
                     status=OperationStatus.UPDATED,

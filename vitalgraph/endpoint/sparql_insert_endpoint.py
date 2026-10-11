@@ -141,7 +141,7 @@ class SPARQLInsertEndpoint:
                 # Nudge the backfill task — INSERT DATA bypasses
                 # inline server-property stamping.
                 from vitalgraph.tasks.backfill_server_properties_task import nudge_backfill
-                nudge_backfill()
+                nudge_backfill(space_id)
 
                 return SPARQLInsertResponse(
                     status=OperationStatus.CREATED,

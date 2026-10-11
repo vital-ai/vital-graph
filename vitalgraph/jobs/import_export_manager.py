@@ -358,7 +358,7 @@ class ImportExportJobManager:
                 # Nudge the backfill task so it stamps server-managed
                 # properties on newly imported entities promptly.
                 if job['job_type'] == 'import' and self._backfill_task:
-                    self._backfill_task.nudge()
+                    self._backfill_task.nudge(job['space_id'])
             else:
                 await self._update_status(
                     job_id, "failed",

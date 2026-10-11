@@ -292,7 +292,7 @@ class EntityRegistryCLI:
         type_key = self._extract_flag(args, '--type')
         name = self._extract_flag(args, '--name')
         if not type_key or not name:
-            print("Usage: create-entity --type <type_key> --name <name> [--country C] [--region R] [--locality L] [--website W] [--description D]")
+            print("Usage: create-entity --type <type_key> --name <name> [--country C] [--region R] [--locality L] [--website W] [--description D] [--placeholder true|false]")
             return True
         country = self._extract_flag(args, '--country')
         region = self._extract_flag(args, '--region')
@@ -300,6 +300,8 @@ class EntityRegistryCLI:
         website = self._extract_flag(args, '--website')
         description = self._extract_flag(args, '--description')
         try:
+            # issues/249: omit to let the known-format policy decide.
+            placeholder = self._extract_bool_flag(args, '--placeholder')
             entity = _run_async(self.registry.create_entity(
                 type_key=type_key,
                 primary_name=name,
@@ -308,6 +310,7 @@ class EntityRegistryCLI:
                 locality=locality,
                 website=website,
                 description=description,
+                is_placeholder_name=placeholder,
             ))
             print(f"✅ Created entity: {entity['entity_id']} ({name})")
         except Exception as e:
@@ -319,7 +322,7 @@ class EntityRegistryCLI:
         if not self._require_connected():
             return True
         if not args:
-            print("Usage: update-entity <entity_id> [--name N] [--status S] [--country C] [--region R] [--locality L] [--website W] [--description D]")
+            print("Usage: update-entity <entity_id> [--name N] [--status S] [--country C] [--region R] [--locality L] [--website W] [--description D] [--placeholder true|false]")
             return True
         entity_id = args.pop(0)
         name = self._extract_flag(args, '--name')
@@ -330,6 +333,7 @@ class EntityRegistryCLI:
         website = self._extract_flag(args, '--website')
         description = self._extract_flag(args, '--description')
         try:
+            placeholder = self._extract_bool_flag(args, '--placeholder')
             result = _run_async(self.registry.update_entity(
                 entity_id=entity_id,
                 primary_name=name,
@@ -339,6 +343,7 @@ class EntityRegistryCLI:
                 locality=locality,
                 website=website,
                 description=description,
+                is_placeholder_name=placeholder,
             ))
             if result:
                 print(f"✅ Updated entity: {entity_id}")
@@ -398,7 +403,7 @@ class EntityRegistryCLI:
         if not self._require_connected():
             return True
         if not args:
-            print("Usage: add-alias <entity_id> --name <name> [--type aka|trade_name|abbreviation]")
+            print("Usage: add-alias <entity_id> --name <name> [--type aka|trade_name|abbreviation] [--placeholder true|false]")
             return True
         entity_id = args.pop(0)
         name = self._extract_flag(args, '--name')
@@ -407,7 +412,9 @@ class EntityRegistryCLI:
             print("❌ --name is required")
             return True
         try:
-            result = _run_async(self.registry.add_alias(entity_id, name, alias_type))
+            placeholder = self._extract_bool_flag(args, '--placeholder')
+            result = _run_async(self.registry.add_alias(
+                entity_id, name, alias_type, is_placeholder_name=placeholder))
             print(f"✅ Added alias '{name}' to {entity_id}")
         except Exception as e:
             print(f"❌ Error: {e}")
@@ -1336,6 +1343,15 @@ class EntityRegistryCLI:
     # ------------------------------------------------------------------
     # Utility
     # ------------------------------------------------------------------
+
+    def _extract_bool_flag(self, args: list[str], flag: str) -> Optional[bool]:
+        """Extract `--flag true|false`; None when absent (the server decides)."""
+        val = self._extract_flag(args, flag)
+        if val is None:
+            return None
+        if val.lower() not in ('true', 'false'):
+            raise ValueError(f"{flag} takes true or false, not {val!r}")
+        return val.lower() == 'true'
 
     def _extract_flag(self, args: list[str], flag: str) -> Optional[str]:
         """Extract --flag value from args list. Modifies args in-place."""

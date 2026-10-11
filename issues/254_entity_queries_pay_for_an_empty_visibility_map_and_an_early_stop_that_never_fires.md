@@ -1,6 +1,9 @@
 # 254 — Entity fuzzy queries pay for an empty visibility map, and for an early stop that never fires
 
-## Status: OPEN, measured on production 2026-09-29. Neither finding is a
+## Status: CAUSE 1 DONE 2026-10-11 — the VACUUM ran on production. Cause 2 (the early
+## stop) deliberately untouched: its recall check needs the post-`248` index.
+##
+## Found: measured on production 2026-09-29. Neither finding is a
 ## correctness defect — the numbers are simply higher than they need to be, and
 ## the two causes are independent. The VACUUM is the cheap one and is already
 ## recorded as an unactioned item in `issues/251`; this issue is what makes it
@@ -137,3 +140,30 @@ redesign; cause 1 is a maintenance command.
 * An in-region measurement. Everything here is network-adjusted by subtracting a
   measured RTT, which is an estimate, not a measurement. Running the same script
   from inside the VPC would settle the server-side number properly.
+
+## Done on production, 2026-10-11 — the VACUUM
+
+Run as the app role (the tables' owner) with `statement_timeout = 0`, one table
+at a time: `VACUUM (ANALYZE) entity_fuzzy_hash` 4.8 s, `VACUUM (ANALYZE)
+entity_fuzzy_band` 51.0 s.
+
+| | before | after |
+|---|---|---|
+| `entity_fuzzy_band` all-visible | 0 of 233,795 pages (0.0%) | 234,447 of 234,451 (100.0%) |
+| `entity_fuzzy_hash` all-visible | 0 of 14,342 (0.0%) | 14,446 of 14,446 (100.0%) |
+| 5 sample band lookups: heap fetches | 35 | **0** |
+| same lookups: shared buffers | 80 | 45 |
+
+Both tables had last been vacuumed 2026-07-29. `entity_fuzzy_phonetic_band` was
+already 92.3% visible and was left alone.
+
+**This will need doing again after the `248`/`249` rebuild.** A full rebuild
+truncates and reloads the band tables, which leaves the visibility map empty
+again, and autovacuum's insert threshold won't reach a freshly loaded 45M-row
+table soon.
+
+**Cause 2 is unchanged on purpose.** `248` takes location out of the name
+shingles, which changes every band and therefore the candidate sets the early
+stop sees. The recall check this issue requires (`248`'s 8 production clusters)
+has to run against the rebuilt index, so the threshold is a post-deploy
+decision.

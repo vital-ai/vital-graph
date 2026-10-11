@@ -1,6 +1,9 @@
 # 249 — A third of the business entities are indexed under a placeholder name, and every one of them is a match for every other one
 
-## Status: OPEN, measured 2026-09-29, NOT BUILT. **Decided: these strings must
+## Status: FIXED IN CODE 2026-10-11 (uncommitted, not yet released). Production needs
+## the registry migration BEFORE the code, then a full fuzzy rebuild — see "Rollout".
+##
+## Found: measured 2026-09-29, NOT BUILT. **Decided: these strings must
 ## not enter the index at all.** Found as a data observation while measuring
 ## `248` and split out because it is a different defect with a different fix.
 ## The scores and the phonetic collapse below are EXACT — computed by calling
@@ -284,3 +287,73 @@ Discovery also keeps customer names out of the checker.
 Verified on 2026-10-01 to reproduce the jaccard values (0.000 and 0.333), both
 head-to-head scores (83.3 and 90.0) and both omission-variant shingle counts
 (1 and 5) exactly as recorded above.
+
+## Fix, 2026-10-11
+
+As decided above: skip at index time, stored as a column, on both sides.
+
+- **Policy** (`entity_registry/placeholder_names.py`): `KNOWN_PLACEHOLDER_PATTERNS`
+  holds exactly `^company-\d+$`. Measured 2026-10-11 with the `GROUP BY` over
+  name shapes this issue asked for: 212,360 active entities (up from 209,580);
+  every other `word-<digits>` name occurs once and is a real business; no alias
+  has a placeholder shape. So the "is it the only format" question is answered:
+  yes. `indexable_names(entity)` is the ONE function every index and query path
+  calls, in both backends. It reads the stored flag when the dict carries one
+  and falls back to the same pattern when it doesn't, so bulk and incremental
+  cannot drift apart.
+- **Columns**: `entity.is_placeholder_name`, `entity_alias.is_placeholder_name`,
+  `NOT NULL DEFAULT FALSE`. Each migration adds its column AND backfills in one
+  `DO` block, so the backfill runs once; re-running it at every migrate would
+  undo a manual correction.
+- **Writers**: `create_entity`, `update_entity`, `add_alias` and get-or-create
+  take `is_placeholder_name=None` (None means the policy decides; the resolved
+  value is stored), through the API request models (and shown in the responses)
+  and the CLI (`--placeholder true|false`). `update_entity` re-resolves the flag
+  when the name changes, accepts it alone as a correction, and either change
+  re-indexes.
+- **Index**: both backends `continue` on placeholder names without renumbering
+  (`_variant_count` stays `len(all_names)`). An entity whose names are ALL
+  placeholders gets no bands but still gets its hash, so the sync path does not
+  re-index it on every pass.
+- **Query**: `_get_name_variants` drops placeholders in both backends, so
+  `find_similar('company-4471000')` returns nothing and a sweep skips those
+  queries outright.
+- **Trap 1, `fuzzy check`**: expected counts are of INDEXABLE names; the report
+  prints how many were skipped and how many entities have no indexable name, so
+  "212,360 deliberately skipped" cannot be mistaken for "212,360 missing".
+- **Trap 2, the hash**: both copies append the placeholder names, but ONLY when
+  some name is a placeholder. A real-named entity's hash is byte-identical to
+  before, so the first sync after deploy re-indexes the ~212k placeholder
+  entities (dropping their bands), not all 1.28M.
+
+Tests: `tests/unit/test_placeholder_names_policy.py` (17: the pattern, override,
+stable numbering, query side, and the hash property against the verbatim old
+formula); `tests/integration/test_fuzzy_placeholder_names.py` (8 for this issue,
+through the real registry and PG index on the test stack): flagged and unbanded
+but hashed; placeholders don't match each other; a REAL alias on a placeholder
+entity is banded as variant 1 only and is found; writer override; a correction
+re-indexes and moves the hash; renaming to a placeholder drops the bands; a
+placeholder alias is skipped; deleting leaves no bands. The `fuzzy check`
+arithmetic balances on the test database (45 expected, 45 banded).
+
+## Rollout (production)
+
+1. **Run the registry migration BEFORE deploying the code**:
+   `apps/entity_registry/migrate.py --migrate-only` (or the registry CLI's
+   migrate). The new code inserts `is_placeholder_name`, so without the column
+   entity creation fails. The migration backfills about 212k rows once.
+2. Deploy.
+3. **Full fuzzy rebuild** (`apps/fuzzy_index/migrate_fuzzy_redis_to_pg.py
+   --rebuild`); `248` needs it too, so do one rebuild for both. Measured band
+   compute: about 1,290 entities/s, so about 14 minutes of CPU for the 1.07M
+   indexable entities, plus the COPY of about 45M band rows. **The rebuild
+   truncates first, so fuzzy matching is empty for the whole run** (an estimated
+   20-25 minutes). Take the before numbers first: band-row count, and the
+   rebuild time.
+4. `VACUUM (ANALYZE)` the band and hash tables afterwards (`254`).
+5. Verify: `fuzzy check` reports ✅ and states the excluded count; band rows
+   drop by roughly 8.8M; the phonetic table has no 212k-key cells; `248`'s 8
+   clusters are still 8/8.
+
+Not done: the vector path (`build_entity_search_text`) still embeds placeholder
+names, as this issue scoped out.

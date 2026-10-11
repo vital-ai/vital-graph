@@ -152,7 +152,15 @@ class _FakeTask:
         self.task = BackfillServerPropertiesTask.__new__(BackfillServerPropertiesTask)
         self.task.pool = object()
         self.task.batch_size = 200
-        self.task._force_full_check = False
+        # Steady state: nothing pending, the current cycle not forced
+        # (`issues/266` replaced the single `_force_full_check` flag).
+        self.task._pending_force_all = False
+        self.task._pending_force_spaces = set()
+        self.task._cycle_force_all = False
+        self.task._cycle_force_spaces = set()
+        self.task._last_forced_cycle_at = float("-inf")
+        self.task.nudge_min_interval_s = 30.0
+        self.task._nudge_event = __import__("asyncio").Event()
         self.task._cursor = BackfillCursor(targets=[("sp", "urn:g")], index=0)
 
         # `_iteration` re-discovers targets at the start of a cycle, which needs
@@ -202,7 +210,7 @@ async def test_a_nudge_forces_the_scan_anyway(monkeypatch):
     monkeypatch.setattr(mod.backfill_state, "mark_complete", lambda *a, **k: _true())
 
     ft = _FakeTask()
-    ft.task._force_full_check = True          # as nudge() sets it
+    ft.task.nudge("sp")             # _iteration starts the cycle that takes it
     await ft.task._iteration()
     assert scanned, "a nudge must override completion markers"
 

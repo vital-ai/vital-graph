@@ -129,6 +129,7 @@ def _entity_to_response(entity: dict) -> EntityResponse:
         verified=entity.get('verified', False),
         verified_by=entity.get('verified_by'),
         verified_time=entity.get('verified_time'),
+        is_placeholder_name=bool(entity.get('is_placeholder_name', False)),
         status=entity['status'],
         created_time=entity.get('created_time'),
         updated_time=entity.get('updated_time'),
@@ -201,6 +202,7 @@ class EntityRegistryEndpoint:
                     longitude=request.longitude, metadata=request.metadata,
                     created_by=request.created_by,
                     notes=request.notes, aliases=aliases, identifiers=identifiers,
+                    is_placeholder_name=request.is_placeholder_name,
                     locations=locations,
                 )
                 full = await self.registry.get_entity(entity['entity_id'])
@@ -309,6 +311,7 @@ class EntityRegistryEndpoint:
                     verified=request.verified, verified_by=request.verified_by,
                     status=request.status,
                     updated_by=request.updated_by, notes=request.notes,
+                    is_placeholder_name=request.is_placeholder_name,
                 )
                 if entity is None:
                     return EntityEnvelope(status=OperationStatus.NOT_FOUND, message=f"Entity not found: {entity_id}", entity=None)
@@ -395,6 +398,7 @@ class EntityRegistryEndpoint:
                     entity_id=entity_id, alias_name=request.alias_name,
                     alias_type=request.alias_type, is_primary=request.is_primary,
                     created_by=request.created_by, notes=request.notes,
+                    is_placeholder_name=request.is_placeholder_name,
                 )
                 return AliasEnvelope(status=OperationStatus.CREATED, alias=AliasResponse(**alias))
             except ValueError as e:

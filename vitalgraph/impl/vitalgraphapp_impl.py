@@ -571,6 +571,11 @@ class VitalGraphAppImpl:
                                 interval_seconds=analytics_interval,
                                 handler=analytics_job,
                                 process_type="analytics",
+                                # Once a day on one instance. Production ran it
+                                # once a day only because both tasks started
+                                # within 20 s and a run outlasts the gap; a
+                                # staggered deploy would run it twice (issues/264).
+                                single_runner=True,
                             )
                             
                             # Initialize PostgreSQL-based metrics collector and rollup job
@@ -589,6 +594,10 @@ class VitalGraphAppImpl:
                                     interval_seconds=3600,
                                     handler=metrics_rollup,
                                     process_type="metrics",
+                                    # Both tasks ran it hourly; the second found
+                                    # nothing left (234 runs, 0 rows, 2026-10-01
+                                    # to 10-11). Cheap, but pure repetition (issues/264).
+                                    single_runner=True,
                                 )
                                 self.logger.info("✅ Query metrics collector initialized (PostgreSQL-backed)")
                             except Exception as e:

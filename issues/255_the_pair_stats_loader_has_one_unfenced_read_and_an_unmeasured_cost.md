@@ -1,6 +1,9 @@
 # 255 — `_load_missing_pair_stats` has one unfenced read, and its own cost is unmeasured
 
-## Status: OPEN, filed 2026-10-02 from a production monitoring review. Nothing
+## Status: FIXED 2026-10-11, items 1 and 2 (uncommitted, not yet released). Item 3,
+## measuring the loader's 7,710 ms, is still open.
+##
+## Found: filed 2026-10-02 from a production monitoring review. Nothing
 ## here is fixed. The LOCK-BLOCKING half of this path is `issues/145` and is
 ## fixed and deployed; what follows is the part that fix did not cover.
 
@@ -146,3 +149,27 @@ same trade at the site it missed), `issues/136` (where the 10s database-level
 `lock_timeout` comes from), `issues/140` (the handler that makes this path
 visible at all), `issues/138`/`issues/090`/`issues/101` (pair stats and the
 gate's DECISION, as distinct from the cost of loading them)
+
+## Fix, 2026-10-11 — items 1 and 2
+
+1. **The warning names the read and the wait.** `_load_missing_pair_stats`
+   records which read is running and since when, and the failure warning now
+   reads `pair stats lookup failed during pair count (rdf_quad) after 10003 ms`
+   (or `during pair stats (rdf_stats) after 101 ms`). The stages are: pair stats
+   (rdf_stats), pair count (rdf_quad), value stats, range count (rdf_quad), text
+   term count (term), text count (rdf_quad).
+2. **Every read in the loader is fenced**, not just `:1145`. The same function
+   had four more unfenced reads of the same kind: the range count, the term-size
+   read, and the two text counts. All five now take
+   `lock_timeout_ms=STATS_LOCK_TIMEOUT_MS`.
+
+Tests (`tests/unit/sparql_sql/test_stats_lock_timeout.py`, 11 pass):
+`test_every_stats_read_bounds_its_lock_wait` now expects 11 fenced sites (was 6);
+new `test_every_read_in_the_pair_stats_loader_bounds_its_lock_wait` walks the
+loader's AST and fails on ANY `execute_query` without the fence, which scopes the
+guard by the read's role rather than by table name, as this issue asked; new
+`test_the_failure_warning_names_the_read_and_the_wait` raises a lock timeout on
+the rdf_quad count and checks the warning says so. Both new tests fail against
+the old generator.
+
+**Still open: item 3.** The 7,710 ms loader cost is unmeasured and unchanged.

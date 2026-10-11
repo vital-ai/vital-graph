@@ -28,6 +28,8 @@ class AliasCreateRequest(BaseModel):
     is_primary: bool = False
     created_by: Optional[str] = None
     notes: Optional[str] = None
+    is_placeholder_name: Optional[bool] = Field(
+        default=None, description="Whether the name is an upstream placeholder (e.g. 'company-<digits>') that must stay out of fuzzy matching. Omit to let the server decide from known placeholder formats; the decision is stored. issues/249")
 
 
 class LocationCreateRequest(BaseModel):
@@ -94,6 +96,8 @@ class EntityCreateRequest(BaseModel):
     aliases: Optional[List[AliasCreateRequest]] = None
     identifiers: Optional[List[IdentifierCreateRequest]] = None
     locations: Optional[List[LocationCreateRequest]] = None
+    is_placeholder_name: Optional[bool] = Field(
+        default=None, description="Whether the name is an upstream placeholder (e.g. 'company-<digits>') that must stay out of fuzzy matching. Omit to let the server decide from known placeholder formats; the decision is stored. issues/249")
 
 
 class EntityUpdateRequest(BaseModel):
@@ -111,6 +115,8 @@ class EntityUpdateRequest(BaseModel):
     status: Optional[str] = None
     updated_by: Optional[str] = None
     notes: Optional[str] = None
+    is_placeholder_name: Optional[bool] = Field(
+        default=None, description="Whether the name is an upstream placeholder (e.g. 'company-<digits>') that must stay out of fuzzy matching. Omit to let the server decide from known placeholder formats; the decision is stored. issues/249")
 
 
 class SameAsCreateRequest(BaseModel):
@@ -210,6 +216,7 @@ class AliasResponse(BaseModel):
     is_primary: bool
     status: str
     created_time: Optional[datetime] = None
+    is_placeholder_name: Optional[bool] = False
 
     class Config:
         from_attributes = True
@@ -345,6 +352,7 @@ class EntityResponse(BaseModel):
     verified: Optional[bool] = False
     verified_by: Optional[str] = None
     verified_time: Optional[datetime] = None
+    is_placeholder_name: Optional[bool] = False
     status: str
     created_time: Optional[datetime] = None
     updated_time: Optional[datetime] = None
@@ -381,6 +389,8 @@ class EntityResolveRequest(BaseModel):
     notes: Optional[str] = None
     aliases: Optional[List[AliasCreateRequest]] = None
     identifiers: Optional[List[IdentifierCreateRequest]] = None
+    is_placeholder_name: Optional[bool] = Field(
+        default=None, description="Whether the name is an upstream placeholder (e.g. 'company-<digits>') that must stay out of fuzzy matching. Omit to let the server decide from known placeholder formats; the decision is stored. issues/249")
 
 
 class EntityCreateResponse(ResultStatus):

@@ -1,6 +1,8 @@
 # 261 — A KGType delete whose lookup query fails reports success
 
-## Status: OPEN, filed 2026-10-04. Found on dev, not fixed.
+## Status: FIXED 2026-10-11 (uncommitted, not yet released).
+##
+## Found, filed 2026-10-04. Found on dev, not fixed.
 
 ## What was seen
 
@@ -55,3 +57,19 @@ Verifying `issues/260` on dev with a probe type: create, check it is indexed,
 delete, check the rows go. The rows did not go. The dev stack's sidecar had been
 stopped along with the app; restarting it, the same delete removed the quads and
 both index rows.
+
+## Fix, 2026-10-11
+
+One checked lookup, `vitalgraph/kg_impl/kgtype_lookup.kgtype_exists`, raises
+`KGTypeLookupFailed` when the query result says `success: False`; the create and
+delete processors delegate to it. The delete paths already re-raise, so a failed
+lookup now reaches the endpoint as `STORE_FAILED` instead of "No KGTypes found
+for deletion". The error text avoids "not found", which the endpoint would map
+to `NOT_FOUND`. The update processor's copy had NO callers and the opposite bug
+(its dict branch read a failure dict as truthy, so "exists"); it is deleted.
+
+Tests: `tests/unit/test_kgtype_lookup_failure_is_not_absence.py` (9). A failed
+lookup raises on batch delete, single delete and create; an absent type is still
+absent; a present type is still deleted; the message cannot be read as not-found.
+Against the old delete processor, the batch-delete test fails with
+`DID NOT RAISE`, which is the dev observation exactly.

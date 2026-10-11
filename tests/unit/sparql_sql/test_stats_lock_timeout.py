@@ -150,8 +150,13 @@ def test_every_stats_read_bounds_its_lock_wait():
     # not a stats table, but they are the same kind of read — an optimisation
     # input on the request path, whose failure only leaves a leaf unpriced — so
     # they take the same bounded lock wait rather than parking behind a writer.
-    assert bounded == 6, (
-        f"generator.py has {bounded} bounded stats reads, expected 6 "
+    #
+    # 11 since `issues/255`: the pair-stats loader's other five reads — the
+    # rdf_quad pair count, the range count, the term-size read, and the two text
+    # counts — are the same kind of input and now take the same bound. Before,
+    # a lock on rdf_quad parked a user request for the database's 10 s.
+    assert bounded == 11, (
+        f"generator.py has {bounded} bounded stats reads, expected 11 "
         f"(saw {reads} references to the stats tables)")
 
     from vitalgraph.db.sparql_sql import slot_type_tautology as T
@@ -209,3 +214,51 @@ async def test_a_genuinely_absent_table_is_still_cached(monkeypatch):
 
     assert G._stats_cache.get(("sp_y", None)) == ({}, {})
     G._stats_cache.pop(("sp_y", None), None)
+
+
+def test_every_read_in_the_pair_stats_loader_bounds_its_lock_wait():
+    """`issues/255`. The count above is scoped by TABLE NAME, so it could not
+    see the loader's `rdf_quad` count — the hazard is the read's ROLE (a plan
+    input on the request path), which a table name does not express. Scope it
+    by role: every query `_load_missing_pair_stats` issues is fenced."""
+    import ast
+    import inspect
+    import textwrap
+    tree = ast.parse(textwrap.dedent(inspect.getsource(G._load_missing_pair_stats)))
+    calls = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and n.func.attr == "execute_query"]
+    assert len(calls) >= 5, "found too few queries in the loader; the guard would be vacuous"
+    unfenced = [n.lineno for n in calls
+                if not any(k.arg == "lock_timeout_ms" for k in n.keywords)]
+    assert not unfenced, (
+        f"loader read(s) at relative line(s) {unfenced} can wait the database's "
+        f"10 s lock timeout on a user request")
+
+
+@pytest.mark.asyncio
+async def test_the_failure_warning_names_the_read_and_the_wait(monkeypatch, caplog):
+    """`issues/255`: one handler wraps every read, and the warning could not
+    say which failed or how long it waited — 100 ms fenced and 10 s unfenced
+    were the same line. `264` had to recover it from timestamps."""
+    from types import SimpleNamespace
+    from vitalgraph.db.sparql_sql import semijoin
+
+    calls = []
+
+    async def fake_execute_query(sql, *a, **k):
+        calls.append(sql)
+        if "_rdf_stats" in sql:
+            return []                                   # pair not in rdf_stats
+        raise asyncpg.LockNotAvailableError("canceling statement due to lock timeout")
+
+    monkeypatch.setattr(semijoin, "needed_pairs",
+                        lambda plan, aliases: [("p-uuid", "o-uuid")])
+    monkeypatch.setattr(db_provider, "execute_query", fake_execute_query)
+    aliases = SimpleNamespace(quad_stats={}, graph_lock_uri=None)
+    with caplog.at_level("WARNING"):
+        await G._load_missing_pair_stats(object(), aliases, "sp", conn=object())
+    msg = " ".join(r.getMessage() for r in caplog.records
+                   if "pair stats lookup failed" in r.getMessage())
+    assert "pair count (rdf_quad)" in msg, msg
+    assert " ms" in msg, msg

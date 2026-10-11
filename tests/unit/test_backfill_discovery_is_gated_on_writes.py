@@ -36,7 +36,8 @@ pytestmark = [pytest.mark.unit]
 def task(monkeypatch):
     """A task whose discovery and activity signal are both counted."""
     t = BackfillServerPropertiesTask(pool=object(), space_manager=None)
-    t._force_full_check = False          # the steady state, not the first cycle
+    t._pending_force_all = False         # the steady state, not the first cycle
+    t._begin_cycle()
     t.calls = {"discover": 0, "activity": 0}
     t.graphs = ["urn:g1", "urn:g2"]
     t.activity = (100, "reset-1")
@@ -97,6 +98,7 @@ class TestEveryWayItMustReDerive:
     async def test_a_nudge_ignores_the_cache(self, task):
         await task._discover_graphs_cached("sp")
         task.nudge()
+        task._begin_cycle()                 # a nudge takes effect at the next cycle
         await task._discover_graphs_cached("sp")
         assert task.calls["discover"] == 2
 

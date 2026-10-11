@@ -433,6 +433,22 @@ class EntityRegistrySchema:
         "ALTER TABLE entity_location ADD COLUMN IF NOT EXISTS external_location_id VARCHAR(50)",
         # Fuzzy hash: MD5 of fuzzy-relevant fields for fast PG ↔ MemoryDB comparison
         "ALTER TABLE entity ADD COLUMN IF NOT EXISTS fuzzy_hash VARCHAR(32)",
+        # Placeholder names never enter the fuzzy index (`issues/249`). Per NAME,
+        # so an entity with a placeholder primary and a real alias stays findable
+        # by the alias. The backfill runs ONLY in the step that adds the column:
+        # re-running it at every startup would undo a manual "this is a real
+        # name" correction. The pattern matches KNOWN_PLACEHOLDER_PATTERNS in
+        # placeholder_names.py, the only format measured on production.
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM information_schema.columns "
+        "WHERE table_name = 'entity' AND column_name = 'is_placeholder_name') THEN "
+        "ALTER TABLE entity ADD COLUMN is_placeholder_name BOOLEAN NOT NULL DEFAULT FALSE; "
+        "UPDATE entity SET is_placeholder_name = TRUE WHERE primary_name ~* '^company-[0-9]+$'; "
+        "END IF; END $$",
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM information_schema.columns "
+        "WHERE table_name = 'entity_alias' AND column_name = 'is_placeholder_name') THEN "
+        "ALTER TABLE entity_alias ADD COLUMN is_placeholder_name BOOLEAN NOT NULL DEFAULT FALSE; "
+        "UPDATE entity_alias SET is_placeholder_name = TRUE WHERE alias_name ~* '^company-[0-9]+$'; "
+        "END IF; END $$",
 
         # --- Metadata management refactor (Phase 1) ---
         # is_active on the four existing lookup tables so a value can be retired

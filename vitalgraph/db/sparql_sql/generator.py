@@ -1078,6 +1078,11 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
     aliases.saturated_pairs = set()
     if conn is None and conn_params is None:
         return
+    # Which read is running, and since when: the failure warning below names
+    # both (`issues/255`). It wraps every read here, and without these a 100 ms
+    # fenced timeout and a 10 s unfenced one were the same line.
+    _stage = "setup"
+    _t0 = time.perf_counter()
     try:
         from . import db_provider as db
         pairs = needed_pairs(plan, aliases)
@@ -1102,6 +1107,7 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
         # counted and the join order was chosen without it (issues/090).
         _lock = getattr(aliases, "graph_lock_uri", None)
         if missing:
+            _stage = "pair stats (rdf_stats)"
             values = ", ".join(f"('{p}'::uuid, '{o}'::uuid)" for p, o in missing)
             rows = await db.execute_query(
                 # SUMMED IN SQL, and NARROWED THE SAME WAY THE PRELOAD WAS.
@@ -1142,13 +1148,15 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                 if ck in _pair_count_cache:
                     aliases.extra_quad_stats[(p_uuid, o_uuid)] = _pair_count_cache[ck]
                     continue
+                _stage = "pair count (rdf_quad)"
                 crows = await db.execute_query(
                     f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_rdf_quad "
                     f"WHERE predicate_uuid = '{p_uuid}'::uuid "
                     f"AND object_uuid = '{o_uuid}'::uuid"
                     f"{_ctx_filter(space_id, _lock)} "
                     f"LIMIT {_PAIR_COUNT_CAP}) s",
-                    conn=conn, conn_params=conn_params)
+                    conn=conn, conn_params=conn_params,
+                    lock_timeout_ms=STATS_LOCK_TIMEOUT_MS)
                 n = crows[0]["n"] if crows else 0
                 _pair_count_cache[ck] = n
                 aliases.extra_quad_stats[(p_uuid, o_uuid)] = n
@@ -1168,6 +1176,7 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
         from .sparql_sql_schema import NUMERIC_TERM_COLUMN
         aliases.range_stats = {}
         aliases.text_stats = {}
+        _stage = "value stats"
         vstats = await _load_value_stats_cached(
             space_id, conn=conn, conn_params=conn_params)
         # Freshness is decided per query, NOT cached with the histograms.
@@ -1224,13 +1233,15 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
             else:
                 col_sql = NUMERIC_TERM_COLUMN
                 val_sql = str(literal)
+            _stage = "range count (rdf_quad)"
             crows = await db.execute_query(
                 f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_rdf_quad q "
                 f"WHERE q.predicate_uuid = '{p_uuid}'::uuid AND q.object_uuid IN "
                 f"(SELECT term_uuid FROM {space_id}_term "
                 f" WHERE {col_sql} {op} {val_sql}) "
                 f"LIMIT {_PAIR_COUNT_CAP}) s",
-                conn=conn, conn_params=conn_params)
+                conn=conn, conn_params=conn_params,
+                lock_timeout_ms=STATS_LOCK_TIMEOUT_MS)
             n = crows[0]["n"] if crows else 0
             _pair_count_cache[ck] = n
             aliases.range_stats[(p_uuid, op, literal)] = n
@@ -1327,7 +1338,8 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                 rrows = await db.execute_query(
                     "SELECT reltuples::bigint AS n FROM pg_class "
                     "WHERE oid = to_regclass($1)",
-                    (f"{space_id}_term",), conn=conn, conn_params=conn_params)
+                    (f"{space_id}_term",), conn=conn, conn_params=conn_params,
+                    lock_timeout_ms=STATS_LOCK_TIMEOUT_MS)
                 n_terms = rrows[0]["n"] if rrows else None
                 # -1 is PostgreSQL's "never analyzed", not a row count.
                 aliases.term_rows = n_terms if (n_terms or 0) > 0 else None
@@ -1339,22 +1351,26 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
             if ck in _pair_count_cache:
                 aliases.text_stats[(p_uuid, cond)] = _pair_count_cache[ck]
                 continue
+            _stage = "text term count (term)"
             trows = await db.execute_query(
                 f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_term "
                 f"WHERE {cond} LIMIT {_TEXT_TERM_CAP}) s",
-                conn=conn, conn_params=conn_params)
+                conn=conn, conn_params=conn_params,
+                lock_timeout_ms=STATS_LOCK_TIMEOUT_MS)
             t_n = trows[0]["n"] if trows else 0
             if t_n >= _TEXT_TERM_CAP:
                 # Common. Record it as saturated-large so the gate reads it as
                 # "not selective" without a second, expensive count.
                 n = _TEXT_COUNT_CAP
             else:
+                _stage = "text count (rdf_quad)"
                 crows = await db.execute_query(
                     f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_rdf_quad q "
                     f"WHERE q.predicate_uuid = '{p_uuid}'::uuid AND q.object_uuid IN "
                     f"(SELECT term_uuid FROM {space_id}_term WHERE {cond}) "
                     f"LIMIT {_TEXT_COUNT_CAP}) s",
-                    conn=conn, conn_params=conn_params)
+                    conn=conn, conn_params=conn_params,
+                    lock_timeout_ms=STATS_LOCK_TIMEOUT_MS)
                 n = crows[0]["n"] if crows else 0
             _pair_count_cache[ck] = n
             aliases.text_stats[(p_uuid, cond)] = n
@@ -1383,8 +1399,16 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
         # This is only quiet enough to be a WARNING because the `still = []`
         # binding above stopped the per-query throw. The two changes belong
         # together: at WARNING without that fix, this floods the log.
-        logger.warning("semijoin gate: pair stats lookup failed, plan will be "
-                       "chosen without leaf statistics: %s", e, exc_info=True)
+        #
+        # NAMES THE READ AND THE TIME (`issues/255`). One handler wraps every
+        # read in this function, so the bare message could not say whether a
+        # lock timeout was a fenced read giving up at 100 ms or an unfenced one
+        # that had waited 10 s, and `264` had to recover the answer by matching
+        # timestamps against the maintenance log.
+        logger.warning("semijoin gate: pair stats lookup failed during %s after "
+                       "%.0f ms, plan will be chosen without leaf statistics: %s",
+                       _stage, (time.perf_counter() - _t0) * 1000, e,
+                       exc_info=True)
 
 
 _HALEY = "http://vital.ai/ontology/haley-ai-kg#"

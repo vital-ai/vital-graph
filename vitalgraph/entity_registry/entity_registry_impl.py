@@ -28,6 +28,7 @@ from .entity_alias_ops import AliasMixin
 from .entity_category_ops import CategoryMixin
 from .entity_changelog_ops import ChangeLogMixin
 from .entity_fuzzy import EntityFuzzyIndex, compute_entity_hash
+from .placeholder_names import resolve_placeholder_flag
 from .entity_fuzzy_pg import EntityFuzzyIndexPG
 from .entity_fuzzy_ops import FuzzyMixin
 from .entity_identifier_ops import (
@@ -214,9 +215,14 @@ class EntityRegistryImpl(
         aliases: Optional[List[Dict[str, Any]]] = None,
         identifiers: Optional[List[Dict[str, Any]]] = None,
         locations: Optional[List[Dict[str, Any]]] = None,
+        is_placeholder_name: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         Create a new entity with a generated unique ID.
+
+        `is_placeholder_name`: whether `primary_name` is an upstream placeholder
+        that must stay out of the fuzzy index (`issues/249`). None lets the
+        known-format policy decide; the resolved value is stored.
 
         Optionally creates initial aliases, identifiers, and locations
         in the same transaction.
@@ -234,7 +240,7 @@ class EntityRegistryImpl(
             locality=locality, website=website, latitude=latitude,
             longitude=longitude, created_by=created_by, notes=notes,
             metadata=metadata, aliases=aliases, identifiers=identifiers,
-            locations=locations)
+            locations=locations, is_placeholder_name=is_placeholder_name)
         type_id = None
         async with self.pool.acquire() as conn:
             try:
@@ -268,7 +274,7 @@ class EntityRegistryImpl(
         description=None, country=None, region=None, locality=None,
         website=None, latitude=None, longitude=None, created_by=None,
         notes=None, metadata=None, aliases=None, identifiers=None,
-        locations=None,
+        locations=None, is_placeholder_name=None,
     ):
         """The entity's ROWS, on the caller's connection and transaction.
 
@@ -293,12 +299,22 @@ class EntityRegistryImpl(
         if entity_id is None:
             raise RuntimeError("Failed to generate unique entity ID after 5 attempts")
 
+        # Resolved once and stored (`issues/249`): the writer's statement, or the
+        # known-format policy. Every index path then reads the stored value.
+        placeholder = resolve_placeholder_flag(primary_name, is_placeholder_name)
+
         # Compute fuzzy hash from the fields that will be indexed
-        alias_list = [
-            {'alias_name': a.get('alias_name', a.get('name', ''))} for a in (aliases or [])
-        ]
+        alias_list = []
+        for a in (aliases or []):
+            a_name = a.get('alias_name', a.get('name', ''))
+            alias_list.append({
+                'alias_name': a_name,
+                'is_placeholder_name': resolve_placeholder_flag(
+                    a_name, a.get('is_placeholder_name')),
+            })
         fuzzy_hash = compute_entity_hash({
             'type_key': type_key, 'primary_name': primary_name,
+            'is_placeholder_name': placeholder,
             'country': country, 'region': region, 'locality': locality,
             'aliases': alias_list,
         })
@@ -306,12 +322,12 @@ class EntityRegistryImpl(
         row = await conn.fetchrow(
             "INSERT INTO entity (entity_id, entity_type_id, primary_name, description, "
             "country, region, locality, website, latitude, longitude, "
-            "metadata, created_by, notes, fuzzy_hash) "
-            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14) "
+            "metadata, created_by, notes, fuzzy_hash, is_placeholder_name) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15) "
             "RETURNING *",
             entity_id, type_id, primary_name, description,
             country, region, locality, website, latitude, longitude,
-            metadata_json, created_by, notes, fuzzy_hash
+            metadata_json, created_by, notes, fuzzy_hash, placeholder
         )
         entity = dict(row)
         entity['entity_uri'] = entity_id_to_uri(entity_id)
@@ -536,9 +552,15 @@ class EntityRegistryImpl(
         metadata: Optional[Dict[str, Any]] = None,
         verified: Optional[bool] = None,
         verified_by: Optional[str] = None,
+        is_placeholder_name: Optional[bool] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Update entity fields. Only provided (non-None) fields are updated.
+
+        `is_placeholder_name` (`issues/249`): set explicitly to correct the
+        stored decision — e.g. a real name the policy misread. A new
+        `primary_name` without it is re-resolved by the known-format policy.
+        Either change re-indexes the entity.
 
         Returns:
             Updated entity dict, or None if entity not found.
@@ -547,6 +569,9 @@ class EntityRegistryImpl(
         fields = {}
         if primary_name is not None:
             fields['primary_name'] = primary_name
+        if is_placeholder_name is not None or primary_name is not None:
+            fields['is_placeholder_name'] = resolve_placeholder_flag(
+                primary_name, is_placeholder_name)
         if description is not None:
             fields['description'] = description
         if country is not None:
@@ -606,7 +631,8 @@ class EntityRegistryImpl(
         updated = await self.get_entity(entity_id)
 
         # Refresh fuzzy index and hash if name or location fields changed
-        fuzzy_fields = {'primary_name', 'country', 'region', 'locality'}
+        fuzzy_fields = {'primary_name', 'country', 'region', 'locality',
+                        'is_placeholder_name'}
         if updated and fuzzy_fields & set(fields.keys()):
             new_hash = compute_entity_hash(updated)
             async with self.pool.acquire() as conn:

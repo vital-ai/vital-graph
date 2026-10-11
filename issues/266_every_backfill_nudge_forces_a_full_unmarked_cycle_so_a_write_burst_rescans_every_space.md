@@ -1,6 +1,8 @@
 # 266 — Every backfill nudge forces a full, unmarked cycle, so a write burst rescans every space
 
-## Status: OPEN — found 2026-10-10 while improving the backfill task's logging;
+## Status: FIXED 2026-10-11 (uncommitted, not yet released).
+##
+## Found 2026-10-10 while improving the backfill task's logging;
 ## measured on production 2026-10-11. Background-work cost, `239` territory.
 ## Not a correctness defect: the forced cycles find nothing and change nothing.
 
@@ -79,3 +81,35 @@ apart and count forced cycles and the discovery/batch statements they issue,
 before and after. On production after deploy: a SPARQL-update burst like
 10-03's should show forced cycles at most every 30 s, and discovery only for the
 written space.
+
+## Fix, 2026-10-11
+
+`backfill_server_properties_task.py`. The single `_force_full_check` flag is now
+a PENDING force (set by nudges) and an ACTIVE one (snapshotted when a cycle
+starts):
+
+- **Coalesced.** A cycle takes the pending force at most once per
+  `BACKFILL_NUDGE_MIN_INTERVAL_S` (default 30 s). A nudge inside the window stays
+  pending; the idle loop sleeps out the rest of the window instead of waiting for
+  another nudge, so the last write of a burst is not left to the 30-minute
+  safety net.
+- **Scoped.** `nudge(space_id)` bypasses the discovery cache and completion
+  markers for that space only. The SPARQL insert/update endpoints and the import
+  manager now pass the space. A nudge with no space, a `NOTIFY` with no payload,
+  and startup still force every space.
+- **A mid-cycle nudge is no longer lost.** The old flag was cleared at the end of
+  every cycle, wiping a nudge that arrived during it, contrary to the comment
+  beside it. A nudge now lands in pending and is taken by the next cycle.
+
+Tests: `tests/unit/test_backfill_nudge_is_coalesced.py` (9). Replaying
+production's burst (one nudge every 3.4 s for ten minutes, a cycle after each)
+gives one forced cycle per 30 s window instead of one per nudge (176 nudges),
+while still forcing once in every window. Plus scoping, a held nudge honoured
+when its window ends, mid-cycle survival, `NOTIFY` payload scoping, startup
+force-all, and that both endpoints name the space. The existing backfill tests
+(`test_backfill_state.py`, `test_backfill_discovery_is_gated_on_writes.py`)
+were ported to the new state.
+
+Not measured live: forced-cycle counts under a real SPARQL burst on the test
+stack. After deploy, a burst like 10-03's should show forced cycles at most every
+30 s.

@@ -191,52 +191,6 @@ class KGTypesUpdateProcessor:
             self.logger.error(f"Error in batch KGType update operation: {e}")
             return []
     
-    async def kgtype_exists(self, backend, space_id: str, graph_id: str, kgtype_uri: str) -> bool:
-        """
-        Check if a KGType exists in the backend before updating.
-        
-        Args:
-            backend: Backend adapter instance
-            space_id: Space identifier
-            graph_id: Graph identifier (complete URI)
-            kgtype_uri: URI of the KGType to check
-            
-        Returns:
-            bool: True if KGType exists, False otherwise
-        """
-        try:
-            # Use SELECT query instead of ASK for more reliable existence checking
-            check_query = f"""
-            SELECT ?s WHERE {{
-                GRAPH <{graph_id}> {{
-                    <{kgtype_uri}> ?p ?o .
-                    BIND(<{kgtype_uri}> AS ?s)
-                }}
-            }} LIMIT 1
-            """
-            
-            self.logger.info(f"🔍 Checking KGType existence: {kgtype_uri}")
-            result = await backend.execute_sparql_query(space_id, check_query)
-            
-            # If we get any results, the KGType exists
-            if isinstance(result, list):
-                exists = len(result) > 0
-                self.logger.info(f"🔍 KGType existence check result: {exists} (found {len(result)} results)")
-                return exists
-            elif isinstance(result, dict):
-                # Some backends might return dict format
-                exists = bool(result)
-                self.logger.info(f"🔍 KGType existence check result: {exists}")
-                return exists
-            
-            # Default to False if we can't determine existence
-            self.logger.warning(f"Could not determine KGType existence for {kgtype_uri} - unexpected result format: {type(result)}")
-            return False
-            
-        except Exception as e:
-            self.logger.error(f"Error checking if KGType exists {kgtype_uri}: {e}")
-            return False
-    
     async def _build_delete_quads_for_kgtype(self, backend, space_id: str, graph_id: str, kgtype_uri: str) -> List[tuple]:
         """
         Build delete quads for existing KGType data that needs to be replaced.

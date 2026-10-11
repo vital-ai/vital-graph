@@ -8,6 +8,7 @@ Implements DELETE and batch DELETE operations with proper validation.
 import logging
 from typing import List, Dict, Any, Optional
 from .kg_backend_utils import KGBackendInterface
+from .kgtype_lookup import kgtype_exists
 
 
 class KGTypesDeleteProcessor:
@@ -113,42 +114,10 @@ class KGTypesDeleteProcessor:
             raise
     
     async def kgtype_exists(self, backend, space_id: str, graph_id: str, kgtype_uri: str) -> bool:
-        """
-        Check if a KGType exists in the backend.
-        
-        Args:
-            backend: Backend adapter instance
-            space_id: Space identifier
-            graph_id: Graph identifier (complete URI)
-            kgtype_uri: URI of the KGType to check
-            
-        Returns:
-            bool: True if KGType exists, False otherwise
-        """
-        try:
-            # Use SELECT query for reliable existence checking
-            check_query = f"""
-            SELECT ?s WHERE {{
-                GRAPH <{graph_id}> {{
-                    <{kgtype_uri}> ?p ?o .
-                    BIND(<{kgtype_uri}> AS ?s)
-                }}
-            }} LIMIT 1
-            """
-            
-            result = await backend.execute_sparql_query(space_id, check_query)
-            
-            # Handle dictionary response format from backend
-            if isinstance(result, dict):
-                result = result.get('results', {}).get('bindings', [])
-            
-            # If we get any results, the KGType exists
-            exists = result and len(result) > 0
-            return exists
-            
-        except Exception as e:
-            self.logger.error(f"Error checking if KGType exists {kgtype_uri}: {e}")
-            return False
+        """True if the KGType exists. RAISES `KGTypeLookupFailed` when the lookup
+        query fails — it used to read only the bindings, so a failed query
+        reported "not found" and the request answered success (`issues/261`)."""
+        return await kgtype_exists(backend, space_id, graph_id, kgtype_uri)
     
     async def _build_delete_quads_for_kgtype(self, backend, space_id: str, graph_id: str, kgtype_uri: str) -> List[tuple]:
         """
