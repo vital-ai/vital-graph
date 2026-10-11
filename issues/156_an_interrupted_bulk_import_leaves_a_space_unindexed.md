@@ -1,6 +1,6 @@
 # An Interrupted Bulk Import Leaves A Space Silently Unindexed
 
-## Status: FIXED 2026-10-11 (uncommitted), all three options.
+## Status: FIXED 2026-10-11 (`09ed0e33`, not yet released), all three options.
 ##
 ## Found 2026-09-04 on the vg-test stack, by doing it — three
 ## imports were killed mid-flight while choosing a dataset, and the space was

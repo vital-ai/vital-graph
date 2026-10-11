@@ -1,6 +1,6 @@
 # The Request Pool Has No Bulkhead, No Fan-Out Bound, And Is Sized Above The Box
 
-## Status: CLOSED 2026-10-11 — the leak is fixed (uncommitted); steps 3-5 have no
+## Status: CLOSED 2026-10-11 — the leak is fixed (`09ed0e33`, not yet released); steps 3-5 have no
 ## measured case in production and are not built, per this issue's own rule.
 ##
 ## Was: IN PROGRESS — steps 1 and 2 landed 2026-09-24 with tests; steps 3-5

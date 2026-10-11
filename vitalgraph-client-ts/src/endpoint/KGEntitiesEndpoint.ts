@@ -293,6 +293,16 @@ export class KGEntitiesEndpoint extends BaseEndpoint {
     });
   }
 
+  /**
+   * One count per entity type, labelled by the type URI.
+   *
+   * The server's body is `{ space_id, graph_id, count_requests: [{ label, ... }] }`.
+   * This used to send `{ entity_type_uris }` with the ids as query params, which
+   * the server rejects as a validation error before counting anything. A label
+   * whose count failed carries `error` in the response, and the response status
+   * is `partial` (some failed) or `query_failed` (all failed) — its `count` is
+   * then NOT a zero result (vital-graph issues/228).
+   */
   async batchCount(
     spaceId: string,
     graphId: string,
@@ -300,8 +310,11 @@ export class KGEntitiesEndpoint extends BaseEndpoint {
   ): Promise<VitalGraphResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId });
     return this.request('POST', '/api/graphs/kgentities/counts', {
-      params: { space_id: spaceId, graph_id: graphId },
-      json: { entity_type_uris: entityTypeUris },
+      json: {
+        space_id: spaceId,
+        graph_id: graphId,
+        count_requests: entityTypeUris.map((uri) => ({ label: uri, entity_type_uri: uri })),
+      },
     });
   }
 }

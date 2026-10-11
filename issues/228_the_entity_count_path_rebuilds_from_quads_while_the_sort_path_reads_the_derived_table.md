@@ -1,6 +1,6 @@
 # The Entity Count Path Rebuilds From Quads While The Sort Path Reads The Derived Table
 
-## Status: FIXED 2026-10-11 (uncommitted).
+## Status: FIXED 2026-10-11 (`09ed0e33`, not yet released).
 ##
 ## Found: measured on production.
 ##
@@ -159,3 +159,32 @@ served from the table; the table agrees with the SPARQL count; a failed count is
 `partial`. Five fail against the old endpoint (the agreement test passes on
 both, as it should). `tests/api/test_kgentities_api.py -k count` (3) pass
 against the rebuilt test app.
+
+## Clients, 2026-10-11 (uncommitted, not yet released)
+
+Checked after `09ed0e33`. No client code had changed since 0.0.46, but the
+server change reached both clients:
+
+- **Python client, `count_kgentities` — fixed.** It returns a bare int, read as
+  `data.get("count", 0)`. A cancelled count used to be an HTTP 500, which
+  `_make_request` raised; after `09ed0e33` it is HTTP 200 `query_failed` with
+  `count: 0`, so **the client would have returned 0 for a failed count**,
+  the defect this issue fixed on the server, moved into the client. It now
+  raises `VitalGraphClientError` when the body says `success: false`, which is
+  what its callers got before. `batch_count_kgentities` returns the label dicts
+  (each now carries `error`) and raises only when EVERY count failed
+  (`query_failed`); a `partial` batch returns the list. The new optional
+  `EntityLabelCount.error` reaches the client through the shared model.
+  Test: `tests/unit/test_client_count_failure_is_not_zero.py` (4; both failure
+  cases fail against the previous client).
+- **TypeScript client, `kgentities.batchCount` — was broken, fixed.** It sent
+  `{ entity_type_uris }` with the ids as query params; the server's body is
+  `{ space_id, graph_id, count_requests: [{ label, ... }] }`, so every call was
+  rejected with HTTP 422 before counting anything. This predates this issue and
+  any recent release. Verified against the test server: the old body returns 422
+  (`space_id`, `count_requests` missing), and the new body returns 200 with the
+  100,000-entity count. It now sends one count request per type URI, labelled by
+  the URI. Test: `vitalgraph-client-ts/tests/unit/batch-count.test.ts` (fails
+  against the old code); all 72 TS unit tests pass and `tsc --noEmit` is clean.
+  The TS `count` returns the whole response, so its callers already see
+  `status`. Needs a TS client release (package 0.1.4 → next) to reach users.

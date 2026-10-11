@@ -1714,6 +1714,14 @@ class KGEntitiesEndpoint(BaseEndpoint):
         )
         response = await self._make_request('GET', url, params=params)
         data = response.json()
+        # A FAILED COUNT IS NOT ZERO (`issues/228`). The server used to answer a
+        # cancelled count with HTTP 500, which `_make_request` raised; it now
+        # answers HTTP 200 with `status=query_failed` and `count: 0`, so reading
+        # only `count` would turn a failure into a confident zero. Raise, as the
+        # 500 did, so callers of this int-returning method see no change.
+        if data.get("success") is False:
+            raise VitalGraphClientError(
+                f"Entity count failed ({data.get('status')}): {data.get('message')}")
         return data.get("count", 0)
     
     async def batch_count_kgentities(
@@ -1733,7 +1741,13 @@ class KGEntitiesEndpoint(BaseEndpoint):
                  created_after, created_before, modified_after, modified_before)
         
         Returns:
-            List of {'label': str, 'count': int} dicts.
+            List of {'label': str, 'count': int, 'error': str | None} dicts. A
+            label whose count could not be computed has `error` set and its
+            `count` is NOT a zero result (`issues/228`); some labels may succeed
+            while others fail (server status `partial`).
+
+        Raises:
+            VitalGraphClientError: if every count failed (`query_failed`).
         """
         self._check_connection()
         validate_required_params(space_id=space_id, graph_id=graph_id)
@@ -1747,4 +1761,6 @@ class KGEntitiesEndpoint(BaseEndpoint):
         # Read-only count aggregation expressed as a POST — safe to replay.
         response = await self._make_request('POST', url, json=body, idempotent=True)
         data = response.json()
+        if data.get("status") == "query_failed":
+            raise VitalGraphClientError(f"Every entity count failed: {data.get('message')}")
         return data.get("counts", [])
