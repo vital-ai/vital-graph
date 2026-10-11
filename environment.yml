@@ -1,0 +1,25 @@
+name: vital-graph
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  # Python version
+  - python=3.12
+
+  # Core dependencies
+  - pip
+  - setuptools>=64
+  - wheel
+
+  # System dependencies for PostgreSQL and other native libraries
+  - postgresql
+  - libpq
+
+  # Python packages come from pyproject.toml, the single source of truth.
+  # `all` = client + server + dev + test + docs: everything this development
+  # env runs. This file used to list them by hand, and the copy drifted: it
+  # never had mammoth/pdfplumber (6 converter tests failed), black/flake8/mypy/
+  # pre-commit/sentencepiece were absent, and vitalsigns/aiofiles sat below the
+  # floors pyproject declares. Add a dependency to pyproject.toml, not here.
+  - pip:
+      - -e .[all]
