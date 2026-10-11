@@ -247,6 +247,10 @@ async def cmd_rebuild(pool, num_perm: int = 64, threshold: float = 0.3,
         if ddl:
             print(f"  load done in {time.time() - start:.0f}s; restoring band indexes")
             await _restore_band_indexes(pool, ddl)
+            # Only a crash between the drop and here needs the saved DDL. A
+            # failed restore raises above and leaves the file in place.
+            saved.unlink(missing_ok=True)
+            print(f"  all {len(ddl)} band indexes restored; removed {saved.name}")
     duration = time.time() - start
 
     from vitalgraph.entity_registry.entity_fuzzy_storage import (

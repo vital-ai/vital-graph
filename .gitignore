@@ -349,3 +349,7 @@ vitalgraph-jena-sidecar/dependency-reduced-pom.xml
 # the repository. They are run artefacts, never source.
 .archive_state/
 .delete_state/
+
+# Saved band-index DDL from a bulk fuzzy rebuild that did not finish its restore
+# (apps/fuzzy_index/migrate_fuzzy_redis_to_pg.py); run it to put the indexes back.
+fuzzy_band_indexes_*.sql

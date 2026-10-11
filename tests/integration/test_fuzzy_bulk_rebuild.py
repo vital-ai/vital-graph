@@ -94,6 +94,8 @@ async def test_bulk_and_in_place_rebuilds_agree(scratch_pool):
     assert ddl_bulk == ddl_in_place
     assert all(bands_bulk[t] for t in mod.BAND_TABLES), "the rebuild indexed nothing"
     assert bands_bulk == bands_in_place
+    assert not list(Path.cwd().glob("fuzzy_band_indexes_*.sql")), \
+        "the saved DDL outlived a successful restore"
 
 
 async def test_a_concurrent_duplicate_does_not_block_the_primary_key(scratch_pool):
@@ -128,3 +130,5 @@ async def test_a_failed_load_still_restores_the_indexes(scratch_pool, monkeypatc
         await mod.cmd_rebuild(scratch_pool, bulk=True)
     ddl_after, _ = await _state(scratch_pool, mod)
     assert ddl_after == ddl_before
+    # the restore succeeded, so its safety net is no longer needed
+    assert not list(Path.cwd().glob("fuzzy_band_indexes_*.sql"))
