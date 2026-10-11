@@ -1,13 +1,62 @@
 # 250 — A nested frame graph returns the child frame and none of its slots
 
-## Status: OPTION 3 DONE 2026-09-29 — both connection arms are now typed to
-## `Edge_hasKGSlot`, so the child-frame stub is gone and the documented contract
-## ("does NOT include child frames") is true rather than half-applied.
-## THE TRAVERSAL QUESTION IS STILL OPEN: a nested frame's slots are still not
-## returned. This made the current behaviour honest; it did not make it complete.
+## Status: RESOLVED. The fix shipped 2026-09-29 (both connection arms typed to
+## `Edge_hasKGSlot`), and the question this issue left open was DECIDED AGAINST
+## four days later. Nothing is outstanding.
 ##
 ## NOT introduced by `issues/240` — the batched query preserved the singular
 ## contract exactly, which is what the equivalence test pins.
+
+## The open question was settled on 2026-10-03, and the answer is "shallow"
+
+This issue shipped option 3 and left options 1 and 2 — traverse
+`Edge_hasKGFrame` transitively, or one extra level — as a live choice, calling
+the shallow result "honest but not complete".
+
+**That framing is withdrawn.** `issues/256` decided, and `issues/257` states, the
+rule that settles it:
+
+> `hasFrameGraphURI` IS the definition of a frame graph. [...] an
+> `Edge_hasKGFrame` (parent -> child) and an `Edge_hasEntityKGFrame` have NONE:
+> structural links are in no frame's graph (decided 2026-10-03).
+>
+> Nothing a frame does not own carries its grouping. That is what keeps
+> `update` shallow and makes `replace` the only subtree operation.
+
+So a frame graph is shallow BY DEFINITION, and a child frame's slots are not
+missing from the parent's graph — they were never in it. The typed arms are not
+an approximation of a traversal still owed; **they are the rule**, arrived at
+independently and four days early. A transitive read would now CONTRADICT the
+data model. Options 1 and 2 are withdrawn, not deferred.
+
+What survives from the original report is the half-applied part, and that is
+exactly what was fixed: the untyped arms grouped a structural `Edge_hasKGFrame`
+and its destination into the parent's graph, which the rule says belongs to no
+frame's graph at all.
+
+**If a consumer needs to render a hierarchy**, that is a subtree READ operation
+and there is none — `replace` and recursive delete are the only subtree
+operations today. That is a feature request against the rule, not this defect,
+and it should be filed on its own evidence of a caller that needs it.
+
+## One dead implementation still does the wrong thing
+
+`delete_frame_graph` / `_build_frame_graph_delete_query`
+(`kgframe_graph_impl.py:161` and `:395`) deletes `?childFrame`'s triples and the
+parent -> child edge while binding NOTHING for the child's own slots — a
+half-cascade that would leave them pointing at a deleted frame, and a grouping
+the 2026-10-03 rule forbids outright.
+
+**It is dead.** Its only caller is `kgframes_endpoint._delete_frame_graph`
+(`:2855`), which has no callers itself; the live `DELETE /kgframes` route goes
+through `frame_delete.delete_frames` -> `delete_frame_subtrees`, which takes an
+explicit `recursive` flag and refuses a frame with children when it is false.
+`issues/212` covers the orphaning on the live path and records it cannot recur.
+
+Left as-is rather than removed, because deletion of a delete path deserves its
+own change and its own issue — this is the `issues/240` dead-helper pattern
+(a wrong implementation sitting beside the right one), noted here so whoever
+removes it has the reason to hand.
 
 ## What was done
 

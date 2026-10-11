@@ -1,5 +1,6 @@
 # 254 — Entity fuzzy queries pay for an empty visibility map, and for an early stop that never fires
 
+## ARCHIVED 2026-10-11 — cause 1 (VACUUM) done on production; cause 2 (the early stop) fixed by reading every band in one statement, verified on a 1.04M-entity registry: 0 of 600 typo targets missed (was 3), 7 statements to 1, faster locally. Nothing remaining but post-deploy validation. Evidence: the last section.
 ## Status: CAUSE 1 DONE 2026-10-11 — the VACUUM ran on production. Cause 2 (the early
 ## stop) MEASURED 2026-10-11 on a 1.04M-entity registry: fires on 4.8% of queries, cost
 ## 1 target in 200; undecided, see the end.
@@ -203,3 +204,32 @@ What this settles and what it does not:
   `scale_registry_248.py measure` before and after.
 
 Still open. Not changed here.
+
+## Cause 2 FIXED 2026-10-11 — every band, one statement per stage
+
+`get_candidate_ids` now reads all of a stage's bands in one `query_bands` call,
+and `query_bands_progressive` is gone. No threshold to tune: the early stop is
+removed rather than retuned, because on production it saved nothing (every query
+read all 7 batches) and where it fired it cost recall.
+
+Measured on the 1.04M-entity registry (post-248/249 index, 806 planted queries),
+3 alternating runs of each against HEAD:
+
+| | progressive (before) | one statement |
+|---|---|---|
+| typo targets missed | 3 of 600 | **0** |
+| identical-name pairs found | 200/200 | 200/200 |
+| statements per query, median / max | 7 / 14 | **1 / 2** |
+| ms per query, median (3 runs, local, no RTT) | 15.1-16.9 | **10.4-12.0** |
+| ms per query, p90 | 48-59 | **41-49** |
+
+The only result changes are the three recovered queries. Faster even locally;
+in production each removed statement is also a round trip (~26 ms measured
+above), so a typical query should drop by roughly 6 of them.
+`tests/unit/test_fuzzy_candidates_read_every_band.py` pins it (one statement for
+all primary bands; the target reachable only through later bands is found);
+both tests fail on the previous code.
+
+Remaining here is production validation, not work: re-measure `find_similar`
+after the deploy, the post-rebuild VACUUM (deploy step 9), and an in-region
+number if wanted.

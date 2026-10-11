@@ -238,12 +238,26 @@ class KGFrameGraphProcessor:
         only `Edge_hasKGSlot` and `Edge_hasKGFrame` can leave a frame at all
         (`Edge_hasEntityKGFrame` runs entity->frame).
 
-        THE FILTER IS ON `vital:vitaltype`, NOT `rdf:type`, and that is not
-        interchangeable here. `vitaltype` is the single-valued type URI this
-        codebase counts on and the predicate `kg_query_builder` already uses to
-        type a slot edge. Anchoring on the wrong one would match nothing and
-        return every connection frame as slotless — silently, for the same
-        reason a missing arm is silent.
+        THE FILTER IS ON `vital:vitaltype` BY CONVENTION, not by necessity.
+        `vitaltype` is the single-valued type URI this codebase counts on and the
+        predicate `kg_query_builder.py:976` already uses to type a slot edge.
+
+        Corrected 2026-10-11: this said the two were "not interchangeable" and
+        that `rdf:type` "would match nothing". Both false — every edge carries
+        BOTH, in identical numbers (1,356,591 `Edge_hasKGSlot`, 5,741
+        `Edge_hasKGFrame`), and `_build_frame_graph_delete_query` below types its
+        edges with `rdf:type`. Use `vitaltype` to match its neighbours; do not
+        believe `rdf:type` is broken.
+
+        AND THE EXCLUSION OF CHILD FRAMES IS NOW THE DEFINITION, not a scope
+        limit. `hasFrameGraphURI` IS a frame graph (decided 2026-10-03,
+        `issues/256`, stated in `issues/257`): a `KGFrame` is grouped with
+        itself, a slot and its `Edge_hasKGSlot` with their frame, and a parent ->
+        child `Edge_hasKGFrame` is grouped with NOTHING — structural links are in
+        no frame's graph. So these typed arms are not an approximation of a
+        deeper traversal that is still owed; they are the rule. A subtree read
+        would contradict it, and `replace` plus recursive delete are the only
+        subtree operations.
 
         Args:
             frame_uri: Frame URI
