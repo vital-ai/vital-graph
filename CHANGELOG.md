@@ -2,6 +2,92 @@
 
 Notable changes per release. Dates are the release date, not the first commit.
 
+## 0.0.47 — 2026-10-11
+
+17 commits since 0.0.46, 10 of them code, build or test changes. One maintenance runner instead of two,
+count endpoints served from the derived table, the fuzzy index's placeholder and
+location fixes with a faster rebuild, and a batch of correctness fixes. **Run the
+registry migration BEFORE deploying the server, and the full fuzzy rebuild
+straight after it.** Move `count_kgentities` callers to this client with the
+deploy (below).
+
+### Changed — behaviour a caller will see (server)
+
+- **`/kgentities/count` and the batch count** are served from `entity_prop_sort`
+  when filtered by type, status or dates (85k matches: ~1.0 s → 25-80 ms). A
+  failed count is **HTTP 200 `status=query_failed`** (was HTTP 500, as the listing
+  already answered). In a batch, a failed label carries `error` and the batch is
+  `partial` (or `query_failed` if every label failed); it was `count: 0` and
+  `found` (`issues/228`).
+- **KGType create/delete whose existence lookup fails answers `store_failed`.**
+  A delete used to answer "No KGTypes found" (success) and delete nothing
+  (`issues/261`).
+- **`find_similar` never returns a `company-<digits>` placeholder**, and a
+  placeholder query returns `[]` (was ten confident wrong matches). An entity
+  with a placeholder name and a real alias stays findable by the alias
+  (`issues/249`).
+- **Location no longer decides which names are candidates**; it breaks ties
+  between equal scores. Scores, match levels and `min_score` are unchanged;
+  `score_detail` gains `geo_agreement` (0-3) (`issues/248`).
+- **Fuzzy candidates read every band in one statement.** The early stop that
+  missed real matches on common-word names is gone: on a 1.04M-entity registry,
+  0 of 600 typo targets missed (was 3), one statement per stage instead of up to
+  seven round trips (`issues/254`).
+- **A SPARQL UPDATE binding one new term on many rows** no longer fails on a
+  duplicate key; terms it mints are inserted in `term_uuid` order, like every
+  other writer (`issues/152`).
+
+### Added — server
+
+- Registry entity/alias requests accept optional `is_placeholder_name` (omit:
+  the server decides from the known formats); responses carry it. CLI
+  `create-entity`, `update-entity`, `add-alias` accept `--placeholder`.
+- Failed logins log why (`invalid_credentials`, `bootstrap_retired`,
+  `bootstrap_unavailable`, `user_not_found`); `auth.bootstrap.used` is DEBUG.
+
+### Fixed — server
+
+- **Maintenance ran on every instance.** One instance now holds the
+  `db_maintenance` lock and runs each cycle; the others stand by. `metrics_rollup`
+  and `space_analytics` are single-runner too (`issues/264`).
+- The stats recompute no longer `TRUNCATE`s `rdf_stats` under planner reads
+  (`issues/264`); the planner's pair-stats reads are all fenced at 100 ms
+  (`issues/255`), and value-stats freshness runs only for a query's range
+  predicates (boot warm-up 7.7 s → ms).
+- The `frame_slot` sweep deleted valid value-slot rows; a residue gap below the
+  backfill threshold now self-heals after 3 cycles (`issues/265`, `issues/263`).
+- A backfill nudge forced a full unmarked cycle per write; nudges now coalesce to
+  one forced cycle per 30 s window, scoped to the space written
+  (`BACKFILL_NUDGE_MIN_INTERVAL_S`) (`issues/266`).
+- A bulk import restores its indexes even when cancelled; maintenance warns about
+  a space missing schema indexes (`issues/156`). A transaction-path connection
+  leak is fixed (`issues/231`).
+
+### Client
+
+- **Python `count_kgentities` raises `VitalGraphClientError` on a failed count**
+  instead of returning `0`. An older client against the new server reads a failed
+  count as zero, because the server now answers HTTP 200 `query_failed`.
+  `batch_count_kgentities` returns labels carrying `error`; it raises only if
+  every label failed.
+- **TypeScript client 0.1.5: `kgentities.batchCount`** sends the body the server
+  expects; it was rejected with HTTP 422 against every server version.
+
+### Operations
+
+- **Migration first:** `apps/entity_registry/migrate.py --migrate-only` adds
+  `is_placeholder_name` to `entity` and `entity_alias` (with a one-time backfill).
+  Without it every entity create fails on the new code.
+- **Full fuzzy rebuild after the deploy:** every band changes (`248`, `249`).
+  `apps/fuzzy_index/migrate_fuzzy_redis_to_pg.py --rebuild` now drops the band
+  tables' indexes for the load and recreates them (DDL saved first, restored even
+  on failure; `--no-bulk` for the old path): 15 min for a 1.04M-entity registry
+  where row-by-row maintenance ran for hours. Fuzzy matching is empty while it
+  runs. `VACUUM (ANALYZE)` the band and hash tables afterwards.
+- Packaging: the FastAPI floor is `>=0.143.0` in the `server` and `dev` extras;
+  the dev extra installs the fuzzy index's imports. Base and `client`
+  dependencies are unchanged.
+
 ## 0.0.46 — 2026-10-04
 
 4 commits since 0.0.45 (same day), one of them code. Frame `create` and entity-
