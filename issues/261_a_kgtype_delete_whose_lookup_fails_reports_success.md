@@ -1,6 +1,6 @@
 # 261 — A KGType delete whose lookup query fails reports success
 
-## Status: FIXED 2026-10-11 (uncommitted, not yet released).
+## Status: FIXED 2026-10-11 (`85b5dfa3`, not yet released).
 ##
 ## Found, filed 2026-10-04. Found on dev, not fixed.
 

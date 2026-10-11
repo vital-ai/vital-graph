@@ -1,6 +1,6 @@
 # 248 — Folding geo into the name shingles loses the match it is meant to help find
 
-## Status: FIXED IN CODE 2026-10-11 (uncommitted, not yet released), option 1. Needs a
+## Status: FIXED IN CODE 2026-10-11 (`85b5dfa3`, not yet released), option 1. Needs a
 ## full fuzzy rebuild straight after deploy — the bands change.
 ##
 ## Found: measured 2026-09-29. The dedup question itself is ANSWERED AND

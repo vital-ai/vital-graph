@@ -1,6 +1,6 @@
 # 266 — Every backfill nudge forces a full, unmarked cycle, so a write burst rescans every space
 
-## Status: FIXED 2026-10-11 (uncommitted, not yet released).
+## Status: FIXED 2026-10-11 (`85b5dfa3`, not yet released).
 ##
 ## Found 2026-10-10 while improving the backfill task's logging;
 ## measured on production 2026-10-11. Background-work cost, `239` territory.

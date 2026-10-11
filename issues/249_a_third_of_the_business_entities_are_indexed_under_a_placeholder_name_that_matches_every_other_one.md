@@ -1,6 +1,6 @@
 # 249 — A third of the business entities are indexed under a placeholder name, and every one of them is a match for every other one
 
-## Status: FIXED IN CODE 2026-10-11 (uncommitted, not yet released). Production needs
+## Status: FIXED IN CODE 2026-10-11 (`85b5dfa3`, not yet released). Production needs
 ## the registry migration BEFORE the code, then a full fuzzy rebuild — see "Rollout".
 ##
 ## Found: measured 2026-09-29, NOT BUILT. **Decided: these strings must

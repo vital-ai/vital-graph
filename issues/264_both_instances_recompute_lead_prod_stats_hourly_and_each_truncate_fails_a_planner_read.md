@@ -201,7 +201,7 @@ Not changed: `space_analytics` and `metrics_rollup` are registered the same way
 and presumably also run once per instance. They are now one keyword argument
 away from the same fix, but were not measured here.
 
-## The other scheduled jobs, measured 2026-10-11 (uncommitted, not yet released)
+## The other scheduled jobs, measured 2026-10-11 (`85b5dfa3`, not yet released)
 
 Production, 2026-10-01 to 10-11:
 

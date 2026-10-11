@@ -1,6 +1,6 @@
 # 255 — `_load_missing_pair_stats` has one unfenced read, and its own cost is unmeasured
 
-## Status: FIXED 2026-10-11, items 1 and 2 (uncommitted, not yet released). Item 3,
+## Status: FIXED 2026-10-11, items 1 and 2 (`85b5dfa3`, not yet released). Item 3,
 ## measuring the loader's 7,710 ms, is still open.
 ##
 ## Found: filed 2026-10-02 from a production monitoring review. Nothing
