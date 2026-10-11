@@ -51,6 +51,7 @@ load_dotenv(project_root / '.env')
 import asyncpg                                                   # noqa: E402
 
 from vitalgraph.config.config_loader import VitalGraphConfig     # noqa: E402
+from vitalgraph.entity_registry.entity_fuzzy import EntityFuzzyIndex  # noqa: E402
 from vitalgraph.entity_registry.entity_fuzzy_pg import EntityFuzzyIndexPG  # noqa: E402
 from vitalgraph.vectorization.fuzzy_core import (                # noqa: E402
     compute_shingles, score_pair)
@@ -166,65 +167,64 @@ def check_known_misses(res, k):
 # B and C — the geo defect, at candidate-generation and at scoring time.
 # ---------------------------------------------------------------------------
 
+def _index_shingles(name, geo):
+    """The shingles the index ACTUALLY builds for a name, in both backends.
+
+    Measured through `_name_shingles`, not `compute_shingles(context_tokens=)`:
+    that function still accepts geo, but since `issues/248` the index no longer
+    passes it, so testing it directly would report the defect on fixed code.
+    Returns the PG backend's set after asserting the in-memory one agrees.
+    """
+    entity = dict(primary_name=name, **geo)
+    pg = EntityFuzzyIndexPG.__new__(EntityFuzzyIndexPG)
+    EntityFuzzyIndexPG.__init__(pg, pool=None)
+    mem = EntityFuzzyIndex()
+    a, b = pg._name_shingles(name, entity), mem._name_shingles(name, entity)
+    if a != b:
+        raise AssertionError(f"the two backends shingle {name!r} differently")
+    return a
+
+
 def check_geo_compression(res, k):
-    print("\nB. Geo is three fixed shingles, so it compresses similarity toward 1")
+    print("\nB. Geo must not change candidate generation (issues/248, fixed)")
     print(LINE)
-    # The documented shape: a typo pair that name alone separates, and geo does
-    # not. Measured on shingles, so it needs no index: this is WHY the candidate
-    # set grew 8.9x and lost the target, not merely that it did.
+    # The documented shape: a typo pair that name alone separates. With geo in
+    # the shingles, shared location pulled every pair toward 1 and let the
+    # adaptive cut drop the target (+0.063 here before the fix).
     name_a, name_b = 'Aur Trdaing Corp', 'Aur Trading Corp'
     geo = {'country': 'US', 'region': 'FL', 'locality': 'Miami'}
 
-    plain_a, plain_b = compute_shingles(name_a, k), compute_shingles(name_b, k)
-    j_plain = len(plain_a & plain_b) / max(1, len(plain_a | plain_b))
+    def j(ga, gb):
+        sa, sb = _index_shingles(name_a, ga), _index_shingles(name_b, gb)
+        return len(sa & sb) / max(1, len(sa | sb))
 
-    geo_a = compute_shingles(name_a, k, context_tokens=geo)
-    geo_b = compute_shingles(name_b, k, context_tokens=geo)
-    j_geo = len(geo_a & geo_b) / max(1, len(geo_a | geo_b))
-
-    res.add(f"name only: jaccard {j_plain:.3f}", 'INFO')
-    res.add(f"name + geo: jaccard {j_geo:.3f}", 'INFO')
-    res.known("adding geo RAISES the similarity of a typo pair",
-              j_geo > j_plain,
-              f"+{j_geo - j_plain:.3f} — every pair sharing geo is pulled "
-              f"toward 1, which is what lets the adaptive cut drop the target",
-              "geo no longer compresses similarity: the fix may have landed")
+    j_plain, j_geo = j({}, {}), j(geo, geo)
+    res.add(f"name only: jaccard {j_plain:.3f}; with shared geo: {j_geo:.3f}", 'INFO')
+    res.add("shared geo does not raise a typo pair's similarity",
+            'PASS' if abs(j_geo - j_plain) < 1e-9 else 'FAIL',
+            "geo is out of the name shingles" if abs(j_geo - j_plain) < 1e-9 else
+            f"+{j_geo - j_plain:.3f}: geo is back in the shingles — issues/248 regressed")
 
 
 def check_geo_penalty(res):
-    print("\nC. Geo that is MISSING or DISAGREES penalises a true pair")
+    print("\nC. Missing or disagreeing geo must not penalise a true pair (issues/248, fixed)")
     print(LINE)
     same = 'Identical Holdings LLC'
 
     def score(a_geo, b_geo):
-        sa = compute_shingles(same, EXPECTED_CONFIG['shingle_k'], context_tokens=a_geo)
-        sb = compute_shingles(same, EXPECTED_CONFIG['shingle_k'], context_tokens=b_geo)
+        sa, sb = _index_shingles(same, a_geo), _index_shingles(same, b_geo)
         return len(sa & sb) / max(1, len(sa | sb))
 
     full = {'country': 'US', 'region': 'FL', 'locality': 'Miami'}
     partial = {'country': 'US', 'region': 'FL'}            # locality missing
     other = {'country': 'US', 'region': 'TX', 'locality': 'Austin'}
-    none_ = {}
 
-    j_full = score(full, full)
-    j_missing = score(full, partial)
-    j_disagree = score(full, other)
-    j_none = score(none_, none_)
-
-    res.add(f"identical name, identical geo: {j_full:.3f}", 'INFO')
-    # Both are `248`'s open defect, not regressions: an incomplete record and a
-    # disagreeing one are each penalised against an identical NAME. They flip to
-    # FIXED when geo moves out of `_name_shingles`.
-    res.known(f"identical name, one geo field MISSING: {j_missing:.3f}",
-              j_missing < j_none - 0.001,
-              f"penalised below the no-geo baseline of {j_none:.3f} — "
-              f"issues/248, an incomplete record should not cost recall",
-              "an incomplete record no longer scores below the no-geo baseline")
-    res.known(f"identical name, geo DISAGREES: {j_disagree:.3f}",
-              j_disagree < j_none - 0.001,
-              f"penalised below the no-geo baseline of {j_none:.3f} — "
-              f"issues/248's 0.478 case",
-              "a disagreeing geo no longer penalises an identical name")
+    for label, val in (("one geo field MISSING", score(full, partial)),
+                       ("geo DISAGREES", score(full, other))):
+        ok = abs(val - 1.0) < 1e-9
+        res.add(f"identical name, {label}: {val:.3f}", 'PASS' if ok else 'FAIL',
+                "an identical name stays identical" if ok else
+                "penalised below 1.000 — geo is back in the shingles, issues/248 regressed")
 
 
 # ---------------------------------------------------------------------------
@@ -318,35 +318,48 @@ async def check_cluster_recall(res, pool, idx, want):
 # ---------------------------------------------------------------------------
 
 async def check_placeholder_clique(res, pool):
-    print("\nE. Placeholder names in the index (issues/249)")
+    """Placeholder names must be OUT OF THE INDEX (`issues/249`, fixed).
+
+    Counts in the INDEX, not the entity table: placeholder entities stay in the
+    registry by design, flagged `is_placeholder_name` and kept out of the bands.
+    Samples placeholder entities with no real alias (an entity with a real alias
+    is rightly indexed by it) and counts their band rows, which must be 0. Before
+    the post-deploy rebuild the old bands are still there, so run it after.
+    """
+    print("\nE. Placeholder names are out of the index (issues/249, fixed)")
     print(LINE)
     async with pool.acquire() as conn:
-        total = await conn.fetchval(
-            "SELECT count(*) FROM entity e JOIN entity_type et "
-            "ON e.entity_type_id = et.type_id "
-            "WHERE e.status = 'active' AND et.type_key = 'business'")
-        placeholder = await conn.fetchval(
-            "SELECT count(*) FROM entity e JOIN entity_type et "
-            "ON e.entity_type_id = et.type_id "
-            "WHERE e.status = 'active' AND et.type_key = 'business' "
-            "AND e.primary_name ~ '^company-[0-9]+$'")
-    if not total:
-        res.add("placeholder share", 'SKIP', "no active business entities")
-        return
-
-    pct = 100.0 * placeholder / total
-    res.add(f"{placeholder:,} of {total:,} active business entities are "
-            f"`company-<digits>` ({pct:.1f}%)",
-            'INFO',
-            "issues/249 measured 209,580 of 643,791 = 32.6% on 2026-09-29")
-    # Not a FAIL: `249` is OPEN and decided-but-unbuilt, so a nonzero count is
-    # the expected state. It becomes a PASS when the fix lands and this drops to
-    # zero IN THE INDEX — which is the thing to re-check then.
-    res.known("placeholder names are still in the index (issues/249)",
-              placeholder > 0,
-              f"{placeholder:,} of them, in a single phonetic cell — decided, "
-              f"unbuilt; see issues/249 §2",
-              "no placeholder names remain: issues/249 appears to be built")
+        has_col = await conn.fetchval(
+            "SELECT 1 FROM information_schema.columns WHERE table_name = 'entity' "
+            "AND column_name = 'is_placeholder_name'")
+        if not has_col:
+            res.add("placeholder flag", 'SKIP',
+                    "entity.is_placeholder_name is missing — the registry migration "
+                    "has not run on this database")
+            return
+        flagged = await conn.fetchval(
+            "SELECT count(*) FROM entity WHERE status = 'active' AND is_placeholder_name")
+        sample = [r[0] for r in await conn.fetch(
+            "SELECT e.entity_id FROM entity e WHERE e.status = 'active' "
+            "AND e.is_placeholder_name AND NOT EXISTS (SELECT 1 FROM entity_alias a "
+            "WHERE a.entity_id = e.entity_id AND a.status = 'active' "
+            "AND NOT a.is_placeholder_name) LIMIT 200")]
+        res.add(f"{flagged:,} active entities flagged as placeholder names", 'INFO',
+                "production had 212,490 named `company-<digits>` on 2026-10-11")
+        if not sample:
+            res.add("placeholder entities in the index", 'SKIP',
+                    "no placeholder-only entities to sample here")
+            return
+        # `split_part(entity_key, '::', 1)` is the entity-id expression
+        # `idx_fuzzy_band_entity_id` indexes, so this is an index lookup.
+        rows = await conn.fetchval(
+            "SELECT count(*) FROM entity_fuzzy_band "
+            "WHERE split_part(entity_key, '::', 1) = ANY($1::text[])", sample)
+    res.add(f"band rows for {len(sample)} sampled placeholder-only entities: {rows:,}",
+            'PASS' if rows == 0 else 'FAIL',
+            "placeholder names are out of the index" if rows == 0 else
+            "placeholder names are still indexed — if this is before the "
+            "post-deploy fuzzy rebuild, rebuild first; after it, issues/249 regressed")
 
 
 # ---------------------------------------------------------------------------
