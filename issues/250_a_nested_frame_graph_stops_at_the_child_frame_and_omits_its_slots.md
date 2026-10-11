@@ -27,12 +27,19 @@ Two types, no third. So the filter drops exactly the child-frame edges. On the
 sampled parent (`...frame:contacts:0`) that is 1 slot edge kept and 1 child-frame
 edge dropped, along with the stub it pointed at.
 
-**The filter is on `vital:vitaltype`, not `rdf:type`.** Both predicates exist in
-the data (`rdf:type` has 3.2M quads), so this looks like a free choice and is
-not: `vitaltype` is the single-valued type URI the codebase counts on and the one
-`kg_query_builder.py:976` already uses to type a slot edge. The wrong predicate
-matches nothing and returns every connection frame slotless, with no error —
-the same silent shape as a dropped arm. Pinned by its own test.
+**The filter is on `vital:vitaltype`, not `rdf:type`** — a convention, and
+pinned as one. `vitaltype` is the single-valued type URI the codebase counts on
+and the one `kg_query_builder.py:976` already uses to type a slot edge.
+
+> **Corrected 2026-10-11.** This said the two were not interchangeable and that
+> the wrong predicate "matches nothing and returns every connection frame
+> slotless". **False, and measured:** every edge carries both, in identical
+> numbers — `rdf:type Edge_hasKGSlot` 1,356,591 against `vitaltype` 1,356,591,
+> and 5,741 each for `Edge_hasKGFrame`. `rdf:type` would have worked;
+> `delete_frame_graph` in this same module types its edges that way and is
+> correct. The choice stands on consistency alone, which is reason enough, and
+> the invented silent-failure risk is withdrawn — left standing it would have
+> had the next reader "fixing" working queries.
 
 **The client was deliberately NOT typed to match.** `group_objects_by_frame_graph`
 stays tolerant: the server is the only producer, so a child-frame edge no longer

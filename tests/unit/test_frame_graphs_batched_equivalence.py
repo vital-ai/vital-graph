@@ -145,14 +145,23 @@ def test_both_connection_arms_are_typed_to_the_slot_edge(proc, build):
 
 @pytest.mark.parametrize("build", ["single", "plural"])
 def test_the_type_filter_uses_vitaltype_not_rdf_type(proc, build):
-    """NOT INTERCHANGEABLE, and wrong is silent.
+    """A CONVENTION, pinned as one — not a correctness requirement.
 
-    `vitaltype` is the single-valued type URI this codebase counts on, and the
-    predicate `kg_query_builder.py` already uses to type a slot edge. `rdf:type`
-    is present in the data too, so this looks like a free choice — but anchoring
-    the arm on the wrong predicate matches nothing, and every CONNECTION frame
-    comes back slotless with no error. That is the exact failure the four arms
-    exist to prevent.
+    `vitaltype` is the single-valued type URI this codebase counts on and the
+    predicate `kg_query_builder.py:976` already uses to type a slot edge, so the
+    arms match it for consistency with their neighbours.
+
+    CORRECTED 2026-10-11. This docstring previously claimed the two are "not
+    interchangeable" and that `rdf:type` "matches nothing". That is false, and
+    measured: every edge carries BOTH, in identical numbers —
+
+        rdf:type Edge_hasKGSlot   1,356,591      vitaltype  1,356,591
+        rdf:type Edge_hasKGFrame      5,741      vitaltype      5,741
+
+    `rdf:type` would have worked. `delete_frame_graph` in the same module types
+    its edges that way and is correct. The assertion stays, because one
+    convention beats two; the scare story had to go, because the next reader
+    would have believed `rdf:type` was broken and "fixed" a working query.
     """
     q = (proc._build_frame_graph_query("urn:f1", "urn:g") if build == "single"
          else proc._build_frame_graphs_query(["urn:f1"], "urn:g"))
