@@ -48,6 +48,14 @@
 ## checks, the 55P03 mechanism). Those came from the app's own log group and a
 ## local database, neither of which depends on which RDS instance I opened.
 
+## UPDATE 2026-10-11 — "NONE DEPLOYED" below is out of date. Production build
+## `v0.0.78` (deployed 2026-10-01 18:50 UTC) was built after `0b6cf134` and before
+## `523dd0c2` (`planning/planning_deploy/deploy_frame_graph_and_groupings_20261003.md`;
+## its revision is from the build repository, so the range is dated, not proven).
+## Every `253` commit through `2b42eaec` falls inside it, including release 0.0.43's
+## conditional write and part 5's whole-write bound. What remains is verifying in
+## production that part 5 ended the confirmed losses; nothing here has checked that.
+##
 ## Status: SIX PARTS FIXED 2026-09-29/30, NONE DEPLOYED, and RE-BASED TWICE BY
 ## MEASUREMENT 2026-09-30. A later report of 5 writes that did not stick is
 ## explained in "the 5 failed writes" below: they are CONFIRMED LOSSES, caused by

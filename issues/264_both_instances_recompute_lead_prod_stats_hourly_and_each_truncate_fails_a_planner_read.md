@@ -1,8 +1,8 @@
 # 264 — Both instances recompute `lead_prod`'s stats every hour, and each TRUNCATE can fail a planner read
 
-## FIXED IN CODE 2026-10-10, both defects, not yet deployed (see "Fix" at the end).
+## Status: FIXED 2026-10-10, both defects (`e0828f8d`, not yet released — newest release is 0.0.46).
 ##
-## Status: OPEN — found 2026-10-10 reading the production logs.
+## Found 2026-10-10 reading the production logs.
 ## Low severity per event, cheap to fix. Two defects: the stats recompute still
 ## takes ACCESS EXCLUSIVE on `rdf_stats` (shorter since `145`, not gone), and
 ## every instance runs the recompute independently, so production pays it twice
@@ -164,7 +164,7 @@ and that belongs in `239`'s accounting.
 - Defect 2: `recompute_stats_tables(lead_prod)` should log 24 times a day across
   both tasks combined, not 24 per task.
 
-## Fix, 2026-10-10 — both defects, not yet deployed
+## Fix, 2026-10-10 — both defects (`e0828f8d`)
 
 **Defect 1: `DELETE`, not `TRUNCATE`** (`sync_stats_tables.recompute_stats_tables`,
 both `rdf_stats` and `rdf_pred_stats`). Test:

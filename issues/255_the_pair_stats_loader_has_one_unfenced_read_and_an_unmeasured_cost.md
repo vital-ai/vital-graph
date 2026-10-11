@@ -4,6 +4,17 @@
 ## here is fixed. The LOCK-BLOCKING half of this path is `issues/145` and is
 ## fixed and deployed; what follows is the part that fix did not cover.
 
+## Update 2026-10-10 — the eight production failures were the FENCED read
+
+`264` matched all 8 `pair stats lookup failed ... lock timeout` lines from
+2026-10-01 to 10-10 to a `recompute_stats_tables` completing 100-190 ms later.
+The recompute's TRUNCATE locks `rdf_stats`, not `rdf_quad`, so every one was
+the 100 ms-fenced `rdf_stats` read doing what `145` designed it to do, not this
+issue's unfenced `rdf_quad` count. That answers the ambiguity raised in `145`'s
+2026-10-02 note for those eight, and `264` removed the TRUNCATE (`e0828f8d`).
+**This issue's own defect is unchanged:** the `rdf_quad` count at
+`generator.py:1145` is still unfenced. It simply was not involved.
+
 ## Why this is not just `issues/145` again
 
 `issues/145` bounded the stats reads that feed the planner to

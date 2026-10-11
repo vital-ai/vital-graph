@@ -1,8 +1,8 @@
 # 265 — The frame_slot sweep deletes every value-slot row it reads
 
-## FIXED IN CODE 2026-10-10, not yet deployed (see "Fix" at the end).
+## Status: FIXED 2026-10-10 (`e0828f8d`, not yet released — newest release is 0.0.46).
 ##
-## Status: OPEN — found 2026-10-10 while investigating `263`. Confirmed on
+## Found 2026-10-10 while investigating `263`. Confirmed on
 ## production data and reproduced read-only on the vg test stack. A correctness
 ## defect: after a WHERE-bound delete, frame-slot queries are served from a table
 ## missing up to 50,000 valid rows until the next backfill.
@@ -88,7 +88,7 @@ only (every slot gets a `hasEntitySlotValue`), where the inner join is harmless.
 Until it is fixed, every WHERE-bound delete in a value-slot space takes a bite
 out of `frame_slot`.
 
-## Fix, 2026-10-10 — not yet deployed
+## Fix, 2026-10-10 (`e0828f8d`)
 
 `cleanup_stale_frame_slot` now LEFT JOINs the slot value and compares with
 `IS NOT DISTINCT FROM`, matching the builders. The test helper `_stale_fe_rows`

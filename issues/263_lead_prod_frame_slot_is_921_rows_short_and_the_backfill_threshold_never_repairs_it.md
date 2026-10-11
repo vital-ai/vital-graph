@@ -1,10 +1,10 @@
 # 263 — `lead_prod`'s frame_slot is 921 rows short, and the backfill threshold never repairs it
 
-## FIXED IN CODE 2026-10-10, not yet deployed (see "Fix" at the end). On
+## Status: FIXED 2026-10-10 (`e0828f8d`, not yet released — newest release is 0.0.46). On
 ## deploy, `lead_prod`'s 921 rows are backfilled automatically on the third
 ## maintenance cycle; no manual production write is needed.
 ##
-## Status: OPEN — found 2026-10-10 reading the production logs. CAUSE FOUND
+## Found 2026-10-10 reading the production logs. CAUSE FOUND
 ## the same day (see "Investigation"): the 921 rows are 211 whole frames written
 ## by the OLD release during the 2026-09-10 frame_slot migration window. No
 ## write path is dropping rows. Still to do: the one-off repair, plus the
@@ -159,7 +159,7 @@ name the tool that fits what was found.
   serving (or to backfill straight after) would prevent the next one, but no
   release procedure was examined.
 
-## Fix, 2026-10-10
+## Fix, 2026-10-10 (`e0828f8d`)
 
 - **Persistent residue is backfilled** (`maintenance_job._run_frame_slot_backfill`).
   Drift below `max(EDGE_DRIFT_MIN_ABS, 1%)` is backfilled once it has lasted
