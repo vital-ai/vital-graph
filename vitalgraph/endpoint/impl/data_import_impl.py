@@ -550,6 +550,39 @@ class ImportEngine:
     # Bulk import (CLI-aggressive)
     # ------------------------------------------------------------------
 
+    async def _recreate_bulk_indexes(self, space_id: str, saved_indexes,
+                                     tables: set) -> None:
+        """Put back what the bulk import dropped — from memory AND from the schema.
+
+        The saved definitions first, so an index the schema does not name (one
+        added by hand) is not lost; then every schema index still missing on
+        these tables, which makes the restore independent of the process that
+        dropped them (`issues/156`). Loud on failure: the caller is either
+        returning a result or unwinding an exception, and a silently unindexed
+        space is what this replaces.
+        """
+        from vitalgraph.db.sparql_sql.space_indexes import restore_space_indexes
+        try:
+            async with self._pool.acquire() as conn:
+                have = {r["indexname"] for r in await conn.fetch(
+                    "SELECT indexname FROM pg_indexes WHERE schemaname='public' "
+                    "AND tablename = ANY($1::text[])", list(tables))}
+                for row in saved_indexes:
+                    if row["indexname"] not in have:
+                        await conn.execute(row["indexdef"])
+                created = await restore_space_indexes(conn, space_id, tables)
+                if created:
+                    logger.warning("Bulk import of %s: %d schema index(es) were "
+                                   "missing beyond the saved set and were created: %s",
+                                   space_id, len(created), ", ".join(created))
+        except Exception:
+            logger.error(
+                "Bulk import of %s could not restore its indexes. The space now "
+                "answers correctly but scans for every query. Repair with "
+                "`python scripts/ensure_space_indexes.py --space %s` (issues/156).",
+                space_id, space_id, exc_info=True)
+            raise
+
     async def import_ntriples_bulk(
         self,
         space_id: str,
@@ -608,126 +641,132 @@ class ImportEngine:
                 await conn.execute(f"DROP INDEX IF EXISTS {row['indexname']}")
             logger.info("Dropped %d indexes for bulk load", len(saved_indexes))
 
-        # --- Pass 1: collect terms ---
-        if progress_cb:
-            progress_cb(ImportProgress(phase="parse_terms", message="Collecting terms..."))
+        # Everything between the DROP and the recreate is in this try, and the
+        # recreate is in its `finally` (`issues/156`). The cancel checks below
+        # used to RETURN straight past the recreate, and any exception did the
+        # same — leaving the space on primary keys only, answering correctly and
+        # scanning for everything, with nothing reporting it. A kill -9 still
+        # cannot run a `finally`; for that, the maintenance job's index check
+        # reports the space, and the schema-based restore here makes a rerun
+        # self-healing.
+        try:
+            # --- Pass 1: collect terms ---
+            if progress_cb:
+                progress_cb(ImportProgress(phase="parse_terms", message="Collecting terms..."))
 
-        t0 = time.time()
-        # Datatypes FIRST. `_term_uuid` hashes the datatype_id, so the ids have
-        # to exist before a single term is hashed (`issues/157`).
-        async with self._pool.acquire() as conn:
-            datatype_ids = await _resolve_datatype_ids(
-                conn, space_id, _scan_datatype_uris(file_path))
-        if datatype_ids:
-            logger.info("Resolved %d literal datatype(s) for %s",
-                        len(datatype_ids), space_id)
+            t0 = time.time()
+            # Datatypes FIRST. `_term_uuid` hashes the datatype_id, so the ids have
+            # to exist before a single term is hashed (`issues/157`).
+            async with self._pool.acquire() as conn:
+                datatype_ids = await _resolve_datatype_ids(
+                    conn, space_id, _scan_datatype_uris(file_path))
+            if datatype_ids:
+                logger.info("Resolved %d literal datatype(s) for %s",
+                            len(datatype_ids), space_id)
 
-        terms, triple_count = self._parse_ntriples_terms(
-            file_path, graph_uri, progress_cb, datatype_ids)
-        phases['parse_terms'] = time.time() - t0
+            terms, triple_count = self._parse_ntriples_terms(
+                file_path, graph_uri, progress_cb, datatype_ids)
+            phases['parse_terms'] = time.time() - t0
 
-        if cancel_event and cancel_event.is_set():
-            return {"success": False, "cancelled": True}
+            if cancel_event and cancel_event.is_set():
+                return {"success": False, "cancelled": True}
 
-        # --- COPY terms ---
-        if progress_cb:
-            progress_cb(ImportProgress(
-                phase="copy_terms",
-                records_total=len(terms),
-                message=f"COPY {len(terms):,} terms...",
-            ))
+            # --- COPY terms ---
+            if progress_cb:
+                progress_cb(ImportProgress(
+                    phase="copy_terms",
+                    records_total=len(terms),
+                    message=f"COPY {len(terms):,} terms...",
+                ))
 
-        t0 = time.time()
-        term_records = [
-            (uid, text, ttype, lang, datatype_ids.get(dt_uri), "primary")
-            for (text, ttype, lang, dt_uri), uid in terms.items()
-        ]
-        async with self._pool.acquire() as conn:
-            await conn.copy_records_to_table(
-                term_tbl,
-                columns=["term_uuid", "term_text", "term_type", "lang",
-                         "datatype_id", "dataset"],
-                records=term_records,
-            )
-        phases['copy_terms'] = time.time() - t0
-        del term_records
-
-        if cancel_event and cancel_event.is_set():
-            return {"success": False, "cancelled": True}
-
-        # --- Pass 2: COPY quads ---
-        if progress_cb:
-            progress_cb(ImportProgress(
-                phase="copy_quads",
-                records_total=triple_count,
-                message=f"COPY quads (batch_size={batch_size:,})...",
-            ))
-
-        from pyoxigraph import parse as ox_parse
-
-        graph_uuid = terms[(graph_uri, "U", None, None)]
-        quad_batch: List[Tuple] = []
-        total_quads = 0
-        t0 = time.time()
-
-        async def flush(batch: List[Tuple]) -> None:
-            nonlocal total_quads
-            if not batch:
-                return
+            t0 = time.time()
+            term_records = [
+                (uid, text, ttype, lang, datatype_ids.get(dt_uri), "primary")
+                for (text, ttype, lang, dt_uri), uid in terms.items()
+            ]
             async with self._pool.acquire() as conn:
                 await conn.copy_records_to_table(
-                    quad_tbl,
-                    columns=["subject_uuid", "predicate_uuid", "object_uuid",
-                             "context_uuid", "dataset"],
-                    records=batch,
+                    term_tbl,
+                    columns=["term_uuid", "term_text", "term_type", "lang",
+                             "datatype_id", "dataset"],
+                    records=term_records,
                 )
-            total_quads += len(batch)
+            phases['copy_terms'] = time.time() - t0
+            del term_records
 
-        # SAME scope as pass 1, which resolved the terms. A different scope here
-        # would mint different labels for the same node, and the quads would
-        # reference term uuids that pass 1 never inserted.
-        bnode_scope = _bnode_scope_for(graph_uri, file_path)
+            if cancel_event and cancel_event.is_set():
+                return {"success": False, "cancelled": True}
 
-        with _open_rdf(file_path) as f:
-            for triple in ox_parse(f, _rdf_format(file_path)):
-                s_val, s_type, _, _ = _classify_node(triple.subject, bnode_scope)
-                s_uuid = terms[(s_val, s_type, None, None)]
-                p_uuid = terms[(triple.predicate.value, "U", None, None)]
-                o_val, o_type, o_lang, o_dt = _classify_node(triple.object, bnode_scope)
-                o_uuid = terms[(o_val, o_type, o_lang, o_dt)]
+            # --- Pass 2: COPY quads ---
+            if progress_cb:
+                progress_cb(ImportProgress(
+                    phase="copy_quads",
+                    records_total=triple_count,
+                    message=f"COPY quads (batch_size={batch_size:,})...",
+                ))
 
-                quad_batch.append((s_uuid, p_uuid, o_uuid, graph_uuid, "primary"))
+            from pyoxigraph import parse as ox_parse
 
-                if len(quad_batch) >= batch_size:
-                    await flush(quad_batch)
-                    quad_batch = []
-                    if progress_cb and total_quads % 500_000 == 0:
-                        elapsed = time.time() - t0
-                        progress_cb(ImportProgress(
-                            phase="copy_quads",
-                            records_done=total_quads,
-                            records_total=triple_count,
-                            elapsed_seconds=elapsed,
-                            rate_per_second=total_quads / elapsed if elapsed > 0 else 0,
-                        ))
-                    if cancel_event and cancel_event.is_set():
-                        return {"success": False, "cancelled": True}
+            graph_uuid = terms[(graph_uri, "U", None, None)]
+            quad_batch: List[Tuple] = []
+            total_quads = 0
+            t0 = time.time()
 
-        await flush(quad_batch)
-        phases['copy_quads'] = time.time() - t0
+            async def flush(batch: List[Tuple]) -> None:
+                nonlocal total_quads
+                if not batch:
+                    return
+                async with self._pool.acquire() as conn:
+                    await conn.copy_records_to_table(
+                        quad_tbl,
+                        columns=["subject_uuid", "predicate_uuid", "object_uuid",
+                                 "context_uuid", "dataset"],
+                        records=batch,
+                    )
+                total_quads += len(batch)
 
-        # --- Recreate indexes ---
-        if progress_cb:
-            progress_cb(ImportProgress(
-                phase="recreate_indexes",
-                message=f"Recreating {len(saved_indexes)} indexes...",
-            ))
+            # SAME scope as pass 1, which resolved the terms. A different scope here
+            # would mint different labels for the same node, and the quads would
+            # reference term uuids that pass 1 never inserted.
+            bnode_scope = _bnode_scope_for(graph_uri, file_path)
 
-        t0 = time.time()
-        async with self._pool.acquire() as conn:
-            for row in saved_indexes:
-                await conn.execute(row['indexdef'])
-        phases['recreate_indexes'] = time.time() - t0
+            with _open_rdf(file_path) as f:
+                for triple in ox_parse(f, _rdf_format(file_path)):
+                    s_val, s_type, _, _ = _classify_node(triple.subject, bnode_scope)
+                    s_uuid = terms[(s_val, s_type, None, None)]
+                    p_uuid = terms[(triple.predicate.value, "U", None, None)]
+                    o_val, o_type, o_lang, o_dt = _classify_node(triple.object, bnode_scope)
+                    o_uuid = terms[(o_val, o_type, o_lang, o_dt)]
+
+                    quad_batch.append((s_uuid, p_uuid, o_uuid, graph_uuid, "primary"))
+
+                    if len(quad_batch) >= batch_size:
+                        await flush(quad_batch)
+                        quad_batch = []
+                        if progress_cb and total_quads % 500_000 == 0:
+                            elapsed = time.time() - t0
+                            progress_cb(ImportProgress(
+                                phase="copy_quads",
+                                records_done=total_quads,
+                                records_total=triple_count,
+                                elapsed_seconds=elapsed,
+                                rate_per_second=total_quads / elapsed if elapsed > 0 else 0,
+                            ))
+                        if cancel_event and cancel_event.is_set():
+                            return {"success": False, "cancelled": True}
+
+            await flush(quad_batch)
+            phases['copy_quads'] = time.time() - t0
+        finally:
+            if progress_cb:
+                progress_cb(ImportProgress(
+                    phase="recreate_indexes",
+                    message=f"Recreating {len(saved_indexes)} indexes...",
+                ))
+            t0 = time.time()
+            await self._recreate_bulk_indexes(space_id, saved_indexes,
+                                              {term_tbl, quad_tbl})
+            phases['recreate_indexes'] = time.time() - t0
 
         # --- Resync auxiliary tables ---
         if progress_cb:

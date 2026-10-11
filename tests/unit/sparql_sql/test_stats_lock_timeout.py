@@ -262,3 +262,51 @@ async def test_the_failure_warning_names_the_read_and_the_wait(monkeypatch, capl
                    if "pair stats lookup failed" in r.getMessage())
     assert "pair count (rdf_quad)" in msg, msg
     assert " ms" in msg, msg
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ranges,expected", [
+    (set(), None),                                   # no range leaf: no check at all
+    ({("p-a", "gte", 5)}, {("p-a", "num")}),         # only the queried predicate
+])
+async def test_freshness_runs_only_for_the_querys_range_predicates(
+        monkeypatch, ranges, expected):
+    """`issues/255` item 3. The check ran over EVERY histogram for every query,
+    including the boot warm-up `?s ?p ?o`; its probe is cached only per process,
+    so a fresh process paid it in full — 2.2 s on `nurture_typed`, production's
+    7,710 ms. Its verdicts are read only by range estimates, so it must check
+    exactly the predicates the query estimates."""
+    from types import SimpleNamespace
+    from vitalgraph.db.sparql_sql import semijoin, sync_value_stats
+
+    vstats = {("p-a", "num"): {"bounds": []}, ("p-b", "num"): {"bounds": []},
+              ("p-c", "dt"): {"bounds": []}}
+    seen = []
+
+    async def fake_load(space_id, conn=None, conn_params=None):
+        return vstats
+
+    async def fake_freshness(conn, space_id, stats):
+        seen.append(set(stats))
+        for entry in stats.values():
+            entry["checked"] = True
+        return {}
+
+    async def fake_execute_query(sql, *a, **k):
+        return []
+
+    monkeypatch.setattr(semijoin, "needed_pairs", lambda plan, aliases: [])
+    monkeypatch.setattr(semijoin, "needed_ranges", lambda plan, aliases: ranges)
+    monkeypatch.setattr(G, "_load_value_stats_cached", fake_load)
+    monkeypatch.setattr(sync_value_stats, "apply_freshness", fake_freshness)
+    monkeypatch.setattr(db_provider, "execute_query", fake_execute_query)
+    aliases = SimpleNamespace(quad_stats={}, graph_lock_uri=None)
+    await G._load_missing_pair_stats(object(), aliases, "sp", conn=object())
+
+    if expected is None:
+        assert seen == [], "freshness ran for a query with no range leaf"
+    else:
+        assert seen == [expected]
+        assert vstats[("p-a", "num")].get("checked"), (
+            "the verdict must land on the cached entry, not a copy")
+        assert "checked" not in vstats[("p-b", "num")]

@@ -395,6 +395,9 @@ class EntityLabelCount(BaseModel):
     """One labeled count within a batch count response."""
     label: str = Field(..., description="Caller-supplied label for this count request")
     count: int = Field(0, description="Number of matching entities for this request")
+    error: Optional[str] = Field(
+        None, description="Set when this count could not be computed; `count` is then "
+                          "NOT a zero result (issues/228)")
 
 
 class EntityCountsResponse(ResultStatus):

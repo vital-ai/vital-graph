@@ -1060,6 +1060,10 @@ async def _measure_fts_leaves(plan, ctx, conn=None, conn_params=None) -> None:
                         "unpriced", table, e)
 
 
+#: A pair-stats load at least this slow logs its per-read breakdown (`issues/255`).
+PAIR_STATS_SLOW_MS = float(os.environ.get("VG_PAIR_STATS_SLOW_MS", "500"))
+
+
 async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                                    conn_params=None) -> None:
     """Fetch row counts for the plan's leaf pairs that the preload lacks.
@@ -1083,6 +1087,19 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
     # fenced timeout and a 10 s unfenced one were the same line.
     _stage = "setup"
     _t0 = time.perf_counter()
+    # Time per read, accumulated (`issues/255` item 3). The loader was reported
+    # at 7,710 ms of a 7,923 ms generation on a cold process, with nothing to
+    # say which of its reads it was; a slow load now logs the breakdown.
+    _spent: Dict[str, float] = {}
+    _mark_t = [_t0]
+
+    def _mark(stage: str) -> str:
+        now = time.perf_counter()
+        _spent[_stage_box[0]] = _spent.get(_stage_box[0], 0.0) + (now - _mark_t[0])
+        _mark_t[0] = now
+        _stage_box[0] = stage
+        return stage
+    _stage_box = [_stage]
     try:
         from . import db_provider as db
         pairs = needed_pairs(plan, aliases)
@@ -1107,7 +1124,7 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
         # counted and the join order was chosen without it (issues/090).
         _lock = getattr(aliases, "graph_lock_uri", None)
         if missing:
-            _stage = "pair stats (rdf_stats)"
+            _stage = _mark("pair stats (rdf_stats)")
             values = ", ".join(f"('{p}'::uuid, '{o}'::uuid)" for p, o in missing)
             rows = await db.execute_query(
                 # SUMMED IN SQL, and NARROWED THE SAME WAY THE PRELOAD WAS.
@@ -1148,7 +1165,7 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                 if ck in _pair_count_cache:
                     aliases.extra_quad_stats[(p_uuid, o_uuid)] = _pair_count_cache[ck]
                     continue
-                _stage = "pair count (rdf_quad)"
+                _stage = _mark("pair count (rdf_quad)")
                 crows = await db.execute_query(
                     f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_rdf_quad "
                     f"WHERE predicate_uuid = '{p_uuid}'::uuid "
@@ -1176,7 +1193,7 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
         from .sparql_sql_schema import NUMERIC_TERM_COLUMN
         aliases.range_stats = {}
         aliases.text_stats = {}
-        _stage = "value stats"
+        _stage = _mark("value stats")
         vstats = await _load_value_stats_cached(
             space_id, conn=conn, conn_params=conn_params)
         # Freshness is decided per query, NOT cached with the histograms.
@@ -1191,13 +1208,30 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
         # It mutates the cached dict in place. Two queries racing here compute
         # the same verdict from the same rows, so the only cost of the race is
         # doing it twice.
-        if conn is not None and vstats:
-            try:
-                from .sync_value_stats import apply_freshness
-                await apply_freshness(conn, space_id, vstats)
-            except Exception as exc:
-                logger.debug("freshness check skipped for %s: %s", space_id, exc)
-        for p_uuid, op, literal in needed_ranges(plan, aliases):
+        #
+        # ONLY FOR THE PREDICATES THIS QUERY ESTIMATES (`issues/255` item 3).
+        # The check used to run over EVERY histogram in the space, for every
+        # query — including the boot warm-up `?s ?p ?o`, which uses none. Its
+        # shape probe scans a drifted predicate's rows and is cached only per
+        # process, so a fresh process paid it in full: measured on the
+        # production-shaped `nurture_typed`, 2.2 s per cold process (50 s with
+        # the database cache cold too), all of it here, for a query whose
+        # generation is otherwise 4 ms warm. That is production's 7,710 ms
+        # `load_pair_stats` at boot. The verdicts are read only by the range
+        # estimates below, so checking exactly their predicates loses nothing;
+        # the subset shares the entry dicts, so verdicts land in the cache.
+        ranges = list(needed_ranges(plan, aliases))
+        wanted = {p for p, _, _ in ranges}
+        if conn is not None and vstats and wanted:
+            subset = {k: v for k, v in vstats.items() if k[0] in wanted}
+            if subset:
+                try:
+                    from .sync_value_stats import apply_freshness
+                    _stage = _mark("value stats freshness")
+                    await apply_freshness(conn, space_id, subset)
+                except Exception as exc:
+                    logger.debug("freshness check skipped for %s: %s", space_id, exc)
+        for p_uuid, op, literal in ranges:
             ck = (space_id, p_uuid, op, literal)
             if ck in _pair_count_cache:
                 aliases.range_stats[(p_uuid, op, literal)] = _pair_count_cache[ck]
@@ -1233,7 +1267,7 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
             else:
                 col_sql = NUMERIC_TERM_COLUMN
                 val_sql = str(literal)
-            _stage = "range count (rdf_quad)"
+            _stage = _mark("range count (rdf_quad)")
             crows = await db.execute_query(
                 f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_rdf_quad q "
                 f"WHERE q.predicate_uuid = '{p_uuid}'::uuid AND q.object_uuid IN "
@@ -1284,6 +1318,7 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                              f"{space_id}_datatype WHERE datatype_uri = '{_esc(dtype)}')")
                 disjuncts.append(cond + ")")
             try:
+                _stage = _mark("IN selectivity (rdf_stats)")
                 rows = await db.execute_query(
                     # DISTINCT ON THE TERM. `s` has one row per graph now
                     # (`issues/163`), so a plain count(*) counts (term, graph)
@@ -1335,6 +1370,7 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
         from .semijoin import needed_texts, has_unservable_text
         if has_unservable_text(plan):
             try:
+                _stage = _mark("term size (pg_class)")
                 rrows = await db.execute_query(
                     "SELECT reltuples::bigint AS n FROM pg_class "
                     "WHERE oid = to_regclass($1)",
@@ -1351,7 +1387,7 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
             if ck in _pair_count_cache:
                 aliases.text_stats[(p_uuid, cond)] = _pair_count_cache[ck]
                 continue
-            _stage = "text term count (term)"
+            _stage = _mark("text term count (term)")
             trows = await db.execute_query(
                 f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_term "
                 f"WHERE {cond} LIMIT {_TEXT_TERM_CAP}) s",
@@ -1363,7 +1399,7 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
                 # "not selective" without a second, expensive count.
                 n = _TEXT_COUNT_CAP
             else:
-                _stage = "text count (rdf_quad)"
+                _stage = _mark("text count (rdf_quad)")
                 crows = await db.execute_query(
                     f"SELECT count(*) AS n FROM (SELECT 1 FROM {space_id}_rdf_quad q "
                     f"WHERE q.predicate_uuid = '{p_uuid}'::uuid AND q.object_uuid IN "
@@ -1375,6 +1411,12 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
             _pair_count_cache[ck] = n
             aliases.text_stats[(p_uuid, cond)] = n
 
+        _mark("done")
+        _total_ms = (time.perf_counter() - _t0) * 1000
+        if _total_ms >= PAIR_STATS_SLOW_MS:
+            logger.info("pair stats loader slow on %s: %.0f ms (%s)", space_id, _total_ms,
+                        ", ".join(f"{k} {v * 1000:.0f} ms" for k, v in
+                                  sorted(_spent.items(), key=lambda kv: -kv[1])))
         logger.debug("semijoin gate: resolved %d/%d pair stats (%d counted), "
                      "%d range(s), %d text(s)",
                      len(aliases.extra_quad_stats), len(missing),
@@ -1407,7 +1449,7 @@ async def _load_missing_pair_stats(plan, aliases, space_id, conn=None,
         # timestamps against the maintenance log.
         logger.warning("semijoin gate: pair stats lookup failed during %s after "
                        "%.0f ms, plan will be chosen without leaf statistics: %s",
-                       _stage, (time.perf_counter() - _t0) * 1000, e,
+                       _stage_box[0], (time.perf_counter() - _t0) * 1000, e,
                        exc_info=True)
 
 

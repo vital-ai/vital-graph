@@ -464,9 +464,9 @@ class _SparqlSQLCoreAdapter:
     releases the connection on the way out. ``space_impl`` is accepted and
     ignored — the archived signature took it, and callers still pass it.
 
-    TWO THINGS THE ARCHIVED VERSION DID THAT THIS DOES NOT. Both are recorded as
-    differences rather than fixed here, because they are pool behaviour and
-    belong with `issues/231`:
+    TWO THINGS THE ARCHIVED VERSION DID THAT THIS DID NOT — BOTH FIXED
+    2026-10-11 (`issues/231`). Recorded as they were, because the gap is what a
+    test pins:
 
       * **It called ``track_connection()``** (`utils/resource_manager.py:212`) on
         the acquired connection. That helper is still live and this backend uses
@@ -484,10 +484,23 @@ class _SparqlSQLCoreAdapter:
         self._impl = space_impl
 
     async def create_transaction(self, space_impl=None) -> _SparqlSQLTransaction:
+        # FIXED 2026-10-11 (`issues/231`): both gaps the docstring records.
+        # Deferred until the QUERY/MUTATION pool split, which production then
+        # showed no case for (one pool wait over 1 s in 10 days, on the
+        # internal pool), so it lands on its own, modelled on
+        # `SparqlSQLDbImpl.create_transaction`.
         pool = self._impl._db._pool
         conn = await pool.acquire()
-        tr = conn.transaction()
-        await tr.start()
+        try:
+            from ...utils.resource_manager import track_connection
+            track_connection(conn)
+            tr = conn.transaction()
+            await tr.start()
+        except BaseException:
+            # A failed start must not keep the connection: it would be gone for
+            # the life of the process, silently (`issues/229`'s symptom).
+            await pool.release(conn)
+            raise
         return _SparqlSQLTransaction(conn, tr, pool)
 
 

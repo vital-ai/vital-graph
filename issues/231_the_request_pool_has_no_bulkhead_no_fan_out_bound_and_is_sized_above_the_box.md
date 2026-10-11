@@ -1,6 +1,9 @@
 # The Request Pool Has No Bulkhead, No Fan-Out Bound, And Is Sized Above The Box
 
-## Status: IN PROGRESS — steps 1 and 2 landed 2026-09-24 with tests; steps 3-5
+## Status: CLOSED 2026-10-11 — the leak is fixed (uncommitted); steps 3-5 have no
+## measured case in production and are not built, per this issue's own rule.
+##
+## Was: IN PROGRESS — steps 1 and 2 landed 2026-09-24 with tests; steps 3-5
 ## open. The bulkhead now exists and the outage path (ANALYZE on request
 ## connections) is closed; sizing and the QUERY/MUTATION split are not.
 
@@ -703,3 +706,33 @@ Saturate the pool and watch what waits:
       FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid
       JOIN pg_class c ON c.oid=l.relation
      WHERE a.datname=current_database() GROUP BY 1,2,3;
+
+## Closed 2026-10-11 — measured in production, by this issue's own rule
+
+The order of work above said: deploy `238`, re-measure, THEN decide steps 3-5.
+`238` reached production in build `v0.0.77`, and production has run on `v0.0.78`
+since 2026-10-01. The `pool_wait` records the decision rests on, 2026-10-01 to
+10-11, at production's `VG_SLOW_ACQUIRE_SECONDS` = 1.0 s:
+
+    pool_wait records, all classes, 10 days        1
+      class internal, waited 1,750 ms, in_use 1 of 3, other_classes_idle 24
+
+**No request-class acquire waited a second in ten days.** "Near-zero upside
+means keep the pools and close this" — so step 3 (the QUERY/MUTATION split) is
+not built. Step 4 (a smaller global budget) has no symptom to fix; note the
+budget is no longer what section 3 describes: production runs
+`PROD_DB_POOL_SIZE` = 15 per task across 2 tasks, 30 total, not 30 x 3 = 90.
+Changing it is a deploy-config decision, and nothing measured calls for it.
+Step 5 (a read replica) is an infrastructure and cost decision with no measured
+need behind it.
+
+**The transaction-path leak is FIXED.** It was deferred only to land with step
+3; with step 3 not happening, it lands alone.
+`_SparqlSQLCoreAdapter.create_transaction` now releases its connection if
+starting the transaction fails, and tracks the connection, as
+`SparqlSQLDbImpl.create_transaction` does. Test:
+`tests/unit/sparql_sql/test_core_adapter_transaction_does_not_leak.py` (fails
+against the old code).
+
+If this reopens, the evidence is one query: `pool_wait` records with class
+`query` or `mutation`.

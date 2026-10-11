@@ -1,6 +1,8 @@
 # An Interrupted Bulk Import Leaves A Space Silently Unindexed
 
-## Status: OPEN. Found 2026-09-04 on the vg-test stack, by doing it — three
+## Status: FIXED 2026-10-11 (uncommitted), all three options.
+##
+## Found 2026-09-04 on the vg-test stack, by doing it — three
 ## imports were killed mid-flight while choosing a dataset, and the space was
 ## left with primary keys only.
 
@@ -71,3 +73,32 @@ against a script that already exists. Then 1.
 This behaviour predates the rdf_stats recompute work and is untouched by it.
 Recorded here because it was found while testing that work, and because the
 diagnosis cost real time.
+
+## Fix, 2026-10-11 — all three options
+
+Found while fixing it: **a CANCEL also left the space unindexed**, not only a
+kill. The three `cancel_event` checks returned straight past the recreate.
+
+1. **Restore from the schema, not from memory**
+   (`vitalgraph/db/sparql_sql/space_indexes.py`: `schema_indexes`,
+   `missing_space_indexes`, `restore_space_indexes`). The import replays its
+   saved definitions first, so an index the schema does not name is kept, then
+   every schema index still missing on term/quad. A rerun is self-healing.
+2. **Detect it.** The maintenance job's `_run_space_index_check` compares each
+   space with `create_space_indexes_sql` every 15 min
+   (`VITALGRAPH_SPACE_INDEX_CHECK_S`), one catalog query per space, and logs a
+   WARNING naming the indexes and `scripts/ensure_space_indexes.py --space X`.
+   Detection only: a non-concurrent `CREATE INDEX` on a large table blocks
+   writes, so repair is an operator's call. The message says an import in
+   progress is a legitimate cause.
+3. **Narrow the window.** Everything between the DROP and the recreate is in a
+   `try`, and the recreate is its `finally`: exceptions and cancels restore
+   every index. A failed restore logs an ERROR with the repair command.
+
+Tests: `tests/integration/test_interrupted_bulk_import_keeps_indexes.py` (4):
+a cancelled import and a failed import each restore every index (both fail
+against the old code: indexes left dropped); the schema restore needs no memory
+of what was dropped; the maintenance check reports a space missing one. Each
+test first asserts the fixture space is complete: the first version compared an
+empty set with an empty set after an earlier test had stripped the shared space,
+and passed vacuously against the unfixed code.

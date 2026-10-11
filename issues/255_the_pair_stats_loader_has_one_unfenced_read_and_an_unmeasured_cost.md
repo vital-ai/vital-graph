@@ -1,6 +1,8 @@
 # 255 — `_load_missing_pair_stats` has one unfenced read, and its own cost is unmeasured
 
-## Status: FIXED 2026-10-11, items 1 and 2 (`85b5dfa3`, not yet released). Item 3,
+## Status: FIXED 2026-10-11 — items 1 and 2 in `85b5dfa3`, item 3 (uncommitted).
+##
+## Was: FIXED 2026-10-11, items 1 and 2 (`85b5dfa3`, not yet released). Item 3,
 ## measuring the loader's 7,710 ms, is still open.
 ##
 ## Found: filed 2026-10-02 from a production monitoring review. Nothing
@@ -173,3 +175,33 @@ the rdf_quad count and checks the warning says so. Both new tests fail against
 the old generator.
 
 **Still open: item 3.** The 7,710 ms loader cost is unmeasured and unchanged.
+
+## Item 3, 2026-10-11 — measured, and the cost was not the loader's reads
+
+**Production's 7,710 ms came from the boot warm-up query**
+(`SELECT ?s WHERE { GRAPH <g> { ?s ?p ?o } } LIMIT 1`, `issues/258`): a cold
+PROCESS. Reproduced locally by running that query in a fresh process
+(`test_scripts/perf/_issue255_loader_cold.py`), with the loader now logging
+per-read time:
+
+| space | cold process | of which | warm |
+|---|---|---|---|
+| `nurture_typed` | 2,551 / 2,468 ms gen (51 s with the DB cache cold too) | **value stats freshness 2,221 / 2,240 ms** (50,212 ms) | 4 ms |
+| `sp_lead_synth_100k` | 257-345 ms gen | loader 4-5 ms | 4 ms |
+| `wordnet_frames` | 144-192 ms gen | loader 2-3 ms | 2 ms |
+
+**The cost was `apply_freshness`**, which ran over EVERY histogram in the space
+for every query, though its verdicts are read only by range estimates; the boot
+warm-up has no range leaf at all. Its shape probe scans each drifted predicate's
+rows and is cached only per process, so every fresh process paid it in full.
+
+**Fix:** freshness runs only for the predicates the query estimates ranges on
+(the subset shares the cached entry dicts, so verdicts still land in the cache),
+and not at all without a range leaf. After: `nurture_typed` cold loader
+**2-4 ms**, cold warm-up query ~0.3 s total (was ~2.7 s).
+
+The loader now accumulates time per read and logs a breakdown at INFO when a load
+takes at least `VG_PAIR_STATS_SLOW_MS` (500 ms), so production can say which read
+a slow load spent its time on. Test:
+`test_freshness_runs_only_for_the_querys_range_predicates` (both cases fail
+against the previous generator).

@@ -658,15 +658,6 @@ class KGEntitiesEndpoint:
                 _effective_graph, entity_type_uri, search,
                 sort_by=sort_by, prop_filters=prop_filters,
             )
-            
-            # Check count cache
-            qhash = _count_cache.query_hash(count_sparql)
-            cached = _count_cache.get(space_id, _effective_graph, qhash)
-            if cached is not None:
-                return EntityCountResponse(
-                    status=OperationStatus.FOUND if cached else OperationStatus.EMPTY,
-                    count=cached,
-                )
 
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
@@ -680,18 +671,43 @@ class KGEntitiesEndpoint:
                 raise HTTPException(status_code=503, detail="Backend implementation not available")
             backend_adapter = create_backend_adapter(backend)
 
-            from ..kg_impl.kgentity_list_impl import _extract_bindings
-            result = await backend_adapter.execute_sparql_query(space_id, count_sparql)
-            bindings = _extract_bindings(result)
-            count = int(bindings[0]['count']['value']) if bindings and 'count' in bindings[0] else 0
-
-            _count_cache.put(space_id, _effective_graph, qhash, count)
+            # THE LISTING'S COUNT PATH, not a second one (`issues/228`). This
+            # endpoint built the same SPARQL `COUNT(DISTINCT)` as the listing's
+            # fallback and ran it directly, so it never reached
+            # `entity_prop_sort` — which the listing's count already reads for
+            # exactly these shapes (type + status / created / modified /
+            # provenance). Measured on production: 85,153 matches in 1.0 s here
+            # against 25-82 ms on the table, and a cold wide count crossed the
+            # 60 s statement timeout. `_resolve_total_count` is cache, then the
+            # table, then this SPARQL, and shares the cache with the listing.
+            structured_filters = {
+                "status": status, "exclude_status": exclude_status,
+                "created_after": created_after, "created_before": created_before,
+                "modified_after": modified_after, "modified_before": modified_before,
+                "provenance_type": provenance_type,
+            }
+            count = await list_processor._resolve_total_count(
+                space_id, _effective_graph, backend_adapter, count_sparql,
+                entity_type_uri, search, prop_filters, sort_by,
+                filters=structured_filters)
             return EntityCountResponse(
                 status=OperationStatus.FOUND if count else OperationStatus.EMPTY,
                 count=count,
             )
         except HTTPException:
             raise
+        except SparqlQueryFailed as e:
+            # 200 WITH THE FAILURE STATED, as the listing answers the same
+            # failure (`issues/215`). A cancelled count used to be wrapped by
+            # the generic `except` below into an HTTP 500 carrying a driver
+            # message (`issues/228`), indistinguishable from a real fault —
+            # though it is a domain outcome and retryable (the retry took 1.0 s).
+            self.logger.error("Entity count failed on %s: %s", space_id, e)
+            return EntityCountResponse(
+                status=OperationStatus.QUERY_FAILED,
+                message=f"Count query failed: {e.error or e}",
+                count=0,
+            )
         except Exception as e:
             self.logger.error(f"Error counting entities: {e}")
             raise HTTPException(status_code=500, detail=f"Error counting entities: {e}")
@@ -725,24 +741,36 @@ class KGEntitiesEndpoint:
                         graph_id, cr.entity_type_uri, cr.search,
                         sort_by=cr.sort_by, prop_filters=pf,
                     )
-                    # Check count cache
-                    qhash = _count_cache.query_hash(sparql)
-                    cached = _count_cache.get(body.space_id, graph_id, qhash)
-                    if cached is not None:
-                        return {"label": cr.label, "count": cached}
-                    
-                    from ..kg_impl.kgentity_list_impl import _extract_bindings
-                    result = await backend_adapter.execute_sparql_query(body.space_id, sparql)
-                    bindings = _extract_bindings(result)
-                    count = int(bindings[0]['count']['value']) if bindings and 'count' in bindings[0] else 0
-                    _count_cache.put(body.space_id, graph_id, qhash, count)
-                    return {"label": cr.label, "count": count}
+                    # Same path as the single count and the listing (`issues/228`).
+                    count = await list_processor._resolve_total_count(
+                        body.space_id, graph_id, backend_adapter, sparql,
+                        cr.entity_type_uri, cr.search, pf, cr.sort_by,
+                        filters={
+                            "status": cr.status, "exclude_status": cr.exclude_status,
+                            "created_after": cr.created_after,
+                            "created_before": cr.created_before,
+                            "modified_after": cr.modified_after,
+                            "modified_before": cr.modified_before,
+                        })
+                    return {"label": cr.label, "count": count, "error": None}
                 except Exception as e:
+                    # A failed count is NOT a zero. It used to be returned as
+                    # `count: 0`, a confident "none" for a query that never ran.
                     self.logger.error(f"Batch count error for '{cr.label}': {e}")
-                    return {"label": cr.label, "count": 0}
+                    return {"label": cr.label, "count": 0, "error": str(e)}
             
             counts = await asyncio.gather(*[_run_count(cr) for cr in body.count_requests])
-            count_items = [EntityLabelCount(label=c["label"], count=c["count"]) for c in counts]
+            count_items = [EntityLabelCount(label=c["label"], count=c["count"],
+                                            error=c["error"]) for c in counts]
+            failed = [ci.label for ci in count_items if ci.error]
+            if failed:
+                return EntityCountsResponse(
+                    status=(OperationStatus.QUERY_FAILED if len(failed) == len(count_items)
+                            else OperationStatus.PARTIAL),
+                    message=f"{len(failed)} of {len(count_items)} count(s) failed: "
+                            f"{', '.join(failed[:5])}",
+                    counts=count_items,
+                )
             _any = any(ci.count for ci in count_items)
             return EntityCountsResponse(
                 status=OperationStatus.FOUND if _any else OperationStatus.EMPTY,

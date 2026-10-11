@@ -268,6 +268,10 @@ VECTOR_REINDEX_COOLDOWN_HOURS = 24   # skip if reindexed within this many hours
 # Repairs keep the 300s cadence. Only watches are slowed, and the first cycle
 # after a restart always runs them, so a fresh deploy still gets a full report.
 WATCH_INTERVAL_S = float(os.getenv("VITALGRAPH_WATCH_INTERVAL_S", "3600"))
+# Missing schema indexes (`issues/156`) cost one catalog query per space and
+# turn every query into a scan, so they are checked more often than the hourly
+# watches.
+SPACE_INDEX_CHECK_INTERVAL_S = float(os.getenv("VITALGRAPH_SPACE_INDEX_CHECK_S", "900"))
 
 _watch_last_run: Dict[Tuple[str, str], float] = {}
 
@@ -647,6 +651,11 @@ class MaintenanceJob:
             graphreg_result = await self._run_graph_registration_check(list(stats.keys()))
             if graphreg_result:
                 summary["graph_registration"] = graphreg_result
+
+            # --- Missing schema indexes (an interrupted bulk import; issues/156) ---
+            index_result = await self._run_space_index_check(list(stats.keys()))
+            if index_result:
+                summary["missing_indexes"] = index_result
 
             # --- Edge fan-out: refresh the traversal-amplification guard ---
             # Read on every query and it does change plans, so an empty or
@@ -1497,6 +1506,43 @@ class MaintenanceJob:
                              space_id, exc)
                 continue
         return None
+
+    async def _run_space_index_check(self, space_ids: List[str]) -> Optional[Dict]:
+        """Report spaces missing indexes the schema names. DETECTION ONLY.
+
+        `issues/156`: a bulk import interrupted between dropping its indexes and
+        recreating them leaves a space on primary keys only — every answer
+        correct, every query a scan, nothing reporting it. One catalog query per
+        space, compared with `create_space_indexes_sql`, turns that into a
+        WARNING for every cause, including ones nobody has thought of.
+
+        It does NOT repair: a non-concurrent `CREATE INDEX` on a large table
+        blocks its writes for minutes, which is an operator's decision. An
+        import still running legitimately has its indexes dropped, so the
+        message names that possibility before the repair.
+        """
+        from ..db.sparql_sql.space_indexes import missing_space_indexes
+        findings: Dict[str, List[str]] = {}
+        for space_id in space_ids:
+            if not should_run_watch("space_indexes", space_id,
+                                    interval_s=SPACE_INDEX_CHECK_INTERVAL_S):
+                continue
+            try:
+                async with self._pool.acquire() as conn:
+                    missing = await missing_space_indexes(conn, space_id)
+            except Exception as exc:
+                log_probe_failure("space_index_check", space_id, exc)
+                continue
+            if missing:
+                findings[space_id] = [name for name, _ in missing]
+                logger.warning(
+                    "Space %s is MISSING %d schema index(es) (%s%s). Queries stay "
+                    "correct but scan; if no bulk import is running on it right "
+                    "now, repair with `python scripts/ensure_space_indexes.py "
+                    "--space %s` (issues/156).",
+                    space_id, len(missing), ", ".join(n for n, _ in missing[:6]),
+                    ", ..." if len(missing) > 6 else "", space_id)
+        return {"spaces": findings} if findings else None
 
     async def _run_edge_fanout_refresh(self, space_ids: List[str],
                                        force: bool = False) -> Optional[Dict]:

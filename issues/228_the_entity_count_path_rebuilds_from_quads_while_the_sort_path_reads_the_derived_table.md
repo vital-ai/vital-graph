@@ -1,6 +1,8 @@
 # The Entity Count Path Rebuilds From Quads While The Sort Path Reads The Derived Table
 
-## Status: OPEN — measured on production, no fix attempted.
+## Status: FIXED 2026-10-11 (uncommitted).
+##
+## Found: measured on production.
 ##
 ## Found 2026-09-23 while counting nurture actions per month in `prod_kg`.
 ## The counts themselves are correct; what this records is that they cost
@@ -122,3 +124,38 @@ That script buckets by month precisely to stay in the cheap part of the curve �
 each month is its own short statement, so no single one approaches the 60s cap.
 The expensive shape is the unbounded whole-type count it takes once at the start
 and once at the end.
+
+## Fix, 2026-10-11
+
+**Question 1: yes, and the gate already existed.** The listing's own count,
+`KGEntityListProcessor._resolve_total_count` (cache, then
+`fast_entity_prop_count` on `entity_prop_sort`, then this SPARQL), already
+recognises the shape and declines cleanly. `/kgentities/count` and the batch
+count simply never called it. Both now do, with the same structured filters, so
+they share the listing's path and cache.
+
+**Question 2:** `fast_entity_prop_count` already pins the outer scan to one lane,
+so its `DISTINCT` collapses nothing (the pkey argument above).
+
+**Question 3, decided: a failed count is HTTP 200 `query_failed`**, as the
+listing has answered the same `SparqlQueryFailed` since `issues/215`. A cancelled
+count is a domain outcome, retryable, and was a 500 only because the generic
+`except` wrapped it. A failure that is not a query failure stays a 500.
+
+**Found on the way: the batch count reported a failed label as `count: 0`.** It
+now sets `EntityLabelCount.error` (new optional field) and the response status
+to `partial` (some failed) or `query_failed` (all failed).
+
+Measured on the vg stack, `sp_lead_synth_100k` (100,000 Leads), typed whole-type
+count, 5 runs each, count cache busted every run: SPARQL path 172.5 / 179.2 /
+525.7 ms (min/med/max); new endpoint 23.9 / 24.8 / 26.0 ms, the same 100,000.
+That fixture has no date or status lanes, so production's `created_after` shape
+(1.0 s → 25-82 ms on the table, above) was not re-measured locally.
+
+Tests: `tests/integration/test_count_endpoint_uses_the_table.py` (6), with the
+SPARQL path made to fail so only the table can answer: three filter shapes are
+served from the table; the table agrees with the SPARQL count; a failed count is
+200 `query_failed`; a failed batch label carries `error` and makes the batch
+`partial`. Five fail against the old endpoint (the agreement test passes on
+both, as it should). `tests/api/test_kgentities_api.py -k count` (3) pass
+against the rebuilt test app.
