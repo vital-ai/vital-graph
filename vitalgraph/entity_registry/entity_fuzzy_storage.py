@@ -191,57 +191,6 @@ class PostgreSQLFuzzyStorage:
 
         return {row['entity_key']: row['hits'] for row in rows}
 
-    async def query_bands_progressive(
-        self,
-        table: str,
-        band_queries: List[Tuple[int, List[bytes]]],
-        band_batch_size: int = 3,
-        min_candidates: int = 20,
-        max_candidates: int = 5000,
-    ) -> Dict[str, int]:
-        """Progressive band query with early stopping.
-
-        Queries bands in small batches. After each batch, checks whether
-        enough strong candidates have been found and stops early if so.
-
-        Args:
-            table: Table name.
-            band_queries: All (band_id, hashes) pairs to query.
-            band_batch_size: How many bands to query per SQL call.
-            min_candidates: Target candidate count for early stop.
-            max_candidates: Hard cap.
-
-        Returns:
-            Dict mapping entity_key → band hit count.
-        """
-        if not band_queries:
-            return {}
-
-        from collections import Counter
-        band_hits: Counter = Counter()
-        bands_queried = 0
-
-        for batch_start in range(0, len(band_queries), band_batch_size):
-            batch = band_queries[batch_start:batch_start + band_batch_size]
-            batch_result = await self.query_bands(table, batch)
-
-            for key, hits in batch_result.items():
-                band_hits[key] += hits
-            bands_queried += len(batch)
-
-            # Early exit check
-            if bands_queried >= 3:
-                min_hits = max(2, bands_queried // 2)
-                strong = sum(1 for cnt in band_hits.values() if cnt >= min_hits)
-                if strong >= min_candidates:
-                    logger.debug(
-                        "progressive_query: early stop after %d/%d bands "
-                        "(%d strong candidates, target=%d)",
-                        bands_queried, len(band_queries), strong, min_candidates)
-                    break
-
-        return dict(band_hits)
-
     async def remove_entity_bands(
         self,
         table: str,

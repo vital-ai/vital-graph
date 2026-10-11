@@ -284,8 +284,9 @@ class EntityFuzzyIndexPG:
     ) -> Set[str]:
         """Retrieve candidate entity IDs from LSH indexes.
 
-        Uses progressive band queries with early stopping across
-        primary LSH, phonetic LSH, and typo-variant lookups.
+        Escalates across primary LSH, phonetic LSH and typo-variant lookups,
+        stopping once enough candidates are found; each stage reads all of its
+        bands in one statement.
 
         Args:
             entity: Dict with primary_name and optional aliases/location.
@@ -314,42 +315,40 @@ class EntityFuzzyIndexPG:
 
         candidate_ids: Set[str] = set()
 
-        # Step 1: Primary LSH progressive query
+        # EVERY BAND, IN ONE STATEMENT (`issues/254`). This was a progressive
+        # query, 3 bands per round trip, stopping once 20 entities had hits on
+        # half the bands read. On production every query read all 7 batches
+        # anyway, so the stop saved nothing there and cost 6 round trips. Where it
+        # DID fire it cost recall: after the first 3 bands, 20 names sharing a
+        # common word ("... Transport Group") already met the bar, so a typo of a
+        # name whose distinctive token matched only in later bands was never
+        # reached (1 target in 200 on a 1.04M-entity registry, with the stop
+        # firing on 4.8% of queries).
+
+        # Step 1: Primary LSH
         if primary_mh:
             band_queries = self._build_band_queries(primary_mh, self.primary_band_ranges)
-            hits = await self.storage.query_bands_progressive(
-                TABLE_PRIMARY, band_queries,
-                min_candidates=DEFAULT_MIN_CANDIDATES,
-                max_candidates=DEFAULT_MAX_CANDIDATES,
-            )
+            hits = await self.storage.query_bands(TABLE_PRIMARY, band_queries)
             candidate_ids = self._extract_entity_ids(hits)
 
         if len(candidate_ids) >= DEFAULT_MIN_CANDIDATES:
             return candidate_ids
 
-        # Step 2: Phonetic LSH progressive query
+        # Step 2: Phonetic LSH
         if phonetic_mh:
             band_queries = self._build_band_queries(phonetic_mh, self.phonetic_band_ranges)
-            hits = await self.storage.query_bands_progressive(
-                TABLE_PHONETIC, band_queries,
-                min_candidates=DEFAULT_MIN_CANDIDATES,
-                max_candidates=DEFAULT_MAX_CANDIDATES,
-            )
+            hits = await self.storage.query_bands(TABLE_PHONETIC, band_queries)
             ph_ids = self._extract_entity_ids(hits, phonetic_keys=True)
             candidate_ids.update(ph_ids)
 
         if len(candidate_ids) >= DEFAULT_MIN_CANDIDATES:
             return candidate_ids
 
-        # Step 3: Typo variants progressive query
+        # Step 3: Typo variants
         typo_mh = self._build_typo_minhashes(query_names, entity, max_variants=50)
         if typo_mh:
             band_queries = self._build_band_queries(typo_mh, self.primary_band_ranges)
-            hits = await self.storage.query_bands_progressive(
-                TABLE_PRIMARY, band_queries,
-                min_candidates=DEFAULT_MIN_CANDIDATES,
-                max_candidates=DEFAULT_MAX_CANDIDATES,
-            )
+            hits = await self.storage.query_bands(TABLE_PRIMARY, band_queries)
             typo_ids = self._extract_entity_ids(hits)
             candidate_ids.update(typo_ids)
 

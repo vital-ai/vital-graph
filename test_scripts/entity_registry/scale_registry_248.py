@@ -427,7 +427,8 @@ async def cmd_measure(a):
         seen["batches"] = seen.get("batches", 0) + 1
         return await orig_qb(*args, **kw)
     idx.storage.query_bands = counting_qb
-    if a.no_early_stop:
+    # Only meaningful on code that still has the progressive query (before 254's fix).
+    if a.no_early_stop and hasattr(idx.storage, "query_bands_progressive"):
         orig_prog = idx.storage.query_bands_progressive
 
         async def all_bands(table, band_queries, **kw):

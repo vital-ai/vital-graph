@@ -130,8 +130,93 @@ async def cmd_status(pool):
         print(f"  Avg bands/entity: {bands_per:.1f}")
 
 
-async def cmd_rebuild(pool, num_perm: int = 64, threshold: float = 0.3):
-    """Full rebuild of the PG fuzzy index from entity table data."""
+BAND_TABLES = ('entity_fuzzy_band', 'entity_fuzzy_phonetic_band')
+
+
+async def _band_index_ddl(conn) -> list:
+    """`(table, kind, name, ddl)` for every index on the band tables, read from the catalog.
+
+    Read back rather than taken from `EntityRegistrySchema`, so the rebuild restores
+    exactly what the database had, including indexes added outside the schema
+    file (252's entity-id expression indexes were built by hand on production).
+    """
+    out = []
+    for t in BAND_TABLES:
+        pk = await conn.fetchrow(
+            "SELECT conname, pg_get_constraintdef(oid) AS d FROM pg_constraint "
+            "WHERE conrelid = $1::regclass AND contype = 'p'", t)
+        if pk:
+            out.append((t, 'pk', pk['conname'],
+                        f"ALTER TABLE {t} ADD CONSTRAINT {pk['conname']} {pk['d']}"))
+        for r in await conn.fetch(
+                "SELECT c.relname, pg_get_indexdef(i.indexrelid) AS d FROM pg_index i "
+                "JOIN pg_class c ON c.oid = i.indexrelid "
+                "WHERE i.indrelid = $1::regclass AND NOT i.indisprimary "
+                "ORDER BY c.relname", t):
+            out.append((t, 'index', r['relname'], r['d']))
+    return out
+
+
+async def _drop_band_indexes(pool, ddl: list) -> None:
+    async with pool.acquire() as conn:
+        for t, kind, name, _ in ddl:
+            if kind == 'pk':
+                await conn.execute(f"ALTER TABLE {t} DROP CONSTRAINT {name}")
+            else:
+                await conn.execute(f"DROP INDEX {name}")
+
+
+async def _restore_band_indexes(pool, ddl: list) -> None:
+    """Recreate the band indexes, each in one transaction with no statement timeout.
+
+    Building them on ~20M rows takes minutes, and production's parameter group
+    caps statements at 60 s (`issues/136`), so the timeout is lifted per statement.
+
+    A live writer can insert during the load. With no primary key, the same
+    (band_id, band_hash, entity_key) can then arrive twice, once from the writer
+    and once from the rebuild, and the key would refuse to build. So a refused key
+    deduplicates that table and is retried; any other failure propagates.
+    """
+    async with pool.acquire() as conn:
+        for t, kind, name, stmt in ddl:
+            if await conn.fetchval(
+                    "SELECT 1 FROM pg_class WHERE relname = $1", name):
+                continue                      # already back: a re-run after a partial restore
+            t0 = time.time()
+            for attempt in (1, 2):
+                try:
+                    async with conn.transaction():
+                        await conn.execute("SET LOCAL statement_timeout = 0")
+                        await conn.execute("SET LOCAL maintenance_work_mem = '1GB'")
+                        await conn.execute(stmt)
+                    break
+                except asyncpg.UniqueViolationError:
+                    if kind != 'pk' or attempt == 2:
+                        raise
+                    async with conn.transaction():
+                        await conn.execute("SET LOCAL statement_timeout = 0")
+                        removed = await conn.execute(
+                            f"DELETE FROM {t} WHERE ctid IN (SELECT ctid FROM ("
+                            f"SELECT ctid, row_number() OVER (PARTITION BY band_id, "
+                            f"band_hash, entity_key ORDER BY ctid) AS rn FROM {t}) d "
+                            f"WHERE rn > 1)")
+                    print(f"  {t}: duplicate rows from a concurrent writer removed "
+                          f"({removed}); retrying {name}")
+            print(f"  restored {name} in {time.time() - t0:.0f}s")
+
+
+async def cmd_rebuild(pool, num_perm: int = 64, threshold: float = 0.3,
+                      bulk: bool = True):
+    """Full rebuild of the PG fuzzy index from entity table data.
+
+    BULK BY DEFAULT: the band tables' primary keys and indexes are dropped for the
+    load and recreated afterwards. Maintaining them row by row during the COPY made
+    the rebuild run at ~250 entities/s falling to ~100/s on a 1.04M-entity registry
+    (a 3+ hour window with fuzzy matching empty); dropped and recreated, the same
+    rebuild took 710 s plus 131 s of index build (`issues/248`, measured
+    2026-10-11). The recreated DDL is the catalog's own, printed and saved before
+    anything is dropped, and restored even if the load fails.
+    """
     from vitalgraph.entity_registry.entity_fuzzy_pg import EntityFuzzyIndexPG
 
     await ensure_tables(pool)
@@ -144,8 +229,24 @@ async def cmd_rebuild(pool, num_perm: int = 64, threshold: float = 0.3):
           f"{len(idx.phonetic_band_ranges)} phonetic")
     print()
 
+    ddl = []
+    if bulk:
+        async with pool.acquire() as conn:
+            ddl = await _band_index_ddl(conn)
+        # Written down before anything is dropped: if this process is killed
+        # mid-load, these statements put the indexes back.
+        saved = Path(f"fuzzy_band_indexes_{time.strftime('%Y%m%d_%H%M%S')}.sql")
+        saved.write_text("".join(f"{stmt};\n" for *_, stmt in ddl))
+        print(f"  bulk load: dropping {len(ddl)} band index(es); DDL saved to {saved.resolve()}")
+        await _drop_band_indexes(pool, ddl)
+
     start = time.time()
-    count = await idx.initialize(pool, skip_lock=True)
+    try:
+        count = await idx.initialize(pool, skip_lock=True)
+    finally:
+        if ddl:
+            print(f"  load done in {time.time() - start:.0f}s; restoring band indexes")
+            await _restore_band_indexes(pool, ddl)
     duration = time.time() - start
 
     from vitalgraph.entity_registry.entity_fuzzy_storage import (
@@ -342,6 +443,9 @@ def main():
     )
     parser.add_argument('--rebuild', action='store_true',
                         help='Full rebuild of PG fuzzy index from entity table')
+    parser.add_argument('--no-bulk', action='store_true',
+                        help='--rebuild with the band indexes kept in place during '
+                             'the load (slow: maintained row by row)')
     parser.add_argument('--verify', action='store_true',
                         help='Verify consistency between Redis and PG fuzzy hashes')
     parser.add_argument('--status', action='store_true',
@@ -370,7 +474,8 @@ def main():
                 await ensure_tables(pool)
                 await cmd_status(pool)
             elif args.rebuild:
-                await cmd_rebuild(pool, num_perm=args.num_perm, threshold=args.threshold)
+                await cmd_rebuild(pool, num_perm=args.num_perm, threshold=args.threshold,
+                                  bulk=not args.no_bulk)
             elif args.verify:
                 await cmd_verify(pool)
             elif args.compare:
