@@ -1,7 +1,8 @@
 # 254 — Entity fuzzy queries pay for an empty visibility map, and for an early stop that never fires
 
 ## Status: CAUSE 1 DONE 2026-10-11 — the VACUUM ran on production. Cause 2 (the early
-## stop) deliberately untouched: its recall check needs the post-`248` index.
+## stop) MEASURED 2026-10-11 on a 1.04M-entity registry: fires on 4.8% of queries, cost
+## 1 target in 200; undecided, see the end.
 ##
 ## Found: measured on production 2026-09-29. Neither finding is a
 ## correctness defect — the numbers are simply higher than they need to be, and
@@ -167,3 +168,38 @@ shingles, which changes every band and therefore the candidate sets the early
 stop sees. The recall check this issue requires (`248`'s 8 production clusters)
 has to run against the rebuilt index, so the threshold is a post-deploy
 decision.
+
+## Cause 2 measured on a production-scale registry, 2026-10-11
+
+`248`'s recall check ran on a synthetic 1.04M-entity registry
+(`test_scripts/entity_registry/scale_registry_248.py`, post-`248`/`249` index,
+806 planted queries with known targets), with the early stop as shipped and with it
+disabled (`measure --no-early-stop`, every band read):
+
+| | shipped | every band |
+|---|---|---|
+| queries where the early stop fired | **39 of 806 (4.8%)** | 0 |
+| targets missed | 3 (one target, all three geo variants) | **0** |
+| ms per query, median / p90 (local, no RTT) | 14.9 / 45.2 | 18.5 / 56.1 |
+
+So **"an early stop that never fires" is wrong for names built from common
+words.** It fires when 20 entities reach 2 hits after the first batch of 3 bands
+(`min_hits = max(2, 3//2) = 2`), and common tokens supply that easily. 36 of the
+39 firings were harmless (identical-name pairs, found either way). One was not:
+`Enjamb Armstrnog Transport Group` → `... Armstrong ...` (Jaccard 0.765, score
+96.9) shares 12 of 21 bands with its target, none of them in the first 3, and 44
+`... Transport Group` names had 2 hits there, so the scan stopped after 3 bands.
+
+What this settles and what it does not:
+
+* the early stop **costs recall**, rarely (1 target in 200 typo targets here) but
+  on exactly the names where it fires: the distinctive token matches in later
+  bands while the common ones fill the first batch;
+* disabling it costs ~24% locally. In production every batch is also a round trip
+  (~26 ms, measured above), so the early stop saves more there than here;
+* the 2-of-3 bar is weak evidence, but no other bar has been measured. Delaying the
+  first check (e.g. to 6 bands with 3 hits), or ordering band batches by
+  selectivity, are untested candidates. Measure any of them with
+  `scale_registry_248.py measure` before and after.
+
+Still open. Not changed here.

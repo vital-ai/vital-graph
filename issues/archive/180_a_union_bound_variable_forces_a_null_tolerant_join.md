@@ -1,5 +1,6 @@
 # A UNION-Bound Variable Forces A Null-Tolerant Join, And LIMIT Stops Working
 
+## ARCHIVED 2026-10-11 — correctness fixed (COALESCE in emit_join, and distribution); the performance half re-measured on current code: distribution + merge wins every shape, including the ORDER BY + LIMIT one that cost 2x before the merge. Nothing remaining. Evidence: the last section.
 ## Status: CORRECTNESS FIXED 2026-09-09 — the join is distributed over the union, so
 ## every projected variable is bound (`tests/integration/test_join_distributes_over_union.py`).
 ## PERFORMANCE OPEN: that rewrite exactly doubles the work on an ORDER BY + LIMIT
@@ -233,3 +234,35 @@ seconds.
   mechanism dominates.
 - What the cost looks like WITHOUT `ORDER BY` + `LIMIT`, which is the shape most
   real queries take. Every measurement here is of a top-10 query.
+
+## The 2x cost is gone: re-measured 2026-10-11
+
+The 2.0000x above was measured before `merge_bgp_joins` joined the rewrite
+(`35cf5616`, which measured 362x on this query). Re-measured on current code on the
+test stack's `wordnet_frames` (10.3M quads), distribution ON vs patched to the
+identity (OFF), 5 alternating runs per cell, fenced exactly as the executor fences
+(`test_scripts/perf/_issue180_distribution_gate.py`):
+
+| shape | ON buffers | OFF buffers | ON ms min/med | OFF ms min/med |
+|---|---|---|---|---|
+| full result | 38,047 | 15,579,252 | 32.0 / 66.6 | 7,061.7 / 7,126.1 |
+| `ORDER BY ?entity LIMIT 10` (the shape this issue measured) | 38,047 | 15,579,253 | 32.1 / 42.4 | 6,485.3 / 7,101.3 |
+| `ORDER BY ?frame LIMIT 10` | 38,047 | 15,579,268 | 33.6 / 42.8 | 9,954.5 / 10,272.3 |
+| `LIMIT 10 OFFSET 20` | 2,635 | 910,890 | 2.5 / 2.9 | 627.6 / 674.4 |
+
+**ON wins every shape, ~170x on the ORDER BY + LIMIT shape that cost 2x before.**
+The full result is identical (425 rows, same multiset digest). Both top-10s are
+valid answers: their `?entity` values are exactly the 10 smallest, and every row is
+in the full result; the digests differ only by which tied rows were picked. The
+null-tolerant predicates are 0 ON, 2 OFF. So the gate this issue asked for is not
+needed: there is no shape here where distributing loses.
+
+A paging check across all 43 pages: ON partitions the 425 rows exactly, while OFF
+repeats 24 and drops 24. That is not a defect in either. This query projects six
+variables, so `_anchor_var_for_paging` imposes no order (`collect.py:629`), and
+LIMIT/OFFSET with no ORDER BY is unordered by definition. ON partitions because its
+plan happens to be deterministic, not because anything guarantees it.
+
+Side note: generation took 5.5 s here, all of it `slot_type_tautology` giving up
+at its 5 s budget. The fixture space has never had a maintenance cycle to
+precompute that, as the warning says (`issues/178`).

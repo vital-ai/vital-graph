@@ -1,6 +1,7 @@
 # The Deep-Page `OFFSET 0` Fence Costs 3–21x On Every Shape Measured
 
-## Status: OPEN — measured 2026-08-25, NOT changed. Needs a full sweep first.
+## ARCHIVED 2026-10-11 — no longer reproduces: on current code the fence costs 0.9-1.1x on all eight cases this issue priced at 3-21x (identical SQL, 5 alternating runs, rows identical). Nothing to change. Evidence: the last section.
+## Status: CLOSED 2026-10-11 — measured 2026-08-25; re-measured, the cost is gone.
 
 `emit_slice.py:796` emits an unconditional optimisation fence on the deep-page
 path:
@@ -104,3 +105,41 @@ allowed to do around it.
 - `issues/119` — the investigation that surfaced this
 - `issues/archive/040` — where deep-page fences came from, and one removal
 - `issues/070` — a barrier change reverted after measurement
+
+## Re-measured 2026-10-11: the cost no longer exists
+
+The sweep this issue asked for, done in two parts on the test stack:
+
+1. **Full query-tier perf suite**, fence gated to "only over a semi-join" vs as
+   shipped, recorded and compared, then 3 alternating rounds of the
+   paging/traversal/growth benches. Nothing attributable: `deep_paging.monotonic`
+   read the same buffers both ways (333,764 vs 333,757), and every timing
+   difference was inside the run-to-run spread of one variant (the growth-curve
+   benches swing 3-6x within a variant and never reach the deep-page path at all,
+   since they page at offset 0). The traversal plan-shape flips seen in the first
+   comparison varied within a variant too, and the fixtures had been re-ANALYZEd
+   mid-run by the test app's maintenance job.
+2. **This issue's eight cases**, offset 1000, 25 rows, measured on IDENTICAL SQL
+   with and without the fence (the current generator's page with the
+   `OFFSET 0` re-inserted), 5 alternating runs, test app stopped
+   (`test_scripts/perf/_issue134_deep_page_fence.py`):
+
+| case | fenced med ms | unfenced med ms | ratio | rows |
+|---|---|---|---|---|
+| 10k eq CA | 26.5 | 27.9 | 0.9 | same (0, under 1,000 matches) |
+| 10k eq IL | 9.8 | 9.6 | 1.0 | same (0) |
+| 10k eq VT | 2.9 | 2.9 | 1.0 | same (0) |
+| 10k range 0.8 | 193.2 | 196.1 | 1.0 | same (25) |
+| 100k eq CA | 276.7 | 269.6 | 1.0 | same (25) |
+| 100k eq IL | 166.3 | 157.1 | 1.1 | same (25) |
+| 100k eq VT | 36.7 | 37.3 | 1.0 | same (0) |
+| 100k range 0.8 | 255.4 | 238.6 | 1.1 | same (25) |
+
+**0.9-1.1x everywhere, where August measured 3-21x.** `needs_ordered_scan` is
+now False on all eight, where three were True then, so the generator has changed
+underneath the fence since. A gate was written and tested (kept the fence only
+when `_has_semijoin(plan.child)`), and then REVERTED: a plan-shaping change with
+no measured benefit is risk for nothing. The fence stays as it is.
+
+If this ever needs reopening, rerun the script above. A ratio well above 1 on
+identical SQL is the only evidence that would justify touching it.

@@ -1,5 +1,6 @@
 # 248 — Folding geo into the name shingles loses the match it is meant to help find
 
+## ARCHIVED 2026-10-11 — fixed and verified locally at production scale, nothing remaining. Evidence: 1.04M-entity synthetic registry (`test_scripts/entity_registry/scale_registry_248.py`), before/after table at the end. Production still needs the full rebuild after deploy (`249`'s Rollout), which is a deploy step, not open work here.
 ## Status: FIXED IN CODE 2026-10-11 (`85b5dfa3`, not yet released), option 1. Needs a
 ## full fuzzy rebuild straight after deploy — the bands change.
 ##
@@ -273,3 +274,58 @@ same applies to `254`'s early-stop threshold, which waits on that check.
 
 **The test stack's own index** still has bands built with geo for its existing
 entities; rebuild it before relying on fuzzy results there.
+
+## Verified at production scale, 2026-10-11
+
+No local registry was near production's size (dev 2,317 entities, test stack 330),
+and this defect depends on scale (same-city crowding of the level walk), so one was
+built: `test_scripts/entity_registry/scale_registry_248.py` creates
+`registry_scale_248` in the test-stack container with **1,043,603 entities + 120,000
+aliases**: 640k businesses (210k `company-<digits>`), 400k persons, US geo
+Zipf-weighted so the most crowded city holds 14,029 entities. Planted cases, each
+with a known target: 200 identical-name pairs (member 2's geo agrees / lacks
+locality / other city / other state), 200 one-edit typos (substitution, omission,
+insertion, transposition) each queried with geo agreeing, absent and disagreeing,
+and this issue's three literals with 3,000 same-city rivals. Run through the
+real `EntityFuzzyIndexPG` rebuild and `find_similar_by_name`, before (`3f34e783`,
+geo in the shingles) and after (HEAD):
+
+| | before | after |
+|---|---|---|
+| identical-name pairs, both members found | 200/200 | **200/200** |
+| ... query's own record first | 121/200 | **195/200** (geo tie-break) |
+| typo, geo agrees, found | 195/200 | **199/200** |
+| typo, geo disagrees, found | 187/200 | **199/200** |
+| typo, geo absent, found | 200/200 | 199/200 (below) |
+| `Aur Trdaing Corp` with geo | **missed**, 1,965 candidates | **rank 1** |
+| `Aur Trdaing Corp` no geo | rank 1 | rank 1 |
+| `Carbal` → `Cabral` | found with geo only (geo shingles gave a nonzero Jaccard) | missed, as expected |
+| `Dice Durid` → `Dice Druid` | found with geo only | missed (coin flip, threshold untouched) |
+| candidates per typo query, median | 90-217, varying with geo | 103-146, identical across geo |
+| band rows per table | 24,435,663 | 20,025,663 (placeholders out, `249`) |
+
+Every "Verify after fixing" item holds: pairs not regressed, Aur at rank 1 with
+geo, a disagreeing geo no worse than none (the after candidates and results are
+identical across the three geo variants), Carbal still missed. The before
+column's Carbal "hit" is the geo shingles manufacturing similarity, which is the
+defect, not recall.
+
+**The one after-miss is not this issue.** `Enjamb Armstrnog Transport Group` →
+`... Armstrong ...` (Jaccard 0.765, score 96.9) shares 12 of 21 bands with its
+target, but `query_bands_progressive` stopped after the FIRST batch of 3: 44
+entities already had 2 hits from the common-word bands (`Transport Group`), which
+meets its early-stop bar of 20 at `max(2, 3//2) = 2` hits. So the early stop DOES
+fire, on names built from common words, and it costs recall. That is `254`'s
+cause 2 and is recorded there. It misses with geo agreeing, absent or disagreeing
+alike, because geo no longer touches candidate generation.
+
+**Rebuild time, for the rollout.** On the test stack the shipped rebuild (band
+indexes maintained during the COPY) ran at ~250 entities/s falling to ~100/s, a
+3+ hour run. With the two band tables' PK and secondary indexes dropped for the
+load and recreated afterwards, it took 710 s (1,469/s) plus 131 s for the indexes.
+The `249` rollout estimate of 20-25 minutes counted band computation only.
+Production's RDS will not match a laptop's Docker I/O, but the estimate should not
+be trusted without measuring there.
+
+The test stack's own index was rebuilt with this code (45 active entities, 945
+bands per table).

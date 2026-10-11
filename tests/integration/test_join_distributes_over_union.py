@@ -7,11 +7,11 @@ leave unbound is projected with `COALESCE`, because SPARQL merges compatible
 solutions so the BOUND value wins. That is what ships, and it is
 shape-independent.
 
-`rewrite_distribute_union` is a separate, currently UNWIRED optimisation. It is
-worth 6.1x on a full result set and costs exactly 2.0000x on
-`ORDER BY ... LIMIT`, which is the shape the reference query uses, so it is not
-enabled by default. The tests here still exercise it directly, because its row
-loss was subtle and worth keeping pinned.
+`rewrite_distribute_union` is a separate optimisation, wired in `generate_sql`
+together with `merge_bgp_joins`. Before the merge it cost 2.0000x on
+`ORDER BY ... LIMIT`; with it, it wins every shape measured, ~170x on that one
+(`issues/180`, re-measured 2026-10-11). The tests here exercise it directly,
+because its row loss was subtle and worth keeping pinned.
 
 `rewrite_distribute_union` rewrites `Join(Union(A,B), C)` into
 `Union(Join(A,C), Join(B,C))` so each arm joins on the variables that arm
