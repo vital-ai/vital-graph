@@ -183,6 +183,17 @@ dev = [
     "markdownify>=0.13.0",
     "mammoth>=1.8.0",
     "pdfplumber>=0.11.0",
+    # Entity-registry fuzzy index. MODULE-LEVEL imports in
+    # entity_registry/entity_fuzzy.py and vectorization/fuzzy_core.py, so these
+    # tests fail at COLLECTION without them — which broke CI at 85b5dfa3, while
+    # a dev env built from `.[all]` never saw it:
+    #   tests/unit/test_placeholder_names_policy.py      (issues/249)
+    #   tests/unit/test_fuzzy_geo_is_a_tie_break.py       (issues/248)
+    # Collection stops at the first missing one: jellyfish hid redis, and
+    # rapidfuzz is imported beside them. The rest of the `server` extra stays out.
+    "jellyfish>=1.0.0",
+    "rapidfuzz>=3.0.0",
+    "redis>=5.0.0",
 ]
 
 # Testing utilities
