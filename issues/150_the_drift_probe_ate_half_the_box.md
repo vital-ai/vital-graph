@@ -1,5 +1,11 @@
 # Removing A Timeout Turned A Failing Probe Into A 54%-Duty-Cycle Scan
 
+## DEPLOYED (checked 2026-10-11): production build `v0.0.78`, live since 2026-10-01,
+## contains this fix (`af1c717e` / `4c690d7a`, 2026-09-05/06); dated from the deploy notes, as that build's commit
+## is in the build repository. The "UNDEPLOYED" below predates it.
+##
+## REVIEWED 2026-10-11 — STAYS OPEN: the fix is in production (see DEPLOYED above). REMAINS: the stats-blindness item is "left open", and no local verification of the gate is recorded.
+##
 ## Status: FIXED in code, UNDEPLOYED. Caused by `478fa06`, which was itself a fix.
 
 ## The symptom, as reported

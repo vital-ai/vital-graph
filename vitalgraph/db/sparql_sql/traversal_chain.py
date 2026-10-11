@@ -331,8 +331,10 @@ def _traversal_tables(bgp: PlanV2,
 def _as_uuid_pair(pred, obj):
     """(predicate, object) as TERM UUIDs, or None.
 
-    `leaf_terms` records constants as `(term_text, term_type)`; `rdf_stats` —
-    which prices a constrained end — is keyed by term UUID. Returning the raw
+    `leaf_terms` records constants as `(term_text, term_type, lang, datatype)`
+    (`collect.py`; widened in `a2b623a` — believing it a 2-tuple is what caused
+    `issues/138`); `rdf_stats` — which prices a constrained end — is keyed by
+    term UUID. Returning the raw
     text pair looks right and silently never matches a statistic, so the end
     prices as unknown and the direction is never chosen. Converted here, with
     the same deterministic UUIDv5 the writer uses, so the two agree by
@@ -346,8 +348,12 @@ def _as_uuid_pair(pred, obj):
         o_text, o_type = obj[0], obj[1]
     except Exception:
         return None
-    # A typed or language-tagged object hashes with those in the key, and
-    # leaf_terms does not carry them here — so only plain URIs are priced.
+    # Only plain URIs are priced — BY CHOICE, not for lack of data. leaf_terms
+    # DOES carry lang and datatype (`issues/135`, appended 2026-09-01), so a
+    # typed literal could be hashed here exactly as the writer hashes it. Doing
+    # so changes which traversals get a direction, which is a plan change that
+    # wants its own measurement (`issues/090`). Past this guard nothing has a
+    # lang or datatype, so the two-argument hash below is correct.
     if p_type != "U" or o_type != "U":
         return None
     return (_generate_term_uuid(p_text, p_type),

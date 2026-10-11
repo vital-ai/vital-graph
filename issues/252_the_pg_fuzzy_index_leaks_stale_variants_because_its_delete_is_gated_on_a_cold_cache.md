@@ -1,5 +1,11 @@
 # 252 — The PG fuzzy index leaks stale variants because its delete is gated on a per-process cache
 
+## DEPLOYED (checked 2026-10-11): production build `v0.0.78`, live since 2026-10-01,
+## contains this fix (`c38ba726`, 2026-10-01 10:18 EDT); dated from the deploy notes, as that build's commit
+## is in the build repository. The "FIXED LOCALLY" below predates it.
+##
+## REVIEWED 2026-10-11 — STAYS OPEN: the fix is in production (see DEPLOYED above), so "FIXED LOCALLY" is out of date. REMAINS: the page-boundary alias under-indexing it "noticed, not fixed" is still in `entity_fuzzy_pg.py` `_do_initialize`.
+##
 ## Status: FIXED LOCALLY 2026-09-29, verified end to end.
 ## **PRODUCTION INDEXES BUILT 2026-09-29** — both valid, both owned by
 ## `vitalgraph_user`, 214 MB each, measured at 0.172 ms against the old shape's

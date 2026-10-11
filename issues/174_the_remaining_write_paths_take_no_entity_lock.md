@@ -1,6 +1,12 @@
 # 174 — The remaining write paths take no entity lock
 
-## Status: OPEN
+## Status: OPEN — items 1, 2, 3 and 5 LANDED; 4 superseded by `175`. ONE item remains:
+## 6, `PUT /objects` (`objects_impl.update_objects_batch`) is atomic and takes NO
+## entity lock — checked against the code 2026-10-11. Index corrected the same day.
+## LATENT, not live: production made ZERO calls to any objects write route in
+## the 10 days to 2026-10-11 (access logs), so nothing is racing through it today.
+##
+## Was: OPEN
 
 **Raised:** 2026-09-07, from the cleanup in issues/173
 **Related:** issues/173 (the race that corrupted 243 subjects and the lock that

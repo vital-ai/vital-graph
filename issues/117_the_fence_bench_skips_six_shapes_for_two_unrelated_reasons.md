@@ -1,5 +1,7 @@
 # The Fence Bench Skips Six Shapes, for Two Reasons and Neither Is the Fence
 
+## REVIEWED 2026-10-11 — STAYS OPEN: despite FIXED below, the 2026-09-14/15 sections reopen it: the cell oscillates and records nothing either way, and one failure takes four other cells down. Needs a fix or an explicit acceptance.
+##
 ## Status: FIXED 2026-08-22 (`4c61499`). Both bench defects corrected; six
 ## skips are now one, and that one is honest. The product question this
 ## uncovered went to `issues/118` and was downgraded there.

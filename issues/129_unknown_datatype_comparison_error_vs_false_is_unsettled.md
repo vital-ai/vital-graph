@@ -1,5 +1,7 @@
 # Unknown-Datatype Comparison: Type Error or False? The Two Authorities Disagree
 
+## REVIEWED 2026-10-11 — STAYS OPEN: all seven cases pass, but the follow-ups it says to fix "regardless" are unbuilt: the DAWG reload cache, `truncate_space` not clearing `datatype`, no `invalidate_datatype_cache` call.
+##
 ## Status: CLOSED 2026-08-25 — all seven cases pass.
 ## Semantics settled 2026-08-24; the remaining five closed out since.
 

@@ -1,5 +1,7 @@
 # Vector Auto-Sync Embeds "Every Literal Property" Instead Of The Configured Mapping
 
+## REVIEWED 2026-10-11 — STAYS OPEN: the mapping fix is built and falsified, and geo/fuzzy WERE checked (the header's "NOT audited" is out of date). REMAINS: decide whether to measure and re-embed vectors built from the wrong text.
+##
 ## Status: FIXED 2026-09-24 — `_sync_vectors_for_subjects` now resolves the
 ## index's mapping per subject and SKIPS what it does not cover, exactly as the
 ## FTS half does. Found 2026-09-21 while fixing that half (`issues/217`).

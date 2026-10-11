@@ -1,5 +1,11 @@
 # The Slot-Sort Backfill Never Ran Because The Driver Gave Up At 60s
 
+## DEPLOYED (checked 2026-10-11): production build `v0.0.78`, live since 2026-10-01,
+## contains this fix (`478fa06a`, 2026-09-02); dated from the deploy notes, as that build's commit
+## is in the build repository. The "UNDEPLOYED" below predates it.
+##
+## REVIEWED 2026-10-11 — STAYS OPEN: the fix is in production (see DEPLOYED above), so "UNDEPLOYED" below is out of date. REMAINS: the client-timeout fix is scale-dependent (a 97-133 s probe) and was never verified locally at scale.
+##
 ## Status: FIXED in code, UNDEPLOYED. The listing is slow until this ships and
 ## the backfill runs.
 

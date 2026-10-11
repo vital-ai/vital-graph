@@ -1,5 +1,7 @@
 # CSV Import Drops Literal Datatypes and Computes Non-Canonical Term UUIDs
 
+## REVIEWED 2026-10-11 — STAYS OPEN: the converter fix is done and both known spaces were reloaded (the header's "need reloading" is out of date). REMAINS: check whether any production or test CSV-loaded space still predates the fix; no deploy note records it.
+##
 ## Status: FIXED in the converter 2026-08-06 — existing CSV-loaded spaces need reloading
 
 Two defects in `test_scripts/import/test_csv_import_process.py`, the converter

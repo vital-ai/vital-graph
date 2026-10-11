@@ -1,5 +1,7 @@
 # `vitalgraphimport --mode bulk` Discards Literal Datatypes
 
+## REVIEWED 2026-10-11 — STAYS OPEN: the fix is built; the half deferred to `158` is fixed. REMAINS: the local fixture imported before the fix (`nurture_shape_test`) holds untyped terms and has not been re-imported.
+##
 ## Status: FIXED 2026-09-04 for non-string datatypes; see issues/158 for the
 ## xsd:string half, which the fix uncovered and cannot settle on its own.
 ##

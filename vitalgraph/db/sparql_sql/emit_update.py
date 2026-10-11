@@ -867,10 +867,21 @@ async def _modify_sql(
                         f'vitalgraph_term_uuid({text_expr}, {type_expr}, '
                         f'{lang_expr}, {dt_id_expr})'
                     )
+                    # DISTINCT, ORDERED, ON CONFLICT (`issues/152`). `NOT EXISTS`
+                    # alone failed two ways. Two binding rows minting the SAME
+                    # new term both passed it — it reads the table as of the
+                    # statement's start — and the second violated the primary
+                    # key, failing the whole update (one BIND'd literal on five
+                    # matched rows was enough). And concurrent updates inserted
+                    # in whatever order the SELECT yielded, the term-table
+                    # deadlock 152 recorded. DISTINCT removes the in-statement
+                    # duplicates, `ORDER BY 1` gives every writer one lock order,
+                    # and ON CONFLICT settles a race the way the single-term path
+                    # (`_term_insert_sql`, issues 003/019) already does.
                     stmts.append(
                         f"INSERT INTO {term_table} "
                         f"(term_uuid, term_text, term_type, lang, datatype_id) "
-                        f"SELECT {uuid_expr}, "
+                        f"SELECT DISTINCT {uuid_expr}, "
                         f"{text_expr}, "
                         f"{type_expr}, "
                         f"{lang_expr}, "
@@ -879,7 +890,9 @@ async def _modify_sql(
                         f"WHERE b.\"{col}__uuid\" IS NULL "
                         f"AND NOT EXISTS ("
                         f"SELECT 1 FROM {term_table} "
-                        f"WHERE term_uuid = {uuid_expr})"
+                        f"WHERE term_uuid = {uuid_expr}) "
+                        f"ORDER BY 1 "
+                        f"ON CONFLICT (term_uuid) DO NOTHING"
                     )
 
         # Step 4: INSERT new quads from bindings

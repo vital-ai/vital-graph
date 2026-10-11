@@ -1,5 +1,7 @@
 # Graph Registration Is a Side Effect of One Write Path, So Every Other Path Leaves the Catalog Silent
 
+## REVIEWED 2026-10-11 — STAYS OPEN: despite CLOSED below, its own "Still open" lists unbuilt work: registration of landing quads is still not structural, and `load_wordnet_csv.py`'s duplicate SQL is unreconciled.
+##
 ## Status: CLOSED 2026-08-21. Both instances fixed (`ee086a5`, `1a7abc1`) and
 ## the general rule now watched (`_run_graph_registration_check`).
 

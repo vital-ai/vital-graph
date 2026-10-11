@@ -1,6 +1,11 @@
 # A UNION-Bound Variable Forces A Null-Tolerant Join, And LIMIT Stops Working
 
-## Status: SPLIT after measurement. The CORRECTNESS half is CONFIRMED and open:
+## Status: CORRECTNESS FIXED 2026-09-09 — the join is distributed over the union, so
+## every projected variable is bound (`tests/integration/test_join_distributes_over_union.py`).
+## PERFORMANCE OPEN: that rewrite exactly doubles the work on an ORDER BY + LIMIT
+## shape (31.2M vs 15.6M buffers) and has no gate. Header corrected 2026-10-11.
+##
+## Was: SPLIT after measurement. The CORRECTNESS half is CONFIRMED and open:
 ## the join merges compatible solutions in its condition but not in its
 ## projection, so bound values are lost (`COALESCE` is absent from the generated
 ## SQL entirely). The PERFORMANCE half is **REFUTED** — removing the

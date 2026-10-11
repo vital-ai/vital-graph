@@ -57,7 +57,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import asyncpg
 
 from vitalgraph.entity_registry.datasketch_cluster import register_cluster_storage
-from vitalgraph.entity_registry.entity_fuzzy import EntityFuzzyIndex, compute_fuzzy_hash
+from vitalgraph.entity_registry.entity_fuzzy import EntityFuzzyIndex
+from vitalgraph.entity_registry.entity_fuzzy import compute_entity_hash as compute_fuzzy_hash  # one hash, two names
 
 logging.basicConfig(
     level=logging.INFO,

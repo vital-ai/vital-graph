@@ -1,5 +1,7 @@
 # 176 — The prop-sort tables: what they are, and what commit 9756865e actually contains
 
+## REVIEWED 2026-10-11 — STAYS OPEN: a record, as CLOSED below says, but its "Still open" section still lists the `hasFrameGraphURI` proxy and the search path composing with the prop-sort tables.
+##
 ## Status: CLOSED — record, not a defect
 
 **Raised:** 2026-09-08

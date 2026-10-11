@@ -200,7 +200,7 @@ async def cmd_verify(pool):
     missing_in_pg = 0
     PAGE = 10000
 
-    from vitalgraph.entity_registry.entity_fuzzy import compute_fuzzy_hash
+    from vitalgraph.entity_registry.entity_fuzzy import compute_entity_hash as compute_fuzzy_hash
 
     async with pool.acquire() as conn:
         total = await conn.fetchval(
