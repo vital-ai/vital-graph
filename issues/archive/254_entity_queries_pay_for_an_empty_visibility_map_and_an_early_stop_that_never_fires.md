@@ -237,6 +237,17 @@ number if wanted.
 ## In production, 2026-10-12 (v0.0.85)
 
 Deployed with the single-statement band query, after the rebuild and its
-`VACUUM (ANALYZE)` (deploy step 9). The post-deploy `find_similar` latency has
-not been re-measured against this issue's before numbers; that comparison is
-the remaining production validation.
+`VACUUM (ANALYZE)` (deploy step 9). Re-measured 2026-10-12 with the same method as
+the before numbers (`test_scripts/perf/entity_query_roundtrips.py`, laptop → RDS,
+baseline RTT 24.8 / 30.1 / 33.8 ms):
+
+| | before (2026-09-29) | after (2026-10-12) |
+|---|---|---|
+| exact name, total per query | median 298-647 ms | **52-68 ms** (5 runs) |
+| band statements per query | 7 | **1** |
+| placeholder name | median 535-962 ms, max 36.4 s | **0 ms, 0 statements** (`249` short-circuits it) |
+
+About 5-10x on an ordinary query from outside the VPC, from three causes
+together: the visibility map (cause 1), one statement instead of seven (cause 2;
+six fewer ~30 ms round trips), and `249`'s placeholder exclusion. The validation
+is done.
