@@ -329,3 +329,16 @@ be trusted without measuring there.
 
 The test stack's own index was rebuilt with this code (45 active entities, 945
 bands per table).
+
+## In production, 2026-10-12 (v0.0.85, build of 0.0.47)
+
+Rebuilt on production after the deploy with the bulk path: ~27.07M → ~22.6M band
+rows per table (placeholders out, `249`), `fuzzy check` ✅, and
+`test_fuzzy_prod_check.py` **8/8 duplicate-name clusters** with B/C PASS.
+
+**The rebuild took 27.9 minutes: 766 entities/s on RDS**, against 1,469/s for
+the same code on the synthetic 1.04M registry on a laptop. The synthetic run
+predicted the row counts exactly and overstated throughput ~1.9x. **Budget ~28
+minutes of empty fuzzy matching for a production rebuild.** Entity writes during
+the load left 63 duplicate band rows per table, which the restore deduplicated
+before rebuilding the primary key, as designed.

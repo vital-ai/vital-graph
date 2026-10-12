@@ -233,3 +233,10 @@ both tests fail on the previous code.
 Remaining here is production validation, not work: re-measure `find_similar`
 after the deploy, the post-rebuild VACUUM (deploy step 9), and an in-region
 number if wanted.
+
+## In production, 2026-10-12 (v0.0.85)
+
+Deployed with the single-statement band query, after the rebuild and its
+`VACUUM (ANALYZE)` (deploy step 9). The post-deploy `find_similar` latency has
+not been re-measured against this issue's before numbers; that comparison is
+the remaining production validation.

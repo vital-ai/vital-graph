@@ -186,3 +186,12 @@ again, above-floor priority, the probe staying open, and the message's branch
 order. Unit suite otherwise unchanged: the only failures are the 6
 document-converter tests (`mammoth`/PDF library not installed in this env) and
 the issue-index "committed" check, until these files are committed.
+
+## In production, 2026-10-12 (v0.0.85)
+
+Deployed. The integrity warning now names `backfill_frame_slot_table`, not the
+blocking rebuild, and its rate fell from ~16/hour (760 in 48 h) to 3 in the first
+45 minutes; the residue backfill acts on the third consecutive cycle.
+`lead_prod_frame_slot` went 1,129,513 → 1,138,222 (+8,709), most of it ordinary
+writes, so the bare count cannot isolate the 921. The warnings going quiet is
+the signal to check.
