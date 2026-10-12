@@ -1,7 +1,7 @@
 # Issues
 
 Numbered, append-only, one defect each. Resolved ones move to `archive/` —
-192 there, 75 live. An issue is archived only when nothing remains to do:
+192 there, 76 live. An issue is archived only when nothing remains to do:
 "FIXED in the converter, existing spaces need reloading" is not resolved, it is
 half-done, and it stays here.
 
@@ -128,6 +128,7 @@ Reproduce and measure LOCALLY; dev and vg hold spaces at or above prod scale.
 | **149** | FIXED in code | The slot-sort backfill was blocked by a client timeout |
 | **171** | OPEN | **Stop building what nothing reads, and prove it under realistic load.** PART 2 is the concurrent test that would have caught every member of this group — and its absence is why they reached production. `143` measured the same listing SQL at 1,216 ms and 11,187 ms inside one three-minute window; collapsing that 9x spread is the goal, and a per-statement win that does not collapse it has not finished the job |
 | **268** | FIXED 2026-10-12 (not yet released) | **The frame_slot warning sent a surplus to a backfill that only inserts, and the surplus was not real.** `263` chose the remedy by orphans alone, so the main KG space's +2 to +30 surpluses read "the backfill repairs this". The surplus itself was skew: the two counts were two statements, two snapshots, with a multi-second scan between them. Fixed: one statement (and the client timeout it ignored), and a remedy per finding |
+| **269** | OPEN | **A full gen-2 garbage collection every 60 seconds freezes each task for ~150 ms.** Production, both tasks: one gen-2 collection every 60.1-60.2 s, 164 ms median (237 max), collecting a median of 350 objects; the same pauses show as `EVENT LOOP STALL`s. Not a regression (1,530 / 1,613 / 1,623 per 13 h on Oct 10-12). The startup `gc.freeze()` (639,604 objects) is already in place, so it is post-startup long-lived objects. Trigger unknown: the cadence looks like a timer, and nothing in `vitalgraph/` forces a collection. Next: log the stack at gen-2 start to find it |
 
 Cross-listed in **Other**: `230` (the ANALYZE pile-up — fixed; `236` is the
 frequency behind it), `231` (where background work RUNS — the INTERNAL pool
