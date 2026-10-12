@@ -172,12 +172,13 @@ async def test_a_residue_space_keeps_its_probe_open(world):
 
 def test_the_warning_names_the_backfill_when_nothing_is_orphaned():
     """The message recommended the TRUNCATE rebuild for 921 missing rows — an
-    outage offered as the fix. It must name the tool that fits."""
-    import inspect
-    src = inspect.getsource(M.MaintenanceJob._run_frame_slot_integrity)
-    assert "backfill_frame_slot_table" in src
-    i_zero = src.index('f["orphan_rate"] == 0.0')
-    # rindex: the docstring above names the script too, as the orphan repair.
-    i_rebuild = src.rindex("migrate_frame_slot_table.py")
-    assert i_rebuild > i_zero, (
-        "the rebuild must be the ORPHAN branch, not the default advice")
+    outage offered as the fix. It must name the tool that fits.
+
+    Checked by behaviour since `issues/268` moved the wording into
+    `frame_slot_repair_text`, which also gives a surplus its own remedy."""
+    missing = M.frame_slot_repair_text("lead", expected=1_000, actual=79, orphan_rate=0.0)
+    assert "backfill_frame_slot_table" in missing
+    assert "migrate_frame_slot_table.py" not in missing, (
+        "the rebuild must be the ORPHAN remedy, not the default advice")
+    orphans = M.frame_slot_repair_text("lead", expected=1_000, actual=1_000, orphan_rate=0.01)
+    assert "migrate_frame_slot_table.py --space lead --apply" in orphans

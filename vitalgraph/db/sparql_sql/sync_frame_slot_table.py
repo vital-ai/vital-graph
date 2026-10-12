@@ -427,18 +427,29 @@ async def frame_slot_drift(conn, space_id: str, timeout: float = None) -> tuple:
     `Edge_hasKGSlot` where the slot carries a `hasKGSlotType` — the same
     condition the builder uses, with no role filter, because there is no
     privileged role (`issues/183`).
+
+    ONE STATEMENT, SO ONE SNAPSHOT (`issues/268`). The two counts were two
+    statements, each with its own snapshot under READ COMMITTED. The expected
+    count is a multi-second scan, so rows written during it were counted by the
+    `count(*)` that ran after it and not by the scan: a phantom SURPLUS of 2-30
+    rows on a 3.05M-row production table under write load, reported as drift.
+
+    `timeout` is the CLIENT-side cancel (`issues/149`); it was accepted and never
+    passed to the driver.
     """
     t_fs = f"{space_id}_frame_slot"
     t_edge = f"{space_id}_edge"
     t_quad = f"{space_id}_rdf_quad"
-    expected = await conn.fetchval(f"""
-        SELECT count(*) FROM (
-          SELECT DISTINCT emv.source_node_uuid, emv.dest_node_uuid, emv.context_uuid
-          FROM {t_edge} emv
-          JOIN {t_quad} st ON st.subject_uuid = emv.dest_node_uuid
-           AND st.predicate_uuid = $1) x""", _SLOT_TYPE_UUID)
-    actual = await conn.fetchval(f"SELECT count(*) FROM {t_fs}")
-    return int(expected or 0), int(actual or 0)
+    row = await conn.fetchrow(f"""
+        SELECT
+          (SELECT count(*) FROM (
+             SELECT DISTINCT emv.source_node_uuid, emv.dest_node_uuid, emv.context_uuid
+             FROM {t_edge} emv
+             JOIN {t_quad} st ON st.subject_uuid = emv.dest_node_uuid
+              AND st.predicate_uuid = $1) x) AS expected,
+          (SELECT count(*) FROM {t_fs}) AS actual""",
+        _SLOT_TYPE_UUID, timeout=timeout)
+    return int(row["expected"] or 0), int(row["actual"] or 0)
 
 
 async def frame_slot_orphan_rate(conn, space_id: str) -> float:

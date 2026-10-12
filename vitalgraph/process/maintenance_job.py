@@ -181,6 +181,33 @@ _frame_slot_residue_cycles: Dict[str, int] = {}
 # drift changes, so an unrepairable gap costs one scan, not one per cycle.
 _frame_slot_residue_futile: Dict[str, int] = {}
 
+
+def frame_slot_repair_text(space_id: str, expected: int, actual: int,
+                           orphan_rate: float) -> str:
+    """What to do about a `frame_slot` integrity finding, chosen by WHAT is wrong.
+
+    `issues/263` made the text depend on orphans, so a handful of missing rows
+    stopped recommending the blocking rebuild. `issues/268`: it then sent a
+    SURPLUS to the backfill too, because only orphans were tested, and a backfill
+    only ever inserts. Three cases, three remedies.
+    """
+    if orphan_rate > 0.0:
+        return ("Orphaned rows need the rebuild, which blocks frame-slot queries "
+                f"while it runs: `scripts/migrate_frame_slot_table.py --space "
+                f"{space_id} --apply`.")
+    if actual < expected:
+        return ("Missing rows only: the frame_slot backfill repairs this (above "
+                "the drift floor at once, below it after "
+                f"{FRAME_SLOT_RESIDUE_CYCLES} cycles). If it persists, run "
+                "`backfill_frame_slot_table` for the space — not the rebuild, "
+                "which blocks frame-slot queries.")
+    return ("Extra rows and no orphans: rows whose slot no longer qualifies (its "
+            "role or entity changed, or it lost `hasKGSlotType`). The backfill "
+            "only inserts and cannot fix this; the maintenance sweep "
+            "(`cleanup_stale_frame_slot`) removes such rows a bounded batch per "
+            "cycle. If it persists across cycles, the rebuild does it at once, "
+            "but blocks frame-slot queries while it runs.")
+
 # Value histograms: rebuild a space once a predicate's row count has moved this
 # far from the count its histogram was built at.
 #
@@ -2314,21 +2341,8 @@ class MaintenanceJob:
         if not findings:
             return None
         for sp, f in findings.items():
-            # The repair depends on WHAT is wrong (`issues/263`). Missing rows
-            # with no orphans are the backfill's job — non-blocking, and run by
-            # the next step automatically. Only orphans need the rebuild, which
-            # TRUNCATEs under ACCESS EXCLUSIVE; recommending it for a handful
-            # of missing rows offered an outage as the fix.
-            if f["orphan_rate"] == 0.0:
-                repair = ("Missing rows only: the frame_slot backfill repairs "
-                          "this (above the drift floor at once, below it after "
-                          f"{FRAME_SLOT_RESIDUE_CYCLES} cycles). If it persists, "
-                          "run `backfill_frame_slot_table` for the space — not "
-                          "the rebuild, which blocks frame-slot queries.")
-            else:
-                repair = ("Orphaned rows need the rebuild, which blocks "
-                          "frame-slot queries while it runs: "
-                          f"`scripts/migrate_frame_slot_table.py --space {sp} --apply`.")
+            repair = frame_slot_repair_text(sp, f["expected"], f["actual"],
+                                            f["orphan_rate"])
             logger.warning(
                 "frame_slot integrity: %s expected %d rows, has %d, orphan rate "
                 "%.2f%% — the frame-slot collapse is serving from a table that "
