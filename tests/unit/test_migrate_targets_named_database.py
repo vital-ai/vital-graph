@@ -8,9 +8,17 @@ secret). These pin how `--db` and `--ssl` become connection arguments.
 
 from __future__ import annotations
 
+import os
+from unittest import mock
+
 import pytest
 
-from apps.entity_registry.migrate import SESSION_SETTINGS, connect_kwargs
+# `migrate.py` calls `load_dotenv()` at import, which copies the real `.env` into
+# `os.environ` for the rest of the session; a later test that expects its own
+# `.env` to supply a credential then reads the real one instead. Import it with
+# the environment restored afterwards.
+with mock.patch.dict(os.environ):
+    from apps.entity_registry.migrate import SESSION_SETTINGS, connect_kwargs
 
 ENV = {
     "LIVE_DB_HOST": "live.example.internal",
