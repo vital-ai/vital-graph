@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 # to be guarded.
 _FRAME_ANALYTICS_MAX_QUADS = 5_000_000
 
+# Per-statement budget for the analytics queries (`issues/275`). Set as a
+# SESSION value on the job's connection and reset afterwards; see
+# `_compute_and_store` for why not `SET LOCAL`.
+ANALYTICS_STATEMENT_TIMEOUT = os.getenv("VG_ANALYTICS_STATEMENT_TIMEOUT", "120s")
+
 # Well-known predicates
 _VITALTYPE = 'http://vital.ai/ontology/vital-core#vitaltype'
 _HAS_EDGE_SOURCE = 'http://vital.ai/ontology/vital-core#hasEdgeSource'
@@ -138,52 +143,65 @@ class AnalyticsJob:
         start = time.monotonic()
 
         async with self._pool.acquire() as conn:
-            # Set statement timeout to prevent runaway queries on large spaces (120s)
-            await conn.execute("SET LOCAL statement_timeout = '120s'")
-
-            # Verify space tables exist
-            table_exists = await conn.fetchval(
-                "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = $1)",
-                f"{space_id}_rdf_quad"
-            )
-            if not table_exists:
-                logger.warning("AnalyticsJob: space tables not found for %s, skipping", space_id)
-                return {"space_id": space_id, "skipped": True}
-
-            # Resolve the graph to the CONTEXT UUID the quads are keyed by.
-            #
-            # This used to resolve `graph.graph_id` and filter with
-            # `AND q.graph_id = N`. The quad table has no `graph_id` column --
-            # it has `context_uuid` -- so that clause was invalid SQL and EVERY
-            # graph-filtered analytics request failed with `column q.graph_id
-            # does not exist`. Unfiltered requests never built the clause, which
-            # is why it survived: the only caller exercised in tests passes no
-            # graph.
-            #
-            # `graph` still gates existence, so "Graph not found" keeps its
-            # meaning; the term lookup is what the filter actually needs. A
-            # registered graph whose URI is not a term in this space has no
-            # quads, and is reported the same way rather than silently
-            # analysing the whole space.
-            graph_ctx = None
-            if graph_uri:
-                known = await conn.fetchval(
-                    "SELECT graph_id FROM graph WHERE space_id = $1 AND graph_uri = $2",
-                    space_id, graph_uri
+            # 120 s per statement, AS A SESSION SETTING (`issues/275`). This was
+            # `SET LOCAL`, which holds only inside a transaction block; on this
+            # autocommit connection PostgreSQL warned and kept the instance
+            # default (60 s on production), so every analytics query had half
+            # its budget and the main KG space's cold-cache run failed at ~59 s
+            # after a restart. Not one long transaction instead: the job runs
+            # for tens of seconds, and a snapshot held that long stops VACUUM on
+            # the tables it reads. Reset before the connection goes back.
+            await conn.execute(
+                f"SET statement_timeout = '{ANALYTICS_STATEMENT_TIMEOUT}'")
+            try:
+                # Verify space tables exist
+                table_exists = await conn.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = $1)",
+                    f"{space_id}_rdf_quad"
                 )
-                if known is None:
-                    return {"space_id": space_id, "error": f"Graph not found: {graph_uri}"}
-                graph_ctx = await conn.fetchval(
-                    f"SELECT term_uuid FROM {space_id}_term WHERE term_text = $1",
-                    graph_uri
-                )
-                if graph_ctx is None:
-                    return {"space_id": space_id, "error": f"Graph not found: {graph_uri}"}
+                if not table_exists:
+                    logger.warning("AnalyticsJob: space tables not found for %s, skipping", space_id)
+                    return {"space_id": space_id, "skipped": True}
 
-            entity_analytics = await self._compute_entity_analytics(conn, space_id, graph_ctx)
-            frame_analytics = await self._compute_frame_analytics(conn, space_id, graph_ctx)
-            relation_analytics = await self._compute_relation_analytics(conn, space_id, graph_ctx)
-            property_analytics = await self._compute_property_analytics(conn, space_id, graph_ctx)
+                # Resolve the graph to the CONTEXT UUID the quads are keyed by.
+                #
+                # This used to resolve `graph.graph_id` and filter with
+                # `AND q.graph_id = N`. The quad table has no `graph_id` column --
+                # it has `context_uuid` -- so that clause was invalid SQL and EVERY
+                # graph-filtered analytics request failed with `column q.graph_id
+                # does not exist`. Unfiltered requests never built the clause, which
+                # is why it survived: the only caller exercised in tests passes no
+                # graph.
+                #
+                # `graph` still gates existence, so "Graph not found" keeps its
+                # meaning; the term lookup is what the filter actually needs. A
+                # registered graph whose URI is not a term in this space has no
+                # quads, and is reported the same way rather than silently
+                # analysing the whole space.
+                graph_ctx = None
+                if graph_uri:
+                    known = await conn.fetchval(
+                        "SELECT graph_id FROM graph WHERE space_id = $1 AND graph_uri = $2",
+                        space_id, graph_uri
+                    )
+                    if known is None:
+                        return {"space_id": space_id, "error": f"Graph not found: {graph_uri}"}
+                    graph_ctx = await conn.fetchval(
+                        f"SELECT term_uuid FROM {space_id}_term WHERE term_text = $1",
+                        graph_uri
+                    )
+                    if graph_ctx is None:
+                        return {"space_id": space_id, "error": f"Graph not found: {graph_uri}"}
+
+                entity_analytics = await self._compute_entity_analytics(conn, space_id, graph_ctx)
+                frame_analytics = await self._compute_frame_analytics(conn, space_id, graph_ctx)
+                relation_analytics = await self._compute_relation_analytics(conn, space_id, graph_ctx)
+                property_analytics = await self._compute_property_analytics(conn, space_id, graph_ctx)
+            finally:
+                try:
+                    await conn.execute("RESET statement_timeout")
+                except Exception:
+                    pass
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
 
@@ -645,9 +663,30 @@ class AnalyticsJob:
         # skip return, which wants a real number there. What made it expensive
         # was running on benchmark fixtures at all, and the exclusion list in
         # `run()` is what stops that.
-        distinct_pred_count = await conn.fetchval(f"""
-            SELECT COUNT(DISTINCT predicate_uuid) FROM {t_quad} q WHERE 1=1{gf}
-        """) or 0
+        #
+        # FROM THE STATS TABLE ON A LARGE UNFILTERED SPACE (`issues/275`). On the
+        # 79.5M-quad main KG space the scan read all of `quad_po` (79.5M entries)
+        # to return 28: 31.5 s warm, past 60 s cold, which failed the job once
+        # per restart. `{space}_rdf_pred_stats` holds one row per predicate,
+        # rebuilt by the stats recompute (`STATS_RECOMPUTE_INTERVAL_S`, hourly),
+        # so the same number is a count of a few dozen rows — as of the last
+        # recompute, which `distinct_predicate_count_source` says. Graph-filtered
+        # requests keep the scan (the stats are not per graph), and so do small
+        # spaces and a space whose stats table is empty or absent.
+        distinct_pred_count, pred_count_source = None, "rdf_quad"
+        if not gf and quad_estimate > _FRAME_ANALYTICS_MAX_QUADS:
+            try:
+                n = await conn.fetchval(
+                    f"SELECT count(*) FROM {space_id}_rdf_pred_stats WHERE row_count > 0")
+                if n:
+                    distinct_pred_count, pred_count_source = n, "rdf_pred_stats"
+            except Exception as exc:
+                logger.debug("AnalyticsJob: %s rdf_pred_stats unavailable (%s); "
+                             "counting from the quad table", space_id, exc)
+        if distinct_pred_count is None:
+            distinct_pred_count = await conn.fetchval(f"""
+                SELECT COUNT(DISTINCT predicate_uuid) FROM {t_quad} q WHERE 1=1{gf}
+            """) or 0
 
         if quad_estimate > 5_000_000:
             logger.info(
@@ -661,12 +700,12 @@ class AnalyticsJob:
             # lets a caller tell the two apart.
             #
             # distinct_predicate_count is REAL even here: computed above the
-            # guard, so it is not nulled. That costs seconds on a very large
-            # space and is a deliberate trade — the UI has one honest number
-            # instead of a blank panel. It is a trade and not a free lunch,
-            # which is what the comment above the query now says.
+            # guard, so it is not nulled — the UI has one honest number instead
+            # of a blank panel. On these spaces it comes from rdf_pred_stats
+            # (`issues/275`), so it no longer costs a scan of the quad table.
             return {
                 "distinct_predicate_count": distinct_pred_count,
+                "distinct_predicate_count_source": pred_count_source,
                 "top_predicates": [],
                 "literal_type_distribution": [],
                 "skipped": True,
@@ -708,6 +747,7 @@ class AnalyticsJob:
 
         return {
             "distinct_predicate_count": distinct_pred_count,
+            "distinct_predicate_count_source": pred_count_source,
             "top_predicates": top_predicates,
             "literal_type_distribution": literal_type_distribution,
             "skipped": False,

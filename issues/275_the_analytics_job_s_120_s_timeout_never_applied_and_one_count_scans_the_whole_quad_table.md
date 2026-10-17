@@ -1,6 +1,6 @@
 # 275 — The analytics job's 120 s timeout never applied, and one count scans the whole quad table
 
-## Status: OPEN (filed 2026-10-17). Found in production on v0.0.87.
+## Status: FIXED 2026-10-17 (not yet released). Found in production on v0.0.87.
 
 **Related:** `issues/253` (`SET LOCAL` used where it does not hold, the write
 path), `issues/270` (the index trim this is NOT caused by).
@@ -62,22 +62,38 @@ Not a regression from the v0.0.86 index drop (`issues/270`/`271`): `quad_po`
 still leads with `predicate_uuid` — which is what made the dropped `quad_pred`
 redundant — and the planner uses it.
 
-## Proposed fix
+## Fixed
 
-1. **Make the timeout apply.** Wrap the job's per-space work in
-   `async with conn.transaction():` (then `SET LOCAL` holds and is scoped to
-   it), or use a session `SET statement_timeout` right after acquire and reset
-   it before release. Restoring 120 s very likely ends the failure on its own:
-   31.5 s warm fits easily, and a cold boot run fits in 120 s.
-2. **Make the count cheap.** Source `distinct_predicate_count` from
-   `{space}_rdf_stats` (or `rdf_pred_stats`), where `predicate_uuid` is already
-   materialized — a distinct count there is ~instant — or move it below the 5M
-   guard with the rest of property analytics. Check the stats tables' freshness
-   rule first: an analytics figure from stale stats must say so.
-3. **Guard against the class**: a unit test that every executable `SET LOCAL`
-   in `vitalgraph/` sits inside `async with … transaction()` or behind an
-   `is_in_transaction()` check, so the next no-op `SET LOCAL` fails CI rather
-   than production.
-4. Test: the job's queries run with `statement_timeout = 120s` (read it back
-   with `SHOW` inside the job's connection), and the count's value equals the
-   table scan's on a fixture space.
+1. **The timeout applies.** `_compute_and_store` sets `statement_timeout` as a
+   SESSION value on the job's connection (`VG_ANALYTICS_STATEMENT_TIMEOUT`,
+   default `120s`) and RESETs it in a `finally` before the connection goes back
+   to the pool. Not one long transaction: the job runs for tens of seconds and a
+   snapshot held that long stops VACUUM on the tables it reads.
+2. **The count is cheap where it was expensive.** On an unfiltered run above
+   the 5M-quad guard, `distinct_predicate_count` is `count(*)` of
+   `{space}_rdf_pred_stats` (one row per predicate, rebuilt by the hourly stats
+   recompute) when that table is populated; the result carries
+   `distinct_predicate_count_source` (`rdf_pred_stats` or `rdf_quad`).
+   Graph-filtered runs, small spaces and a space with empty or absent stats keep
+   the exact scan. Production, read-only: 28 from the stats table in 12.8 ms
+   (with the round trip), the same 28 the 31.5 s scan returns on the 79.5M-quad
+   main KG space.
+3. **A CI guard for the class**: `tests/unit/test_set_local_runs_inside_a_transaction.py`
+   parses every module under `vitalgraph/` and fails on an executed `SET LOCAL`
+   that is not inside `async with ….transaction()`, not in a function checking
+   `is_in_transaction()`, and not in a named caller-holds-the-transaction helper
+   (`_apply_read_fence`, whose callers are checked to open one). It fails on the
+   previous code at `analytics_job.py:142`.
+
+## Verification
+
+* `tests/integration/test_analytics_runs_with_its_own_timeout.py` (2): the job's
+  queries see `statement_timeout = 2min` and the connection gets its own value
+  back afterwards (a one-connection pool, so the same connection is read); above
+  the guard the count comes from `rdf_pred_stats` and equals the scan, below it
+  from the scan. Both fail on the previous code — the first with
+  `statement_timeout='0'` inside the job, the test database's default, which is
+  the no-op exactly.
+* The guard test (3) passes, and fails on the previous code.
+* `test_analytics_graph_scope.py`, `test_analytics_honours_the_exclusion_list.py`,
+  `test_background_work_uses_the_internal_pool.py`: pass.
