@@ -176,6 +176,30 @@ def _select_rows(space_id: str, where: str, *, seed_param: str = None) -> str:
     # walk everything. `_frame_roots` explains why a SUPERSET of roots is what
     # makes the seeded form provably equivalent.
     _seed = f" AND fe.source_node_uuid = ANY({seed_param})" if seed_param else ""
+    # THE SLOT EDGES PER WALKED FRAME, WHEN SEEDED (`issues/273`). The recursive
+    # CTE's row estimate is a guess, and with a plain join the planner
+    # merge-joined the seeded walk against EVERY slot edge of the space read in
+    # `idx_edge_type_src` order: 149,251 edges and 128k buffers to derive 372
+    # rows for one decision write on a UW-sized space (111-150 ms), again a cost
+    # tracking the space. LATERAL makes it one `(edge_type, source)` index probe
+    # per walked frame; `OFFSET 0` is load-bearing — without it the planner
+    # pulls the subquery back up into a plain join and picks the merge join
+    # again (measured: identical plan). The full resync and the backfill walk everything, where
+    # the set-based join is the right plan, so they keep it.
+    if seed_param:
+        _slot_join = f"""JOIN LATERAL (
+            SELECT se.edge_uuid, se.dest_node_uuid, se.context_uuid, se.source_node_uuid
+            FROM {t_edge} se
+            WHERE se.source_node_uuid = frame_w.frame_uuid
+              AND se.context_uuid = frame_w.context_uuid
+              AND se.edge_type_uuid = $2
+            OFFSET 0
+        ) slot_e ON TRUE"""
+    else:
+        _slot_join = f"""JOIN {t_edge} slot_e
+          ON slot_e.source_node_uuid = frame_w.frame_uuid
+         AND slot_e.context_uuid = frame_w.context_uuid
+         AND slot_e.edge_type_uuid = $2"""
     return f"""
         WITH RECURSIVE frame_walk AS (
             -- Level 1: frames hanging directly off an entity.
@@ -229,10 +253,7 @@ def _select_rows(space_id: str, where: str, *, seed_param: str = None) -> str:
             val_t.num_val                  AS value_num,
             val_t.dt_val                   AS value_dt
         FROM frame_walk frame_w
-        JOIN {t_edge} slot_e
-          ON slot_e.source_node_uuid = frame_w.frame_uuid
-         AND slot_e.context_uuid = frame_w.context_uuid
-         AND slot_e.edge_type_uuid = $2
+        {_slot_join}
         -- The slot's type. INNER: a slot with no type cannot be selected by a
         -- sort criterion, so a row for it would never be read.
         JOIN {t_quad} slt_t

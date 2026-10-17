@@ -225,6 +225,17 @@ async def sync_frame_slot_after_edge_insert(conn, space_id: str,
 
     n = 0
     for chunk in chunk_uuids(touched_uuids):
+        # THE FRAMES FIRST, AS AN ARRAY (`issues/273`). This was
+        # `emv.source_node_uuid IN (SELECT source_node_uuid FROM edge WHERE ...)`
+        # inside the INSERT, and the planner hash-joined it against a SEQUENTIAL
+        # scan of the whole edge table, plus every slot-type quad in the space:
+        # on a UW-sized space (200,880 edges) 62-72 ms to derive 372 rows for one
+        # decision write, a cost tracking the space rather than the write. The
+        # same set resolved by its own BitmapOr lookup and passed as `= ANY` is
+        # an index probe per frame. Same rows: the subquery's result IS this set.
+        frames = await _edge_owners(conn, space_id, chunk)
+        if not frames:
+            continue
         result = await _forced(conn, f"""
             INSERT INTO {t_fs} (frame_uuid, slot_uuid, role_uuid, entity_uuid,
                                 context_uuid, frame_type_uuid)
@@ -240,20 +251,34 @@ async def sync_frame_slot_after_edge_insert(conn, space_id: str,
               ON vt.subject_uuid = emv.source_node_uuid
              AND vt.context_uuid = emv.context_uuid
              AND vt.predicate_uuid = $3
-            WHERE emv.source_node_uuid IN (
-                    SELECT e2.source_node_uuid FROM {t_edge} e2
-                    WHERE e2.source_node_uuid = ANY($4)
-                       OR e2.dest_node_uuid = ANY($4)
-                       OR e2.edge_uuid = ANY($4))
+            WHERE emv.source_node_uuid = ANY($4::uuid[])
             ON CONFLICT (frame_uuid, slot_uuid, context_uuid) DO UPDATE
                SET role_uuid       = EXCLUDED.role_uuid,
                    entity_uuid     = EXCLUDED.entity_uuid,
                    frame_type_uuid = EXCLUDED.frame_type_uuid
-        """, _SLOT_TYPE_UUID, _SLOT_VALUE_UUID, _VITALTYPE_UUID, chunk)
+        """, _SLOT_TYPE_UUID, _SLOT_VALUE_UUID, _VITALTYPE_UUID, frames)
         n += int(result.split()[-1]) if result else 0
     if n:
         logger.debug("sync_frame_slot_after_edge_insert(%s): %d row(s)", space_id, n)
     return n
+
+
+async def _edge_owners(conn, space_id: str,
+                       touched_uuids: List[uuid.UUID]) -> List[uuid.UUID]:
+    """Source nodes of every edge that starts at, ends at, or IS a touched uuid.
+
+    Exactly the set the after-insert re-derive used to compute in a subquery;
+    resolved on its own so the INSERT can probe the edge table by `= ANY`.
+    """
+    if not touched_uuids:
+        return []
+    rows = await conn.fetch(
+        f"SELECT DISTINCT source_node_uuid FROM {space_id}_edge "
+        f"WHERE source_node_uuid = ANY($1::uuid[]) "
+        f"   OR dest_node_uuid = ANY($1::uuid[]) "
+        f"   OR edge_uuid = ANY($1::uuid[])",
+        touched_uuids)
+    return [r["source_node_uuid"] for r in rows]
 
 
 async def _edge_source_nodes(conn, space_id: str,
