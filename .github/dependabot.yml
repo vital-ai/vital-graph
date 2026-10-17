@@ -18,15 +18,28 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # MINOR AND PATCH ONLY in the groups. A group that also takes MAJOR bumps
+    # resolves each package to its newest version independently, and the
+    # result can violate the packages' own peer ranges: 2026-10-16 produced
+    # `@eslint/js` 10 beside `eslint` 9 (frontend) and `typescript` 7 beside a
+    # `typescript-eslint` that supports < 6.1 (client), and both PRs failed
+    # `npm ci` in the Docker build. Majors still arrive, one package per PR,
+    # where each can be judged and tested on its own.
     groups:
       frontend-prod:
         dependency-type: production
+        update-types: [minor, patch]
         patterns:
           - "*"
       frontend-dev:
         dependency-type: development
+        update-types: [minor, patch]
         patterns:
           - "*"
+    ignore:
+      # As for the client: `typescript-eslint` 8.71.2 requires typescript < 6.1.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   # Published TypeScript client (@vital-ai/vitalgraph-client)
   - package-ecosystem: npm
@@ -34,15 +47,29 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # MINOR AND PATCH ONLY in the groups. A group that also takes MAJOR bumps
+    # resolves each package to its newest version independently, and the
+    # result can violate the packages' own peer ranges: 2026-10-16 produced
+    # `@eslint/js` 10 beside `eslint` 9 (frontend) and `typescript` 7 beside a
+    # `typescript-eslint` that supports < 6.1 (client), and both PRs failed
+    # `npm ci` in the Docker build. Majors still arrive, one package per PR,
+    # where each can be judged and tested on its own.
     groups:
       client-ts-prod:
         dependency-type: production
+        update-types: [minor, patch]
         patterns:
           - "*"
       client-ts-dev:
         dependency-type: development
+        update-types: [minor, patch]
         patterns:
           - "*"
+    ignore:
+      # Not until `typescript-eslint` supports it: 8.71.2 requires
+      # typescript >=4.8.4 <6.1.0, so a TypeScript 7 bump cannot install.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   # Jena SPARQL compiler sidecar
   - package-ecosystem: maven
