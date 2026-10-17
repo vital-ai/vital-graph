@@ -27,6 +27,9 @@ Safety, because this is meant to be run against production:
     index, its size and its scan count, and touches nothing.
   * An index is dropped only if its COVERING composite exists AND is valid on
     the same space. A space missing the composite keeps its single-column index.
+  * Waits instead of timing out: the session sets `statement_timeout = 0` and
+    `lock_timeout = 0` itself (see SESSION_SETTINGS), so a server default cannot
+    cancel a drop half-way and leave the index INVALID.
   * DROP INDEX CONCURRENTLY: no lock that blocks reads or writes. It cannot run
     in a transaction, so each index is its own statement. A PARTITIONED quad
     table's index (relkind `I`) cannot be dropped concurrently, so it gets a
@@ -102,11 +105,32 @@ async def plan(conn, only_space: str | None):
     return out
 
 
+#: Session settings the drops need, whatever the server's defaults are.
+#: `DROP INDEX CONCURRENTLY` waits for every transaction that could use the
+#: index, and on a busy table that includes maintenance's SHARE UPDATE EXCLUSIVE
+#: (VACUUM/ANALYZE). Production's parameter group cancels such waits
+#: (`statement_timeout = 60s` and a `lock_timeout`): on 2026-10-17 the first run
+#: was cancelled on the main KG space after 6 of 27 drops, and the cancel left
+#: that index INVALID (issues/271, 272). Waiting is safe here — the queued drop
+#: does not block ordinary reads or writes — so the session waits as long as it
+#: takes. Set for THIS connection only; the application is unaffected.
+SESSION_SETTINGS = (("statement_timeout", "0"), ("lock_timeout", "0"))
+
+
+async def configure_session(conn) -> dict:
+    """Apply `SESSION_SETTINGS` and return the values now in force."""
+    for name, value in SESSION_SETTINGS:
+        await conn.execute(f"SET {name} = {value}")
+    return {name: await conn.fetchval(f"SHOW {name}") for name, _ in SESSION_SETTINGS}
+
+
 async def run(target: str, only_space: str | None, apply: bool) -> int:
     conn = await asyncpg.connect(target)          # autocommit: CONCURRENTLY needs it
     try:
         who = await conn.fetchval("SELECT current_user || '@' || current_database()")
-        print(f"target: {who} ({'APPLY' if apply else 'dry run'})")
+        settings = await configure_session(conn)
+        print(f"target: {who} ({'APPLY' if apply else 'dry run'}); "
+              + ", ".join(f"{k}={v}" for k, v in settings.items()))
         items = await plan(conn, only_space)
         if not items:
             print("nothing to do: no quad_pred / quad_ctx / quad_sp indexes")
