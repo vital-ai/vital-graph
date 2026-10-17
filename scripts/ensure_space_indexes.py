@@ -72,9 +72,17 @@ async def main() -> int:
     try:
         stmts = SparqlSQLSchema().create_space_indexes_sql(a.space)
 
-        have = {r["indexname"] for r in await conn.fetch(
-            "SELECT indexname FROM pg_indexes WHERE schemaname='public' "
-            "AND tablename LIKE $1", f"{a.space}%")}
+        # VALID indexes only (issues/272): an invalid one — a cancelled
+        # CONCURRENTLY build — is in pg_indexes but unusable, and the
+        # `IF NOT EXISTS` replay below would skip it by name.
+        rows = await conn.fetch(
+            "SELECT ci.relname, i.indisvalid AND i.indisready AS ok "
+            "FROM pg_index i JOIN pg_class ci ON ci.oid = i.indexrelid "
+            "JOIN pg_class ct ON ct.oid = i.indrelid "
+            "JOIN pg_namespace n ON n.oid = ct.relnamespace "
+            "WHERE n.nspname = 'public' AND ct.relname LIKE $1", f"{a.space}%")
+        have = {r["relname"] for r in rows if r["ok"]}
+        invalid = {r["relname"] for r in rows if not r["ok"]}
         tables = {r["tablename"] for r in await conn.fetch(
             "SELECT tablename FROM pg_tables WHERE schemaname='public' "
             "AND tablename LIKE $1", f"{a.space}%")}
@@ -88,11 +96,12 @@ async def main() -> int:
                 skipped.append((m.group("name"), m.group("table")))
             elif m.group("name") not in have:
                 missing.append(m.group("name"))
+        invalid_wanted = [n for n in missing if n in invalid]
 
         print(f"{a.space}: {len(stmts)} schema indexes, "
               f"{len(missing)} missing, {len(skipped)} on absent tables")
         for name in missing:
-            print(f"   missing: {name}")
+            print(f"   missing: {name}" + ("  (present but INVALID)" if name in invalid else ""))
         for name, table in skipped:
             print(f"   skipped: {name} (no table {table})")
 
@@ -108,6 +117,9 @@ async def main() -> int:
         # An earlier revision returned early on "0 missing" and therefore never
         # applied those to a space whose indexes were already complete, which is
         # the common case and the one that needed them.
+        for name in invalid_wanted:
+            await conn.execute(f'DROP INDEX IF EXISTS "{name}"')
+            print(f"   dropped INVALID {name} so it can be rebuilt")
         created, failed = 0, []
         for stmt in stmts:
             m = _NAME_RE.search(stmt)

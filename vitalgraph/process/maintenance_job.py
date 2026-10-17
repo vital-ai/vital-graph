@@ -1641,7 +1641,8 @@ class MaintenanceJob:
         import still running legitimately has its indexes dropped, so the
         message names that possibility before the repair.
         """
-        from ..db.sparql_sql.space_indexes import missing_space_indexes
+        from ..db.sparql_sql.space_indexes import (
+            invalid_space_indexes, missing_space_indexes)
         findings: Dict[str, List[str]] = {}
         for space_id in space_ids:
             if not should_run_watch("space_indexes", space_id,
@@ -1650,11 +1651,25 @@ class MaintenanceJob:
             try:
                 async with self._pool.acquire() as conn:
                     missing = await missing_space_indexes(conn, space_id)
+                    invalid = (await invalid_space_indexes(conn, space_id)
+                               if missing else [])
             except Exception as exc:
                 log_probe_failure("space_index_check", space_id, exc)
                 continue
+            if invalid:
+                # Its own message (`issues/272`): the cause and the repair
+                # differ from an absent index. A cancelled CONCURRENTLY build
+                # left it; the planner ignores it and writes still maintain it.
+                logger.warning(
+                    "Space %s has %d INVALID schema index(es) (%s): present in "
+                    "the catalog, never used by the planner, still maintained on "
+                    "every write — left by a failed or cancelled CREATE/REINDEX "
+                    "CONCURRENTLY. Repair: DROP INDEX CONCURRENTLY, then recreate "
+                    "it (issues/272).", space_id, len(invalid), ", ".join(invalid[:6]))
+            missing = [(n, t) for n, t in missing if n not in set(invalid)]
+            if invalid or missing:
+                findings[space_id] = [name for name, _ in missing] + list(invalid)
             if missing:
-                findings[space_id] = [name for name, _ in missing]
                 logger.warning(
                     "Space %s is MISSING %d schema index(es) (%s%s). Queries stay "
                     "correct but scan; if no bulk import is running on it right "
