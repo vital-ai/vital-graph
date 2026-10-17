@@ -923,12 +923,29 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         return list(graph_uris)
 
     async def _ensure_graphs_registered(
-        self, space_id: str, quads: list,
+        self, space_id: str, quads: list, connection=None,
     ) -> None:
         """Auto-register every graph URI found in *quads* that is not yet
         in the ``graph`` table — inserting data into a graph URI implicitly
         creates the graph record. Inherited behaviour, now this backend's own
-        contract rather than a replication of the archived one."""
+        contract rather than a replication of the archived one.
+
+        ON THE CALLER'S CONNECTION WHEN IT HAS ONE (`issues/274`). This used to
+        go through the request pool even when the caller was holding a pooled
+        connection for its write transaction: a nested acquisition. With a
+        request pool of N and N concurrent writers, every one of them waited
+        the acquire timeout (15 s) and then wrote without registering, behind a
+        WARNING — reproduced with a one-connection pool, where every upsert took
+        16-19 s against ~1 s. Inside the caller's transaction the registration
+        also rolls back with the write, and a failure fails the write instead of
+        leaving data in an uncatalogued graph.
+
+        ONE statement for the batch's graphs, not a read of every graph in the
+        space followed by an insert per missing one. No per-process cache of
+        registered graphs: a graph can be deleted by another process (the admin
+        command, another task), and a stale cache would write into it without a
+        catalog row.
+        """
         graph_uris = self._extract_graph_uris_from_quads(quads)
         # The context backing the DEFAULT graph is storage, not a graph a user
         # created, so it never earns a catalog row (`named_graph_semantics`
@@ -938,22 +955,18 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         graph_uris = [g for g in graph_uris if not is_default_graph(g)]
         if not graph_uris:
             return
+        names = [uri.rsplit('/', 1)[-1] for uri in graph_uris]
+        sql = ("INSERT INTO graph (space_id, graph_uri, graph_name, created_time) "
+               "SELECT $1, u.uri, u.name, $4 "
+               "FROM unnest($2::text[], $3::text[]) AS u(uri, name) "
+               "ON CONFLICT (space_id, graph_uri) DO NOTHING")
+        args = (space_id, list(graph_uris), names, datetime.now())
+        if connection is not None:
+            await connection.execute(sql, *args)
+            return
         try:
-            existing = await self._db.execute_query(
-                "SELECT graph_uri FROM graph WHERE space_id = $1",
-                [space_id],
-            )
-            existing_set = {r['graph_uri'] for r in existing} if existing else set()
-            for uri in graph_uris:
-                if uri not in existing_set:
-                    graph_name = uri.rsplit('/', 1)[-1]
-                    await self._db.execute_query(
-                        """INSERT INTO graph (space_id, graph_uri, graph_name, created_time)
-                           VALUES ($1, $2, $3, $4)
-                           ON CONFLICT (space_id, graph_uri) DO NOTHING""",
-                        [space_id, uri, graph_name, datetime.now()],
-                    )
-                    logger.debug("Auto-registered graph %s in space %s", uri, space_id)
+            async with self._db._pool.acquire() as conn:
+                await conn.execute(sql, *args)
         except Exception as e:
             logger.warning("_ensure_graphs_registered(%s) failed: %s", space_id, e)
 
@@ -1372,7 +1385,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                                    verify_count: bool = False,
                                    connection=None) -> int:
         try:
-            await self._ensure_graphs_registered(space_id, quads)
+            await self._ensure_graphs_registered(space_id, quads, connection=connection)
             t = self.schema.get_table_names(space_id)
             inserted = 0
 
@@ -1491,8 +1504,6 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             return 0
 
         try:
-            await self._ensure_graphs_registered(space_id, quads)
-
             import time as _time
             _t0 = _time.monotonic()
 
@@ -1577,6 +1588,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
             async def _do_bulk(conn):
                 _wal0 = await _wal_insert_pos(conn)
+                # On the write's own connection and transaction (`issues/274`).
+                await self._ensure_graphs_registered(space_id, quads, connection=conn)
                 dt_map = await _resolve_all_datatypes(conn)
                 _t1 = _time.monotonic()
 
