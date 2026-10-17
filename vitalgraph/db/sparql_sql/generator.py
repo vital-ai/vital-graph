@@ -276,6 +276,13 @@ def invalidate_datatype_cache(space_id: Optional[str] = None) -> None:
 _stats_cache: Dict[tuple, tuple] = {}
 
 
+def invalidate_all_stats_caches() -> None:
+    """`invalidate_stats_cache` for every space cached. For a lost invalidation
+    stream (issues/276), where which spaces changed is unknown."""
+    for sid in {k[0] for k in list(_stats_cache)} | set(_value_stats_cache):
+        invalidate_stats_cache(sid)
+
+
 def invalidate_stats_cache(space_id: str) -> None:
     """Clear cached stats for a space so the next query reloads from DB.
 

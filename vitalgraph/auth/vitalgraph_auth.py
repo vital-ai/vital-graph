@@ -211,6 +211,11 @@ class VitalGraphAuth:
             "expires_in": expires_in,
         }
 
+    def clear_token_cache(self) -> None:
+        """Drop every cached token version (a lost invalidation stream,
+        issues/276): the next request per user re-checks the database."""
+        self._token_version_cache.clear()
+
     def invalidate_token_cache(self, username: str) -> None:
         """Invalidate cached token version for a user.
 

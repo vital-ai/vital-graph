@@ -122,6 +122,12 @@ class EntityGraphCache:
             self._remove(k)
             self._invalidations += 1
 
+    def clear(self) -> None:
+        """Remove every entry. For a lost invalidation stream (issues/276)."""
+        for k in list(self._cache):
+            self._remove(k)
+            self._invalidations += 1
+
     # ------------------------------------------------------------------
     # SPARQL UPDATE support
     # ------------------------------------------------------------------

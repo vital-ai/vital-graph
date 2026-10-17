@@ -823,6 +823,34 @@ class VitalGraphAppImpl:
                             signal_manager.register_callback(CHANNEL_GRAPH, _handle_graph_entity_cache)
                             signal_manager.register_callback(CHANNEL_SPACE, _handle_space_entity_cache)
                             self.logger.info("✅ Entity graph + count cache cross-instance sync registered on CHANNEL_ENTITY_GRAPH/GRAPH/SPACE")
+
+                            # AFTER A LISTEN RECONNECT, DROP WHAT THE NOTICES
+                            # KEPT IN STEP (`issues/276`). Every notice sent
+                            # while this task was not listening is gone, so
+                            # nothing says which entries went stale — on
+                            # 2026-10-17 both tasks were deaf for hours after an
+                            # RDS failover and served each other's stale reads.
+                            # Clearing is the only correct answer; the caches
+                            # refill on demand.
+                            from vitalgraph.db.sparql_sql.generator import (
+                                invalidate_all_stats_caches, invalidate_datatype_cache,
+                                invalidate_term_cache)
+
+                            async def _resync_after_listen_reconnect():
+                                _entity_graph_cache.clear()
+                                _count_cache.clear()
+                                invalidate_term_cache(None)
+                                invalidate_datatype_cache(None)
+                                invalidate_all_stats_caches()
+                                self.auth.clear_token_cache()
+                                if self.space_manager is not None:
+                                    await self.space_manager._refresh_cache_from_db()
+                                self.logger.warning(
+                                    "Caches cleared after the notification listener "
+                                    "reconnected: entity graph, count, term, datatype, "
+                                    "stats, token versions; space list reloaded")
+
+                            signal_manager.register_resync(_resync_after_listen_reconnect)
                         else:
                             self.logger.warning("Entity graph cache signal sync skipped — signal_manager not available")
                     except Exception as e:

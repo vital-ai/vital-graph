@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import os
 import asyncpg
 from asyncio import Task
 from typing import Dict, List, Optional, Callable, Set, Awaitable
@@ -21,6 +22,13 @@ CHANNEL_PROCESS = "vitalgraph_process"
 CHANNEL_CACHE_INVALIDATE = "vitalgraph_cache_invalidate"
 CHANNEL_ENTITY_GRAPH = "vitalgraph_entity_graph"
 CHANNEL_TOKEN_VERSION = "vitalgraph_token_version"
+
+# How often the LISTEN connection proves it is alive (issues/276). A dropped
+# connection is not always seen as closed: after the RDS failover of
+# 2026-10-17 the old primary's socket simply went quiet, `is_closed()` stayed
+# False, and both tasks listened to nothing for hours while still sending.
+LISTEN_PROBE_INTERVAL_S = float(os.getenv("VG_LISTEN_PROBE_INTERVAL_S", "15"))
+LISTEN_PROBE_TIMEOUT_S = float(os.getenv("VG_LISTEN_PROBE_TIMEOUT_S", "5"))
 
 # Signal types
 SIGNAL_TYPE_CREATED = "created"
@@ -68,6 +76,13 @@ class SignalManager:
         
         # Set of channels we're currently listening to
         self.active_channels: Set[str] = set()
+
+        # Run after the LISTEN connection is RE-established (not on the first
+        # connect): every notice sent while it was down is lost, so a cache it
+        # keeps in step is stale by an unknown amount and must be dropped
+        # (issues/276). Each is `async def cb() -> None`.
+        self.resync_callbacks: List[Callable[[], Awaitable[None]]] = []
+        self.reconnects = 0
         
         # Register default logging callbacks for all channels
         self._register_default_logging_callbacks()
@@ -206,11 +221,14 @@ class SignalManager:
         retry_delay = 1
         max_retry_delay = 30
         
+        connected_before = False
         while self.running:
             self.listen_connection = None
             try:
                 self.listen_connection = await self._create_dedicated_connection()
                 retry_delay = 1  # Reset on successful connect
+                lost = asyncio.Event()
+                self.listen_connection.add_termination_listener(lambda _c: lost.set())
                 
                 # Define the notification handler that asyncpg will call
                 def notification_handler(connection, pid, channel, payload):
@@ -231,11 +249,28 @@ class SignalManager:
                     f"PostgreSQL notification listener connected, "
                     f"listening on {len(self.active_channels)} channels"
                 )
-                
-                # Keep connection alive — asyncpg delivers notifications via the handler
-                while self.running:
-                    await asyncio.sleep(1.0)
-                    
+                if connected_before:
+                    # Notices sent while we were down are gone; drop what they
+                    # would have kept in step (issues/276).
+                    self.reconnects += 1
+                    self.logger.warning(
+                        "PostgreSQL notification listener RE-connected (reconnect #%d): "
+                        "notices sent while it was down were lost, resyncing %d "
+                        "cache(s)", self.reconnects, len(self.resync_callbacks))
+                    await self._run_resync()
+                connected_before = True
+
+                # Watch the connection. This used to sleep forever here, and a
+                # LISTEN connection that died without raising — the RDS failover
+                # of 2026-10-17 — left every task deaf to the others until it
+                # was restarted, while it went on SENDING (issues/276).
+                reason = await self._wait_while_alive(self.listen_connection, lost)
+                if reason is not None:
+                    self.logger.warning(
+                        "PostgreSQL notification listener connection lost (%s); "
+                        "reconnecting and re-subscribing", reason)
+                self.active_channels.clear()
+
             except asyncio.CancelledError:
                 self.logger.debug("Listen task cancelled")
                 return
@@ -336,6 +371,46 @@ class SignalManager:
         except Exception as e:
             self.logger.error(f"Error processing notification: {e}", exc_info=True)
     
+    def register_resync(self, callback: Callable[[], Awaitable[None]]):
+        """Run *callback* after every LISTEN reconnect (issues/276)."""
+        self.resync_callbacks.append(callback)
+
+    async def _run_resync(self):
+        for cb in list(self.resync_callbacks):
+            try:
+                await cb()
+            except Exception as e:
+                self.logger.error("Resync callback %s failed after LISTEN reconnect: %s",
+                                  getattr(cb, "__name__", cb), e)
+
+    async def _wait_while_alive(self, conn, lost: asyncio.Event):
+        """Return when *conn* is gone: terminated, closed, or failing its probe.
+
+        Three signals because none is enough alone. asyncpg's termination
+        callback fires when the protocol sees the socket close; `is_closed()`
+        covers a close it saw any other way; and the probe — a `SELECT 1` with a
+        timeout — catches the case neither does, a peer that vanished without a
+        FIN or RST, which is what a database failover can leave behind.
+        """
+        waited = 0.0
+        while self.running:
+            try:
+                await asyncio.wait_for(lost.wait(), timeout=1.0)
+                return "terminated"
+            except asyncio.TimeoutError:
+                pass
+            if self._is_connection_closed(conn):
+                return "closed"
+            waited += 1.0
+            if waited >= LISTEN_PROBE_INTERVAL_S:
+                waited = 0.0
+                try:
+                    await asyncio.wait_for(conn.fetchval("SELECT 1"),
+                                           timeout=LISTEN_PROBE_TIMEOUT_S)
+                except Exception as e:
+                    return f"probe failed ({type(e).__name__})"
+        return None
+
     def register_callback(self, channel: str, callback: Callable[[dict], Awaitable[None]]):
         """
         Register a callback for a specific notification channel.

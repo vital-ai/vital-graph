@@ -90,6 +90,11 @@ class CountCache:
             self._cache.pop(k, None)
             self._invalidations += 1
 
+    def clear(self) -> None:
+        """Remove every entry. For a lost invalidation stream (issues/276)."""
+        self._invalidations += len(self._cache)
+        self._cache.clear()
+
     # ------------------------------------------------------------------
     # Stats / observability
     # ------------------------------------------------------------------

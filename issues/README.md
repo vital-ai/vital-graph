@@ -1,7 +1,7 @@
 # Issues
 
 Numbered, append-only, one defect each. Resolved ones move to `archive/` —
-192 there, 82 live. An issue is archived only when nothing remains to do:
+192 there, 83 live. An issue is archived only when nothing remains to do:
 "FIXED in the converter, existing spaces need reloading" is not resolved, it is
 half-done, and it stays here.
 
@@ -135,6 +135,7 @@ Reproduce and measure LOCALLY; dev and vg hold spaces at or above prod scale.
 | **273** | FIXED 2026-10-17 (not yet released) | **Incremental derived-table syncs scanned the space, not the write.** Profiled on a UW-sized space, one decision write: the `entity_slot_sort` seeded walk merge-joined every slot edge in the space (149k rows, 111-150 ms) and the `frame_slot` re-derive hash-joined a sequential scan of the edge table (62-72 ms), for 372 rows. Fixed: a LATERAL per walked frame (`OFFSET 0` required) and frames resolved first then probed by `= ANY` — real write timings `slot_sort_sync` 198-262 → 81-96 ms, `fe_sync` modestly lower. `frame_prop_sort` evaluated and not adopted (its EXPLAIN-only win was timing overhead) |
 | **274** | FIXED 2026-10-17 (not yet released) | **A write holding a pooled connection asks the same pool for another.** `_ensure_graphs_registered` registers graphs through the request pool while the write holds its own connection, outside the transaction. A request pool of one (a benchmark's) made every upsert wait the 15 s acquire timeout; a burst of writers equal to the pool would do the same in production, then skip registration with a WARNING. Not seen in 14 days of production logs. Fixed: registered on the caller's connection inside its transaction, one statement per batch; no cache (graphs are deleted by other processes) |
 | **275** | FIXED 2026-10-17 (not yet released) | **The analytics job's 120 s timeout never applied, and one count scans the whole quad table.** `analytics_job.py:142` runs `SET LOCAL statement_timeout = '120s'` on an autocommit pooled connection, a no-op (PostgreSQL warns, keeps the 60 s default) — every analytics query has had half its budget. `distinct_predicate_count` is a full index-only scan of the quad table above the 5M guard: 31.5 s warm on the 79.5M-quad main KG space, over 60 s cold, so it fails once per restart. Fixed: a session timeout reset on release; the count from `rdf_pred_stats` on large spaces (28 in ~13 ms on production, as the 31.5 s scan); a CI guard on `SET LOCAL` outside a transaction |
+| **276** | FIXED IN CODE 2026-10-17 (not yet released) | **After a database failover each task stopped hearing the other and served stale cached reads.** The LISTEN loop slept forever without checking its connection; the 2026-10-17 RDS failover killed it silently, so from 17:12 UTC notices received went to 0 while notices sent continued, and each task served cached reads of the other's writes. Fixed: the listener probes its connection, reconnects and re-subscribes, and clears the caches the lost notices kept in step. Production needs a restart until released |
 
 Cross-listed in **Other**: `230` (the ANALYZE pile-up — fixed; `236` is the
 frequency behind it), `231` (where background work RUNS — the INTERNAL pool
