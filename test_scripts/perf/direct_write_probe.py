@@ -116,7 +116,9 @@ async def main():
         postgresql_config={"host": a.host, "port": a.port, "database": a.database,
                            "username": a.user, "password": password,
                            "min_pool_size": 1, "max_pool_size": 6},
-        sidecar_config={"url": "http://localhost:7070"})
+        # Never called: the bulk write path does not compile SPARQL. The test
+        # stack's sidecar port, as every script defaults to (not the dev 7070).
+        sidecar_config={"url": "http://localhost:7071"})
     assert await impl.connect(), "could not connect"
     graph = URIRef(a.graph or f"urn:{a.space}")
     pool = impl.db_impl.connection_pool
