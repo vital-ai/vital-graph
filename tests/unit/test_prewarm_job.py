@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
 
 from vitalgraph.process import prewarm_job as P
@@ -44,8 +43,11 @@ def test_spaces_are_opt_in(monkeypatch):
 
 
 def test_it_is_registered_single_runner_and_only_when_configured():
-    from vitalgraph.impl import vitalgraphapp_impl
-    src = inspect.getsource(vitalgraphapp_impl)
+    # READ the module, do not import it: `vitalgraphapp_impl` pulls in the whole
+    # server chain (itsdangerous and the rest), which the unit tier does not
+    # install — CI failed on exactly that import.
+    from pathlib import Path
+    src = (Path(P.__file__).parent.parent / "impl" / "vitalgraphapp_impl.py").read_text()
     block = src[src.index('name="space_prewarm"') - 400: src.index('name="space_prewarm"') + 400]
     assert "if prewarm_spaces:" in block
     assert "single_runner=True" in block
