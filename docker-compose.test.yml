@@ -162,6 +162,12 @@ services:
       - jit=off
       - -c
       - dynamic_shared_memory_type=sysv
+      # Production's target setting (issues/271): write cost is mostly full-page
+      # images, and their compressor decides it — pglz (`on`) measured ~2x
+      # slower than lz4 at about the same size. `off` here would make every
+      # write-path timing meaningless for production.
+      - -c
+      - wal_compression=lz4
     # No named volume here — but PGDATA is NOT in the container's writable
     # layer, which this comment used to claim and which is wrong in the one way
     # that matters. `postgres:18` declares VOLUME /var/lib/postgresql, so Docker
@@ -242,6 +248,9 @@ services:
       # at a 5-connection pool showed p99 reads of 1152ms with zero records.
       # Lower it (0.05) when measuring, not when serving.
       - VG_SLOW_ACQUIRE_SECONDS=${VG_SLOW_ACQUIRE_SECONDS:-1.0}
+      # Spaces kept resident in shared_buffers (issues/271). Empty by default,
+      # as in production until a space is named; set it to measure with it.
+      - VG_PREWARM_SPACES=${VG_PREWARM_SPACES:-}
       # Auth
       - SECRET_KEY=test-secret-key
       - JWT_SECRET_KEY=test-jwt-secret

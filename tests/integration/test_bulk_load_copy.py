@@ -70,8 +70,9 @@ async def test_copy_rebuild_matches_executemany(space_impl, two_spaces):
                     f"idx_{auto_sid}_quad_ctx_pred"):
             assert await conn.fetchval(
                 "SELECT 1 FROM pg_indexes WHERE indexname = $1", idx), idx
-        # ...and the two the schema no longer builds stay gone (issues/270).
-        for idx in (f"idx_{auto_sid}_quad_pred", f"idx_{auto_sid}_quad_ctx"):
+        # ...and the ones the schema no longer builds stay gone (issues/270, 271).
+        for idx in (f"idx_{auto_sid}_quad_pred", f"idx_{auto_sid}_quad_ctx",
+                    f"idx_{auto_sid}_quad_sp"):
             assert not await conn.fetchval(
                 "SELECT 1 FROM pg_indexes WHERE indexname = $1", idx), idx
 

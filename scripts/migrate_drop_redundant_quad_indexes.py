@@ -1,8 +1,9 @@
 #!/usr/bin/env python
-"""Drop the single-column quad indexes a composite already covers — issues/270.
+"""Drop the quad indexes another index already covers — issues/270, 271.
 
-    idx_{space}_quad_pred  (predicate_uuid)   covered by quad_po / quad_ps
-    idx_{space}_quad_ctx   (context_uuid)     covered by quad_ctx_pred
+    idx_{space}_quad_pred  (predicate_uuid)                 covered by quad_po / quad_ps
+    idx_{space}_quad_ctx   (context_uuid)                   covered by quad_ctx_pred
+    idx_{space}_quad_sp    (subject_uuid, predicate_uuid)   covered by the pkey (s, p, o, c)
 
 Why: every quad insert maintains every index on the table, at a random page
 each (the keys are UUIDs). Production's main KG space carried 9 indexes, ~32 GB,
@@ -11,12 +12,14 @@ index maintenance alone. These two were the least used of the nine (26k and 385k
 scans against hundreds of millions to billions for the rest) and a composite
 index with the same LEADING column serves the same lookups: a B-tree on
 (predicate_uuid, object_uuid) answers `predicate_uuid = X` as well as a B-tree on
-(predicate_uuid) does. Dropping them leaves 7 index writes per quad instead of 9
-and ~1.35 GB less to keep in cache on that space.
+(predicate_uuid) does. `quad_sp` (issues/271) is heavily scanned, but every
+scan it serves the primary key serves too, since (s, p) is the pkey's leading
+prefix. All three dropped leaves 6 index writes per quad instead of 9 and
+~6.4 GB less to keep in cache on that space.
 
 Verified on the vg test stack before any production run: the full query-tier
-perf suite with both indexes dropped on every space against a run with them in
-place (see issues/270 for the comparison).
+perf suite with the indexes dropped on every space against runs with them in
+place (see issues/270 and issues/271 for the comparisons).
 
 Safety, because this is meant to be run against production:
 
@@ -57,10 +60,12 @@ import asyncpg  # noqa: E402
 from devtools.target import dsn  # noqa: E402
 
 #: index suffix -> the covering indexes, any ONE of which makes it redundant.
-#: `{s}` is the space id.
+#: `{s}` is the space id. quad_sp's cover is the primary key, whose name has no
+#: `idx_` prefix.
 REDUNDANT = {
     "quad_pred": ("idx_{s}_quad_po", "idx_{s}_quad_ps"),
     "quad_ctx": ("idx_{s}_quad_ctx_pred",),
+    "quad_sp": ("{s}_rdf_quad_pkey",),
 }
 
 
@@ -79,7 +84,7 @@ async def plan(conn, only_space: str | None):
         "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
         "LEFT JOIN pg_stat_all_indexes s ON s.indexrelid = c.oid "
         "WHERE n.nspname = 'public' AND c.relkind IN ('i', 'I') "
-        "  AND c.relname ~ '^idx_.+_quad_(pred|ctx)$' ORDER BY c.relname")
+        "  AND c.relname ~ '^idx_.+_quad_(pred|ctx|sp)$' ORDER BY c.relname")
     out = []
     for r in rows:
         idx = r["idx"]
@@ -104,7 +109,7 @@ async def run(target: str, only_space: str | None, apply: bool) -> int:
         print(f"target: {who} ({'APPLY' if apply else 'dry run'})")
         items = await plan(conn, only_space)
         if not items:
-            print("nothing to do: no single-column quad_pred / quad_ctx indexes")
+            print("nothing to do: no quad_pred / quad_ctx / quad_sp indexes")
             return 0
         kept = 0
         for space, idx, size, scans, covered_by, partitioned in items:

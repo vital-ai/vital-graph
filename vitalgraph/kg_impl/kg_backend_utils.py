@@ -321,6 +321,72 @@ async def _delete_subjects_synced(conn, space_id: str, t, del_uuids,
     return deleted, (_s1 - _s0, _s2 - _s1, _s3 - _s2, _s4 - _s3)
 
 
+async def _unchanged_subjects(conn, t, subject_uuids, g_uuid, quads) -> set:
+    """The stored subjects whose quads in `g_uuid` are exactly `quads`' for them.
+
+    For the diffing upsert (issues/271): such a subject needs no write at all.
+    A subject counts as unchanged only if the new batch states it AND its set of
+    (predicate, object) uuids equals the stored set — so a subject the new graph
+    drops, or adds a value to, or changes one value of, is replaced as before.
+
+    Uuids come from `classify_term`, the same function the write uses, so the
+    comparison is against exactly what would be stored. A literal whose datatype
+    the space has never seen makes its subject CHANGED: without an id it would
+    hash as untyped and could collide with a stored untyped literal of the same
+    text, which would skip a write that changes the stored value's type.
+    """
+    from rdflib import Literal
+    from ..db.sparql_sql.sparql_sql_space_impl import classify_term
+
+    if not subject_uuids or not quads:
+        return set()
+    stored = set(subject_uuids)
+
+    dt_uris = {str(o.datatype) for _s, _p, o, _g in quads
+               if isinstance(o, Literal) and o.datatype}
+    dt_map: Dict[str, int] = {}
+    if dt_uris:
+        for r in await conn.fetch(
+                f"SELECT datatype_uri, datatype_id FROM {t['datatype']} "
+                f"WHERE datatype_uri = ANY($1::text[])", list(dt_uris)):
+            dt_map[r['datatype_uri']] = r['datatype_id']
+
+    # INLINE, NOT `asyncio.to_thread`. In the app the default executor is shared
+    # with the maintenance job's synchronous ANALYZE/VACUUM, and a first test-
+    # stack run spent 3.9 s of a 4.1 s upsert queued behind it for ~70 ms of
+    # work. Memoised per term: a decision graph repeats its predicates and
+    # many objects, so most uuid5 computations are lookups.
+    uuid_of: Dict[Any, Any] = {}
+
+    def _u(term):
+        u = uuid_of.get(term)
+        if u is None:
+            u = uuid_of[term] = classify_term(term, dt_map)[0]
+        return u
+
+    new: Dict[Any, set] = {}
+    unknown: set = set()
+    for s, p, o, _g in quads:
+        su = _u(s)
+        if su not in stored:
+            continue
+        if isinstance(o, Literal) and o.datatype and str(o.datatype) not in dt_map:
+            unknown.add(su)
+        new.setdefault(su, set()).add((_u(p), _u(o)))
+    candidates = [su for su in new if su not in unknown]
+    if not candidates:
+        return set()
+
+    old: Dict[Any, set] = {}
+    for r in await conn.fetch(
+            f"SELECT subject_uuid, predicate_uuid, object_uuid FROM {t['rdf_quad']} "
+            f"WHERE subject_uuid = ANY($1::uuid[]) AND context_uuid = $2",
+            candidates, g_uuid):
+        old.setdefault(r['subject_uuid'], set()).add(
+            (r['predicate_uuid'], r['object_uuid']))
+    return {su for su in candidates if old.get(su) == new[su]}
+
+
 async def _insert_stamp(conn, t, s_uuid, p_uuid, g_uuid, value: str,
                         subject_uri: Optional[str] = None) -> None:
     """Insert the timestamp term and its quad, all idempotently.
@@ -1662,19 +1728,13 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         The lock is taken FIRST, before anything is read, so the existence check
         the caller made outside this transaction cannot be acted on by two
         writers at once. Everything else happens exactly as
-        `update_entity_graph` does it, per entity.
+        `update_entity_graph` does it, per entity — except that a stored subject
+        whose quads are unchanged is neither deleted nor rewritten (issues/271).
         """
         import time as _time
         from ..db.sparql_sql.entity_lock import lock_entities
-        from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
-        from ..db.sparql_sql.sync_frame_slot_table import sync_frame_slot_before_delete
-        from ..db.sparql_sql.sync_edge_table import sync_edge_table_before_delete
-        from ..db.sparql_sql.sync_entity_slot_sort import (
-            sync_entity_slot_sort_before_delete)
-        from ..db.sparql_sql.sync_entity_prop_sort import (
-            sync_entity_prop_sort_after_change)
-        from ..db.sparql_sql.sync_frame_prop_sort import (
-            sync_frame_prop_sort_after_change)
+        from ..db.sparql_sql.sparql_sql_space_impl import (
+            _generate_term_uuid, classify_term)
         from rdflib import URIRef
 
         try:
@@ -1696,14 +1756,30 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                 return out
 
             quads = await asyncio.to_thread(_build_quads)
+            # The server-managed properties, stamped HERE rather than left to the
+            # bulk write, so the unchanged-subject comparison below sees the
+            # quads that will actually be stored. The bulk write's own stamping
+            # adds only what a batch lacks, so it adds nothing after this.
+            try:
+                from .kg_server_properties import server_property_quads_for_import
+                from datetime import datetime, timezone
+                quads = quads + server_property_quads_for_import(
+                    quads, datetime.now(timezone.utc))
+            except Exception as exc:
+                # The bulk write stamps again and reports its own failure; a
+                # missed stamp here only makes that subject compare as changed.
+                self.logger.warning("upsert: server-property stamping skipped: %s", exc)
 
             async with _write_conn(self.backend.db_impl.connection_pool, conn) as conn:
                 async with conn.transaction():
                     # Sorted inside `lock_entities`, so a multi-entity upsert
                     # cannot deadlock against one taking the same entities in a
                     # different order.
+                    _p0 = _time.monotonic()
                     await lock_entities(conn, entity_uris)
+                    _p1 = _time.monotonic()
 
+                    subject_uuids: List = []
                     for entity_uri in entity_uris:
                         e_uuid = _generate_term_uuid(entity_uri, 'U')
                         rows = await conn.fetch(
@@ -1711,43 +1787,85 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                             f"WHERE predicate_uuid = $1 AND object_uuid = $2 "
                             f"  AND context_uuid = $3",
                             p_uuid, e_uuid, g_uuid)
-                        subject_uuids = [r['subject_uuid'] for r in rows]
-                        if not subject_uuids:
-                            continue
-                        # The auxiliary tables are derived from the quads, so
-                        # they have to be told before the rows go, not after.
-                        await sync_frame_slot_before_delete(
-                            conn, space_id, subject_uuids, context_uuid=g_uuid)
-                        await sync_edge_table_before_delete(
-                            conn, space_id, subject_uuids, context_uuid=g_uuid)
-                        # `entity_slot_sort` BEFORE the delete for the same
-                        # reason (`issues/194`): its rows are reached through
-                        # the edge table this delete invalidates, and a stale
-                        # row makes a sort order by a value that is gone.
-                        await sync_entity_slot_sort_before_delete(
-                            conn, space_id, subject_uuids, context_uuid=g_uuid)
-                        await conn.execute(
-                            f"DELETE FROM {t['rdf_quad']} "
-                            f"WHERE subject_uuid = ANY($1) AND context_uuid = $2",
-                            subject_uuids, g_uuid)
-                        # AND THE PROP TABLES AFTER IT. A delete there is a
-                        # RECOMPUTE: they store the MIN of a multi-valued
-                        # property, so removing the lexically first of three
-                        # values must move the MIN to the next survivor while
-                        # the row itself survives. Re-deriving before the
-                        # delete would restore the value being removed.
-                        await sync_entity_prop_sort_after_change(
-                            conn, space_id, subject_uuids, context_uuid=g_uuid)
-                        await sync_frame_prop_sort_after_change(
-                            conn, space_id, subject_uuids, context_uuid=g_uuid)
+                        subject_uuids.extend(r['subject_uuid'] for r in rows)
+                    subject_uuids = list(dict.fromkeys(subject_uuids))
 
-                    if quads:
+                    # WRITE ONLY WHAT CHANGED (issues/271). This used to delete
+                    # every quad of every subject and insert the whole new graph,
+                    # so a subject whose quads were identical was deleted and
+                    # written again — full index and WAL cost twice, and the
+                    # insert path's own skip of stored quads could never fire,
+                    # because the rows had just gone (`pg_stat_statements` on
+                    # production: calls = rows for every UW quad insert). A
+                    # subject whose stored quads equal its new ones is now left
+                    # alone; the rest are replaced exactly as before.
+                    #
+                    # SUBJECT GRANULARITY, not quad: every derived-table sync is
+                    # keyed by the subjects a write touched (a frame through its
+                    # own subject, a slot, or the edge joining them), and the
+                    # partial frame update already replaces a subset of an
+                    # entity's subjects this way, so the derived tables have one
+                    # semantics for both.
+                    _p2 = _time.monotonic()
+                    unchanged = await _unchanged_subjects(
+                        conn, t, subject_uuids, g_uuid, quads)
+                    replaced = [s for s in subject_uuids if s not in unchanged]
+                    _p3 = _time.monotonic()
+
+                    # THE FRAMES THAT OWN A REPLACED SLOT OR EDGE, resolved
+                    # before the delete takes the edge rows that lead to them.
+                    # `frame_slot`'s pre-delete sync drops EVERY row of such a
+                    # frame, but a skipped frame is not written, so the bulk
+                    # write's re-derive never reaches it: dropping one slot lost
+                    # the rows of the frame's surviving slots. The delete-all
+                    # upsert never showed this because it rewrote every frame.
+                    owners = []
+                    if replaced and unchanged:
+                        from ..db.sparql_sql.sync_frame_slot_table import (
+                            _edge_source_nodes)
+                        owners = await _edge_source_nodes(conn, space_id, replaced)
+
+                    _del_steps = (0.0, 0.0, 0.0, 0.0)
+                    if replaced:
+                        _n_del, _del_steps = await _delete_subjects_synced(
+                            conn, space_id, t, replaced, g_uuid)
+                    _p4 = _time.monotonic()
+
+                    to_write = quads
+                    if unchanged:
+                        to_write = [q for q in quads
+                                    if classify_term(q[0], {})[0] not in unchanged]
+                    if to_write:
                         await self.backend.add_rdf_quads_batch_bulk(
-                            space_id, quads, connection=conn)
+                            space_id, to_write, connection=conn)
+                    _p5 = _time.monotonic()
 
+                    # Re-derive what the write did not reach: the owners above,
+                    # through which their surviving slots' rows are found again.
+                    written = {classify_term(q[0], {})[0] for q in to_write}
+                    rederive = [u for u in dict.fromkeys(owners) if u not in written]
+                    if rederive:
+                        from ..db.sparql_sql.sync_frame_slot_table import (
+                            sync_frame_slot_after_edge_insert)
+                        from ..db.sparql_sql.sync_entity_slot_sort import (
+                            sync_entity_slot_sort_after_edge_insert)
+                        await sync_frame_slot_after_edge_insert(
+                            conn, space_id, rederive)
+                        await sync_entity_slot_sort_after_edge_insert(
+                            conn, space_id, rederive)
+                    _p6 = _time.monotonic()
+
+            _p7 = _time.monotonic()
             self.logger.info(
-                "\u23f1\ufe0f  upsert_objects_atomic: %.3fs (%d entit(y/ies), %d quads)",
-                _time.monotonic() - _t0, len(entity_uris), len(quads))
+                "\u23f1\ufe0f  upsert_objects_atomic: %.3fs (%d entit(y/ies), %d quads, "
+                "%d written; %d stored subject(s): %d unchanged, %d replaced) "
+                "phases lock=%.3fs members=%.3fs diff=%.3fs delete=%.3fs "
+                "[fs=%.3f edge=%.3f ess=%.3f quads=%.3f] write=%.3fs rederive=%.3fs "
+                "commit=%.3fs",
+                _p7 - _t0, len(entity_uris), len(quads), len(to_write),
+                len(subject_uuids), len(unchanged), len(replaced),
+                _p1 - _p0, _p2 - _p1, _p3 - _p2, _p4 - _p3, *_del_steps,
+                _p5 - _p4, _p6 - _p5, _p7 - _p6)
             return True
         except EntityLockTimeout as e:
             return self._lock_timeout_failed("upsert_objects_atomic", e, len(entity_uris))

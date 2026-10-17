@@ -1,7 +1,7 @@
 # Issues
 
 Numbered, append-only, one defect each. Resolved ones move to `archive/` —
-192 there, 77 live. An issue is archived only when nothing remains to do:
+192 there, 78 live. An issue is archived only when nothing remains to do:
 "FIXED in the converter, existing spaces need reloading" is not resolved, it is
 half-done, and it stays here.
 
@@ -130,6 +130,7 @@ Reproduce and measure LOCALLY; dev and vg hold spaces at or above prod scale.
 | **268** | FIXED 2026-10-12 (not yet released) | **The frame_slot warning sent a surplus to a backfill that only inserts, and the surplus was not real.** `263` chose the remedy by orphans alone, so the main KG space's +2 to +30 surpluses read "the backfill repairs this". The surplus itself was skew: the two counts were two statements, two snapshots, with a multi-second scan between them. Fixed: one statement (and the client timeout it ignored), and a remedy per finding |
 | **269** | OPEN | **A full gen-2 garbage collection every 60 seconds freezes each task for ~150 ms.** Production, both tasks: one gen-2 collection every 60.1-60.2 s, 164 ms median (237 max), collecting a median of 350 objects; the same pauses show as `EVENT LOOP STALL`s. Not a regression (1,530 / 1,613 / 1,623 per 13 h on Oct 10-12). The startup `gc.freeze()` (639,604 objects) is already in place, so it is post-startup long-lived objects. Trigger unknown: the cadence looks like a timer, and nothing in `vitalgraph/` forces a collection. Next: log the stack at gen-2 start to find it |
 | **270** | FIXED 2026-10-16 (not yet released) | **A bulk load turned maintenance into a scan loop, and every quad insert into nine index writes.** A 22,885-lead backfill grew the main KG quad table 50M → 79M rows; reads went ~25 → ~2,000 IOPS against gp3's fixed 3,000, and writes failed on 10 s lock timeouts. Three defects: probes that timed out were retried every cycle (59 + 54 in 48 h); ANALYZE/VACUUM fired at an absolute 10,000 changes, so every cycle on 79M rows (~2.1 GB per ANALYZE); and nine indexes per quad insert, two of them nearly unused. Fixed: timeout back-off, table-relative gates (2%), and `quad_pred`/`quad_ctx` dropped (schema + migration script). Production migration not yet run |
+| **271** | FIXED 2026-10-17 (not yet released) | **A UW decision write took seconds because it rewrote what it had and wrote each row alone.** 1,000-object / 7k-quad writes took 6.5-18.7 s on a quiet database: ~4 % of the UW space was in cache, each quad wrote 5.3 KB of WAL (mostly page images, pglz), the upsert deleted and re-inserted every unchanged quad, and executemany ran 8,500 statements. Fixed: one set-based insert per table, the upsert writes only changed subjects, `quad_sp` dropped (pkey prefix), an opt-in single-runner prewarm job, per-phase and WAL logging. Test stack: new write 1.26 s median, re-upserts 0.28-0.34 s; 1.9 s under cache churn. Production: lz4, migration, `VG_PREWARM_SPACES` pending |
 
 Cross-listed in **Other**: `230` (the ANALYZE pile-up — fixed; `236` is the
 frequency behind it), `231` (where background work RUNS — the INTERNAL pool

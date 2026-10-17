@@ -117,6 +117,57 @@ async def _apply_read_fence(conn) -> None:
         await conn.execute(f"SET LOCAL statement_timeout = '{ms}ms'")
 
 
+async def _wal_insert_pos(conn) -> Optional[int]:
+    """The server's WAL insert position as a byte offset, or None.
+
+    For the write log line only: the difference between two readings is the WAL
+    a write generated (ours plus anything concurrent, so an upper bound). It
+    must never fail a write — a standby, for one, cannot answer it.
+    """
+    try:
+        lsn = await conn.fetchval("SELECT pg_current_wal_insert_lsn()::text")
+        hi, lo = lsn.split("/")
+        return (int(hi, 16) << 32) + int(lo, 16)
+    except Exception:
+        return None
+
+
+def _wal_mb(a: Optional[int], b: Optional[int]) -> str:
+    return "?" if a is None or b is None else f"{(b - a) / 1e6:.1f}"
+
+
+def classify_term(term, dt_map: Dict[str, int]) -> tuple:
+    """`(term_uuid, term_text, term_type, lang, datatype_id)` for an rdflib term.
+
+    The one classification every bulk write uses, so a caller that has to know
+    a quad's uuids BEFORE writing it (the diffing upsert, issues/271) computes
+    exactly the identity the write will store. `dt_map` maps datatype URI to the
+    space's datatype id. A datatype missing from it hashes the literal as
+    UNTYPED — the write itself resolves it first, so only a caller computing
+    uuids ahead of the write sees this, and it must treat such a literal as
+    unknown, not as the untyped literal it now collides with.
+    """
+    term_text = str(term)
+    if isinstance(term, URIRef):
+        term_type = 'U'
+    elif isinstance(term, BNode):
+        term_type = 'B'
+    elif isinstance(term, Literal):
+        term_type = 'L'
+    else:
+        term_type = 'U'
+
+    lang = None
+    datatype_id = None
+    if isinstance(term, Literal):
+        lang = term.language
+        if term.datatype:
+            datatype_id = dt_map.get(str(term.datatype))
+
+    term_uuid = _generate_term_uuid(term_text, term_type, lang, datatype_id)
+    return term_uuid, term_text, term_type, lang, datatype_id
+
+
 def _generate_term_uuid(
     term_text: str, term_type: str,
     lang: Optional[str] = None, datatype_id: Optional[int] = None,
@@ -1429,10 +1480,12 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         - ``rebuild_indexes=None`` (default, auto): a large batch (>=
           ``REBUILD_MIN_QUADS``) into a currently-**empty** space drops the
           secondary indexes, COPYs, and rebuilds them once (fast initial load);
-          otherwise executemany (incremental, index-live, never disrupts reads).
+          otherwise an incremental, index-live insert that never disrupts
+          reads: one set-based statement per table at ``UNNEST_MIN_ROWS`` rows
+          or more, executemany below that (issues/271).
         - ``rebuild_indexes=True``: force the drop→COPY→rebuild path (operator
           maintenance-window load into a non-empty space — disrupts reads).
-        - ``rebuild_indexes=False``: force executemany.
+        - ``rebuild_indexes=False``: never rebuild; incremental as above.
         """
         if not quads:
             return 0
@@ -1511,29 +1564,19 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             # ------------------------------------------------------------------
             # 3. Build term rows + quad rows in Python (CPU-only, no I/O)
             # ------------------------------------------------------------------
+            # Memoised per write (issues/271): a batch repeats its predicates,
+            # its graph and many objects, so of the 4 x quads classifications
+            # most are the same term again. `dt_map` is fixed for the write.
+            _classified: Dict[Any, tuple] = {}
+
             def _classify(term, dt_map):
-                """Return (term_text, term_type, lang, datatype_id, term_uuid)."""
-                term_text = str(term)
-                if isinstance(term, URIRef):
-                    term_type = 'U'
-                elif isinstance(term, BNode):
-                    term_type = 'B'
-                elif isinstance(term, Literal):
-                    term_type = 'L'
-                else:
-                    term_type = 'U'
-
-                lang = None
-                datatype_id = None
-                if isinstance(term, Literal):
-                    lang = term.language
-                    if term.datatype:
-                        datatype_id = dt_map.get(str(term.datatype))
-
-                term_uuid = _generate_term_uuid(term_text, term_type, lang, datatype_id)
-                return term_uuid, term_text, term_type, lang, datatype_id
+                r = _classified.get(term)
+                if r is None:
+                    r = _classified[term] = classify_term(term, dt_map)
+                return r
 
             async def _do_bulk(conn):
+                _wal0 = await _wal_insert_pos(conn)
                 dt_map = await _resolve_all_datatypes(conn)
                 _t1 = _time.monotonic()
 
@@ -1562,7 +1605,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
                 # Insert terms + quads via the context-appropriate strategy.
                 from .bulk_load import (
-                    REBUILD_MIN_QUADS, insert_terms_quads_executemany,
+                    REBUILD_MIN_QUADS, UNNEST_MIN_ROWS,
+                    insert_terms_quads_executemany, insert_terms_quads_unnest,
                     bulk_load_with_index_rebuild)
                 # Sorted by term_uuid: `seen_terms` is keyed in first-seen order, so
                 # two batches sharing new terms inserted them in different orders and
@@ -1591,12 +1635,17 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                         self.schema.create_space_indexes_sql(space_id),
                         terms_direct=term_empty)
                     _strategy = "copy+rebuild"
+                elif len(term_args) + len(quad_rows) >= UNNEST_MIN_ROWS:
+                    await insert_terms_quads_unnest(
+                        conn, t, term_args, quad_rows)
+                    _strategy = "unnest"
                 else:
                     await insert_terms_quads_executemany(
                         conn, t, term_args, quad_rows)
                     _strategy = "executemany"
                 _t3 = _time.monotonic()
                 _t4 = _t3  # term/quad insert is one fused strategy call
+                _wal1 = await _wal_insert_pos(conn)
 
                 # Sync edge table with newly inserted subjects
                 from .sync_edge_table import sync_edge_table_after_insert
@@ -1616,13 +1665,16 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 from .sync_entity_slot_sort import sync_entity_slot_sort_after_edge_insert
                 await sync_entity_slot_sort_after_edge_insert(
                     conn, space_id, unique_subjects)
+                _t5c = _time.monotonic()
 
                 from .sync_entity_prop_sort import sync_entity_prop_sort_after_change
                 from .sync_frame_prop_sort import sync_frame_prop_sort_after_change
                 await sync_entity_prop_sort_after_change(
                     conn, space_id, unique_subjects)
+                _t5d = _time.monotonic()
                 await sync_frame_prop_sort_after_change(
                     conn, space_id, unique_subjects)
+                _t5e = _time.monotonic()
 
                 # Sync stats tables
                 # See the note in remove_rdf_quads_batch_bulk: a caller that
@@ -1672,17 +1724,26 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                         logger.warning("value histogram rebuild skipped for "
                                        "%s: %s", space_id, exc)
                 _t6 = _time.monotonic()
+                _wal2 = await _wal_insert_pos(conn)
 
+                # One phase per sync (issues/271). The last three used to be
+                # logged together as `stats_sync`, which they are not: the
+                # stats tables are not written here at all, and the label sent
+                # the 2026-10-16 analysis looking for a stats cost that did not
+                # exist. WAL is logged because it, not CPU, is what a large
+                # write into a served table mostly costs.
                 logger.info(
                     "⏱️  BULK insert: dt_resolve=%.3fs  classify=%.3fs  "
                     "tq_insert=%.3fs [%s] (%d terms + %d quads)  "
                     "edge_sync=%.3fs (%d)  fe_sync=%.3fs (%d)  "
-                    "stats_sync=%.3fs  total=%.3fs",
+                    "slot_sort_sync=%.3fs  eprop_sync=%.3fs  fprop_sync=%.3fs  "
+                    "histograms=%.3fs  wal=%s/%s MB (insert/total)  total=%.3fs",
                     _t1 - _t0, _t2 - _t1, _t3 - _t2, _strategy,
                     len(term_args), len(quad_rows),
                     _t5 - _t4, edge_inserted,
                     _t5b - _t5, fe_inserted,
-                    _t6 - _t5b, _t6 - _t0,
+                    _t5c - _t5b, _t5d - _t5c, _t5e - _t5d, _t6 - _t5e,
+                    _wal_mb(_wal0, _wal1), _wal_mb(_wal0, _wal2), _t6 - _t0,
                 )
                 return len(quad_rows)
 

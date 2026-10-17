@@ -1669,7 +1669,13 @@ class SparqlSQLSchema:
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_obj ON {t['rdf_quad']} (object_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_po ON {t['rdf_quad']} (predicate_uuid, object_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_ps ON {t['rdf_quad']} (predicate_uuid, subject_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_sp ON {t['rdf_quad']} (subject_uuid, predicate_uuid)",
+            # No `quad_sp (subject_uuid, predicate_uuid)` (`issues/271`): it is
+            # the leading prefix of the primary key (s, p, o, c), which serves
+            # every lookup it did. 5.0 GB on production's main KG space, one
+            # random-page write per quad. Verified on the vg test stack: with it
+            # dropped on all 301 spaces the query-tier perf suite read no more
+            # buffers anywhere (the planner took the pkey; seven traversal
+            # benches re-arranged and read 7-15 % fewer).
             # Graph-scoped COVERING index (Tier 1 — billion_scale_strategy.md §5/§14).
             # Serves graph-scoped predicate scans (WHERE context=? AND predicate=?)
             # index-only — no heap. Measured ~3x fewer buffers vs the pre-existing
@@ -2060,8 +2066,8 @@ class SparqlSQLSchema:
             f"DROP INDEX IF EXISTS idx_{space_id}_term_trgm",
             f"DROP INDEX IF EXISTS idx_{space_id}_term_num",
             # Kept although the schema no longer builds quad_pred / quad_ctx
-            # (`issues/270`): a bulk load on an older space then removes them
-            # and rebuilds only what the schema lists.
+            # (`issues/270`) or quad_sp (`issues/271`): a bulk load on an older
+            # space then removes them and rebuilds only what the schema lists.
             f"DROP INDEX IF EXISTS idx_{space_id}_quad_pred",
             f"DROP INDEX IF EXISTS idx_{space_id}_quad_subj",
             f"DROP INDEX IF EXISTS idx_{space_id}_quad_obj",

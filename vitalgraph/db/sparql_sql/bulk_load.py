@@ -19,11 +19,21 @@ The right strategy depends on load *context*, not batch size alone:
 
 ``insert_terms_quads_copy`` (COPY + staging, indexes left in place) is the
 building block the rebuild path reuses once the secondary indexes are gone.
+
+- ``insert_terms_quads_unnest`` — the same incremental, index-live write as
+  executemany, but ONE ``INSERT … SELECT FROM unnest(arrays)`` per table
+  instead of one statement per row. For a batch of thousands of rows into a
+  served table this is the right choice (issues/271): the executor starts once,
+  not 8,500 times, and the rows go in sorted by primary key, so consecutive rows
+  land on neighbouring leaf pages of the subject-leading indexes. Arrays rather
+  than COPY-to-staging, because a temp table per write churns the system
+  catalogs at the rate the UW decision writes arrive.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from typing import Dict, List, Sequence, Tuple
 import uuid
 
@@ -32,6 +42,11 @@ logger = logging.getLogger(__name__)
 # Below this many quads the COPY/rebuild fixed overhead (temp tables, index
 # build startup) costs more than it saves — use executemany.
 REBUILD_MIN_QUADS = 10_000
+
+# At or above this many rows (terms + quads) an incremental write goes in as one
+# INSERT .. SELECT FROM unnest(...) per table (issues/271). Below it the batch is
+# a handful of statements and executemany's pipelining is as good.
+UNNEST_MIN_ROWS = int(os.getenv("VG_UNNEST_MIN_ROWS", "500"))
 
 _TERM_COLS = ("term_uuid", "term_text", "term_type", "lang", "datatype_id")
 _QUAD_COLS = ("subject_uuid", "predicate_uuid", "object_uuid", "context_uuid")
@@ -54,6 +69,42 @@ async def insert_terms_quads_executemany(
         f"VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
         quad_rows,
     )
+    return len(quad_rows)
+
+
+async def insert_terms_quads_unnest(
+    conn,
+    t: Dict[str, str],
+    term_args: List[Tuple],
+    quad_rows: List[Tuple],
+) -> int:
+    """Insert terms and quads as one set-based statement per table.
+
+    Same result as `insert_terms_quads_executemany` — ON CONFLICT DO NOTHING
+    against stored rows, and against duplicates within the batch, which DO
+    NOTHING settles inside one statement as well — but one executor run per
+    table instead of one per row.
+
+    ORDERED BY THE PRIMARY KEY. Every writer then takes the term and quad keys
+    in the same global order, which can only remove lock-order deadlocks
+    between concurrent batches (issues/115, 152), and successive rows fall on
+    neighbouring leaves of the pkey and the other subject-leading indexes.
+    """
+    if term_args:
+        u, text, ttype, lang, dt = (list(c) for c in zip(*term_args))
+        await conn.execute(
+            f"INSERT INTO {t['term']} ({', '.join(_TERM_COLS)}) "
+            f"SELECT * FROM unnest($1::uuid[], $2::text[], $3::text[], "
+            f"$4::text[], $5::bigint[]) "
+            f"ORDER BY 1 ON CONFLICT DO NOTHING",
+            u, text, ttype, lang, dt)
+    if quad_rows:
+        s, p, o, g = (list(c) for c in zip(*quad_rows))
+        await conn.execute(
+            f"INSERT INTO {t['rdf_quad']} ({', '.join(_QUAD_COLS)}) "
+            f"SELECT * FROM unnest($1::uuid[], $2::uuid[], $3::uuid[], $4::uuid[]) "
+            f"ORDER BY 1, 2, 3, 4 ON CONFLICT DO NOTHING",
+            s, p, o, g)
     return len(quad_rows)
 
 

@@ -603,6 +603,29 @@ class VitalGraphAppImpl:
                             except Exception as e:
                                 self.logger.warning(f"Query metrics initialization failed (non-critical): {e}")
 
+                            # Keep named latency-critical spaces resident in
+                            # shared_buffers (issues/271). Opt-in: registered only
+                            # when VG_PREWARM_SPACES names a space. One runner for
+                            # all tasks — the cache belongs to the database.
+                            try:
+                                from vitalgraph.process.prewarm_job import (
+                                    PrewarmJob, PREWARM_INTERVAL_S,
+                                    prewarm_spaces_from_env)
+                                prewarm_spaces = prewarm_spaces_from_env()
+                                if prewarm_spaces:
+                                    self.process_scheduler.register_job(
+                                        name="space_prewarm",
+                                        interval_seconds=PREWARM_INTERVAL_S,
+                                        handler=PrewarmJob(bg_pool, prewarm_spaces),
+                                        process_type="prewarm",
+                                        single_runner=True,
+                                    )
+                                    self.logger.info(
+                                        f"✅ Space prewarm job registered for "
+                                        f"{', '.join(prewarm_spaces)} (every {PREWARM_INTERVAL_S:.0f}s)")
+                            except Exception as e:
+                                self.logger.warning(f"Space prewarm job registration failed (non-critical): {e}")
+
                             # Register import/export cleanup job
                             try:
                                 from vitalgraph.process.import_export_cleanup_job import ImportExportCleanupJob
