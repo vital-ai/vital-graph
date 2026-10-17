@@ -479,6 +479,46 @@ REFRESH_TIMEOUT_MS = int(_os.getenv("VG_TYPE_AGREEMENT_REFRESH_TIMEOUT_MS",
 REFRESH_CLIENT_TIMEOUT_S = REFRESH_TIMEOUT_MS / 1000.0 + 30.0
 
 
+#: How long a refresh that ran out its budget is left alone (`issues/270`).
+#: Longer than the born-stale back-off: what is waited for is the space
+#: shrinking or the database having I/O to spare, not a burst of writes passing.
+TIMEOUT_BACKOFF_S = float(_os.getenv("VG_TYPE_AGREEMENT_TIMEOUT_BACKOFF_S", "21600"))
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    """A server-side statement timeout or a client-side (driver) timeout."""
+    import asyncio
+    import asyncpg
+    return isinstance(exc, (asyncio.TimeoutError, TimeoutError,
+                            asyncpg.QueryCanceledError))
+
+
+async def _store_unknown(conn, space_id: str, kind: str, token, rows,
+                         compute_ms: int) -> None:
+    """Record an attempt that produced no verdict, so it is backed off.
+
+    Nothing is stored without a token: the row's `agrees IS NULL` is what
+    `_refresh_not_needed` backs off on, and a missing token means the scan never
+    started. Never raises: failing to record a failure must not hide it.
+    """
+    if token is None:
+        return
+    try:
+        await conn.execute(
+            "INSERT INTO type_agreement (space_id, kind, predicate_uri, "
+            "  agrees, change_token, source_rows, computed_at, compute_ms) "
+            "VALUES ($1,$2,$3,NULL,$4,$5,NOW(),$6) "
+            "ON CONFLICT (space_id, kind, predicate_uri) DO UPDATE SET "
+            "  agrees = NULL, change_token = EXCLUDED.change_token, "
+            "  source_rows = EXCLUDED.source_rows, "
+            "  computed_at = EXCLUDED.computed_at, "
+            "  compute_ms = EXCLUDED.compute_ms",
+            space_id, kind, RDF_TYPE_URI, token, rows, compute_ms)
+    except Exception as exc:  # pragma: no cover - logged, not raised
+        logger.warning("type agreement: could not record the %s %s timeout: %s",
+                       space_id, kind, exc)
+
+
 #: How long a space that proved unable to hold a verdict is left alone.
 #: Long, because the thing being waited for is the write rate dropping, not a
 #: transient. It expires on its own so a space that goes quiet recovers with no
@@ -499,7 +539,7 @@ async def _refresh_not_needed(conn, space_id: str, kind: str,
     """
     try:
         row = await conn.fetchrow(
-            "SELECT agrees, change_token, "
+            "SELECT agrees, change_token, compute_ms, "
             "       EXTRACT(epoch FROM NOW() - computed_at) AS age_s "
             "FROM type_agreement "
             "WHERE space_id = $1 AND kind = $2 AND predicate_uri = $3",
@@ -510,6 +550,17 @@ async def _refresh_not_needed(conn, space_id: str, kind: str,
         return None
     if row["agrees"] is None:
         age = float(row["age_s"] or 0)
+        # An attempt that used its whole budget timed out (`issues/270`); one
+        # that finished sooner was born stale. Different waits, different reasons.
+        try:
+            spent_ms = row["compute_ms"] or 0
+        except (KeyError, IndexError):     # a row from before the column was read
+            spent_ms = 0
+        if spent_ms >= REFRESH_TIMEOUT_MS:
+            if age < TIMEOUT_BACKOFF_S:
+                return (f"last attempt ran out its {REFRESH_TIMEOUT_MS} ms budget; "
+                        f"retried in {int(TIMEOUT_BACKOFF_S - age)}s")
+            return None
         if age < BORN_STALE_BACKOFF_S:
             return (f"cannot hold a verdict at this write rate; retried in "
                     f"{int(BORN_STALE_BACKOFF_S - age)}s")
@@ -558,6 +609,7 @@ async def refresh_type_agreement(conn, space_id: str, force: bool = False) -> li
     for kind, (suffix, col) in _SOURCES.items():
         table = f"{space_id}_{suffix}"
         record = {"space_id": space_id, "kind": kind, "agrees": None}
+        token = rows = started = None        # read by the timeout handler below
         try:
             if not force:
                 skip = await _refresh_not_needed(conn, space_id, kind, table)
@@ -652,10 +704,25 @@ async def refresh_type_agreement(conn, space_id: str, force: bool = False) -> li
         except asyncpg.UndefinedTableError as exc:
             record["skipped"] = f"missing table ({exc.__class__.__name__})"
         except Exception as exc:
-            # A space that cannot be measured keeps whatever it had. The stored
-            # token ages it out on its own as the table changes.
             record["error"] = f"{type(exc).__name__}: {exc}"
-            logger.warning("type agreement: %s %s refresh failed: %s",
-                           space_id, kind, exc)
+            if _is_timeout(exc):
+                # OUT OF BUDGET: back off, do not rescan (`issues/270`). A
+                # timeout wrote nothing, so the next cycle repeated the same
+                # 5-minute scan: 54 times in 48 hours on production's main KG
+                # space. Stored as unknown, like a born-stale verdict, so
+                # `_refresh_not_needed` backs it off; the elapsed time marks it
+                # as a timeout and earns the longer back-off.
+                ms = int((_time.monotonic() - started) * 1000) if started else 0
+                await _store_unknown(conn, space_id, kind, token, rows,
+                                     max(ms, REFRESH_TIMEOUT_MS))
+                logger.warning(
+                    "type agreement: %s %s refresh TIMED OUT after %d ms; backing "
+                    "off %d min before trying again", space_id, kind, ms,
+                    int(TIMEOUT_BACKOFF_S / 60))
+            else:
+                # A space that cannot be measured keeps whatever it had. The
+                # stored token ages it out on its own as the table changes.
+                logger.warning("type agreement: %s %s refresh failed: %s",
+                               space_id, kind, exc)
         out.append(record)
     return out

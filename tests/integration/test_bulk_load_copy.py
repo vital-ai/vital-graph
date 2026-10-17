@@ -66,9 +66,13 @@ async def test_copy_rebuild_matches_executemany(space_impl, two_spaces):
         assert auto_counts[0] == N
 
         # Secondary indexes were rebuilt, not left dropped.
-        for idx in (f"idx_{auto_sid}_quad_pred", f"idx_{auto_sid}_term_trgm",
+        for idx in (f"idx_{auto_sid}_quad_po", f"idx_{auto_sid}_term_trgm",
                     f"idx_{auto_sid}_quad_ctx_pred"):
             assert await conn.fetchval(
+                "SELECT 1 FROM pg_indexes WHERE indexname = $1", idx), idx
+        # ...and the two the schema no longer builds stay gone (issues/270).
+        for idx in (f"idx_{auto_sid}_quad_pred", f"idx_{auto_sid}_quad_ctx"):
+            assert not await conn.fetchval(
                 "SELECT 1 FROM pg_indexes WHERE indexname = $1", idx), idx
 
         # rdf_stats after a recompute — the copy+rebuild path does not write it

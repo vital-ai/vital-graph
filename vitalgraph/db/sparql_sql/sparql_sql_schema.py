@@ -1652,11 +1652,21 @@ class SparqlSQLSchema:
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_dt "
             f"ON {t['term']} ({DATETIME_TERM_COLUMN})",
 
-            # Quad table indexes — essential for V2 SQL generation
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_pred ON {t['rdf_quad']} (predicate_uuid)",
+            # Quad table indexes — essential for V2 SQL generation.
+            #
+            # NO single-column (predicate_uuid) or (context_uuid) index
+            # (`issues/270`). `quad_po` / `quad_ps` lead with predicate_uuid and
+            # `quad_ctx_pred` leads with context_uuid, so a B-tree on the
+            # composite answers the same equality lookups. Every quad insert
+            # maintains every index at a random page (UUID keys), and on
+            # production's main KG space these two were the least used of nine
+            # (26k and 385k scans, against hundreds of millions for the rest).
+            # Verified on the vg test stack: with both dropped on every space,
+            # the query-tier perf suite kept its buffer counts; the planner used
+            # `quad_ps` where it had used `quad_pred`. Existing spaces drop them
+            # with `scripts/migrate_drop_redundant_quad_indexes.py`.
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_subj ON {t['rdf_quad']} (subject_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_obj ON {t['rdf_quad']} (object_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_ctx ON {t['rdf_quad']} (context_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_po ON {t['rdf_quad']} (predicate_uuid, object_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_ps ON {t['rdf_quad']} (predicate_uuid, subject_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_sp ON {t['rdf_quad']} (subject_uuid, predicate_uuid)",
@@ -2049,6 +2059,9 @@ class SparqlSQLSchema:
             f"DROP INDEX IF EXISTS idx_{space_id}_term_type",
             f"DROP INDEX IF EXISTS idx_{space_id}_term_trgm",
             f"DROP INDEX IF EXISTS idx_{space_id}_term_num",
+            # Kept although the schema no longer builds quad_pred / quad_ctx
+            # (`issues/270`): a bulk load on an older space then removes them
+            # and rebuilds only what the schema lists.
             f"DROP INDEX IF EXISTS idx_{space_id}_quad_pred",
             f"DROP INDEX IF EXISTS idx_{space_id}_quad_subj",
             f"DROP INDEX IF EXISTS idx_{space_id}_quad_obj",

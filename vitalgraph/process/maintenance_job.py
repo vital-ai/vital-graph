@@ -9,8 +9,9 @@ Runs every N minutes (default 5). Each cycle:
 5. Optionally runs cleanup of old process records (once per day)
 
 NEED GATES — run only where there is work (`issues/236`):
-- ANALYZE: n_mod_since_analyze >= 10,000, or the table has never been analyzed
-- VACUUM:  n_dead_tup         >= 10,000, or the table has never been vacuumed
+- ANALYZE: n_mod_since_analyze >= max(10,000, 2% of live rows), or never analyzed
+- VACUUM:  n_dead_tup         >= max(10,000, 2% of live rows), or never vacuumed
+  (the fraction is `issues/270`: PostgreSQL's autovacuum covers the big tables)
 
 Applied TWICE, because the pick is per space and the work is per table:
 1. `_pick_worst_for_*` chooses a space that has work; staleness ORDERS the
@@ -45,6 +46,36 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 ANALYZE_MOD_THRESHOLD = 10_000       # run only at or above this many mods
 VACUUM_DEAD_THRESHOLD = 10_000       # run only at or above this many dead tuples
+
+# ...AND A FRACTION OF THE TABLE (`issues/270`). The absolute floor alone meant
+# "every cycle" on a big table: the main KG space's 79M-row quad table was
+# re-ANALYZEd 57 times in 24 hours at 0.02% modified, each pass reading ~2.1 GB
+# (statistics target 1000) in ~46 s on a database at its IOPS limit, and
+# VACUUMed every cycle at 10,000 dead tuples. PostgreSQL's own autovacuum is on
+# and table-relative (production: analyze at 0.5%, vacuum at 1%); it never got
+# the chance (autoanalyze_count 0), because this job always got there first. At
+# 2% it does: autovacuum keeps the big tables, and this job still covers small
+# tables and anything never analyzed.
+ANALYZE_SCALE_FACTOR = float(os.getenv("VG_ANALYZE_SCALE_FACTOR", "0.02"))
+VACUUM_SCALE_FACTOR = float(os.getenv("VG_VACUUM_SCALE_FACTOR", "0.02"))
+
+
+def analyze_floor(live_rows: int) -> float:
+    """Modifications that make a table (or space) due for ANALYZE."""
+    return max(ANALYZE_MOD_THRESHOLD, ANALYZE_SCALE_FACTOR * (live_rows or 0))
+
+
+def vacuum_floor(live_rows: int) -> float:
+    """Dead tuples that make a table (or space) due for VACUUM."""
+    return max(VACUUM_DEAD_THRESHOLD, VACUUM_SCALE_FACTOR * (live_rows or 0))
+
+
+def _live_rows(row) -> int:
+    """`n_live_tup` from a stats row, 0 when the row does not carry it."""
+    try:
+        return int(row["n_live_tup"] or 0)
+    except (KeyError, IndexError, TypeError):
+        return 0
 
 # DELETED, not merely unused: `ANALYZE_STALENESS_MINUTES` (10) and
 # `VACUUM_STALENESS_MINUTES` (30). They were the second half of a conjunction
@@ -159,7 +190,18 @@ def log_probe_failure(probe: str, space_id: str, exc: BaseException) -> None:
     repair -- but asserting the reason hid a permanent, total failure of the
     repair path behind a comment about a benign one (`issues/144`). Skipping
     quietly and skipping *knowingly* are different things.
+
+    A TIMEOUT also backs the probe off for this space (`issues/270`), so the
+    next cycle does not repeat a scan that has just proved too long to finish.
     """
+    if is_timeout(exc):
+        delay = note_probe_timeout(probe, space_id)
+        logger.warning(
+            "%s: drift probe TIMED OUT for %s (%s: %s) — skipping this space, so "
+            "its derived table will NOT be repaired; backing off %.0f min before "
+            "trying again",
+            probe, space_id, type(exc).__name__, exc, delay / 60.0)
+        return
     logger.warning(
         "%s: drift probe FAILED for %s (%s: %s) — skipping this space, so its "
         "derived table will NOT be repaired this cycle",
@@ -520,6 +562,53 @@ def reset_probe_gate() -> None:
     """Test seam; also forces a full re-derive on the next cycle."""
     _probe_watermark.clear()
     _probe_unconverged.clear()
+    _probe_failures.clear()
+
+
+# A PROBE THAT TIMES OUT IS BACKED OFF (`issues/270`). Neither gate above stops
+# a probe that failed: the watermark keeps moving on a written space, and a
+# failure never marks it converged, so the identical full scan ran again every
+# cycle. Production, 2026-10-16: `edge_integrity` on the main KG space (79M
+# quads) hit its statement timeout 59 times in 48 hours, each a ~2-minute scan
+# that produced nothing, on a database already at its IOPS limit.
+#
+# Only TIMEOUTS back off. Any other failure (a bug, a missing column) is cheap
+# to retry and must keep shouting. The delay doubles per consecutive timeout up
+# to a cap, and one success clears it, so a space that shrinks or quiets down
+# recovers with no intervention. In memory, like the gate: a restart retries.
+PROBE_FAILURE_BACKOFF_S = float(os.getenv("VG_PROBE_FAILURE_BACKOFF_S", "3600"))
+PROBE_FAILURE_BACKOFF_MAX_S = float(os.getenv("VG_PROBE_FAILURE_BACKOFF_MAX_S", "86400"))
+#: (probe, space) -> (consecutive timeouts, monotonic time it may run again)
+_probe_failures: Dict[Tuple[str, str], Tuple[int, float]] = {}
+
+
+def is_timeout(exc: BaseException) -> bool:
+    """A server-side statement timeout or a client-side (driver) timeout."""
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        return True
+    return isinstance(exc, asyncpg.QueryCanceledError)
+
+
+def note_probe_timeout(probe: str, space_id: str) -> float:
+    """Record a timeout for *probe* on *space_id*; return the back-off in seconds."""
+    n = _probe_failures.get((probe, space_id), (0, 0.0))[0] + 1
+    delay = min(PROBE_FAILURE_BACKOFF_MAX_S, PROBE_FAILURE_BACKOFF_S * 2 ** (n - 1))
+    _probe_failures[(probe, space_id)] = (n, time.monotonic() + delay)
+    return delay
+
+
+def probe_backed_off(probe: str, space_id: str) -> Optional[float]:
+    """Seconds until *probe* may run on *space_id* again, or None if it may run now."""
+    entry = _probe_failures.get((probe, space_id))
+    if entry is None:
+        return None
+    remaining = entry[1] - time.monotonic()
+    return remaining if remaining > 0 else None
+
+
+def clear_probe_backoff(probe: str, space_id: str) -> None:
+    """A probe that completed is no longer backed off."""
+    _probe_failures.pop((probe, space_id), None)
 
 
 def reset_watch_schedule() -> None:
@@ -984,6 +1073,7 @@ class MaintenanceJob:
             SELECT
                 relname,
                 n_dead_tup,
+                n_live_tup,
                 n_mod_since_analyze,
                 last_analyze,
                 last_autoanalyze,
@@ -1007,6 +1097,7 @@ class MaintenanceJob:
                     SELECT
                         relname,
                         n_dead_tup,
+                        n_live_tup,
                         n_mod_since_analyze,
                         last_analyze,
                         last_autoanalyze,
@@ -1035,6 +1126,7 @@ class MaintenanceJob:
 
             if sid not in spaces:
                 spaces[sid] = {
+                    "n_live_tup": 0,
                     "n_mod_since_analyze": 0,
                     "last_analyze": None,
                     "n_dead_tup": 0,
@@ -1042,6 +1134,7 @@ class MaintenanceJob:
                 }
 
             entry = spaces[sid]
+            entry["n_live_tup"] += _live_rows(row)
             entry["n_mod_since_analyze"] += row["n_mod_since_analyze"] or 0
             entry["n_dead_tup"] += row["n_dead_tup"] or 0
 
@@ -1091,7 +1184,7 @@ class MaintenanceJob:
             #
             # `last is None` stays eligible — a never-analyzed space must get its
             # first pass, which is what the `inf` branch below was protecting.
-            if mods < ANALYZE_MOD_THRESHOLD and last is not None:
+            if mods < analyze_floor(s.get("n_live_tup", 0)) and last is not None:
                 continue
 
             # Score: mods weighted by staleness.  A space reaching here with
@@ -1128,7 +1221,7 @@ class MaintenanceJob:
             # wrong of the two: `<space>_term` is INSERT-ONLY — lifetime
             # `n_tup_upd = 0`, six deletes, zero dead tuples — and had been
             # vacuumed 9,543 times for 26.9 hours, entirely on elapsed time.
-            if dead < VACUUM_DEAD_THRESHOLD and last is not None:
+            if dead < vacuum_floor(s.get("n_live_tup", 0)) and last is not None:
                 continue
 
             # Score: dead tuples weighted by staleness.  A space reaching here
@@ -2043,6 +2136,9 @@ class MaintenanceJob:
         worst_orphan_space = None
         worst_orphan_rate = 0.0
         for space_id in space_ids:
+            # Backed off after a timeout (`issues/270`); see `log_probe_failure`.
+            if probe_backed_off("edge_integrity", space_id):
+                continue
             try:
                 async with self._pool.acquire() as conn:
                     async with maintenance_timeouts(conn):
@@ -2098,6 +2194,7 @@ class MaintenanceJob:
             except Exception as exc:
                 log_probe_failure("edge_integrity", space_id, exc)
                 continue
+            clear_probe_backoff("edge_integrity", space_id)
             if unref["frames"] or unref["slots"]:
                 # REPORTS, like its sibling, and for the same reason: what is
                 # unreachable is still DATA, and deleting it destroys the only
@@ -2297,6 +2394,9 @@ class MaintenanceJob:
 
         findings: Dict[str, Dict] = {}
         for space_id in space_ids:
+            # Backed off after a timeout (`issues/270`); see `log_probe_failure`.
+            if probe_backed_off("frame_slot_integrity", space_id):
+                continue
             try:
                 async with self._pool.acquire() as conn:
                     async with maintenance_timeouts(conn):
@@ -2333,6 +2433,7 @@ class MaintenanceJob:
             except Exception as exc:
                 log_probe_failure("frame_slot_integrity", space_id, exc)
                 continue
+            clear_probe_backoff("frame_slot_integrity", space_id)
             if expected == actual and orphan_rate == 0.0:
                 continue
             findings[space_id] = {"expected": expected, "actual": actual,
@@ -2375,6 +2476,9 @@ class MaintenanceJob:
         residue_drift = 0
         stale_space = None
         for space_id in space_ids:
+            # Backed off after a timeout (`issues/270`); see `log_probe_failure`.
+            if probe_backed_off("frame_entity_integrity", space_id):
+                continue
             try:
                 async with self._pool.acquire() as conn:
                     async with maintenance_timeouts(conn):
@@ -2404,6 +2508,7 @@ class MaintenanceJob:
             except Exception as exc:
                 log_probe_failure("frame_entity_integrity", space_id, exc)
                 continue
+            clear_probe_backoff("frame_entity_integrity", space_id)
             if orphan_rate > EDGE_ORPHAN_STALE_PCT:
                 stale_space = stale_space or (space_id, orphan_rate)
                 continue
@@ -3065,7 +3170,7 @@ class MaintenanceJob:
     #: Per-table need query. The space-level pick decides WHICH space; this
     #: decides which of its tables actually have work (`issues/236`).
     _TABLE_NEED_SQL = """
-        SELECT relname, n_mod_since_analyze, n_dead_tup,
+        SELECT relname, n_mod_since_analyze, n_dead_tup, n_live_tup,
                GREATEST(COALESCE(last_analyze,     'epoch'::timestamptz),
                         COALESCE(last_autoanalyze, 'epoch'::timestamptz))
                    > 'epoch'::timestamptz AS ever_analyzed,
@@ -3082,9 +3187,9 @@ class MaintenanceJob:
         Same rule as the space-level gate: real need, or never done at all.
         """
         if command == "ANALYZE":
-            return ((row["n_mod_since_analyze"] or 0) >= ANALYZE_MOD_THRESHOLD
+            return ((row["n_mod_since_analyze"] or 0) >= analyze_floor(_live_rows(row))
                     or not row["ever_analyzed"])
-        return ((row["n_dead_tup"] or 0) >= VACUUM_DEAD_THRESHOLD
+        return ((row["n_dead_tup"] or 0) >= vacuum_floor(_live_rows(row))
                 or not row["ever_vacuumed"])
 
     async def _tables_needing(self, command: str, space_id: str) -> List[str]:
