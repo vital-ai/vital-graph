@@ -1,7 +1,7 @@
 # Issues
 
 Numbered, append-only, one defect each. Resolved ones move to `archive/` —
-192 there, 81 live. An issue is archived only when nothing remains to do:
+192 there, 82 live. An issue is archived only when nothing remains to do:
 "FIXED in the converter, existing spaces need reloading" is not resolved, it is
 half-done, and it stays here.
 
@@ -134,6 +134,7 @@ Reproduce and measure LOCALLY; dev and vg hold spaces at or above prod scale.
 | **272** | FIXED 2026-10-17 (not yet released) | **An index left invalid by a failed concurrent build counted as present.** The `156` check matched indexes by name, so an `indisvalid = false` index — unused by the planner, still maintained on writes — read as healthy, and every `CREATE INDEX IF NOT EXISTS` repair skipped it. Production had one (an empty test space's `term_dt`); the 0.0.48 index migration's cancelled drop briefly made another. Fixed: validity is part of "present", the restore and `ensure_space_indexes.py` drop an invalid index before rebuilding it, and maintenance reports it as INVALID |
 | **273** | FIXED 2026-10-17 (not yet released) | **Incremental derived-table syncs scanned the space, not the write.** Profiled on a UW-sized space, one decision write: the `entity_slot_sort` seeded walk merge-joined every slot edge in the space (149k rows, 111-150 ms) and the `frame_slot` re-derive hash-joined a sequential scan of the edge table (62-72 ms), for 372 rows. Fixed: a LATERAL per walked frame (`OFFSET 0` required) and frames resolved first then probed by `= ANY` — real write timings `slot_sort_sync` 198-262 → 81-96 ms, `fe_sync` modestly lower. `frame_prop_sort` evaluated and not adopted (its EXPLAIN-only win was timing overhead) |
 | **274** | FIXED 2026-10-17 (not yet released) | **A write holding a pooled connection asks the same pool for another.** `_ensure_graphs_registered` registers graphs through the request pool while the write holds its own connection, outside the transaction. A request pool of one (a benchmark's) made every upsert wait the 15 s acquire timeout; a burst of writers equal to the pool would do the same in production, then skip registration with a WARNING. Not seen in 14 days of production logs. Fixed: registered on the caller's connection inside its transaction, one statement per batch; no cache (graphs are deleted by other processes) |
+| **275** | OPEN | **The analytics job's 120 s timeout never applied, and one count scans the whole quad table.** `analytics_job.py:142` runs `SET LOCAL statement_timeout = '120s'` on an autocommit pooled connection, a no-op (PostgreSQL warns, keeps the 60 s default) — every analytics query has had half its budget. `distinct_predicate_count` is a full index-only scan of the quad table above the 5M guard: 31.5 s warm on the 79.5M-quad main KG space, over 60 s cold, so it fails once per restart. Fix: make the timeout apply; source the count from the stats tables; a CI guard on `SET LOCAL` outside a transaction |
 
 Cross-listed in **Other**: `230` (the ANALYZE pile-up — fixed; `236` is the
 frequency behind it), `231` (where background work RUNS — the INTERNAL pool
