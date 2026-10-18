@@ -203,15 +203,21 @@ async def test_the_repair_selects_EXACTLY_the_absent_slots(pg_conn, test_space):
     slots independently is what tells the two apart.
     """
     from vitalgraph.db.sparql_sql.sync_entity_slot_sort import (
-        _SLOT_TYPE, ESS_BACKFILL_BATCH)
+        _SLOT_TYPE, _SLOT_VALUE_PREDS, ESS_BACKFILL_BATCH)
     await _load(pg_conn, test_space, "findslots", with_b=False)
+    # Absent AND carrying a sortable value — the only slots that can have a row
+    # (`issues/277`). A valueless slot in the shared space is absent too, and
+    # the repair must NOT select it.
     absent = await pg_conn.fetchval(
         f"SELECT count(*) FROM {test_space}_rdf_quad q "
         f" WHERE q.predicate_uuid = $1 "
         f"   AND NOT EXISTS (SELECT 1 FROM {test_space}_entity_slot_sort e "
         f"                    WHERE e.slot_uuid = q.subject_uuid "
-        f"                      AND e.context_uuid = q.context_uuid)",
-        _SLOT_TYPE)
+        f"                      AND e.context_uuid = q.context_uuid) "
+        f"   AND EXISTS (SELECT 1 FROM {test_space}_rdf_quad v "
+        f"                WHERE v.subject_uuid = q.subject_uuid "
+        f"                  AND v.predicate_uuid = ANY($2::uuid[]))",
+        _SLOT_TYPE, _SLOT_VALUE_PREDS)
     fix = await _repair(pg_conn, test_space)
     assert fix["slots"] == min(int(absent), ESS_BACKFILL_BATCH), (
         f"must select the absent slots and nothing else: {fix}, absent={absent}")

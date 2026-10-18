@@ -2759,7 +2759,7 @@ class MaintenanceJob:
         """
         from ..db.sparql_sql.sync_entity_slot_sort import (
             entity_slot_sort_coverage, backfill_entity_slot_sort_batch,
-            entity_slot_sort_row_shortfall, entity_slot_sort_valueless_slots,
+            entity_slot_sort_row_shortfall, entity_slot_sort_gap,
             backfill_entity_slot_sort_missing_slots)
         from ..db.sparql_sql.fast_slot_filter import take_slot_sort_block
 
@@ -2796,23 +2796,28 @@ class MaintenanceJob:
                         sf = await entity_slot_sort_row_shortfall(
                             conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
                         if sf["shortfall"]:
-                            valueless = await entity_slot_sort_valueless_slots(
+                            # The cheap count said something is missing; the
+                            # exact split, every count in ONE snapshot
+                            # (`issues/277`). Taken as separate statements
+                            # during a mass delete, they drifted and claimed a
+                            # gap of tens of slots where there was none.
+                            gap = await entity_slot_sort_gap(
                                 conn, space_id, timeout=PROBE_CLIENT_TIMEOUT_S)
-                            real = sf["shortfall"] - valueless
+                            real = gap["real"]
                             if real > 0:
                                 logger.warning(
                                     "entity_slot_sort SUSPECTED SHORTFALL: %s "
-                                    "has %d of %d slots; %d of the %d missing "
-                                    "carry a value, so up to %d rows may be "
-                                    "absent. AN UPPER BOUND, not a gap: a slot "
-                                    "unreachable from an entity, or in a lane "
-                                    "this table does not split on, is absent "
-                                    "CORRECTLY. Confirm with "
+                                    "has %d of %d slots; of the %d missing, %d "
+                                    "have no value and %d are entity slots "
+                                    "(both correctly absent), so up to %d rows "
+                                    "may be absent. AN UPPER BOUND, not a gap: "
+                                    "a slot unreachable from an entity is also "
+                                    "absent CORRECTLY. Confirm with "
                                     "entity_slot_sort_drift before treating it "
-                                    "as real. See issues/194.",
-                                    space_id, sf["table_rows"],
-                                    sf["quad_slots"], real, sf["shortfall"],
-                                    real)
+                                    "as real. See issues/194, 277.",
+                                    space_id, gap["table_rows"],
+                                    gap["quad_slots"], gap["shortfall"],
+                                    gap["no_value"], gap["entity_slots"], real)
                                 # AND REPAIR IT. An alarm with no repair is what
                                 # `entity_prop_sort` had: correct, permanent and
                                 # unactionable. The per-ENTITY batch below
@@ -2857,15 +2862,20 @@ class MaintenanceJob:
                                         space_id, fix["slots"],
                                         fix["entities"], fix["rows"])
                                 if fix["unattributed"]:
-                                    # No `frame_slot` row either, so BOTH
-                                    # mirrors are short for those slots and
-                                    # nothing incremental can rebuild them.
+                                    # Absent, carrying a sortable value, and NOT
+                                    # reached by the repair's two edge hops
+                                    # (slot -> frame -> entity): under a nested
+                                    # frame, or the edge table is short. The
+                                    # message used to say "no frame_slot row —
+                                    # both mirrors are short", which is not what
+                                    # was measured (`issues/277`).
                                     logger.error(
                                         "entity_slot_sort: %s has %d absent "
-                                        "slots with no frame_slot row — both "
-                                        "mirrors are short, so this needs "
-                                        "resync_all_auxiliary_tables. See "
-                                        "issues/194.",
+                                        "slots with a value that the repair "
+                                        "cannot reach through one frame (a "
+                                        "nested frame, or a short edge table); "
+                                        "resync_all_auxiliary_tables rebuilds "
+                                        "them. See issues/194, 277.",
                                         space_id, fix["unattributed"])
                             else:
                                 logger.debug(

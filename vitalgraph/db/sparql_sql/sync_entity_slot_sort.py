@@ -638,14 +638,22 @@ async def backfill_entity_slot_sort_missing_slots(
     """
     n = int(batch_size or ESS_BACKFILL_BATCH)
     t = f"{space_id}_entity_slot_sort"
+    # ONLY SLOTS THAT CAN HAVE A ROW (`issues/277`): absent AND carrying a value
+    # this table sorts on. A slot with no value, or only an entity-slot value,
+    # derives nothing here, so it can never be repaired — it used to fill the
+    # batch anyway, and the ones under nested frames were reported every cycle
+    # as "unattributed", an ERROR about rows that should not exist.
     rows = await conn.fetch(
         f"SELECT q.subject_uuid AS slot_uuid FROM {space_id}_rdf_quad q "
         f" WHERE q.predicate_uuid = $1 "
         f"   AND NOT EXISTS (SELECT 1 FROM {t} e "
         f"                    WHERE e.slot_uuid = q.subject_uuid "
         f"                      AND e.context_uuid = q.context_uuid) "
+        f"   AND EXISTS (SELECT 1 FROM {space_id}_rdf_quad v "
+        f"                WHERE v.subject_uuid = q.subject_uuid "
+        f"                  AND v.predicate_uuid = ANY($2::uuid[])) "
         f" LIMIT {n}",
-        _SLOT_TYPE, timeout=timeout)
+        _SLOT_TYPE, _SLOT_VALUE_PREDS, timeout=timeout)
     slots = [r["slot_uuid"] for r in rows]
     if not slots:
         return {"slots": 0, "entities": 0, "rows": 0, "unattributed": 0}
@@ -736,11 +744,17 @@ async def entity_slot_sort_row_shortfall(conn, space_id: str,
     shortfall into the two causes; it is the expensive form, so only run it when
     this says there is something to explain.
     """
-    quad_slots = await conn.fetchval(
-        f"SELECT count(*) FROM {space_id}_rdf_quad WHERE predicate_uuid = $1",
+    # ONE STATEMENT, so both counts see the same snapshot (`issues/277`, the
+    # `issues/268` lesson). As two statements, writes landing between them
+    # moved the difference: deletes made a phantom gap, and inserts could hide
+    # a real one — which `fast_slot_filter` reads as "complete" and releases a
+    # block on.
+    row = await conn.fetchrow(
+        f"SELECT (SELECT count(*) FROM {space_id}_rdf_quad WHERE predicate_uuid = $1) "
+        f"         AS quad_slots, "
+        f"       (SELECT count(*) FROM {space_id}_entity_slot_sort) AS table_rows",
         _SLOT_TYPE, timeout=timeout)
-    table_rows = await conn.fetchval(
-        f"SELECT count(*) FROM {space_id}_entity_slot_sort", timeout=timeout)
+    quad_slots, table_rows = row["quad_slots"], row["table_rows"]
     return {"quad_slots": int(quad_slots or 0),
             "table_rows": int(table_rows or 0),
             "shortfall": max(0, int(quad_slots or 0) - int(table_rows or 0))}
@@ -766,6 +780,63 @@ async def entity_slot_sort_valueless_slots(conn, space_id: str,
         f"                    WHERE v.subject_uuid = q.subject_uuid "
         f"                      AND v.predicate_uuid = ANY($2))",
         _SLOT_TYPE, _SLOT_VALUE_PREDS, timeout=timeout) or 0)
+
+
+# An entity slot's value: a URI naming an entity, in this space and graph or in
+# another. Not one of SLOT_VALUE_URIS — this table does not sort on it, and
+# `frame_slot.entity_uuid` is where it is derived — so an entity slot is
+# CORRECTLY absent here, but it is not "valueless" (`issues/277`).
+_ENTITY_SLOT_VALUE = _u(f"{HALEY}hasEntitySlotValue")
+
+
+async def entity_slot_sort_gap(conn, space_id: str,
+                               timeout: float | None = None) -> dict:
+    """The real gap, with every count taken in ONE snapshot (`issues/277`).
+
+    `shortfall` (quad slots minus table rows) splits into:
+
+      * `no_value`      — a type and no value of any kind: derives nothing;
+      * `entity_slots`  — an entity-slot value (`hasEntitySlotValue`) and no
+                          value this table sorts on: derives nothing HERE;
+      * `real`          — what remains, slots that should have a row and do not.
+
+    One statement, so the counts cannot drift apart. As separate statements
+    during a mass delete on production (2026-10-17, ~60 entity-graph deletes a
+    minute) they did: shortfall 3,368 against valueless 3,339 claimed a 29-slot
+    gap, where one snapshot showed shortfall = valueless = 3,339 and a gap of 0.
+
+    "Has a value" is the presence of the value quad only. It never asks whether
+    an entity slot's target exists in this space or graph: it may name an entity
+    in another, and that is a value all the same.
+
+    The expensive form (one probe per slot-type quad); run it only when the
+    cheap `entity_slot_sort_row_shortfall` reports something to explain.
+    """
+    row = await conn.fetchrow(
+        f"""
+        WITH slots AS (
+            SELECT q.subject_uuid,
+                   EXISTS (SELECT 1 FROM {space_id}_rdf_quad v
+                            WHERE v.subject_uuid = q.subject_uuid
+                              AND v.predicate_uuid = ANY($2::uuid[])) AS has_value,
+                   EXISTS (SELECT 1 FROM {space_id}_rdf_quad v
+                            WHERE v.subject_uuid = q.subject_uuid
+                              AND v.predicate_uuid = $3) AS has_entity
+              FROM {space_id}_rdf_quad q
+             WHERE q.predicate_uuid = $1)
+        SELECT count(*) AS quad_slots,
+               count(*) FILTER (WHERE NOT has_value AND NOT has_entity) AS no_value,
+               count(*) FILTER (WHERE NOT has_value AND has_entity) AS entity_slots,
+               (SELECT count(*) FROM {space_id}_entity_slot_sort) AS table_rows
+          FROM slots
+        """, _SLOT_TYPE, _SLOT_VALUE_PREDS, _ENTITY_SLOT_VALUE, timeout=timeout)
+    quad_slots, table_rows = int(row["quad_slots"] or 0), int(row["table_rows"] or 0)
+    no_value, entity_slots = int(row["no_value"] or 0), int(row["entity_slots"] or 0)
+    shortfall = max(0, quad_slots - table_rows)
+    return {"quad_slots": quad_slots, "table_rows": table_rows,
+            "shortfall": shortfall, "no_value": no_value,
+            "entity_slots": entity_slots,
+            "real": max(0, shortfall - no_value - entity_slots)}
 
 
 async def entity_slot_sort_coverage(conn, space_id: str, limit: int = 5,
