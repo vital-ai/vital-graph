@@ -47,6 +47,14 @@ class _Conn:
             return self.quad_slots
         raise AssertionError(f"unexpected query: {sql[:60]}")
 
+    async def fetchrow(self, sql, *args, **kwargs):
+        # The shortfall, both counts in one statement (`issues/277`).
+        if self.probe_raises:
+            raise RuntimeError("probe exploded")
+        if "quad_slots" in sql and "table_rows" in sql:
+            return {"quad_slots": self.quad_slots, "table_rows": self.table_rows}
+        raise AssertionError(f"unexpected query: {sql[:60]}")
+
     async def execute(self, *a, **k):
         self.released = True
         return "DELETE 1"
