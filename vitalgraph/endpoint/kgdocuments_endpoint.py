@@ -136,6 +136,22 @@ def _set_document_grouping_uris(graph_objects) -> int:
     return n
 
 
+
+_TRUE = {"true", "1", "yes", "on"}
+_FALSE = {"false", "0", "no", "off"}
+
+
+def _form_flag(value: Optional[str], default: bool) -> Optional[bool]:
+    """A boolean form field: `default` when omitted or empty, None when unreadable."""
+    if value is None or not value.strip():
+        return default
+    v = value.strip().lower()
+    if v in _TRUE:
+        return True
+    if v in _FALSE:
+        return False
+    return None
+
 class KGDocumentsEndpoint:
     """KGDocument CRUD and segmentation management endpoint."""
 
@@ -257,12 +273,26 @@ class KGDocumentsEndpoint:
             file: UploadFile = File(..., description="Document file to ingest"),
             headline: Optional[str] = Form(None, description="Document title (defaults to filename)"),
             source_url: Optional[str] = Form(None, description="Original source URL"),
-            store_original: bool = Form(True, description="Keep the uploaded bytes in object storage"),
+            # A STRING, parsed here, not `bool = Form(True)`. From FastAPI 0.147
+            # (2026-10-19) an OMITTED bool form field arrives as False —
+            # checkbox semantics — whatever its declared default, so every
+            # upload that did not send the field silently stopped keeping its
+            # original. A string's default survives (issues/281).
+            store_original: Optional[str] = Form(
+                None, description="Keep the uploaded bytes in object storage "
+                                  "(true/false; default true)"),
             current_user: Dict = Depends(auth),
         ):
             require_space_write(current_user, space_id)
+            keep = _form_flag(store_original, default=True)
+            if keep is None:
+                return KGDocumentUploadResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message=(f"store_original must be true or false, not "
+                             f"{store_original!r}"),
+                )
             return await self._upload_document(
-                space_id, graph_id, file, headline, source_url, store_original
+                space_id, graph_id, file, headline, source_url, keep
             )
 
         @self.router.put(

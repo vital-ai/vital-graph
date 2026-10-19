@@ -1,7 +1,7 @@
 # Issues
 
 Numbered, append-only, one defect each. Resolved ones move to `archive/` —
-192 there, 87 live. An issue is archived only when nothing remains to do:
+192 there, 88 live. An issue is archived only when nothing remains to do:
 "FIXED in the converter, existing spaces need reloading" is not resolved, it is
 half-done, and it stays here.
 
@@ -140,6 +140,7 @@ Reproduce and measure LOCALLY; dev and vg hold spaces at or above prod scale.
 | **278** | OPEN; diagnostic added 2026-10-19 (not yet released) | **Gen-2 GC pauses tripled after the 2026-10-17 releases.** Production's once-a-minute gen-2 collection went from ~160 ms (Oct 12-16) to ~500 ms (Oct 18-19), collecting a few dozen objects each time. Every task boots near 140 ms, climbs for ~6 h and levels off — a bounded structure filling, not a leak. Starts with v0.0.88 and with the cleanup/backfill traffic the same evening; not yet separated. Diagnostic: an opt-in single-runner heap census (`VG_HEAP_CENSUS_INTERVAL_S`) logging tracked objects by type and the largest holders by attribute path, frozen caches included |
 | **279** | OPEN | **The frame write routes accept edges and slots naming a frame that does not exist.** `POST /kgentities/kgframes` (create and upsert) and `POST /kgframes` write a request whose `Edge_hasKGFrame`/`Edge_hasKGSlot` name a frame neither sent nor stored; only the whole-entity create checks endpoints, and only against the request. Production: a client builder dropped the child `KGFrame`s of decision explanations, and 4,704 unreachable subtrees accumulated in the UW space over five days, visible only to the dangling-endpoint probe. `issues/212` saw the same gap and never opened it. Fix: refuse unreachable endpoints (request, then an in-transaction precheck against the store), one shared rule for both routes. Repro: three strict-xfail API tests. Also: the success message counts every URI as a "frame" |
 | **280** | FIXED IN CODE 2026-10-19 (not yet released) | **A nested OPTIONAL filter was scoped to the join, and the conformance runner could not see it.** `OPTIONAL { { P FILTER F } }` must scope F to the inner group; since `c7caf819` (2026-08-25) we lifted it into the join condition, matching pyoxigraph 0.5.11's identical bug. The runner passed any result equal to pyoxigraph's without asking the .srx, so both 005 variants (opposite answers) passed until pyoxigraph 0.5.12 fixed its half and E2E went red. Fixed: lift removed; the runner checks the .srx on an oracle match; the unapproved `-simplified` variant skipped by name; pyoxigraph pinned to 0.5.12 |
+| **281** | FIXED IN CODE 2026-10-19 (not yet released) | **FastAPI 0.147 reads an omitted bool form field as False, so uploads stopped keeping the original.** `/kgdocuments/upload` declared `store_original: bool = Form(True)`; from FastAPI 0.147.0 (2026-10-19) an omitted bool form field is False whatever its default, so uploads that did not send it silently dropped the original. Production's image predates it; the next build would not. Fixed: parsed from a string with a true default; a unit guard refuses any `bool` form field |
 
 Cross-listed in **Other**: `230` (the ANALYZE pile-up — fixed; `236` is the
 frequency behind it), `231` (where background work RUNS — the INTERNAL pool
