@@ -361,8 +361,14 @@ class SegmentationWorker:
                 await manager.fail(job.job_id, f"Document {job.document_uri} not found")
                 return
 
+            # The document type's registered config, and the vectorize
+            # decision its segments inherit (`issues/285`, `issues/286`).
+            type_config, index_status = await self._resolve_type_policy(
+                space_id, job, doc_properties)
+
             # Build segmentation config
-            config = self._build_config(job.segment_method_uri, job.max_segment_tokens)
+            config = self._build_config(
+                job.segment_method_uri, job.max_segment_tokens, type_config)
 
             # Compute content hash for skip-if-unchanged on future runs
             content_hash = SegmentationJobManager.compute_content_hash(doc_properties)
@@ -370,6 +376,7 @@ class SegmentationWorker:
             segment_count, output = await self._execute_segmentation(
                 backend_impl, space_impl, space_id, job.graph_id,
                 job.document_uri, doc_properties, config,
+                index_status=index_status,
             )
 
             # Mark as 'vectorizing' — segments are stored and immediately
@@ -409,10 +416,16 @@ class SegmentationWorker:
         document_uri: str,
         doc_properties: dict,
         config,
+        index_status: Optional[str] = None,
     ) -> tuple:
         """Run the segmentation pipeline. Returns (segment_count, output).
 
         Does NOT trigger vectorization — caller is responsible for that.
+
+        `index_status`, when set, is stamped on the parent copy and every
+        segment so the original's vectorize decision travels with them: a
+        segment's own type is `document_segment`, so nothing downstream could
+        otherwise tell it came from a document that opted out (`issues/285`).
         """
         from vitalgraph.document import KGDocumentSegmentationProcessor
 
@@ -426,6 +439,10 @@ class SegmentationWorker:
             original_properties=doc_properties,
             config=config,
         )
+        if index_status:
+            output.parent_copy_properties["kGIndexStatusURI"] = index_status
+            for seg in output.segment_properties_list:
+                seg["kGIndexStatusURI"] = index_status
 
         # Delete existing segmentation for this method
         await self._delete_existing_segmentation(
@@ -563,6 +580,8 @@ class SegmentationWorker:
                     props["kGDocumentURL"] = str(obj_val)
                 elif "hasKGDocumentType" in pred:
                     props["kGDocumentType"] = str(obj_val)
+                elif "hasKGIndexStatusURI" in pred:
+                    props["kGIndexStatusURI"] = str(obj_val)
                 elif "hasPrimaryLanguageType" in pred:
                     props["primaryLanguageType"] = str(obj_val)
                 elif "hasKGGraphURI" in pred or "kGGraphURI" in pred:
@@ -580,14 +599,27 @@ class SegmentationWorker:
             logger.error(f"Error fetching properties for {document_uri}: {e}")
             return None
 
-    def _build_config(self, method_uri: Optional[str], max_tokens: Optional[int]):
-        """Build segmentation config from job parameters."""
+    def _build_config(self, method_uri: Optional[str], max_tokens: Optional[int],
+                      type_config=None):
+        """Build segmentation config from job parameters.
+
+        The job's own method and max win; anything it leaves unset comes from
+        the document type's registered config (`issues/286`). This used to
+        ignore that table entirely and hardcode a minimum of 20 and no overlap,
+        so the config API stored settings nothing read.
+        """
         from vitalgraph.document import MarkdownSegmentConfig, PlainSplitConfig
 
         kwargs = {}
+        if type_config is not None:
+            method_uri = method_uri or type_config.segment_method_uri
+            max_tokens = max_tokens or type_config.max_segment_tokens
+            kwargs["min_segment_tokens"] = type_config.min_segment_tokens
+            kwargs["overlap_tokens"] = type_config.overlap_tokens
+        else:
+            kwargs["min_segment_tokens"] = 20
         if max_tokens:
             kwargs["max_segment_tokens"] = max_tokens
-        kwargs["min_segment_tokens"] = 20
 
         if method_uri == "urn:segmethod:plain_recursive_split":
             return PlainSplitConfig(**kwargs)
@@ -739,6 +771,47 @@ class SegmentationWorker:
             obj.primaryLanguageType = props["primaryLanguageType"]
         if props.get("kGGraphURI"):
             obj.kGGraphURI = props["kGGraphURI"]
+        if props.get("kGIndexStatusURI"):
+            obj.kGIndexStatusURI = props["kGIndexStatusURI"]
+
+    async def _resolve_type_policy(self, space_id: str, job, doc_properties: dict):
+        """`(type_config, index_status)` for this job's document.
+
+        `type_config` is the enabled config for the document's type -- the one
+        matching the job's method when the job names one, else the first. None
+        when the type has none, or the document has no type.
+
+        `index_status` is what the segments are stamped with
+        (`vectorize_policy.segment_index_status`).
+
+        Best effort: a failed lookup segments with the job's own settings and
+        stamps nothing, which is the behaviour before either was added.
+        """
+        from vitalgraph.document.segmentation_config_manager import SegmentationConfigManager
+        from vitalgraph.document.vectorize_policy import segment_index_status
+
+        doc_type = doc_properties.get("kGDocumentType")
+        pool = await self._get_pool(space_id)
+        if pool is None:
+            return None, None
+        try:
+            async with pool.acquire() as conn:
+                type_config = None
+                if doc_type and await conn.fetchval(
+                        "SELECT to_regclass($1) IS NOT NULL",
+                        f"{space_id}_document_segmentation_config"):
+                    configs = await SegmentationConfigManager(
+                        conn, space_id).get_config_for_document_type(doc_type)
+                    matching = [c for c in configs
+                                if c.segment_method_uri == job.segment_method_uri]
+                    type_config = (matching or configs or [None])[0]
+                index_status = await segment_index_status(
+                    conn, space_id, doc_properties.get("kGIndexStatusURI"), doc_type)
+                return type_config, index_status
+        except Exception as e:
+            logger.warning("Job %s: type policy lookup failed, using job settings: %s",
+                           job.job_id, e)
+            return None, None
 
     def _fire_vectorization_background(
         self, space_impl, space_id: str, graph_id: str, output, job_id: int,

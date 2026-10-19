@@ -433,19 +433,27 @@ class TestWikipediaVectorization:
                 space_id=wiki_env["space_id"],
             )
             if status_resp.vectorizing == 0 and status_resp.jobs and all(
-                job["status"] == "completed" for job in status_resp.jobs
+                job["status"] in ("completed", "cancelled") for job in status_resp.jobs
             ):
                 break
             await asyncio.sleep(JOB_COMPLETION_POLL_INTERVAL)
 
         assert status_resp is not None, "no segmentation status returned"
 
-        # All jobs should have reached 'completed'
+        # Every job completed, or was SUPERSEDED: the fixture creates documents
+        # whose type has a segmentation config, which queues a job on create
+        # (`issues/286`), and then segments them explicitly, which cancels that
+        # job in favour of its own. One completed job per document is the bar.
         for job in status_resp.jobs:
-            assert job["status"] == "completed", (
+            assert job["status"] in ("completed", "cancelled"), (
                 f"Job {job.get('job_id')} ({job.get('document_uri')}) has status "
-                f"'{job['status']}', expected 'completed'"
+                f"'{job['status']}', expected 'completed' (or 'cancelled' if superseded)"
             )
+        completed_docs = {j["document_uri"] for j in status_resp.jobs
+                          if j["status"] == "completed"}
+        expected = set(wiki_env["doc_uris"].values())   # filename -> URI
+        assert expected <= completed_docs, (
+            f"documents without a completed job: {expected - completed_docs}")
         # Summary counters should reflect completion
         assert status_resp.vectorizing == 0, (
             f"Expected 0 vectorizing jobs, got {status_resp.vectorizing}"
@@ -477,7 +485,8 @@ class TestWikipediaVectorization:
         # Total across counters should equal number of jobs
         total_counters = (
             status_resp.pending + status_resp.in_progress +
-            status_resp.vectorizing + status_resp.completed + status_resp.failed
+            status_resp.vectorizing + status_resp.completed + status_resp.failed +
+            status_resp.cancelled
         )
         assert total_counters == len(status_resp.jobs), (
             f"Summary counters total ({total_counters}) != job count ({len(status_resp.jobs)})"

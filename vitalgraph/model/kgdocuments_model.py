@@ -24,6 +24,13 @@ class SegmentDocumentRequest(BaseModel):
     max_segment_tokens: int = Field(1024, description="Maximum tokens per segment")
     min_segment_tokens: int = Field(50, description="Minimum tokens per segment")
     overlap_tokens: int = Field(0, description="Token overlap between segments")
+    vectorize: Optional[bool] = Field(
+        None,
+        description="Store a vectorize decision on the document before segmenting: "
+                    "false keeps the document and its segments out of every vector "
+                    "index, true embeds them even when the document type's "
+                    "auto_vectorize is off. Omitted leaves the document as it is."
+    )
 
 
 class SegmentDocumentResponse(ResultStatus):

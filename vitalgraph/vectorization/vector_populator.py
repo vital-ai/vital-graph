@@ -267,10 +267,20 @@ async def populate_index(
     )
 
     # Process in batches
+    from vitalgraph.document.vectorize_policy import vector_opt_outs
     for i in range(0, len(subject_uuids), batch_size):
         batch_uuids = subject_uuids[i : i + batch_size]
 
         try:
+            # The same opt-out auto-sync applies (`issues/285`), or a reindex
+            # would embed every document a caller asked to keep out.
+            opted_out = await vector_opt_outs(conn, space_id, batch_uuids, context_uuid)
+            if opted_out:
+                stats.subjects_skipped += sum(1 for u in batch_uuids if str(u) in opted_out)
+                batch_uuids = [u for u in batch_uuids if str(u) not in opted_out]
+                if not batch_uuids:
+                    continue
+
             await _process_batch(
                 conn, space_id, vec_table, context_uuid,
                 batch_uuids, provider, mapping_rule, stats,

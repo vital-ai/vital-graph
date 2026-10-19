@@ -132,13 +132,30 @@ async def _sync_vectors_for_subjects(
     # NO MAPPING NOW MEANS SKIP, exactly as on the FTS path.
     scope = await _subject_scopes(conn, space_id, subject_uuids, context_uuid)
 
+    # WHO HAS OPTED OUT of vectors altogether (`issues/285`): an explicit
+    # `KGIndexStatus_NO_INDEX`, or a document whose type has `auto_vectorize`
+    # off. Treated exactly like "out of scope" below, so an opt-out also
+    # REMOVES vectors written before it was set.
+    from vitalgraph.document.vectorize_policy import vector_opt_outs
+    opted_out = await vector_opt_outs(conn, space_id, subject_uuids, context_uuid)
+
     # Process each index
     for row in rows:
         idx_name = row["index_name"]
-        provider = get_provider(
-            row["provider"], row["provider_config"] or {},
-            cache_key=f"{space_id}:{idx_name}",
-        )
+        try:
+            provider = get_provider(
+                row["provider"], row["provider_config"] or {},
+                cache_key=f"{space_id}:{idx_name}",
+            )
+        except Exception as e:
+            # ONE index whose provider cannot be built must not stop the others.
+            # Uncaught, this aborted the whole sync -- every later index, and the
+            # geo, fuzzy and FTS steps after it -- for every subject in the
+            # batch. An OpenAI index on a stack without a key did exactly that
+            # to every new space, which bootstraps one (`issues/285`).
+            logger.warning("auto_sync vector %s/%s skipped: provider %s "
+                           "unavailable: %s", space_id, idx_name, row["provider"], e)
+            continue
         vec_table = f"{space_id}_vec_{idx_name}"
         upsert_sql = UPSERT_VECTOR_SQL.format(vec_table=vec_table)
 
@@ -154,6 +171,9 @@ async def _sync_vectors_for_subjects(
             # vectors. Same trap the FTS path documents.
             mapping_type, type_uri = scope.get(str(subj_uuid), (None, None))
             rule = None
+            if str(subj_uuid) in opted_out:
+                to_delete.append(subj_uuid)
+                continue
             if mapping_type:
                 rule = await resolve_search_mapping(
                     conn, space_id, idx_name, mapping_type, type_uri)
@@ -516,6 +536,7 @@ async def _subject_scopes(conn, space_id: str, subject_uuids, context_uuid):
     # bulk populator resolves it: `KGType` and its subclasses, from VitalSigns.
     from .vector_populator import _resolve_vitaltype_filter
     kgtype_classes = set(_resolve_vitaltype_filter("kgtype") or ())
+    kgdocument_classes = set(_resolve_vitaltype_filter("kgdocument") or ()) | {KGDOC}
     out = {}
     for r in rows:
         key = str(r["subject_uuid"])   # see the lookup in the caller
@@ -529,11 +550,19 @@ async def _subject_scopes(conn, space_id: str, subject_uuids, context_uuid):
             # A SEGMENT before a document: both are `rdf:type KGDocument`, and the
             # segment index is what tells them apart (the same discriminator the
             # segment listing queries use). Ordered above `document_type` because a
-            # segment carries the parent's document type too, so testing that first
-            # would classify every segment as a whole document.
+            # segment carries a document type too -- `urn:kgdoctype:document_segment`,
+            # NOT its parent's (`kgdocument_segmentation_processor` sets it) -- so
+            # testing that first would classify every segment as a whole document.
             out[key] = ("kgdocument_segment", r["document_type"] or KGDOC)
         elif r["document_type"]:
             out[key] = ("kgdocument", r["document_type"])
+        elif r["rdf_type"] and r["rdf_type"] in kgdocument_classes:
+            # A document WITHOUT a type is still a document. This fell through
+            # to `kgentity` below, so an upload -- which set no
+            # `kGDocumentType` -- was embedded into any index with a catch-all
+            # entity mapping (`issues/285`). The bulk populator already treats
+            # it as `kgdocument` (it selects by vitaltype), so the two now agree.
+            out[key] = ("kgdocument", None)
         elif r["rdf_type"]:
             # The fallback stays `kgentity`, which is what it always was — but it
             # is now reached only by subjects that are none of the above, rather

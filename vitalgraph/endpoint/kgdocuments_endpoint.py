@@ -251,10 +251,17 @@ class KGDocumentsEndpoint:
             space_id: str = Query(..., description="Space ID"),
             graph_id: str = Query(..., description="Graph ID"),
             body: QuadRequest = Body(..., description="KGDocument quads"),
+            vectorize: Optional[bool] = Query(
+                None, description="false: never embed these documents or their "
+                                  "segments; true: embed even if the document "
+                                  "type has auto_vectorize off; omitted: the "
+                                  "type's default. Stored on each document as "
+                                  "hasKGIndexStatusURI, so it survives updates."),
             current_user: Dict = Depends(auth),
         ):
             require_space_write(current_user, space_id)
-            return await self._create(space_id, graph_id, body.quads)
+            return await self._create(space_id, graph_id, body.quads,
+                                      vectorize=vectorize)
 
         @self.router.post(
             "/kgdocuments/upload",
@@ -281,6 +288,13 @@ class KGDocumentsEndpoint:
             store_original: Optional[str] = Form(
                 None, description="Keep the uploaded bytes in object storage "
                                   "(true/false; default true)"),
+            document_type: Optional[str] = Form(
+                None, description="kGDocumentType URI. Selects the type's "
+                                  "segmentation config, which segments the "
+                                  "document on upload, and its vectorize default"),
+            vectorize: Optional[str] = Form(
+                None, description="true/false; omitted means the document "
+                                  "type's default. See POST /kgdocuments"),
             current_user: Dict = Depends(auth),
         ):
             require_space_write(current_user, space_id)
@@ -291,8 +305,19 @@ class KGDocumentsEndpoint:
                     message=(f"store_original must be true or false, not "
                              f"{store_original!r}"),
                 )
+            # Tri-state: omitted is None, which `_form_flag` also returns for
+            # an unreadable value -- so unreadable is told apart by the input.
+            vec = _form_flag(vectorize, default=None)
+            if vec is None and vectorize is not None and vectorize.strip():
+                return KGDocumentUploadResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message=(f"vectorize must be true or false, not "
+                             f"{vectorize!r}"),
+                )
             return await self._upload_document(
-                space_id, graph_id, file, headline, source_url, keep
+                space_id, graph_id, file, headline, source_url, keep,
+                document_type=(document_type or "").strip() or None,
+                vectorize=vec,
             )
 
         @self.router.put(
@@ -361,6 +386,10 @@ class KGDocumentsEndpoint:
             graph_id: str = Query(..., description="Graph ID"),
             current_user: Dict = Depends(auth),
         ):
+            # A write: it replaces the document's segments, and with
+            # `vectorize` set it changes the document itself. It checked no
+            # permission at all.
+            require_space_write(current_user, space_id)
             return await self._handle_segment(space_id, graph_id, body)
 
         # ------------------------------------------------------------------
@@ -587,6 +616,14 @@ class KGDocumentsEndpoint:
         Falls back to synchronous processing if the job queue is unavailable.
         """
         try:
+            # The per-request override is STORED on the document, not carried
+            # in the job: a job is one run, and the decision has to hold for the
+            # document's vectors and for every later re-segmentation too. The
+            # worker copies it onto the segments (`issues/285`).
+            if body.vectorize is not None:
+                await self._set_index_status(
+                    space_id, graph_id, body.document_uri, body.vectorize)
+
             # Try to enqueue as a background job
             job_id = await self._enqueue_segmentation_job(
                 space_id=space_id,
@@ -1243,6 +1280,8 @@ class KGDocumentsEndpoint:
         headline: Optional[str],
         source_url: Optional[str],
         store_original: bool,
+        document_type: Optional[str] = None,
+        vectorize: Optional[bool] = None,
     ) -> KGDocumentUploadResponse:
         """Convert an uploaded file to Markdown and create a KGDocument from it."""
         from vitalgraph.document.document_converter import (
@@ -1299,8 +1338,15 @@ class KGDocumentsEndpoint:
             file_node_uri=file_node_uri,
             html_extensions=EXT_HTML,
         )
+        if document_type:
+            # Without a type an upload matched no segmentation config, and
+            # auto-sync classified it as an ENTITY (`issues/284`, `issues/285`).
+            quads.append(Quad(s=_uri_term(doc_uri),
+                              p=_uri_term(f"{HALEY_KG}hasKGDocumentType"),
+                              o=_uri_term(document_type)))
 
-        create_result = await self._create(space_id, graph_id, quads)
+        create_result = await self._create(space_id, graph_id, quads,
+                                           vectorize=vectorize)
         if not create_result.success:
             return KGDocumentUploadResponse(
                 status=create_result.status,
@@ -1481,8 +1527,15 @@ class KGDocumentsEndpoint:
             ])
         return quads
 
-    async def _create(self, space_id: str, graph_id: str, quads: List[Quad]) -> QuadResultsResponse:
-        """Create KGDocument(s) from quad payload, with write protection for managed segments."""
+    async def _create(self, space_id: str, graph_id: str, quads: List[Quad],
+                      vectorize: Optional[bool] = None) -> QuadResultsResponse:
+        """Create KGDocument(s) from quad payload, with write protection for managed segments.
+
+        `vectorize` is stamped on every KGDocument in the payload as
+        `hasKGIndexStatusURI` (`vectorize_policy`). After the store, a document
+        whose type has an enabled segmentation config is queued for
+        segmentation (`issues/286`).
+        """
         try:
             # Check for managed segment types in incoming quads
             protection_error = self._check_write_protection(quads)
@@ -1506,14 +1559,24 @@ class KGDocumentsEndpoint:
 
             _set_document_grouping_uris(graph_objects)
 
+            from ai_haley_kg_domain.model.KGDocument import KGDocument
+            from vitalgraph.document.vectorize_policy import status_for
+            status_uri = status_for(vectorize)
+            if status_uri:
+                for obj in graph_objects:
+                    if isinstance(obj, KGDocument):
+                        obj.kGIndexStatusURI = status_uri
+
             # Store objects
             result = await backend_adapter.store_objects(space_id, graph_id, graph_objects)
             if not result.success:
                 raise HTTPException(status_code=500, detail=result.message)
 
-            # Schedule auto-sync (vectorization + segmentation)
+            # Schedule auto-sync (vectorization, FTS, geo, fuzzy)
             created_uris = [str(getattr(obj, 'URI', '')) for obj in graph_objects if getattr(obj, 'URI', None)]
             self._schedule_auto_sync(space_impl, space_id, graph_id, created_uris, "upsert")
+
+            await self._auto_segment(space_id, graph_id, graph_objects)
 
             return QuadResultsResponse(
                 status=OperationStatus.CREATED,
@@ -1745,14 +1808,106 @@ class KGDocumentsEndpoint:
     # Auto-sync helper
     # ------------------------------------------------------------------
 
+    async def _auto_segment(self, space_id: str, graph_id: str, graph_objects) -> int:
+        """Queue segmentation for each new document whose type has a config.
+
+        `issues/286`. The config API stored per-type settings and nothing
+        acted on them at create time: `AutoSegmentationHook` was written for
+        this and never called, so a created document stayed unsegmented until
+        someone called `/kgdocuments/segment`. The worker resolves the config
+        again when it runs (method, sizes, vectorize default), so the job only
+        needs to exist.
+
+        Best effort, after the store: a failure here leaves the document
+        created and unsegmented, which is what every create did before.
+        Returns the number of jobs queued.
+        """
+        from ai_haley_kg_domain.model.KGDocument import KGDocument
+        docs = []
+        for obj in graph_objects:
+            if not isinstance(obj, KGDocument) or obj.kGDocumentType is None:
+                continue
+            if obj.kGDocumentSegmentIndex is not None:
+                continue   # a managed segment or parent copy, never an original
+            docs.append((str(obj.URI), str(obj.kGDocumentType)))
+        if not docs:
+            return 0
+        try:
+            manager, pool, conn = await self._get_config_manager(space_id)
+        except Exception as e:
+            self.logger.warning("auto-segmentation: config lookup unavailable: %s", e)
+            return 0
+        try:
+            if not await conn.fetchval(
+                    "SELECT to_regclass($1) IS NOT NULL",
+                    f"{space_id}_document_segmentation_config"):
+                return 0
+            configs = {}
+            for _uri, doc_type in docs:
+                if doc_type not in configs:
+                    configs[doc_type] = await manager.get_config_for_document_type(doc_type)
+        except Exception as e:
+            self.logger.warning("auto-segmentation: config lookup failed: %s", e)
+            return 0
+        finally:
+            if pool and conn:
+                await pool.release(conn)
+        queued = 0
+        for uri, doc_type in docs:
+            cfgs = configs.get(doc_type) or []
+            if not cfgs:
+                continue
+            # One job per document: jobs are keyed on the document, so a second
+            # config's job would supersede the first. The first by config_id.
+            if len(cfgs) > 1:
+                self.logger.info(
+                    "auto-segmentation: %d configs for %s, using %s", len(cfgs),
+                    doc_type, cfgs[0].segment_method_uri)
+            job_id = await self._enqueue_segmentation_job(
+                space_id, graph_id, uri, cfgs[0].segment_method_uri,
+                cfgs[0].max_segment_tokens)
+            if job_id is not None:
+                queued += 1
+        return queued
+
+    async def _set_index_status(self, space_id: str, graph_id: str,
+                                document_uri: str, vectorize: bool) -> None:
+        """Replace the document's `hasKGIndexStatusURI` and re-sync its vectors,
+        so turning vectorization off also removes vectors already written."""
+        from vitalgraph.document.vectorize_policy import (
+            INDEX_STATUS_PROPERTY, status_for)
+        backend_adapter, space_impl = await self._get_backend(space_id)
+        status_uri = status_for(vectorize)
+        ok = await backend_adapter.execute_sparql_update(space_id, f"""
+            DELETE {{ GRAPH <{graph_id}> {{ <{document_uri}> <{INDEX_STATUS_PROPERTY}> ?o }} }}
+            INSERT {{ GRAPH <{graph_id}> {{ <{document_uri}> <{INDEX_STATUS_PROPERTY}> <{status_uri}> }} }}
+            WHERE {{ OPTIONAL {{ GRAPH <{graph_id}> {{ <{document_uri}> <{INDEX_STATUS_PROPERTY}> ?o }} }} }}
+        """)
+        if not ok:
+            # The adapter reports failure as False, not an exception. Going on
+            # would segment under the OLD decision while answering success.
+            raise RuntimeError(f"could not store vectorize={vectorize} on {document_uri}")
+        self._schedule_auto_sync(space_impl, space_id, graph_id, [document_uri], "upsert")
+
     def _schedule_auto_sync(
         self, space_impl, space_id: str, graph_id: str,
         subject_uris: List[str], operation: Literal["upsert", "delete"]
     ) -> None:
-        """Schedule background vectorization + segmentation sync."""
+        """Schedule background sync -- vectors, FTS, geo, fuzzy -- for these subjects."""
         try:
-            backend_impl = getattr(space_impl, 'backend', None)
+            # `get_db_space_impl()`, as the entity endpoint resolves it. This read
+            # `space_impl.backend`, which `SpaceImpl` does not have, so `db_impl`
+            # was always None and NO document create, update or delete was ever
+            # synced -- not vectorized, not FTS-indexed, and on delete its rows
+            # were left behind -- with nothing logged (`issues/285`). Only the
+            # segmentation worker, which resolves the backend itself, synced.
+            getter = getattr(space_impl, 'get_db_space_impl', None)
+            backend_impl = getter() if callable(getter) else getattr(space_impl, 'backend', None)
             db_impl = getattr(backend_impl, 'db_impl', None) if backend_impl else None
+            if not db_impl and subject_uris:
+                self.logger.warning(
+                    "auto_sync not scheduled for %d subject(s) in %s: no db_impl on %s",
+                    len(subject_uris), space_id, type(backend_impl).__name__)
             if db_impl and subject_uris:
                 from ..vectorization.auto_sync import schedule_sync
                 schedule_sync(

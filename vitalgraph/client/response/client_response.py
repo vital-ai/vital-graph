@@ -1057,6 +1057,27 @@ class SegmentDocumentClientResponse(VitalGraphResponse):
         return self.success and not self.error_code
 
 
+class KGDocumentUploadClientResponse(VitalGraphResponse):
+    """Response for uploading a file as a KGDocument (``/kgdocuments/upload``).
+
+    An unsupported or unreadable file is a DOMAIN outcome: HTTP 200 with
+    ``success`` False and the reason in ``message``.
+    """
+    success: bool = Field(False, description="Whether the document was created")
+    document_uri: Optional[str] = Field(None, description="URI of the created KGDocument")
+    file_node_uri: Optional[str] = Field(
+        None, description="URI of the FileNode holding the original bytes in object storage, if kept")
+    source_format: Optional[str] = Field(None, description="Detected source extension, e.g. '.pdf'")
+    converted: bool = Field(False, description="True when the content was converted to Markdown")
+    heading_count: int = Field(0, description="Markdown headings in the stored content")
+    content_length: int = Field(0, description="Characters of stored Markdown")
+
+    @property
+    def is_success(self) -> bool:
+        """Check if operation was successful."""
+        return self.success and not self.error_code
+
+
 class SegmentationStatusClientResponse(VitalGraphResponse):
     """Response for segmentation status queries."""
     pending: int = Field(0, description="Number of pending jobs")

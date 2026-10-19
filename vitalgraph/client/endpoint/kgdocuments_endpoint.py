@@ -6,7 +6,9 @@ Follows the same pattern as KGTypesEndpoint.
 """
 
 import logging
-from typing import Dict, Any, Optional, List
+import mimetypes
+import os
+from typing import Dict, Any, Optional, List, Union
 
 from .base_endpoint import BaseEndpoint, http_status_of
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
@@ -25,6 +27,7 @@ from ..response.client_response import (
     KGDocumentDeleteResponse,
     KGDocumentSegmentsResponse,
     SegmentDocumentClientResponse,
+    KGDocumentUploadClientResponse,
     SegmentationStatusClientResponse,
     SegmentationConfigClientResponse,
     SegmentationConfigListClientResponse,
@@ -235,15 +238,23 @@ class KGDocumentsEndpoint(BaseEndpoint):
     # ------------------------------------------------------------------
 
     async def create_kgdocuments(
-        self, space_id: str, graph_id: str, objects: List[GraphObject]
+        self, space_id: str, graph_id: str, objects: List[GraphObject],
+        vectorize: Optional[bool] = None,
     ) -> KGDocumentCreateResponse:
         """
         Create KGDocuments from GraphObjects.
+
+        A document whose ``kGDocumentType`` has an enabled segmentation config
+        is queued for segmentation automatically.
 
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
             objects: List of KGDocument GraphObject instances to create
+            vectorize: False keeps these documents and their segments out of
+                every vector index; True embeds them even when the document
+                type's ``auto_vectorize`` is off; None (default) follows the
+                type. Stored on each document, so it survives later updates.
 
         Returns:
             KGDocumentCreateResponse with .is_success property
@@ -255,6 +266,8 @@ class KGDocumentsEndpoint(BaseEndpoint):
             url = f"{self._get_server_url()}/api/graphs/kgdocuments"
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
             params = build_query_params(space_id=space_id, graph_id=graph_id)
+            if vectorize is not None:
+                params["vectorize"] = "true" if vectorize else "false"
 
             response = await self._make_authenticated_request(
                 'POST', url, params=params, json=body,
@@ -292,6 +305,100 @@ class KGDocumentsEndpoint(BaseEndpoint):
             logger.error(f"Error creating KGDocuments: {e}")
             return build_error_response(
                 KGDocumentCreateResponse,
+                error_code=500,
+                error_message=str(e),
+                status_code=http_status_of(e),
+            )
+
+    async def upload_kgdocument(
+        self,
+        space_id: str,
+        graph_id: str,
+        file: Union[str, bytes],
+        filename: Optional[str] = None,
+        content_type: Optional[str] = None,
+        headline: Optional[str] = None,
+        source_url: Optional[str] = None,
+        store_original: bool = True,
+        document_type: Optional[str] = None,
+        vectorize: Optional[bool] = None,
+    ) -> KGDocumentUploadClientResponse:
+        """
+        Upload a file and create a KGDocument from it.
+
+        The server converts the file to Markdown (PDF, DOCX, HTML and text are
+        supported), stores it as the document's content, and by default keeps
+        the original bytes in object storage, linked from the document as a
+        FileNode.
+
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            file: A path to read, or the file's bytes
+            filename: Name sent to the server; selects the converter by
+                extension. Defaults to the path's basename; required for bytes.
+            content_type: MIME type; guessed from the filename when omitted
+            headline: Document title (the server defaults it to the filename)
+            source_url: Where the document came from
+            store_original: Keep the uploaded bytes in object storage
+            document_type: ``kGDocumentType`` URI. Selects the type's
+                segmentation config -- a type with one is segmented on upload --
+                and its vectorize default
+            vectorize: See ``create_kgdocuments``
+
+        Returns:
+            KGDocumentUploadClientResponse. An unsupported or unreadable file is
+            reported with ``is_success`` False and the reason in ``message``.
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, graph_id=graph_id)
+        if isinstance(file, (bytes, bytearray)):
+            if not filename:
+                raise VitalGraphClientError(
+                    "filename is required when uploading bytes: the server picks "
+                    "the converter by its extension")
+            data = bytes(file)
+        else:
+            with open(file, "rb") as fh:
+                data = fh.read()
+            filename = filename or os.path.basename(file)
+        content_type = (content_type or mimetypes.guess_type(filename)[0]
+                        or "application/octet-stream")
+
+        form: Dict[str, str] = {"store_original": "true" if store_original else "false"}
+        if headline:
+            form["headline"] = headline
+        if source_url:
+            form["source_url"] = source_url
+        if document_type:
+            form["document_type"] = document_type
+        if vectorize is not None:
+            form["vectorize"] = "true" if vectorize else "false"
+
+        try:
+            url = f"{self._get_server_url()}/api/graphs/kgdocuments/upload"
+            params = build_query_params(space_id=space_id, graph_id=graph_id)
+            # Not retried: a POST is not idempotent, and a replay after a lost
+            # response would create a second document.
+            response = await self._make_authenticated_request(
+                'POST', url, params=params, data=form,
+                files={'file': (filename, data, content_type)},
+            )
+            body = response.json()
+            body.setdefault("error_code", 0)
+            body.setdefault("status_code", response.status_code)
+            return KGDocumentUploadClientResponse(**body)
+        except VitalGraphClientError as e:
+            return build_error_response(
+                KGDocumentUploadClientResponse,
+                error_code=e.status_code or 500,
+                error_message=str(e),
+                status_code=e.status_code or 500,
+            )
+        except Exception as e:
+            logger.error(f"Error uploading KGDocument: {e}")
+            return build_error_response(
+                KGDocumentUploadClientResponse,
                 error_code=500,
                 error_message=str(e),
                 status_code=http_status_of(e),
@@ -483,6 +590,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
         document_uri: str,
         segment_method_uri: Optional[str] = None,
         max_segment_tokens: Optional[int] = None,
+        vectorize: Optional[bool] = None,
     ) -> SegmentDocumentClientResponse:
         """
         Trigger segmentation for a KGDocument.
@@ -493,6 +601,8 @@ class KGDocumentsEndpoint(BaseEndpoint):
             document_uri: URI of the document to segment
             segment_method_uri: Optional segmentation method override
             max_segment_tokens: Optional max tokens per segment override
+            vectorize: Store a vectorize decision on the document first (see
+                ``create_kgdocuments``). None leaves the document as it is.
 
         Returns:
             SegmentDocumentClientResponse with segmentation results
@@ -510,6 +620,8 @@ class KGDocumentsEndpoint(BaseEndpoint):
                 body["segment_method_uri"] = segment_method_uri
             if max_segment_tokens is not None:
                 body["max_segment_tokens"] = max_segment_tokens
+            if vectorize is not None:
+                body["vectorize"] = vectorize
 
             response = await self._make_authenticated_request(
                 'POST', url, params=params, json=body
@@ -830,7 +942,10 @@ class KGDocumentsEndpoint(BaseEndpoint):
         return await self.client.search_mappings.create_mapping(
             space_id=space_id,
             index_name="document_segments",
-            mapping_type="kgdocument",
+            # `kgdocument_segment`, which is what auto-sync classifies a segment
+            # as and what the server's own setup creates. `kgdocument` matched
+            # whole documents only, so segments routed here were never embedded.
+            mapping_type="kgdocument_segment",
             type_uri=type_uri,
             enabled=enabled,
         )

@@ -222,4 +222,31 @@ async def delete_segmentation(
         "Deleted %d segmentation object(s) for %s (method=%s)",
         deleted, original_uri, method_uri or "<all>",
     )
+    _schedule_index_cleanup(backend, space_id, graph_id, safe_uris)
     return deleted
+
+
+def _schedule_index_cleanup(backend, space_id: str, graph_id: str,
+                            uris: List[str]) -> None:
+    """Remove the deleted objects' vector, FTS, geo and fuzzy rows.
+
+    Deleting the quads left every index row behind: each re-segmentation
+    orphaned the previous run's segment vectors (new segments get new URIs, so
+    nothing ever overwrote them), and a document delete left all of its
+    segments' rows matching searches. Found as `vectorize=false` on an embedded
+    document leaving its old segments' vectors in place (`issues/285`).
+
+    `backend` is a space backend or the adapter around one; both shapes reach
+    here.
+    """
+    if not uris:
+        return
+    db_impl = getattr(backend, 'db_impl', None) or getattr(
+        getattr(backend, 'backend', None), 'db_impl', None)
+    if db_impl is None:
+        logger.warning("segmentation delete: no db_impl on %s, %d index row "
+                       "set(s) left for %s", type(backend).__name__, len(uris), space_id)
+        return
+    from ..vectorization.auto_sync import schedule_sync
+    schedule_sync(db_impl=db_impl, space_id=space_id, subject_uris=list(uris),
+                  graph_uri=graph_id, operation="delete")
