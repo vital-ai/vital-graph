@@ -626,6 +626,26 @@ class VitalGraphAppImpl:
                             except Exception as e:
                                 self.logger.warning(f"Space prewarm job registration failed (non-critical): {e}")
 
+                            # What the garbage collector scans, by type and by
+                            # holder (issues/278). Opt-in diagnostic: registered
+                            # only when VG_HEAP_CENSUS_INTERVAL_S > 0, on one task.
+                            try:
+                                from vitalgraph.process.heap_census_job import (
+                                    HeapCensusJob, HEAP_CENSUS_INTERVAL_S)
+                                if HEAP_CENSUS_INTERVAL_S > 0:
+                                    self.process_scheduler.register_job(
+                                        name="heap_census",
+                                        interval_seconds=HEAP_CENSUS_INTERVAL_S,
+                                        handler=HeapCensusJob(roots={"app": self}),
+                                        process_type="heap_census",
+                                        single_runner=True,
+                                    )
+                                    self.logger.info(
+                                        f"✅ Heap census job registered (every "
+                                        f"{HEAP_CENSUS_INTERVAL_S:.0f}s, one task)")
+                            except Exception as e:
+                                self.logger.warning(f"Heap census job registration failed (non-critical): {e}")
+
                             # Register import/export cleanup job
                             try:
                                 from vitalgraph.process.import_export_cleanup_job import ImportExportCleanupJob

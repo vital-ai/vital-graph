@@ -251,6 +251,8 @@ services:
       # Spaces kept resident in shared_buffers (issues/271). Empty by default,
       # as in production until a space is named; set it to measure with it.
       - VG_PREWARM_SPACES=${VG_PREWARM_SPACES:-}
+      # Heap census, by type and holder (issues/278). Off (0) by default.
+      - VG_HEAP_CENSUS_INTERVAL_S=${VG_HEAP_CENSUS_INTERVAL_S:-0}
       # Auth
       - SECRET_KEY=test-secret-key
       - JWT_SECRET_KEY=test-jwt-secret
