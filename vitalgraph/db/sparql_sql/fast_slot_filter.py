@@ -14,9 +14,10 @@ criterion — joined over the quad table. Measured on `lead_nurture_100k`
     campaign + PRESENT   17.2 s            98.8 ms       1
 
 The join was re-deriving what the table already stores. The table carries
-`(context_uuid, entity_type_uuid, frame_type_path, slot_type_uuid, value_text,
+`(context_uuid, entity_type_uuid, frame_type_path, slot_type_uuid, value_key,
 entity_uuid)` with a btree index on exactly that tuple, which is an equality
-probe for this shape.
+probe for this shape. (`value_key` is `value_text` cut to a bounded prefix so it
+fits a btree entry -- issues/283.)
 
 THE INDEX PREFIX IS NOT OPTIONAL. Probing `slot_type_uuid` + `value_text` alone
 measured 5.36 s; the same query supplying `context_uuid`, `entity_type_uuid` and
@@ -51,6 +52,7 @@ from decimal import Decimal, InvalidOperation
 from typing import List, Optional
 
 from .fast_slot_sort import _LANE, _LANE_SQL, _term_uuid
+from .sort_value_key import VALUE_KEY_CHARS, fits_value_key
 # The ISO and timezone tests the GENERAL PIPELINE uses for the same comparison,
 # imported rather than restated. A second copy of either is a second definition
 # of which values this store considers dates, and the two paths must agree about
@@ -86,9 +88,13 @@ def _lane_arg(lane: str, val):
     drift from the column. Parsing here would put that UTC decision in a second
     place; `_ISO_RE` only decides whether the value IS a date, which is what the
     general pipeline uses it for too.
+
+    A TEXT VALUE AT OR PAST THE KEY LENGTH DECLINES. The text lane compares
+    `value_key`, a bounded prefix, and that is exact only for a literal shorter
+    than it (`sort_value_key`, issues/283).
     """
     if lane == "text":
-        return str(val)
+        return str(val) if fits_value_key(val) else None
     if lane == "num":
         try:
             d = Decimal(str(val))
@@ -192,8 +198,10 @@ def filter_decline_reason(criteria) -> Optional[str]:
                 "frame criterion, a comparator that is not `eq`, an unmapped "
                 "slot_class_uri, a missing slot_type, a null value, or a value "
                 "outside its lane (a non-numeric value on a numeric slot, a "
-                "non-ISO value on a dateTime slot). A conjunction is served "
-                "only when EVERY conjunct is")
+                f"non-ISO value on a dateTime slot, a text value of {VALUE_KEY_CHARS} or "
+                "more characters that the bounded key cannot compare -- "
+                "issues/283). A conjunction is served only when EVERY "
+                "conjunct is")
     return None
 
 

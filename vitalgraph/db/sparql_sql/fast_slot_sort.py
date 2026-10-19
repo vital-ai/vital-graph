@@ -77,8 +77,13 @@ _LANE = {
 # in. The COLLATE has to be repeated here: the index is built `COLLATE "C"` and
 # an ORDER BY under the database's default collation cannot use it, which
 # silently returns the query to the six-way join this exists to avoid.
+#
+# Text reads `value_key`, the bounded prefix the index covers, not `value_text`
+# (issues/283). Exact for every literal shorter than the key -- which
+# `fast_slot_filter._lane_arg` enforces -- and the documented tie caveat for a
+# sort is in `sort_value_key`.
 _LANE_SQL = {
-    "text": ('value_text', 'MIN(value_text COLLATE "C")', 'MAX(value_text COLLATE "C")'),
+    "text": ('value_key', 'MIN(value_key COLLATE "C")', 'MAX(value_key COLLATE "C")'),
     "num": ('value_num', 'MIN(value_num)', 'MAX(value_num)'),
     "dt": ('value_dt', 'MIN(value_dt)', 'MAX(value_dt)'),
 }
@@ -268,7 +273,7 @@ def _filter_exists(
             f"   AND f{p_slot}.frame_type_path = ${p_path}"
             f"   AND f{p_slot}.slot_type_uuid = ${p_slot}"
             # `_LANE` yields the lane NAME ('text'/'num'/'dt'); the COLUMN is
-            # `value_text`/`value_num`/`value_dt`, which `_LANE_SQL` holds.
+            # `value_key`/`value_num`/`value_dt`, which `_LANE_SQL` holds.
             # Emitting the bare lane produced `f.text = $n` — a column that does
             # not exist, so the count errored and the page silently returned
             # nothing.

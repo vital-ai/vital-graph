@@ -136,9 +136,10 @@ class TestWhatItRefusesToTouch:
         assert slot_range_constraint(bgp, al, SPACE, "val", ">=", 99) is None
 
     def test_a_text_lane_is_not_offered(self):
-        """`value_text` has its own index and its own collation question; this
-        covers the ordering lanes only."""
-        assert "value_text" not in set(VALUE_LANE.values())
+        """The text lane (`value_key`, the bounded prefix of `value_text`) has its
+        own index and its own collation question; this covers the ordering lanes
+        only."""
+        assert not {"value_text", "value_key"} & set(VALUE_LANE.values())
 
     def test_equality_declines(self):
         """Equality already reaches the term semi-join with an accurate estimate

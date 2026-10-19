@@ -29,7 +29,7 @@ walk, one UNCORRELATED constraint on the entity:
     <entity>.<col> IN (SELECT entity_uuid FROM {space}_entity_slot_sort
                        WHERE context_uuid = <ctx> AND entity_type_uuid = <E>
                          AND frame_type_path = ARRAY[...]::uuid[]
-                         AND slot_type_uuid = <T> AND value_text = '<V>')
+                         AND slot_type_uuid = <T> AND value_key = '<V>')
 
 Uncorrelated is the whole point: PostgreSQL evaluates each subquery ONCE and
 hash-semi-joins, so N criteria cost N lookups rather than multiplying. That is
@@ -58,6 +58,8 @@ import logging
 import os
 import re
 from typing import Dict, List, Optional, Set
+
+from .sort_value_key import fits_value_key
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +172,7 @@ def component_intersect_constraints(bgp, aliases, space_id: str,
         value_alias = slot_var = None
         for var in comp:
             for a in subj_aliases.get(var, []):
-                if EQUALITY_LANE.get(pred_of.get(a, "")) == "value_text" \
+                if EQUALITY_LANE.get(pred_of.get(a, "")) == "value_key" \
                         and a in obj_text:
                     value_alias, slot_var = a, var
                     break
@@ -199,18 +201,23 @@ def component_intersect_constraints(bgp, aliases, space_id: str,
         value = str(obj_text[value_alias])
         if not value:
             continue   # an unresolved constant would match nothing — issues/162
+        if not fits_value_key(value):
+            # The probe reads `value_key`, a bounded prefix, which cannot tell
+            # two long values apart (issues/283). Skipping the narrowing leaves
+            # the general query to answer it from `term_text`.
+            continue
         path = ", ".join(f"{t}::uuid" for t in dict.fromkeys(frame_tokens))
         sql = (f"{anchor[0]}.{anchor[1]} IN (SELECT entity_uuid FROM {ess} "
                f"WHERE entity_type_uuid = {entity_type_token} "
                f"AND frame_type_path = ARRAY[{path}] "
                f"AND slot_type_uuid = {type_token} "
-               # COLLATE "C" to match the index, or value_text is applied as
+               # COLLATE "C" to match the index, or value_key is applied as
                # a FILTER rather than a seek — see the note in
                # `slot_sort_range`. Measured on this same shape, with
                # entity_type AND slot_type already constrained: 99,999 rows
                # removed by filter, 71,313 buffers (`issues/162`). Constraining
                # the prefix is necessary and NOT sufficient.
-               f"AND value_text COLLATE \"C\" = "
+               f"AND value_key COLLATE \"C\" = "
                f"\'{value.replace(chr(39), chr(39) * 2)}\')")
         entry = (anchor[0], sql)
         if entry not in out:

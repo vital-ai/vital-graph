@@ -4,6 +4,11 @@
 ## SCALING question is open: the bound is the entity count of the type, and
 ## where that curve bends has not been measured.
 
+**2026-10-19:** the latent bug recorded below under "BUT A BOUNDED SORT KEY IS
+BOTH POSSIBLE AND SUFFICIENT" (an unbounded `value_text` under a btree) went live:
+a consumer's long slot values failed every write. It is now `issues/283`, fixed
+with the bounded prefix this issue proposed, applied to all three sort tables.
+
 ## The gap
 
 Two fast paths read `{space}_entity_slot_sort`, and each declines the other's
@@ -388,7 +393,7 @@ about Playwright and CI (`c4dae57`) still stands as a thing that happened
 without review, and the keep-both reasoning still holds IF ordered access is
 ever wanted. Neither is the cause of this issue.
 
-The `entity_slot_sort.value_text` finding also survives and is independent: that
+(Since fixed as `issues/283`.) The `entity_slot_sort.value_text` finding also survives and is independent: that
 column is unbounded TEXT under a btree index, so a long slot value fails the
 index insert, in the backfill rather than at the write that caused it. That is a
 latent correctness bug regardless of anything here.

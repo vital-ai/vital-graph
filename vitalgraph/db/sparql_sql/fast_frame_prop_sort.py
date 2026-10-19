@@ -33,6 +33,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+from .sort_value_key import fits_value_key
+
 logger = logging.getLogger(__name__)
 
 from .sync_frame_prop_sort import _u, ASSERTION_URI, ASPECT_URI  # noqa: E402
@@ -56,7 +58,9 @@ _DATATYPES = {
     f"{HALEY}hasFrameSequence": "integer",
 }
 
-_SORT_LANE = {"string": "value_text", "uri": "value_text",
+# Text reads `value_key`, the bounded prefix the text indexes cover
+# (issues/283); `_filter_terms` declines a literal too long for it.
+_SORT_LANE = {"string": "value_key", "uri": "value_key",
               "dateTime": "value_dt", "integer": "value_num"}
 
 
@@ -150,6 +154,11 @@ def _filter_terms(filters: Optional[Dict[str, Any]]) -> Optional[List[tuple]]:
         if key not in known:
             return None
         prop, op = known[key]
+        if not fits_value_key(value):
+            # Membership reads `value_all` and the sort lane `value_key`, both
+            # bounded to a prefix that cannot tell two long values apart
+            # (issues/283). Declined whole, like any unexpressible filter.
+            return None
         out.append((prop, op, value))
     return out
 
@@ -226,7 +235,7 @@ def build_frame_page_sql(space_id: str, terms: List[tuple], sort_by: Optional[st
             return None
         su = p(_u(sort_by))
         direction = "DESC" if descending else "ASC"
-        collate = ' COLLATE "C"' if lane == "value_text" else ""
+        collate = ' COLLATE "C"' if lane == "value_key" else ""
         # EMIT THE PARTIAL INDEX'S OWN PREDICATE, or the index cannot be used.
         # `_..._num` and `_..._dt` are partial (`WHERE value_x IS NOT NULL`) and
         # PostgreSQL will only choose a partial index when the query IMPLIES its
@@ -235,12 +244,12 @@ def build_frame_page_sql(space_id: str, terms: List[tuple], sort_by: Optional[st
         # is sub-millisecond. The schema comment beside those indexes records
         # exactly this rule; the query simply did not honour it.
         #
-        # Not needed for `value_text`, whose index is not partial.
+        # Not needed for `value_key`, whose index is not partial.
         #
         # It also narrows nothing the caller would miss: the SPARQL this
         # replaces binds the sort triple as REQUIRED, so a subject without the
         # property is absent there too.
-        lane_not_null = f" AND s.{lane} IS NOT NULL" if lane != "value_text" else ""
+        lane_not_null = f" AND s.{lane} IS NOT NULL" if lane != "value_key" else ""
         # Tie-break on the URI, matching the SPARQL `ORDER BY ?frame`, and it is
         # the last index column so the correct order is the index order.
         order = f"s.{lane}{collate} {direction} NULLS LAST, s.frame_uri"

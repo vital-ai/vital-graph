@@ -50,6 +50,8 @@ import logging
 import uuid
 from typing import List, Optional
 
+from .sort_value_key import bounded_text_sql
+
 logger = logging.getLogger(__name__)
 
 HALEY = "http://vital.ai/ontology/haley-ai-kg#"
@@ -143,7 +145,12 @@ def _select_rows(space_id: str, where: str) -> str:
             -- DISTINCT so the membership array is not multiplied by the
             -- entity-type join above, and so it is deterministic (an aggregate
             -- with DISTINCT sorts).
-            array_agg(DISTINCT t.term_text) AS value_all,
+            --
+            -- Each element BOUNDED, because the GIN index over this array caps
+            -- an entry at 2,712 bytes and a long value failed the write
+            -- (issues/283). The readers decline any literal the bound cannot
+            -- answer, so membership stays exact for the rest.
+            array_agg(DISTINCT {bounded_text_sql('t.term_text')}) AS value_all,
             -- The entity's own URI, denormalised to be the sort TIE-BREAK
             -- without a join. See the column comment in the schema: joining for
             -- it cost a deep page 2.1ms -> 123ms.

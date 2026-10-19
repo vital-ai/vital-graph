@@ -117,13 +117,15 @@ RANGE_OPS = {">=", ">", "<=", "<"}
 #
 # Text covers the URI and string-shaped slots — `entity_slot_sort.value_text`
 # stores the lexical form for all of them, which is why the campaign URI matches
-# `value_text = 'urn:acme:campaign:000'` exactly.
+# `value_key = 'urn:acme:campaign:000'` exactly. The lane is `value_key`, the
+# bounded prefix the index covers (issues/283); the caller declines a literal
+# too long for it.
 EQUALITY_LANE = dict(VALUE_LANE)
 for _eq_n in ("Text", "Uri", "Choice", "Json", "Boolean", "Code", "LongText",
               "MultiChoice", "MultiTaxonomy", "Taxonomy", "Audio", "Image",
               "Video", "FileUpload", "GeoLocation", "PropertyFrameType", "Run",
               "Entity"):
-    EQUALITY_LANE[f"{_H}has{_eq_n}SlotValue"] = "value_text"
+    EQUALITY_LANE[f"{_H}has{_eq_n}SlotValue"] = "value_key"
 
 _PRED_RE = re.compile(r"(\w+)\.predicate_uuid\s*=\s*__CONST_(c_\d+)__")
 _OBJ_RE = re.compile(r"(\w+)\.object_uuid\s*=\s*__CONST_(c_\d+)__")

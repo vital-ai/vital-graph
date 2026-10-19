@@ -7,6 +7,11 @@
 ## paths are wired too (`78b316b8`), which closes all nineteen gaps — so drift
 ## is now prevented at the source as well as caught and repaired.
 
+**Consequence found later (`issues/283`):** deriving these tables inside the write
+transaction moved an index failure from the backfill to the write. The three
+tables btree-indexed the whole `value_text`, so a value over ~2.7 KB failed the
+write that carried it. Fixed there by indexing a bounded prefix.
+
 The twin of `issues/187`, found by asking why `entity_prop_sort` existed in no
 local space. It does not reproduce 187 — it is a *different set of tables* with a
 *worse failure mode* — but it was invisible for the same reason `185` describes:

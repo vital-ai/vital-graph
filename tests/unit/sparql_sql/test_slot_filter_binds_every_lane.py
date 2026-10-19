@@ -161,7 +161,7 @@ class TestTheTextLaneIsUnchanged:
     def test_a_text_value_still_binds_as_text(self):
         sql, args = _sql_and_args("v1", TEXT)
         assert "v1" in args
-        assert "value_text = $5" in sql, (
+        assert "value_key = $5" in sql, (
             f"the text lane needs no normalisation and must not gain any:\n{sql}")
 
 
@@ -225,6 +225,6 @@ class TestTheSortPathBindsTheSameWay:
 
     def test_the_other_lanes_are_untouched(self):
         sql, args = self._exists("v1", TEXT)
-        assert "value_text = $5" in sql and "iso_to_utc" not in sql
+        assert "value_key = $5" in sql and "iso_to_utc" not in sql
         sql, args = self._exists(2, NUM)
         assert "value_num = $5" in sql and Decimal(2) in args

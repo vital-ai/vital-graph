@@ -19,6 +19,8 @@ import logging
 import re
 from typing import Dict, List, Tuple
 
+from .sort_value_key import VALUE_KEY_COLUMN, value_key_column_sql
+
 logger = logging.getLogger(__name__)
 
 
@@ -1274,6 +1276,11 @@ class SparqlSQLSchema:
                 value_text        TEXT,
                 value_num         NUMERIC,
                 value_dt          TIMESTAMP,
+                -- What the text index orders and seeks on: `value_text` cut
+                -- to a bounded prefix, because the whole value does not fit a
+                -- btree entry and a long slot failed the write (issues/283,
+                -- `sort_value_key`). `value_text` stays whole for projection.
+                {value_key_column_sql()},
                 PRIMARY KEY (slot_uuid, context_uuid)
             ){_part}''')
         if partition_quads > 0:
@@ -1312,6 +1319,8 @@ class SparqlSQLSchema:
                 value_text        TEXT,
                 value_num         NUMERIC,
                 value_dt          TIMESTAMP,
+                -- The bounded prefix the text indexes cover (issues/283).
+                {value_key_column_sql()},
                 -- EVERY value, where the lanes above hold only the MIN.
                 --
                 -- The two gates want different data from the same row. Sorting
@@ -1330,6 +1339,12 @@ class SparqlSQLSchema:
                 --
                 -- TEXT[] uniformly, uris included, so one GIN index serves all
                 -- of them. One element in the common case.
+                --
+                -- Each element is BOUNDED to the key length, like `value_key`:
+                -- a GIN entry is capped at 2,712 bytes and a long value failed
+                -- the write (issues/283). Membership stays exact for every
+                -- literal shorter than the bound, and the readers decline the
+                -- rest.
                 value_all         TEXT[] NOT NULL DEFAULT '{{}}',
                 -- The entity's URI, denormalised for the SAME reason the values
                 -- are: `entity_uuid` is a hash of it, so it cannot change under
@@ -1378,6 +1393,8 @@ class SparqlSQLSchema:
                 value_text        TEXT,
                 value_num         NUMERIC,
                 value_dt          TIMESTAMP,
+                -- Bounded, as in `entity_prop_sort` (issues/283).
+                {value_key_column_sql()},
                 value_all         TEXT[] NOT NULL DEFAULT '{{}}',
                 -- The tie-break, for the reason the entity table records: the
                 -- SPARQL query this replaces breaks ties with `?frame`, and
@@ -1799,9 +1816,14 @@ class SparqlSQLSchema:
             # COLLATE "C" matches what the generator emits for a text ORDER BY;
             # under any other collation the index cannot serve the sort and the
             # planner silently falls back to the six-way join this replaces.
+            #
+            # On `value_key`, NOT `value_text` -- here and in every text index
+            # on the two prop-sort tables below. A btree entry is capped at
+            # 2,704 bytes and `value_text` is unbounded, so one long slot value
+            # failed the write that carried it (issues/283).
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_ess_text "
             f"ON {t['entity_slot_sort']} (context_uuid, entity_type_uuid, "
-            f"frame_type_path, slot_type_uuid, value_text COLLATE \"C\", entity_uuid)",
+            f"frame_type_path, slot_type_uuid, {VALUE_KEY_COLUMN} COLLATE \"C\", entity_uuid)",
             # PARTIAL, and that is load-bearing twice over. Every row has a
             # value_text (a term always has text) but only numeric and temporal
             # literals have num_val / dt_val, so unrestricted these two would
@@ -1841,7 +1863,7 @@ class SparqlSQLSchema:
             # an Index Scan with heap fetches (58 buffers -> 2,918, 4ms -> 15ms).
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_text "
             f"ON {t['entity_prop_sort']} (context_uuid, entity_type_uuid, "
-            f"property_uuid, value_text COLLATE \"C\", entity_uri)",
+            f"property_uuid, {VALUE_KEY_COLUMN} COLLATE \"C\", entity_uri)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_num "
             f"ON {t['entity_prop_sort']} (context_uuid, entity_type_uuid, "
             f"property_uuid, value_num, entity_uri) WHERE value_num IS NOT NULL",
@@ -1862,7 +1884,7 @@ class SparqlSQLSchema:
             # `value_num` has no untyped twin.
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_any_text "
             f"ON {t['entity_prop_sort']} (context_uuid, property_uuid, "
-            f"value_text COLLATE \"C\", entity_uri)",
+            f"{VALUE_KEY_COLUMN} COLLATE \"C\", entity_uri)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_any_dt "
             f"ON {t['entity_prop_sort']} (context_uuid, property_uuid, "
             f"value_dt, entity_uri) WHERE value_dt IS NOT NULL",
@@ -1887,7 +1909,7 @@ class SparqlSQLSchema:
             # included -- even for the partial index, which can hold no NULLs.
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_text_desc "
             f"ON {t['entity_prop_sort']} (context_uuid, entity_type_uuid, "
-            f"property_uuid, value_text COLLATE \"C\" DESC NULLS LAST, entity_uri)",
+            f"property_uuid, {VALUE_KEY_COLUMN} COLLATE \"C\" DESC NULLS LAST, entity_uri)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_eps_dt_desc "
             f"ON {t['entity_prop_sort']} (context_uuid, entity_type_uuid, "
             f"property_uuid, value_dt DESC NULLS LAST, entity_uri) "
@@ -1918,7 +1940,7 @@ class SparqlSQLSchema:
             # `frame_prop_sort`, the same five shapes plus the untyped pair.
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_text "
             f"ON {t['frame_prop_sort']} (context_uuid, frame_type_uuid, "
-            f"property_uuid, value_text COLLATE \"C\", frame_uri)",
+            f"property_uuid, {VALUE_KEY_COLUMN} COLLATE \"C\", frame_uri)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_num "
             f"ON {t['frame_prop_sort']} (context_uuid, frame_type_uuid, "
             f"property_uuid, value_num, frame_uri) WHERE value_num IS NOT NULL",
@@ -1927,7 +1949,7 @@ class SparqlSQLSchema:
             f"property_uuid, value_dt, frame_uri) WHERE value_dt IS NOT NULL",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_any_text "
             f"ON {t['frame_prop_sort']} (context_uuid, property_uuid, "
-            f"value_text COLLATE \"C\", frame_uri)",
+            f"{VALUE_KEY_COLUMN} COLLATE \"C\", frame_uri)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_any_num "
             f"ON {t['frame_prop_sort']} (context_uuid, property_uuid, "
             f"value_num, frame_uri) WHERE value_num IS NOT NULL",
@@ -1942,7 +1964,7 @@ class SparqlSQLSchema:
             # frame_uuid from the edge table.
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_form_text "
             f"ON {t['frame_prop_sort']} (context_uuid, form_type_uuid, "
-            f"property_uuid, value_text COLLATE \"C\", frame_uri)",
+            f"property_uuid, {VALUE_KEY_COLUMN} COLLATE \"C\", frame_uri)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fps_form_num "
             f"ON {t['frame_prop_sort']} (context_uuid, form_type_uuid, "
             f"property_uuid, value_num, frame_uri) WHERE value_num IS NOT NULL",

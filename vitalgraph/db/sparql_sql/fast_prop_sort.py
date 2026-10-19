@@ -32,6 +32,8 @@ import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
+from .sort_value_key import fits_value_key
+
 logger = logging.getLogger(__name__)
 
 from .sync_entity_prop_sort import (  # noqa: E402
@@ -53,8 +55,11 @@ _DATATYPES = {
 
 # Which column an ORDER BY reads. `uri` and `uri_list` sort as text because a
 # uri IS text here -- `value_all` holds them as TEXT[] for the same reason.
-_SORT_LANE = {"string": "value_text", "uri": "value_text",
-              "uri_list": "value_text", "dateTime": "value_dt"}
+#
+# Text reads `value_key`, the bounded prefix the text indexes cover, not
+# `value_text` (issues/283); `_filter_terms` declines a literal too long for it.
+_SORT_LANE = {"string": "value_key", "uri": "value_key",
+              "uri_list": "value_key", "dateTime": "value_dt"}
 
 
 _prop_sort_present: dict[str, bool] = {}
@@ -183,6 +188,11 @@ def _filter_terms(filters: Optional[Dict[str, Any]]) -> Optional[List[tuple]]:
         if key not in known:
             return None          # something new; decline rather than ignore it
         prop, op = known[key]
+        if not fits_value_key(value):
+            # Membership reads `value_all` and the sort lane `value_key`, both
+            # bounded to a prefix that cannot tell two long values apart
+            # (issues/283). Declined whole, like any unexpressible filter.
+            return None
         out.append((prop, op, value))
     return out
 
@@ -270,7 +280,7 @@ def build_page_sql(space_id: str, terms: List[tuple], sort_by: Optional[str],
         direction = "DESC" if descending else "ASC"
         # NULLS LAST in both directions: an entity missing the sort property
         # belongs at the end of the list, not at the top of a descending one.
-        collate = ' COLLATE "C"' if lane == "value_text" else ""
+        collate = ' COLLATE "C"' if lane == "value_key" else ""
         # EMIT THE PARTIAL INDEX'S OWN PREDICATE, or the index cannot be used.
         # `_..._num` and `_..._dt` are partial (`WHERE value_x IS NOT NULL`) and
         # PostgreSQL will only choose a partial index when the query IMPLIES its
@@ -279,12 +289,12 @@ def build_page_sql(space_id: str, terms: List[tuple], sort_by: Optional[str],
         # is sub-millisecond. The schema comment beside those indexes records
         # exactly this rule; the query simply did not honour it.
         #
-        # Not needed for `value_text`, whose index is not partial.
+        # Not needed for `value_key`, whose index is not partial.
         #
         # It also narrows nothing the caller would miss: the SPARQL this
         # replaces binds the sort triple as REQUIRED, so a subject without the
         # property is absent there too.
-        lane_not_null = f" AND s.{lane} IS NOT NULL" if lane != "value_text" else ""
+        lane_not_null = f" AND s.{lane} IS NOT NULL" if lane != "value_key" else ""
         # TIE-BREAK ON THE ENTITY URI, not on `entity_uuid`, because the SPARQL
         # query this replaces breaks ties with `?s`. `entity_uuid` is a hash of
         # the URI, so its order is unrelated -- five entities sharing a name came

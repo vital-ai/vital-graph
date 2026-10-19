@@ -41,13 +41,16 @@ import logging
 import uuid as _uuid
 from typing import Any, List, Optional, Tuple
 
+from .sort_value_key import fits_value_key
+
 logger = logging.getLogger(__name__)
 
 _VITALGRAPH_NS = _uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
 #: Entity properties this path can filter or sort on, and the lane each uses.
-#: Mirrors `_SORT_LANE` in `fast_prop_sort`; anything else declines.
-_LANE = {"string": "value_text", "uri": "value_text", "dateTime": "value_dt"}
+#: Mirrors `_SORT_LANE` in `fast_prop_sort`; anything else declines. Text reads
+#: `value_key`, the bounded prefix the index covers (issues/283).
+_LANE = {"string": "value_key", "uri": "value_key", "dateTime": "value_dt"}
 
 _RANGE_OPS = {"gte": ">=", "gt": ">", "lte": "<=", "lt": "<", "eq": "="}
 
@@ -89,6 +92,10 @@ def fts_frame_decline_reason(criteria) -> Optional[str]:
             return f"filter on unregistered or list property {f.property_uri}"
         if getattr(f, "operator", None) not in _RANGE_OPS:
             return f"filter operator {f.operator} not served here"
+        if not fits_value_key(getattr(f, "value", None)):
+            # The text lane compares a bounded prefix, exact only for a
+            # literal shorter than it (`sort_value_key`, issues/283).
+            return f"filter value on {f.property_uri} too long for the key"
     sorts = list(getattr(criteria, "sort_criteria", None) or [])
     if len(sorts) > 1:
         return "more than one sort"
@@ -170,7 +177,7 @@ def _build(space_id: str, criteria, fts_table: str, cfg: str, *, for_count: bool
             cmp_sql = f"e.value_dt {op} vitalgraph_iso_to_utc({p(str(f.value))})"
             lane_sql = "e.value_dt IS NOT NULL AND " + cmp_sql
         else:
-            lane_sql = f'e.value_text COLLATE "C" {op} {p(str(f.value))}'
+            lane_sql = f'e.value_key COLLATE "C" {op} {p(str(f.value))}'
         where.append(
             f"EXISTS (SELECT 1 FROM {eps} e WHERE e.entity_uuid = s.entity_uuid "
             f"AND e.context_uuid = {ctx} AND e.property_uuid = {pu} AND {lane_sql})")
@@ -183,7 +190,7 @@ def _build(space_id: str, criteria, fts_table: str, cfg: str, *, for_count: bool
         lane = _LANE[_prop_datatype(sc.property_uri)]
         spu = p(_term_uuid(sc.property_uri))
         direction = "DESC" if (sc.sort_order or "asc").lower() == "desc" else "ASC"
-        collate = ' COLLATE "C"' if lane == "value_text" else ""
+        collate = ' COLLATE "C"' if lane == "value_key" else ""
         join_sort = (f"JOIN {eps} sv ON sv.entity_uuid = s.entity_uuid "
                      f"AND sv.context_uuid = {ctx} AND sv.property_uuid = {spu}")
         # Tie on the frame's URI TEXT, which is what the pipeline orders by.

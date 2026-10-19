@@ -40,6 +40,8 @@ import logging
 import uuid
 from typing import List, Optional
 
+from .sort_value_key import bounded_text_sql
+
 logger = logging.getLogger(__name__)
 
 HALEY = "http://vital.ai/ontology/haley-ai-kg#"
@@ -203,7 +205,8 @@ def _select_rows(space_id: str, where: str, seed_param: str = None) -> str:
             min(t.term_text COLLATE "C") AS value_text,
             min(t.num_val)               AS value_num,
             min(t.dt_val)                AS value_dt,
-            array_agg(DISTINCT t.term_text) AS value_all,
+            -- Bounded per element, as in `sync_entity_prop_sort` (issues/283).
+            array_agg(DISTINCT {bounded_text_sql('t.term_text')}) AS value_all,
             min(et.term_text)            AS frame_uri,
             -- Not `min(uuid)`: that aggregate only exists from PostgreSQL 14,
             -- and this must build on whatever the RDS instance runs. Same

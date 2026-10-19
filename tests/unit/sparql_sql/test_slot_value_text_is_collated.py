@@ -1,6 +1,8 @@
-"""A `value_text` comparison must carry COLLATE "C", or it cannot seek.
+"""A text-lane comparison must carry COLLATE "C", or it cannot seek.
 
-`idx_{space}_ess_text` indexes `value_text COLLATE "C"`; the database collation
+`idx_{space}_ess_text` indexes `value_key COLLATE "C"` -- the bounded prefix of
+`value_text`, since issues/283; before that it indexed `value_text` itself, which
+is what the measurement below was taken on. The database collation
 is `en_US.utf8`. An equality written in the default collation cannot use that
 index column, so PostgreSQL seeks on the columns before it and applies the value
 as a FILTER. Measured on `lead_nurture_grouped` (4,064,500 slot-sort rows), same
@@ -36,7 +38,11 @@ MODULES = ["vitalgraph.db.sparql_sql.component_intersect"]
 
 @pytest.mark.parametrize("mod", MODULES, ids=[m.rsplit(".", 1)[-1] for m in MODULES])
 def test_every_emitted_value_text_equality_is_collated(mod):
-    """Scan the module source for an equality on value_text without COLLATE.
+    """Scan the module source for a text-lane equality that cannot seek.
+
+    Two ways to miss the index: `value_key` without COLLATE "C", and
+    `value_text` with or without it -- that column is no longer indexed at all
+    (issues/283), so an equality on it is a filter whatever its collation.
 
     Source-level rather than behavioural because both call sites need a live
     space, a resolved constant and a matching slot type to reach; the clause
@@ -50,16 +56,16 @@ def test_every_emitted_value_text_equality_is_collated(mod):
         stripped = line.strip()
         if stripped.startswith("#"):
             continue
-        if not re.search(r'value_text\s*(COLLATE\s*\\?"C\\?")?\s*=', stripped):
+        if not re.search(r'value_(text|key)\s*(COLLATE\s*\\?"C\\?")?\s*=', stripped):
             continue
-        if "value_text COLLATE" in stripped:
+        if "value_key COLLATE" in stripped:
             continue
         # `value_text = ''` in prose/examples inside a docstring has no f-prefix
         if 'f"' not in stripped and "f'" not in stripped:
             continue
         offenders.append(stripped[:100])
     assert not offenders, (
-        f"{mod} emits an uncollated value_text equality; it will FILTER rather "
+        f"{mod} emits a value_text or uncollated value_key equality; it will FILTER rather "
         f"than seek and the narrowing costs more than it saves:\n  "
         + "\n  ".join(offenders))
 
@@ -74,8 +80,8 @@ def test_the_collation_matches_the_index_definition():
     import inspect, re
     from vitalgraph.db.sparql_sql import sparql_sql_schema
     schema_src = inspect.getsource(sparql_sql_schema)
-    # The DDL escapes its quotes in source: `value_text COLLATE \"C\"`.
-    assert re.search(r'value_text COLLATE \\?"C\\?"', schema_src), (
+    # The DDL escapes its quotes in source: `{VALUE_KEY_COLUMN} COLLATE \"C\"`.
+    assert re.search(r'\{VALUE_KEY_COLUMN\} COLLATE \\?"C\\?"', schema_src), (
         'the text index no longer declares COLLATE "C" — if the collation '
         "changed, every emitted comparison must change with it or silently "
         "stop seeking")
